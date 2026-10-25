@@ -519,9 +519,10 @@ public partial class WorktreeManager(
     /// <summary>The snapshot's attributes file, inside its git dir, as a path git reads the same on every platform: a
     /// config value read from the environment is not unescaped, so it carries no backslash. Its <c>!text !eol</c>
     /// resets both to unspecified for every path; git resolves each attribute on its own, so both are named.
-    /// <c>-text</c> would mark every path binary and void a project rule that sets only <c>eol</c>. Git ranks the file above the machine's attributes and below the project's
-    /// <c>.gitattributes</c>, so the agent's later commands, which skip neither, still convert only what the project
-    /// asks for. <c>info/attributes</c> would not do: it outranks the project's own file.</summary>
+    /// <c>-text</c> would mark every path binary and void a project rule that sets only <c>eol</c>. Git ranks the file
+    /// above the machine's attributes and below the project's <c>.gitattributes</c>, so the agent's later commands,
+    /// which skip neither, still convert only what the project asks for. <c>info/attributes</c> would not do: it
+    /// outranks the project's own file.</summary>
     static string CreateSnapshotAttributesFile(string worktreePath) {
         var info = Path.Combine(worktreePath, ".git", "info");
         Directory.CreateDirectory(info);
