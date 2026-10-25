@@ -7,7 +7,6 @@ using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
-[NotInParallel]
 public class AgentCommandAccountTests {
     const string Server     = "https://kcap.example";
     const string DaemonName = "acct";
@@ -21,12 +20,12 @@ public class AgentCommandAccountTests {
 
     AccountStore Accounts => AccountStore.Beside(Daemons.Store);
 
-    AgentCommand Command() =>
+    AgentCommand Command(TextWriter stderr) =>
         new(Daemons.Store, Accounts, Config.Root, Resolutions.None(Config.Root), Home, TestHarnesses.All(),
-            TestBinaries.None, new WorkingDirectory(Daemons.Root), TimeProvider.System, new StandardStreams(TextWriter.Null, TextWriter.Null, TextReader.Null));
+            TestBinaries.None, new WorkingDirectory(Daemons.Root), TimeProvider.System, new StandardStreams(TextWriter.Null, stderr, TextReader.Null));
 
-    Task<int> Start(params string[] args) =>
-        Command().HandleAsync(["agent", "start", .. args, "--daemon", DaemonName], Server);
+    Task<int> Start(StringWriter stderr, params string[] args) =>
+        Command(stderr).HandleAsync(["agent", "start", .. args, "--daemon", DaemonName], Server);
 
     string Register(string id, HarnessId vendor, string name) {
         var directory = AccountDirectory.Normalize(Home.CreateDir(name));
@@ -50,12 +49,12 @@ public class AgentCommandAccountTests {
         Register(PlayId, HarnessId.Claude, ".claude-play");
         Register("c0de0000c0de0000c0de0000c0de0000", HarnessId.Codex, ".codex-work");
         var daemon = Daemon(HelloReply("accounts/1"), FrameCodec.Attached(AgentId, []));
-        using var console = ConsoleOutput.StartFullCapture("\n");
+        var stderr = new StringWriter();
 
-        var exit = await Start("claude", "--account", "c1a0de02", "-d");
+        var exit = await Start(stderr, "claude", "--account", "c1a0de02", "-d");
 
         var frames = await daemon.WaitAsync(TimeSpan.FromSeconds(30));
-        await Assert.That(exit).IsEqualTo(0).Because(console.GetCapturedError());
+        await Assert.That(exit).IsEqualTo(0).Because(stderr.ToString());
         await Assert.That(frames.Select(f => f?.Type)).IsEquivalentTo(new FrameType?[] { null, FrameType.Hello, FrameType.Spawn });
         await Assert.That(FrameCodec.Spawn(frames[2]!).accountId).IsEqualTo(PlayId);
     }
@@ -65,12 +64,12 @@ public class AgentCommandAccountTests {
         Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
         Register(WorkId, HarnessId.Claude, ".claude-work");
         var daemon = Daemon(HelloReply("accounts/1"), FrameCodec.Attached(AgentId, []));
-        using var console = ConsoleOutput.StartFullCapture("\n");
+        var stderr = new StringWriter();
 
-        var exit = await Start("claude", "--account", "~/.claude-work", "-d");
+        var exit = await Start(stderr, "claude", "--account", "~/.claude-work", "-d");
 
         var frames = await daemon.WaitAsync(TimeSpan.FromSeconds(30));
-        await Assert.That(exit).IsEqualTo(0).Because(console.GetCapturedError());
+        await Assert.That(exit).IsEqualTo(0).Because(stderr.ToString());
         await Assert.That(FrameCodec.Spawn(frames[2]!).accountId).IsEqualTo(WorkId);
     }
 
@@ -80,12 +79,12 @@ public class AgentCommandAccountTests {
         Register(WorkId, HarnessId.Claude, ".claude-work");
         Register(PlayId, HarnessId.Claude, ".claude-play");
         using var daemon = new ControlSocketTripwire(Daemons.Store, DaemonName);
-        using var console = ConsoleOutput.StartErrorCapture("\n");
+        var stderr = new StringWriter();
 
-        var exit = await Start("claude", "--account", "c1a0", "-d");
+        var exit = await Start(stderr, "claude", "--account", "c1a0", "-d");
 
         await Assert.That(exit).IsEqualTo(1);
-        await Assert.That(console.GetCapturedError()).Contains(WorkId).And.Contains(PlayId);
+        await Assert.That(stderr.ToString()).Contains(WorkId).And.Contains(PlayId);
         await Assert.That(daemon.WasDialed).IsFalse();
     }
 
@@ -95,12 +94,12 @@ public class AgentCommandAccountTests {
         Register(WorkId, HarnessId.Claude, ".claude-work");
         var stranger = Home.CreateDir(".claude-stranger").Path;
         using var daemon = new ControlSocketTripwire(Daemons.Store, DaemonName);
-        using var console = ConsoleOutput.StartErrorCapture("\n");
+        var stderr = new StringWriter();
 
-        var exit = await Start("claude", "--account", stranger, "-d");
+        var exit = await Start(stderr, "claude", "--account", stranger, "-d");
 
         await Assert.That(exit).IsEqualTo(1);
-        await Assert.That(console.GetCapturedError()).Contains(stranger).And.Contains("kcap accounts add");
+        await Assert.That(stderr.ToString()).Contains(stranger).And.Contains("kcap accounts add");
         await Assert.That(daemon.WasDialed).IsFalse();
     }
 
@@ -109,13 +108,13 @@ public class AgentCommandAccountTests {
         Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
         Register(WorkId, HarnessId.Claude, ".claude-work");
         var daemon = Daemon(HelloReply("status/1"));
-        using var console = ConsoleOutput.StartErrorCapture("\n");
+        var stderr = new StringWriter();
 
-        var exit = await Start("claude", "--account", "c1a0de01", "-d");
+        var exit = await Start(stderr, "claude", "--account", "c1a0de01", "-d");
 
         var frames = await daemon.WaitAsync(TimeSpan.FromSeconds(30));
         await Assert.That(exit).IsEqualTo(1);
-        await Assert.That(console.GetCapturedError()).Contains("this daemon does not support choosing an account; update kcap on this machine");
+        await Assert.That(stderr.ToString()).Contains("this daemon does not support choosing an account; update kcap on this machine");
         await Assert.That(frames.Select(f => f?.Type)).IsEquivalentTo(new FrameType?[] { null, FrameType.Hello });
     }
 
@@ -123,12 +122,12 @@ public class AgentCommandAccountTests {
     public async Task A_vendor_without_accounts_is_refused_and_nothing_is_sent() {
         Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
         using var daemon = new ControlSocketTripwire(Daemons.Store, DaemonName);
-        using var console = ConsoleOutput.StartErrorCapture("\n");
+        var stderr = new StringWriter();
 
-        var exit = await Start("cursor", "--account", "c1a0de01", "-d");
+        var exit = await Start(stderr, "cursor", "--account", "c1a0de01", "-d");
 
         await Assert.That(exit).IsEqualTo(1);
-        await Assert.That(console.GetCapturedError()).Contains("accounts apply to claude and codex only");
+        await Assert.That(stderr.ToString()).Contains("accounts apply to claude and codex only");
         await Assert.That(daemon.WasDialed).IsFalse();
     }
 
@@ -137,12 +136,12 @@ public class AgentCommandAccountTests {
         Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
         new TempDirHandle(Daemons.Root).CreateFile("accounts/accounts.json", "{ not json");
         using var daemon = new ControlSocketTripwire(Daemons.Store, DaemonName);
-        using var console = ConsoleOutput.StartErrorCapture("\n");
+        var stderr = new StringWriter();
 
-        var exit = await Start("claude", "--account", "c1a0de01", "-d");
+        var exit = await Start(stderr, "claude", "--account", "c1a0de01", "-d");
 
         await Assert.That(exit).IsEqualTo(1);
-        await Assert.That(console.GetCapturedError()).Contains(Accounts.Directory);
+        await Assert.That(stderr.ToString()).Contains(Accounts.Directory);
         await Assert.That(daemon.WasDialed).IsFalse();
     }
 
@@ -150,12 +149,12 @@ public class AgentCommandAccountTests {
     public async Task Start_without_account_sends_no_hello_and_no_account() {
         Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
         var daemon = Daemon(FrameCodec.Attached(AgentId, []));
-        using var console = ConsoleOutput.StartFullCapture("\n");
+        var stderr = new StringWriter();
 
-        var exit = await Start("claude", "-d");
+        var exit = await Start(stderr, "claude", "-d");
 
         var frames = await daemon.WaitAsync(TimeSpan.FromSeconds(30));
-        await Assert.That(exit).IsEqualTo(0).Because(console.GetCapturedError());
+        await Assert.That(exit).IsEqualTo(0).Because(stderr.ToString());
         await Assert.That(frames.Select(f => f?.Type)).IsEquivalentTo(new FrameType?[] { null, FrameType.Spawn });
         await Assert.That(FrameCodec.Spawn(frames[1]!).accountId).IsNull();
     }
