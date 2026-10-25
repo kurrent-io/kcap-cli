@@ -29,6 +29,9 @@ public class LocalSearchViewModelTests {
         /// Set before construction to hold the lookup open.
         public TaskCompletionSource<LocalEmbeddingModelManifest?>? Lookup;
 
+        public int SettingsOpened;
+        public readonly BehaviorSubject<Action?> OpenSettings = new(null);
+
         public Harness(LocalEmbeddingSetting? setting, bool offered = true, TaskCompletionSource<LocalEmbeddingModelManifest?>? lookup = null) {
             Lookup  = lookup;
             Setting = setting;
@@ -38,7 +41,7 @@ public class LocalSearchViewModelTests {
             Vm = new LocalSearchViewModel(() => Setting, _ => Lookup?.Task ?? Task.FromResult(Offered), Status, Search, Upgrade, () => {
                 Reconnects++;
                 return Task.CompletedTask;
-            }, CancellationToken.None, ImmediateScheduler.Instance);
+            }, CancellationToken.None, ImmediateScheduler.Instance, openSettings: OpenSettings);
         }
 
         public async Task ApplyAsync(int exitCode, params string[] lines) {
@@ -59,6 +62,38 @@ public class LocalSearchViewModelTests {
             await Assert.That(keyword.Vm.StateText).IsEqualTo("keyword search");
             await Assert.That(meaning.Vm.StateText).IsEqualTo("search by meaning");
             await Assert.That(meaning.Vm.CurrentText).IsEqualTo("Searches by meaning with mxbai-embed-large.");
+        });
+    }
+
+    /// <summary>The rail's search word is the way into the Settings tab that changes it.</summary>
+    [Test]
+    public async Task The_rail_word_opens_search_settings() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness(null);
+            h.OpenSettings.OnNext(() => h.SettingsOpened++);
+
+            await h.Vm.OpenSettingsCommand.Execute().ToTask();
+
+            await Assert.That(h.SettingsOpened).IsEqualTo(1);
+        });
+    }
+
+    /// <summary>A local server reached by URL with no profile has no Settings window, so the rail word opens the
+    /// controls in place instead of linking to a window that cannot open.</summary>
+    [Test]
+    public async Task Without_a_settings_window_the_rail_word_opens_the_controls_in_place() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness(null);
+
+            await Assert.That(await h.Vm.OpenSettingsCommand.CanExecute.FirstAsync()).IsFalse();
+            await Assert.That(h.Vm.ShowsInlineSettings).IsTrue();
+            await Assert.That(h.Vm.ShowsSettingsLink).IsFalse();
+
+            h.OpenSettings.OnNext(() => h.SettingsOpened++);
+
+            await Assert.That(await h.Vm.OpenSettingsCommand.CanExecute.FirstAsync()).IsTrue();
+            await Assert.That(h.Vm.ShowsInlineSettings).IsFalse();
+            await Assert.That(h.Vm.ShowsSettingsLink).IsTrue();
         });
     }
 

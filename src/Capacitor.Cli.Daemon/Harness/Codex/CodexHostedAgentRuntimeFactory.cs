@@ -132,6 +132,10 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
 
     public bool SupportsRestartResume(string? runtimeTransport) => true;
 
+    /// <summary>Only a session recorded on the terminal transport resumes there; any other may reach the app-server.</summary>
+    public bool ResumesIdleWithoutPrompt(string? runtimeTransport) =>
+        runtimeTransport == CodexTransportDecision.Pty && _pty.ResumesIdleWithoutPrompt(runtimeTransport);
+
     public Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
         // A parked reviewer's transcript is envelope-sourced; a PTY resume would fork it.
         if (ctx.ResumeSessionId is not null && ctx.IsReviewFlow && !UsesAppServer(ctx))

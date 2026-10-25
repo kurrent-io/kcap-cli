@@ -14,7 +14,7 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
     public const string BuiltinUnavailable = "The version of kcap local this Mac runs has no built-in model.";
     public const string BuiltinLookingUp = "Checking whether the version of kcap local this Mac runs has a built-in model…";
     public const string MeaningDetail = "Finds related information even when you use different words. Uses an AI model that runs in Ollama on this Mac.";
-    public const string KeywordDetail = "Finds information using matching words. No AI model needed. You can change this later from kcap local in the sidebar.";
+    public const string KeywordDetail = "Finds information using matching words. No AI model needed. You can change this later in Settings, under Search.";
     public const string DefaultLabel = $"{LocalEmbeddingChoice.DefaultModel} (about 670 MB)";
     public const string DefaultDetail = "Downloaded into Ollama if it is not there yet.";
     public const string OllamaDownloadUrl = "https://ollama.com/download";

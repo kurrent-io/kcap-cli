@@ -11,15 +11,15 @@ using ReactiveUI.Reactive;
 namespace Capacitor.App.ViewModels;
 
 /// <summary>
-/// How the local server searches, beside its version in the rail, and a flyout that changes it by running
-/// setup again. An upgrade and a search change cannot run together, so each holds the other off.
+/// How the local server searches: a word beside its version in the rail, which opens the Settings tab that
+/// changes it by running setup again. An upgrade and a search change cannot run together, so each holds the other off.
 /// </summary>
 public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
     public const string BusyText = "Another local setup, upgrade or uninstall is running on this Mac. Try again once it has finished.";
 
     static readonly string[] Derived = [
         nameof(Running), nameof(StateText), nameof(CurrentText), nameof(CanApply), nameof(ApplyLabel), nameof(Embeddings),
-        nameof(FailureText),
+        nameof(FailureText), nameof(ShowsSettingsLink), nameof(ShowsInlineSettings),
     ];
 
     readonly LocalSearchController _search;
@@ -33,16 +33,19 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
     readonly SerialDisposable _read = new();
     readonly SerialDisposable _offer = new();
     LocalEmbeddingSetting? _current;
+    bool _canOpenSettings;
     bool _loaded;
 
     /// <param name="readSetting">The installation's recorded embedding setting; a disk read, run on
     /// <paramref name="readScheduler"/> (the task pool by default), never on the UI thread.</param>
     /// <param name="builtinOffer">The built-in model set the installed stack offers, or null; asked again on every reconnect,
     /// which follows an upgrade.</param>
+    /// <param name="openSettings">What opens Settings on its Search tab, null while no Settings window can open.</param>
     public LocalSearchViewModel(
             Func<LocalEmbeddingSetting?> readSetting, Func<CancellationToken, Task<LocalEmbeddingModelManifest?>> builtinOffer,
             IObservable<ServerLaneStatus> status, LocalSearchController search,
-            LocalUpgradeController upgrade, Func<Task> reconnect, CancellationToken shutdown, IScheduler? readScheduler = null) {
+            LocalUpgradeController upgrade, Func<Task> reconnect, CancellationToken shutdown, IScheduler? readScheduler = null,
+            IObservable<Action?>? openSettings = null) {
         _search        = search;
         _upgrade       = upgrade;
         _readSetting   = readSetting;
@@ -81,7 +84,15 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
             })
             .DisposeWith(_disposables);
 
-        ApplyCommand = ReactiveCommand.CreateFromTask(ApplyAsync);
+        ApplyCommand        = ReactiveCommand.CreateFromTask(ApplyAsync);
+        Action? open = null;
+        var settings = openSettings ?? Observable.Return<Action?>(null);
+        settings.Subscribe(action => {
+            open             = action;
+            _canOpenSettings = action is not null;
+            Refresh();
+        }).DisposeWith(_disposables);
+        OpenSettingsCommand = ReactiveCommand.Create(() => open?.Invoke(), settings.Select(action => action is not null));
     }
 
     public SearchChoiceViewModel Choice { get; }
@@ -120,6 +131,14 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
         : null;
 
     public ReactiveCommand<Unit, Unit> ApplyCommand { get; }
+
+    public ReactiveCommand<Unit, Unit> OpenSettingsCommand { get; }
+
+    /// The rail word opens the Settings tab when there is one to open.
+    public bool ShowsSettingsLink => StateText is not null && _canOpenSettings;
+
+    /// Without a Settings window, the rail word opens the same controls in place.
+    public bool ShowsInlineSettings => StateText is not null && !_canOpenSettings;
 
     bool CurrentByMeaning => _current is { Model: not null } or { Provider: LocalEmbeddingProvider.Builtin };
 
