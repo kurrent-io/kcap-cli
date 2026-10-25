@@ -118,9 +118,14 @@ public class McpFlowsServerTests : IDisposable {
             WorkingDirectory       = server.WorkingDirectory,
         };
         // A POSIX shell (dash) points an asynchronous list's stdin at /dev/null before its own redirections run, so
-        // `<&0` would hand the server /dev/null; stdin is kept on fd 3 and restored from there.
+        // `<&0` would hand the server /dev/null; stdin is kept on fd 3 and restored from there. The background child
+        // waits for the shell ($$ inside it) to be gone before it becomes the server, since the server reads its
+        // ancestry at startup; a pid file that cannot be written kills the child before it starts.
         var pidFile = Config.PathTo($"orphan-{Guid.NewGuid():N}.pid");
-        foreach (var arg in new[] { "-c", "exec 3<&0; \"$@\" <&3 3<&- & echo $! > \"$0\"", pidFile, server.FileName }) shell.ArgumentList.Add(arg);
+        const string script =
+            "exec 3<&0; (while kill -0 $$ 2>/dev/null; do sleep 0.05; done; exec \"$@\" <&3 3<&-) & "
+          + "echo $! > \"$0\" || { kill $!; exit 97; }";
+        foreach (var arg in new[] { "-c", script, pidFile, server.FileName }) shell.ArgumentList.Add(arg);
         foreach (var arg in server.ArgumentList) shell.ArgumentList.Add(arg);
         shell.Environment.Clear();
         foreach (var (key, value) in server.Environment) shell.Environment[key] = value;
@@ -128,6 +133,7 @@ public class McpFlowsServerTests : IDisposable {
         var process = Process.Start(shell) ?? throw new InvalidOperationException("Failed to start the shell");
         _spawnedProcesses.Add(process);
         process.WaitForExit();
+        if (process.ExitCode != 0) throw new InvalidOperationException($"The shell could not start the server: exit {process.ExitCode}");
         var pid = int.Parse(File.ReadAllText(pidFile).Trim(), CultureInfo.InvariantCulture);
         using (var orphan = Process.GetProcessById(pid)) _orphans.Add((pid, orphan.StartTime));
 
