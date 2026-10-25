@@ -110,6 +110,24 @@ public class WorktreeManagerUserGitConfigTests {
         await Assert.That(snapshot.Do("status", "--porcelain").Text).IsEqualTo("");
     }
 
+    /// <summary>The snapshot's attributes file replaces the user's for the agent's later commands, so it keeps the user's
+    /// own rules, such as an LFS filter, and resets only their line endings</summary>
+    [Test]
+    public async Task A_standalone_snapshot_keeps_the_users_own_attribute_rules() {
+        var source = Tmp.CreateDir("proj");
+        source.CreateFile("README.md", "hello");
+        var attributes = Tmp.CreateFile("user.gitattributes", "*.psd filter=lfs diff=lfs merge=lfs -text\n*.txt eol=crlf");
+        using var config = UserGlobalConfig($"[core]\n    attributesFile = {attributes.Replace('\\', '/')}\n");
+
+        var worktree = await NewManager().CreateAsync(source);
+
+        var snapshot = GitRepo.At(worktree.Path);
+        await Assert.That(snapshot.Do("check-attr", "filter", "diff", "--", "art.psd").Text)
+            .IsEqualTo("art.psd: filter: lfs\nart.psd: diff: lfs");
+        await Assert.That(snapshot.Do("check-attr", "text", "eol", "--", "notes.txt").Text)
+            .IsEqualTo("notes.txt: text: unspecified\nnotes.txt: eol: unspecified");
+    }
+
     /// <summary>
     /// The machine's attributes file sits below the snapshot's, and git resolves each attribute on its own, so the
     /// snapshot's file must reset <c>eol</c> as well as <c>text</c>: a machine-wide <c>* eol=crlf</c> would otherwise

@@ -435,7 +435,8 @@ public partial class WorktreeManager(
         StripWorkspaceMcpConfig(worktreePath);
         var noHooks = NoBranchHooks();
         await RunGit(worktreePath, GitTimeout, time, noHooks, "init");
-        var verbatim = VerbatimLineEndings(CreateSnapshotAttributesFile(worktreePath));
+        var userAttributes = await UserAttributesFileAsync(worktreePath, time);
+        var verbatim       = VerbatimLineEndings(CreateSnapshotAttributesFile(worktreePath, userAttributes));
         // Kept in the snapshot's own config too, so the agent's later diffs compare the bytes that were copied.
         foreach (var setting in verbatim)
             await RunGit(worktreePath, GitTimeout, time, noHooks, "config", setting.Key, setting.Value);
@@ -508,7 +509,8 @@ public partial class WorktreeManager(
 
     /// <summary>A standalone snapshot records the bytes it copied: a user's line-ending conversion would rewrite
     /// them, and its strict form refuses the commit outright. A user's own attributes file is replaced by the
-    /// snapshot's, so only the project's <c>.gitattributes</c> decides a file's conversion.</summary>
+    /// snapshot's, which keeps its rules but resets their line endings, so only the project's <c>.gitattributes</c>
+    /// decides a file's conversion.</summary>
     static GitConfigOverride[] VerbatimLineEndings(string attributesFile) =>
         [new("core.autocrlf", "false"), new("core.safecrlf", "false"), new("core.attributesFile", attributesFile)];
 
@@ -523,13 +525,28 @@ public partial class WorktreeManager(
     /// above the machine's attributes and below the project's <c>.gitattributes</c>, so the agent's later commands,
     /// which skip neither, still convert only what the project asks for. <c>info/attributes</c> would not do: it
     /// outranks the project's own file.</summary>
-    static string CreateSnapshotAttributesFile(string worktreePath) {
+    static string CreateSnapshotAttributesFile(string worktreePath, string? userAttributesFile) {
         var info = Path.Combine(worktreePath, ".git", "info");
         Directory.CreateDirectory(info);
         var path = Path.Combine(info, "kcap-snapshot-attributes");
-        File.WriteAllText(path, "* !text !eol\n");
+        // The user's own rules come first, so the agent's later commands keep them (an LFS filter, a diff driver), and
+        // the reset after them wins for text and eol, a later line in one file outranking an earlier one.
+        var user = userAttributesFile is not null && File.Exists(userAttributesFile) ? File.ReadAllText(userAttributesFile) : "";
+        File.WriteAllText(path, (user.Length > 0 && !user.EndsWith('\n') ? user + "\n" : user) + "* !text !eol\n");
 
         return Path.GetFullPath(path).Replace('\\', '/');
+    }
+
+    /// <summary>The attributes file the user's git config names, else the default git reports for it. A git older than
+    /// 2.42 cannot report the default, and the snapshot then keeps no rules of the user's</summary>
+    static async Task<string?> UserAttributesFileAsync(string worktreePath, TimeProvider time) {
+        var configured = await RunGitCaptureResult(worktreePath, GitTimeout, time, sourceReadOnly: false, [],
+            "config", "--path", "--get", "core.attributesFile");
+        if (configured.ExitCode == 0 && configured.Stdout.Trim() is { Length: > 0 } named) return named;
+
+        var fallback = await RunGitCaptureResult(worktreePath, GitTimeout, time, sourceReadOnly: false, [], "var", "GIT_ATTR_GLOBAL");
+
+        return fallback.ExitCode == 0 && fallback.Stdout.Trim() is { Length: > 0 } path ? path : null;
     }
 
     /// <summary>A linked worktree's submodule has no gitdir of its own, so a checkout that recursed into it
