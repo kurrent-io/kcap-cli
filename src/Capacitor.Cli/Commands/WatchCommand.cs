@@ -1687,6 +1687,8 @@ partial class WatchCommand(
             return; // discovery is best-effort — never break the main drain loop
         }
 
+        IReadOnlyDictionary<string, string>? spawnCalls = null;
+
         foreach (var sub in subs) {
             if (ct.IsCancellationRequested) return;
 
@@ -1703,7 +1705,9 @@ partial class WatchCommand(
 
             // Fail-closed: register the subagent (→ SubagentStarted) before its child watcher
             // streams content. On POST failure, drop from `seen` so the next tick retries.
-            if (isNew && !await PostCodexSubagentStartAsync(sessionId, childAgentId, agentType, sub.FilePath, ct)) {
+            if (isNew
+             && !await PostCodexSubagentStartAsync(sessionId, childAgentId, agentType, sub.FilePath,
+                    CodexSubagentDiscovery.SpawnCallFor(spawnCalls ??= CodexSubagentDiscovery.ReadSpawnCalls(transcriptPath), sub.AgentPath), ct)) {
                 seen.Remove(sub.FilePath);
                 continue;
             }
@@ -1717,11 +1721,11 @@ partial class WatchCommand(
     }
 
     async Task<bool> PostCodexSubagentStartAsync(
-        string sessionId, string agentId, string agentType, string subFile, CancellationToken ct
+        string sessionId, string agentId, string agentType, string subFile, string? spawnCallId, CancellationToken ct
     ) {
         try {
             using var client  = await http.ForBackgroundAsync(ct);
-            var       payload = CodexSubagentDiscovery.BuildStartPayload(sessionId, agentId, agentType, subFile);
+            var       payload = CodexSubagentDiscovery.BuildStartPayload(sessionId, agentId, agentType, subFile, spawnCallId);
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
             using var resp    = await client.PostWithRetryAsync($"{Url}/hooks/subagent-start", content, time, ct: ct);
 
