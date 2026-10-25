@@ -539,7 +539,7 @@ public partial class WorktreeManager(
 
     /// <summary>The attributes file the user's git config names, relative to the snapshot as git reads it, else git's
     /// default. Git 2.42 and later report that default; for an older git it is rebuilt from the same environment git
-    /// reads, which is why the home here is git's <c>HOME</c> rather than the daemon's resolved one</summary>
+    /// reads, which is why the home here is git's rather than the daemon's resolved one</summary>
     static async Task<string?> UserAttributesFileAsync(string worktreePath, TimeProvider time) {
         var configured = await RunGitCaptureResult(worktreePath, GitTimeout, time, sourceReadOnly: false, [],
             "config", "--path", "--get", "core.attributesFile");
@@ -550,9 +550,18 @@ public partial class WorktreeManager(
 
         if (Environment.GetEnvironmentVariable("XDG_CONFIG_HOME") is { Length: > 0 } xdg) return Path.Combine(xdg, "git", "attributes");
 
-        return (Environment.GetEnvironmentVariable("HOME") ?? Environment.GetEnvironmentVariable("USERPROFILE")) is { Length: > 0 } home
-            ? Path.Combine(home, ".config", "git", "attributes")
-            : null;
+        return GitHome() is { } home ? Path.Combine(home, ".config", "git", "attributes") : null;
+    }
+
+    /// <summary>The home git uses: <c>HOME</c>, else on Windows <c>HOMEDRIVE</c> plus <c>HOMEPATH</c>, else
+    /// <c>USERPROFILE</c></summary>
+    static string? GitHome() {
+        if (Environment.GetEnvironmentVariable("HOME") is { Length: > 0 } home) return home;
+        if (!OperatingSystem.IsWindows()) return null;
+        if (Environment.GetEnvironmentVariable("HOMEDRIVE") is { Length: > 0 } drive
+         && Environment.GetEnvironmentVariable("HOMEPATH") is { Length: > 0 } homePath) return drive + homePath;
+
+        return Environment.GetEnvironmentVariable("USERPROFILE") is { Length: > 0 } profile ? profile : null;
     }
 
     /// <summary>A linked worktree's submodule has no gitdir of its own, so a checkout that recursed into it
