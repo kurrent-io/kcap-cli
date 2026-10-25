@@ -24,15 +24,21 @@ public class LocalSearchViewModelTests {
         public int Reconnects;
         /// What `data/embedding.json` holds; the view model reads it again once a run settles.
         public LocalEmbeddingSetting? Setting;
+        /// What the installed stack's manifest offers; looked up again on every reconnect.
+        public LocalEmbeddingModelManifest? Offered;
+        /// Set before construction to hold the lookup open.
+        public TaskCompletionSource<LocalEmbeddingModelManifest?>? Lookup;
 
         public int SettingsOpened;
         public readonly BehaviorSubject<Action?> OpenSettings = new(null);
 
-        public Harness(LocalEmbeddingSetting? setting) {
+        public Harness(LocalEmbeddingSetting? setting, bool offered = true, TaskCompletionSource<LocalEmbeddingModelManifest?>? lookup = null) {
+            Lookup  = lookup;
             Setting = setting;
+            Offered = offered ? new("builtin-test", 1, new('e', 64), [new("model.onnx", new('f', 64), 300L * 1024 * 1024)]) : null;
             Search  = new LocalSearchController(() => Cli, action => action(), held: () => Upgrade.Running);
             Upgrade = new LocalUpgradeController(() => Cli, action => action(), held: () => Search.Running);
-            Vm = new LocalSearchViewModel(() => Setting, Status, Search, Upgrade, () => {
+            Vm = new LocalSearchViewModel(() => Setting, _ => Lookup?.Task ?? Task.FromResult(Offered), Status, Search, Upgrade, () => {
                 Reconnects++;
                 return Task.CompletedTask;
             }, CancellationToken.None, ImmediateScheduler.Instance, openSettings: OpenSettings);
@@ -51,7 +57,7 @@ public class LocalSearchViewModelTests {
     public async Task The_rail_names_how_the_server_searches() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var keyword = new Harness(null);
-            using var meaning = new Harness(new LocalEmbeddingSetting("mxbai-embed-large"));
+            using var meaning = new Harness(LocalEmbeddingSetting.Ollama("mxbai-embed-large"));
 
             await Assert.That(keyword.Vm.StateText).IsEqualTo("keyword search");
             await Assert.That(meaning.Vm.StateText).IsEqualTo("search by meaning");
@@ -92,9 +98,74 @@ public class LocalSearchViewModelTests {
     }
 
     [Test]
+    public async Task The_builtin_option_follows_the_installed_stack_and_is_looked_up_again_on_reconnect() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness(null, offered: false);
+
+            await Assert.That(h.Vm.Choice.BuiltinEnabled).IsFalse();
+            await Assert.That(h.Vm.Choice.UseKeyword).IsTrue();
+            await Assert.That(h.Vm.Choice.Choice.Args).IsEmpty();
+
+            h.Offered = new("builtin-test", 1, new('e', 64), [new("model.onnx", new('f', 64), 300L * 1024 * 1024)]);
+            h.Status.OnNext(new(ServerLaneState.Retrying));
+            h.Status.OnNext(new(ServerLaneState.Connected));
+
+            await Assert.That(h.Vm.Choice.BuiltinEnabled).IsTrue();
+            await Assert.That(h.Vm.Choice.UseBuiltin).IsTrue();
+        });
+    }
+
+    [Test]
+    public async Task Builtin_cannot_be_applied_as_a_new_choice_while_the_lookup_is_pending() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var lookup = new TaskCompletionSource<LocalEmbeddingModelManifest?>();
+            using var h = new Harness(LocalEmbeddingSetting.Declined, lookup: lookup);
+
+            h.Vm.Choice.UseBuiltin = true;
+
+            await Assert.That(h.Vm.Choice.BuiltinEnabled).IsFalse();
+            await Assert.That(h.Vm.Choice.UseKeyword).IsTrue();
+            await Assert.That(h.Vm.CanApply).IsFalse();
+
+            var offered = h.Vm.Choice.WhenAnyValue(x => x.BuiltinEnabled).Where(enabled => enabled).FirstAsync().ToTask();
+            lookup.SetResult(h.Offered);
+            await offered.WaitAsync(TimeSpan.FromSeconds(5));
+            h.Vm.Choice.UseBuiltin = true;
+
+            await Assert.That(h.Vm.Choice.Choice.Args).IsEquivalentTo(["--builtin-embeddings"]);
+            await Assert.That(h.Vm.CanApply).IsTrue();
+
+            using var recorded = new Harness(LocalEmbeddingSetting.Builtin(new string('a', 64)), lookup: new());
+            await Assert.That(recorded.Vm.Choice.BuiltinEnabled).IsTrue();
+            await Assert.That(recorded.Vm.Choice.UseBuiltin).IsTrue();
+        });
+    }
+
+    /// While the lookup is open the shown recommendation is keyword search, yet setup left to decide could pick the
+    /// built-in model, so nothing applies until the recommendation is the one setup will reach.
+    [Test]
+    public async Task An_unchosen_recommendation_waits_for_the_builtin_lookup() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var lookup = new TaskCompletionSource<LocalEmbeddingModelManifest?>();
+            using var h = new Harness(null, lookup: lookup);
+
+            await Assert.That(h.Vm.Choice.UseKeyword).IsTrue();
+            await Assert.That(h.Vm.CanApply).IsFalse();
+
+            var offered = h.Vm.WhenAnyValue(x => x.CanApply).Where(can => can).FirstAsync().ToTask();
+            lookup.SetResult(h.Offered);
+            await offered.WaitAsync(TimeSpan.FromSeconds(5));
+
+            await Assert.That(h.Vm.Choice.UseBuiltin).IsTrue();
+            await Assert.That(h.Vm.Choice.Choice.Unchosen).IsTrue();
+            await Assert.That(h.Vm.Choice.Choice.Args).IsEmpty();
+        });
+    }
+
+    [Test]
     public async Task The_recorded_choice_cannot_be_applied_again() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            using var h = new Harness(new LocalEmbeddingSetting("mxbai-embed-large"));
+            using var h = new Harness(LocalEmbeddingSetting.Ollama("mxbai-embed-large"));
 
             await Assert.That(h.Vm.Choice.UseDefault).IsTrue();
             await Assert.That(h.Vm.CanApply).IsFalse();
@@ -107,13 +178,28 @@ public class LocalSearchViewModelTests {
     }
 
     [Test]
+    public async Task A_recorded_builtin_model_reads_as_search_by_meaning_and_only_a_change_applies() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness(LocalEmbeddingSetting.Builtin(new string('a', 64)));
+
+            await Assert.That(h.Vm.StateText).IsEqualTo("search by meaning");
+            await Assert.That(h.Vm.CurrentText).IsEqualTo("Searches by meaning with the built-in model.");
+            await Assert.That(h.Vm.CanApply).IsFalse();
+
+            h.Vm.Choice.UseKeyword = true;
+
+            await Assert.That(h.Vm.CanApply).IsTrue();
+        });
+    }
+
+    [Test]
     public async Task Turning_search_by_meaning_on_reruns_setup_with_the_model_and_reconnects() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var h = new Harness(LocalEmbeddingSetting.Declined);
-            h.Vm.Choice.UseMeaning = true;
+            h.Vm.Choice.UseOllama = true;
             await Assert.That(h.Vm.ApplyLabel).IsEqualTo("Turn on search by meaning");
 
-            h.Setting = new LocalEmbeddingSetting("mxbai-embed-large");
+            h.Setting = LocalEmbeddingSetting.Ollama("mxbai-embed-large");
             await h.ApplyAsync(0,
                 "{\"v\":1,\"event\":\"embeddings_configured\",\"provider\":\"ollama\",\"model\":\"mxbai-embed-large\"}",
                 Reused, LocalSetupScript.Committed);
@@ -180,7 +266,7 @@ public class LocalSearchViewModelTests {
     [Test]
     public async Task A_reconnect_rereads_a_setting_changed_elsewhere() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            using var h = new Harness(new LocalEmbeddingSetting("mxbai-embed-large"));
+            using var h = new Harness(LocalEmbeddingSetting.Ollama("mxbai-embed-large"));
 
             h.Setting = LocalEmbeddingSetting.Declined;
             h.Status.OnNext(new(ServerLaneState.Retrying, "Connection refused"));

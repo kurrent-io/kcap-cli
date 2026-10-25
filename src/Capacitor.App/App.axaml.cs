@@ -798,7 +798,7 @@ public partial class App : Application {
             () => LocalEndpoints.Read(_localRoot).Active?.Version, serverLane.Status, localUpgrade, lifecycleCli.LocalStartAsync,
             () => serverLane.RestartAsync(), _shutdown.Token, searchChange: localSearch) {
             Search = localSearch is null ? null : new LocalSearchViewModel(
-                () => LocalEmbeddingFile.Read(_localRoot), serverLane.Status, localSearch, localUpgrade, () => serverLane.RestartAsync(),
+                () => LocalEmbeddingFile.Read(_localRoot), ct => LocalBuiltinOffer.LookupAsync(_localRoot, ct), serverLane.Status, localSearch, localUpgrade, () => serverLane.RestartAsync(),
                 _shutdown.Token, openSettings: _openSearchSettings),
         };
         _localStack = localStack;
@@ -1251,6 +1251,7 @@ public partial class App : Application {
             UrlOpener: new ShellUrlOpener(),
             Probe: probe,
             DetectionFeed: probe => HarnessesStepViewModel.BuildDetectionFeed(probe, _userHome),
+            BuiltinOffer: ct => LocalBuiltinOffer.LookupAsync(_localRoot, ct),
             CliPath: cliPath,
             ShimApplicable: shimApplicable,
             ShimTarget: shimTarget,

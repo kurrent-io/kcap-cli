@@ -69,6 +69,50 @@ public class LocalBundleManifestTests {
     [Test]
     public Task Non_json_is_refused() => AssertRefused(_ => "not json");
 
+    const string ModelJson = """{"model_id":"mxbai-embed-large-v1","contract":1,"model_set":"%SET%","files":[{"name":"model.onnx","sha256":"%SHA%","size":336983163,"source_url":"https://x/y"},{"name":"vocab.txt","sha256":"%SHA%","size":231508,"source_url":"https://x/z"}]}""";
+
+    static string WithModel(ECDsa key, string model) =>
+        Json(key)[..^1] + $$""","embedding_model":{{model}}}""";
+
+    static string Model(string set = "", string sha = "") =>
+        ModelJson.Replace("%SET%", set.Length > 0 ? set : new string('b', 64)).Replace("%SHA%", sha.Length > 0 ? sha : new string('c', 64));
+
+    [Test]
+    public async Task A_manifest_without_an_embedding_model_has_none() {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var (bytes, sig) = Sign(key, Json(key));
+
+        await Assert.That(LocalBundleManifest.Verify(bytes, sig, key, Version, Rid).EmbeddingModel).IsNull();
+    }
+
+    [Test]
+    public async Task A_valid_embedding_model_is_parsed() {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var (bytes, sig) = Sign(key, WithModel(key, Model()));
+
+        var m = LocalBundleManifest.Verify(bytes, sig, key, Version, Rid).EmbeddingModel!;
+
+        await Assert.That(m.ModelId).IsEqualTo("mxbai-embed-large-v1");
+        await Assert.That(m.Contract).IsEqualTo(1);
+        await Assert.That(m.ModelSet).IsEqualTo(new string('b', 64));
+        await Assert.That(m.Files.Select(f => f.Name)).IsEquivalentTo(["model.onnx", "vocab.txt"]);
+        await Assert.That(m.Files[0].Size).IsEqualTo(336983163L);
+        await Assert.That(m.TotalSize).IsEqualTo(336983163L + 231508);
+    }
+
+    [Test]
+    [Arguments("null")]
+    [Arguments("[]")]
+    [Arguments("""{"model_id":"m","contract":1,"model_set":"bad","files":[]}""")]
+    [Arguments("""{"model_id":"m","contract":1,"model_set":"%SET%","files":[]}""")]
+    [Arguments("""{"model_id":"m","contract":0,"model_set":"%SET%","files":[{"name":"a","sha256":"%SET%","size":1}]}""")]
+    [Arguments("""{"model_id":"m","contract":1,"model_set":"%SET%","files":[{"name":"../a","sha256":"%SET%","size":1}]}""")]
+    [Arguments("""{"model_id":"m","contract":1,"model_set":"%SET%","files":[{"name":"a","sha256":"xyz","size":1}]}""")]
+    [Arguments("""{"model_id":"m","contract":1,"model_set":"%SET%","files":[{"name":"a","sha256":"%SET%","size":0}]}""")]
+    [Arguments("""{"model_id":"m","contract":1,"model_set":"%SET%","files":[{"name":"a","sha256":"%SET%","size":1},{"name":"A","sha256":"%SET%","size":1}]}""")]
+    public Task A_malformed_embedding_model_is_refused(string entry) =>
+        AssertRefused(k => WithModel(k, entry.Replace("%SET%", new string('b', 64))));
+
     [Test]
     public async Task Every_failure_code_has_a_distinct_snake_case_wire_name() {
         var names = Enum.GetValues<LocalInstallFailureCode>().Select(c => c.Wire()).ToList();
