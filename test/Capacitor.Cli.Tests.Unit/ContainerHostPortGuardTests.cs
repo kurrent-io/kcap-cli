@@ -35,6 +35,7 @@ public partial class ContainerHostPortGuardTests {
     [Arguments("KurrentDbBuilder Unbuilt() => new KurrentDbBuilder(image); var c = new ContainerBuilder(i).WithPortBinding(ContainerHostPorts.Next(), 80).Build();")]
     [Arguments("Pair(new KurrentDbBuilder(a), new PostgreSqlBuilder(b).WithPortBinding(ContainerHostPorts.Next(), 5432).Build())")]
     [Arguments("new KurrentDbBuilder(image).WithEnvironment(\"NOTE\", \".WithPortBinding(ContainerHostPorts.Next(), 2113)\").Build()")]
+    [Arguments("var q = '\"'; new KurrentDbBuilder(image).Build(); var s = \"x\";")]
     public async Task Pattern_flags_a_port_docker_chooses(string code) =>
         await Assert.That(PublishesOnDockersChoice(code)).IsTrue();
 
