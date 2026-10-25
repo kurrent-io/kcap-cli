@@ -15,7 +15,7 @@ namespace Capacitor.App.ViewModels.Onboarding;
 /// Retry and the page waits for a second Next rather than moving on as if it had worked.
 /// </summary>
 public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
-    /// Every answer, narrowest first, offered when the server does not say which this tenant can honour.
+    /// Every answer, narrowest first, offered when the server does not say which this tenant can honour
     public static readonly IReadOnlyList<VisibilityOption> AllVisibilityOptions = [
         new("private", "Only me", "Nobody else can read them."),
         new("project", "People I share a project with", "Readable by other members of your projects that hold the repository."),
@@ -112,7 +112,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
 
     public bool CliAvailable => _cli.CliPath is not null;
 
-    /// The answers this tenant can honour, in the server's order and copy, or every answer when it does not say.
+    /// The answers this tenant can honour, in the server's order and copy, or every answer when it does not say
     public IReadOnlyList<VisibilityOption> VisibilityOptions { get; private set; } = AllVisibilityOptions;
 
     public string? Visibility {
@@ -250,7 +250,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
         }
     }
 
-    /// A failed read keeps every answer on screen: the step must stay answerable whatever the server does.
+    /// A failed read keeps every answer on screen: the step must stay answerable whatever the server does
     async Task OfferAsync(Task<VisibilityOptionsResponse?> offered) {
         VisibilityOptionsResponse? offer;
         try { offer = await offered.ConfigureAwait(true); } catch (Exception ex) when (ex is not OperationCanceledException) {

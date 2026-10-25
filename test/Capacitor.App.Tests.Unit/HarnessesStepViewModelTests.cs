@@ -274,7 +274,7 @@ public class HarnessesStepViewModelTests {
     ];
 
     /// The step offers the answers the server says this tenant can honour, in its order and copy, and every answer
-    /// when the server says nothing or the read fails. It still waits for an explicit choice.
+    /// when the server says nothing or the read fails. It still waits for an explicit choice
     [Test]
     [MethodDataSource(nameof(OfferRows))]
     [NotInParallel("AvaloniaSession")]
