@@ -23,6 +23,16 @@ public class TranscriptEnvelopesTests {
     }
 
     [Test]
+    public async Task A_user_message_names_its_stored_event_and_an_unidentified_one_names_none() {
+        var id = Guid.NewGuid();
+        var stored = TranscriptEnvelopes.From(new CanonicalEvent(CanonicalEventTypes.UserMessageReceived, new UserMessageReceived { Content = "hi" }, id, At))[0];
+        await Assert.That(stored.SourceEventId).IsEqualTo(id);
+
+        var unidentified = TranscriptEnvelopes.From(new CanonicalEvent(CanonicalEventTypes.UserMessageReceived, new UserMessageReceived { Content = "hi" }, Guid.Empty, At))[0];
+        await Assert.That(unidentified.SourceEventId).IsNull();
+    }
+
+    [Test]
     public async Task Thinking_with_empty_content_reads_as_encrypted() {
         var plain = TranscriptEnvelopes.From(Ev(new AssistantThinkingGenerated { Content = "hmm" }))[0];
         await Assert.That(plain.Kind).IsEqualTo(AcpEventKind.AssistantThinking);

@@ -101,6 +101,25 @@ public class AgentOrchestratorResumeLedgerTests {
     }
 
     [Test]
+    [Arguments(null, true)]
+    [Arguments("Named by the caller", false)]
+    public async Task Both_ledger_writes_record_whether_the_start_title_was_cut_from_the_prompt(string? title, bool derived) {
+        using var repoPath = GitRepo.CreateWithCommit();
+        var factory = new ObservingAcpFactory();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
+            new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
+            allowedRepoPath: repoPath, extraRuntimeFactories: [factory]);
+        factory.Observe = () => orch.ResumeLedger!.TryRead("ledger-title");
+
+        await orch.HandleLaunchAgentForTest(
+            AgentOrchestratorHarness.NewCursorLaunch("ledger-title", repoPath) with { Title = title });
+
+        await Assert.That(orch.GetAgentForTest("ledger-title")).IsNotNull();
+        await Assert.That(factory.ObservedAtStart!.Launch.TitleDerived).IsEqualTo(derived);
+        await Assert.That(orch.ResumeLedger!.TryRead("ledger-title")!.Launch.TitleDerived).IsEqualTo(derived);
+    }
+
+    [Test]
     public async Task A_launch_that_fails_to_start_leaves_no_entry() {
         using var repoPath = GitRepo.CreateWithCommit();
         var factory = new ObservingThenFailingFactory();

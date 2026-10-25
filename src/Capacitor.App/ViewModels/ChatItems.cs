@@ -10,8 +10,9 @@ namespace Capacitor.App.ViewModels;
 /// One row of the Chat tab. Matched by DataTemplates on the concrete type.
 public abstract class ChatItemViewModel : ReactiveObject { }
 
-public sealed class UserTurnItem(string text, IReadOnlyList<UserAttachment>? attachments = null) : ChatItemViewModel {
+public sealed class UserTurnItem(string text, IReadOnlyList<UserAttachment>? attachments = null, SenderLabel? sender = null) : ChatItemViewModel {
     public string Text { get; } = text;
+    public SenderLabel Sender { get; } = sender ?? new SenderLabel(default, null);
     public bool HasText => !string.IsNullOrWhiteSpace(Text);
     public IReadOnlyList<UserAttachment> Attachments { get; } = attachments ?? [];
     public bool HasAttachments => Attachments.Count > 0;
@@ -84,9 +85,13 @@ public sealed class SystemNoteItem(string text, string label = SystemNoteItem.No
 /// A bang command the user ran, and the output record that follows it. The output arrives later,
 /// so it is filled in on the same item.
 public sealed class ShellCommandItem : ChatItemViewModel {
-    public ShellCommandItem(string command) { Command = command; }
+    public ShellCommandItem(string command, SenderLabel? sender = null) {
+        Command = command;
+        Sender = sender ?? new SenderLabel(default, null);
+    }
 
     public string Command { get; }
+    public SenderLabel Sender { get; }
     public bool HasCommand => Command.Length > 0;
 
     string? _output;

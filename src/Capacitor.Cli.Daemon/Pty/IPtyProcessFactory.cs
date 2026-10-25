@@ -15,6 +15,9 @@ public static class PtyDefaults
 
 public interface IPtyProcessFactory
 {
+    /// <param name="removeEnv">Inherited variables the child must not see; <paramref name="extraEnv"/> is
+    /// applied after them.</param>
     IPtyProcess Spawn(string command, string[] args, string cwd,
-        Dictionary<string, string>? extraEnv = null, ushort cols = PtyDefaults.Cols, ushort rows = PtyDefaults.Rows);
+        Dictionary<string, string>? extraEnv = null, ushort cols = PtyDefaults.Cols, ushort rows = PtyDefaults.Rows,
+        IReadOnlyCollection<string>? removeEnv = null);
 }
