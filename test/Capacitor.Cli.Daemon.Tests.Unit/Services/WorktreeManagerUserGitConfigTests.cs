@@ -103,10 +103,27 @@ public class WorktreeManagerUserGitConfigTests {
         await Assert.That(snapshot.Do("cat-file", "blob", "HEAD:crlf.txt").StdOut).IsEqualTo("one\r\ntwo\r\n");
         await Assert.That(snapshot.Do("cat-file", "blob", "HEAD:project.txt").StdOut).IsEqualTo("one\ntwo\n");
         // The agent's later git commands do not carry GIT_ATTR_NOSYSTEM. The snapshot's attributes file sits above the
-        // machine's in git's precedence and below the project's, so a machine-wide `* text` cannot reach these files.
-        await Assert.That(snapshot.Do("check-attr", "text", "crlf.txt").Text).IsEqualTo("crlf.txt: text: unset");
+        // machine's in git's precedence and below the project's, and its `!text` resets text to unspecified there, so a
+        // machine-wide `* text` cannot reach these files.
+        await Assert.That(snapshot.Do("check-attr", "text", "crlf.txt").Text).IsEqualTo("crlf.txt: text: unspecified");
         await Assert.That(snapshot.Do("check-attr", "text", "project.txt").Text).IsEqualTo("project.txt: text: set");
         await Assert.That(snapshot.Do("status", "--porcelain").Text).IsEqualTo("");
+    }
+
+    /// <summary>A project rule that sets only <c>eol</c> relies on <c>text</c> being unspecified, so the snapshot's own
+    /// attributes must not unset it: a checkout then writes the line ending the project asks for.</summary>
+    [Test]
+    public async Task A_standalone_snapshot_honours_a_project_rule_that_sets_only_eol() {
+        var source = Tmp.CreateDir("proj");
+        source.CreateFile("eol.txt", "one\ntwo\n");
+        source.CreateFile(".gitattributes", "eol.txt eol=crlf\n");
+
+        var worktree = await NewManager().CreateAsync(source);
+
+        var snapshot = GitRepo.At(worktree.Path);
+        File.Delete(Path.Combine(worktree.Path, "eol.txt"));
+        snapshot.Do("checkout", "--", "eol.txt");
+        await Assert.That(File.ReadAllText(Path.Combine(worktree.Path, "eol.txt"))).IsEqualTo("one\r\ntwo\r\n");
     }
 
     /// <summary>The machine's attributes file lives at a path compiled into git, so no test can stage one. This pins
