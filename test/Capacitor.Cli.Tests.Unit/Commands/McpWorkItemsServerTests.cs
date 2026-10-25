@@ -186,13 +186,6 @@ public class McpWorkItemsServerTests {
         await Assert.That(byName["declare_work_incomplete"].InputSchema.Required).IsEquivalentTo(new[] { "work_item_id" });
     }
 
-    [Test]
-    public async Task Incomplete_body_carries_the_session_and_reason_but_never_the_item() {
-        var body = McpWorkItemsServer.BuildDeclareIncompleteBody(
-            Args("""{"work_item_id":"wi-1","session_id":"s1","reason":"The migration bug is still open"}"""));
-
-        await Assert.That(body.ToJsonString()).IsEqualTo("""{"session_id":"s1","reason":"The migration bug is still open"}""");
-    }
 
     [Test]
     public async Task Incomplete_body_leaves_out_an_absent_reason() {
@@ -766,6 +759,16 @@ public class McpWorkItemsServerTests {
         await Assert.That(h.Method).IsEqualTo(HttpMethod.Get);
         await Assert.That(h.Url).IsEqualTo("http://x/api/work-items/wi-1/topology");
         await Assert.That(h.Body).IsNull();
+    }
+
+    [Test]
+    public async Task Dispatch_declare_work_incomplete_posts_the_session_and_reason_to_the_items_route() {
+        var h = await DispatchAsync("declare_work_incomplete", """{"work_item_id":"wi-1","session_id":"s1","reason":"The migration bug is still open"}""");
+
+        await Assert.That(h.Calls).IsEqualTo(1);
+        await Assert.That(h.Method).IsEqualTo(HttpMethod.Post);
+        await Assert.That(h.Url).IsEqualTo("http://x/api/work-items/wi-1/incomplete");
+        await Assert.That(h.Body).IsEqualTo("""{"session_id":"s1","reason":"The migration bug is still open"}""");
     }
 
     [Test]
