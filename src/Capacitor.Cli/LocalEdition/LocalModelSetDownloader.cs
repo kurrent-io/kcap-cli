@@ -67,6 +67,8 @@ public sealed class LocalModelSetDownloader(LocalRoot root, LocalBundleClient bu
                 done += file.Size;
             }
 
+            ct.ThrowIfCancellationRequested();
+
             if (Publishing?.Invoke(m) == false) return false;
 
             Install(m, partial);

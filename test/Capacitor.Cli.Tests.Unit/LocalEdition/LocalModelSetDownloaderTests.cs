@@ -90,6 +90,25 @@ public class LocalModelSetDownloaderTests {
         await Assert.That(Files(tmp)).IsEmpty();
     }
 
+    /// <summary>Cancellation raised by the last progress report, after every file has verified, still installs
+    /// nothing and never asks <see cref="LocalModelSetDownloader.Publishing"/>.</summary>
+    [Test]
+    public async Task Cancellation_after_the_last_file_verifies_publishes_nothing() {
+        using var tmp = new TempDir();
+        using var cts = new CancellationTokenSource();
+        var asked = false;
+        var d     = new LocalModelSetDownloader(new(tmp.Path), Client(Serve)) { Publishing = _ => asked = true };
+        var progress = new OnReport(p => {
+            if (p.Received == p.Total) cts.Cancel();
+        });
+
+        await Assert.ThrowsAsync<OperationCanceledException>(async () => await d.DownloadAsync(Manifest, progress, cts.Token));
+
+        await Assert.That(asked).IsFalse();
+        await Assert.That(d.Fetched).IsFalse();
+        await Assert.That(Files(tmp)).IsEmpty();
+    }
+
     [Test]
     public async Task A_valid_set_already_in_place_is_not_downloaded_again() {
         using var tmp = new TempDir();
@@ -156,7 +175,10 @@ public class LocalModelSetDownloaderTests {
         new(status) { Content = new ByteArrayContent(body ?? []) };
 
     static LocalModelSetDownloader Downloader(TempDir tmp, Func<HttpRequestMessage, HttpResponseMessage> respond) =>
-        new(new(tmp.Path), new LocalBundleClient(new(new Handler(respond)), TimeProvider.System) { BaseUrl = "https://example.test/download/local" });
+        new(new(tmp.Path), Client(respond));
+
+    static LocalBundleClient Client(Func<HttpRequestMessage, HttpResponseMessage> respond) =>
+        new(new(new Handler(respond)), TimeProvider.System) { BaseUrl = "https://example.test/download/local" };
 
     sealed class Handler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
@@ -165,5 +187,9 @@ public class LocalModelSetDownloaderTests {
 
     sealed class Collect(List<(long, long)> into) : IProgress<(long Received, long Total)> {
         public void Report((long Received, long Total) value) => into.Add(value);
+    }
+
+    sealed class OnReport(Action<(long Received, long Total)> report) : IProgress<(long Received, long Total)> {
+        public void Report((long Received, long Total) value) => report(value);
     }
 }
