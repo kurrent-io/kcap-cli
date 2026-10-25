@@ -537,16 +537,22 @@ public partial class WorktreeManager(
         return Path.GetFullPath(path).Replace('\\', '/');
     }
 
-    /// <summary>The attributes file the user's git config names, else the default git reports for it. A git older than
-    /// 2.42 cannot report the default, and the snapshot then keeps no rules of the user's</summary>
+    /// <summary>The attributes file the user's git config names, relative to the snapshot as git reads it, else git's
+    /// default. Git 2.42 and later report that default; for an older git it is rebuilt from the same environment git
+    /// reads, which is why the home here is git's <c>HOME</c> rather than the daemon's resolved one</summary>
     static async Task<string?> UserAttributesFileAsync(string worktreePath, TimeProvider time) {
         var configured = await RunGitCaptureResult(worktreePath, GitTimeout, time, sourceReadOnly: false, [],
             "config", "--path", "--get", "core.attributesFile");
-        if (configured.ExitCode == 0 && configured.Stdout.Trim() is { Length: > 0 } named) return named;
+        if (configured.ExitCode == 0 && configured.Stdout.Trim() is { Length: > 0 } named) return Path.Combine(worktreePath, named);
 
-        var fallback = await RunGitCaptureResult(worktreePath, GitTimeout, time, sourceReadOnly: false, [], "var", "GIT_ATTR_GLOBAL");
+        var reported = await RunGitCaptureResult(worktreePath, GitTimeout, time, sourceReadOnly: false, [], "var", "GIT_ATTR_GLOBAL");
+        if (reported.ExitCode == 0 && reported.Stdout.Trim() is { Length: > 0 } path) return path;
 
-        return fallback.ExitCode == 0 && fallback.Stdout.Trim() is { Length: > 0 } path ? path : null;
+        if (Environment.GetEnvironmentVariable("XDG_CONFIG_HOME") is { Length: > 0 } xdg) return Path.Combine(xdg, "git", "attributes");
+
+        return (Environment.GetEnvironmentVariable("HOME") ?? Environment.GetEnvironmentVariable("USERPROFILE")) is { Length: > 0 } home
+            ? Path.Combine(home, ".config", "git", "attributes")
+            : null;
     }
 
     /// <summary>A linked worktree's submodule has no gitdir of its own, so a checkout that recursed into it

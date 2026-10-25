@@ -128,6 +128,18 @@ public class WorktreeManagerUserGitConfigTests {
             .IsEqualTo("notes.txt: text: unspecified\nnotes.txt: eol: unspecified");
     }
 
+    /// <summary>A relative <c>core.attributesFile</c> names a file in the repository git runs in, the snapshot here</summary>
+    [Test]
+    public async Task A_standalone_snapshot_keeps_rules_from_a_relative_attributes_file() {
+        var source = Tmp.CreateDir("proj");
+        source.CreateFile(".attrs", "*.psd filter=lfs\n");
+        using var config = UserGlobalConfig("[core]\n    attributesFile = .attrs\n");
+
+        var worktree = await NewManager().CreateAsync(source);
+
+        await Assert.That(GitRepo.At(worktree.Path).Do("check-attr", "filter", "--", "art.psd").Text).IsEqualTo("art.psd: filter: lfs");
+    }
+
     /// <summary>
     /// The machine's attributes file sits below the snapshot's, and git resolves each attribute on its own, so the
     /// snapshot's file must reset <c>eol</c> as well as <c>text</c>: a machine-wide <c>* eol=crlf</c> would otherwise
