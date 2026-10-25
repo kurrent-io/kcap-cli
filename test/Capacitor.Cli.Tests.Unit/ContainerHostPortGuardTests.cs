@@ -43,6 +43,7 @@ public partial class ContainerHostPortGuardTests {
     [Arguments("KurrentDbBuilder? b = new(image); b.Build()")]
     [Arguments("new KurrentDbBuilder(image).WithCreateParameterModifier(_ => Side(new ContainerBuilder(i).WithPortBinding(ContainerHostPorts.Next(), 80))).Build()")]
     [Arguments("var s = \"\"\"\"x\"\"\"\"; new KurrentDbBuilder(image).Build(); var t = \"\"\"\"y\"\"\"\";")]
+    [Arguments("(new KurrentDbBuilder(image), new ContainerBuilder(i).WithPortBinding(ContainerHostPorts.Next(), 80))")]
     public async Task Pattern_flags_a_port_docker_chooses(string code) =>
         await Assert.That(PublishesOnDockersChoice(code)).IsTrue();
 
@@ -52,6 +53,7 @@ public partial class ContainerHostPortGuardTests {
     [Arguments("new KurrentDbBuilder(image).WithCreateParameterModifier(p => { p.Name = \"k\"; }).WithPortBinding(ContainerHostPorts.Next(), 2113).Build()")]
     [Arguments("// .WithPortBinding(2113, true)\n.WithPortBinding(ContainerHostPorts.Next(), Port)")]
     [Arguments("new KurrentDbBuilder(ImageFactory().Build()).WithPortBinding(ContainerHostPorts.Next(), 2113).Build()")]
+    [Arguments("new KurrentDbBuilder(image).WithX(new PostgreSqlBuilder(p).WithPortBinding(ContainerHostPorts.Next(), 5432).Build()).WithPortBinding(ContainerHostPorts.Next(), 2113).Build()")]
     public async Task Pattern_passes_a_port_picked_below_the_ephemeral_range(string code) =>
         await Assert.That(PublishesOnDockersChoice(code)).IsFalse();
 
@@ -76,23 +78,23 @@ public partial class ContainerHostPortGuardTests {
             || PublishingBuilder().Matches(code).Any(builder => !BindsItsOwnPort(code, builder));
     }
 
-    /// <summary>Whether the builder's own chain, from its construction to whichever comes first of its <c>.Build()</c>,
-    /// the end of its statement or the next builder's construction, carries a picked binding. Only a call chained
-    /// on the builder itself counts, outside every bracket opened after it: a binding or a <c>.Build()</c> inside an
-    /// argument or a lambda in the chain belongs to something else, and a binding added in a later statement does
-    /// not count.</summary>
+    /// <summary>Whether the builder's own chain, from its construction to its <c>.Build()</c> or the end of the expression
+    /// holding it (a <c>;</c>, a <c>,</c> or the bracket closing around it), carries a picked binding. Only a call chained
+    /// on the builder itself counts, outside every bracket opened after it: a binding, a <c>.Build()</c> or another
+    /// builder inside an argument or a lambda in the chain belongs to something else, and a binding added in a later
+    /// statement does not count.</summary>
     static bool BindsItsOwnPort(string code, Match builder) {
         var start = builder.Index + builder.Length;
-        var next  = PublishingBuilder().Match(code, start) is { Success: true } other ? other.Index : code.Length;
 
         // Counting from 1 inside the builder's constructor call.
         var depth = 1;
 
-        for (var i = start; i < next; i++) {
+        for (var i = start; i < code.Length; i++) {
             switch (code[i]) {
                 case '(' or '[' or '{': depth++; continue;
+                case ')' or ']' or '}' when depth == 0: return false;
                 case ')' or ']' or '}': depth--; continue;
-                case ';' when depth <= 0: return false;
+                case ';' or ',' when depth == 0: return false;
             }
 
             if (depth != 0 || code[i] != '.') continue;

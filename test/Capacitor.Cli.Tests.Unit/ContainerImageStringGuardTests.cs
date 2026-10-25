@@ -9,7 +9,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// call, matched with string contents blanked so a literal containing <c>tag:</c> cannot pass for the named argument.
 /// </summary>
 public partial class ContainerImageStringGuardTests {
-    [GeneratedRegex(@"new\s+(?:[\w.]+\.)?(?:\w*ContainerBuilder|KurrentDbBuilder|PostgreSqlBuilder)\s*\((?!\s*new\s+DockerImage\s*\()|(?:\w*ContainerBuilder|KurrentDbBuilder|PostgreSqlBuilder)\??\s+\w+\s*=\s*new\s*\((?!\s*new\s+DockerImage\s*\()|\.WithImage\s*\((?!\s*new\s+DockerImage\s*\()")]
+    [GeneratedRegex(@"new\s+(?:[\w.]+\.)?(?:\w*ContainerBuilder|KurrentDbBuilder|PostgreSqlBuilder)\s*\((?!\s*new\s+DockerImage\s*\()|(?:[\w.]+\.)?(?:\w*ContainerBuilder|KurrentDbBuilder|PostgreSqlBuilder)\??\s+\w+\s*=\s*new\s*\((?!\s*new\s+DockerImage\s*\()|\.WithImage\s*\((?!\s*new\s+DockerImage\s*\()")]
     private static partial Regex ImageString();
 
     [GeneratedRegex(@"new\s+DockerImage\s*\(")]
@@ -32,6 +32,7 @@ public partial class ContainerImageStringGuardTests {
     [Arguments("new PostgreSqlBuilder(\"postgres:18\")")]
     [Arguments("new DockerImage(Repository(\"tag: x\"))")]
     [Arguments("var s = \"\"\"\"x\"\"\"\"; new ContainerBuilder(\"alpine:3\"); var t = \"\"\"\"y\"\"\"\";")]
+    [Arguments("Testcontainers.KurrentDb.KurrentDbBuilder b = new(\"kurrentdb:26\");")]
     public async Task Pattern_matches_an_untyped_image(string code) =>
         await Assert.That(UsesAnImageString(code)).IsTrue();
 
