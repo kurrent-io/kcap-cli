@@ -135,8 +135,7 @@ public class AgentCommandAccountTests {
     [Test]
     public async Task An_unreadable_registry_is_refused_naming_its_directory() {
         Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
-        Directory.CreateDirectory(Accounts.Directory);
-        File.WriteAllText(Accounts.RegistryPath, "{ not json");
+        new TempDirHandle(Daemons.Root).CreateFile("accounts/accounts.json", "{ not json");
         using var daemon = new ControlSocketTripwire(Daemons.Store, DaemonName);
         using var console = ConsoleOutput.StartErrorCapture("\n");
 
