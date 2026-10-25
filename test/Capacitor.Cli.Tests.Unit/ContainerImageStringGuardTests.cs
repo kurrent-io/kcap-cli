@@ -47,7 +47,7 @@ public partial class ContainerImageStringGuardTests {
             .Because("pass new DockerImage(repository, tag: …) so Testcontainers never runs its timed image-name regex on it");
     }
 
-    static bool UsesAnImageString(string code) => ImageString().IsMatch(SourceCode.OutsideStrings(code));
+    static bool UsesAnImageString(string code) => ImageString().IsMatch(SourceCode.WithoutCommentsOrStrings(code));
 
     static string RepoRoot([CallerFilePath] string here = "") {
         var dir = Path.GetDirectoryName(here);

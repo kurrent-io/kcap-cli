@@ -36,12 +36,15 @@ public partial class ContainerHostPortGuardTests {
     [Arguments("Pair(new KurrentDbBuilder(a), new PostgreSqlBuilder(b).WithPortBinding(ContainerHostPorts.Next(), 5432).Build())")]
     [Arguments("new KurrentDbBuilder(image).WithEnvironment(\"NOTE\", \".WithPortBinding(ContainerHostPorts.Next(), 2113)\").Build()")]
     [Arguments("var q = '\"'; new KurrentDbBuilder(image).Build(); var s = \"x\";")]
+    [Arguments("/* \" */ new KurrentDbBuilder(image).Build(); var s = \"x\";")]
     public async Task Pattern_flags_a_port_docker_chooses(string code) =>
         await Assert.That(PublishesOnDockersChoice(code)).IsTrue();
 
     [Test]
     [Arguments(".WithPortBinding(ContainerHostPorts.Next(), Port)")]
     [Arguments("new KurrentDbBuilder(image).WithPortBinding(ContainerHostPorts.Next(), 2113).Build()")]
+    [Arguments("new KurrentDbBuilder(image).WithCreateParameterModifier(p => { p.Name = \"k\"; }).WithPortBinding(ContainerHostPorts.Next(), 2113).Build()")]
+    [Arguments("// .WithPortBinding(2113, true)\n.WithPortBinding(ContainerHostPorts.Next(), Port)")]
     public async Task Pattern_passes_a_port_picked_below_the_ephemeral_range(string code) =>
         await Assert.That(PublishesOnDockersChoice(code)).IsFalse();
 
@@ -60,7 +63,7 @@ public partial class ContainerHostPortGuardTests {
     }
 
     static bool PublishesOnDockersChoice(string source) {
-        var code = SourceCode.OutsideStrings(source);
+        var code = SourceCode.WithoutCommentsOrStrings(source);
 
         return DockerChosenBinding().IsMatch(code)
             || PublishingBuilder().Matches(code).Any(builder => !PickedBinding().IsMatch(ChainOf(code, builder)));
@@ -73,11 +76,26 @@ public partial class ContainerHostPortGuardTests {
 
         int[] ends = [
             Build().Match(code, start) is { Success: true } build ? build.Index : code.Length,
-            code.IndexOf(';', start) is >= 0 and var statement ? statement : code.Length,
+            StatementEnd(code, start),
             PublishingBuilder().Match(code, start) is { Success: true } next ? next.Index : code.Length
         ];
 
         return code[start..ends.Min()];
+    }
+
+    /// <summary>The first <c>;</c> outside every bracket opened after <paramref name="start"/>, which lies inside the builder's
+    /// own constructor call, so a statement inside a lambda in the chain does not end it.</summary>
+    static int StatementEnd(string code, int start) {
+        var depth = 1;
+
+        for (var i = start; i < code.Length; i++)
+            switch (code[i]) {
+                case '(' or '[' or '{': depth++; break;
+                case ')' or ']' or '}': depth--; break;
+                case ';' when depth <= 0: return i;
+            }
+
+        return code.Length;
     }
 
     static string RepoRoot([CallerFilePath] string here = "") {
