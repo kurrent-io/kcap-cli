@@ -1029,6 +1029,8 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(PlanArtifactsResponseDto))]
 [JsonSerializable(typeof(Plans.PlanLedgerDto))]
 [JsonSerializable(typeof(List<Plans.SessionPlanDto>))]
+[JsonSerializable(typeof(MessageSenders.MessageSendersRequest))]
+[JsonSerializable(typeof(MessageSenders.MessageSendersResponseDto))]
 [JsonSerializable(typeof(EvalContextResult))]
 [JsonSerializable(typeof(EvalQuestionDto))]
 [JsonSerializable(typeof(EvalQuestionDto[]))]
@@ -1543,7 +1545,12 @@ public readonly record struct AcpEventEnvelope(
         // user_message — the vendor turn it opens. Sent only when set, so a server that predates it sees the
         // shape it always has.
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        string? TurnId = null
+        string? TurnId = null,
+
+        // user_message read from a stored transcript: the id the server keeps the event under. Local to the
+        // desktop chat, never serialized.
+        [property: JsonIgnore]
+        Guid? SourceEventId = null
     );
 
 /// <summary>
