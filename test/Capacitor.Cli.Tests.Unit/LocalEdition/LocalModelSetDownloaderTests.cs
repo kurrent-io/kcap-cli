@@ -106,7 +106,7 @@ public class LocalModelSetDownloaderTests {
         using var tmp = new TempDir();
         var       d   = Downloader(tmp, Serve);
         await d.DownloadAsync(Manifest, new Collect([]), CancellationToken.None);
-        File.WriteAllBytes(tmp.PathTo("models", Manifest.ModelSet, "vocab.txt"), [1, 2, 3]);
+        tmp.CreateFile(["models", Manifest.ModelSet, "vocab.txt"], "abc");
 
         await d.DownloadAsync(Manifest, new Collect([]), CancellationToken.None);
 
@@ -120,7 +120,7 @@ public class LocalModelSetDownloaderTests {
         var       d   = Downloader(tmp, Serve);
         await d.DownloadAsync(Manifest, new Collect([]), CancellationToken.None);
 
-        await using (var f = new FileStream(tmp.PathTo("models", Manifest.ModelSet, "model.onnx"), FileMode.Open)) f.SetLength(Onnx.Length - 1);
+        tmp.CreateFile(["models", Manifest.ModelSet, "model.onnx"], new string('x', Onnx.Length - 1));
 
         await Assert.That(d.IsPresent(Manifest)).IsFalse();
     }
@@ -131,10 +131,7 @@ public class LocalModelSetDownloaderTests {
         var       d   = Downloader(tmp, Serve);
         await d.DownloadAsync(Manifest, new Collect([]), CancellationToken.None);
 
-        var path = tmp.PathTo("models", Manifest.ModelSet, "vocab.txt");
-        var raw  = File.ReadAllBytes(path);
-        raw[0] ^= 1;
-        File.WriteAllBytes(path, raw);
+        tmp.CreateFile(["models", Manifest.ModelSet, "vocab.txt"], new string('x', Vocab.Length));
 
         await Assert.That(d.IsPresent(Manifest)).IsFalse();
     }
