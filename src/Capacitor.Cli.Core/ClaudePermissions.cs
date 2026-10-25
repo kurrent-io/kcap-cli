@@ -41,13 +41,16 @@ public static class ClaudePermissions {
         ];
     }
 
-    /// The suggested rule updates, each cut to its rules for the tool. Mode and directory changes name no tool, so none
-    /// of them is approved.
+    /// The suggested allow rules, each update cut to its rules for the tool. Mode and directory changes name no tool, so
+    /// none of them is approved.
     static JsonArray ForTool(JsonElement suggestions, string toolName) {
         var kept = new JsonArray();
 
         foreach (var suggestion in suggestions.EnumerateArray()) {
+            // Allow always adds allow rules; a suggestion that removes, replaces, denies or asks is not what was approved.
             if (suggestion.ValueKind != JsonValueKind.Object
+             || Text(suggestion, "type") != "addRules"
+             || Text(suggestion, "behavior") != "allow"
              || !suggestion.TryGetProperty("rules", out var rules)
              || rules.ValueKind != JsonValueKind.Array)
                 continue;

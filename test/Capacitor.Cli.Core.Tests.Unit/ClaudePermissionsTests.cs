@@ -41,6 +41,22 @@ public class ClaudePermissionsTests {
         await Assert.That(updates?.ToJsonString()).IsEqualTo($"[{BashSuggestion}]");
     }
 
+    /// <summary>Allow always adds allow rules and nothing else, so a suggestion that would remove, replace, deny or ask
+    /// is passed over, and the tool gets its session rule instead.</summary>
+    [Test]
+    [Arguments("removeRules", "allow")]
+    [Arguments("replaceRules", "allow")]
+    [Arguments("addRules", "deny")]
+    [Arguments("addRules", "ask")]
+    public async Task A_suggestion_that_is_not_an_allow_rule_is_not_saved(string type, string behavior) {
+        var suggestion = $$"""[{"type":"{{type}}","rules":[{"toolName":"Bash","ruleContent":"echo third:*"}],"behavior":"{{behavior}}","destination":"localSettings"}]""";
+
+        var updates = ClaudePermissions.UpdatesFor(ClaudePermissions.AlwaysAllow("Bash"), Element(suggestion), "Bash");
+
+        await Assert.That(updates?.ToJsonString())
+            .IsEqualTo("""[{"type":"addRules","rules":[{"toolName":"Bash"}],"behavior":"allow","destination":"session"}]""");
+    }
+
     [Test]
     public async Task Always_allow_with_nothing_suggested_saves_a_session_rule_for_the_tool() {
         var updates = ClaudePermissions.UpdatesFor(ClaudePermissions.AlwaysAllow("Bash"), Element("[]"), "Bash");
