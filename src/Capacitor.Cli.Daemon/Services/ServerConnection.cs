@@ -975,7 +975,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             try {
                 return await InvokeAgentRegisteredAckedRawAsync(registration)
                     ?? throw new InvalidOperationException($"The server answered the registration of agent {agentId} with no outcome");
-            } catch (Exception ex) when (IsUnknownHubMethod(ex)) {
+            } catch (Exception ex) when (IsUnknownHubMethod(ex, AgentRegisteredAckedMethod)) {
                 Volatile.Write(ref _registrationAckMissingOn, connection);
             }
         }
@@ -988,8 +988,10 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// <summary>The connection id on which the server answered <c>AgentRegisteredAcked</c> as an unknown method.</summary>
     string? _registrationAckMissingOn;
 
+    const string AgentRegisteredAckedMethod = "AgentRegisteredAcked";
+
     internal virtual Task<AgentRegisteredResponse?> InvokeAgentRegisteredAckedRawAsync(AgentRegistered registration)
-        => _hub.InvokeAsync<AgentRegisteredResponse?>("AgentRegisteredAcked", registration, cancellationToken: _ct);
+        => _hub.InvokeAsync<AgentRegisteredResponse?>(AgentRegisteredAckedMethod, registration, cancellationToken: _ct);
 
     internal virtual Task InvokeAgentRegisteredRawAsync(AgentRegistered registration)
         => _hub.InvokeAsync("AgentRegistered", registration, cancellationToken: _ct);
@@ -1645,7 +1647,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                 ParkParticipantOutcome.Rejected => ParkAck.Rejected,
                 _                                => ParkAck.Ambiguous, // unmapped/future wire value — never assume success
             };
-        } catch (Exception ex) when (IsUnknownHubMethod(ex)) {
+        } catch (Exception ex) when (IsUnknownHubMethod(ex, ReportParticipantParkedMethod)) {
             // Pre-B1 server: ReportParticipantParked doesn't exist there and never will until the
             // server is upgraded. Definite degrade, not "no reply" — fall back to the normal reap
             // instead of retrying this park forever (see the doc comment above).
@@ -1660,23 +1662,18 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     }
 
     /// <summary>
-    /// True when <paramref name="ex"/> is the <see cref="Microsoft.AspNetCore.SignalR.HubException"/>
-    /// SignalR raises when the connected server has no handler at all for the invoked hub method
-    /// name — the case a pre-B1 server hits for <c>ReportParticipantParked</c>. When a client invokes
-    /// a target the server's <c>DefaultHubDispatcher</c> can't resolve, it completes the invocation
-    /// with the error <c>Unknown hub method '&lt;target&gt;'</c> (sent regardless of
-    /// <c>EnableDetailedErrors</c>), surfaced on the client as a <c>HubException</c> carrying that
-    /// message — verified against aspnetcore v10.0.11
-    /// (<c>src/SignalR/server/Core/src/Internal/DefaultHubDispatcher.cs</c>). Matched case-insensitively
-    /// on the stable <c>"Unknown hub method"</c> substring (robust to the interpolated target name), and
-    /// narrowly scoped to <see cref="Microsoft.AspNetCore.SignalR.HubException"/> only: that phrase is
-    /// SignalR-internal protocol text no hub handler emits deliberately, so a genuine transient
-    /// <c>HubException</c> (e.g. "Caller is not a registered daemon") never contains it and is never
-    /// misclassified as a permanent degrade.
+    /// True when the server has no hub method named <paramref name="method"/>. A JSON-protocol server cannot bind
+    /// the arguments of a method it lacks, so its dispatcher answers
+    /// <c>Failed to invoke '&lt;method&gt;' due to an error on the server. HubException: Method does not exist.</c>
+    /// whatever <c>EnableDetailedErrors</c> says; a dispatcher that resolves the target first answers
+    /// <c>Unknown hub method '&lt;method&gt;'</c>. Both are matched only for the invoked method, and only as a
+    /// <see cref="Microsoft.AspNetCore.SignalR.HubException"/>, so a handler's own refusal, an authorization
+    /// failure or a broken transport never reads as a missing method.
     /// </summary>
-    static bool IsUnknownHubMethod(Exception ex) =>
+    internal static bool IsUnknownHubMethod(Exception ex, string method) =>
         ex is Microsoft.AspNetCore.SignalR.HubException he
-        && he.Message.Contains("Unknown hub method", StringComparison.OrdinalIgnoreCase);
+        && (string.Equals(he.Message, $"Failed to invoke '{method}' due to an error on the server. HubException: Method does not exist.", StringComparison.Ordinal)
+         || he.Message.StartsWith($"Unknown hub method '{method}'", StringComparison.Ordinal));
 
     /// <summary>
     /// The actual <c>ReportParticipantParked</c> hub invocation, isolated into its own <c>virtual</c>
@@ -1687,7 +1684,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// </summary>
     internal virtual Task<ParkParticipantOutcome> InvokeReportParticipantParkedRawAsync(
             string agentId, string canonicalSessionId, string reason, CancellationToken ct
-        ) => _hub.InvokeAsync<ParkParticipantOutcome>("ReportParticipantParked", agentId, canonicalSessionId, reason, cancellationToken: ct);
+        ) => _hub.InvokeAsync<ParkParticipantOutcome>(ReportParticipantParkedMethod, agentId, canonicalSessionId, reason, cancellationToken: ct);
+
+    const string ReportParticipantParkedMethod = "ReportParticipantParked";
 
     /// <summary>
     /// One terminal chunk, straight to the hub. Throws when the send fails and honours
