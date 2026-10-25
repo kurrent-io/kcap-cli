@@ -1,4 +1,6 @@
 using System.Security.Cryptography;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Capacitor.Cli.Core.Install;
 using Capacitor.Cli.Core.LocalEdition;
 
@@ -34,6 +36,16 @@ static class LocalModelSets {
         }
 
         return true;
+    }
+
+    /// <summary>The model set the installed bundle of <paramref name="version"/> carries beside its server, or null when
+    /// it carries none or it cannot be read.</summary>
+    public static LocalEmbeddingModelManifest? Bundled(LocalRoot root, string version) {
+        try {
+            return LocalEmbeddingModelManifest.Parse(JsonNode.Parse(File.ReadAllBytes(Path.Combine(LocalBin.Directory(root), version, "embedding-model.json"))));
+        } catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) {
+            return null;
+        }
     }
 
     /// <summary>Deletes every model set but <paramref name="keep"/>, and what an interrupted download left. Only

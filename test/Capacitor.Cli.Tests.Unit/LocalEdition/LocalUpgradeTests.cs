@@ -1,5 +1,6 @@
 using System.Net;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
@@ -522,6 +523,58 @@ public class LocalUpgradeTests {
         await Upgrade();
 
         await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Builtin(OldSet));
+    }
+
+    /// <summary>An upgrade rolled forward by the next lifecycle command settles model sets as a finished one does, from
+    /// the model set the new version's bundle carries.</summary>
+    [Test]
+    public async Task A_rolled_forward_upgrade_records_the_new_model_set_and_removes_the_old_ones() {
+        Installed();
+        Recorded(LocalEmbeddingSetting.Builtin(OldSet));
+        var bundle = PublishModelSetInArchive();
+        Tmp.CreateFile(["r", "models", OldSet, "model.onnx"]);
+        Tmp.CreateFile(["r", "models", ".partial-0123456789abcdef", "model.onnx"]);
+
+        using (CrashAt("upgrade:starting")) await Assert.ThrowsAsync<SimulatedCrash>(() => Upgrade());
+
+        await Assert.That(HasModelSet(OldSet)).IsTrue();
+
+        await new LocalStackControl(Stack(), _ => null).StartAsync(_events, _ => { }, CancellationToken.None);
+
+        await Assert.That(JournalAbsent()).IsTrue();
+        await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Builtin(bundle.ModelSet));
+        await Assert.That(HasModelSet(OldSet)).IsFalse();
+        await Assert.That(HasModelSet(".partial-0123456789abcdef")).IsFalse();
+        await Assert.That(HasModelSet(bundle.ModelSet)).IsTrue();
+    }
+
+    [Test]
+    public async Task A_rolled_forward_upgrade_leaves_another_recorded_choice_alone() {
+        Installed();
+        Recorded(LocalEmbeddingSetting.Ollama("nomic-embed-text"));
+        PublishModelSetInArchive();
+
+        using (CrashAt("upgrade:starting")) await Assert.ThrowsAsync<SimulatedCrash>(() => Upgrade());
+        await new LocalStackControl(Stack(), _ => null).StartAsync(_events, _ => { }, CancellationToken.None);
+
+        await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Ollama("nomic-embed-text"));
+    }
+
+    /// <summary>As <see cref="PublishModelSet"/>, with the entry also in the archive as the server's <c>embedding-model.json</c>.</summary>
+    FakeBundle PublishModelSetInArchive() {
+        var entry = new JsonObject {
+            ["model_id"]  = "builtin-test",
+            ["contract"]  = 1,
+            ["model_set"] = new string('e', 64),
+            ["files"]     = new JsonArray([.. ModelFiles.Select(f => (JsonNode)new JsonObject {
+                ["name"] = f.Key, ["sha256"] = Convert.ToHexStringLower(SHA256.HashData(f.Value)), ["size"] = f.Value.Length,
+            })]),
+        };
+
+        return _bundles[New] = new(Tmp.PathTo($"bundle-{New}.tar.gz"), New, "osx-arm64",
+            TestBundles.RegularFile("./kcap-server", "#!/bin/sh\n"), TestBundles.RegularFile("./embedding-model.json", entry.ToJsonString())) {
+            ModelFiles = ModelFiles, EmbeddingModel = entry,
+        };
     }
 
     [Test]

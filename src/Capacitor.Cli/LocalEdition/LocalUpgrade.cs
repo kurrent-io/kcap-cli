@@ -13,8 +13,8 @@ namespace Capacitor.Cli.LocalEdition;
 /// rewritten unit; committed by clearing the journal. A failure before the switch starts the old version again if it
 /// was running. After it nothing is restored: the new version stays selected and stopped.</para>
 ///
-/// <para>A recorded built-in embedding choice has the new version's model set fetched while staging. After the commit
-/// the record names that set once it is in place, and every other model set is removed.</para>
+/// <para>A recorded built-in embedding choice has the new version's model set fetched while staging. After the commit,
+/// finished or rolled forward, the record names that set once it is in place, and every other model set is removed.</para>
 /// </summary>
 sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progress) {
     const string StagingName = "upgrade";
@@ -179,10 +179,12 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
 
                 Switch(lease, entry, details);
                 await StartNewAsync(lease, entry, details);
+                SettleModelSets(LocalModelSets.Bundled(stack.Root, details.To));
                 return;
 
             case LocalUpgradeJournal.Starting:
                 await StartNewAsync(lease, entry, details);
+                SettleModelSets(LocalModelSets.Bundled(stack.Root, details.To));
                 return;
 
             default:
