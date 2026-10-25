@@ -1202,7 +1202,7 @@ public partial class App : Application {
             IProcessRunner runner, ILoginShellProbe probe, ProfileContext? profiles, bool alreadyAuthenticated) {
         var cliPath = CliResolver.ResolvePath(Environment.GetEnvironmentVariable, File.Exists, Program.Host.CliDirectory);
         // Same rule as the shim coordinator's: only a resolved ABSOLUTE path is linkable.
-        var shimTarget = cliPath is not null && Path.IsPathRooted(cliPath) ? cliPath : null;
+        var shimTarget = ShimTargetFor(cliPath, Program.Host.CliOutlivesApp);
         var shimInstaller = CliPathInstallers.Create(runner, probe, _userHome);
         var shimApplicable = await ResolveShimApplicableAsync(
             shimInstaller is not null, shimTarget, ct => probe.KcapOnPathAsync(ct), _shutdown.Token);
@@ -1675,7 +1675,7 @@ public partial class App : Application {
         // The shim links to the RESOLVED ABSOLUTE path only — CliResolver's bare "kcap" PATH
         // fallback means there is nothing to link, so the offer and the menu item both stay off
         // for the whole run.
-        var shimTarget = cliPath is not null && Path.IsPathRooted(cliPath) ? cliPath : null;
+        var shimTarget = ShimTargetFor(cliPath, Program.Host.CliOutlivesApp);
         // autoOfferSuppressed: Start() always runs — Offerable/manual install must keep working in Incomplete mode; only the once-ever auto-offer dialog is skipped.
         var shimOffer = new ShimOfferCoordinator(
             lifecycle.PhaseClosed, probe, CliPathInstallers.Create(runner, probe, _userHome), _appState, surface, shimTarget,
@@ -1689,6 +1689,10 @@ public partial class App : Application {
 
         return (lifecycle, shimOffer, consentFlip, surface, probe, cli);
     }
+
+    /// A link needs an absolute path that is still there once the app exits.
+    internal static string? ShimTargetFor(string? cliPath, bool cliOutlivesApp) =>
+        cliOutlivesApp && cliPath is not null && Path.IsPathRooted(cliPath) ? cliPath : null;
 
     internal static bool IsLocalServer(string? serverUrl, LocalRoot local) =>
         LocalEndpoints.Read(local).Classify(serverUrl) is LocalEndpointClass.Local;

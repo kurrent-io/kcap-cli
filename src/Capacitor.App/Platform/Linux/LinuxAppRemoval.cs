@@ -134,37 +134,22 @@ public sealed partial class LinuxAppRemoval : IAppRemoval {
     }
 
     /// <summary>renameat2(2) with RENAME_NOREPLACE: unlike <see cref="File.Move(string,string)"/> and rename(2), it never
-    /// replaces what is at the destination, and never copies across filesystems, answering EXDEV instead. A filesystem,
-    /// kernel or libc without it falls back to link(2) then unlink(2), which keep both promises but not atomically</summary>
+    /// replaces what is at the destination, and never copies across filesystems, answering EXDEV instead. Where the
+    /// filesystem, kernel or libc lacks it the image stays put: a link-then-unlink by path could delete a replacement
+    /// written to the image's path between the two calls</summary>
     static int MoveWithoutReplacing(string from, string to) {
         try {
-            if (RenameAt2Native(CurrentDirectory, from, CurrentDirectory, to, RenameNoReplace) == 0) return 0;
-            if (Marshal.GetLastPInvokeError() is var renameErrno and not (InvalidArgument or NotSupported)) return renameErrno;
+            return RenameAt2Native(CurrentDirectory, from, CurrentDirectory, to, RenameNoReplace) == 0 ? 0 : Marshal.GetLastPInvokeError();
         } catch (EntryPointNotFoundException) {
-            // a libc that predates the wrapper
+            return NotSupported;
         }
-
-        if (LinkNative(from, to) != 0) return Marshal.GetLastPInvokeError();
-        if (UnlinkNative(from) == 0) return 0;
-
-        var errno = Marshal.GetLastPInvokeError();
-        UnlinkNative(to);
-
-        return errno;
     }
 
     const int  CurrentDirectory = -100;
     const uint RenameNoReplace  = 1;
-    const int  InvalidArgument  = 22;
 
     [LibraryImport("libc", EntryPoint = "renameat2", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
     private static partial int RenameAt2Native(int fromDirectory, string from, int toDirectory, string to, uint flags);
-
-    [LibraryImport("libc", EntryPoint = "link", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
-    private static partial int LinkNative(string from, string to);
-
-    [LibraryImport("libc", EntryPoint = "unlink", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
-    private static partial int UnlinkNative(string path);
 
     internal static string TrashInfo(string path, DateTimeOffset deletedAt) =>
         "[Trash Info]\n"

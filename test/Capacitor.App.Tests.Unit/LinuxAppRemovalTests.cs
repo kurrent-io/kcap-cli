@@ -96,10 +96,8 @@ public class LinuxAppRemovalTests {
         await Assert.That(File.Exists(first)).IsFalse();
         await Assert.That(File.ReadAllText(Tmp.PathTo("data", "Trash", "files", "kcap-x86_64.AppImage"))).IsEqualTo("one");
         await Assert.That(File.ReadAllText(Tmp.PathTo("data", "Trash", "files", "kcap-x86_64.2.AppImage"))).IsEqualTo("two");
-        var info = File.ReadAllText(Tmp.PathTo("data", "Trash", "info", "kcap-x86_64.AppImage.trashinfo"));
-        await Assert.That(info).StartsWith("[Trash Info]\n");
-        await Assert.That(info).Contains($"\nPath={first}\n");
-        await Assert.That(info).Contains($"\nDeletionDate={_time.GetLocalNow():yyyy-MM-ddTHH:mm:ss}\n");
+        await Assert.That(File.ReadAllText(Tmp.PathTo("data", "Trash", "info", "kcap-x86_64.AppImage.trashinfo")))
+            .IsEqualTo(LinuxAppRemoval.TrashInfo(first, _time.GetLocalNow()));
         await Assert.That(File.Exists(Tmp.PathTo("data", "Trash", "info", "kcap-x86_64.2.AppImage.trashinfo"))).IsTrue();
     }
 
