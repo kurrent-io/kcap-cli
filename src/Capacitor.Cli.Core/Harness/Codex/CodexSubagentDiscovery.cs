@@ -304,11 +304,11 @@ public static class CodexSubagentDiscovery {
     }
 
     static string? TaskNameOf(JsonElement output) {
-        if (output.TryGetProperty("output", out var body) && body.ValueKind == JsonValueKind.String) {
+        if (output.Str("output") is { } body) {
             try {
-                using var doc = JsonDocument.Parse(body.GetString()!);
+                using var doc = JsonDocument.Parse(body);
 
-                return doc.RootElement.ValueKind == JsonValueKind.Object ? doc.RootElement.Str("task_name") : null;
+                return doc.RootElement.Str("task_name");
             } catch (JsonException) {
                 return null;
             }
