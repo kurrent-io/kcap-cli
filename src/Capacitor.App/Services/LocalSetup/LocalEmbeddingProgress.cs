@@ -131,7 +131,7 @@ public sealed class LocalEmbeddingProgress : ReactiveObject {
             case "embeddings_configured" when root.Str("provider") == "builtin":
                 Builtin         = true;
                 Model           = BuiltinName;
-                ReplacedModel   = null;
+                ReplacedModel   = root.Str("replaced_model");
                 ConfiguredModel = BuiltinName;
                 SkipCode        = null;
                 SkipMessage     = null;

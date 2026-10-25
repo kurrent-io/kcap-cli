@@ -157,6 +157,14 @@ public class LocalSetupProgressTests {
     }
 
     [Test]
+    public async Task A_switch_to_the_builtin_model_names_the_Ollama_model_it_replaced() {
+        var p = Run("{\"v\":1,\"event\":\"embeddings_configured\",\"provider\":\"builtin\",\"replaced_model\":\"mxbai-embed-large\"}");
+
+        await Assert.That(p.Embeddings.ReplacedModel).IsEqualTo("mxbai-embed-large");
+        await Assert.That(p.Embeddings.ReembedNote).IsEqualTo("The search index is being rebuilt with the built-in model in the background after switching from mxbai-embed-large. Your saved information is kept.");
+    }
+
+    [Test]
     public async Task A_configured_model_ends_in_search_by_meaning_and_names_a_replaced_one() {
         var p = Run(
             "{\"v\":1,\"event\":\"embeddings_model_ready\",\"model\":\"nomic-embed-text\",\"dimensions\":768}",
