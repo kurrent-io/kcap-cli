@@ -128,6 +128,20 @@ public class WorktreeManagerUserGitConfigTests {
             .IsEqualTo("notes.txt: text: unspecified\nnotes.txt: eol: unspecified");
     }
 
+    /// <summary>An empty <c>core.attributesFile</c> turns the user's attributes off, so git's default file is not copied</summary>
+    [Test]
+    public async Task A_standalone_snapshot_copies_no_rules_when_the_user_turns_attributes_off() {
+        var source = Tmp.CreateDir("proj");
+        source.CreateFile("README.md", "hello");
+        Tmp.CreateFile("xdg/git/attributes", "*.psd filter=lfs\n");
+        using var xdg    = EnvScope.Exclusive("XDG_CONFIG_HOME", Tmp.PathTo("xdg"));
+        using var config = UserGlobalConfig("[core]\n    attributesFile =\n");
+
+        var worktree = await NewManager().CreateAsync(source);
+
+        await Assert.That(GitRepo.At(worktree.Path).Do("check-attr", "filter", "--", "art.psd").Text).IsEqualTo("art.psd: filter: unspecified");
+    }
+
     /// <summary>A relative <c>core.attributesFile</c> names a file in the repository git runs in, the snapshot here</summary>
     [Test]
     public async Task A_standalone_snapshot_keeps_rules_from_a_relative_attributes_file() {

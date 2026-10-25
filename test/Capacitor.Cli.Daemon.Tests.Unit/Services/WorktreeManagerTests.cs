@@ -95,6 +95,8 @@ public class WorktreeManagerTests {
         up.Do("update-ref", "refs/pull/7/head", up.Head);
         var head = up.Head;
         sub.Dispose();
+        // A recursing fetch could otherwise reach the moved commit, and the HEAD assertion would prove nothing.
+        await Assert.That(Directory.Exists(sub.Path)).IsFalse();
 
         var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
         var worktree = await manager.CreateAsync(clone, name: "review-pr-7", baseRef: "refs/pull/7/head");

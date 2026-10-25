@@ -543,10 +543,13 @@ public partial class WorktreeManager(
     static async Task<string?> UserAttributesFileAsync(string worktreePath, TimeProvider time) {
         var configured = await RunGitCaptureResult(worktreePath, GitTimeout, time, sourceReadOnly: false, [],
             "config", "--path", "--get", "core.attributesFile");
-        if (configured.ExitCode == 0 && configured.Stdout.Trim() is { Length: > 0 } named) return Path.Combine(worktreePath, named);
+        // Only git's line ending is trimmed: a path may begin or end with a space. An explicitly empty value turns the
+        // user's attributes off, so the default is not consulted.
+        if (configured.ExitCode == 0)
+            return configured.Stdout.TrimEnd('\r', '\n') is { Length: > 0 } named ? Path.Combine(worktreePath, named) : null;
 
         var reported = await RunGitCaptureResult(worktreePath, GitTimeout, time, sourceReadOnly: false, [], "var", "GIT_ATTR_GLOBAL");
-        if (reported.ExitCode == 0 && reported.Stdout.Trim() is { Length: > 0 } path) return path;
+        if (reported.ExitCode == 0 && reported.Stdout.TrimEnd('\r', '\n') is { Length: > 0 } path) return path;
 
         if (Environment.GetEnvironmentVariable("XDG_CONFIG_HOME") is { Length: > 0 } xdg) return Path.Combine(xdg, "git", "attributes");
 
