@@ -274,7 +274,7 @@ The setup wizard walks you through the steps below. Re-run it any time to update
 
    kcap reports the coding agents it found on this machine — which are on your `PATH`, which have config on disk, which kcap is already wired into, and whether your login shell can find `kcap` — since only the machine can know that, and on a device-code sign-in the browser is a different box entirely. **Whatever you choose there is what step 4 installs**, per agent and per choice, instead of the terminal prompt; a `--skip-<agent>` flag still wins, and "Not now" installs nothing.
 
-   That screen also asks who may read the sessions this machine records from now on, and **step 3 then reports that answer instead of asking again**. Declining every agent and still choosing an audience is a coherent answer, so the two are read separately. Answer that screen without setting an audience and step 3 keeps whatever your profile already has, rather than re-asking — its prompt defaults to org-public, so re-asking could widen a narrower setting you never changed. If the screen was never answered at all, step 3 prompts as before.
+   That screen also asks who may read the sessions this machine records from now on, and **step 3 then reports that answer instead of asking again**. Declining every agent and still choosing an audience is a coherent answer, so the two are read separately. Answer that screen without setting an audience and step 3 keeps whatever your profile already has, rather than re-asking — its prompt preselects the workspace's default (`org_public` on a server that cannot say), so re-asking could widen a narrower setting you never changed. If the screen was never answered at all, step 3 prompts as before.
 
    **The Import screen's figures come from this machine, and its answer runs here.** Once you have answered the Agents screen, kcap scans for past sessions and reports what it found — per repository and per history window (last 30 days / last 90 days / everything), plus how many sessions could not be attributed to a repository at all. It scans only the agents you kept: an agent you were offered and left off is skipped, while one with history on disk but nothing installed now was never offered, so its history still counts. The report is capped at 200 repositories, newest activity first, and the screen says how many it is not showing.
 
@@ -399,7 +399,7 @@ kcap setup --org "Acme" --slug acme --tier team --default-visibility org_public 
 | This machine has one user (local) | `--single-user` | required |
 | Install kcap local (local) | `--yes` | required, except to reuse an installation |
 | Ollama for search by meaning (local) | `--embedding-model <model>`, `--no-embeddings` | required while Ollama runs and nothing is recorded |
-| Default session visibility | `--default-visibility` | `org_public`; `private` with `--local` |
+| Default session visibility | `--default-visibility` | the workspace's default (`org_public` from a server that cannot say); `private` with `--local` |
 | Install kcap for the detected agents? | `--skip-harnesses`, `--skip-<agent>-hooks` and friends | yes |
 | Let Codex's sandbox reach the server? | `--skip-codex-network-access` | yes |
 | Record another Claude/Codex config directory? | — (`kcap accounts add` afterwards) | no; the command is printed |

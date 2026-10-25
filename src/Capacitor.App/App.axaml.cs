@@ -1806,7 +1806,10 @@ public partial class App : Application {
         using var timeout = new CancellationTokenSource(WizardVisibilityOptionsTimeout, _time);
         using var bounded = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
         try {
-            if (await FreshServerLaneAsync(bounded.Token).ConfigureAwait(false) is not ({ } lane, { } profiles)) return null;
+            if (await FreshServerLaneAsync(bounded.Token).ConfigureAwait(false) is not ({ } lane, { } profiles)) {
+                Console.Error.WriteLine("kcap: visibility options not read (no server resolved) — offering every answer");
+                return null;
+            }
             await using var _ = lane;
 
             var (client, status, _, _) = await lane.GetRequiredService<ICapacitorHttpClient>().ForWaitAsync(bounded.Token).ConfigureAwait(false);
