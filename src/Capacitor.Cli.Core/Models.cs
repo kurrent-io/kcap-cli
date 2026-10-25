@@ -1280,6 +1280,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(Capacitor.Cli.Core.Http.PublishArtefactBody))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Http.PublishArtefactVersionBody))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Http.SetArtefactVisibilityBody))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Setup.VisibilityOptionsResponse))]
 [JsonSourceGenerationOptions(
     PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower,
     UseStringEnumConverter = true

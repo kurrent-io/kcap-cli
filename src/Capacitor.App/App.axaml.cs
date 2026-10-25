@@ -1246,6 +1246,7 @@ public partial class App : Application {
             ProfileOverride: _serverEnv.Profile,
             UsageNotice: _usageNotice,
             ReportCliSetup: ReportWizardCliSetupAsync,
+            ReadVisibilityOptions: ReadWizardVisibilityOptionsAsync,
             ResumeWebSignUp: WizardComposition.ResumesWebSignUp(await _appState.LoadAsync(), _time.GetUtcNow()));
         _localInstall ??= WizardComposition.NewInstallController(options);
         var graph = WizardComposition.BuildGraph(options with { Install = _localInstall });
@@ -1799,6 +1800,34 @@ public partial class App : Application {
     }
 
     static readonly TimeSpan WizardCliSetupReportTimeout = TimeSpan.FromSeconds(30);
+
+    // Null offers every answer: a server that predates the read says nothing, and any other miss is logged.
+    async Task<VisibilityOptionsResponse?> ReadWizardVisibilityOptionsAsync(CancellationToken ct) {
+        using var timeout = new CancellationTokenSource(WizardVisibilityOptionsTimeout, _time);
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
+        try {
+            if (await FreshServerLaneAsync(bounded.Token).ConfigureAwait(false) is not ({ } lane, { } profiles)) return null;
+            await using var _ = lane;
+
+            var (client, status, _, _) = await lane.GetRequiredService<ICapacitorHttpClient>().ForWaitAsync(bounded.Token).ConfigureAwait(false);
+            using (client) {
+                if (status is not (AuthStatus.Ok or AuthStatus.NoAuthRequired)) {
+                    Console.Error.WriteLine($"kcap: visibility options not read ({status}) — offering every answer");
+                    return null;
+                }
+
+                var read = await ServerVisibilityOptions.ReadAsync(client, profiles.Resolution.ServerUrl!, bounded.Token).ConfigureAwait(false);
+                if (read.Problem is { } problem) Console.Error.WriteLine($"kcap: visibility options read failed ({problem}) — offering every answer");
+
+                return read.Offer;
+            }
+        } catch (Exception ex) when (!ct.IsCancellationRequested) {
+            Console.Error.WriteLine($"kcap: visibility options read failed — offering every answer: {ex.Message}");
+            return null;
+        }
+    }
+
+    static readonly TimeSpan WizardVisibilityOptionsTimeout = TimeSpan.FromSeconds(10);
 
     static string? ReportedCliVersion => typeof(CapacitorVersion).Assembly.GetName().Version?.ToString();
 

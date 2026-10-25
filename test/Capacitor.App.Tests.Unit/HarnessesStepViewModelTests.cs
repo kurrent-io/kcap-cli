@@ -27,7 +27,8 @@ public class HarnessesStepViewModelTests {
         public readonly HarnessesStepViewModel Vm;
 
         public Harness(ConfigRoot config, IReadOnlyDictionary<HarnessId, DetectedAgent>? detected = null,
-                IReadOnlySet<HarnessId>? declined = null, PathFixViewModel? pathFix = null, bool local = false) {
+                IReadOnlySet<HarnessId>? declined = null, PathFixViewModel? pathFix = null, bool local = false,
+                Func<CancellationToken, Task<VisibilityOptionsResponse?>>? visibilityOptions = null) {
             detected ??= new Dictionary<HarnessId, DetectedAgent> {
                 [HarnessId.Claude] = new(true, true),
                 [HarnessId.Cursor] = new(false, true),
@@ -41,7 +42,8 @@ public class HarnessesStepViewModelTests {
                 config, pathFix,
                 _ => Task.FromResult<IReadOnlySet<string>?>(ProviderKeys),
                 "test-mac",
-                onLocalPath: local ? () => true : null);
+                onLocalPath: local ? () => true : null,
+                visibilityOptions: visibilityOptions);
         }
 
         public HarnessRowViewModel Row(string label) => Vm.Rows.First(r => r.Label == label);
@@ -254,6 +256,54 @@ public class HarnessesStepViewModelTests {
 
         await Assert.That(calls).IsEquivalentTo([null, "--cursor", "--pi", "--cursor"], CollectionOrdering.Matching);
         await Assert.That(satisfied).IsTrue();
+    }
+
+    static VisibilityOptionsResponse Offer(string preselected, params string[] keys) => new() {
+        Options           = [.. keys.Select(k => new VisibilityOptionDto { Key = k, Label = $"label {k}", Detail = $"detail {k}" })],
+        DefaultVisibility = preselected,
+    };
+
+    public static IEnumerable<Func<(Func<CancellationToken, Task<VisibilityOptionsResponse?>>? Read, string[] Values, string? FirstLabel)>> OfferRows() => [
+        () => (_ => Task.FromResult<VisibilityOptionsResponse?>(Offer("private", "private", "public")), ["private", "public"], "label private"),
+        () => (_ => Task.FromResult<VisibilityOptionsResponse?>(Offer("project", "private", "project", "public")), ["private", "project", "public"], "label private"),
+        () => (_ => Task.FromResult<VisibilityOptionsResponse?>(Offer("org_public", "private", "project", "org_public", "public")),
+               ["private", "project", "org_public", "public"], "label private"),
+        () => (_ => Task.FromResult<VisibilityOptionsResponse?>(null), ["private", "project", "org_public", "public"], "Only me"),
+        () => (_ => Task.FromException<VisibilityOptionsResponse?>(new HttpRequestException("down")), ["private", "project", "org_public", "public"], "Only me"),
+        () => (null, ["private", "project", "org_public", "public"], "Only me"),
+    ];
+
+    /// The step offers the answers the server says this tenant can honour, in its order and copy, and every answer
+    /// when the server says nothing or the read fails. It still waits for an explicit choice.
+    [Test]
+    [MethodDataSource(nameof(OfferRows))]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Who_can_read_offers_what_the_tenant_can_honour(
+            Func<CancellationToken, Task<VisibilityOptionsResponse?>>? read, string[] values, string? firstLabel) {
+        var (offered, label, visibility) = await AvaloniaSession.DispatchAsync(async () => {
+            var h = new Harness(Config.Root, visibilityOptions: read);
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+
+            return (h.Vm.VisibilityOptions.Select(o => o.Value).ToList(), h.Vm.VisibilityOptions[0].Label, h.Vm.Visibility);
+        });
+
+        await Assert.That(offered).IsEquivalentTo(values, CollectionOrdering.Matching);
+        await Assert.That(label).IsEqualTo(firstLabel);
+        await Assert.That(visibility).IsNull();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_local_install_asks_the_server_nothing() {
+        var asked = await AvaloniaSession.DispatchAsync(async () => {
+            var calls = 0;
+            var h = new Harness(Config.Root, local: true, visibilityOptions: _ => { calls++; return Task.FromResult<VisibilityOptionsResponse?>(null); });
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+
+            return calls;
+        });
+
+        await Assert.That(asked).IsEqualTo(0);
     }
 
     [Test]

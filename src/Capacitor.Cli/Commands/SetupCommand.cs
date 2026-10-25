@@ -967,7 +967,7 @@ sealed class SetupCommand(
             defaultVisibility = (GetArg(args, "--default-visibility")
                               ?? (museAssistant ? MuseAssistantPosture.DefaultVisibility
                                 : local is not null ? LocalDefaultVisibility
-                                : "org_public")).ToLowerInvariant();
+                                : VisibilityChoices(await ReadVisibilityOptionsAsync(serverUrl)).Preselected)).ToLowerInvariant();
 
             await Console.Out.WriteLineAsync($"  Default visibility: {defaultVisibility}");
         } else if (flowVisibility.Apply is { } fromFlow) {
@@ -979,13 +979,13 @@ sealed class SetupCommand(
                 ? $"  [dim]· Not chosen in the browser - keeping {Markup.Escape(VisibilityLabel(fromFlow))}[/]"
                 : $"  [dim]· Chosen in the browser: {Markup.Escape(VisibilityLabel(fromFlow))}[/]");
         } else {
+            var choices = VisibilityChoices(await ReadVisibilityOptionsAsync(serverUrl));
             var visibilityPrompt = new SelectionPrompt<string>()
                 .Title("Which of your sessions should be readable by other users in the same kcap account by default?")
-                .AddChoices(AppConfig.ValidVisibilities)
-                .UseConverter(VisibilityLabel);
+                .AddChoices(choices.Keys)
+                .UseConverter(choices.Label);
 
-            // Start the cursor on the option we label "(default)" rather than the first choice.
-            visibilityPrompt.DefaultValue = "org_public";
+            visibilityPrompt.DefaultValue = choices.Preselected;
 
             defaultVisibility = AnsiConsole.Prompt(visibilityPrompt);
 
@@ -2315,8 +2315,8 @@ sealed class SetupCommand(
     ///
     /// <para><b>An answered screen that set nothing leaves the profile alone</b>, which is the lane's
     /// contract for a null answer — and the reason this cannot simply fall through to the prompt: the
-    /// prompt's cursor starts on <c>org_public</c>, so one Return would widen an existing
-    /// <c>private</c>. A screen that was never answered has told us nothing and still needs asking.</para>
+    /// prompt preselects the tenant's default, so one Return could widen an existing <c>private</c>. A
+    /// screen that was never answered has told us nothing and still needs asking.</para>
     /// </summary>
     /// <param name="browser">The Agents answer, or null where that step never settled.</param>
     /// <param name="current">What the profile holds now.</param>
@@ -2339,6 +2339,57 @@ sealed class SetupCommand(
 
     /// <summary>Per request, not per leg: the poll below runs for as long as a human takes.</summary>
     static readonly TimeSpan BrowserFlowHttpTimeout = TimeSpan.FromSeconds(15);
+
+    /// <summary>What step 3 offers, in order, how each stop reads, and the one it preselects</summary>
+    internal readonly record struct VisibilityChoiceSet(IReadOnlyList<string> Keys, Func<string, string> Label, string Preselected);
+
+    /// <summary>
+    /// The stops the server says this tenant can honour, in the browser flow's copy and with its default. Without
+    /// that answer, from a server that predates it or one that could not give it, every stop is offered with
+    /// <c>org_public</c> preselected
+    /// </summary>
+    internal static VisibilityChoiceSet VisibilityChoices(VisibilityOptionsResponse? offer) {
+        if (offer is not { DefaultVisibility: { } preselected }) return new(AppConfig.ValidVisibilities, VisibilityLabel, "org_public");
+
+        var copy = offer.Options.ToDictionary(o => o.Key!, o => o.Detail is { Length: > 0 } detail
+            ? $"{Markup.Escape(o.Label!)} [dim]— {Markup.Escape(detail)}[/]"
+            : Markup.Escape(o.Label!), StringComparer.Ordinal);
+
+        return new([.. copy.Keys], key => copy.GetValueOrDefault(key, key), preselected);
+    }
+
+    static readonly TimeSpan VisibilityOptionsTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>The server's stops, or null to offer every one. A server that predates the read is silent; any other
+    /// miss says why in one line, and none of them stops setup</summary>
+    async Task<VisibilityOptionsResponse?> ReadVisibilityOptionsAsync(string serverUrl) {
+        string problem;
+
+        try {
+            await using var scoped = HttpForChosenServer(serverUrl);
+
+            var (client, status) = await scoped.GetRequiredService<ICapacitorHttpClient>().ForWaitAsync();
+
+            using (client) {
+                if (status is AuthStatus.Ok or AuthStatus.NoAuthRequired) {
+                    client.Timeout = VisibilityOptionsTimeout;
+
+                    var read = await ServerVisibilityOptions.ReadAsync(client, serverUrl, CancellationToken.None);
+                    if (read.Problem is null) return read.Offer;
+
+                    problem = read.Problem;
+                } else {
+                    problem = $"not signed in ({status})";
+                }
+            }
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            problem = ex.Message;
+        }
+
+        AnsiConsole.MarkupLine($"  [dim]· Could not read which options this account supports ({Markup.Escape(problem)}); offering all of them[/]");
+
+        return null;
+    }
 
     /// <summary>How long the login-shell probe may hold up the create. Two attempts at its own 5s
     /// timeout, plus room to spawn them; past that the machine reports "not probed", which is not the
