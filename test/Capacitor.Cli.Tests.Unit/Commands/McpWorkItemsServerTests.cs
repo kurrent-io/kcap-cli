@@ -183,7 +183,7 @@ public class McpWorkItemsServerTests {
 
         await Assert.That(byName["merge_work_item"].InputSchema.Required).IsEquivalentTo(new[] { "work_item_id", "into_work_item_id" });
         await Assert.That(byName["detach_work_item"].InputSchema.Required).IsEquivalentTo(new[] { "work_item_id" });
-        await Assert.That(byName["declare_work_incomplete"].InputSchema.Required).IsEquivalentTo(new[] { "work_item_id", "reason" });
+        await Assert.That(byName["declare_work_incomplete"].InputSchema.Required).IsEquivalentTo(new[] { "work_item_id" });
     }
 
     [Test]
@@ -195,9 +195,11 @@ public class McpWorkItemsServerTests {
     }
 
     [Test]
-    public async Task Incomplete_body_requires_a_reason() =>
-        await Assert.That(() => McpWorkItemsServer.BuildDeclareIncompleteBody(Args("""{"work_item_id":"wi-1","session_id":"s1"}""")))
-            .Throws<ArgumentException>().WithMessageContaining("reason");
+    public async Task Incomplete_body_leaves_out_an_absent_reason() {
+        var body = McpWorkItemsServer.BuildDeclareIncompleteBody(Args("""{"work_item_id":"wi-1","session_id":"s1"}"""));
+
+        await Assert.That(body.ToJsonString()).IsEqualTo("""{"session_id":"s1"}""");
+    }
 
     [Test]
     public async Task Loose_end_body_carries_session_id_and_text() {

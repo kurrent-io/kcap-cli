@@ -847,8 +847,13 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
     internal static JsonObject BuildDetachBody(JsonObject? args) =>
         new() { ["session_id"] = McpSessionId.Resolve(args) };
 
-    internal static JsonObject BuildDeclareIncompleteBody(JsonObject? args) =>
-        new() { ["session_id"] = McpSessionId.Resolve(args), ["reason"] = McpToolArguments.RequireString(args, "reason") };
+    internal static JsonObject BuildDeclareIncompleteBody(JsonObject? args) {
+        var body = new JsonObject { ["session_id"] = AotJsonString(McpSessionId.Resolve(args)) };
+
+        if (McpToolArguments.OptionalString(args, "reason") is { } reason) body["reason"] = AotJsonString(reason);
+
+        return body;
+    }
 
     // Text bounds and the none-class rule stay the server's, so its 400 names the real reason.
     internal static JsonObject BuildDeclareLooseEndBody(JsonObject? args) {
@@ -1119,9 +1124,9 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
           + "repeating the declaration from the same session is a no-op.",
             new("object", new() {
                 ["work_item_id"] = new("string", "The work item that is not finished."),
-                ["reason"]       = new("string", "What is still left to do, in one sentence."),
+                ["reason"]       = new("string", "What is still left to do, in one sentence. Optional, but give one when you can."),
                 ["session_id"]   = new("string", "Session id declaring. Defaults to the session this server runs in when omitted.")
-            }, ["work_item_id", "reason"]), McpToolAnnotations.Upsert),
+            }, ["work_item_id"]), McpToolAnnotations.Upsert),
 
         new("dismiss_next_work",
             "Record that the user turned down a next-work suggestion, so it stops being offered. Call it only "

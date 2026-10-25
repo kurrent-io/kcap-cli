@@ -76,7 +76,7 @@ two — that records structure that isn't there. Merge instead:
 
 A tracker can close an issue when a PR merges even though the work it names is not done.
 When the user says so, or the session shows it, call `declare_work_incomplete` with the
-`work_item_id` and a one-sentence `reason` saying what is left. The item stays in flight
+`work_item_id` and, when you can, a one-sentence `reason` saying what is left. The item stays in flight
 until a PR merges or an issue closes after the declaration. Only a session attached to the
 item can declare it, and a repeat from the same session is a no-op. Unfinished work that is
 not the item itself is a loose end, not this.
@@ -191,7 +191,7 @@ next work or said they are done with or parking that work.
 | `get_work_item_topology` | `work_item_id` | Read parent, parts, and dependencies (visibility-scoped). |
 | `merge_work_item` | `work_item_id`, `into_work_item_id` | Merge a duplicate into the survivor (prefer the keyed item as survivor). |
 | `detach_work_item` | `work_item_id` | Detach the session from a wrongly attached item. `session_id` defaults to the current session. |
-| `declare_work_incomplete` | `work_item_id`, `reason` | Keep a tracker close from settling an item whose work is unfinished. `session_id` defaults to the current session. |
+| `declare_work_incomplete` | `work_item_id`, optional `reason` | Keep a tracker close from settling an item whose work is unfinished. `session_id` defaults to the current session. |
 | `list_work_item_evals` | `work_item_id` | List the item's evaluation runs you can read, newest first; `cursor` from `next_cursor`. |
 | `get_work_item_eval` | `work_item_id`, `run_id` | Read one run's per-question results, judged requirements and retrospective. |
 | `request_work_item_eval` | `work_item_id` | Queue an evaluation (`mode` `process`, the default, or `root_cause`); returns your still-active run instead of a second one. |
