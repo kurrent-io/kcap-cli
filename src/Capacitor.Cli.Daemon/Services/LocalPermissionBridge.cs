@@ -694,7 +694,7 @@ internal sealed partial class LocalPermissionBridge(
                             // decision log plus the run event are its audit trail.
                             if (behavior == PermissionSettlements.Allow && pending is not null) _broker.OweCall(pending, SubagentIdOf(node));
                             RecordRefusal(vendor, governed, canonicalSessionId, node, toolName, toolInput, behavior);
-                            await WriteResponseAsync(context, BuildHookResponseJson(new PermissionDecision(behavior, null, null), vendor), time);
+                            await WriteResponseAsync(context, BuildHookResponseJson(new PermissionDecision(behavior, null, null), vendor, suggestions, toolName), time);
 
                             return;
                         }
@@ -725,7 +725,7 @@ internal sealed partial class LocalPermissionBridge(
                         // Shutdown: claim rather than inspect. Losing means another party settled first.
                         if (_broker.TrySettle(pending.RequestId, PermissionSettlements.DenyDecision,
                                 PermissionSettlements.Deny, PermissionSettlements.SourceDaemonShutdown)) {
-                            await WriteResponseAsync(context, BuildHookResponseJson(PermissionSettlements.DenyDecision, vendor), time);
+                            await WriteResponseAsync(context, BuildHookResponseJson(PermissionSettlements.DenyDecision, vendor, suggestions, toolName), time);
                             return;
                         }
                         settlement = await settlementTask;
@@ -735,12 +735,12 @@ internal sealed partial class LocalPermissionBridge(
                         time.GetUtcNow().ToString("O"), pending.AgentId, pending.SessionId, pending.Vendor,
                         pending.ToolName, settlement.Outcome, settlement.Source));
                     RecordRefusal(vendor, attributed, canonicalSessionId, node, toolName, toolInput, settlement.Decision.Behavior);
-                    await WriteResponseAsync(context, BuildHookResponseJson(settlement.Decision, vendor), time);
+                    await WriteResponseAsync(context, BuildHookResponseJson(settlement.Decision, vendor, suggestions, toolName), time);
                     return;
                 }
             }
 
-            await WriteResponseAsync(context, BuildHookResponseJson(decision, vendor), time);
+            await WriteResponseAsync(context, BuildHookResponseJson(decision, vendor, suggestions, toolName), time);
         } catch (Exception ex) {
             LogBridgeHandlerError(logger, ex);
             if (permissionRequest) _refusals.MarkAllIncomplete();
@@ -1171,20 +1171,20 @@ internal sealed partial class LocalPermissionBridge(
         AgentActivityClock? ActivityClock = null,
         Func<string, string, CancellationToken, Task<(int Status, string Body)>>? SubmitForwarder = null);
 
-    static string BuildHookResponseJson(PermissionDecision decision, string vendor) =>
+    static string BuildHookResponseJson(PermissionDecision decision, string vendor, JsonElement? suggestions, string? toolName) =>
         vendor switch {
-            "claude" => BuildClaudeResponse(decision),
+            "claude" => BuildClaudeResponse(decision, suggestions, toolName),
             "codex"  => BuildCodexResponse(decision),
             _        => throw new InvalidOperationException($"Unsupported vendor: {vendor}")
         };
 
-    static string BuildClaudeResponse(PermissionDecision decision) {
-        // Mirrors the server-side BuildHookResponse. Claude expects camelCase keys here
-        // (hookSpecificOutput, hookEventName, applyPermissions, updatedInput) — these are
-        // outside the server's snake_case JSON convention because Claude defines them.
+    static string BuildClaudeResponse(PermissionDecision decision, JsonElement? suggestions, string? toolName) {
+        // Mirrors the server-side BuildHookResponse. The camelCase keys are Claude's own hook contract, outside kcap's
+        // snake_case convention.
         var decisionNode = new JsonObject { ["behavior"] = decision.Behavior };
 
-        if (decision.ApplyPermissions is { } ap) decisionNode["applyPermissions"] = JsonNode.Parse(ap.GetRawText());
+        if (decision.Behavior == PermissionSettlements.Allow && ClaudePermissions.UpdatesFor(decision.ApplyPermissions, suggestions, toolName) is { } updates)
+            decisionNode["updatedPermissions"] = updates;
         if (decision.UpdatedInput is { } ui) decisionNode["updatedInput"]         = JsonNode.Parse(ui.GetRawText());
 
         var payload = new JsonObject {
