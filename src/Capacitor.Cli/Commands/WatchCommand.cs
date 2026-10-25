@@ -885,6 +885,7 @@ partial class WatchCommand(
         if (state.LinesProcessed > 0) {
             var replay = new List<TranscriptReplayConsumer>();
             if (state.SecondaryRoots is { } secondaryRoots) replay.Add(SecondaryRootsReplay(secondaryRoots, vendor));
+            if (vendor == "claude") replay.Add(CreatedPullRequestsReplay(state));
             if (TracksClaudeToolCalls(vendor, isSessionWatcher: agentId is null)) replay.Add(ClaudePendingToolCallsReplay(state.PendingClaudeToolCalls));
             if (TracksCodexToolCalls(vendor)) replay.Add(CodexWatcherStateReplay(state, isChildWatcher: agentId is not null));
             await TranscriptReplay.ReplayAsync(transcriptPath, state.LinesProcessed, replay, cts.Token, message => Log(time, message));
@@ -967,6 +968,12 @@ partial class WatchCommand(
                 if (SecondaryProbeDue(state, time.GetUtcNow())) {
                     await LinkSecondaryPullRequestsAsync(state, sessionId, SecondaryProbeBudget, cts.Token, TouchHeartbeat);
                     state.LastSecondaryProbe = time.GetUtcNow();
+                }
+
+                if (state.PendingCreatedPullRequests.Count > 0 && time.GetUtcNow() >= state.NextCreatedPullRequestLink) {
+                    await LinkCreatedPullRequestsAsync(state, sessionId, SecondaryProbeBudget, cts.Token, TouchHeartbeat);
+                    // Only a post the server refused waits; a PR created after a clean pass goes at once.
+                    state.NextCreatedPullRequestLink = state.PendingCreatedPullRequests.Count > 0 ? time.GetUtcNow() + TimeSpan.FromSeconds(60) : default;
                 }
 
                 // Before the first drain, so a transcript title line can be judged by the time LLM titling is due.
@@ -1176,6 +1183,8 @@ partial class WatchCommand(
             }
 
             // A PR is usually opened in the session's last turn, after the previous 60s probe.
+            await LinkCreatedPullRequestsAsync(state, sessionId,
+                FinalSecondaryProbeDeadline - time.GetElapsedTime(shutdownStarted), CancellationToken.None, TouchHeartbeat);
             await LinkSecondaryPullRequestsAsync(state, sessionId,
                 FinalSecondaryProbeDeadline - time.GetElapsedTime(shutdownStarted), CancellationToken.None, TouchHeartbeat);
         }
@@ -1822,6 +1831,23 @@ partial class WatchCommand(
         new(WindowOnly: false, line => {
             roots.OnLine(vendor, line);
             return roots.IsFull;
+        });
+
+    internal static void ObserveCreatedPullRequest(WatchState state, string line) {
+        if (CreatedPullRequests.FromClaudeLine(line) is not { } pr) return;
+        if (state.LinkedPullRequests.Contains((pr.Owner, pr.RepoName, pr.Number)) || state.PendingCreatedPullRequests.Contains(pr)) return;
+
+        state.PendingCreatedPullRequests.Add(pr);
+    }
+
+    /// <summary>
+    /// A PR created before a restart: the watcher keeps no record of what it linked, and the server
+    /// takes a PR it already has as a no-op.
+    /// </summary>
+    internal static TranscriptReplayConsumer CreatedPullRequestsReplay(WatchState state) =>
+        new(WindowOnly: false, line => {
+            ObserveCreatedPullRequest(state, line);
+            return false;
         });
 
     /// <summary>
@@ -2682,7 +2708,13 @@ partial class WatchCommand(
             // mutation in a session's first lines must register before the buffer flushes, and an
             // oversized Write redacts to a placeholder with no path. Only paths are read.
             if (state.SecondaryRoots is { } secondaryRoots) {
+                var knownRoots = secondaryRoots.Roots.Count;
                 foreach (var line in drainRead.Lines) secondaryRoots.OnLine(vendor, line);
+                if (secondaryRoots.Roots.Count > knownRoots) Log(time, $"Probing secondary checkouts for a PR: {string.Join(", ", secondaryRoots.Roots)}");
+            }
+
+            if (vendor == "claude") {
+                foreach (var line in drainRead.Lines) ObserveCreatedPullRequest(state, line);
             }
 
             // A Codex collab CHILD watcher additionally folds its own rollout's turn state
@@ -4053,7 +4085,68 @@ partial class WatchCommand(
     Task LinkSecondaryPullRequestsAsync(WatchState state, string sessionId, TimeSpan budget, CancellationToken ct, Action beat) =>
         LinkSecondaryPullRequestsAsync(state,
             (root, remaining) => RepositoryDetection.DetectRepositoryAsync(router, config, root, time, remaining),
-            (pr, token) => PostLinkedPullRequestAsync(sessionId, pr, token),
+            (pr, token) => PostLinkedPullRequestAsync(sessionId, pr, "from a secondary checkout", token),
+            budget, time, ct, beat);
+
+    /// <summary>
+    /// Posts each created PR the server has not accepted yet. Its title and head come from gh when it
+    /// answers in time; without them the PR is still linked, since the number and URL are what link it.
+    /// </summary>
+    internal static async Task LinkCreatedPullRequestsAsync(
+            WatchState                                             state,
+            Func<CreatedPullRequest, TimeSpan, Task<PrInfo?>>      describe,
+            Func<RepositoryPayload, CancellationToken, Task<bool>> post,
+            TimeSpan                                               budget,
+            TimeProvider                                           time,
+            CancellationToken                                      ct,
+            Action                                                 beat
+        ) {
+        if (state.PendingCreatedPullRequests.Count == 0 || budget <= TimeSpan.Zero) return;
+
+        var started = time.GetTimestamp();
+        using var deadline = new CancellationTokenSource(budget, time);
+        using var linked   = CancellationTokenSource.CreateLinkedTokenSource(ct, deadline.Token);
+
+        foreach (var created in state.PendingCreatedPullRequests.ToArray()) {
+            var remaining = budget - time.GetElapsedTime(started);
+            if (remaining <= TimeSpan.Zero || linked.IsCancellationRequested) return;
+
+            beat();
+
+            var key = (created.Owner, created.RepoName, created.Number);
+
+            if (!state.LinkedPullRequests.Contains(key)) {
+                PrInfo? info;
+                try { info = await describe(created, remaining).WaitAsync(linked.Token); }
+                catch (OperationCanceledException) { return; }
+                catch { info = null; }
+
+                var payload = new RepositoryPayload {
+                    Host      = "github.com",
+                    Owner     = created.Owner,
+                    RepoName  = created.RepoName,
+                    Branch    = info?.HeadRef,
+                    PrNumber  = created.Number,
+                    PrTitle   = info?.Title,
+                    PrUrl     = created.Url,
+                    PrHeadRef = info?.HeadRef,
+                };
+
+                bool accepted;
+                try { accepted = await post(payload, linked.Token); } catch (OperationCanceledException) { return; }
+                if (!accepted) continue;
+
+                state.LinkedPullRequests.Add(key);
+            }
+
+            state.PendingCreatedPullRequests.Remove(created);
+        }
+    }
+
+    Task LinkCreatedPullRequestsAsync(WatchState state, string sessionId, TimeSpan budget, CancellationToken ct, Action beat) =>
+        LinkCreatedPullRequestsAsync(state,
+            (pr, remaining) => GitHubPrDetector.DescribeAsync(pr.Url, pr.Number, home.Path, remaining, RepositoryDetection.DefaultRunner(time)),
+            (pr, token) => PostLinkedPullRequestAsync(sessionId, pr, "created in the session", token),
             budget, time, ct, beat);
 
     // Half of WatcherHeartbeat.Threshold: the heartbeat is touched before each probe, so one
@@ -4230,7 +4323,7 @@ partial class WatchCommand(
         }
     }
 
-    async Task<bool> PostLinkedPullRequestAsync(string sessionId, RepositoryPayload pr, CancellationToken ct) {
+    async Task<bool> PostLinkedPullRequestAsync(string sessionId, RepositoryPayload pr, string source, CancellationToken ct) {
         try {
             using var client  = await http.ForBackgroundAsync(ct);
             var       payload = new JsonObject {
@@ -4247,7 +4340,7 @@ partial class WatchCommand(
             using var resp    = await client.PostWithRetryAsync(
                 $"{Url}/api/sessions/{Uri.EscapeDataString(sessionId)}/pull-requests", content, time, ct: ct, retryStatuses: true);
 
-            if (resp.IsSuccessStatusCode) Log(time, $"Linked {pr.Owner}/{pr.RepoName}#{pr.PrNumber} from a secondary checkout");
+            if (resp.IsSuccessStatusCode) Log(time, $"Linked {pr.Owner}/{pr.RepoName}#{pr.PrNumber} {source}");
             else Log(time, $"Linking {pr.Owner}/{pr.RepoName}#{pr.PrNumber} failed: HTTP {(int)resp.StatusCode}");
 
             return resp.IsSuccessStatusCode;

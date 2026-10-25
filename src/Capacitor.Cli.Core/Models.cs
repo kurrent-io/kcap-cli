@@ -151,6 +151,11 @@ class WatchState {
     public DateTimeOffset                                       LastSecondaryProbe { get; set; }
     public string?                                              NextSecondaryRoot  { get; set; }
 
+    // Claude session and subagent watchers: PRs the transcript shows the agent creating, kept
+    // until the server accepts them.
+    public List<CreatedPullRequest> PendingCreatedPullRequests { get; } = [];
+    public DateTimeOffset           NextCreatedPullRequestLink { get; set; }
+
     public bool               InitialTitleSent   { get; set; }
     public bool               TitleGenerated     { get; set; }
     public int                TitleAttempts      { get; set; }
