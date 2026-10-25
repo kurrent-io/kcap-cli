@@ -105,7 +105,7 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
         + (_current is { Pending: true } ? " The change is not applied yet." : "");
 
     public bool CanApply =>
-        _loaded && !Running && !_upgrade.Running && Choice.Valid
+        _loaded && !Running && !_upgrade.Running && Choice.Valid && !Choice.AwaitingOffer
      && (Differs(Choice.Choice) || _current is null or { Pending: true });
 
     public string ApplyLabel => Choice.Choice switch {

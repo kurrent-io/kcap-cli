@@ -106,6 +106,27 @@ public class LocalSearchViewModelTests {
         });
     }
 
+    /// While the lookup is open the shown recommendation is keyword search, yet setup left to decide could pick the
+    /// built-in model, so nothing applies until the recommendation is the one setup will reach.
+    [Test]
+    public async Task An_unchosen_recommendation_waits_for_the_builtin_lookup() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var lookup = new TaskCompletionSource<LocalEmbeddingModelManifest?>();
+            using var h = new Harness(null, lookup: lookup);
+
+            await Assert.That(h.Vm.Choice.UseKeyword).IsTrue();
+            await Assert.That(h.Vm.CanApply).IsFalse();
+
+            var offered = h.Vm.WhenAnyValue(x => x.CanApply).Where(can => can).FirstAsync().ToTask();
+            lookup.SetResult(h.Offered);
+            await offered.WaitAsync(TimeSpan.FromSeconds(5));
+
+            await Assert.That(h.Vm.Choice.UseBuiltin).IsTrue();
+            await Assert.That(h.Vm.Choice.Choice.Unchosen).IsTrue();
+            await Assert.That(h.Vm.Choice.Choice.Args).IsEmpty();
+        });
+    }
+
     [Test]
     public async Task The_recorded_choice_cannot_be_applied_again() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {

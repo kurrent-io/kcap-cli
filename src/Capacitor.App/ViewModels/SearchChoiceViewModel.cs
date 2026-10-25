@@ -96,6 +96,9 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
     /// A recorded built-in model stays selectable, so a switch away from it can be undone.
     public bool BuiltinEnabled => _builtinOffered == true || _recordedBuiltin;
 
+    /// Setup left to decide may pick the built-in model, so an unchosen recommendation is not final until the lookup answers.
+    public bool AwaitingOffer => _followRecommendation && _builtinOffered is null;
+
     public string? BuiltinStatus => _builtinOffered switch {
         _ when _recordedBuiltin => null,
         false                   => BuiltinUnavailable,
@@ -120,6 +123,7 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
         this.RaisePropertyChanged(nameof(BuiltinEnabled));
         this.RaisePropertyChanged(nameof(BuiltinStatus));
         this.RaisePropertyChanged(nameof(BuiltinDescription));
+        this.RaisePropertyChanged(nameof(AwaitingOffer));
     }
 
     Mode Recommendation => OllamaRunning ? Mode.Ollama : _builtinOffered == true ? Mode.Builtin : Mode.Keyword;
@@ -255,5 +259,6 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
         this.RaisePropertyChanged(nameof(Valid));
         this.RaisePropertyChanged(nameof(OtherModelError));
         this.RaisePropertyChanged(nameof(Choice));
+        this.RaisePropertyChanged(nameof(AwaitingOffer));
     }
 }
