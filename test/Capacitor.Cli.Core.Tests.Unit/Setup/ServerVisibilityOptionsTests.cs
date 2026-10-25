@@ -6,7 +6,7 @@ using WireMock.Server;
 namespace Capacitor.Cli.Core.Tests.Unit.Setup;
 
 /// <summary>The visibility-options read hands back the stops this build knows, says nothing for a server that
-/// predates the route, and turns every other miss into a reason rather than a throw</summary>
+/// answers 404 for the route, and turns every other miss into a reason rather than a throw</summary>
 public class ServerVisibilityOptionsTests {
     const string ThreeStops = """
         {"options":[{"key":"private","label":"Only me","detail":"Nobody else."},

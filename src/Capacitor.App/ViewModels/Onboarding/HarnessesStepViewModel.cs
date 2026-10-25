@@ -198,7 +198,14 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
     public bool DeclineVisible => SelectedCount == 0 && Rows.Count > 0;
 
     public async Task OnEnterAsync(CancellationToken ct) {
-        if (_detected) return; // re-entering must not stomp the user's choices
+        // Re-entering must not stomp the user's choices, but the offer may have changed since.
+        if (_detected) {
+            if (VisibilityVisible && _visibilityOptions is not null) {
+                Busy = true;
+                try { await OfferAsync(_visibilityOptions(ct)).ConfigureAwait(true); } finally { Busy = false; }
+            }
+            return;
+        }
         if (_onLocalPath?.Invoke() == true) Visibility = "private";
         this.RaisePropertyChanged(nameof(VisibilityVisible));
         Busy = true;

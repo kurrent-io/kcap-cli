@@ -1542,8 +1542,8 @@ public class SetupCommandTests {
         await Assert.That(choices.Label(keys[0])).IsEqualTo(offer is null ? SetupCommand.VisibilityLabel(keys[0]) : $"label {keys[0]} [dim]— detail {keys[0]}[/]");
     }
 
-    /// <summary>A scripted run that names no visibility takes the server's default, and today's <c>org_public</c> from
-    /// a server that predates the read or fails it</summary>
+    /// <summary>A scripted run that names no visibility takes the server's default, and <c>org_public</c> from a
+    /// server that answers 404 for the read or fails it</summary>
     [Test]
     [Arguments(200, """{"options":[{"key":"private","label":"Only me"},{"key":"project","label":"Project"}],"default_visibility":"project"}""", "project")]
     [Arguments(404, "", "org_public")]

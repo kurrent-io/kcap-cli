@@ -967,7 +967,7 @@ sealed class SetupCommand(
             defaultVisibility = (GetArg(args, "--default-visibility")
                               ?? (museAssistant ? MuseAssistantPosture.DefaultVisibility
                                 : local is not null ? LocalDefaultVisibility
-                                : VisibilityChoices(await ReadVisibilityOptionsAsync(serverUrl)).Preselected)).ToLowerInvariant();
+                                : VisibilityChoices(await ReadVisibilityOptionsAsync(serverUrl, activeProfile)).Preselected)).ToLowerInvariant();
 
             await Console.Out.WriteLineAsync($"  Default visibility: {defaultVisibility}");
         } else if (flowVisibility.Apply is { } fromFlow) {
@@ -979,7 +979,7 @@ sealed class SetupCommand(
                 ? $"  [dim]· Not chosen in the browser - keeping {Markup.Escape(VisibilityLabel(fromFlow))}[/]"
                 : $"  [dim]· Chosen in the browser: {Markup.Escape(VisibilityLabel(fromFlow))}[/]");
         } else {
-            var choices = VisibilityChoices(await ReadVisibilityOptionsAsync(serverUrl));
+            var choices = VisibilityChoices(await ReadVisibilityOptionsAsync(serverUrl, activeProfile));
             var visibilityPrompt = new SelectionPrompt<string>()
                 .Title("Which of your sessions should be readable by other users in the same kcap account by default?")
                 .AddChoices(choices.Keys)
@@ -2345,7 +2345,7 @@ sealed class SetupCommand(
 
     /// <summary>
     /// The stops the server says this tenant can honour, in the browser flow's copy and with its default. Without
-    /// that answer, from a server that predates it or one that could not give it, every stop is offered with
+    /// that answer (a server without the route answers 404, or the read fails), every stop is offered with
     /// <c>org_public</c> preselected
     /// </summary>
     internal static VisibilityChoiceSet VisibilityChoices(VisibilityOptionsResponse? offer) {
@@ -2360,21 +2360,20 @@ sealed class SetupCommand(
 
     static readonly TimeSpan VisibilityOptionsTimeout = TimeSpan.FromSeconds(10);
 
-    /// <summary>The server's stops, or null to offer every one. A server that predates the read is silent; any other
-    /// miss says why in one line, and none of them stops setup</summary>
-    async Task<VisibilityOptionsResponse?> ReadVisibilityOptionsAsync(string serverUrl) {
+    /// <summary>The server's stops, or null to offer every one. A 404 is silent; any other miss says why in one line,
+    /// and none of them stops setup. The timeout covers signing in as well as the read</summary>
+    async Task<VisibilityOptionsResponse?> ReadVisibilityOptionsAsync(string serverUrl, string profileName) {
         string problem;
+        using var timeout = new CancellationTokenSource(VisibilityOptionsTimeout, time);
 
         try {
-            await using var scoped = HttpForChosenServer(serverUrl);
+            await using var scoped = HttpForChosenServer(serverUrl, await ContextForAsync(profileName, serverUrl));
 
-            var (client, status) = await scoped.GetRequiredService<ICapacitorHttpClient>().ForWaitAsync();
+            var (client, status) = await scoped.GetRequiredService<ICapacitorHttpClient>().ForWaitAsync(timeout.Token);
 
             using (client) {
                 if (status is AuthStatus.Ok or AuthStatus.NoAuthRequired) {
-                    client.Timeout = VisibilityOptionsTimeout;
-
-                    var read = await ServerVisibilityOptions.ReadAsync(client, serverUrl, CancellationToken.None);
+                    var read = await ServerVisibilityOptions.ReadAsync(client, serverUrl, timeout.Token);
                     if (read.Problem is null) return read.Offer;
 
                     problem = read.Problem;
@@ -2382,11 +2381,13 @@ sealed class SetupCommand(
                     problem = $"not signed in ({status})";
                 }
             }
+        } catch (OperationCanceledException) when (timeout.IsCancellationRequested) {
+            problem = $"no answer within {VisibilityOptionsTimeout.TotalSeconds:0}s";
         } catch (Exception ex) when (ex is not OperationCanceledException) {
             problem = ex.Message;
         }
 
-        AnsiConsole.MarkupLine($"  [dim]· Could not read which options this account supports ({Markup.Escape(problem)}); offering all of them[/]");
+        AnsiConsole.MarkupLine($"  [dim]· Could not read which options this account supports ({Markup.Escape(problem)}); falling back to every option and org_public[/]");
 
         return null;
     }

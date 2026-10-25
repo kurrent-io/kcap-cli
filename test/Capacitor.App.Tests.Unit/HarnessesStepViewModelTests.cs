@@ -293,29 +293,28 @@ public class HarnessesStepViewModelTests {
         await Assert.That(visibility).IsNull();
     }
 
-    /// An answer chosen from an earlier offer that the server no longer makes is cleared, so it cannot be saved.
+    /// A revisit re-reads the offer without detecting the harnesses again: an answer chosen from an earlier offer that
+    /// the server no longer makes is cleared, so it cannot be saved.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_revisit_after_the_offer_shrank_clears_an_answer_no_longer_offered() {
-        var (offered, visibility) = await AvaloniaSession.DispatchAsync(async () => {
+        var (offered, visibility, detections) = await AvaloniaSession.DispatchAsync(async () => {
             var reads = 0;
             var h = new Harness(Config.Root,
                 visibilityOptions: _ => Task.FromResult<VisibilityOptionsResponse?>(++reads == 1
                     ? Offer("org_public", "private", "project", "org_public", "public")
-                    : Offer("private", "private", "public")),
-                detectOnCall: call => call == 1 ? throw new IOException("busy") : new Dictionary<HarnessId, DetectedAgent> {
-                    [HarnessId.Claude] = new(true, true),
-                });
+                    : Offer("private", "private", "public")));
 
             await h.Vm.OnEnterAsync(CancellationToken.None);
             h.Vm.Visibility = "org_public";
             await h.Vm.OnEnterAsync(CancellationToken.None);
 
-            return (h.Vm.VisibilityOptions.Select(o => o.Value).ToList(), h.Vm.Visibility);
+            return (h.Vm.VisibilityOptions.Select(o => o.Value).ToList(), h.Vm.Visibility, h.DetectCalls);
         });
 
         await Assert.That(offered).IsEquivalentTo(["private", "public"], CollectionOrdering.Matching);
         await Assert.That(visibility).IsNull();
+        await Assert.That(detections).IsEqualTo(1);
     }
 
     [Test]

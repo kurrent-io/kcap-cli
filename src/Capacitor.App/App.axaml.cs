@@ -1801,7 +1801,7 @@ public partial class App : Application {
 
     static readonly TimeSpan WizardCliSetupReportTimeout = TimeSpan.FromSeconds(30);
 
-    // Null offers every answer: a server that predates the read says nothing, and any other miss is logged.
+    // Null offers every answer: a 404 for the route is silent, and any other miss is logged.
     async Task<VisibilityOptionsResponse?> ReadWizardVisibilityOptionsAsync(CancellationToken ct) {
         using var timeout = new CancellationTokenSource(WizardVisibilityOptionsTimeout, _time);
         using var bounded = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
