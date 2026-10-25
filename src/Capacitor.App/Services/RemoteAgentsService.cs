@@ -212,6 +212,7 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
 
     async Task RefreshListingAsync() {
         lock (_lock) {
+            if (_disposed) return;
             if (_daemonsBusy) { _daemonsRerun = true; return; }
             _daemonsBusy = true;
             _daemonsInFlight = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -227,6 +228,8 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
             }
             TaskCompletionSource? completed;
             lock (_lock) {
+                // Dispose takes this lock before disposing the subjects and has already released the in-flight waiter.
+                if (_disposed) { _daemonsBusy = false; return; }
                 if (result is not null && generation == _generation)
                     _daemons.OnNext(result);
                 if (listingGeneration == _listingGeneration) {
