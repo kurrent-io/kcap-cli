@@ -118,7 +118,30 @@ public sealed class PullRequestToneCache : IDisposable {
     Entry? LiveEntry(string session, long version) =>
         !_disposed && _entries.TryGetValue(session, out var entry) && entry.Version == version ? entry : null;
 
+    int _ticking;
+    bool _tickAgain;
+
+    /// One drain at a time, iterative: a read that finishes without awaiting calls back in from its
+    /// own stack, and a nested drain per due session would grow with the listing. The caller that
+    /// finds a drain running leaves a note the running one honours before it returns.
     void Tick() {
+        if (Interlocked.Exchange(ref _ticking, 1) == 1) {
+            Volatile.Write(ref _tickAgain, true);
+            return;
+        }
+        try {
+            do {
+                Volatile.Write(ref _tickAgain, false);
+                Drain();
+            } while (Volatile.Read(ref _tickAgain));
+        } finally {
+            Volatile.Write(ref _ticking, 0);
+        }
+        // A note left after the loop read it, by a caller that arrived between the check and the reset.
+        if (Volatile.Read(ref _tickAgain)) Tick();
+    }
+
+    void Drain() {
         List<(string Session, long Version)> due;
         CancellationToken ct;
         lock (_lock) {
@@ -199,9 +222,8 @@ public sealed class PullRequestToneCache : IDisposable {
         } finally {
             lock (_lock) _inFlight.Remove(session);
             // A refresh may have invalidated this read while it was in flight, and a read held back
-            // for a free slot is due now. Queued, not inline: a read that finishes without awaiting
-            // would otherwise nest the next one on this stack, once per due session.
-            _ = Task.Run(Tick, CancellationToken.None);
+            // for a free slot is due now.
+            Tick();
         }
     }
 
