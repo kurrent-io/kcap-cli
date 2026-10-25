@@ -26,8 +26,8 @@ public class ChatMessageSenderTests {
         public void Dispose() { }
     }
 
-    static ProjectedLine UserLine(string text, long offset, Guid? sourceEventId) => new(
-        new ChatProjectionResult([new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: text, SourceEventId: sourceEventId)], [text], []), offset);
+    static ProjectedLine UserLine(string text, long offset, Guid? sourceEventId = null, Guid? dispatchId = null) => new(
+        new ChatProjectionResult([new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: text, SourceEventId: sourceEventId, DispatchId: dispatchId)], [text], []), offset);
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -82,6 +82,31 @@ public class ChatMessageSenderTests {
             await Assert.That(turns[1].Sender.HasTitle).IsFalse();
             await Assert.That(chat.UserTitle).IsEqualTo("You");
             await Assert.That(senders.Reads[0].Request.EventNumbers).IsEmpty();
+        } finally { await chat.TeardownAsync(); }
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_journaled_message_is_looked_up_by_its_dispatch_and_one_with_none_is_never_asked_about() => RunOnUiAsync(async () => {
+        var time = new FakeTimeProvider();
+        var dispatch = Guid.NewGuid();
+        var senders = new FakeMessageSenderSource {
+            Answer = _ => new(MessageSendersReadKind.Ready, [new MessageSenderDto { DispatchId = dispatch, SenderName = "Tony" }]),
+        };
+        var feed = new LinesFeed(UserLine("dispatched", 0, dispatchId: dispatch), UserLine("typed here", 0));
+        var chat = new ChatTabViewModel("a1", AgentOrigin.Local, Observable.Return(Session("/journal.jsonl")), Observable.Return<string[]?>(null),
+            new ReadOnlyChatInput(), new NoAttachmentUploader(), _ => feed, new RecordingOpener(), time,
+            new FakePermissionService(), new SessionRuns(time), sessionId: Observable.Return<string?>("s1"), senders: senders);
+        try {
+            await WaitUntilAsync(() => chat.Items.Count == 2 && senders.Reads.Count > 0, what: "the dispatched message asked about");
+            if (chat.PendingSenderReadForTesting is { } read) await read;
+            var turns = chat.Items.OfType<UserTurnItem>().ToList();
+
+            await Assert.That(turns.Select(t => t.Sender.Keys)).IsEquivalentTo(new[] { new MessageKeys(DispatchId: dispatch), new MessageKeys() });
+            await Assert.That(turns[0].Sender.Title).IsEqualTo("Tony");
+            await Assert.That(turns[1].Sender.HasTitle).IsFalse();
+            await Assert.That(senders.Reads.Single().Request.DispatchIds).IsEquivalentTo(new[] { dispatch });
+            await Assert.That(senders.Reads.Single().Request.EventIds).IsEmpty();
         } finally { await chat.TeardownAsync(); }
     });
 
