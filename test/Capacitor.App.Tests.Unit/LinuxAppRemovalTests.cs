@@ -26,9 +26,21 @@ public class LinuxAppRemovalTests {
 
     string Staged => Tmp.PathTo("data", "kcap", "desktop");
 
-    LinuxAppRemoval Removal(Runner? runner = null, string? image = null, Func<string, string, int>? rename = null) =>
+    /// The trash rules on every platform; the libc rename itself only where it exists, in its own test.
+    LinuxAppRemoval Removal(Runner? runner = null, string? image = null, Func<string, string, int>? rename = null, bool libcRename = false) =>
         new(runner ?? new Runner(), image ?? Tmp.PathTo("apps", "kcap-x86_64.AppImage"), Staged,
-            [Tmp.PathTo("links-a"), Tmp.PathTo("links-b")], Tmp.PathTo("data", "Trash"), _time, rename);
+            [Tmp.PathTo("links-a"), Tmp.PathTo("links-b")], Tmp.PathTo("data", "Trash"), _time,
+            libcRename ? null : rename ?? MoveWithoutCopying);
+
+    /// A rename within one filesystem: what rename(2) does there, without libc.
+    static int MoveWithoutCopying(string from, string to) {
+        try {
+            File.Move(from, to);
+            return 0;
+        } catch (IOException) {
+            return 5;
+        }
+    }
 
     const int CrossDevice = 18;
 
@@ -106,6 +118,28 @@ public class LinuxAppRemovalTests {
         await Assert.That(trashed).IsFalse();
         await Assert.That(File.ReadAllText(image)).IsEqualTo("image");
         await Assert.That(Directory.EnumerateFileSystemEntries(Tmp.PathTo("data", "Trash", "files"))).IsEmpty();
+        await Assert.That(Directory.EnumerateFileSystemEntries(Tmp.PathTo("data", "Trash", "info"))).IsEmpty();
+    }
+
+    /// <summary>The production rename moves the image into the Trash on the platform it is built for.</summary>
+    [Test, RunOn(OS.Linux)]
+    public async Task On_linux_the_image_is_renamed_into_the_trash() {
+        var image = Tmp.CreateFile("apps/kcap-x86_64.AppImage", "image");
+
+        await Assert.That(await Removal(image: image, libcRename: true).TrashBundleAsync(CancellationToken.None)).IsTrue();
+
+        await Assert.That(File.Exists(image)).IsFalse();
+        await Assert.That(File.ReadAllText(Tmp.PathTo("data", "Trash", "files", "kcap-x86_64.AppImage"))).IsEqualTo("image");
+    }
+
+    /// <summary>Off Linux there is no libc to bind, so the image stays where it is instead of the call throwing.</summary>
+    [Test, ExcludeOn(OS.Linux)]
+    public async Task Off_linux_the_image_stays_where_it_is() {
+        var image = Tmp.CreateFile("apps/kcap-x86_64.AppImage", "image");
+
+        await Assert.That(await Removal(image: image, libcRename: true).TrashBundleAsync(CancellationToken.None)).IsFalse();
+
+        await Assert.That(File.ReadAllText(image)).IsEqualTo("image");
         await Assert.That(Directory.EnumerateFileSystemEntries(Tmp.PathTo("data", "Trash", "info"))).IsEmpty();
     }
 

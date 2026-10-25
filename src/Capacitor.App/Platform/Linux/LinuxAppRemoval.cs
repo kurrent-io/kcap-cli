@@ -23,7 +23,8 @@ public sealed partial class LinuxAppRemoval : IAppRemoval {
 
     internal LinuxAppRemoval(IProcessRunner runner, string image, string stagedRoot, IReadOnlyList<string> linkFolders, string trash,
             TimeProvider time, Func<string, string, int>? rename = null) {
-        _rename      = rename ?? Rename;
+        // libc is a Linux name; anywhere else the image stays put rather than the call failing to bind.
+        _rename      = rename ?? (OperatingSystem.IsLinux() ? Rename : static (_, _) => NotSupported);
         _runner      = runner;
         _image       = image;
         _stagedRoot  = stagedRoot;
@@ -98,7 +99,8 @@ public sealed partial class LinuxAppRemoval : IAppRemoval {
         }
     }
 
-    const int CrossDevice = 18;
+    const int CrossDevice  = 18;
+    const int NotSupported = 38;
 
     static void TryDelete(string path) {
         try { File.Delete(path); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
