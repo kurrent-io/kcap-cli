@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Harness;
@@ -8,25 +9,34 @@ public sealed class AccountsCommand(AccountStore accounts, PluginEnvironment env
     const int    MinIdPrefix     = 4;
     const int    IdDisplayChars  = 8;
     const string SkipNetworkFlag = "--skip-codex-network-access";
+    const string JsonFlag        = "--json";
+    const string ListAction      = "list";
+    const string UsageLine       = "Usage: kcap accounts [list|add|remove|rename|rewire]";
 
     bool _skipNetwork;
+    bool _json;
+
+    // Seam: a test removes the account here, where another command can.
+    internal Action? BetweenWiringAndStamp { get; set; }
 
     public async Task<int> HandleAsync(string[] args) {
         _skipNetwork = args.Contains(SkipNetworkFlag);
-        args         = [.. args.Where(a => a != SkipNetworkFlag)];
+        _json        = args.Contains(JsonFlag);
+        args         = [.. args.Where(a => a is not (SkipNetworkFlag or JsonFlag))];
+
+        var action = args.Length < 2 ? ListAction : args[1];
 
         try {
             return args.Length < 2 ? await List() : args[1] switch {
-                "list"                         => await List(),
+                ListAction                     => await List(),
                 "add" when args.Length == 4    => await Add(args[2], args[3]),
                 "remove" when args.Length == 3 => await Remove(args[2]),
                 "rename" when args.Length == 4 => await Rename(args[2], args[3]),
                 "rewire" when args.Length <= 3 => await Rewire(args.Length == 3 ? args[2] : null),
-                _                              => await Usage(),
+                _                              => await Usage(action),
             };
         } catch (RegistryUnavailable ex) {
-            await Console.Error.WriteLineAsync($"Could not use the kcap account registry in {accounts.Directory}: {ex.Message}");
-            return 1;
+            return await Refuse(action, $"Could not use the kcap account registry in {accounts.Directory}: {ex.Message}");
         }
     }
 
@@ -71,74 +81,131 @@ public sealed class AccountsCommand(AccountStore accounts, PluginEnvironment env
     }
 
     async Task<int> Add(string vendorName, string directory) {
-        if (!TryVendor(vendorName, out var vendor)) return await Usage();
+        if (!TryVendor(vendorName, out var vendor)) return await Usage("add");
 
-        if (TryNormalize(directory) is not { } normalized || !Directory.Exists(normalized)) {
-            await Console.Error.WriteLineAsync($"{directory} does not exist.");
-            return 1;
-        }
+        if (TryNormalize(directory) is not { } normalized || !Directory.Exists(normalized))
+            return await Refuse("add", $"{directory} does not exist.");
 
         var account = Registry(() => AccountAdoption.EnsureDefault(accounts, vendor, normalized, time));
-        return await WireAndReport(account) ? 0 : 1;
+        var wired   = await WireAndReport(account);
+        return await Finish("add", account.Id, wired.Error is null, wired.Steps, wired.Revision, wired.Error);
     }
 
     async Task<int> Remove(string idOrDir) {
-        if (Resolve(idOrDir) is not { } account) return await NotFound(idOrDir);
+        if (Resolve(idOrDir) is not { } account) return await NotFound("remove", idOrDir);
 
         var steps = Guarded(() => AccountWiring.Unwire(account, env.Home));
-        if (!AccountWiring.HasFatalFailure(steps)) {
-            Registry(() => accounts.Mutate(r => (r with { Accounts = [.. r.Accounts.Where(a => a.Id != account.Id)] }, 0)));
-            await Console.Out.WriteLineAsync($"Removed {account.Vendor} account {account.Label}. {account.Directory} was left in place.");
-            return 0;
+        if (AccountWiring.HasFatalFailure(steps)) {
+            // A partial unwire changed the account on disk, so the failure is committed like a failed wiring.
+            var summary   = AccountWiring.FailureSummary(steps);
+            var error     = $"Could not unwire {account.Label}: {summary}. It stays registered.";
+            var committed = StampWiring(account, summary).Revision;
+            await Console.Error.WriteLineAsync(error);
+            return await Finish("remove", account.Id, false, steps, committed, error);
         }
 
-        await Console.Error.WriteLineAsync($"Could not unwire {account.Label}: {AccountWiring.FailureSummary(steps)}. It stays registered.");
-        return 1;
+        var (_, revision) = Registry(() => accounts.MutateWithRevision(r => (r with { Accounts = [.. r.Accounts.Where(a => a.Id != account.Id)] }, 0)));
+        await Say($"Removed {account.Vendor} account {account.Label}. {account.Directory} was left in place.");
+        return await Finish("remove", account.Id, true, steps, revision);
     }
 
     async Task<int> Rename(string idOrDir, string label) {
-        if (string.IsNullOrWhiteSpace(label)) return await Usage();
-        if (Resolve(idOrDir) is not { } account) return await NotFound(idOrDir);
+        if (string.IsNullOrWhiteSpace(label)) return await Usage("rename");
+        if (Resolve(idOrDir) is not { } account) return await NotFound("rename", idOrDir);
 
-        Registry(() => accounts.Mutate(r => (r with { Accounts = [.. r.Accounts.Select(a => a.Id == account.Id ? a with { Label = label } : a)] }, 0)));
-        await Console.Out.WriteLineAsync($"Renamed to {label}.");
-        return 0;
+        var (_, revision) = Registry(() => accounts.MutateWithRevision(r => (r with { Accounts = [.. r.Accounts.Select(a => a.Id == account.Id ? a with { Label = label } : a)] }, 0)));
+        await Say($"Renamed to {label}.");
+        return await Finish("rename", account.Id, true, [], revision);
     }
 
     async Task<int> Rewire(string? idOrDir) {
         IReadOnlyList<VendorAccount> targets;
         if (idOrDir is null) targets = Registry(accounts.Load).Accounts;
         else if (Resolve(idOrDir) is { } one) targets = [one];
-        else return await NotFound(idOrDir);
+        else return await NotFound("rewire", idOrDir);
 
         if (targets.Count == 0) {
-            await Console.Out.WriteLineAsync("No accounts registered. Add one with: kcap accounts add <claude|codex> <dir>");
-            return 0;
+            await Say("No accounts registered. Add one with: kcap accounts add <claude|codex> <dir>");
+            return await Finish("rewire", null, true, [], null);
         }
 
-        var ok = true;
-        foreach (var account in targets) ok &= await WireAndReport(account);
-        return ok ? 0 : 1;
+        var   steps    = new List<WiringStep>();
+        var   errors   = new List<string>();
+        long? revision = null;
+        foreach (var account in targets) {
+            var wired = await WireAndReport(account);
+            steps.AddRange(targets.Count == 1 ? wired.Steps : wired.Steps.Select(s => s with { Detail = $"{account.Label}: {s.Detail}" }));
+            if (wired.Error is not null) errors.Add(wired.Error);
+            revision = wired.Revision;
+        }
+
+        return await Finish("rewire", targets.Count == 1 ? targets[0].Id : null, errors.Count == 0, steps, revision,
+            errors.Count == 0 ? null : string.Join(" ", errors));
     }
 
-    async Task<bool> WireAndReport(VendorAccount account) {
+    async Task<(IReadOnlyList<WiringStep> Steps, long Revision, string? Error)> WireAndReport(VendorAccount account) {
         IReadOnlyList<WiringStep> steps;
         using (Registry(accounts.Lock)) steps = Guarded(() => AccountWiring.Wire(account, env.Home, Options));
+        BetweenWiringAndStamp?.Invoke();
 
-        var fatal = AccountWiring.HasFatalFailure(steps);
+        // The stamp's Mutate takes the lock held above, so it must come after that block. Committing after the
+        // wiring is what lets a snapshot at this revision vouch for it.
+        var fatal             = AccountWiring.HasFatalFailure(steps);
+        var (revision, found) = StampWiring(account, fatal ? AccountWiring.FailureSummary(steps) : null);
+
+        if (!found) {
+            var removed = $"Account {account.Label} was removed while it was being wired.";
+            await Console.Error.WriteLineAsync(removed);
+
+            return (steps, revision, removed);
+        }
+
+        string? error = null;
         if (!fatal) {
-            await Console.Out.WriteLineAsync($"Wired {account.Vendor} account {account.Label} ({account.Directory}).");
+            await Say($"Wired {account.Vendor} account {account.Label} ({account.Directory}).");
             if (account.Vendor is HarnessId.Codex)
-                await Console.Out.WriteLineAsync($"  Trust the kcap hooks the next time you start Codex with CODEX_HOME={account.Directory}.");
+                await Say($"  Trust the kcap hooks the next time you start Codex with CODEX_HOME={account.Directory}.");
         }
 
         if (steps.Any(s => !s.Succeeded)) {
-            await Console.Error.WriteLineAsync(fatal
+            var message = fatal
                 ? $"Could not wire {account.Label}: {AccountWiring.FailureSummary(steps)}. Run `kcap accounts rewire` to retry."
-                : $"Warning: {account.Label}: {AccountWiring.FailureSummary(steps)}");
+                : $"Warning: {account.Label}: {AccountWiring.FailureSummary(steps)}";
+            await Console.Error.WriteLineAsync(message);
+            if (fatal) error = message;
         }
 
-        return !fatal;
+        return (steps, revision, error);
+    }
+
+    // Rebuilds the list even when the stamp changes nothing, so the revision still moves for a rewire that found nothing to fix.
+    // Found is false when a concurrent remove took the account between the wiring and this stamp.
+    (long Revision, bool Found) StampWiring(VendorAccount account, string? failure) {
+        var now = time.GetUtcNow();
+        var (found, revision) = Registry(() => accounts.MutateWithRevision(r => (r with {
+            Accounts = [.. r.Accounts.Select(a => a.Id != account.Id ? a
+                                                : failure is null ? a with { WiredAt = now, WiringFailure = null }
+                                                                  : a with { WiringFailure = failure })],
+        }, r.Accounts.Any(a => a.Id == account.Id))));
+
+        return (revision, found);
+    }
+
+    Task Say(string line) => _json ? Task.CompletedTask : Console.Out.WriteLineAsync(line);
+
+    // list keeps its text listing under --json: its output is the data, not a verdict on an action.
+    async Task<int> Finish(string action, string? accountId, bool succeeded, IReadOnlyList<WiringStep> steps, long? revision, string? error = null) {
+        if (_json && action != ListAction) {
+            var result = new AccountActionResultDto(action, accountId, succeeded, [.. steps.Select(s => new WiringStepDto(s.Name, s.Succeeded, s.Detail))], revision, error);
+            await Console.Out.WriteLineAsync(JsonSerializer.Serialize(result, AccountActionResultJsonContext.Default.AccountActionResultDto));
+        }
+
+        return succeeded ? 0 : 1;
+    }
+
+    async Task<int> Refuse(string action, string error) {
+        await Console.Error.WriteLineAsync(error);
+        return await Finish(action, null, false, [], null, error);
     }
 
     VendorAccount? Resolve(string idOrDir) {
@@ -153,11 +220,7 @@ public sealed class AccountsCommand(AccountStore accounts, PluginEnvironment env
 
     string? TryNormalize(string path) {
         try {
-            var expanded = path == "~" ? env.Home.Path
-                         : path.StartsWith("~/", StringComparison.Ordinal) ? Path.Combine(env.Home.Path, path[2..])
-                         : path;
-
-            return AccountDirectory.Normalize(expanded);
+            return AccountDirectory.Normalize(AccountDirectory.ExpandHome(path, env.Home));
         } catch (ArgumentException) {
             return null;
         } catch (NotSupportedException) {
@@ -172,13 +235,10 @@ public sealed class AccountsCommand(AccountStore accounts, PluginEnvironment env
         return name.ToLowerInvariant() is "claude" or "codex";
     }
 
-    static async Task<int> NotFound(string idOrDir) {
-        await Console.Error.WriteLineAsync($"No account matches {idOrDir}. Run `kcap accounts` to list them.");
-        return 1;
-    }
+    Task<int> NotFound(string action, string idOrDir) => Refuse(action, $"No account matches {idOrDir}. Run `kcap accounts` to list them.");
 
-    static async Task<int> Usage() {
-        await Console.Error.WriteLineAsync(EmbeddedResources.TryLoad("help-accounts.txt") ?? "Usage: kcap accounts [list|add|remove|rename|rewire]");
-        return 1;
+    async Task<int> Usage(string action) {
+        await Console.Error.WriteLineAsync(EmbeddedResources.TryLoad("help-accounts.txt") ?? UsageLine);
+        return await Finish(action, null, false, [], null, UsageLine);
     }
 }

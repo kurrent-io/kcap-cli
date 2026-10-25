@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Continuation;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Resume;
@@ -318,7 +319,10 @@ internal partial class AgentOrchestrator {
             WorktreeIsStandalone: agent.Worktree.IsStandalone,
             WorktreeSourceRepo:   agent.Worktree.SourceRepo,
             PermissionMode:         cmd?.PermissionMode ?? prior?.Launch.PermissionMode,
-            InactivityBoundSeconds: agent.InactivityBoundSeconds);
+            InactivityBoundSeconds: agent.InactivityBoundSeconds,
+            AccountDirectory:       agent.Account?.Directory,
+            AccountId:              agent.Account?.AccountId,
+            AccountLabel:           agent.Account?.Label);
 
         return NewRunningEntry(agent.Id, agent.Vendor, agent.RuntimeTransport, agent.SessionId, agent.VendorSession, launch, prior) with {
             HasTerminal = agent.Runtime.EmitsTerminalOutput, TranscriptFormat = TranscriptFormatOf(agent),
@@ -330,7 +334,7 @@ internal partial class AgentOrchestrator {
     /// the resolved worktree; no <see cref="AgentInstance"/> exists yet.
     ResumeLedgerEntry BuildPreStartLedgerEntry(
             LaunchAgentCommand cmd, string? prompt, string? model, string? effort, WorktreeInfo worktree,
-            WorkLocation work, LaunchConsentOutcome consent, string? pinnedSessionId) {
+            WorkLocation work, LaunchConsentOutcome consent, string? pinnedSessionId, ResolvedAccount? account) {
         var launch = new ResumeLaunchDescriptor(
             Prompt:           prompt,
             Model:            model,
@@ -357,7 +361,10 @@ internal partial class AgentOrchestrator {
             WorktreeIsStandalone: worktree.IsStandalone,
             WorktreeSourceRepo:   worktree.SourceRepo,
             PermissionMode:         cmd.PermissionMode,
-            InactivityBoundSeconds: cmd.InactivityBoundSeconds);
+            InactivityBoundSeconds: cmd.InactivityBoundSeconds,
+            AccountDirectory:       account?.Directory,
+            AccountId:              account?.AccountId,
+            AccountLabel:           account?.Label);
 
         return NewRunningEntry(cmd.AgentId, cmd.Vendor, PreStartTransport, pinnedSessionId, pinnedSessionId, launch, prior: null);
     }
@@ -404,13 +411,13 @@ internal partial class AgentOrchestrator {
 
     void WritePreStartLedger(
             LaunchAgentCommand cmd, string? prompt, string? model, string? effort, WorktreeInfo worktree,
-            WorkLocation work, LaunchConsentOutcome consent, string? pinnedSessionId) {
+            WorkLocation work, LaunchConsentOutcome consent, string? pinnedSessionId, ResolvedAccount? account) {
         if (ResumeLedger is null || cmd.Kind != LaunchKind.Default) return;
 
         lock (_ledgerLock) {
             // A live agent under this id owns the entry; a colliding launch must not overwrite it.
             if (_agents.ContainsKey(cmd.AgentId)) return;
-            TryWriteLedger(cmd.AgentId, () => BuildPreStartLedgerEntry(cmd, prompt, model, effort, worktree, work, consent, pinnedSessionId));
+            TryWriteLedger(cmd.AgentId, () => BuildPreStartLedgerEntry(cmd, prompt, model, effort, worktree, work, consent, pinnedSessionId, account));
         }
     }
 
@@ -483,6 +490,9 @@ internal partial class AgentOrchestrator {
 
         /// <summary>The server's reason, empty when it gave none, once it refused the registration.</summary>
         public string? RefusedRegistration { get; set; }
+
+        /// <summary>Why the account the entry recorded can no longer be used, once the launch refused it.</summary>
+        public string? AccountRefusal { get; set; }
 
         public WorkLocation Work      => Entry.Launch.Work;
         public bool         IsPrivate => Entry.Launch.IsPrivate;
@@ -846,13 +856,22 @@ internal partial class AgentOrchestrator {
             if (RecordFailedAttempt(entry, LastErrorOf(reason, exitCode)) is not { } failed) return ResumeOutcome.Stopped;
 
             entry = failed;
+        } else if (ResolveAccount(entry.Vendor, accountId: null, entry.Launch).Refusal is { } refusal) {
+            reason = refusal;
+
+            if (RecordFailedAttempt(entry, reason) is not { } failed) return ResumeOutcome.Stopped;
+
+            entry = failed;
         } else {
             reason = NativeResumeUnsupported;
         }
 
-        var outcome = await ContinueEntry(entry, reason, ct);
-        if (outcome != ResumeOutcome.Interrupted) return outcome;
-        if (IsWithdrawn(entry.AgentId)) return ResumeOutcome.Stopped;
+        // A continuation resolves the same recorded account, so it would be refused too.
+        if (!reason.StartsWith(AccountResolution.Unavailable, StringComparison.Ordinal)) {
+            var outcome = await ContinueEntry(entry, reason, ct);
+            if (outcome != ResumeOutcome.Interrupted) return outcome;
+            if (IsWithdrawn(entry.AgentId)) return ResumeOutcome.Stopped;
+        }
 
         InterruptEntry(entry.AgentId, LastErrorOf(reason, exitCode));
         if (!entry.Launch.IsPrivate && reason != RegistrationRefusedReason) await ReportResumeFailedAsync(entry, reason, exitCode, ct);
@@ -886,6 +905,8 @@ internal partial class AgentOrchestrator {
         var outcome = await LaunchAdmittedAsync(command, consent, hold, resume, cancel: CancellationToken.None); // the resume's own token ends its start
 
         if (resume.Agent is null && IsWithdrawn(entry.AgentId)) return (StoppedDuringResume, null);
+
+        if (resume.AccountRefusal is { } refusal) return (refusal, null);
 
         // The server holds no live entry under this id, so the resume goes on under a new one, unless a stop
         // came first: it gave up the worktree, and the teardown has removed it.
@@ -1126,7 +1147,8 @@ internal partial class AgentOrchestrator {
             PermissionMode:      launch.PermissionMode,
             Title:               launch.Title,
             // A prompt cut re-sent as the caller's title would outrank the one the session has since been given.
-            TitleDerived:        launch.TitleDerived ?? true);
+            TitleDerived:        launch.TitleDerived ?? true,
+            AccountId:           launch.AccountId);
     }
 
     /// <summary>The ledger's worktree as the launch path names it.</summary>
