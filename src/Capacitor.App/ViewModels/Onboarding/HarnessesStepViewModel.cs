@@ -262,11 +262,12 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
         VisibilityOptionsResponse? offer;
         try { offer = await offered.ConfigureAwait(true); } catch (Exception ex) when (ex is not OperationCanceledException) {
             Console.Error.WriteLine($"kcap: visibility options read failed — offering every answer: {ex.Message}");
-            return;
+            offer = null;
         }
-        if (offer is null) return;
 
-        VisibilityOptions = [.. offer.Options.Select(o => new VisibilityOption(o.Key!, o.Label!, o.Detail ?? ""))];
+        VisibilityOptions = offer is null
+            ? AllVisibilityOptions
+            : [.. offer.Options.Select(o => new VisibilityOption(o.Key!, o.Label!, o.Detail ?? ""))];
         this.RaisePropertyChanged(nameof(VisibilityOptions));
         if (VisibilityOptions.All(o => o.Value != Visibility)) Visibility = null;
     }

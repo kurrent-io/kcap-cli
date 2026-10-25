@@ -317,6 +317,29 @@ public class HarnessesStepViewModelTests {
         await Assert.That(detections).IsEqualTo(1);
     }
 
+    /// A revisit whose re-read fails falls back to every answer, as a first entry does, rather than keeping the
+    /// earlier, narrower offer.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_revisit_whose_read_fails_offers_every_answer() {
+        var (offered, visibility) = await AvaloniaSession.DispatchAsync(async () => {
+            var reads = 0;
+            var h = new Harness(Config.Root,
+                visibilityOptions: _ => ++reads == 1
+                    ? Task.FromResult<VisibilityOptionsResponse?>(Offer("private", "private", "public"))
+                    : Task.FromException<VisibilityOptionsResponse?>(new HttpRequestException("down")));
+
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+            h.Vm.Visibility = "public";
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+
+            return (h.Vm.VisibilityOptions.Select(o => o.Value).ToList(), h.Vm.Visibility);
+        });
+
+        await Assert.That(offered).IsEquivalentTo(["private", "project", "org_public", "public"], CollectionOrdering.Matching);
+        await Assert.That(visibility).IsEqualTo("public");
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_local_install_asks_the_server_nothing() {
