@@ -543,17 +543,23 @@ public partial class WorktreeManager(
     static async Task<string?> UserAttributesFileAsync(string worktreePath, TimeProvider time) {
         var configured = await RunGitCaptureResult(worktreePath, GitTimeout, time, sourceReadOnly: false, [],
             "config", "--path", "--get", "core.attributesFile");
-        // Only git's line ending is trimmed: a path may begin or end with a space. An explicitly empty value turns the
-        // user's attributes off, so the default is not consulted.
+        // An explicitly empty value turns the user's attributes off, so the default is not consulted.
         if (configured.ExitCode == 0)
-            return configured.Stdout.TrimEnd('\r', '\n') is { Length: > 0 } named ? Path.Combine(worktreePath, named) : null;
+            return OutputLine(configured.Stdout) is { Length: > 0 } named ? Path.Combine(worktreePath, named) : null;
 
         var reported = await RunGitCaptureResult(worktreePath, GitTimeout, time, sourceReadOnly: false, [], "var", "GIT_ATTR_GLOBAL");
-        if (reported.ExitCode == 0 && reported.Stdout.TrimEnd('\r', '\n') is { Length: > 0 } path) return path;
+        if (reported.ExitCode == 0 && OutputLine(reported.Stdout) is { Length: > 0 } path) return path;
 
         if (Environment.GetEnvironmentVariable("XDG_CONFIG_HOME") is { Length: > 0 } xdg) return Path.Combine(xdg, "git", "attributes");
 
         return GitHome() is { } home ? Path.Combine(home, ".config", "git", "attributes") : null;
+    }
+
+    /// <summary>Git's output without the one line terminator it ends with; a path's own trailing characters stay</summary>
+    static string OutputLine(string stdout) {
+        var line = stdout.EndsWith('\n') ? stdout[..^1] : stdout;
+
+        return line.EndsWith('\r') ? line[..^1] : line;
     }
 
     /// <summary>The home git uses: <c>HOME</c>, else on Windows <c>HOMEDRIVE</c> plus <c>HOMEPATH</c>, else
