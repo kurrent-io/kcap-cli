@@ -4,8 +4,8 @@
 # $BaseUrl/models/<model_set>/<name>). Each file is checked against the size and digest the bundle
 # pins, and the set id against the files, before anything is uploaded. An object already stored is
 # never replaced: it must verify, and one that does not stops the run. A missing one is downloaded
-# from the pinned upstream URL, verified and uploaded. Run it before the bundle's manifest is
-# published; a re-run from the top is safe.
+# from the pinned upstream URL, verified and uploaded. An archive with no model publishes nothing.
+# Run it before the bundle's manifest is published; a re-run from the top is safe.
 # Usage: publish-local-model.sh <bundle-archive>
 #   $R2 and $DEST as for r2-fetch.sh.
 set -euo pipefail
@@ -14,21 +14,20 @@ archive="${1:?$usage}"
 here="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/hash.sh
 source "$here/lib/hash.sh"
+# shellcheck source=lib/embedding-model.sh
+source "$here/lib/embedding-model.sh"
 [ -f "$archive" ] || { echo "no archive at $archive" >&2; exit 1; }
 
-tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-tar -xOf "$archive" ./embedding-model.json > "$tmp/model.json" 2>/dev/null \
-  || { echo "$archive has no embedding-model.json" >&2; exit 1; }
+member="$(embedding_model_member "$archive")" || { echo "could not list $archive" >&2; exit 1; }
+[ "$member" = present ] || { echo "$archive carries no embedding model; nothing to publish"; exit 0; }
 
-valid="$(jq -r '
-  def hex($n): type == "string" and test("^[0-9a-f]{\($n)}$");
-  if (.model_set | hex(64)) and (.model_id | type == "string" and test("^[A-Za-z0-9._-]+$"))
-     and (.contract | type == "number") and (.files | type == "array" and length > 0)
-     and all(.files[]; (.name | type == "string" and test("^[A-Za-z0-9][A-Za-z0-9._-]*$"))
-                       and (.sha256 | hex(64)) and (.size | type == "number" and . > 0)
-                       and (.source_url | type == "string" and startswith("https://")))
-  then "ok" else "bad" end' "$tmp/model.json")"
-[ "$valid" = ok ] || { echo "embedding-model.json in $archive is malformed" >&2; exit 1; }
+tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+tar -xOf "$archive" ./embedding-model.json > "$tmp/model.json"
+
+if ! embedding_model_valid "$tmp/model.json" \
+   || ! jq -e 'all(.files[]; .source_url | type == "string" and startswith("https://"))' "$tmp/model.json" >/dev/null; then
+  echo "embedding-model.json in $archive is malformed" >&2; exit 1
+fi
 
 # The set id hashes the files in ordinal name order.
 set_id="$(jq -r .model_set "$tmp/model.json")"

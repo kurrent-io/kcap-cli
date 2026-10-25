@@ -43,6 +43,18 @@ bundle() { # <name> <model_set>   (an archive laid out as the server's: ./embedd
 }
 bundle good "$set_id"; bundle badid "$(printf 'f%.0s' $(seq 64))"
 mkdir -p "$tmp/empty"; printf x > "$tmp/empty/kcap-server"; tar -czf "$tmp/nomodel.tar.gz" -C "$tmp/empty" .
+printf 'not a tar archive' > "$tmp/notar.tar.gz"
+reject() { # <name> <jq edit>   (an entry kcap rejects, under a set id that matches it, so only validation can refuse it)
+  json x | jq "$2" > "$tmp/edit.json"
+  jq -j '"model=\(.model_id)\ncontract=\(.contract)\n" + ([.files | sort_by(.name)[] | "\(.name)=\(.sha256)\n"] | join(""))' "$tmp/edit.json" > "$tmp/edit-id"
+  mkdir -p "$tmp/stage"; jq --arg set "$(sha256_of "$tmp/edit-id")" '.model_set = $set' "$tmp/edit.json" > "$tmp/stage/embedding-model.json"
+  tar -czf "$tmp/$1.tar.gz" -C "$tmp/stage" .
+}
+reject contract0 '.contract = 0'
+reject contractneg '.contract = -1'
+reject contractfrac '.contract = 1.5'
+reject longname ".files[1].name = \"z$(printf 'a%.0s' $(seq 128))\""
+reject casedup '.files[1].name = "MODEL.onnx"'
 
 B="$tmp/bucket/local/models/$set_id"
 fail=0
@@ -87,7 +99,19 @@ run "a set id that does not match its files refuses" 1 badid
 [ -z "$(log)" ] || { echo "FAIL: uploaded under a wrong set id"; fail=1; }
 
 fresh
-run "an archive without a model refuses" 1 nomodel
+run "an archive without a model publishes nothing" 0 nomodel
+grep -q "nothing to publish" "$tmp/out" || { echo "FAIL: no-model message: $(cat "$tmp/out")"; fail=1; }
+[ -z "$(log)" ] && [ ! -e "$up/.requests" ] || { echo "FAIL: a model-less archive uploaded or downloaded"; fail=1; }
+
+fresh
+run "an archive tar cannot read refuses" 1 notar
+
+for bad in contract0 contractneg contractfrac longname casedup; do
+  fresh
+  run "an entry kcap rejects refuses: $bad" 1 "$bad"
+  grep -q "malformed" "$tmp/out" || { echo "FAIL: $bad refused for another reason: $(cat "$tmp/out")"; fail=1; }
+  [ -z "$(log)" ] && [ ! -e "$up/.requests" ] || { echo "FAIL: $bad uploaded or downloaded before refusing"; fail=1; }
+done
 
 fresh; touch "$tmp/bucket/.broken"
 run "an R2 failure is never read as absent" 1 good
