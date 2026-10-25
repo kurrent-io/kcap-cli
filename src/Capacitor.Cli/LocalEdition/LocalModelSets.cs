@@ -48,17 +48,17 @@ static class LocalModelSets {
         }
     }
 
-    /// <summary>Deletes every model set but <paramref name="keep"/>, and what an interrupted download left. Only
+    /// <summary>Deletes every model set not named in <paramref name="keep"/>, and what an interrupted download left. Only
     /// directories named like a model set or a download's own leftover are touched, and no link is followed, so nothing
     /// outside <c>models/</c> is reached. Call it under the lifecycle lease, which every download holds. Never throws.</summary>
-    public static void RemoveAllBut(LocalRoot root, LocalEmbeddingModelManifest keep) {
+    public static void RemoveAllBut(LocalRoot root, params string?[] keep) {
         try {
             var models = new DirectoryInfo(Directory(root));
             if (!models.Exists || models.LinkTarget is not null) return;
 
             foreach (var set in models.EnumerateDirectories()) {
                 if (set.LinkTarget is not null || !(ReleaseManifest.IsValidSha256(set.Name) || IsLeftover(set.Name))
-                 || string.Equals(set.Name, keep.ModelSet, StringComparison.OrdinalIgnoreCase)) continue;
+                 || keep.Any(k => string.Equals(set.Name, k, StringComparison.OrdinalIgnoreCase))) continue;
 
                 try {
                     set.Delete(recursive: true);

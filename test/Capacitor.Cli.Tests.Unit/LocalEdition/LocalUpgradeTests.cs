@@ -1,5 +1,6 @@
 using System.Net;
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -12,7 +13,7 @@ using TUnit.Core.Enums;
 
 namespace Capacitor.Cli.Tests.Unit.LocalEdition;
 
-[ExcludeOn(OS.Windows)]
+[ExcludeOn(OS.Windows), UnsupportedOSPlatform("windows")]
 public class LocalUpgradeTests {
     const string Old = "1.2.3";
     const string New = "1.3.0";
@@ -514,15 +515,41 @@ public class LocalUpgradeTests {
         await Assert.That(wire.ContainsKey("pending")).IsFalse();
     }
 
+    /// <summary>The record still names the old set, so its files stay: the next setup can serve it again.</summary>
     [Test]
     public async Task A_failed_model_download_leaves_the_recorded_model_set() {
         Installed();
         Recorded(LocalEmbeddingSetting.Builtin(OldSet));
         PublishUnservedModelSet();
+        Tmp.CreateFile(["r", "models", OldSet, "model.onnx"]);
 
         await Upgrade();
 
         await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Builtin(OldSet));
+        await Assert.That(HasModelSet(OldSet)).IsTrue();
+    }
+
+    [Test]
+    public async Task A_record_that_cannot_be_rewritten_keeps_the_model_set_it_names() {
+        Installed();
+        Recorded(LocalEmbeddingSetting.Builtin(OldSet));
+        var bundle = PublishModelSet();
+        Tmp.CreateFile(["r", "models", OldSet, "model.onnx"]);
+        var data = Path.GetDirectoryName(LocalEmbeddingFile.PathFor(Root))!;
+        var progress = new SyncProgress<LocalInstallEvent>(e => {
+            _events.Report(e);
+            if (e is LocalInstallEvent.Stopped) File.SetUnixFileMode(data, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        });
+
+        try {
+            await Assert.That(await Upgrade(progress: progress)).IsTypeOf<LocalInstallEvent.Upgraded>();
+        } finally {
+            File.SetUnixFileMode(data, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Builtin(OldSet));
+        await Assert.That(HasModelSet(OldSet)).IsTrue();
+        await Assert.That(HasModelSet(bundle.ModelSet)).IsTrue();
     }
 
     /// <summary>An upgrade rolled forward by the next lifecycle command settles model sets as a finished one does, from
@@ -549,6 +576,21 @@ public class LocalUpgradeTests {
     }
 
     [Test]
+    public async Task A_rolled_forward_upgrade_whose_model_download_failed_keeps_the_recorded_model_set() {
+        Installed();
+        Recorded(LocalEmbeddingSetting.Builtin(OldSet));
+        PublishModelSetInArchive(served: false);
+        Tmp.CreateFile(["r", "models", OldSet, "model.onnx"]);
+
+        using (CrashAt("upgrade:starting")) await Assert.ThrowsAsync<SimulatedCrash>(() => Upgrade());
+        await new LocalStackControl(Stack(), _ => null).StartAsync(_events, _ => { }, CancellationToken.None);
+
+        await Assert.That(JournalAbsent()).IsTrue();
+        await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Builtin(OldSet));
+        await Assert.That(HasModelSet(OldSet)).IsTrue();
+    }
+
+    [Test]
     public async Task A_rolled_forward_upgrade_leaves_another_recorded_choice_alone() {
         Installed();
         Recorded(LocalEmbeddingSetting.Ollama("nomic-embed-text"));
@@ -560,8 +602,9 @@ public class LocalUpgradeTests {
         await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Ollama("nomic-embed-text"));
     }
 
-    /// <summary>As <see cref="PublishModelSet"/>, with the entry also in the archive as the server's <c>embedding-model.json</c>.</summary>
-    FakeBundle PublishModelSetInArchive() {
+    /// <summary>As <see cref="PublishModelSet"/>, with the entry also in the archive as the server's <c>embedding-model.json</c>;
+    /// unless <paramref name="served"/>, no file of the set is served.</summary>
+    FakeBundle PublishModelSetInArchive(bool served = true) {
         var entry = new JsonObject {
             ["model_id"]  = "builtin-test",
             ["contract"]  = 1,
@@ -573,7 +616,7 @@ public class LocalUpgradeTests {
 
         return _bundles[New] = new(Tmp.PathTo($"bundle-{New}.tar.gz"), New, "osx-arm64",
             TestBundles.RegularFile("./kcap-server", "#!/bin/sh\n"), TestBundles.RegularFile("./embedding-model.json", entry.ToJsonString())) {
-            ModelFiles = ModelFiles, EmbeddingModel = entry,
+            ModelFiles = served ? ModelFiles : [], EmbeddingModel = entry,
         };
     }
 

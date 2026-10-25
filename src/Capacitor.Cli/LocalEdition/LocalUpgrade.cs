@@ -144,19 +144,26 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
     }
 
     /// <summary>Under the lease, after a commit. The unit already runs the server with the built-in provider, so a record
-    /// still naming the old set would make the next setup replace the unit for nothing. Never throws.</summary>
+    /// still naming the old set would make the next setup replace the unit for nothing. The set the record names is
+    /// never removed: a failed download or record write leaves it the one the next setup can serve. Never throws.</summary>
     void SettleModelSets(LocalEmbeddingModelManifest? modelSet) {
         if (modelSet is null) return;
 
-        try {
-            if (LocalEmbeddingFile.Read(stack.Root) is { Provider: LocalEmbeddingProvider.Builtin } recorded
-             && recorded.ModelSetId != modelSet.ModelSet && LocalModelSets.IsPresent(stack.Root, modelSet))
-                LocalEmbeddingFile.Write(stack.Root, LocalEmbeddingSetting.Builtin(modelSet.ModelSet));
-        } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
-            // The next setup rewrites the record and the unit.
+        string? recordedSet = null;
+
+        if (LocalEmbeddingFile.Read(stack.Root) is { Provider: LocalEmbeddingProvider.Builtin } recorded) {
+            recordedSet = recorded.ModelSetId;
+
+            if (recordedSet != modelSet.ModelSet && LocalModelSets.IsPresent(stack.Root, modelSet)) {
+                try {
+                    if (LocalEmbeddingFile.Write(stack.Root, LocalEmbeddingSetting.Builtin(modelSet.ModelSet))) recordedSet = modelSet.ModelSet;
+                } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+                    // The next setup rewrites the record and the unit.
+                }
+            }
         }
 
-        LocalModelSets.RemoveAllBut(stack.Root, modelSet);
+        LocalModelSets.RemoveAllBut(stack.Root, modelSet.ModelSet, recordedSet);
     }
 
     /// <summary>Finishes an upgrade the previous lifecycle command left in the journal.</summary>
