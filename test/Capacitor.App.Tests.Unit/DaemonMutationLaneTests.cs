@@ -1868,6 +1868,19 @@ public class DaemonMutationLaneTests {
     }
 
     [Test]
+    public async Task A_nonzero_exit_without_a_result_is_a_failure() {
+        var cli = new FakeKcapCli {
+            AccountsBehavior = (_, _, _) => Task.FromResult(new ProcessResult(2, "", "kcap: daemon below floor\nrun kcap upgrade\n", false)),
+        };
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli });
+        lane.AccountsRevisionReached = (_, _) => Task.FromResult(true);
+
+        var outcome = await lane.RunAsync(AccountReq(), CancellationToken.None).WaitAsync(Bounded);
+
+        await Assert.That(outcome).IsEqualTo(new MutationOutcome.Failed(2, "kcap: daemon below floor", RecoverySurface.Attention));
+    }
+
+    [Test]
     public async Task A_revision_the_snapshot_never_reaches_is_unconfirmed_and_one_it_reaches_succeeds() {
         var cli = AccountCli(0, ResultLine([Step("hooks")], revision: 12));
         await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli });

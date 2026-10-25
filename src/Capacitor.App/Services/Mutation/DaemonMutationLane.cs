@@ -320,7 +320,11 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
     async Task<MutationOutcome> ClassifyAccountVerbAsync(MutationRequest request, ProcessResult result, CancellationToken ct) {
         // A killed run may or may not have committed, whatever it printed; the next snapshot shows which.
         if (result.TimedOut) return new MutationOutcome.Unconfirmed("timeout");
-        if (LastAccountResult(result.Stdout) is not { } dto) return new MutationOutcome.Unconfirmed("no_result");
+        // The CLI prints a result even for a failed action, so a nonzero exit without one never reached the command.
+        if (LastAccountResult(result.Stdout) is not { } dto)
+            return result.ExitCode == 0
+                ? new MutationOutcome.Unconfirmed("no_result")
+                : new MutationOutcome.Failed(result.ExitCode, FirstLine(result.Stderr), RecoverySurface.Attention);
 
         var failedStep = dto.Steps.FirstOrDefault(s => !s.Succeeded);
         if (result.ExitCode != 0 || !dto.Succeeded || failedStep is not null)
@@ -547,6 +551,14 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
 
         if (staleInstance is not null && evidence.InstanceId == staleInstance) return PredecessorLeg;
 
+        return null;
+    }
+
+    static string? FirstLine(string text) {
+        foreach (var line in text.AsSpan().EnumerateLines()) {
+            var trimmed = line.Trim();
+            if (trimmed.Length > 0) return trimmed.ToString();
+        }
         return null;
     }
 
