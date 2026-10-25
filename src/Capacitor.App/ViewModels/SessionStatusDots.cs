@@ -47,6 +47,7 @@ public static class SessionStatusDots {
             requester: row.RequesterDisplay, borrowedFrom: row.BorrowedFrom, answerExpected: answerExpected,
             model: row.Model is { Length: > 0 } known ? HostedHarnessCatalog.ModelLabelFor(row.Vendor, known) : null,
             harness: string.IsNullOrEmpty(row.Vendor) ? null : HostedHarnessCatalog.LabelFor(row.Vendor),
+            ended: row.IsEndedSession,
             liveCommands: liveCommands,
             terminalDialog: row.TerminalDialog is not null, interruption: row.Interruption, agentId: row.Id);
 

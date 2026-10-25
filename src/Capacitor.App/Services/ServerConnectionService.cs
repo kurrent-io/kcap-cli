@@ -47,6 +47,7 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     readonly Subject<ServerPermissionRequest> _permissionRequests = new();
     readonly Subject<ServerElicitationRequest> _elicitations = new();
     readonly Subject<string> _sessionAccessChanged = new();
+    readonly Subject<SessionPush> _sessionPushes = new();
     readonly Subject<PendingInputUpdate> _pendingInput = new();
     readonly Subject<TerminalOutputFrame> _terminalOutput = new();
     readonly Subject<TerminalSize> _terminalDimensions = new();
@@ -109,6 +110,7 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     public IObservable<ServerPermissionRequest> PermissionRequests => _permissionRequests.AsObservable();
     public IObservable<ServerElicitationRequest> ElicitationRequests => _elicitations.AsObservable();
     public IObservable<string> SessionAccessChanged => _sessionAccessChanged.AsObservable();
+    public IObservable<SessionPush> SessionPushes => _sessionPushes.AsObservable();
     public IObservable<PendingInputUpdate> PendingInputChanged => _pendingInput.AsObservable();
     public IObservable<TerminalOutputFrame> TerminalOutput => _terminalOutput.AsObservable();
     public IObservable<TerminalSize> TerminalDimensions => _terminalDimensions.AsObservable();
@@ -317,6 +319,11 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         hub.On<string, string, string, JsonElement?, bool>(HubBroadcasts.AcpElicitationRequested,
             (sid, rid, prompt, options, multi) => _elicitations.OnNext(new(sid, rid, prompt, ServerPermissionRequest.ParseOptions(options) ?? [], multi)));
         hub.On<string>(HubBroadcasts.SessionAccessChanged, _sessionAccessChanged.OnNext);
+        hub.On<string>(HubBroadcasts.ActiveSessionAdded, id => _sessionPushes.OnNext(new(SessionPushKind.ActiveAdded, id)));
+        hub.On<string>(HubBroadcasts.ActiveSessionChanged, id => _sessionPushes.OnNext(new(SessionPushKind.ActiveChanged, id)));
+        hub.On<string>(HubBroadcasts.ActiveSessionRemoved, id => _sessionPushes.OnNext(new(SessionPushKind.ActiveRemoved, id)));
+        hub.On<string>(HubBroadcasts.SessionTitleChanged, id => _sessionPushes.OnNext(new(SessionPushKind.TitleChanged, id)));
+        hub.On<string>(HubBroadcasts.SessionDeleted, id => _sessionPushes.OnNext(new(SessionPushKind.Deleted, id)));
         hub.On<string, string, JsonElement?>(HubBroadcasts.PendingInputChanged, (_, sessionId, items) => {
             if (ParseQueue(items) is { } queue) _pendingInput.OnNext(new(sessionId, queue));
         });
@@ -334,9 +341,8 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         HubBroadcasts.FlowsChanged, HubBroadcasts.WorkItemsChanged, HubBroadcasts.ProjectsChanged, HubBroadcasts.WelcomeStateChanged,
     ];
     static readonly string[] UnusedPings = [
-        HubBroadcasts.SessionTitleChanged, HubBroadcasts.ActiveSessionAdded, HubBroadcasts.ActiveSessionChanged,
-        HubBroadcasts.ActiveSessionRemoved, HubBroadcasts.SessionDeleted, HubBroadcasts.SessionEvalCompleted,
-        HubBroadcasts.SessionWhatsDoneGenerated, HubBroadcasts.SubagentAdopted, HubBroadcasts.RawStreamAccessRevoked,
+        HubBroadcasts.SessionEvalCompleted, HubBroadcasts.SessionWhatsDoneGenerated, HubBroadcasts.SubagentAdopted,
+        HubBroadcasts.RawStreamAccessRevoked,
     ];
 
     /// Connected additionally requires `hub` to still be the live connection and still be connected
@@ -554,6 +560,7 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         _permissionRequests.Dispose();
         _elicitations.Dispose();
         _sessionAccessChanged.Dispose();
+        _sessionPushes.Dispose();
         _pendingInput.Dispose();
         _terminalOutput.Dispose();
         _terminalDimensions.Dispose();

@@ -14,6 +14,9 @@ public interface IRemoteAgentsService {
     IObservableCache<AgentInstanceDto, string> Agents { get; }
     /// Replay-1, seeded with an empty list.
     IObservable<IReadOnlyList<DaemonInfo>> Daemons { get; }
+    /// Replay-1. True once a fetch in the lane's current connection returned rows; false while the
+    /// lane is not Connected and after a fetch that returned none, when Agents is retained history.
+    IObservable<bool> Current { get; }
 }
 
 /// An agents fetch's outcome: Rows is null on any failure (including Unauthorized), so a caller
@@ -28,6 +31,7 @@ public sealed record RemoteFetch(AgentInstanceDto[]? Rows, bool Unauthorized = f
 public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
     readonly SourceCache<AgentInstanceDto, string> _agents = new(a => a.AgentId);
     readonly BehaviorSubject<IReadOnlyList<DaemonInfo>> _daemons = new([]);
+    readonly BehaviorSubject<bool> _current = new(false);
     readonly IDisposable _subscriptions;
     // Guards _generation/_lastSubject and each refresh kind's busy/rerun pair. _generation bumps
     // on every Connected status carrying a subject, not only on a subject change, so any fetch
@@ -40,6 +44,7 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
 
     readonly Lock _lock = new();
     int _generation;
+    bool _connected;
     string? _lastSubject;
     // The lane's own Epoch off the latest Connected status seen — captured per fetch and handed
     // to onUnauthorized, so ServerConnectionService.ParkSignedOut(int) can re-validate a delayed
@@ -70,8 +75,17 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
         // status this runs first: nothing seeded under one identity survives into another, even
         // when the refresh that follows fetches null and would otherwise leave stale rows in
         // place. Caches clear only when the token subject changes; every Connected carrying a
-        // subject advances the generation, so an older fetch can neither publish nor report an
-        // auth failure.
+        // subject advances the generation, and so does a lost connection, so an older fetch can
+        // neither publish nor report an auth failure nor vouch for a lane that is gone.
+        var laneLost = lane.Status
+            .Where(s => s.State != ServerLaneState.Connected)
+            .Subscribe(_ => {
+                lock (_lock) {
+                    _generation++;
+                    _connected = false;
+                    _current.OnNext(false);
+                }
+            });
         var identityChange = lane.Status
             .Where(s => s.State == ServerLaneState.Connected)
             .Subscribe(s => {
@@ -85,6 +99,7 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
                         _lastSubject = s.Subject;
                     }
                     _lastLaneEpoch = s.Epoch;
+                    _connected = true;
                 }
             });
 
@@ -101,11 +116,12 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
             .Select(_ => Observable.FromAsync(async () => await RefreshAgentsAsync(fetchAgents)))
             .Merge()
             .Subscribe();
-        _subscriptions = new System.Reactive.Disposables.CompositeDisposable(identityChange, refreshDaemons, refreshAgents);
+        _subscriptions = new System.Reactive.Disposables.CompositeDisposable(laneLost, identityChange, refreshDaemons, refreshAgents);
     }
 
     public IObservableCache<AgentInstanceDto, string> Agents => _agents.AsObservableCache();
     public IObservable<IReadOnlyList<DaemonInfo>> Daemons => _daemons.AsObservable();
+    public IObservable<bool> Current => _current.AsObservable();
 
     async Task RefreshAgentsAsync(Func<CancellationToken, Task<RemoteFetch>> fetch) {
         lock (_lock) {
@@ -134,10 +150,12 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
                 // A completion from before the latest connect must never repopulate the cache or
                 // report an auth failure a fresher connect may already have superseded — checked
                 // under the same lock a connect's generation bump takes.
-                if (generation == _generation) {
+                // A refresh admitted after the lane dropped is as stale as one that outlived it.
+                if (generation == _generation && _connected) {
                     if (result?.Rows is { } rows)
                         _agents.EditDiff(rows, EqualityComparer<AgentInstanceDto>.Default);
                     if (result is { Unauthorized: true }) notifyUnauthorized = true;
+                    _current.OnNext(result?.Rows is not null);
                 }
                 rerun = _agentsRerun;
                 if (rerun) _agentsRerun = false;
@@ -220,5 +238,6 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
         inFlight?.TrySetResult();
         _agents.Dispose();
         _daemons.Dispose();
+        _current.Dispose();
     }
 }
