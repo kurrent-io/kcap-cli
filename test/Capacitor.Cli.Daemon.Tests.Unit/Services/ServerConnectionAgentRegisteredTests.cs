@@ -38,8 +38,13 @@ public class ServerConnectionAgentRegisteredTests {
     static Task<AgentRegisteredResponse> Register(ServerConnection conn, string agentId = "agent-1") =>
         conn.AgentRegisteredAsync(agentId, "prompt", "model", null, "/repo", runtimeTransport: "pty");
 
+    /// <summary>What a JSON-protocol server without the method answers; <see cref="ServerConnectionLegacyHubWireTests"/>
+    /// takes it from a real dispatcher.</summary>
+    const string MethodDoesNotExist =
+        "Failed to invoke 'AgentRegisteredAcked' due to an error on the server. HubException: Method does not exist.";
+
     static Task<AgentRegisteredResponse?> UnknownMethod(AgentRegistered _) =>
-        Task.FromException<AgentRegisteredResponse?>(new HubException("Unknown hub method 'AgentRegisteredAcked'"));
+        Task.FromException<AgentRegisteredResponse?>(new HubException(MethodDoesNotExist));
 
     [Test]
     public async Task An_accepted_registration_is_returned_and_sends_only_the_acked_call() {
@@ -142,5 +147,26 @@ public class ServerConnectionAgentRegisteredTests {
 
         await Assert.That(async () => await Register(conn)).Throws<HubException>();
         await Assert.That(conn.LegacyCalls).IsEmpty();
+    }
+
+    /// <summary>Both dispatcher answers for a missing method count, and only for the method that was invoked;
+    /// a handler's refusal, another method's absence or an exception that is not a hub answer never does.</summary>
+    [Test]
+    [Arguments("hub", MethodDoesNotExist, "AgentRegisteredAcked", true)]
+    [Arguments("hub", "Unknown hub method 'AgentRegisteredAcked'", "AgentRegisteredAcked", true)]
+    [Arguments("hub", MethodDoesNotExist, "ReportParticipantParked", false)]
+    [Arguments("hub", "Unknown hub method 'AgentRegisteredAckedV2'", "AgentRegisteredAcked", false)]
+    [Arguments("hub", "Failed to invoke 'AgentRegisteredAcked' due to an error on the server. HubException: Caller is not a registered daemon", "AgentRegisteredAcked", false)]
+    [Arguments("hub", "Failed to invoke 'AgentRegisteredAcked' due to an error on the server.", "AgentRegisteredAcked", false)]
+    [Arguments("invalid-operation", MethodDoesNotExist, "AgentRegisteredAcked", false)]
+    [Arguments("canceled", MethodDoesNotExist, "AgentRegisteredAcked", false)]
+    public async Task Only_the_invoked_methods_absence_reads_as_a_missing_method(string kind, string message, string method, bool missing) {
+        Exception ex = kind switch {
+            "hub"               => new HubException(message),
+            "invalid-operation" => new InvalidOperationException(message),
+            _                   => new OperationCanceledException(message),
+        };
+
+        await Assert.That(ServerConnection.IsUnknownHubMethod(ex, method)).IsEqualTo(missing);
     }
 }

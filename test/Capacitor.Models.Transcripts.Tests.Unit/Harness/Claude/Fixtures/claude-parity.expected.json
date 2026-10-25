@@ -17,7 +17,10 @@
           "outputTokens": "5",
           "totalTokens": "20",
           "cachedInputTokens": "3",
-          "model": "claude-x"
+          "model": "claude-x",
+          "additionalCounts": {
+            "cache_creation_input_tokens": 2
+          }
         },
         "cacheCreation": 2,
         "attachments": null
@@ -152,7 +155,10 @@
           "outputTokens": "5",
           "totalTokens": "20",
           "cachedInputTokens": "3",
-          "model": "claude-x"
+          "model": "claude-x",
+          "additionalCounts": {
+            "cache_creation_input_tokens": 2
+          }
         },
         "cacheCreation": 2,
         "attachments": null

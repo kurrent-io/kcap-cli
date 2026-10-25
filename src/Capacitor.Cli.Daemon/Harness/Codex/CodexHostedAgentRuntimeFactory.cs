@@ -132,6 +132,10 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
 
     public bool SupportsRestartResume(string? runtimeTransport) => true;
 
+    /// <summary>Only a session recorded on the terminal transport resumes there; any other may reach the app-server.</summary>
+    public bool ResumesIdleWithoutPrompt(string? runtimeTransport) =>
+        runtimeTransport == CodexTransportDecision.Pty && _pty.ResumesIdleWithoutPrompt(runtimeTransport);
+
     public Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
         // A parked reviewer's transcript is envelope-sourced; a PTY resume would fork it.
         if (ctx.ResumeSessionId is not null && ctx.IsReviewFlow && !UsesAppServer(ctx))
@@ -225,8 +229,6 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
         CodexPosture = ctx.CodexPosture,
     };
 
-    internal const string HostedAppServerMarkerEnv = "KCAP_HOSTED_APPSERVER";
-
     internal static Dictionary<string, string> BuildEnv(RuntimeStartContext ctx, bool emitEnvelopeTranscript) {
         var env = new Dictionary<string, string> {
             [HostedAgent.RenderedVar] = HostedAgent.Rendered,
@@ -237,9 +239,9 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
         if (!string.IsNullOrEmpty(ctx.DaemonEpoch))     env["KCAP_DAEMON_EPOCH"]      = ctx.DaemonEpoch;
         if (!string.IsNullOrEmpty(ctx.ServerUrl))       env[ProfileOverrides.UrlVar]  = ctx.ServerUrl;
         if (!string.IsNullOrEmpty(ctx.DaemonBridgeUrl)) env[HostedAgent.BridgeUrlVar] = ctx.DaemonBridgeUrl;
-        // guard-1: only an envelope-sourced session carries this marker; the codex hook + watcher read it
-        // and stand down so the rollout is not double-ingested alongside the envelopes.
-        if (emitEnvelopeTranscript) env[HostedAppServerMarkerEnv] = "1";
+        // Only an envelope-sourced session carries this marker, so its rollout is not ingested a second
+        // time beside the envelopes.
+        if (emitEnvelopeTranscript) env[HostedAgent.HostedAppServerVar] = "1";
         return env;
     }
 
@@ -247,7 +249,7 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     // this launch: an inherited envelope marker would make a non-emitting child's hook watcher stand
     // down and lose ingestion, and an inherited session or lookup agent names another session.
     internal static void ApplyChildEnv(IDictionary<string, string?> childEnv, IReadOnlyDictionary<string, string> overlay) {
-        childEnv.Remove(HostedAppServerMarkerEnv);
+        childEnv.Remove(HostedAgent.HostedAppServerVar);
         childEnv.Remove(HostedAgent.FlowRoleVar);
         childEnv.Remove(HostedAgent.DaemonAgentIdVar);
         InheritedHarnessSessions.Remove(childEnv);
