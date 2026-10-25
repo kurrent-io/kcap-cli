@@ -13,8 +13,8 @@ namespace Capacitor.Cli.LocalEdition;
 /// rewritten unit; committed by clearing the journal. A failure before the switch starts the old version again if it
 /// was running. After it nothing is restored: the new version stays selected and stopped.</para>
 ///
-/// <para>A recorded built-in embedding choice has the new version's model set fetched while staging, and every other
-/// model set removed after the commit.</para>
+/// <para>A recorded built-in embedding choice has the new version's model set fetched while staging. After the commit
+/// the record names that set once it is in place, and every other model set is removed.</para>
 /// </summary>
 sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progress) {
     const string StagingName = "upgrade";
@@ -124,7 +124,7 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
 
         var upgraded = await StartNewAsync(lease, entry, details);
 
-        if (modelSet is not null) models.RemoveAllBut(modelSet);
+        SettleModelSets(modelSet);
 
         return upgraded;
     }
@@ -141,6 +141,22 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
         }
 
         await LocalEmbeddingStep.FetchBuiltinAsync(models, modelSet, recorded, progress, ct);
+    }
+
+    /// <summary>Under the lease, after a commit. The unit already runs the server with the built-in provider, so a record
+    /// still naming the old set would make the next setup replace the unit for nothing. Never throws.</summary>
+    void SettleModelSets(LocalEmbeddingModelManifest? modelSet) {
+        if (modelSet is null) return;
+
+        try {
+            if (LocalEmbeddingFile.Read(stack.Root) is { Provider: LocalEmbeddingProvider.Builtin } recorded
+             && recorded.ModelSetId != modelSet.ModelSet && LocalModelSets.IsPresent(stack.Root, modelSet))
+                LocalEmbeddingFile.Write(stack.Root, LocalEmbeddingSetting.Builtin(modelSet.ModelSet));
+        } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+            // The next setup rewrites the record and the unit.
+        }
+
+        LocalModelSets.RemoveAllBut(stack.Root, modelSet);
     }
 
     /// <summary>Finishes an upgrade the previous lifecycle command left in the journal.</summary>

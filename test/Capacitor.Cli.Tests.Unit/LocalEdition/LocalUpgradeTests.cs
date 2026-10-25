@@ -495,6 +495,35 @@ public class LocalUpgradeTests {
         await Assert.That(HasModelSet("not-a-model-set")).IsTrue().Because("only model sets and download leftovers are removed");
     }
 
+    /// <summary>The record names the set the new server serves, so the next setup finds nothing to change and leaves
+    /// the unit alone; it stays in the form an older kcap reads as a settled decline.</summary>
+    [Test]
+    public async Task An_upgrade_records_the_new_model_set_for_a_recorded_builtin_choice() {
+        Installed();
+        Recorded(LocalEmbeddingSetting.Builtin(OldSet));
+        var bundle = PublishModelSet();
+
+        await Upgrade();
+
+        await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Builtin(bundle.ModelSet));
+        await Assert.That(LocalServerUnit.ForInstallation(Root, Port).Serves(LocalEmbeddingSetting.Builtin(bundle.ModelSet))).IsTrue();
+
+        var wire = JsonNode.Parse(File.ReadAllText(LocalEmbeddingFile.PathFor(Root)))!.AsObject();
+        await Assert.That(wire["provider"]!.GetValue<string>()).IsEqualTo("none");
+        await Assert.That(wire.ContainsKey("pending")).IsFalse();
+    }
+
+    [Test]
+    public async Task A_failed_model_download_leaves_the_recorded_model_set() {
+        Installed();
+        Recorded(LocalEmbeddingSetting.Builtin(OldSet));
+        PublishUnservedModelSet();
+
+        await Upgrade();
+
+        await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Builtin(OldSet));
+    }
+
     [Test]
     public async Task A_bundle_without_a_model_set_reports_a_skip_and_keeps_the_old_one() {
         Installed();
