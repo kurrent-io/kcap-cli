@@ -1,7 +1,7 @@
-namespace Capacitor.Cli.Commands;
+namespace Capacitor.Cli.Core;
 
 /// <summary>A path printed inside a command the user is meant to paste into their shell.</summary>
-internal static class ShellArgument {
+public static class ShellArgument {
     public static string Quote(string value) => Quote(value, OperatingSystem.IsWindows());
 
     public static string Quote(string value, bool windows) {

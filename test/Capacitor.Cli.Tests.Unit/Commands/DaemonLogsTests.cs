@@ -13,51 +13,48 @@ public class DaemonLogsTests {
     [TempConfigRoot]  public required TempConfigRoot  Config  { get; init; }
     [TempHome]        public required TempHome        Home    { get; init; }
 
+    StringWriter Out { get; } = new();
+    StringWriter Err { get; } = new();
+
     DaemonCommands Sut() => new(
         Daemons.Store, Config.Root, Resolutions.None(Config.Root), Home,
-        TestHarnesses.All(), TestBinaries.None, TimeProvider.System);
+        TestHarnesses.All(), TestBinaries.None, TimeProvider.System, new StandardStreams(Out, Err, TextReader.Null));
 
     string LogPath          => Config.Root.Path("daemon.log");
     string StderrCapturePath => System.IO.Path.ChangeExtension(LogPath, null) + ".out.log";
 
     [Test]
-    [NotInParallel]
     public async Task Logs_surfaces_the_stderr_capture_sibling() {
         await File.WriteAllTextAsync(LogPath, "primary-log-line\n");
         await File.WriteAllTextAsync(StderrCapturePath, "startup: lock acquired\n");
 
-        using var capture = ConsoleOutput.StartFullCapture();
 
         var exit = await Sut().HandleAsync(["daemon", "logs"]);
 
         await Assert.That(exit).IsEqualTo(0);
-        await Assert.That(capture.GetCapturedOutput()).Contains("primary-log-line");
-        await Assert.That(capture.GetCapturedOutput()).Contains("startup: lock acquired");
-        await Assert.That(capture.GetCapturedError()).Contains("daemon.out.log");
+        await Assert.That(Out.ToString()).Contains("primary-log-line");
+        await Assert.That(Out.ToString()).Contains("startup: lock acquired");
+        await Assert.That(Err.ToString()).Contains("daemon.out.log");
     }
 
     [Test]
-    [NotInParallel]
     public async Task Logs_skips_an_empty_stderr_capture() {
         await File.WriteAllTextAsync(LogPath, "primary-log-line\n");
         await File.WriteAllTextAsync(StderrCapturePath, "");   // a clean run leaves it empty
 
-        using var capture = ConsoleOutput.StartFullCapture();
 
         var exit = await Sut().HandleAsync(["daemon", "logs"]);
 
         await Assert.That(exit).IsEqualTo(0);
-        await Assert.That(capture.GetCapturedError()).DoesNotContain("daemon.out.log");
+        await Assert.That(Err.ToString()).DoesNotContain("daemon.out.log");
     }
 
     [Test]
-    [NotInParallel]
     public async Task Logs_reports_nothing_when_neither_file_exists() {
-        using var capture = ConsoleOutput.StartFullCapture();
 
         var exit = await Sut().HandleAsync(["daemon", "logs"]);
 
         await Assert.That(exit).IsEqualTo(1);
-        await Assert.That(capture.GetCapturedError()).Contains("No log file found");
+        await Assert.That(Err.ToString()).Contains("No log file found");
     }
 }
