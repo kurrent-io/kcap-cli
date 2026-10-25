@@ -305,6 +305,7 @@ internal partial class AgentOrchestrator {
             PermissionPreset: agent.PermissionPreset,
             McpConfigPath:    agent.McpConfigPath,
             Title:            agent.Title,
+            TitleDerived:     agent.StartTitle?.Derived ?? true,
             IsPrivate:        agent.IsPrivate,
             Origin:           origin,
             RequesterUserId:  agent.RequesterUserId ?? cmd?.RequesterUserId,
@@ -347,6 +348,7 @@ internal partial class AgentOrchestrator {
             PermissionPreset: cmd.AcpPermissionPreset,
             McpConfigPath:    null,
             Title:            StartTitleOf(cmd)?.Text ?? AgentStartTitle.Shorten(prompt),
+            TitleDerived:     StartTitleOf(cmd)?.Derived ?? true,
             IsPrivate:        false,
             Origin:           "server",
             RequesterUserId:  cmd.RequesterUserId,
@@ -1144,6 +1146,8 @@ internal partial class AgentOrchestrator {
             InactivityBoundSeconds: launch.InactivityBoundSeconds,
             PermissionMode:      launch.PermissionMode,
             Title:               launch.Title,
+            // A prompt cut re-sent as the caller's title would outrank the one the session has since been given.
+            TitleDerived:        launch.TitleDerived ?? true,
             AccountId:           launch.AccountId);
     }
 
