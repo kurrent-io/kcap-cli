@@ -105,7 +105,7 @@ internal sealed class AgentCommand(
 
         // A daemon without accounts/1 never reads the account id and would start the agent under its default account.
         if (account is not null && !await DaemonChoosesAccountsAsync(name)) {
-            await Console.Error.WriteLineAsync("kcap agent start: this daemon does not support choosing an account; update kcap on this machine");
+            await console.Error.WriteLineAsync("kcap agent start: this daemon does not support choosing an account; update kcap on this machine");
 
             return 1;
         }
@@ -127,13 +127,13 @@ internal sealed class AgentCommand(
         try {
             registry = accounts.Load();
         } catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) {
-            await Console.Error.WriteLineAsync($"kcap agent start: could not read the kcap account registry in {accounts.Directory}: {ex.Message}");
+            await console.Error.WriteLineAsync($"kcap agent start: could not read the kcap account registry in {accounts.Directory}: {ex.Message}");
 
             return null;
         }
 
         if (HarnessNames.From(parsed.Vendor) is not ({ } vendor and (HarnessId.Claude or HarnessId.Codex))) {
-            await Console.Error.WriteLineAsync($"kcap agent start: cannot use --account with {parsed.Vendor}: accounts apply to claude and codex only");
+            await console.Error.WriteLineAsync($"kcap agent start: cannot use --account with {parsed.Vendor}: accounts apply to claude and codex only");
 
             return null;
         }
@@ -141,7 +141,7 @@ internal sealed class AgentCommand(
         var outcome = AccountResolution.ResolveArgument(registry, vendor, AccountDirectory.ExpandHome(parsed.Account!, home));
         if (outcome.Account is not null) return outcome.Account;
 
-        await Console.Error.WriteLineAsync($"kcap agent start: {outcome.Refusal}");
+        await console.Error.WriteLineAsync($"kcap agent start: {outcome.Refusal}");
 
         return null;
     }

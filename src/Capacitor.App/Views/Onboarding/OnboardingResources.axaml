@@ -19,9 +19,6 @@
     <SolidColorBrush x:Key="OnboardingDividerBrush" Color="#17DED9FF" />
     <SolidColorBrush x:Key="OnboardingPanelBorderBrush" Color="#5D4363" />
     <SolidColorBrush x:Key="OnboardingSkeletonBrush" Color="#3A2540" />
-    <SolidColorBrush x:Key="OnboardingRailIdleBrush" Color="#29DED9FF" />
-    <SolidColorBrush x:Key="OnboardingRailStopBrush" Color="#57DED9FF" />
-    <SolidColorBrush x:Key="OnboardingRailPassedBrush" Color="#B8DED9FF" />
     <SolidColorBrush x:Key="OnboardingWarningFillBrush" Color="#0DFF7272" />
     <SolidColorBrush x:Key="OnboardingWarningBorderBrush" Color="#47FF7272" />
     <SolidColorBrush x:Key="OnboardingResolvedFillBrush" Color="#0D5BE0B3" />

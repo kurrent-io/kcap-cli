@@ -91,7 +91,7 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
         writer.AutoFlush = true;
 
         // In arrival order: a task call addresses the plan that the call before it declared.
-        await McpStdioLoop.RunAsync(reader, writer, TimedDispatchToolCallAsync, (id, method, request) => method switch {
+        await McpStdioLoop.RunAsync(reader, writer, tools, TimedDispatchToolCallAsync, (id, method, request) => method switch {
             null         => BuildErrorResponse(id, -32600, "Invalid request: method must be a string"),
             "initialize" => BuildInitializeResponse(id, request),
             "tools/list" => BuildToolsListResponse(id, tools),

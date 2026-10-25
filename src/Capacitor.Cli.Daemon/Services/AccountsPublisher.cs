@@ -54,11 +54,11 @@ internal sealed partial class AccountsPublisher(
     public Task WaitBeyondAsync(long seen, CancellationToken ct) => _notifier.WaitBeyondAsync(seen, ct);
 
     /// <summary>Reads the registry now, whether or not its file looks changed.</summary>
-    public Task RebuildAsync(CancellationToken ct) => PollAsync(force: true, ct);
+    public Task RebuildAsync(CancellationToken ct) => TryPollAsync(force: true, ct);
 
     public override async Task StartAsync(CancellationToken cancellationToken) {
         if (config.Accounts is not null) {
-            await PollAsync(force: true, cancellationToken);
+            await TryPollAsync(force: true, cancellationToken);
             _timer = new PeriodicTimer(PollInterval, time);
         }
 
@@ -70,17 +70,20 @@ internal sealed partial class AccountsPublisher(
 
         using (timer) {
             try {
-                while (await timer.WaitForNextTickAsync(stoppingToken)) {
-                    // The host stops the daemon when this method throws.
-                    try {
-                        await PollAsync(force: false, stoppingToken);
-                        _pollWarned = false;
-                    } catch (Exception ex) when (ex is not OperationCanceledException) {
-                        if (!_pollWarned) LogPollFailed(logger, ex);
-                        _pollWarned = true;
-                    }
-                }
+                while (await timer.WaitForNextTickAsync(stoppingToken)) await TryPollAsync(force: false, stoppingToken);
             } catch (OperationCanceledException) { /* shutdown */ }
+        }
+    }
+
+    /// <summary>An unreadable registry is logged once and left for the next poll: a throw here would
+    /// stop the daemon, at boot as much as from the timer.</summary>
+    async Task TryPollAsync(bool force, CancellationToken ct) {
+        try {
+            await PollAsync(force, ct);
+            _pollWarned = false;
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            if (!_pollWarned) LogPollFailed(logger, ex);
+            _pollWarned = true;
         }
     }
 

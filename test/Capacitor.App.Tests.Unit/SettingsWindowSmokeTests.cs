@@ -1,3 +1,5 @@
+using System.Reactive.Concurrency;
+using System.Reactive.Subjects;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -6,6 +8,7 @@ using Avalonia.Input;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.Services;
+using Capacitor.App.Services.LocalSetup;
 using Capacitor.App.Services.Mutation;
 using Capacitor.App.Services.Notifications;
 using Capacitor.App.Services.Onboarding;
@@ -14,6 +17,7 @@ using Capacitor.App.Views;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -44,6 +48,7 @@ public class SettingsWindowSmokeTests {
             var rename = window.FindControl<Button>("RenameButton")!;
             await Assert.That(name.Text).IsEqualTo("daemon-a");
             await Assert.That(tabs.SelectedIndex).IsEqualTo(0);
+            await Assert.That(window.FindControl<TabItem>("SearchTab")!.IsVisible).IsFalse();
             Settle(window);
             await Assert.That(capacity.Value).IsEqualTo(5m);
             await Assert.That(capacity.ShowButtonSpinner).IsFalse();
@@ -358,6 +363,54 @@ public class SettingsWindowSmokeTests {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         while (!ready()) await Task.Delay(10, timeout.Token);
     }
+
+    /// <summary>With a local server, Settings carries its search choice, and opening it for search lands on that
+    /// tab. Every line of the choice fits inside the tab: the longest option label wraps rather than clipping.</summary>
+    [Test]
+    public Task The_search_tab_holds_the_local_search_choice_within_its_width() => AvaloniaSession.RunOnUiAsync(async () => {
+        ConfigMutator.Mutate(Config.Root, c => c with { Profiles = new() {
+            ["work"] = new Profile { ServerUrl = "http://localhost:5000", Daemon = new DaemonSettings { Name = "daemon-a", MaxAgents = 5 } }
+        } });
+        var cli = new FakeKcapCli();
+        LocalUpgradeController? upgrade = null;
+        var search = new LocalSearchController(() => cli, action => action(), held: () => upgrade?.Running == true);
+        upgrade = new LocalUpgradeController(() => cli, action => action(), held: () => search.Running);
+        using var local = new LocalSearchViewModel(() => new LocalEmbeddingSetting("mxbai-embed-large"),
+            new BehaviorSubject<ServerLaneStatus>(new(ServerLaneState.Connected)), search, upgrade, () => Task.CompletedTask,
+            CancellationToken.None, ImmediateScheduler.Instance);
+        var service = new FakeDaemonClientService();
+        service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["settings/1"]));
+        service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(active: 0));
+        using var vm = new SettingsViewModel(new SettingsProfileStore(Config.Root, "work", "http://localhost:5000"),
+            service, new ScriptedLocalControlOps(), (_, _) => Task.FromResult(false),
+            (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded()),
+            (_, _) => Task.FromResult(false), _ => Task.FromResult(false), true, Task.CompletedTask, (_, _) => Task.FromResult(true)) {
+            Search = local,
+        };
+        var window = new SettingsWindow { DataContext = vm };
+        try {
+            window.Show();
+            window.ShowSearch();
+            Settle(window);
+            var tabs = window.FindControl<TabControl>("SettingsTabs")!;
+
+            await Assert.That(window.FindControl<TabItem>("SearchTab")!.IsVisible).IsTrue();
+            await Assert.That(tabs.SelectedItem).IsSameReferenceAs(window.FindControl<TabItem>("SearchTab"));
+            var choice = tabs.GetVisualDescendants().OfType<SearchChoiceView>().Single();
+            await Assert.That(choice.IsEffectivelyVisible).IsTrue();
+            await Assert.That(tabs.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "SearchApplyButton").IsEffectivelyVisible).IsTrue();
+            await Assert.That(tabs.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "SearchCurrentText").Text)
+                .IsEqualTo("Searches by meaning with mxbai-embed-large.");
+
+            var clipped = choice.GetVisualDescendants().OfType<TextBlock>()
+                .Where(t => t.IsEffectivelyVisible && !string.IsNullOrEmpty(t.Text))
+                // A line wider than its box is cut off at the box, so the text's own layout is what overflows.
+                .Where(t => t.TextLayout.Width > t.Bounds.Width + 0.5
+                         || t.TranslatePoint(new Point(t.Bounds.Width, 0), choice) is not { } right || right.X > choice.Bounds.Width + 0.5)
+                .Select(t => t.Text).ToList();
+            await Assert.That(clipped).IsEmpty();
+        } finally { window.Close(); }
+    });
 
     static void Settle(Window window) {
         Dispatcher.UIThread.RunJobs();
