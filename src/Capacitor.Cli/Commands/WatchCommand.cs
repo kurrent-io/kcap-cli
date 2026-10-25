@@ -971,8 +971,8 @@ partial class WatchCommand(
                 }
 
                 if (state.PendingCreatedPullRequests.Count > 0 && time.GetUtcNow() >= state.NextCreatedPullRequestLink) {
-                    await LinkCreatedPullRequestsAsync(state, sessionId, SecondaryProbeBudget, cts.Token, TouchHeartbeat);
-                    // Only a post the server refused waits; a PR created after a clean pass goes at once.
+                    await LinkCreatedPullRequestsAsync(state, sessionId, SecondaryProbeBudget, cts.Token, lastChance: false, TouchHeartbeat);
+                    // Only a PR left pending waits; one created after a clean pass goes at once.
                     state.NextCreatedPullRequestLink = state.PendingCreatedPullRequests.Count > 0 ? time.GetUtcNow() + TimeSpan.FromSeconds(60) : default;
                 }
 
@@ -1184,7 +1184,7 @@ partial class WatchCommand(
 
             // A PR is usually opened in the session's last turn, after the previous 60s probe.
             await LinkCreatedPullRequestsAsync(state, sessionId,
-                FinalSecondaryProbeDeadline - time.GetElapsedTime(shutdownStarted), CancellationToken.None, TouchHeartbeat);
+                FinalSecondaryProbeDeadline - time.GetElapsedTime(shutdownStarted), CancellationToken.None, lastChance: true, TouchHeartbeat);
             await LinkSecondaryPullRequestsAsync(state, sessionId,
                 FinalSecondaryProbeDeadline - time.GetElapsedTime(shutdownStarted), CancellationToken.None, TouchHeartbeat);
         }
@@ -4088,9 +4088,13 @@ partial class WatchCommand(
             (pr, token) => PostLinkedPullRequestAsync(sessionId, pr, "from a secondary checkout", token),
             budget, time, ct, beat);
 
+    static readonly TimeSpan MaxCreatedPullRequestLookup = TimeSpan.FromSeconds(5);
+
     /// <summary>
-    /// Posts each created PR the server has not accepted yet. Its title and head come from gh when it
-    /// answers in time; without them the PR is still linked, since the number and URL are what link it.
+    /// Posts each created PR the server has not accepted yet, with its title and head from gh. A PR gh cannot
+    /// describe waits for a later pass, since the server records a link without a branch as one on main; on the
+    /// <paramref name="lastChance"/> pass it is linked by number and URL alone. The lookup gets at most half
+    /// of what is left, so the post always has time, and a PR that fails moves behind the rest.
     /// </summary>
     internal static async Task LinkCreatedPullRequestsAsync(
             WatchState                                             state,
@@ -4099,6 +4103,7 @@ partial class WatchCommand(
             TimeSpan                                               budget,
             TimeProvider                                           time,
             CancellationToken                                      ct,
+            bool                                                   lastChance,
             Action                                                 beat
         ) {
         if (state.PendingCreatedPullRequests.Count == 0 || budget <= TimeSpan.Zero) return;
@@ -4106,6 +4111,11 @@ partial class WatchCommand(
         var started = time.GetTimestamp();
         using var deadline = new CancellationTokenSource(budget, time);
         using var linked   = CancellationTokenSource.CreateLinkedTokenSource(ct, deadline.Token);
+
+        void MoveToBack(CreatedPullRequest pr) {
+            state.PendingCreatedPullRequests.Remove(pr);
+            state.PendingCreatedPullRequests.Add(pr);
+        }
 
         foreach (var created in state.PendingCreatedPullRequests.ToArray()) {
             var remaining = budget - time.GetElapsedTime(started);
@@ -4116,10 +4126,17 @@ partial class WatchCommand(
             var key = (created.Owner, created.RepoName, created.Number);
 
             if (!state.LinkedPullRequests.Contains(key)) {
+                var lookup = remaining / 2 < MaxCreatedPullRequestLookup ? remaining / 2 : MaxCreatedPullRequestLookup;
+
                 PrInfo? info;
-                try { info = await describe(created, remaining).WaitAsync(linked.Token); }
-                catch (OperationCanceledException) { return; }
+                try { info = await describe(created, lookup).WaitAsync(lookup, time, linked.Token); }
+                catch (OperationCanceledException) when (linked.IsCancellationRequested) { MoveToBack(created); return; }
                 catch { info = null; }
+
+                if (info is null && !lastChance) {
+                    MoveToBack(created);
+                    continue;
+                }
 
                 var payload = new RepositoryPayload {
                     Host      = "github.com",
@@ -4133,8 +4150,12 @@ partial class WatchCommand(
                 };
 
                 bool accepted;
-                try { accepted = await post(payload, linked.Token); } catch (OperationCanceledException) { return; }
-                if (!accepted) continue;
+                try { accepted = await post(payload, linked.Token); } catch (OperationCanceledException) { MoveToBack(created); return; }
+
+                if (!accepted) {
+                    MoveToBack(created);
+                    continue;
+                }
 
                 state.LinkedPullRequests.Add(key);
             }
@@ -4143,11 +4164,11 @@ partial class WatchCommand(
         }
     }
 
-    Task LinkCreatedPullRequestsAsync(WatchState state, string sessionId, TimeSpan budget, CancellationToken ct, Action beat) =>
+    Task LinkCreatedPullRequestsAsync(WatchState state, string sessionId, TimeSpan budget, CancellationToken ct, bool lastChance, Action beat) =>
         LinkCreatedPullRequestsAsync(state,
-            (pr, remaining) => GitHubPrDetector.DescribeAsync(pr.Url, pr.Number, home.Path, remaining, RepositoryDetection.DefaultRunner(time)),
+            (pr, lookup) => GitHubPrDetector.DescribeAsync(pr.Url, pr.Number, home.Path, lookup, RepositoryDetection.DefaultRunner(time)),
             (pr, token) => PostLinkedPullRequestAsync(sessionId, pr, "created in the session", token),
-            budget, time, ct, beat);
+            budget, time, ct, lastChance, beat);
 
     // Half of WatcherHeartbeat.Threshold: the heartbeat is touched before each probe, so one
     // probe bounded by this budget is the longest the pass can leave it untouched. The pass is
