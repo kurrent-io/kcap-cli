@@ -27,11 +27,26 @@ public class LinuxAppRemovalTests {
 
     string Staged => Tmp.PathTo("data", "kcap", "desktop");
 
-    /// The trash rules on every platform; the libc rename itself only where it exists, in its own test.
-    LinuxAppRemoval Removal(Runner? runner = null, string? image = null, Func<string, string, int>? rename = null, bool libcRename = false) =>
+    /// The trash rules on every platform; the libc move itself only where it exists, in its own test.
+    LinuxAppRemoval Removal(Runner? runner = null, string? image = null, Func<string, string, int>? move = null, bool libcMove = false,
+            Func<string, Stream>? createInfo = null) =>
         new(runner ?? new Runner(), image ?? Tmp.PathTo("apps", "kcap-x86_64.AppImage"), Staged,
             [Tmp.PathTo("links-a"), Tmp.PathTo("links-b")], Tmp.PathTo("data", "Trash"), _time,
-            libcRename ? null : rename ?? MoveWithoutCopying);
+            libcMove ? null : move ?? MoveWithoutCopying, createInfo);
+
+    /// A stream whose every write fails, as one on a full disk does.
+    sealed class FullDisk : Stream {
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => 0;
+        public override long Position { get => 0; set { } }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new IOException("No space left on device");
+    }
 
     /// A move within one filesystem that never replaces what is there, as link(2) and unlink(2) do, without libc.
     static int MoveWithoutCopying(string from, string to) {
@@ -88,13 +103,13 @@ public class LinuxAppRemovalTests {
         await Assert.That(File.Exists(Tmp.PathTo("data", "Trash", "info", "kcap-x86_64.2.AppImage.trashinfo"))).IsTrue();
     }
 
-    /// <summary>An image on another filesystem than the Trash cannot be renamed into it. It stays where it is, with
+    /// <summary>An image on another filesystem than the Trash cannot be moved into it. It stays where it is, with
     /// nothing copied into the Trash and no info file left to name a file that is not there.</summary>
     [Test]
     public async Task An_image_on_another_filesystem_stays_where_it_is() {
         var image = Tmp.CreateFile("apps/kcap-x86_64.AppImage", "image");
 
-        var trashed = await Removal(image: image, rename: (_, _) => CrossDevice).TrashBundleAsync(CancellationToken.None);
+        var trashed = await Removal(image: image, move: (_, _) => CrossDevice).TrashBundleAsync(CancellationToken.None);
 
         await Assert.That(trashed).IsFalse();
         await Assert.That(File.ReadAllText(image)).IsEqualTo("image");
@@ -117,6 +132,25 @@ public class LinuxAppRemovalTests {
         await Assert.That(File.Exists(Tmp.PathTo("data", "Trash", "info", "kcap-x86_64.2.AppImage.trashinfo"))).IsTrue();
     }
 
+    /// <summary>An info file that cannot be written is no name collision: the removal stops at once, leaves no
+    /// partial info file, and leaves the image where it is. The cap on claims only bounds a loop that retries</summary>
+    [Test]
+    public async Task An_info_file_that_cannot_be_written_stops_the_removal_and_is_not_left_behind() {
+        var image  = Tmp.CreateFile("apps/kcap-x86_64.AppImage", "image");
+        var claims = 0;
+
+        var trashed = await Removal(image: image, createInfo: path => {
+            if (++claims > 20) throw new UnauthorizedAccessException("too many claims");
+            File.Create(path).Dispose();
+            return new FullDisk();
+        }).TrashBundleAsync(CancellationToken.None);
+
+        await Assert.That(trashed).IsFalse();
+        await Assert.That(claims).IsEqualTo(1);
+        await Assert.That(Directory.EnumerateFileSystemEntries(Tmp.PathTo("data", "Trash", "info"))).IsEmpty();
+        await Assert.That(File.ReadAllText(image)).IsEqualTo("image");
+    }
+
     /// <summary>A Trash the removal creates is the user's alone, as the freedesktop.org spec asks.</summary>
     [Test, ExcludeOn(OS.Windows), UnsupportedOSPlatform("windows")]
     public async Task A_trash_the_removal_creates_is_owner_only() {
@@ -130,12 +164,12 @@ public class LinuxAppRemovalTests {
         await Assert.That(File.GetUnixFileMode(Tmp.PathTo("data", "Trash", "info"))).IsEqualTo(ownerOnly);
     }
 
-    /// <summary>The production rename moves the image into the Trash on the platform it is built for.</summary>
+    /// <summary>The production move puts the image in the Trash on the platform it is built for.</summary>
     [Test, RunOn(OS.Linux)]
-    public async Task On_linux_the_image_is_renamed_into_the_trash() {
+    public async Task On_linux_the_image_is_moved_into_the_trash() {
         var image = Tmp.CreateFile("apps/kcap-x86_64.AppImage", "image");
 
-        await Assert.That(await Removal(image: image, libcRename: true).TrashBundleAsync(CancellationToken.None)).IsTrue();
+        await Assert.That(await Removal(image: image, libcMove: true).TrashBundleAsync(CancellationToken.None)).IsTrue();
 
         await Assert.That(File.Exists(image)).IsFalse();
         await Assert.That(File.ReadAllText(Tmp.PathTo("data", "Trash", "files", "kcap-x86_64.AppImage"))).IsEqualTo("image");
@@ -146,7 +180,7 @@ public class LinuxAppRemovalTests {
     public async Task Off_linux_the_image_stays_where_it_is() {
         var image = Tmp.CreateFile("apps/kcap-x86_64.AppImage", "image");
 
-        await Assert.That(await Removal(image: image, libcRename: true).TrashBundleAsync(CancellationToken.None)).IsFalse();
+        await Assert.That(await Removal(image: image, libcMove: true).TrashBundleAsync(CancellationToken.None)).IsFalse();
 
         await Assert.That(File.ReadAllText(image)).IsEqualTo("image");
         await Assert.That(Directory.EnumerateFileSystemEntries(Tmp.PathTo("data", "Trash", "info"))).IsEmpty();

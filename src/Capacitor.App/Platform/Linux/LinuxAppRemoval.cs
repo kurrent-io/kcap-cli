@@ -16,15 +16,17 @@ public sealed partial class LinuxAppRemoval : IAppRemoval {
     readonly string                _trash;
     readonly TimeProvider          _time;
     readonly Func<string, string, int> _move;
+    readonly Func<string, Stream>      _createInfo;
 
     public LinuxAppRemoval(IProcessRunner runner, UserHome home, AppImageInstall install, Func<string, string?> getEnv, TimeProvider time)
         : this(runner, install.Image, AppImageInstall.StagedRoot(getEnv, home), KcapLinkFolders.For(home),
                Path.Combine(AppImageInstall.DataHome(getEnv, home), "Trash"), time) { }
 
     internal LinuxAppRemoval(IProcessRunner runner, string image, string stagedRoot, IReadOnlyList<string> linkFolders, string trash,
-            TimeProvider time, Func<string, string, int>? move = null) {
+            TimeProvider time, Func<string, string, int>? move = null, Func<string, Stream>? createInfo = null) {
         // libc is a Linux name; anywhere else the image stays put rather than the call failing to bind.
         _move        = move ?? (OperatingSystem.IsLinux() ? MoveWithoutReplacing : static (_, _) => NotSupported);
+        _createInfo  = createInfo ?? (static path => new FileStream(path, FileMode.CreateNew, FileAccess.Write));
         _runner      = runner;
         _image       = image;
         _stagedRoot  = stagedRoot;
@@ -67,16 +69,27 @@ public sealed partial class LinuxAppRemoval : IAppRemoval {
             OwnerOnlyDirectory(files);
             OwnerOnlyDirectory(info);
 
-            var name = Path.GetFileName(_image);
+            var name    = Path.GetFileName(_image);
+            var content = TrashInfo(_image, _time.GetLocalNow());
             for (var attempt = 1; claimed is null; attempt++) {
                 var candidate = attempt == 1 ? name : $"{Path.GetFileNameWithoutExtension(name)}.{attempt}{Path.GetExtension(name)}";
                 var infoPath  = Path.Combine(info, candidate + ".trashinfo");
+
+                // Only the create can collide; a write that fails after it is the disk's fault, not the name's.
+                Stream stream;
                 try {
-                    using (var stream = new FileStream(infoPath, FileMode.CreateNew, FileAccess.Write))
-                    using (var writer = new StreamWriter(stream))
-                        writer.Write(TrashInfo(_image, _time.GetLocalNow()));
+                    stream = _createInfo(infoPath);
                 } catch (IOException) when (File.Exists(infoPath)) {
                     continue;
+                }
+
+                try {
+                    using (stream)
+                    using (var writer = new StreamWriter(stream))
+                        writer.Write(content);
+                } catch {
+                    TryDelete(infoPath);
+                    throw;
                 }
 
                 if (File.Exists(Path.Combine(files, candidate)) || Directory.Exists(Path.Combine(files, candidate))) {
@@ -120,9 +133,17 @@ public sealed partial class LinuxAppRemoval : IAppRemoval {
         try { File.Delete(path); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
-    /// <summary>link(2) then unlink(2): unlike <see cref="File.Move(string,string)"/> and rename(2), a link never replaces
-    /// what is at the destination, and never copies across filesystems, answering EXDEV instead.</summary>
+    /// <summary>renameat2(2) with RENAME_NOREPLACE: unlike <see cref="File.Move(string,string)"/> and rename(2), it never
+    /// replaces what is at the destination, and never copies across filesystems, answering EXDEV instead. A filesystem,
+    /// kernel or libc without it falls back to link(2) then unlink(2), which keep both promises but not atomically</summary>
     static int MoveWithoutReplacing(string from, string to) {
+        try {
+            if (RenameAt2Native(CurrentDirectory, from, CurrentDirectory, to, RenameNoReplace) == 0) return 0;
+            if (Marshal.GetLastPInvokeError() is var renameErrno and not (InvalidArgument or NotSupported)) return renameErrno;
+        } catch (EntryPointNotFoundException) {
+            // a libc that predates the wrapper
+        }
+
         if (LinkNative(from, to) != 0) return Marshal.GetLastPInvokeError();
         if (UnlinkNative(from) == 0) return 0;
 
@@ -131,6 +152,13 @@ public sealed partial class LinuxAppRemoval : IAppRemoval {
 
         return errno;
     }
+
+    const int  CurrentDirectory = -100;
+    const uint RenameNoReplace  = 1;
+    const int  InvalidArgument  = 22;
+
+    [LibraryImport("libc", EntryPoint = "renameat2", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
+    private static partial int RenameAt2Native(int fromDirectory, string from, int toDirectory, string to, uint flags);
 
     [LibraryImport("libc", EntryPoint = "link", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
     private static partial int LinkNative(string from, string to);
