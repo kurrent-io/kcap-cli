@@ -22,7 +22,7 @@ runs:
         channel=$(sed -n 's/.*"version": *"\([0-9]*\.[0-9]*\)\..*/\1/p' global.json | head -n 1)
         version=$(curl -fsSL --retry 3 "https://builds.dotnet.microsoft.com/dotnet/release-metadata/$channel/releases.json" \
           | grep -o '"latest-sdk": *"[^"]*"' | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/') || version=""
-        echo "SDK: ${version:-the channel's latest, from global.json}"
+        echo "SDK: ${version:-none resolved, global.json decides}"
         echo "version=$version" >> "$GITHUB_OUTPUT"
 
     - uses: actions/setup-dotnet@v6
