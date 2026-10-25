@@ -123,6 +123,9 @@ sealed class CaptureServerConnection() : ServerConnection(
     public List<(string AgentId, string? Transport)> AgentRegisteredTransports { get; } = [];
     public List<(string AgentId, string? Vendor)> AgentRegisteredVendors { get; } = [];
 
+    /// <summary>The account each registration named, in call order.</summary>
+    public List<(string AgentId, string? Directory, string? AccountId, string? Label)> AgentRegisteredAccounts { get; } = [];
+
     /// <summary>The start title echoed on each registration, in call order.</summary>
     public List<(string AgentId, AgentStartTitle? Title)> AgentRegisteredTitles { get; } = [];
 
@@ -135,7 +138,8 @@ sealed class CaptureServerConnection() : ServerConnection(
     public override async Task<AgentRegisteredResponse> AgentRegisteredAsync(
         string  agentId,              string? prompt, string? model, string? effort, string? repoPath,
         string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null,
-        string? runtimeTransport = null, string? vendor = null, AgentStartTitle? title = null, string? continuesAgentId = null) {
+        string? runtimeTransport = null, string? vendor = null, AgentStartTitle? title = null, string? continuesAgentId = null,
+        string? accountDirectory = null, string? accountId = null, string? accountLabel = null) {
         AgentRegisteredCallCount++;
         lock (AgentRegisteredContinues) AgentRegisteredContinues.Add((agentId, continuesAgentId));
         lock (AgentRegisteredTitles) AgentRegisteredTitles.Add((agentId, title));
@@ -144,6 +148,7 @@ sealed class CaptureServerConnection() : ServerConnection(
         lock (AgentRegisteredPostures) AgentRegisteredPostures.Add((agentId, sandboxPolicy, approvalPolicy));
         lock (AgentRegisteredTransports) AgentRegisteredTransports.Add((agentId, runtimeTransport));
         lock (AgentRegisteredVendors) AgentRegisteredVendors.Add((agentId, vendor));
+        lock (AgentRegisteredAccounts) AgentRegisteredAccounts.Add((agentId, accountDirectory, accountId, accountLabel));
 
         AgentRegisteredEntered?.TrySetResult();
         if (AgentRegisteredGate is { } gate) await gate.Task.ConfigureAwait(false);

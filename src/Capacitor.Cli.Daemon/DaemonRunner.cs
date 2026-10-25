@@ -98,6 +98,11 @@ public static partial class DaemonRunner {
         // Below the carrier scrub: this reads every vendor's override variable, and the scrub above
         // must run before anything reads the environment.
         var harnesses = Core.Harness.HarnessRegistry.FromEnvironment(userHome, binaries);
+        config.Accounts           = Core.Accounts.AccountStore.Beside(paths);
+        config.DefaultDirectories = new Dictionary<HarnessId, string> {
+            [HarnessId.Claude] = harnesses.Of<Core.Harness.Claude.ClaudeHarness>().Paths.Home,
+            [HarnessId.Codex]  = harnesses.Of<Core.Harness.Codex.CodexHarness>().Paths.Home,
+        }.ToFrozenDictionary();
 
         // Resolve server URL + active profile. The CLI does this in its own
         // Program.cs, but the daemon is a separate process so its statics start
@@ -463,13 +468,14 @@ public static partial class DaemonRunner {
                     ?? throw new InvalidOperationException("No IHostedAgentLauncher registered for vendor 'claude'"),
                 sp.GetRequiredService<IPtyProcessFactory>(),
                 sp.GetRequiredService<ILogger<PtyHostedAgentRuntimeFactory>>(),
-                sp.GetRequiredService<TimeProvider>()
+                sp.GetRequiredService<TimeProvider>(),
+                config.Home
             )
         );
         // Codex is the ONE vendor with two transports. The composite factory routes review-flow
         // launches to codex app-server when this daemon resolved it active (config.CodexAppServerActive),
         // and delegates everything else — every interactive launch, and all launches under the PTY
-        // default — to the wrapped PTY factory, byte-identically to before.
+        // default — to the wrapped PTY factory.
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp => {
             var codexLauncher = sp.GetServices<IHostedAgentLauncher>().SingleOrDefault(l => l.Vendor == "codex")
                     ?? throw new InvalidOperationException("No IHostedAgentLauncher registered for vendor 'codex'");
@@ -477,7 +483,8 @@ public static partial class DaemonRunner {
                 codexLauncher,
                 sp.GetRequiredService<IPtyProcessFactory>(),
                 sp.GetRequiredService<ILogger<PtyHostedAgentRuntimeFactory>>(),
-                sp.GetRequiredService<TimeProvider>());
+                sp.GetRequiredService<TimeProvider>(),
+                config.Home);
             return new Harness.Codex.CodexHostedAgentRuntimeFactory(
                 (Harness.Codex.CodexLauncher) codexLauncher, pty,
                 sp.GetRequiredService<DaemonConfig>(),
@@ -626,6 +633,10 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton<VendorCliWatcher>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<VendorCliWatcher>());
 
+        builder.Services.AddSingleton<AccountsPublisher>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<AccountsPublisher>());
+        builder.Services.AddSingleton<AccountsIpc>();
+
         builder.Services.AddSingleton<RepoStoreWatcher>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<RepoStoreWatcher>());
 
@@ -687,13 +698,16 @@ public static partial class DaemonRunner {
         // Every advertised vendor is recorded, since a catalog-only vendor is watched too.
         config.UnattendedVendorBaselines =
             FingerprintUnattendedVendors(config.Binaries, runtimeFactories, config.SupportedVendors);
-        config.VendorCatalogBaselines =
-            VendorModelCatalogs.FingerprintCatalogPaths(runtimeFactories, config.SupportedVendors);
         config.UnattendedVendorCapabilities =
             ComputeUnattendedVendorCapabilities(runtimeFactories, config, config.UnattendedVendors);
-        config.VendorModels =
-            await VendorModelCatalogs.ProbeAsync(runtimeFactories, config.SupportedVendors, CancellationToken.None);
-        foreach (var (vendor, models) in config.VendorModels) LogVendorModels(logger, vendor, models.Length);
+
+        // Built before the host starts, so the per-account probe and the vendor watcher's first watch
+        // set read the same accounts.
+        var accounts = host.Services.GetRequiredService<AccountsPublisher>();
+        await accounts.RebuildAsync(CancellationToken.None);
+        await ProbeVendorCatalogsAsync(config, runtimeFactories, accounts.Current, CancellationToken.None);
+        foreach (var (vendor, models) in config.VendorModels!) LogVendorModels(logger, vendor, models.Length);
+        foreach (var (id, models) in config.VendorModelsByAccount!) LogVendorModels(logger, VendorModelCatalogs.AccountKey(id), models.Length);
         LogStartupPhase(logger, "vendors probed");
 
         // Which build of each unattended vendor was installed when this daemon started. Recorded at
@@ -737,6 +751,9 @@ public static partial class DaemonRunner {
 
         var lifetime   = host.Services.GetRequiredService<IHostApplicationLifetime>();
         var connection = host.Services.GetRequiredService<ServerConnection>();
+
+        connection.GetAccountsSnapshot = () => accounts.Current;
+        accounts.SendToServer          = connection.AccountsChangedAsync;
 
         // Death-rattle instrumentation: without these, a daemon dying mid-run
         // (signal, OOM, unobserved-task FailFast, native crash) leaves no trace
@@ -1620,6 +1637,26 @@ public static partial class DaemonRunner {
                     : null));
         }
         return capabilities;
+    }
+
+    /// <summary>Fingerprints, then probes, each advertised vendor's catalog and, for the vendor whose
+    /// catalog depends on the account, each registered account's catalog under its own directory.</summary>
+    internal static async Task ProbeVendorCatalogsAsync(
+            DaemonConfig config, IReadOnlyList<IHostedAgentRuntimeFactory> factories,
+            Core.Accounts.AccountsSnapshotDto? accounts, CancellationToken ct) {
+        var supported      = config.SupportedVendors ?? [];
+        var accountFactory = VendorModelCatalogs.AccountFactory(factories, supported);
+        var perAccount     = accountFactory is null ? [] : VendorModelCatalogs.AccountsIn(accounts);
+
+        config.VendorCatalogBaselines = VendorModelCatalogs.FingerprintCatalogPaths(factories, supported, accountFactory, perAccount);
+        var vendorProbe  = VendorModelCatalogs.ProbeAsync(factories, supported, ct);
+        var accountProbe = accountFactory is null
+            ? Task.FromResult(new Dictionary<string, VendorModelOption[]>(StringComparer.Ordinal))
+            : VendorModelCatalogs.ProbeByAccountAsync(accountFactory, perAccount, ct);
+        await Task.WhenAll(vendorProbe, accountProbe);
+
+        config.VendorModels          = await vendorProbe;
+        config.VendorModelsByAccount = await accountProbe;
     }
 
     /// <summary>Fingerprints each advertised vendor's binary through the factory that launches it —

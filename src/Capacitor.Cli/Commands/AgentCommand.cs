@@ -1,11 +1,13 @@
 using System.Net.Sockets;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Resume;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Local;
+using Capacitor.Cli.Services;
 
 namespace Capacitor.Cli.Commands;
 
@@ -24,8 +26,12 @@ internal readonly record struct AgentRow(
 /// terminal over the daemon's local control socket.
 /// </summary>
 internal sealed class AgentCommand(
-        DaemonStore store, ConfigRoot config, ProfileContext profiles, UserHome home,
-        HarnessRegistry harnesses, BinaryProbe binaries, WorkingDirectory workdir, TimeProvider time) {
+        DaemonStore store, AccountStore accounts, ConfigRoot config, ProfileContext profiles, UserHome home,
+        HarnessRegistry harnesses, BinaryProbe binaries, WorkingDirectory workdir, TimeProvider time, StandardStreams console) {
+    const string AccountsCapability = "accounts/1";
+
+    static readonly TimeSpan HelloTimeout = TimeSpan.FromSeconds(5);
+
     internal static readonly string[] KnownSubcommands = ["start", "ls", "stop", "attach", "resume"];
 
     /// Verbs that only ever belonged to the pre-rename `agent` daemon group, minus the
@@ -51,8 +57,8 @@ internal sealed class AgentCommand(
         // answering them with a bare usage line is how a healthy daemon reads as dead
         // mid-diagnosis.
         if (DaemonOnlySubcommands.Contains(sub)) {
-            await Console.Error.WriteLineAsync($"kcap agent: unknown subcommand '{sub}'");
-            await Console.Error.WriteLineAsync($"`{sub}` manages the daemon — run `kcap daemon {sub}`.");
+            await console.Error.WriteLineAsync($"kcap agent: unknown subcommand '{sub}'");
+            await console.Error.WriteLineAsync($"`{sub}` manages the daemon — run `kcap daemon {sub}`.");
 
             return 1;
         }
@@ -64,9 +70,9 @@ internal sealed class AgentCommand(
             case "attach": return await AttachAsync(rest);
             case "resume": return await ResumeAsync(rest);
             default:
-                await Console.Error.WriteLineAsync($"kcap agent: unknown subcommand '{sub}'");
-                await Console.Error.WriteLineAsync($"Usage: kcap agent <{string.Join('|', KnownSubcommands)}>");
-                await Console.Error.WriteLineAsync("Run `kcap agent --help` for details.");
+                await console.Error.WriteLineAsync($"kcap agent: unknown subcommand '{sub}'");
+                await console.Error.WriteLineAsync($"Usage: kcap agent <{string.Join('|', KnownSubcommands)}>");
+                await console.Error.WriteLineAsync("Run `kcap agent --help` for details.");
 
                 return 1;
         }
@@ -76,41 +82,83 @@ internal sealed class AgentCommand(
         // ls/stop/attach only ever talk to the local socket, so the group is offline-callable.
         // Starting an agent is the one subcommand that needs a server for the daemon to record to.
         if (baseUrl is null) {
-            await Console.Error.WriteLineAsync("kcap agent start: no server configured. Run `kcap setup` or set KCAP_URL.");
+            await console.Error.WriteLineAsync("kcap agent start: no server configured. Run `kcap setup` or set KCAP_URL.");
 
             return 1;
         }
 
         var parsed = AgentStartArgs.Parse(args);
         if (parsed.Error is not null) {
-            await Console.Error.WriteLineAsync($"kcap agent start: {parsed.Error}");
+            await console.Error.WriteLineAsync($"kcap agent start: {parsed.Error}");
 
             return 1;
+        }
+
+        ResolvedAccount? account = null;
+        if (parsed.Account is not null) {
+            account = await ResolveAccountAsync(parsed);
+            if (account is null) return 1;
         }
 
         var name = ResolveName(parsed.DaemonName);
         if (!await EnsureDaemonAsync(name)) return 1;
 
+        // A daemon without accounts/1 never reads the account id and would start the agent under its default account.
+        if (account is not null && !await DaemonChoosesAccountsAsync(name)) {
+            await console.Error.WriteLineAsync("kcap agent start: this daemon does not support choosing an account; update kcap on this machine");
+
+            return 1;
+        }
+
         var sock = store.SocketPath(name);
         var work = parsed.Worktree ? WorkLocation.OwnedWorktree : WorkLocation.BorrowedCwd;
         var (cols, rows) = TermSize();
-        var spawn = FrameCodec.Spawn(parsed.Vendor, work, parsed.Private, workdir.Path, parsed.Passthrough, cols, rows, parsed.StartTitle);
+        var spawn = FrameCodec.Spawn(
+            parsed.Vendor, work, parsed.Private, workdir.Path, parsed.Passthrough, cols, rows, parsed.StartTitle, account?.AccountId);
 
         return parsed.Detached
             ? await SpawnDetachedAsync(sock, spawn)
             : await LocalAgentClient.RunAsync(sock, spawn, time, CancellationToken.None);
     }
 
+    /// <summary>Null after printing why the <c>--account</c> value cannot be used.</summary>
+    async Task<ResolvedAccount?> ResolveAccountAsync(AgentStartArgs parsed) {
+        AccountRegistry registry;
+        try {
+            registry = accounts.Load();
+        } catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) {
+            await console.Error.WriteLineAsync($"kcap agent start: could not read the kcap account registry in {accounts.Directory}: {ex.Message}");
+
+            return null;
+        }
+
+        if (HarnessNames.From(parsed.Vendor) is not ({ } vendor and (HarnessId.Claude or HarnessId.Codex))) {
+            await console.Error.WriteLineAsync($"kcap agent start: cannot use --account with {parsed.Vendor}: accounts apply to claude and codex only");
+
+            return null;
+        }
+
+        var outcome = AccountResolution.ResolveArgument(registry, vendor, AccountDirectory.ExpandHome(parsed.Account!, home));
+        if (outcome.Account is not null) return outcome.Account;
+
+        await console.Error.WriteLineAsync($"kcap agent start: {outcome.Refusal}");
+
+        return null;
+    }
+
+    async Task<bool> DaemonChoosesAccountsAsync(string name) =>
+        (await HelloProbe.RunAsync(store, name, time, HelloTimeout)).Capabilities.Contains(AccountsCapability);
+
     async Task<int> AttachAsync(string[] args) {
         if (args.Length == 0 || args[0].StartsWith('-')) {
-            await Console.Error.WriteLineAsync("usage: kcap agent attach <agent-id> [--daemon <name>]");
+            await console.Error.WriteLineAsync("usage: kcap agent attach <agent-id> [--daemon <name>]");
 
             return 1;
         }
 
         var (daemonName, daemonError) = DaemonNameFrom(args);
         if (daemonError is not null) {
-            await Console.Error.WriteLineAsync($"kcap agent: {daemonError}");
+            await console.Error.WriteLineAsync($"kcap agent: {daemonError}");
 
             return 1;
         }
@@ -118,7 +166,7 @@ internal sealed class AgentCommand(
         var sock = store.SocketPath(ResolveName(daemonName));
 
         if (!File.Exists(sock)) {
-            await Console.Error.WriteLineAsync($"kcap: no daemon socket at {sock}");
+            await console.Error.WriteLineAsync($"kcap: no daemon socket at {sock}");
 
             return 1;
         }
@@ -136,14 +184,14 @@ internal sealed class AgentCommand(
 
     async Task<int> ResumeAsync(string[] args) {
         if (args.Length == 0 || args[0].StartsWith('-')) {
-            await Console.Error.WriteLineAsync("usage: kcap agent resume <agent-id> [--daemon <name>]");
+            await console.Error.WriteLineAsync("usage: kcap agent resume <agent-id> [--daemon <name>]");
 
             return 1;
         }
 
         var (daemonName, daemonError) = DaemonNameFrom(args);
         if (daemonError is not null) {
-            await Console.Error.WriteLineAsync($"kcap agent: {daemonError}");
+            await console.Error.WriteLineAsync($"kcap agent: {daemonError}");
 
             return 1;
         }
@@ -151,7 +199,7 @@ internal sealed class AgentCommand(
         var sock = store.SocketPath(ResolveName(daemonName));
 
         if (!File.Exists(sock)) {
-            await Console.Error.WriteLineAsync($"kcap: no daemon socket at {sock}");
+            await console.Error.WriteLineAsync($"kcap: no daemon socket at {sock}");
 
             return 1;
         }
@@ -169,36 +217,36 @@ internal sealed class AgentCommand(
 
             switch (resp) {
                 case { Type: FrameType.AgentResumeAck, Text: "resuming" }:
-                    Console.WriteLine($"Resuming {agentId}.");
+                    console.Out.WriteLine($"Resuming {agentId}.");
 
                     return 0;
                 case { Type: FrameType.AgentResumeAck, Text: "not_interrupted" }:
-                    await Console.Error.WriteLineAsync($"{agentId} is not interrupted.");
+                    await console.Error.WriteLineAsync($"{agentId} is not interrupted.");
 
                     return 1;
                 case { Type: FrameType.AgentResumeAck, Text: "unknown" }:
-                    await Console.Error.WriteLineAsync($"No agent {agentId}.");
+                    await console.Error.WriteLineAsync($"No agent {agentId}.");
 
                     return 1;
                 case { Type: FrameType.AgentResumeAck, Text: { } blocked } when blocked.StartsWith("blocked:", StringComparison.Ordinal):
-                    await Console.Error.WriteLineAsync($"{agentId} cannot be resumed: {blocked["blocked:".Length..]}.");
+                    await console.Error.WriteLineAsync($"{agentId} cannot be resumed: {blocked["blocked:".Length..]}.");
 
                     return 1;
                 case { Type: FrameType.Error }:
-                    await Console.Error.WriteLineAsync($"kcap: {resp.Text}");
+                    await console.Error.WriteLineAsync($"kcap: {resp.Text}");
 
                     return 1;
                 case null:
-                    await Console.Error.WriteLineAsync("kcap: this daemon is too old for `agent resume` — restart it with `kcap daemon restart`");
+                    await console.Error.WriteLineAsync("kcap: this daemon is too old for `agent resume` — restart it with `kcap daemon restart`");
 
                     return 1;
                 default:
-                    await Console.Error.WriteLineAsync($"kcap: unexpected daemon response to resume ({resp.Type} {resp.Text})");
+                    await console.Error.WriteLineAsync($"kcap: unexpected daemon response to resume ({resp.Type} {resp.Text})");
 
                     return 1;
             }
         } catch (Exception ex) when (ex is SocketException or IOException) {
-            await Console.Error.WriteLineAsync($"kcap: cannot reach daemon: {ex.Message}");
+            await console.Error.WriteLineAsync($"kcap: cannot reach daemon: {ex.Message}");
 
             return 1;
         }
@@ -211,21 +259,21 @@ internal sealed class AgentCommand(
         var hasId = args.Length > 0 && !args[0].StartsWith('-');
 
         if (all && hasId) {
-            await Console.Error.WriteLineAsync("kcap agent stop: cannot combine an agent id with --all");
+            await console.Error.WriteLineAsync("kcap agent stop: cannot combine an agent id with --all");
 
             return 1;
         }
 
         if (!all && !hasId) {
-            await Console.Error.WriteLineAsync("usage: kcap agent stop <agent-id> [--force] [--daemon <name>]");
-            await Console.Error.WriteLineAsync("       kcap agent stop --all [-y] [--force] [--daemon <name>]");
+            await console.Error.WriteLineAsync("usage: kcap agent stop <agent-id> [--force] [--daemon <name>]");
+            await console.Error.WriteLineAsync("       kcap agent stop --all [-y] [--force] [--daemon <name>]");
 
             return 1;
         }
 
         var (daemonName, daemonError) = DaemonNameFrom(args);
         if (daemonError is not null) {
-            await Console.Error.WriteLineAsync($"kcap agent: {daemonError}");
+            await console.Error.WriteLineAsync($"kcap agent: {daemonError}");
 
             return 1;
         }
@@ -234,7 +282,7 @@ internal sealed class AgentCommand(
         var sock = store.SocketPath(name);
 
         if (!File.Exists(sock)) {
-            await Console.Error.WriteLineAsync($"kcap: no daemon socket at {sock}");
+            await console.Error.WriteLineAsync($"kcap: no daemon socket at {sock}");
 
             return 1;
         }
@@ -246,14 +294,14 @@ internal sealed class AgentCommand(
             if (agents is null) return 1;
 
             if (agents.Count == 0) {
-                Console.WriteLine("No agents.");
+                console.Out.WriteLine("No agents.");
 
                 return 0;
             }
 
             agents = [.. agents.Where(a => a.HasProcess)];
             if (agents.Count == 0) {
-                Console.WriteLine("No agents.");
+                console.Out.WriteLine("No agents.");
 
                 return 0;
             }
@@ -262,33 +310,33 @@ internal sealed class AgentCommand(
             targets = force ? agents.Select(a => a.Id).ToArray() : stoppable;
 
             if (targets.Length == 0) {
-                Console.WriteLine(protectedIds.Length > 0
+                console.Out.WriteLine(protectedIds.Length > 0
                     ? $"No agents to stop. {protectedIds.Length} review agent(s) skipped — pass --force to include them."
                     : "No agents.");
 
                 return 0;
             }
 
-            Console.WriteLine($"Found {targets.Length} agents:");
+            console.Out.WriteLine($"Found {targets.Length} agents:");
             foreach (var a in agents.Where(a => targets.Contains(a.Id) && !protectedIds.Contains(a.Id)))
-                Console.WriteLine($"  • {a.Id}  {a.Repo}");
+                console.Out.WriteLine($"  • {a.Id}  {a.Repo}");
 
             // Both branches label protected rows with their Kind before the [y/N] prompt, so the
             // blast radius of --force is as visible as the default skip list is.
             if (protectedIds.Length > 0) {
-                Console.WriteLine(force
+                console.Out.WriteLine(force
                     ? $"Including {protectedIds.Length} review agent(s):"
                     : $"Skipping {protectedIds.Length} review agent(s) — pass --force to include them:");
                 foreach (var a in agents.Where(a => protectedIds.Contains(a.Id)))
-                    Console.WriteLine($"  • {a.Id}  {a.Kind}  {a.Repo}");
+                    console.Out.WriteLine($"  • {a.Id}  {a.Kind}  {a.Repo}");
             }
 
             if (!yes) {
-                await Console.Out.WriteAsync($"Stop {targets.Length}? [y/N] ");
-                var reply = await Console.In.ReadLineAsync();
+                await console.Out.WriteAsync($"Stop {targets.Length}? [y/N] ");
+                var reply = await console.In.ReadLineAsync();
 
                 if (!string.Equals(reply?.Trim(), "y", StringComparison.OrdinalIgnoreCase)) {
-                    await Console.Out.WriteLineAsync("Cancelled.");
+                    await console.Out.WriteLineAsync("Cancelled.");
 
                     return 0;
                 }
@@ -326,7 +374,7 @@ internal sealed class AgentCommand(
         })];
     }
 
-    static async Task<int> SendStopAsync(string sock, string agentId, string daemonName, bool force, bool missingIsStopped) {
+    async Task<int> SendStopAsync(string sock, string agentId, string daemonName, bool force, bool missingIsStopped) {
         try {
             using var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
             await socket.ConnectAsync(new UnixDomainSocketEndPoint(sock));
@@ -338,25 +386,25 @@ internal sealed class AgentCommand(
             switch (resp?.Type) {
                 case FrameType.StopAck:
                     var outcomes = ReadStopAck(resp.Text, agentId, missingIsStopped);
-                    if (outcomes.Count == 0) { Console.WriteLine("No agents."); return 0; }
+                    if (outcomes.Count == 0) { console.Out.WriteLine("No agents."); return 0; }
 
                     foreach (var (id, outcome) in outcomes) {
                         switch (outcome) {
-                            case StopAckOutcome.Stopped:        Console.WriteLine($"Stopped {id}."); break;
-                            case StopAckOutcome.Skipped:        Console.WriteLine($"Skipped {id} — review agent; pass --force to stop it."); break;
-                            case StopAckOutcome.AlreadyStopped: Console.WriteLine($"Already stopped {id}."); break;
-                            case StopAckOutcome.NoSuchAgent:    Console.Error.WriteLine($"kcap: no such agent {id}"); break;
-                            default:                            Console.Error.WriteLine($"Failed to stop {id} — see `kcap daemon logs`."); break;
+                            case StopAckOutcome.Stopped:        console.Out.WriteLine($"Stopped {id}."); break;
+                            case StopAckOutcome.Skipped:        console.Out.WriteLine($"Skipped {id} — review agent; pass --force to stop it."); break;
+                            case StopAckOutcome.AlreadyStopped: console.Out.WriteLine($"Already stopped {id}."); break;
+                            case StopAckOutcome.NoSuchAgent:    console.Error.WriteLine($"kcap: no such agent {id}"); break;
+                            default:                            console.Error.WriteLine($"Failed to stop {id} — see `kcap daemon logs`."); break;
                         }
                     }
 
                     var skipped = outcomes.Count(o => o.Outcome == StopAckOutcome.Skipped);
                     if (skipped > 0)
-                        Console.WriteLine($"{skipped} review agent(s) left running — pass --force to stop them.");
+                        console.Out.WriteLine($"{skipped} review agent(s) left running — pass --force to stop them.");
 
                     return outcomes.Any(o => o.Outcome.IsFailure()) ? 1 : 0;
                 case FrameType.Error:
-                    await Console.Error.WriteLineAsync($"kcap: {resp.Text}");
+                    await console.Error.WriteLineAsync($"kcap: {resp.Text}");
 
                     return 1;
                 case null:
@@ -365,31 +413,31 @@ internal sealed class AgentCommand(
                     // here is the restart flag, not the stop flag — this daemon is guaranteed
                     // busy since the stop it never understood never ran, so `restart` needs its
                     // own override to proceed.
-                    await Console.Error.WriteLineAsync(
+                    await console.Error.WriteLineAsync(
                         $"kcap: this daemon is too old for `agent stop` — restart it with `kcap daemon restart --force --name {daemonName}`");
 
                     return 1;
                 default:
-                    await Console.Error.WriteLineAsync($"kcap: unexpected daemon response to stop ({resp.Type})");
+                    await console.Error.WriteLineAsync($"kcap: unexpected daemon response to stop ({resp.Type})");
 
                     return 1;
             }
         } catch (Exception ex) when (ex is SocketException or IOException) {
-            await Console.Error.WriteLineAsync($"kcap: cannot reach daemon: {ex.Message}");
+            await console.Error.WriteLineAsync($"kcap: cannot reach daemon: {ex.Message}");
 
             return 1;
         }
     }
 
     /// <summary>Resolves an id or prefix, printing the reason and returning null on failure.</summary>
-    static async Task<string?> ResolveOrReportAsync(string sock, string given) {
+    async Task<string?> ResolveOrReportAsync(string sock, string given) {
         if (IsFullAgentId(given)) return given.ToLowerInvariant(); // skip the round-trip; ResolveAgentId agrees
 
         var agents = await FetchAgentsAsync(sock);
         if (agents is null) return null;
 
         var (id, error) = ResolveAgentId(agents, given);
-        if (error is not null) await Console.Error.WriteLineAsync($"kcap: {error}");
+        if (error is not null) await console.Error.WriteLineAsync($"kcap: {error}");
 
         return id;
     }
@@ -397,7 +445,7 @@ internal sealed class AgentCommand(
     async Task<int> ListAsync(string[] args) {
         var (daemonName, daemonError) = DaemonNameFrom(args);
         if (daemonError is not null) {
-            await Console.Error.WriteLineAsync($"kcap agent: {daemonError}");
+            await console.Error.WriteLineAsync($"kcap agent: {daemonError}");
 
             return 1;
         }
@@ -405,7 +453,7 @@ internal sealed class AgentCommand(
         var sock = store.SocketPath(ResolveName(daemonName));
 
         if (!File.Exists(sock)) {
-            Console.WriteLine("No local daemon running.");
+            console.Out.WriteLine("No local daemon running.");
 
             return 0;
         }
@@ -414,12 +462,12 @@ internal sealed class AgentCommand(
         if (agents is null) return 1;
 
         if (agents.Count == 0) {
-            Console.WriteLine("No agents.");
+            console.Out.WriteLine("No agents.");
 
             return 0;
         }
 
-        foreach (var line in FormatAgentTable(agents)) Console.WriteLine(line);
+        foreach (var line in FormatAgentTable(agents)) console.Out.WriteLine(line);
 
         return 0;
     }
@@ -465,7 +513,7 @@ internal sealed class AgentCommand(
     /// non-answer: a closed connection, an Error frame, or an unexpected frame type. Only a real
     /// AgentList frame with an empty payload is a genuinely empty table, so only that maps to [].
     /// </summary>
-    static async Task<IReadOnlyList<AgentRow>?> FetchAgentsAsync(string sock) {
+    async Task<IReadOnlyList<AgentRow>?> FetchAgentsAsync(string sock) {
         var rows = await FetchAgentTableAsync(sock, LocalFrame.ListWithState());
 
         // A current daemon never answers the state request with six columns; one that predates it
@@ -476,7 +524,7 @@ internal sealed class AgentCommand(
         return rows?.Select(r => r.Row).ToList();
     }
 
-    static async Task<IReadOnlyList<(AgentRow Row, int Columns)>?> FetchAgentTableAsync(string sock, LocalFrame request) {
+    async Task<IReadOnlyList<(AgentRow Row, int Columns)>?> FetchAgentTableAsync(string sock, LocalFrame request) {
         try {
             using var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
             await socket.ConnectAsync(new UnixDomainSocketEndPoint(sock));
@@ -486,31 +534,31 @@ internal sealed class AgentCommand(
             var resp = await FrameCodec.ReadAsync(stream, default);
 
             if (resp is null) {
-                await Console.Error.WriteLineAsync("kcap: daemon closed the connection without replying to list");
+                await console.Error.WriteLineAsync("kcap: daemon closed the connection without replying to list");
 
                 return null;
             }
 
             if (resp.Type == FrameType.Error) {
-                await Console.Error.WriteLineAsync($"kcap: {resp.Text}");
+                await console.Error.WriteLineAsync($"kcap: {resp.Text}");
 
                 return null;
             }
 
             if (resp.Type != FrameType.AgentList) {
-                await Console.Error.WriteLineAsync($"kcap: unexpected daemon response to list ({resp.Type})");
+                await console.Error.WriteLineAsync($"kcap: unexpected daemon response to list ({resp.Type})");
 
                 return null;
             }
 
             if (ParseAgentTable(resp.Text) is { } table) return table;
 
-            await Console.Error.WriteLineAsync(
+            await console.Error.WriteLineAsync(
                 "kcap: daemon sent a malformed agent table (unexpected column count or empty id); refusing to act on it");
 
             return null;
         } catch (Exception ex) when (ex is SocketException or IOException) {
-            await Console.Error.WriteLineAsync($"kcap: cannot reach daemon: {ex.Message}");
+            await console.Error.WriteLineAsync($"kcap: cannot reach daemon: {ex.Message}");
 
             return null;
         }
@@ -518,7 +566,7 @@ internal sealed class AgentCommand(
 
     // ── helpers ──────────────────────────────────────────────────────────
 
-    static async Task<int> SpawnDetachedAsync(string sock, LocalFrame spawn) {
+    async Task<int> SpawnDetachedAsync(string sock, LocalFrame spawn) {
         using var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
         await socket.ConnectAsync(new UnixDomainSocketEndPoint(sock));
         await using var stream = new NetworkStream(socket, ownsSocket: false);
@@ -529,15 +577,15 @@ internal sealed class AgentCommand(
         switch (f?.Type) {
             case FrameType.Attached:
                 var (id, _) = FrameCodec.Attached(f);
-                Console.WriteLine($"Started agent {id} (detached). Attach with: kcap agent attach {id}");
+                console.Out.WriteLine($"Started agent {id} (detached). Attach with: kcap agent attach {id}");
 
                 return 0;
             case FrameType.Error:
-                await Console.Error.WriteLineAsync($"kcap: {f.Text}");
+                await console.Error.WriteLineAsync($"kcap: {f.Text}");
 
                 return 1;
             default:
-                await Console.Error.WriteLineAsync("kcap: unexpected daemon response to spawn");
+                await console.Error.WriteLineAsync("kcap: unexpected daemon response to spawn");
 
                 return 1;
         }
@@ -548,8 +596,8 @@ internal sealed class AgentCommand(
         var sock = store.SocketPath(name);
         if (await CanConnectAsync(sock)) return true;
 
-        await Console.Error.WriteLineAsync($"kcap: starting daemon '{name}'…");
-        await new DaemonCommands(store, config, profiles, home, harnesses, binaries, time)
+        await console.Error.WriteLineAsync($"kcap: starting daemon '{name}'…");
+        await new DaemonCommands(store, config, profiles, home, harnesses, binaries, time, console)
             .HandleAsync(["daemon", "start", "-d", "--name", name]);
 
         var deadline = time.GetUtcNow().UtcDateTime.AddSeconds(15);
@@ -558,7 +606,7 @@ internal sealed class AgentCommand(
             await Task.Delay(TimeSpan.FromMilliseconds(250), time);
         }
 
-        await Console.Error.WriteLineAsync("kcap: daemon did not come up in time (check `kcap daemon logs`).");
+        await console.Error.WriteLineAsync("kcap: daemon did not come up in time (check `kcap daemon logs`).");
 
         return false;
     }

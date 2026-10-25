@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Text;
 using System.Text.Json;
 using Capacitor.Cli.Core;
@@ -165,7 +166,8 @@ internal partial class AgentOrchestrator {
                 UsageLimit: a.Status == "Running" ? a.UsageLimit : null,
                 TerminalDialog: a.Status == "Running" ? a.TerminalDialog : null,
                 WorkingSince: a.Status == "Running" && a.ActivityClock.WorkingFor is { } working
-                    ? (_time.GetUtcNow() - working).UtcDateTime : null))];
+                    ? (_time.GetUtcNow() - working).UtcDateTime : null,
+                AccountDirectory: a.Account?.Directory, AccountId: a.Account?.AccountId, AccountLabel: a.Account?.Label))];
 
     /// The checkout is resolved as the live agent's is, so a row keeps its rail group across the handoff.
     static AgentStatusDto LedgerStatusRow(ResumeLedgerEntry entry, string status) {
@@ -182,7 +184,8 @@ internal partial class AgentOrchestrator {
             SessionId: entry.SessionId,
             Branch: string.IsNullOrWhiteSpace(worktree.Branch) ? null : worktree.Branch,
             TranscriptFormat: entry.TranscriptFormat,
-            Interruption: entry.State == ResumeState.Interrupted ? entry.LastError : null);
+            Interruption: entry.State == ResumeState.Interrupted ? entry.LastError : null,
+            AccountDirectory: entry.Launch.AccountDirectory, AccountId: entry.Launch.AccountId, AccountLabel: entry.Launch.AccountLabel);
     }
 
     /// <summary>
@@ -484,7 +487,7 @@ internal partial class AgentOrchestrator {
     }
 
     async Task HandleAdmittedLocalSpawnAsync(LocalFrame spawn, Stream stream, CancellationToken ct) {
-        var (vendor, work, isPrivate, cwd, args, cols, rows, startTitle) = FrameCodec.Spawn(spawn);
+        var (vendor, work, isPrivate, cwd, args, cols, rows, startTitle, accountId) = FrameCodec.Spawn(spawn);
 
         if (!_launchers.TryGetValue(vendor, out var launcher)) {
             await FrameCodec.WriteAsync(stream, LocalFrame.Error($"Unknown vendor: {vendor}"), ct);
@@ -493,6 +496,13 @@ internal partial class AgentOrchestrator {
 
         if (!Directory.Exists(cwd)) {
             await FrameCodec.WriteAsync(stream, LocalFrame.Error($"Directory does not exist: {cwd}"), ct);
+            return;
+        }
+
+        var resolution = ResolveAccount(vendor, accountId);
+
+        if (resolution.Refusal is { } refusal) {
+            await FrameCodec.WriteAsync(stream, LocalFrame.Error(refusal), ct);
             return;
         }
 
@@ -508,7 +518,8 @@ internal partial class AgentOrchestrator {
 
             var ctx = new LauncherContext(
                 agentId, cwd, worktree, Prompt: null, Model: "", Effort: null,
-                Tools: null, IsReview: false, IsReviewFlow: false, Review: null, ReviewLaunch: null
+                Tools: null, IsReview: false, IsReviewFlow: false, Review: null, ReviewLaunch: null,
+                Account: resolution.Account
             ) {
                 Work = work
             };
@@ -536,13 +547,17 @@ internal partial class AgentOrchestrator {
                 if (_permissionBridge.BaseUrl is { } bridgeUrl) env[HostedAgent.BridgeUrlVar] = bridgeUrl;
             }
 
+            var removeEnv = resolution.Account is { } account
+                ? VendorHomeEnv.Apply(env, vendor, account, _config.Home)
+                : FrozenSet<string>.Empty;
+
             spawnedAtUtc = _time.GetUtcNow().UtcDateTime;
-            var pty     = _ptyFactory.Spawn(launcher.CliPath, built.Args, worktree.Path, env, cols, rows);
+            var pty     = _ptyFactory.Spawn(launcher.CliPath, built.Args, worktree.Path, env, cols, rows, removeEnv);
             var runtime = new PtyHostedAgentRuntime(vendor, pty, _time, logger: _logger);
 
             var startedAtUtc = _time.GetUtcNow().UtcDateTime;
 
-            agent = new AgentInstance(agentId, null, "", null, cwd, vendor, runtime, worktree, new CancellationTokenSource()) {
+            agent = new AgentInstance(agentId, null, "", null, cwd, vendor, runtime, worktree, new CancellationTokenSource(), resolution.Account) {
                 CreatedAt = startedAtUtc, LastOutputAt = startedAtUtc,
                 // Every launch path must go through CreateActivityClock() so the stage-advance report
                 // wiring is attached by construction. Inert here today (a local spawn is PTY-only and

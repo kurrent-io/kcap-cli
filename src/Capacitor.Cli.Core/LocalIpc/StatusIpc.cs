@@ -39,7 +39,9 @@ public sealed record DaemonInfoDto(
     // credential is not the problem, and from a daemon that predates the field.
     string? Credential = null,
     // The profile the daemon resolved its server and sign-in from. Null from an older daemon.
-    string? Profile = null);
+    string? Profile = null,
+    // Same shape as VendorModels, keyed by registry id.
+    Dictionary<string, VendorModelOption[]>? VendorModelsByAccount = null);
 
 /// <summary>
 /// <see cref="Status"/> is the daemon's internal status string VERBATIM (PascalCase, open
@@ -111,7 +113,11 @@ public sealed record AgentStatusDto(
     string? Interruption = null,
     // UTC instant the daemon last saw the agent stop waiting, while Running and not waiting. Lets a
     // freshly built view show the turn's real elapsed time. Null from an older daemon.
-    DateTime? WorkingSince = null);
+    DateTime? WorkingSince = null,
+    // The account the agent runs under. Null from an older daemon.
+    string? AccountDirectory = null,
+    string? AccountId = null,
+    string? AccountLabel = null);
 
 /// Wire tokens for <see cref="AgentStatusDto.WorkLocation"/>, compared literally by every
 /// client, so they never change.

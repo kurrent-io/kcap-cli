@@ -13,7 +13,7 @@ public sealed class AccountStore(string directory) {
 
     public string Directory { get; } = directory;
 
-    string RegistryPath => Path.Combine(Directory, "accounts.json");
+    public string RegistryPath => Path.Combine(Directory, "accounts.json");
     string LockPath     => Path.Combine(Directory, "accounts.lock");
     string HostPath     => Path.Combine(Directory, "host.json");
 
@@ -59,12 +59,19 @@ public sealed class AccountStore(string directory) {
         catch (UnauthorizedAccessException) { return null; }
     }
 
-    public T Mutate<T>(Func<AccountRegistry, (AccountRegistry Next, T Result)> change) {
+    public T Mutate<T>(Func<AccountRegistry, (AccountRegistry Next, T Result)> change) => MutateWithRevision(change).Result;
+
+    /// <summary>Saves only when <c>Next</c> is a different reference from the registry it was given; a change
+    /// that keeps the reference writes nothing and reports the current revision.</summary>
+    public (T Result, long Revision) MutateWithRevision<T>(Func<AccountRegistry, (AccountRegistry Next, T Result)> change) {
         using var _ = Lock();
         var current = Load();
         var (next, result) = change(current);
-        if (!ReferenceEquals(next, current)) Save(next with { Revision = current.Revision + 1 });
-        return result;
+        if (ReferenceEquals(next, current)) return (result, current.Revision);
+
+        var saved = next with { Revision = current.Revision + 1 };
+        Save(saved);
+        return (result, saved.Revision);
     }
 
     public VendorAccount? Find(HarnessId vendor, string directory) =>
