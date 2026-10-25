@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using Capacitor.App.Platform.Linux;
 using Capacitor.Cli.Core;
 using Microsoft.Extensions.Time.Testing;
@@ -32,14 +33,11 @@ public class LinuxAppRemovalTests {
             [Tmp.PathTo("links-a"), Tmp.PathTo("links-b")], Tmp.PathTo("data", "Trash"), _time,
             libcRename ? null : rename ?? MoveWithoutCopying);
 
-    /// A rename within one filesystem: what rename(2) does there, without libc.
+    /// A move within one filesystem that never replaces what is there, as link(2) and unlink(2) do, without libc.
     static int MoveWithoutCopying(string from, string to) {
-        try {
-            File.Move(from, to);
-            return 0;
-        } catch (IOException) {
-            return 5;
-        }
+        if (File.Exists(to)) return 17;
+        File.Move(from, to);
+        return 0;
     }
 
     const int CrossDevice = 18;
@@ -104,21 +102,32 @@ public class LinuxAppRemovalTests {
         await Assert.That(Directory.EnumerateFileSystemEntries(Tmp.PathTo("data", "Trash", "info"))).IsEmpty();
     }
 
-    /// <summary>A move that fails part way leaves nothing behind in the Trash, and the image in place.</summary>
+    /// <summary>A name is free only when the Trash holds neither its file nor its info. A file another tool left
+    /// with no info entry keeps its place, and the image takes the next name.</summary>
     [Test]
-    public async Task A_failed_move_leaves_no_partial_file_in_the_trash() {
+    public async Task A_file_already_in_the_trash_without_its_info_keeps_its_name() {
         var image = Tmp.CreateFile("apps/kcap-x86_64.AppImage", "image");
-        static int PartialThenFail(string from, string to) {
-            File.WriteAllText(to, "ima");
-            return 5;
-        }
+        Tmp.CreateFile("data/Trash/files/kcap-x86_64.AppImage", "someone else's");
 
-        var trashed = await Removal(image: image, rename: PartialThenFail).TrashBundleAsync(CancellationToken.None);
+        await Assert.That(await Removal(image: image).TrashBundleAsync(CancellationToken.None)).IsTrue();
 
-        await Assert.That(trashed).IsFalse();
-        await Assert.That(File.ReadAllText(image)).IsEqualTo("image");
-        await Assert.That(Directory.EnumerateFileSystemEntries(Tmp.PathTo("data", "Trash", "files"))).IsEmpty();
-        await Assert.That(Directory.EnumerateFileSystemEntries(Tmp.PathTo("data", "Trash", "info"))).IsEmpty();
+        await Assert.That(File.ReadAllText(Tmp.PathTo("data", "Trash", "files", "kcap-x86_64.AppImage"))).IsEqualTo("someone else's");
+        await Assert.That(File.ReadAllText(Tmp.PathTo("data", "Trash", "files", "kcap-x86_64.2.AppImage"))).IsEqualTo("image");
+        await Assert.That(File.Exists(Tmp.PathTo("data", "Trash", "info", "kcap-x86_64.AppImage.trashinfo"))).IsFalse();
+        await Assert.That(File.Exists(Tmp.PathTo("data", "Trash", "info", "kcap-x86_64.2.AppImage.trashinfo"))).IsTrue();
+    }
+
+    /// <summary>A Trash the removal creates is the user's alone, as the freedesktop.org spec asks.</summary>
+    [Test, ExcludeOn(OS.Windows), UnsupportedOSPlatform("windows")]
+    public async Task A_trash_the_removal_creates_is_owner_only() {
+        var image = Tmp.CreateFile("apps/kcap-x86_64.AppImage", "image");
+
+        await Removal(image: image).TrashBundleAsync(CancellationToken.None);
+
+        const UnixFileMode ownerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+        await Assert.That(File.GetUnixFileMode(Tmp.PathTo("data", "Trash"))).IsEqualTo(ownerOnly);
+        await Assert.That(File.GetUnixFileMode(Tmp.PathTo("data", "Trash", "files"))).IsEqualTo(ownerOnly);
+        await Assert.That(File.GetUnixFileMode(Tmp.PathTo("data", "Trash", "info"))).IsEqualTo(ownerOnly);
     }
 
     /// <summary>The production rename moves the image into the Trash on the platform it is built for.</summary>

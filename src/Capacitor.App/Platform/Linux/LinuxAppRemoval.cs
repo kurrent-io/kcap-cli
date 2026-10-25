@@ -15,16 +15,16 @@ public sealed partial class LinuxAppRemoval : IAppRemoval {
     readonly IReadOnlyList<string> _linkFolders;
     readonly string                _trash;
     readonly TimeProvider          _time;
-    readonly Func<string, string, int> _rename;
+    readonly Func<string, string, int> _move;
 
     public LinuxAppRemoval(IProcessRunner runner, UserHome home, AppImageInstall install, Func<string, string?> getEnv, TimeProvider time)
         : this(runner, install.Image, AppImageInstall.StagedRoot(getEnv, home), KcapLinkFolders.For(home),
                Path.Combine(AppImageInstall.DataHome(getEnv, home), "Trash"), time) { }
 
     internal LinuxAppRemoval(IProcessRunner runner, string image, string stagedRoot, IReadOnlyList<string> linkFolders, string trash,
-            TimeProvider time, Func<string, string, int>? rename = null) {
+            TimeProvider time, Func<string, string, int>? move = null) {
         // libc is a Linux name; anywhere else the image stays put rather than the call failing to bind.
-        _rename      = rename ?? (OperatingSystem.IsLinux() ? Rename : static (_, _) => NotSupported);
+        _move        = move ?? (OperatingSystem.IsLinux() ? MoveWithoutReplacing : static (_, _) => NotSupported);
         _runner      = runner;
         _image       = image;
         _stagedRoot  = stagedRoot;
@@ -52,8 +52,9 @@ public sealed partial class LinuxAppRemoval : IAppRemoval {
         }
     }
 
-    /// <summary>The freedesktop.org home Trash: the info file is claimed first, so two removals never take one name. The
-    /// image is renamed, never copied, so one on another filesystem than the Trash stays where it is.</summary>
+    /// <summary>The freedesktop.org home Trash. A name is free only while the Trash holds neither its file nor its info;
+    /// the info file is claimed first, so two removals never take one name, and the image is then linked in place, which
+    /// never replaces a file already there. An image on another filesystem than the Trash stays where it is.</summary>
     public Task<bool> TrashBundleAsync(CancellationToken ct) {
         if (!File.Exists(_image)) return Task.FromResult(false);
 
@@ -62,26 +63,31 @@ public sealed partial class LinuxAppRemoval : IAppRemoval {
         string? claimed = null;
 
         try {
-            Directory.CreateDirectory(files);
-            Directory.CreateDirectory(info);
+            OwnerOnlyDirectory(_trash);
+            OwnerOnlyDirectory(files);
+            OwnerOnlyDirectory(info);
 
             var name = Path.GetFileName(_image);
             for (var attempt = 1; claimed is null; attempt++) {
                 var candidate = attempt == 1 ? name : $"{Path.GetFileNameWithoutExtension(name)}.{attempt}{Path.GetExtension(name)}";
                 var infoPath  = Path.Combine(info, candidate + ".trashinfo");
                 try {
-                    using var stream = new FileStream(infoPath, FileMode.CreateNew, FileAccess.Write);
-                    using var writer = new StreamWriter(stream);
-                    writer.Write(TrashInfo(_image, _time.GetLocalNow()));
-                    claimed = candidate;
+                    using (var stream = new FileStream(infoPath, FileMode.CreateNew, FileAccess.Write))
+                    using (var writer = new StreamWriter(stream))
+                        writer.Write(TrashInfo(_image, _time.GetLocalNow()));
                 } catch (IOException) when (File.Exists(infoPath)) {
+                    continue;
                 }
+
+                if (File.Exists(Path.Combine(files, candidate)) || Directory.Exists(Path.Combine(files, candidate))) {
+                    TryDelete(infoPath);
+                    continue;
+                }
+
+                claimed = candidate;
             }
 
-            var destination = Path.Combine(files, claimed);
-            if (_rename(_image, destination) is var errno and not 0) {
-                // A rename either happens or does not, but a destination left by anything else is not the image.
-                if (File.Exists(_image)) TryDelete(destination);
+            if (_move(_image, Path.Combine(files, claimed)) is var errno and not 0) {
                 TryDelete(Path.Combine(info, claimed + ".trashinfo"));
                 Console.Error.WriteLine(errno == CrossDevice
                     ? $"kcap: {_image} is on another filesystem than the Trash; leaving it where it is"
@@ -102,16 +108,35 @@ public sealed partial class LinuxAppRemoval : IAppRemoval {
     const int CrossDevice  = 18;
     const int NotSupported = 38;
 
+    const UnixFileMode OwnerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+
+    /// <summary>Created owner-only, as the Trash spec asks; one that already exists keeps its mode.</summary>
+    static void OwnerOnlyDirectory(string path) {
+        if (OperatingSystem.IsWindows()) Directory.CreateDirectory(path);
+        else Directory.CreateDirectory(path, OwnerOnly);
+    }
+
     static void TryDelete(string path) {
         try { File.Delete(path); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
-    /// <summary>rename(2): unlike <see cref="File.Move(string,string)"/>, it never falls back to copying across
-    /// filesystems, and answers EXDEV instead.</summary>
-    static int Rename(string from, string to) => RenameNative(from, to) == 0 ? 0 : Marshal.GetLastPInvokeError();
+    /// <summary>link(2) then unlink(2): unlike <see cref="File.Move(string,string)"/> and rename(2), a link never replaces
+    /// what is at the destination, and never copies across filesystems, answering EXDEV instead.</summary>
+    static int MoveWithoutReplacing(string from, string to) {
+        if (LinkNative(from, to) != 0) return Marshal.GetLastPInvokeError();
+        if (UnlinkNative(from) == 0) return 0;
 
-    [LibraryImport("libc", EntryPoint = "rename", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
-    private static partial int RenameNative(string from, string to);
+        var errno = Marshal.GetLastPInvokeError();
+        UnlinkNative(to);
+
+        return errno;
+    }
+
+    [LibraryImport("libc", EntryPoint = "link", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
+    private static partial int LinkNative(string from, string to);
+
+    [LibraryImport("libc", EntryPoint = "unlink", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
+    private static partial int UnlinkNative(string path);
 
     internal static string TrashInfo(string path, DateTimeOffset deletedAt) =>
         "[Trash Info]\n"
