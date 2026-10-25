@@ -11,16 +11,17 @@ namespace Capacitor.Cli.Tests.Unit;
 /// picked binding in the statement that constructs it.
 /// </summary>
 public partial class ContainerHostPortGuardTests {
-    [GeneratedRegex(@"\.WithPortBinding\s*\((?!\s*ContainerHostPorts\.Next\s*\(\s*\)\s*,)")]
+    // The (ushort, bool) overload with true, or assignRandomHostPort named, hands the host port back to Docker.
+    [GeneratedRegex(@"\.WithPortBinding\s*\((?!\s*ContainerHostPorts\.Next\s*\(\s*\)\s*,(?!\s*(?:true\b|assignRandomHostPort\s*:)))")]
     private static partial Regex DockerChosenBinding();
 
-    [GeneratedRegex(@"new\s+(?:KurrentDb|PostgreSql)Builder\s*\(|(?:KurrentDb|PostgreSql)Builder\s+\w+\s*=\s*new\s*\(")]
+    [GeneratedRegex(@"new\s+(?:[\w.]+\.)?(?:KurrentDb|PostgreSql)Builder\s*\(|(?:[\w.]+\.)?(?:KurrentDb|PostgreSql)Builder\??\s+\w+\s*=\s*new\s*\(")]
     private static partial Regex PublishingBuilder();
 
-    [GeneratedRegex(@"\.WithPortBinding\s*\(\s*ContainerHostPorts\.Next\s*\(\s*\)\s*,")]
+    [GeneratedRegex(@"\.WithPortBinding\s*\(\s*ContainerHostPorts\.Next\s*\(\s*\)\s*,(?!\s*(?:true\b|assignRandomHostPort\s*:))")]
     private static partial Regex PickedBinding();
 
-    [GeneratedRegex(@"\.Build\s*\(\s*\)")]
+    [GeneratedRegex(@"\G\.Build\s*\(\s*\)")]
     private static partial Regex Build();
 
     [Test]
@@ -37,6 +38,11 @@ public partial class ContainerHostPortGuardTests {
     [Arguments("new KurrentDbBuilder(image).WithEnvironment(\"NOTE\", \".WithPortBinding(ContainerHostPorts.Next(), 2113)\").Build()")]
     [Arguments("var q = '\"'; new KurrentDbBuilder(image).Build(); var s = \"x\";")]
     [Arguments("/* \" */ new KurrentDbBuilder(image).Build(); var s = \"x\";")]
+    [Arguments(".WithPortBinding(ContainerHostPorts.Next(), true)")]
+    [Arguments("new Testcontainers.KurrentDb.KurrentDbBuilder(image).Build()")]
+    [Arguments("KurrentDbBuilder? b = new(image); b.Build()")]
+    [Arguments("new KurrentDbBuilder(image).WithCreateParameterModifier(_ => Side(new ContainerBuilder(i).WithPortBinding(ContainerHostPorts.Next(), 80))).Build()")]
+    [Arguments("var s = \"\"\"\"x\"\"\"\"; new KurrentDbBuilder(image).Build(); var t = \"\"\"\"y\"\"\"\";")]
     public async Task Pattern_flags_a_port_docker_chooses(string code) =>
         await Assert.That(PublishesOnDockersChoice(code)).IsTrue();
 
@@ -45,6 +51,7 @@ public partial class ContainerHostPortGuardTests {
     [Arguments("new KurrentDbBuilder(image).WithPortBinding(ContainerHostPorts.Next(), 2113).Build()")]
     [Arguments("new KurrentDbBuilder(image).WithCreateParameterModifier(p => { p.Name = \"k\"; }).WithPortBinding(ContainerHostPorts.Next(), 2113).Build()")]
     [Arguments("// .WithPortBinding(2113, true)\n.WithPortBinding(ContainerHostPorts.Next(), Port)")]
+    [Arguments("new KurrentDbBuilder(ImageFactory().Build()).WithPortBinding(ContainerHostPorts.Next(), 2113).Build()")]
     public async Task Pattern_passes_a_port_picked_below_the_ephemeral_range(string code) =>
         await Assert.That(PublishesOnDockersChoice(code)).IsFalse();
 
@@ -66,36 +73,36 @@ public partial class ContainerHostPortGuardTests {
         var code = SourceCode.WithoutCommentsOrStrings(source);
 
         return DockerChosenBinding().IsMatch(code)
-            || PublishingBuilder().Matches(code).Any(builder => !PickedBinding().IsMatch(ChainOf(code, builder)));
+            || PublishingBuilder().Matches(code).Any(builder => !BindsItsOwnPort(code, builder));
     }
 
-    /// <summary>The code from a builder's construction to whichever comes first: its <c>.Build()</c>, the end of its
-    /// statement, or the next builder's construction. A binding added in a later statement does not count.</summary>
-    static string ChainOf(string code, Match builder) {
+    /// <summary>Whether the builder's own chain, from its construction to whichever comes first of its <c>.Build()</c>,
+    /// the end of its statement or the next builder's construction, carries a picked binding. Only a call chained
+    /// on the builder itself counts, outside every bracket opened after it: a binding or a <c>.Build()</c> inside an
+    /// argument or a lambda in the chain belongs to something else, and a binding added in a later statement does
+    /// not count.</summary>
+    static bool BindsItsOwnPort(string code, Match builder) {
         var start = builder.Index + builder.Length;
+        var next  = PublishingBuilder().Match(code, start) is { Success: true } other ? other.Index : code.Length;
 
-        int[] ends = [
-            Build().Match(code, start) is { Success: true } build ? build.Index : code.Length,
-            StatementEnd(code, start),
-            PublishingBuilder().Match(code, start) is { Success: true } next ? next.Index : code.Length
-        ];
-
-        return code[start..ends.Min()];
-    }
-
-    /// <summary>The first <c>;</c> outside every bracket opened after <paramref name="start"/>, which lies inside the builder's
-    /// own constructor call, so a statement inside a lambda in the chain does not end it.</summary>
-    static int StatementEnd(string code, int start) {
+        // Counting from 1 inside the builder's constructor call.
         var depth = 1;
 
-        for (var i = start; i < code.Length; i++)
+        for (var i = start; i < next; i++) {
             switch (code[i]) {
-                case '(' or '[' or '{': depth++; break;
-                case ')' or ']' or '}': depth--; break;
-                case ';' when depth <= 0: return i;
+                case '(' or '[' or '{': depth++; continue;
+                case ')' or ']' or '}': depth--; continue;
+                case ';' when depth <= 0: return false;
             }
 
-        return code.Length;
+            if (depth != 0 || code[i] != '.') continue;
+
+            if (Build().IsMatch(code[i..Math.Min(code.Length, i + 16)])) return false;
+
+            if (PickedBinding().Match(code, i) is { Success: true } binding && binding.Index == i) return true;
+        }
+
+        return false;
     }
 
     static string RepoRoot([CallerFilePath] string here = "") {

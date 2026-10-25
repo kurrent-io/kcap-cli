@@ -62,11 +62,15 @@ public class ContainerHostPortsTests {
 
         await using var emulator = await WorkOSEmulator.StartAsync(ct);
 
+        await Assert.That(new Uri(emulator.BaseUrl).Port).IsLessThan(EphemeralFloor);
+
+        // A host that turns the reaper off has none to inspect.
+        if (!TestcontainersSettings.ResourceReaperEnabled) return;
+
         using var docker = TestcontainersSettings.OS.DockerEndpointAuthConfig.GetDockerClientBuilder(Guid.Empty).Build();
         var reaper = await docker.Containers.InspectContainerAsync($"testcontainers-ryuk-{ResourceReaper.DefaultSessionId:D}", ct);
         var reaperPort = int.Parse(reaper.NetworkSettings.Ports["8080/tcp"][0].HostPort, CultureInfo.InvariantCulture);
 
-        await Assert.That(new Uri(emulator.BaseUrl).Port).IsLessThan(EphemeralFloor);
         await Assert.That(reaperPort).IsLessThan(EphemeralFloor);
     }
 

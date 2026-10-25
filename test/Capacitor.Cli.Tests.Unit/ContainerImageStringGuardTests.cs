@@ -9,8 +9,14 @@ namespace Capacitor.Cli.Tests.Unit;
 /// call, matched with string contents blanked so a literal containing <c>tag:</c> cannot pass for the named argument.
 /// </summary>
 public partial class ContainerImageStringGuardTests {
-    [GeneratedRegex(@"new\s+\w*ContainerBuilder\s*\((?!\s*new\s+DockerImage\s*\()|\w*ContainerBuilder\s+\w+\s*=\s*new\s*\((?!\s*new\s+DockerImage\s*\()|\.WithImage\s*\((?!\s*new\s+DockerImage\s*\()|new\s+DockerImage\s*\((?![^()]*\btag\s*:)")]
+    [GeneratedRegex(@"new\s+(?:[\w.]+\.)?(?:\w*ContainerBuilder|KurrentDbBuilder|PostgreSqlBuilder)\s*\((?!\s*new\s+DockerImage\s*\()|(?:\w*ContainerBuilder|KurrentDbBuilder|PostgreSqlBuilder)\??\s+\w+\s*=\s*new\s*\((?!\s*new\s+DockerImage\s*\()|\.WithImage\s*\((?!\s*new\s+DockerImage\s*\()")]
     private static partial Regex ImageString();
+
+    [GeneratedRegex(@"new\s+DockerImage\s*\(")]
+    private static partial Regex DockerImage();
+
+    [GeneratedRegex(@"\G\btag\s*:")]
+    private static partial Regex TagArgument();
 
     [Test]
     [Arguments("new ContainerBuilder(Image)")]
@@ -22,6 +28,10 @@ public partial class ContainerImageStringGuardTests {
     [Arguments("new DockerImage(\"tag:3\")")]
     [Arguments(".WithImage(\"alpine:3\")")]
     [Arguments("ContainerBuilder b = new(\"alpine:3\");")]
+    [Arguments("new KurrentDbBuilder(\"kurrentdb:26\")")]
+    [Arguments("new PostgreSqlBuilder(\"postgres:18\")")]
+    [Arguments("new DockerImage(Repository(\"tag: x\"))")]
+    [Arguments("var s = \"\"\"\"x\"\"\"\"; new ContainerBuilder(\"alpine:3\"); var t = \"\"\"\"y\"\"\"\";")]
     public async Task Pattern_matches_an_untyped_image(string code) =>
         await Assert.That(UsesAnImageString(code)).IsTrue();
 
@@ -30,6 +40,8 @@ public partial class ContainerImageStringGuardTests {
     [Arguments(".WithImage(new DockerImage(\"alpine\", tag: \"3\"))")]
     [Arguments("new StringBuilder(\"text\")")]
     [Arguments("ContainerBuilder b = new(new DockerImage(\"alpine\", tag: \"3\"));")]
+    [Arguments("new DockerImage(GetRepository(), tag: GetTag())")]
+    [Arguments("new KurrentDbBuilder(new DockerImage(\"kurrentdb\", tag: \"26\"))")]
     public async Task Pattern_passes_a_typed_image(string code) =>
         await Assert.That(UsesAnImageString(code)).IsFalse();
 
@@ -47,7 +59,30 @@ public partial class ContainerImageStringGuardTests {
             .Because("pass new DockerImage(repository, tag: …) so Testcontainers never runs its timed image-name regex on it");
     }
 
-    static bool UsesAnImageString(string code) => ImageString().IsMatch(SourceCode.WithoutCommentsOrStrings(code));
+    static bool UsesAnImageString(string source) {
+        var code = SourceCode.WithoutCommentsOrStrings(source);
+
+        return ImageString().IsMatch(code) || DockerImage().Matches(code).Any(call => !NamesItsTag(code, call.Index + call.Length));
+    }
+
+    /// <summary>Whether the <c>DockerImage</c> call whose arguments start at <paramref name="start"/> passes <c>tag:</c>
+    /// as one of its own arguments, not inside a nested call's.</summary>
+    static bool NamesItsTag(string code, int start) {
+        var depth = 0;
+
+        for (var i = start; i < code.Length; i++) {
+            switch (code[i]) {
+                case '(' or '[' or '{': depth++; break;
+                case ')' or ']' or '}' when depth == 0: return false;
+                case ')' or ']' or '}': depth--; break;
+                default:
+                    if (depth == 0 && TagArgument().IsMatch(code[i..Math.Min(code.Length, i + 8)])) return true;
+                    break;
+            }
+        }
+
+        return false;
+    }
 
     static string RepoRoot([CallerFilePath] string here = "") {
         var dir = Path.GetDirectoryName(here);
