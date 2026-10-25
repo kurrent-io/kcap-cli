@@ -123,6 +123,10 @@ internal interface IHostedAgentRuntimeFactory {
     /// probe has passed for the vendor and transport.</summary>
     bool SupportsRestartResume(string? runtimeTransport) => false;
 
+    /// <summary>Whether a restart resume of an agent that was waiting for input can start with no prompt at all.
+    /// Only a runtime that judges the resume by its process, not by a first turn, may say so.</summary>
+    bool ResumesIdleWithoutPrompt(string? runtimeTransport) => false;
+
     /// <summary>The models this vendor can launch on this machine, or null when it publishes no
     /// catalog. Null is also every probe failure: consumers then fall through to their other sources
     /// instead of reading an empty list as "nothing usable".</summary>

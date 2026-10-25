@@ -640,23 +640,53 @@ public class McpSessionsServerTests {
         await Assert.That(root["widened_to_all_repos"]!.GetValue<bool>()).IsTrue();
     }
 
+    /// <summary>A match in either scope is a match; "no match" needs both scopes to say so, and a scope whose
+    /// transcript lane timed out (<c>null</c>) leaves the answer unknown. A scope whose body carries no flag at all
+    /// says nothing, so the other scope's answer stands; a field neither body carries stays absent.</summary>
     [Test]
     [Arguments("true", "true", "true")]
     [Arguments("false", "true", "false")]
-    [Arguments("null", "true", "true")]
-    [Arguments("true", "null", "true")]
+    [Arguments("true", "false", "false")]
+    [Arguments("null", "false", "false")]
+    [Arguments("null", "true", "null")]
+    [Arguments("true", "null", "null")]
     [Arguments("null", "null", "null")]
+    [Arguments(null, "true", "true")]
+    [Arguments("true", null, "true")]
+    [Arguments(null, "false", "false")]
+    [Arguments(null, "null", "null")]
     [Arguments(null, null, null)]
-    public async Task MergeWidenedBody_combines_no_lexical_match_across_scopes(string? first, string? widened, string? expected) {
-        static string WithFlag(string? flag, string sid) =>
-            flag is null
+    public async Task MergeWidenedBody_combines_no_lexical_match_across_scopes(string? first, string? widened, string? expected) =>
+        await AssertMergedField("no_lexical_match", first, widened, expected);
+
+    /// <summary>The lane flags describe one request each, so the merged response names every lane either request
+    /// bounded or timed out; <c>null</c> (no lexical search ran) survives only when neither request ran one.</summary>
+    [Test]
+    [Arguments("bounded_lanes", "[]", """["transcript"]""", """["transcript"]""")]
+    [Arguments("bounded_lanes", """["transcript"]""", """["transcript"]""", """["transcript"]""")]
+    [Arguments("bounded_lanes", """["title"]""", """["transcript"]""", """["title","transcript"]""")]
+    [Arguments("bounded_lanes", "[]", "null", "[]")]
+    [Arguments("bounded_lanes", "null", "null", "null")]
+    [Arguments("timed_out_lanes", "[]", """["transcript"]""", """["transcript"]""")]
+    [Arguments("timed_out_lanes", "null", """["transcript"]""", """["transcript"]""")]
+    [Arguments("timed_out_lanes", null, null, null)]
+    public async Task MergeWidenedBody_unions_the_lane_flags_across_scopes(string field, string? first, string? widened, string? expected) =>
+        await AssertMergedField(field, first, widened, expected);
+
+    static async Task AssertMergedField(string field, string? first, string? widened, string? expected) {
+        string WithField(string? value, string sid) =>
+            value is null
                 ? Body(sid)
-                : $$"""{"no_lexical_match":{{flag}},"hits":[{"session_id":"{{sid}}"}]}""";
+                : $$"""{"{{field}}":{{value}},"hits":[{"session_id":"{{sid}}"}]}""";
 
-        var merged = McpSessionsServer.MergeWidenedBody(WithFlag(first, "s1"), WithFlag(widened, "s2"), limit: 10);
-        var flag   = JsonNode.Parse(merged)!.AsObject()["no_lexical_match"];
+        var merged = JsonNode.Parse(McpSessionsServer.MergeWidenedBody(WithField(first, "s1"), WithField(widened, "s2"), limit: 10))!.AsObject();
 
-        await Assert.That(flag?.ToJsonString() ?? "null").IsEqualTo(expected ?? "null");
+        if (expected is null) {
+            await Assert.That(merged.ContainsKey(field)).IsFalse();
+        } else {
+            await Assert.That(merged.ContainsKey(field)).IsTrue();
+            await Assert.That(merged[field]?.ToJsonString() ?? "null").IsEqualTo(expected);
+        }
     }
 
     [Test]

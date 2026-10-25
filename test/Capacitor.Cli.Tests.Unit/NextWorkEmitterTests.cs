@@ -65,6 +65,7 @@ public class NextWorkEmitterTests {
         await Assert.That(text).Contains("a question answered with nothing pending");
         await Assert.That(text).Contains("Never present after a step inside work that is still open");
         await Assert.That(text).Contains("attached work is still open, do not present unless the user asked for next work or said they are done with or parking that work");
+        await Assert.That(text).Contains("close_loose_end what you finished, declare the rest with declare_loose_end");
         await Assert.That(text).Contains("declare_loose_end (one call per item, never \"none\"), call get_next_work");
     }
 

@@ -40,7 +40,7 @@
         <RadioButton x:Name="SearchKeywordOption" Classes="onboardingOption"
                      IsChecked="{Binding UseKeyword, Mode=TwoWay}">
             <StackPanel Spacing="3">
-                <TextBlock Text="Search by keyword" />
+                <TextBlock Text="Search by keyword" TextWrapping="Wrap" />
                 <TextBlock Classes="detail" Text="{x:Static vm:SearchChoiceViewModel.KeywordDetail}" />
             </StackPanel>
         </RadioButton>
@@ -48,7 +48,7 @@
             <RadioButton x:Name="SearchMeaningOption" Classes="onboardingOption"
                          IsChecked="{Binding UseMeaning, Mode=TwoWay}" IsEnabled="{Binding MeaningEnabled}">
                 <StackPanel Spacing="3">
-                    <TextBlock Text="Search by meaning" />
+                    <TextBlock Text="Search by meaning" TextWrapping="Wrap" />
                     <TextBlock Classes="detail" Text="{x:Static vm:SearchChoiceViewModel.MeaningDetail}" />
                 </StackPanel>
             </RadioButton>
@@ -78,7 +78,7 @@
             <RadioButton x:Name="SearchOtherOption" Classes="onboardingOption nested"
                          IsChecked="{Binding UseOther, Mode=TwoWay}">
                 <StackPanel Spacing="6">
-                    <TextBlock Text="Another Ollama model" />
+                    <TextBlock Text="Another Ollama model" TextWrapping="Wrap" />
                     <TextBox x:Name="SearchOtherModel" Classes="kcapField"
                              PlaceholderText="Model name, e.g. nomic-embed-text" Text="{Binding OtherModel, Mode=TwoWay}"
                              IsVisible="{Binding UseOther}" AutomationProperties.Name="Ollama embedding model" />
