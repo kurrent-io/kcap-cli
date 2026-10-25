@@ -17,6 +17,7 @@ sealed class FakeServerLane : IServerLane {
     public readonly BehaviorSubject<ServerLaneStatus> StatusSubject = new(new(ServerLaneState.Dormant));
     public readonly Subject<ReactiveUnit> AgentsChangedSubject = new();
     public readonly Subject<ReactiveUnit> DaemonsChangedSubject = new();
+    public readonly Subject<ReactiveUnit> DaemonAccountsChangedSubject = new();
     public readonly Subject<LaunchFailure> LaunchFailuresSubject = new();
     public readonly Subject<string> PermissionPendingSubject = new();
     public readonly Subject<PermissionRespondedPing> PermissionRespondedSubject = new();
@@ -28,6 +29,7 @@ sealed class FakeServerLane : IServerLane {
     public readonly Subject<TerminalOutputFrame> TerminalOutputSubject = new();
     public readonly Subject<TerminalSize> TerminalDimensionsSubject = new();
     public Func<Task<IReadOnlyList<DaemonInfo>?>> DaemonsHandler = () => Task.FromResult<IReadOnlyList<DaemonInfo>?>([]);
+    public Func<Task<IReadOnlyList<DaemonAccountsDto>?>> DaemonAccountsHandler = () => Task.FromResult<IReadOnlyList<DaemonAccountsDto>?>([]);
     public Func<string, Task<HubCallOutcome>> StopHandler = _ => Task.FromResult(HubCallOutcome.Ok);
     public Func<string, Task<HubCallOutcome>> SubscribeChatHandler = _ => Task.FromResult(HubCallOutcome.Ok);
     public Func<string, Task<HubCallOutcome>> UnsubscribeChatHandler = _ => Task.FromResult(HubCallOutcome.Ok);
@@ -65,6 +67,7 @@ sealed class FakeServerLane : IServerLane {
     public IObservable<ServerLaneStatus> Status => StatusSubject;
     public IObservable<ReactiveUnit> AgentInstancesChanged => AgentsChangedSubject;
     public IObservable<ReactiveUnit> DaemonsChanged => DaemonsChangedSubject;
+    public IObservable<ReactiveUnit> DaemonAccountsChanged => DaemonAccountsChangedSubject;
     public IObservable<LaunchFailure> LaunchFailures => LaunchFailuresSubject;
     public IObservable<string> PermissionPending => PermissionPendingSubject;
     public IObservable<PermissionRespondedPing> PermissionResponded => PermissionRespondedSubject;
@@ -76,6 +79,7 @@ sealed class FakeServerLane : IServerLane {
     public IObservable<TerminalOutputFrame> TerminalOutput => TerminalOutputSubject;
     public IObservable<TerminalSize> TerminalDimensions => TerminalDimensionsSubject;
     public Task<IReadOnlyList<DaemonInfo>?> GetConnectedDaemonsAsync(CancellationToken ct) => DaemonsHandler();
+    public Task<IReadOnlyList<DaemonAccountsDto>?> GetDaemonAccountsAsync(CancellationToken ct) => DaemonAccountsHandler();
 
     public Task<HubCallOutcome> RequestStopAgentAsync(string agentId, CancellationToken ct) {
         Append(ref _calls, $"stop:{agentId}");

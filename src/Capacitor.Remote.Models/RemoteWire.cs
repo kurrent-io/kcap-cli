@@ -15,6 +15,7 @@ public static class HubMethods {
     public const string SubscribeToChat        = "SubscribeToChat";
     public const string UnsubscribeFromChat    = "UnsubscribeFromChat";
     public const string RegisterSessionAccessWatch = "RegisterSessionAccessWatch";
+    public const string GetDaemonAccounts      = "GetDaemonAccounts";
 }
 
 /// Server → UI-client pushes. Org-wide ones arrive with no join call; the rest follow the join or
@@ -44,6 +45,7 @@ public static class HubBroadcasts {
     public const string WelcomeStateChanged    = "WelcomeStateChanged";
     public const string SessionAccessChanged   = "SessionAccessChanged";
     public const string RawStreamAccessRevoked = "RawStreamAccessRevoked";
+    public const string DaemonAccountsChanged  = "DaemonAccountsChanged";
 }
 
 public static class ApiRoutes {

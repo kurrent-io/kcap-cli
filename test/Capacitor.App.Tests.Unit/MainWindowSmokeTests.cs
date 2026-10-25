@@ -1900,7 +1900,7 @@ public class MainWindowSmokeTests {
         await Assert.That(visibleWhileIn).IsFalse();
     }
 
-    static void ClickFlyoutButton(Button button) {
+    internal static void ClickFlyoutButton(Button button) {
         Dispatcher.UIThread.RunJobs();
         var top = TopLevel.GetTopLevel(button)
             ?? throw new InvalidOperationException("Flyout button is not attached to a TopLevel.");

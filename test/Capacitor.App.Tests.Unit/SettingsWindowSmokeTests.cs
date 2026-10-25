@@ -1,6 +1,7 @@
 using System.Reactive.Concurrency;
 using System.Reactive.Subjects;
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Input;
@@ -13,7 +14,9 @@ using Capacitor.App.Services.Notifications;
 using Capacitor.App.Services.Onboarding;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.App.Tests.Unit;
@@ -67,10 +70,10 @@ public class SettingsWindowSmokeTests {
             Dispatcher.UIThread.RunJobs();
             await Assert.That(rename.IsEffectivelyEnabled).IsTrue();
             await Assert.That(window.Title).IsEqualTo("kcap — Settings");
-            await Assert.That(window.Bounds.Width).IsEqualTo(540d);
+            await Assert.That(window.Bounds.Width).IsEqualTo(600d);
             await Assert.That(window.Bounds.Height).IsEqualTo(580d);
             await Assert.That(capacity.Bounds.Height).IsGreaterThan(0d);
-            tabs.SelectedIndex = 2; // Daemon, Profiles (hidden — no profiles VM here), Notifications
+            tabs.SelectedIndex = 3; // Daemon, Profiles and Accounts (hidden — no view-models here), Notifications
             Dispatcher.UIThread.RunJobs();
             await Assert.That(window.FindControl<ToggleSwitch>("PermissionNotificationsToggle")!.IsEffectivelyEnabled).IsFalse();
             await Assert.That(window.FindControl<ToggleSwitch>("QuestionNotificationsToggle")!.IsEffectivelyEnabled).IsFalse();
@@ -134,6 +137,115 @@ public class SettingsWindowSmokeTests {
     });
 
     [Test]
+    public Task Accounts_tab_lists_rows_with_the_default_pill_state_and_menu() => AvaloniaSession.RunOnUiAsync(async () => {
+        ConfigMutator.Mutate(Config.Root, c => c with { Profiles = new() {
+            ["work"] = new Profile { ServerUrl = "https://work.example", Daemon = new DaemonSettings { Name = "daemon-a", MaxAgents = 5 } }
+        } });
+        var service = new FakeDaemonClientService();
+        service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["settings/1", "accounts/1"]));
+        service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
+        var accounts = new FakeAccountsService();
+        accounts.Publish(new AccountsSnapshotDto("host-1", 3, [
+            new("a1", "claude", "/u/.claude", "/u/.claude", "home", "recording"),
+            new("a2", "claude", "/u/.claude-work", "/u/.claude-work", "work", "recording"),
+            new("a3", "codex", "/u/.codex-main", "/u/.codex-main", "main", "installed"),
+        ], [new("claude", "/u/.claude", "/u/.claude"), new("codex", "/u/.codex", "/u/.codex")]));
+        var requests = new List<MutationRequest>();
+        var discoveries = 0;
+        var accountsVm = new AccountsSettingsViewModel(accounts,
+            (request, _) => { requests.Add(request); return Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded()); },
+            "daemon-a", "work",
+            () => {
+                Interlocked.Increment(ref discoveries);
+                return [new AccountCandidate(HarnessId.Codex, "/u/.codex-alt", "home directory")];
+            },
+            _ => Task.FromResult<string?>(null), service.Status);
+        using var vm = new SettingsViewModel(new SettingsProfileStore(Config.Root, "work", "https://work.example"),
+            service, new ScriptedLocalControlOps(), (_, _) => Task.FromResult(false),
+            (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded()),
+            (_, _) => Task.FromResult(false), _ => Task.FromResult(false), true, Task.CompletedTask, (_, _) => Task.FromResult(true)) {
+            Accounts = accountsVm,
+        };
+        var window = new SettingsWindow { DataContext = vm };
+        try {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            var tabs = window.FindControl<TabControl>("SettingsTabs")!;
+            var tab = window.FindControl<TabItem>("AccountsTab")!;
+            await Assert.That(tab.IsVisible).IsTrue();
+            await Assert.That(tabs.Items.IndexOf(tab)).IsEqualTo(tabs.Items.IndexOf(window.FindControl<TabItem>("ProfilesTab")!) + 1);
+            tabs.SelectedItem = tab;
+            Settle(window);
+
+            var rows = tabs.GetVisualDescendants().OfType<Border>().Where(b => b.Classes.Contains("accountRow")).ToList();
+            string Label(Control row) => row.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("accountLabel")).Text!;
+            Border RowOf(string label) => rows.Single(r => Label(r) == label);
+            bool HasPill(Control row) => row.GetVisualDescendants().OfType<Border>().Any(b => b.Classes.Contains("accountDefault") && b.IsEffectivelyVisible);
+            TextBlock State(Control row) => row.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("accountState"));
+            Button? Visible(Control row, string kind) =>
+                row.GetVisualDescendants().OfType<Button>().SingleOrDefault(b => b.Classes.Contains(kind) && b.IsEffectivelyVisible);
+
+            await Assert.That(string.Join(",", rows.Select(Label))).IsEqualTo("home,work,main,.codex");
+            await Assert.That(HasPill(RowOf("home"))).IsTrue();
+            await Assert.That(HasPill(RowOf("work"))).IsFalse();
+            await Assert.That(HasPill(RowOf("main"))).IsFalse();
+            await Assert.That(HasPill(RowOf(".codex"))).IsTrue();
+
+            var trust = State(RowOf("main"));
+            await Assert.That(trust.Text).IsEqualTo("Needs trust");
+            await Assert.That(trust.Foreground).IsSameReferenceAs(window.FindResource("KcapWarningBrush"));
+            await Assert.That(ToolTip.GetTip(trust)).IsEqualTo("Trust the kcap hooks the next time you start Codex with CODEX_HOME=/u/.codex-main");
+            await Assert.That(State(RowOf("home")).Text).IsEqualTo("Recording");
+            await Assert.That(State(RowOf("home")).Foreground).IsSameReferenceAs(window.FindResource("KcapMutedBrush"));
+            await Assert.That(Visible(RowOf(".codex"), "accountMenu")).IsNull();
+            await Assert.That(Visible(RowOf("home"), "accountAdd")).IsNull();
+
+            var menuButton = Visible(RowOf("work"), "accountMenu")!;
+            await Assert.That(AutomationProperties.GetName(menuButton)).IsEqualTo("Actions for work");
+            var menu = (Flyout)menuButton.Flyout!;
+            menuButton.BringIntoView();
+            Click(window, menuButton);
+            await Assert.That(menu.IsOpen).IsTrue();
+            var items = ((Control)menu.Content!).GetVisualDescendants().OfType<Button>().ToList();
+            await Assert.That(string.Join(",", items.Select(b => b.Content))).IsEqualTo("Rename,Re-wire,Remove");
+            await Assert.That(items.All(b => b.Classes.Contains("kcapGhost"))).IsTrue();
+            await Assert.That(items[0].FindAncestorOfType<FlyoutPresenter>()!.Classes.Contains("kcapPanel")).IsTrue();
+            MainWindowSmokeTests.ClickFlyoutButton(items[0]);
+            Settle(window);
+            await Assert.That(menu.IsOpen).IsFalse();
+            await Assert.That(accountsVm.Renaming!.Id).IsEqualTo("a2");
+            var field = RowOf("work").GetVisualDescendants().OfType<TextBox>().Single(t => t.Classes.Contains("kcapField"));
+            await Assert.That(field.IsEffectivelyVisible).IsTrue();
+            await Assert.That(field.Text).IsEqualTo("work");
+
+            var add = Visible(RowOf(".codex"), "accountAdd")!;
+            add.BringIntoView();
+            Click(window, add);
+            await WaitUntilAsync(() => requests.Count == 1);
+            await Assert.That(requests[0].Verb).IsEqualTo(MutationVerb.AccountAdd);
+            await Assert.That(requests[0].Account).IsEqualTo(new AccountArgs("codex", "/u/.codex", null, null));
+
+            var addAccount = tabs.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "AddAccountButton");
+            addAccount.BringIntoView();
+            Click(window, addAccount);
+            var addMenu = (Flyout)addAccount.Flyout!;
+            await Assert.That(addMenu.IsOpen).IsTrue();
+            await WaitUntilAsync(() => ((Control)addMenu.Content!).GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "/u/.codex-alt"));
+            var texts = ((Control)addMenu.Content!).GetVisualDescendants().OfType<TextBlock>().Select(t => t.Text).ToList();
+            await Assert.That(texts).Contains("home directory");
+            await Assert.That(texts).Contains("Choose a Claude directory…");
+            await Assert.That(texts).Contains("Choose a Codex directory…");
+            await Assert.That(discoveries).IsEqualTo(1);
+            var candidate = ((Control)addMenu.Content!).GetVisualDescendants().OfType<TextBlock>()
+                .Single(t => t.Text == "/u/.codex-alt").FindAncestorOfType<Button>()!;
+            MainWindowSmokeTests.ClickFlyoutButton(candidate);
+            await WaitUntilAsync(() => requests.Count == 2);
+            await Assert.That(addMenu.IsOpen).IsFalse();
+            await Assert.That(requests[1].Account).IsEqualTo(new AccountArgs("codex", "/u/.codex-alt", null, null));
+        } finally { window.Close(); }
+    });
+
+    [Test]
     public Task Notification_toggle_can_be_dragged_without_crashing() => AvaloniaSession.RunOnUiAsync(async () => {
         ConfigMutator.Mutate(Config.Root, c => c with { Profiles = new() {
             ["work"] = new Profile { ServerUrl = "https://work.example", Daemon = new DaemonSettings { Name = "daemon-a", MaxAgents = 5 } }
@@ -143,7 +255,7 @@ public class SettingsWindowSmokeTests {
         var window = new SettingsWindow { DataContext = vm };
         try {
             window.Show();
-            window.FindControl<TabControl>("SettingsTabs")!.SelectedIndex = 2; // Daemon, Profiles (hidden), Notifications
+            window.FindControl<TabControl>("SettingsTabs")!.SelectedIndex = 3; // Daemon, Profiles (hidden), Accounts (hidden), Notifications
             Settle(window);
             var permissions = window.FindControl<ToggleSwitch>("PermissionNotificationsToggle")!;
 
@@ -168,7 +280,7 @@ public class SettingsWindowSmokeTests {
                 window.Show();
                 Dispatcher.UIThread.RunJobs();
                 var tabs = window.FindControl<TabControl>("SettingsTabs")!;
-                tabs.SelectedIndex = 2; // Daemon, Profiles (hidden), Notifications
+                tabs.SelectedIndex = 3; // Daemon, Profiles (hidden), Accounts (hidden), Notifications
                 Dispatcher.UIThread.RunJobs();
                 var permissions = window.FindControl<ToggleSwitch>("PermissionNotificationsToggle")!;
                 var questions = window.FindControl<ToggleSwitch>("QuestionNotificationsToggle")!;
@@ -200,7 +312,7 @@ public class SettingsWindowSmokeTests {
             try {
                 reopened.Show();
                 Dispatcher.UIThread.RunJobs();
-                reopened.FindControl<TabControl>("SettingsTabs")!.SelectedIndex = 2; // Daemon, Profiles (hidden), Notifications
+                reopened.FindControl<TabControl>("SettingsTabs")!.SelectedIndex = 3; // Daemon, Profiles (hidden), Accounts (hidden), Notifications
                 Dispatcher.UIThread.RunJobs();
                 await Assert.That(reopened.FindControl<ToggleSwitch>("PermissionNotificationsToggle")!.IsChecked).IsFalse();
                 await Assert.That(reopened.FindControl<ToggleSwitch>("QuestionNotificationsToggle")!.IsChecked).IsFalse();
@@ -220,7 +332,7 @@ public class SettingsWindowSmokeTests {
         var window = new SettingsWindow { DataContext = vm };
         try {
             window.Show();
-            window.FindControl<TabControl>("SettingsTabs")!.SelectedIndex = 2; // Daemon, Profiles (hidden), Notifications
+            window.FindControl<TabControl>("SettingsTabs")!.SelectedIndex = 3; // Daemon, Profiles (hidden), Accounts (hidden), Notifications
             Settle(window);
             var notice = window.FindControl<Border>("NotificationAccessNotice")!;
             var button = window.FindControl<Button>("NotificationAccessButton")!;

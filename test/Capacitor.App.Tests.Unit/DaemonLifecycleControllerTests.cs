@@ -1880,6 +1880,14 @@ sealed class FakeKcapCli : IKcapCli {
         return PluginInstallBehavior(vendorFlag, ct);
     }
 
+    public readonly List<(MutationVerb Verb, AccountArgs Args)> AccountsCalls = [];
+    public Func<MutationVerb, AccountArgs, CancellationToken, Task<ProcessResult>> AccountsBehavior =
+        (_, _, _) => Task.FromResult(new ProcessResult(0, "", "", false));
+    public Task<ProcessResult> AccountsAsync(MutationVerb verb, AccountArgs args, CancellationToken ct) {
+        AccountsCalls.Add((verb, args));
+        return AccountsBehavior(verb, args, ct);
+    }
+
     public readonly List<IReadOnlyList<string>> DiscoverCalls = [];
     public Func<IReadOnlyList<string>, Task<ImportDiscoveryReport?>> DiscoverBehavior =
         _ => Task.FromResult<ImportDiscoveryReport?>(new ImportDiscoveryReport([], 0, []));

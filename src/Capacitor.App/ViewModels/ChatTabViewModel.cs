@@ -10,6 +10,7 @@ using Avalonia.Collections;
 using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Remote.Models;
 using DynamicData;
@@ -465,6 +466,18 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     string _modelLabel = "default";
     public string ModelLabel { get => _modelLabel; private set => this.RaiseAndSetIfChanged(ref _modelLabel, value); }
+
+    string? _accountLabel;
+    public string? AccountLabel { get => _accountLabel; private set => this.RaiseAndSetIfChanged(ref _accountLabel, value); }
+
+    string? _accountDirectory;
+    public string? AccountDirectory { get => _accountDirectory; private set => this.RaiseAndSetIfChanged(ref _accountDirectory, value); }
+
+    string _accountVendor = "";
+    public string AccountVendor { get => _accountVendor; private set => this.RaiseAndSetIfChanged(ref _accountVendor, value); }
+
+    bool _showsAccountStrip;
+    public bool ShowsAccountStrip { get => _showsAccountStrip; private set => this.RaiseAndSetIfChanged(ref _showsAccountStrip, value); }
 
     string _statusText = "";
     public string StatusText { get => _statusText; private set => this.RaiseAndSetIfChanged(ref _statusText, value); }
@@ -948,6 +961,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _rootSubject.OnNext(info.Root);
         VendorLabel = HostedHarnessCatalog.LabelFor(_options, info.Vendor);
         ModelLabel = HostedHarnessCatalog.ModelLabelFor(info.Vendor, info.Model ?? "");
+        ApplyAccount(info);
         ApplyTerminalMenu(info.UsageLimit, info.TerminalDialog);
         _status = info.Status;
         _interruption = info.Interruption;
@@ -973,6 +987,16 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         if (switched) SwitchFeed(info.FeedKey!, _openFeed!);
         RefreshActivityNote();
         if (!switched) RefreshQueue();
+    }
+
+    void ApplyAccount(ChatSessionInfo info) {
+        var directory = info.AccountDirectory;
+        AccountVendor = info.Vendor;
+        AccountDirectory = directory;
+        AccountLabel = string.IsNullOrWhiteSpace(info.AccountLabel) && directory is not null ? AccountRows.LastSegment(directory) : info.AccountLabel;
+        ShowsAccountStrip = directory is not null
+            && (string.Equals(info.Vendor, HarnessId.Claude.VendorId, StringComparison.OrdinalIgnoreCase)
+             || string.Equals(info.Vendor, HarnessId.Codex.VendorId, StringComparison.OrdinalIgnoreCase));
     }
 
     /// A hook-driven card already asks the same question as the dialog it raised, so the screen's

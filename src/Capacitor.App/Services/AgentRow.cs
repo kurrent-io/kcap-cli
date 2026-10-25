@@ -38,7 +38,11 @@ public sealed record AgentRow(
         // A live server row no daemon hosts, past the hand-over grace: started in a terminal.
         bool IsTerminalSession = false,
         // The listing's access level for the viewer; below "full" the server grants no chat.
-        string? AccessLevel = null) {
+        string? AccessLevel = null,
+        // The account the session runs under. Null from an older daemon and on a pending row.
+        string? AccountDirectory = null,
+        string? AccountId = null,
+        string? AccountLabel = null) {
 
     /// A session the server lists as ended; a daemon row's Completed is not this.
     public bool IsEndedSession => Origin == AgentOrigin.Server && Status == "Completed";
@@ -51,7 +55,8 @@ public sealed record AgentRow(
         MachineBadge: null, RepoGroupKey: repo.Key, RepoGroupLabel: repo.Label,
         CheckoutKey: ViewModels.SessionRailViewModel.WorktreeKeyFor(dto), CheckoutLabel: "",
         AwaitingInput: dto.AwaitingInput, LiveSubagents: dto.LiveSubagents, UsageLimit: dto.UsageLimit,
-        TerminalDialog: dto.TerminalDialog, Interruption: dto.Interruption);
+        TerminalDialog: dto.TerminalDialog, Interruption: dto.Interruption,
+        AccountDirectory: dto.AccountDirectory, AccountId: dto.AccountId, AccountLabel: dto.AccountLabel);
 
     public static AgentRow FromRemote(AgentInstanceDto dto) {
         var daemonKey = $"{dto.OwnerUserId}/{dto.DaemonName}";
@@ -63,7 +68,8 @@ public sealed record AgentRow(
             WorktreePath: null, WorkLocation: null, BorrowedFrom: null,
             MachineBadge: dto.DaemonName, RepoGroupKey: repo.Key, RepoGroupLabel: repo.Label,
             CheckoutKey: $"@{daemonKey}", CheckoutLabel: $"on {dto.DaemonName}",
-            OwnerUserId: dto.OwnerUserId);
+            OwnerUserId: dto.OwnerUserId,
+            AccountDirectory: dto.AccountDirectory, AccountId: dto.AccountId, AccountLabel: dto.AccountLabel);
     }
 
     /// A row from the server's listing. The status is the daemon vocabulary the rail already reads:
