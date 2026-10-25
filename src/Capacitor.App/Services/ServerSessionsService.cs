@@ -154,7 +154,10 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
                 if (_scope.Value == value) return;
                 _pages = 1;
                 _ended.Clear();
+                // Under Mine the unfiltered live set is ownership evidence; the previous scope's copy
+                // would hide the viewer's own registry rows as listed-but-not-mine until the read lands.
                 if (value == RailScope.Team) _mineLive.Clear();
+                else _live.Clear();
                 // Retention exempts the open row from the page cut, not from whose sessions the scope shows.
                 _keptRow = null;
                 _paging.OnNext(new(0, 0, 1, false, false));

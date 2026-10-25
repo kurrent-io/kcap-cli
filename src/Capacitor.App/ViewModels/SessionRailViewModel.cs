@@ -266,8 +266,8 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
 
         Groups = new ReadOnlyObservableCollection<RailGroupViewModel>(_groupsSource);
         directory.Rows.Connect()
-            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Filter(_stateFilter)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Group(row => GroupKey(row, _grouping, _today, _time.LocalTimeZone), _regroup)
             .Transform(g => new RailGroupViewModel(
                 g, _grouping, LabelFor(g.Key, _grouping, g), selected, pending, stale, openLocalSession, openRemoteSession, time, answering, commands,
@@ -341,7 +341,9 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
 
     internal static string GroupKey(AgentRow row, RailGrouping grouping, DateOnly today, TimeZoneInfo zone) => grouping switch {
         RailGrouping.Repository => row.RepoGroupKey,
-        RailGrouping.Date => $"day:{LocalDay(row.LastActivityAt ?? row.CreatedAt, zone):yyyy-MM-dd}",
+        // Invariant: a Buddhist or Hijri culture would write its own year into a key the label parses
+        // back as Gregorian and the preferences persist.
+        RailGrouping.Date => $"day:{LocalDay(row.LastActivityAt ?? row.CreatedAt, zone).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}",
         RailGrouping.Status => $"status:{StatusBucket(row)}",
         _ => "all",
     };

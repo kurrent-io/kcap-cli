@@ -623,6 +623,28 @@ public class ServerSessionsServiceTests {
         await Eventually(() => ids!.Count > 0, "resolved for the new connection");
     }
 
+    /// Under Mine the unfiltered live set is ownership evidence; the previous scope's copy would
+    /// hide the viewer's own registry rows as "listed but not mine" until the owner-filtered read lands.
+    [Test]
+    public async Task Switching_to_Mine_clears_the_live_set_until_its_own_read_lands() {
+        var (lane, listing, _, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        listing.Answer("ended", null, 0, 0);
+        Connect(lane);
+        await Eventually(() => service.Ended.Count == 20, "mine prefix");
+        service.Scope = RailScope.Team;
+        await Eventually(() => service.Live.Count == 2, "team live set");
+        var seen = new List<ServerSessionsSnapshot>();
+        using var sub = service.Snapshots.Subscribe(seen.Add);
+        var before = seen.Count;
+
+        service.Scope = RailScope.Mine;
+
+        await Assert.That(seen.Skip(before).Any(s => s.Live.Count == 0 && s.MineLive.Count == 0)).IsTrue();
+        await Eventually(() => service.MineLive.Count == 1 && service.Live.Count == 2, "mine read lands");
+    }
+
     /// The viewer stays unresolved only as long as the owners read keeps failing.
     [Test]
     public async Task A_failed_owners_read_is_retried_on_the_cadence() {

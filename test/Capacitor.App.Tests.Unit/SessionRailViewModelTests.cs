@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Reactive.Linq;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
@@ -527,6 +528,30 @@ public class SessionRailViewModelTests {
                 await Assert.That(rail.Groups[0].Tooltip).StartsWith("Yesterday");
             }
         });
+    }
+
+    /// The day key is a Gregorian date whatever calendar the user's culture counts in: it is parsed
+    /// back invariantly for the label and persisted as the collapsed-group key.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Date_groups_key_on_the_gregorian_date_under_a_buddhist_calendar_culture() {
+        var previous = CultureInfo.CurrentCulture;
+        CultureInfo.CurrentCulture = new CultureInfo("th-TH");
+        try {
+            await AvaloniaSession.WithImmediateRxScheduler(async () => {
+                var (directory, sessions, _, _, rail) = BuildWithControls();
+                using (directory) using (sessions) using (rail) {
+                    directory.Rows.AddOrUpdate(Server("today", lastActivity: Noon.AddHours(-3)));
+
+                    rail.Grouping = RailGrouping.Date;
+
+                    await Assert.That(rail.Groups[0].Key).IsEqualTo("day:2026-10-24");
+                    await Assert.That(rail.Groups[0].Label).IsEqualTo("Today");
+                }
+            });
+        } finally {
+            CultureInfo.CurrentCulture = previous;
+        }
     }
 
     [Test]
