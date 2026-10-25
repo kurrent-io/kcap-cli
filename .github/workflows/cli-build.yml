@@ -83,7 +83,7 @@ jobs:
 
       # No cache: RUNNER_OS keying collapses Linux legs that need different RID packages.
       - name: Setup .NET
-        uses: actions/setup-dotnet@v6
+        uses: ./.github/actions/setup-dotnet
 
       - name: Publish daemon AOT binary
         run: >

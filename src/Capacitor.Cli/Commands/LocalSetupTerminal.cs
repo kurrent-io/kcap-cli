@@ -64,13 +64,12 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
             confirmed = true;
         }
 
-        LocalEmbeddingAnswer embeddings;
+        LocalEmbeddingAnswer         embeddings;
+        LocalEmbeddingModelManifest? builtin;
 
         try {
-            if (await EmbeddingsAsync(installer, canAsk) is not { } answer)
-                return await RefuseAsync(MissingEmbeddings(installer.Ollama!.BaseUrl));
-
-            embeddings = answer;
+            builtin    = await BuiltinModelAsync(installer, plan, args.Embeddings, CancellationToken.None);
+            embeddings = await EmbeddingsAsync(installer, builtin, canAsk);
         } catch (Exception ex) {
             return await FailAsync(LocalSetupJsonLines.Classify(ex));
         }
@@ -79,7 +78,7 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
         using var deferral = InteractiveLifetime.Defer();
 
         try {
-            var committed = await installer.InstallAsync(new(SingleUser: true, Confirmed: confirmed, embeddings), progress, deferral.Token);
+            var committed = await installer.InstallAsync(new(SingleUser: true, Confirmed: confirmed, embeddings, builtin), progress, deferral.Token);
 
             if (!deferral.Interrupted) return (SetupExit.Done, committed);
 
@@ -92,31 +91,57 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
         }
     }
 
-    /// <summary>The flags' answer; else what an earlier setup recorded, or the step's own report when Ollama is not
-    /// running; else the user's. Null when only the user could answer and cannot be asked.</summary>
-    async Task<LocalEmbeddingAnswer?> EmbeddingsAsync(LocalInstaller installer, bool canAsk) {
+    /// <summary>The built-in model set the version this setup leaves running offers, looked up only for an answer that
+    /// may use it. Null when there is none.</summary>
+    public static async Task<LocalEmbeddingModelManifest?> BuiltinModelAsync(LocalInstaller installer, LocalPlan plan, LocalEmbeddingAnswer answer,
+        CancellationToken ct) {
+        if (answer is not (LocalEmbeddingAnswer.Default or LocalEmbeddingAnswer.Builtin)) return null;
+        if (answer is LocalEmbeddingAnswer.Default && installer.EmbeddingSetting is { Provider: not LocalEmbeddingProvider.Builtin }) return null;
+
+        try {
+            return await installer.FetchEmbeddingManifestAsync(plan.Existing?.Version ?? plan.Version, ct);
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            return null; // The install that follows reports the cancellation.
+        }
+    }
+
+    /// <summary>The flags' answer; else, when an earlier setup recorded a choice or nobody can be asked, the default;
+    /// else the user's.</summary>
+    async Task<LocalEmbeddingAnswer> EmbeddingsAsync(LocalInstaller installer, LocalEmbeddingModelManifest? builtin, bool canAsk) {
         var recorded   = installer.EmbeddingSetting;
         var configured = recorded?.Model;
+        var given      = args.Embeddings;
 
-        if (args.Embeddings is { } given) {
+        if (given is not LocalEmbeddingAnswer.Default) {
             if (configured is not null && given is LocalEmbeddingAnswer.Ollama { Model: { } model } && model != configured)
                 AnsiConsole.MarkupLine($"  [yellow]![/] {Markup.Escape($"{model} replaces {configured}. {EmbeddingModelNotice}")}");
 
             return given;
         }
 
-        if (recorded is not null) return new LocalEmbeddingAnswer.Ollama(null);
+        if (recorded is not null || !canAsk) return given;
 
-        var ollama = installer.Ollama ?? throw new InvalidOperationException("The installer has no Ollama client.");
+        var ollama  = installer.Ollama ?? throw new InvalidOperationException("The installer has no Ollama client.");
+        var running = await ollama.VersionAsync(CancellationToken.None) is not null;
 
-        if (await ollama.VersionAsync(CancellationToken.None) is null) return new LocalEmbeddingAnswer.Ollama(null);
+        if (!running && builtin is null) return given;
 
-        if (!canAsk) return null;
+        const string keyword = "Keyword search only";
+        var withOllama  = $"Ollama on {Url(ollama.BaseUrl)}";
+        var withBuiltin = builtin is null ? null : $"The built-in model ({Megabytes(builtin.TotalSize)} MB download)";
 
-        AnsiConsole.MarkupLine($"  {Markup.Escape($"Ollama is running on {Url(ollama.BaseUrl)}, so search can find sessions and memories by meaning as well as by keyword.")}");
+        AnsiConsole.MarkupLine($"  {Markup.Escape("Search can find sessions and memories by meaning as well as by keyword.")}");
         AnsiConsole.MarkupLine($"  {Markup.Escape(EmbeddingModelNotice)}");
 
-        if (!Ask("Use Ollama for semantic search?", defaultValue: true)) return new LocalEmbeddingAnswer.Skip();
+        var choices = new List<string>();
+        if (running) choices.Add(withOllama);
+        if (withBuiltin is not null) choices.Add(withBuiltin);
+        choices.Add(keyword);
+
+        var picked = AnsiConsole.Prompt(new SelectionPrompt<string>().Title("Search by meaning with:").UseConverter(Markup.Escape).AddChoices(choices));
+
+        if (picked == keyword) return new LocalEmbeddingAnswer.Skip();
+        if (picked == withBuiltin) return new LocalEmbeddingAnswer.Builtin();
 
         var chosen = AnsiConsole.Prompt(new TextPrompt<string>("Embedding model:")
             .DefaultValue(OllamaClient.DefaultModel)
@@ -124,10 +149,6 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
 
         return new LocalEmbeddingAnswer.Ollama(chosen);
     }
-
-    static string MissingEmbeddings(Uri ollama) =>
-        $"Ollama is running on {Url(ollama)}. Pass {LocalSetupArgs.EmbeddingModelFlag} {OllamaClient.DefaultModel} to use it for semantic search, "
-      + $"or {LocalSetupArgs.NoEmbeddingsFlag} to search by keyword. {EmbeddingModelNotice}";
 
     static string Url(Uri uri) => uri.ToString().TrimEnd('/');
 
@@ -196,6 +217,11 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
             LocalInstallEvent.EmbeddingsConfigured { Replaced: { } old } c =>
                 $"Semantic search uses {c.Model} through Ollama; everything embedded with {old} is embedded again in the background",
             LocalInstallEvent.EmbeddingsConfigured c   => $"Semantic search uses {c.Model} through Ollama",
+            LocalInstallEvent.EmbeddingBuiltinDownloading d => $"Downloading the built-in embedding model ({Megabytes(d.Bytes)} MB)…",
+            LocalInstallEvent.EmbeddingBuiltinProgress p    => Tenth(p.Received, p.Bytes) is { } tenth ? $"  {tenth}% of {Megabytes(p.Bytes)} MB" : null,
+            LocalInstallEvent.EmbeddingBuiltinConfigured { Replaced: { } old } =>
+                $"Semantic search uses the built-in model; everything embedded with {old} is embedded again in the background",
+            LocalInstallEvent.EmbeddingBuiltinConfigured    => "Semantic search uses the built-in model",
             LocalInstallEvent.EmbeddingsSkipped k      => k.Message,
             _                                   => null,
         };

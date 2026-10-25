@@ -1,3 +1,4 @@
+using Capacitor.App.Platform.Linux;
 using Capacitor.App.Platform.Mac;
 using Capacitor.App.ViewModels;
 
@@ -22,4 +23,12 @@ internal sealed record UninstallMode(bool PurgeLocal) {
          || !File.Exists(Path.Combine(root, "Contents", "Info.plist"))) return null;
         return new UninstallRunViewModel(cli, removalFor(root), PurgeLocal, quit, post);
     }
+
+    /// Null unless the process runs from an AppImage that is still on disk: the removal trashes the image, so
+    /// only the file the running app came from may reach it.
+    public UninstallRunViewModel? BuildAppImageRun(
+            AppImageInstall? install, Func<AppImageInstall, IAppRemoval> removalFor, IKcapCli cli, Action quit, Action<Action>? post = null) =>
+        install is not null && File.Exists(install.Image)
+            ? new UninstallRunViewModel(cli, removalFor(install), PurgeLocal, quit, post)
+            : null;
 }
