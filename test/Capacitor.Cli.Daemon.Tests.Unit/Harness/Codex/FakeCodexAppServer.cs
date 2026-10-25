@@ -181,10 +181,12 @@ sealed class FakeCodexAppServer : IAsyncDisposable {
 
                 var turnId = "turn-" + _turnStartCount;
                 _lastTurnId = turnId;
+                // A held echo is stored before the ack, so a release the test sends after it cannot miss it.
+                if (EchoUserMessages && HoldUserMessages) await EchoUserMessageAsync(turnId, @params, ct);
                 await RespondAsync(id, new JsonObject {
                     ["turn"] = new JsonObject { ["id"] = turnId, ["status"] = "inProgress", ["items"] = new JsonArray() },
                 }, ct);
-                if (EchoUserMessages) await EchoUserMessageAsync(turnId, @params, ct);
+                if (EchoUserMessages && !HoldUserMessages) await EchoUserMessageAsync(turnId, @params, ct);
 
                 // Optionally inject an out-of-policy approval request mid-turn.
                 if (InjectApprovalDuringTurn) {
@@ -225,8 +227,9 @@ sealed class FakeCodexAppServer : IAsyncDisposable {
                 LastSteerExpectedTurnId = @params.Str("expectedTurnId");
                 if (@params.Arr("input") is { } steerInput && steerInput.GetArrayLength() > 0)
                     LastSteerText = steerInput[0].Str("text");
+                if (EchoUserMessages && HoldUserMessages) await EchoUserMessageAsync(LastSteerExpectedTurnId ?? _lastTurnId, @params, ct);
                 await RespondAsync(id, new JsonObject { ["accepted"] = true }, ct);
-                if (EchoUserMessages) await EchoUserMessageAsync(LastSteerExpectedTurnId ?? _lastTurnId, @params, ct);
+                if (EchoUserMessages && !HoldUserMessages) await EchoUserMessageAsync(LastSteerExpectedTurnId ?? _lastTurnId, @params, ct);
                 break;
 
             case "turn/interrupt":
