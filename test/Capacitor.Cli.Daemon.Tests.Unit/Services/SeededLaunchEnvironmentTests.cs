@@ -35,7 +35,7 @@ public class SeededLaunchEnvironmentTests {
 
     static IDictionary<string, string?> CodexChildEnvironment() {
         var env = new ProcessStartInfo().Environment;
-        CodexHostedAgentRuntimeFactory.ApplyChildEnv(env, CodexHostedAgentRuntimeFactory.BuildEnv(Ctx("codex"), emitEnvelopeTranscript: false));
+        CodexHostedAgentRuntimeFactory.ApplyChildEnv(env, CodexHostedAgentRuntimeFactory.BuildEnv(Ctx("codex"), emitEnvelopeTranscript: false), remove: []);
 
         return env;
     }

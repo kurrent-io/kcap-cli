@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Daemon.Harness.Claude;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Claude;
@@ -39,5 +40,25 @@ public class ClaudeCommandProbeTests {
     [Test]
     public async Task ParseCommands_returns_empty_on_garbage() {
         await Assert.That(ClaudeCommandProbe.ParseCommands("not json\n\n")).IsEmpty();
+    }
+
+    /// <summary>An account launch's picker lists the commands its own directory provides, not the
+    /// daemon's.</summary>
+    [Test]
+    [NotInParallel]
+    public async Task Probe_runs_under_the_agents_account_directory() {
+        using var home = new TempHome();
+        var inherited = home.CreateDir(".claude-work");
+        var other     = home.CreateDir(".claude-other");
+        using var env = EnvScope.Exclusive("CLAUDE_CONFIG_DIR", inherited);
+
+        var custom  = ClaudeCommandProbe.BuildStartInfo("claude", home.Path, new ResolvedAccount(other, "acct-other", "Other"), home);
+        var builtIn = ClaudeCommandProbe.BuildStartInfo("claude", home.Path, new ResolvedAccount(home.CreateDir(".claude"), null, ".claude"), home);
+        var none    = ClaudeCommandProbe.BuildStartInfo("claude", home.Path, null, home);
+
+        await Assert.That(custom.Environment["CLAUDE_CONFIG_DIR"]).IsEqualTo((string)other);
+        await Assert.That(builtIn.Environment.ContainsKey("CLAUDE_CONFIG_DIR")).IsFalse();
+        await Assert.That(none.Environment["CLAUDE_CONFIG_DIR"]).IsEqualTo((string)inherited);
+        await Assert.That(Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR")).IsEqualTo((string)inherited);
     }
 }

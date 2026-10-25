@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -96,6 +97,25 @@ public class ServerConnectionAdvertisementTests {
         await Assert.That(connect.ResumingAgents).IsEquivalentTo(claims);
         await Assert.That(json).Contains(
             "\"resuming_agents\":[{\"agent_id\":\"agent-1\",\"predecessor_instance_id\":\"instance-old\",\"session_id\":\"session-1\"}]");
+    }
+
+    [Test]
+    public async Task Connect_payload_advertises_account_launches_and_carries_the_snapshot() {
+        var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1", ConfigRoot = Config.Root };
+        await using var conn = new ServerConnection(config, new FixedCredentialSource(), NullLoggerFactory.Instance,
+            NullLogger<ServerConnection>.Instance, TimeProvider.System);
+        var snapshot = new AccountsSnapshotDto("host-1", 3,
+            [new("acc-1", "claude", "/home/u/.claude-work", "key-1", "work", "recording")],
+            [new("claude", "/home/u/.claude", "key-0")]);
+        conn.GetAccountsSnapshot = () => snapshot;
+
+        var connect = conn.BuildDaemonConnect("mac", [], [], null);
+        var json    = System.Text.Json.JsonSerializer.Serialize(connect, CapacitorJsonContext.Default.DaemonConnect);
+
+        await Assert.That(connect.SupportsAccountLaunches).IsTrue();
+        await Assert.That(connect.Accounts).IsSameReferenceAs(snapshot);
+        await Assert.That(json).Contains("\"supports_account_launches\":true");
+        await Assert.That(json).Contains("\"accounts\":{\"host_id\":\"host-1\",\"revision\":3,");
     }
 
     [Test]
