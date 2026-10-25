@@ -555,12 +555,8 @@ public partial class WorktreeManager(
         return GitHome() is { } home ? Path.Combine(home, ".config", "git", "attributes") : null;
     }
 
-    /// <summary>Git's output without the one line terminator it ends with; a path's own trailing characters stay</summary>
-    static string OutputLine(string stdout) {
-        var line = stdout.EndsWith('\n') ? stdout[..^1] : stdout;
-
-        return line.EndsWith('\r') ? line[..^1] : line;
-    }
+    /// <summary>Git's output without the LF it ends with, on every platform; a path's own trailing characters stay</summary>
+    static string OutputLine(string stdout) => stdout.EndsWith('\n') ? stdout[..^1] : stdout;
 
     /// <summary>The home git uses: <c>HOME</c>, else on Windows <c>HOMEDRIVE</c> plus <c>HOMEPATH</c>, else
     /// <c>USERPROFILE</c></summary>
