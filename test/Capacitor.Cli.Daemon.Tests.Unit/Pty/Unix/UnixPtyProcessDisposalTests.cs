@@ -15,7 +15,7 @@ public class UnixPtyProcessDisposalTests {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
 
         using var spawner = new UnixSpawnerThread();
-        var       proc    = Spawn(spawner, "/bin/cat");
+        var       proc    = Spawn(spawner, IdleReader.Command, IdleReader.Args);
         var       fd      = proc.MasterFdForTest;
 
         await proc.DisposeAsync().AsTask().WaitAsync(Bound);
@@ -33,7 +33,7 @@ public class UnixPtyProcessDisposalTests {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
 
         using var spawner = new UnixSpawnerThread();
-        var       proc    = Spawn(spawner, "/bin/cat");
+        var       proc    = Spawn(spawner, IdleReader.Command, IdleReader.Args);
         var       fd      = proc.MasterFdForTest;
 
         using var stop = new CancellationTokenSource();
@@ -65,7 +65,7 @@ public class UnixPtyProcessDisposalTests {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
 
         using var spawner = new UnixSpawnerThread();
-        var       proc    = Spawn(spawner, "/bin/cat");
+        var       proc    = Spawn(spawner, IdleReader.Command, IdleReader.Args);
         var       fd      = proc.MasterFdForTest;
 
         var holding = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -96,7 +96,7 @@ public class UnixPtyProcessDisposalTests {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
 
         using var spawner = new UnixSpawnerThread();
-        var       proc    = Spawn(spawner, "/bin/cat");
+        var       proc    = Spawn(spawner, IdleReader.Command, IdleReader.Args);
 
         try {
             proc.BeforeMasterWriteForTest = () => throw new IOException("injected");
