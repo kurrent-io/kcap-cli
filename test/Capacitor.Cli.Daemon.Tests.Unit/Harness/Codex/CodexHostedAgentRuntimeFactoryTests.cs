@@ -24,6 +24,7 @@ public class CodexHostedAgentRuntimeFactoryTests {
         public string Vendor => "codex";
         public bool IsAvailable() => true;
         public bool SupportsUnattended => true;
+        public bool ResumesIdleWithoutPrompt(string? runtimeTransport) => true;
         public Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
             StartCalls++;
             return Task.FromResult(new HostedRuntimeStart(new StubRuntime(), null));
@@ -248,6 +249,18 @@ public class CodexHostedAgentRuntimeFactoryTests {
     [Arguments("appserver")]
     public async Task Both_transports_support_a_restart_resume(string? transport) {
         await Assert.That(((IHostedAgentRuntimeFactory)Factory(new RecordingPtyFactory(), appServerActive: false)).SupportsRestartResume(transport)).IsTrue();
+    }
+
+    /// <summary>Only a session recorded on the terminal resumes there with no turn; an app-server session, or one
+    /// whose transport was never recorded and so may take the app-server route, keeps the nudge.</summary>
+    [Test]
+    [Arguments("pty", true)]
+    [Arguments("app-server", false)]
+    [Arguments("pending", false)]
+    [Arguments(null, false)]
+    public async Task Only_a_terminal_session_resumes_without_a_prompt(string? transport, bool silent) {
+        await Assert.That(((IHostedAgentRuntimeFactory)Factory(new RecordingPtyFactory(), appServerActive: true)).ResumesIdleWithoutPrompt(transport))
+            .IsEqualTo(silent);
     }
 
     [Test]

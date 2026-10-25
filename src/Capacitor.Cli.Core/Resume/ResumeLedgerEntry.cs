@@ -31,7 +31,10 @@ public sealed record ResumeLedgerEntry(
     string? TranscriptFormat = null,
     // When the runtime now recorded started; each launch and each resume stamps its own, so a client can
     // tell the runtime it attached to from a successor. Null before the runtime starts.
-    DateTimeOffset? StartedAt = null
+    DateTimeOffset? StartedAt = null,
+    // Whether the agent was waiting for input when its daemon stopped it. Null in an entry written by an older
+    // daemon, which reads as interrupted mid-turn.
+    bool? AwaitingInput = null
 ) {
     public const int CurrentSchemaVersion = 1;
 }
