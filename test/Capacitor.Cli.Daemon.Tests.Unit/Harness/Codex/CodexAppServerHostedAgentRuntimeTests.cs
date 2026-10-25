@@ -363,24 +363,27 @@ public class CodexAppServerHostedAgentRuntimeTests {
     }
 
     [Test]
-    public async Task A_dispatched_inputs_recorded_user_message_carries_its_dispatch_and_a_typed_one_none() {
-        var fake = new FakeCodexAppServer { HoldTurnOpen = true, EchoUserMessages = true };
-        var (runtime, _, _) = Build(_ => fake, Launch(), emitEnvelopes: true);
+    public async Task A_dispatched_inputs_recorded_user_message_carries_its_dispatch_and_earlier_same_text_inputs_none() {
+        var fake = new FakeCodexAppServer { HoldTurnOpen = true, EchoUserMessages = true, HoldUserMessages = true };
+        var (runtime, _, _) = Build(_ => fake, Launch(prompt: "same"), emitEnvelopes: true);
         await runtime.StartAsync(CancellationToken.None).WaitAsync(HangGuard);
-        var dispatch = Guid.NewGuid();
+        Guid first = Guid.NewGuid(), second = Guid.NewGuid();
 
-        await runtime.SendUserInputAsync("typed").WaitAsync(HangGuard);
-        await runtime.SendDispatchedInputAsync("dispatched", dispatch, waitForWrite: false).WaitAsync(HangGuard);
+        await runtime.SendDispatchedInputAsync("same", first, waitForWrite: false).WaitAsync(HangGuard);
+        await runtime.SendUserInputAsync("again").WaitAsync(HangGuard);
+        await runtime.SendDispatchedInputAsync("again", second, waitForWrite: false).WaitAsync(HangGuard);
+        await fake.ReleaseUserMessagesAsync();
 
         var users = new List<AcpEventEnvelope>();
         using var cts = new CancellationTokenSource(HangGuard);
-        while (users.Count < 2) {
+        while (users.Count < 4) {
             var env = await runtime.Envelopes.ReadAsync(cts.Token);
             if (env.Kind == AcpEventKind.UserMessage) users.Add(env);
         }
 
-        await Assert.That(users.Select(u => (u.Text, u.DispatchId)))
-            .IsEquivalentTo(new (string?, Guid?)[] { ("typed", null), ("dispatched", dispatch) }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+        await Assert.That(users.Select(u => (u.Text, u.DispatchId))).IsEquivalentTo(
+            new (string?, Guid?)[] { ("same", null), ("same", first), ("again", null), ("again", second) },
+            TUnit.Assertions.Enums.CollectionOrdering.Matching);
 
         await fake.CompleteHeldTurnAsync();
         await runtime.WaitForTurnIdleAsync(CancellationToken.None).WaitAsync(HangGuard);
