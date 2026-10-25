@@ -21,6 +21,9 @@ public sealed class LinuxDesktopHost(string cliDirectory, bool updateRelaunch, A
 
     public override bool TrayAnnouncesMenuOpen => false;
 
+    /// A new copy starts from the image, which may have been moved or deleted since this one started.
+    public override bool CanRelaunchNow => appImage is null || File.Exists(appImage.Image);
+
     /// A CLI the image could not copy out runs from its mount.
     public override bool CliOutlivesApp => !cliInMount;
 

@@ -1002,6 +1002,10 @@ public partial class App : Application {
         try {
             var request = UninstallConfirmation.Build(await source.GatherAsync(_shutdown.Token));
             if (!await ShowLifecyclePromptDialogAsync(_coordinator?.Window, request.Prompt, _shutdown.Token)) return;
+            if (!Program.Host.CanRelaunchNow) {
+                _coordinator?.Window?.Notifier?.Notify("kcap cannot restart from where it was started. Run kcap uninstall in a terminal instead.");
+                return;
+            }
             var start = Program.Host.NewCopy([.. request.RelaunchArgs]);
             desktop.Exit += (_, _) => {
                 try { Process.Start(start); }
