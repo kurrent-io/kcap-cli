@@ -256,6 +256,7 @@ internal partial class AgentOrchestrator {
                     PredecessorInstanceId = _config.InstanceId,
                     ResumingAt            = now,
                     UpdatedAt             = now,
+                    AwaitingInput         = agent.ActivityClock.AwaitingInput,
                     SessionId             = agent.SessionId ?? entry.SessionId,
                     VendorSession         = agent.VendorSession ?? entry.VendorSession
                 });
@@ -473,6 +474,10 @@ internal partial class AgentOrchestrator {
 
         /// <summary>Ends the runtime start with the attempt: a stop during the handshake must not wait for the vendor.</summary>
         public CancellationToken Token { get; init; }
+
+        /// <summary>The agent was waiting when its predecessor stopped it and resumes with no turn: it is published
+        /// waiting, before anything can deliver it input.</summary>
+        public bool StartsWaiting { get; init; }
 
         /// <summary>The server's reason, empty when it gave none, once it refused the registration.</summary>
         public string? RefusedRegistration { get; set; }
@@ -695,6 +700,7 @@ internal partial class AgentOrchestrator {
 
             resume.Agent = agent;
             ReplayPersistedRing(agent);
+            if (resume.StartsWaiting) agent.ActivityClock.SetAwaitingInput(true);
             capacity.Publish(agent);
             if (!resume.DefersLedger) WriteResumedLedger(agent, resume.Entry);
 
@@ -870,8 +876,12 @@ internal partial class AgentOrchestrator {
             entry.Launch.RepoPath, entry.Vendor, entry.Launch.RequesterDisplay);
         var consent = _consentGate.GrantResume(entry.AgentId, input, entry.Launch.ConsentSource ?? "");
 
-        var resume  = new ResumeLaunch(entry, ResumedWorktree(entry)) { Token = ct };
-        var outcome = await LaunchAdmittedAsync(BuildResumeCommand(entry, LastAlive(entry, null)), consent, hold, resume, cancel: CancellationToken.None); // the resume's own token ends its start
+        // An agent that was waiting comes back waiting: a nudge would start a turn nobody asked for.
+        var silent  = entry.AwaitingInput == true
+                   && _runtimeFactories.TryGetValue(entry.Vendor, out var factory) && factory.ResumesIdleWithoutPrompt(entry.Transport);
+        var resume  = new ResumeLaunch(entry, ResumedWorktree(entry)) { Token = ct, StartsWaiting = silent };
+        var command = BuildResumeCommand(entry, LastAlive(entry, null)) is var built && silent ? built with { Prompt = "" } : built;
+        var outcome = await LaunchAdmittedAsync(command, consent, hold, resume, cancel: CancellationToken.None); // the resume's own token ends its start
 
         if (resume.Agent is null && IsWithdrawn(entry.AgentId)) return (StoppedDuringResume, null);
 
@@ -1170,7 +1180,9 @@ internal partial class AgentOrchestrator {
                 State                 = ResumeState.Running,
                 LastError             = null,
                 PredecessorInstanceId = null,
-                ResumingAt            = null
+                ResumingAt            = null,
+                // Waiting is a fact about the stop it was recorded at; a crash before the next one proves nothing.
+                AwaitingInput         = null
             });
         }
     }

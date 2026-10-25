@@ -40,7 +40,7 @@ static class ClaudeCommandProbe {
             RedirectStandardError  = true,
             UseShellExecute        = false,
             CreateNoWindow         = true,
-            Environment            = { ["KCAP_SKIP"] = "1" },
+            Environment            = { [HostedAgent.SkipVar] = "1" },
         };
         psi.Environment.Remove("CLAUDECODE");
         psi.Environment.Remove("CLAUDE_CODE_ENTRYPOINT");

@@ -19,7 +19,7 @@ internal static class DaemonBridgeRelay {
     /// surfaces show a PTY vendor's wait the way an ACP runtime's turn end already does.
     /// </summary>
     public static Task NotifyInputWaitAsync(
-            HostedAgent hosted, string vendor, string? sessionId, string? cwd, bool waiting, TimeSpan budget) =>
+            HostedAgent hosted, string vendor, string? sessionId, string? cwd, bool waiting, HookBudget budget) =>
         PostAsync(hosted, vendor, "input-wait", new JsonObject { ["session_id"] = sessionId, ["cwd"] = cwd, ["waiting"] = waiting }, budget);
 
     /// <summary>
@@ -30,7 +30,7 @@ internal static class DaemonBridgeRelay {
     /// </summary>
     public static Task NotifySubagentAsync(
             HostedAgent hosted, string vendor, string? sessionId, string? cwd, string subagentId, bool live,
-            long sentAtMs, TimeSpan budget) =>
+            long sentAtMs, HookBudget budget) =>
         PostAsync(hosted, vendor, "subagent", new JsonObject {
             ["session_id"]  = sessionId,
             ["cwd"]         = cwd,
@@ -48,7 +48,7 @@ internal static class DaemonBridgeRelay {
     /// hook's wait, so a late one must not reach a prompt registered after it was sent.
     /// </summary>
     public static Task NotifyToolSettledAsync(
-            HostedAgent hosted, string vendor, string? sessionId, string? cwd, string? toolUseId, string? subagentId, TimeSpan budget,
+            HostedAgent hosted, string vendor, string? sessionId, string? cwd, string? toolUseId, string? subagentId, HookBudget budget,
             string? toolName = null, JsonNode? toolInput = null, long? sentAtMs = null) {
         var payload = new JsonObject { ["session_id"] = sessionId, ["cwd"] = cwd };
         if (toolUseId is not null) payload["tool_use_id"] = toolUseId;
@@ -66,8 +66,9 @@ internal static class DaemonBridgeRelay {
         return PostAsync(hosted, vendor, "tool-settled", payload, budget);
     }
 
-    static async Task PostAsync(HostedAgent hosted, string vendor, string route, JsonObject payload, TimeSpan budget) {
-        var cap = budget < Cap ? budget : Cap;
+    static async Task PostAsync(HostedAgent hosted, string vendor, string route, JsonObject payload, HookBudget budget) {
+        var remaining = budget.Remaining;
+        var cap       = remaining < Cap ? remaining : Cap;
         if (cap <= TimeSpan.Zero) return;
         if (hosted.AgentId is not { } agentId) return;
         // A notice is not worth a line on stderr, so a refused bridge is as quiet as no bridge.
@@ -76,9 +77,11 @@ internal static class DaemonBridgeRelay {
         payload["agent_id"] = agentId;
 
         try {
-            using var client  = new HttpClient { Timeout = cap };
-            using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-            using var _       = await client.PostAsync($"{bridge.BaseUrl}/{vendor}/{route}", content);
+            // On the hook's own clock, so the cap is the hook's time and not the host's.
+            using var deadline = new CancellationTokenSource(cap, budget.Time);
+            using var client   = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+            using var content  = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+            using var _        = await client.PostAsync($"{bridge.BaseUrl}/{vendor}/{route}", content, deadline.Token);
         } catch {
             // A notice, never a hook outcome.
         }

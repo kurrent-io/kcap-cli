@@ -606,7 +606,7 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
-        if (!ended) DaemonCommands.MarkLedgerInterrupted(store, id, time);
+        if (!ended) DaemonCommands.MarkLedgerInterrupted(store, id, time, Console.Error);
 
         await Console.Out.WriteLineAsync($"Service '{id}' uninstalled ({manager.Describe()}).");
         return 0;
@@ -643,7 +643,7 @@ sealed class DaemonServiceCommands(
                         await Console.Error.WriteLineAsync($"Could not uninstall service '{unit}': {error}");
                         failed = true;
                     } else {
-                        if (!ended) DaemonCommands.MarkLedgerInterrupted(store, unit, time);
+                        if (!ended) DaemonCommands.MarkLedgerInterrupted(store, unit, time, Console.Error);
                         await Console.Out.WriteLineAsync($"Service '{unit}' uninstalled ({manager.Describe()}).");
                     }
                 }
@@ -750,7 +750,7 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
-        if (!exited) DaemonCommands.MarkLedgerInterrupted(store, id, time, DaemonCommands.KeepsSavedResumes(request, outcome));
+        if (!exited) DaemonCommands.MarkLedgerInterrupted(store, id, time, Console.Error, DaemonCommands.KeepsSavedResumes(request, outcome));
 
         await Console.Out.WriteLineAsync($"Service '{id}' stopped (still installed).");
         return 0;

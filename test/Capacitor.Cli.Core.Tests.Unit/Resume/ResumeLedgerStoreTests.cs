@@ -18,7 +18,7 @@ public class ResumeLedgerStoreTests {
             "preset", "/mcp.json", "title", true, "server", "user-1", "User One", "owner", "2026-10-17T08:00:00Z",
             "flow-1", "reviewer", WorktreeBranch: "capacitor/wt", WorktreeIsStandalone: false, WorktreeSourceRepo: "/repo",
             PermissionMode: "plan", InactivityBoundSeconds: 600),
-        ResumeState.Running, 2, "err", "pred-1", T0.AddMinutes(1), DaemonInstanceId: "instance-1");
+        ResumeState.Running, 2, "err", "pred-1", T0.AddMinutes(1), DaemonInstanceId: "instance-1", AwaitingInput: true);
 
     [Test]
     public async Task Write_then_TryRead_round_trips_every_field() {
@@ -42,17 +42,18 @@ public class ResumeLedgerStoreTests {
     }
 
     [Test]
-    public async Task An_entry_written_before_the_instance_worktree_and_permission_fields_reads_them_as_null() {
+    public async Task An_entry_written_before_the_instance_worktree_permission_and_waiting_fields_reads_them_as_null() {
         using var tmp   = new TempDaemonStore();
         var       store = ResumeLedgerStore.For(tmp.Store, "d1");
         store.Write(Entry("agent-1"));
         var path = store.EntryPath("agent-1");
         var json = System.Text.RegularExpressions.Regex.Replace(
             File.ReadAllText(path),
-            ",\"(daemon_instance_id|worktree_branch|worktree_is_standalone|worktree_source_repo|permission_mode|inactivity_bound_seconds)\":(\"[^\"]*\"|true|false|[0-9]+)", "");
+            ",\"(daemon_instance_id|worktree_branch|worktree_is_standalone|worktree_source_repo|permission_mode|inactivity_bound_seconds|awaiting_input)\":(\"[^\"]*\"|true|false|[0-9]+)", "");
         await Assert.That(json).DoesNotContain("worktree_branch");
         await Assert.That(json).DoesNotContain("permission_mode");
         await Assert.That(json).DoesNotContain("inactivity_bound_seconds");
+        await Assert.That(json).DoesNotContain("awaiting_input");
         File.WriteAllText(path, json);
 
         var read = store.TryRead("agent-1")!;
@@ -63,6 +64,7 @@ public class ResumeLedgerStoreTests {
         await Assert.That(read.Launch.WorktreeSourceRepo).IsNull();
         await Assert.That(read.Launch.PermissionMode).IsNull();
         await Assert.That(read.Launch.InactivityBoundSeconds).IsNull();
+        await Assert.That(read.AwaitingInput).IsNull();
     }
 
     [Test]

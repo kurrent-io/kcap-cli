@@ -54,7 +54,7 @@ static class McpReviewContextServer {
         using var reader = new StreamReader(stdin, Encoding.UTF8);
         await using var writer = new StreamWriter(stdout, new UTF8Encoding(false)) { AutoFlush = true };
 
-        await McpStdioLoop.RunAsync(reader, writer, (id, request) => DispatchToolCallAsync(client, validated!, id, request), (id, method, request) => method switch {
+        await McpStdioLoop.RunAsync(reader, writer, tools, (id, request) => DispatchToolCallAsync(client, validated!, id, request), (id, method, request) => method switch {
             "initialize" => BuildInitializeResponse(id, request),
             "tools/list" => ToResponse(
                 id, new McpToolsResult(tools), McpJsonContext.Default.McpToolsResult),

@@ -2,7 +2,6 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
              xmlns:views="clr-namespace:Capacitor.App.Views"
-             xmlns:services="clr-namespace:Capacitor.App.Services.LocalSetup"
              xmlns:svc="clr-namespace:Capacitor.App.Services"
              xmlns:cmd="clr-namespace:Capacitor.Cli.Core.Commands;assembly=Capacitor.Cli.Core"
              x:Class="Capacitor.App.Views.SessionRailView"
@@ -321,48 +320,24 @@
                             <TextBlock Classes="footerDot"
                                        IsVisible="{Binding Search.StateText, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}" />
                             <Button x:Name="RailLocalSearchButton" Classes="kcapGhost" Padding="2,0" Margin="-2,0,3,0" MinHeight="0"
+                                    ToolTip.Tip="How the local server searches your sessions. Change it in Settings."
+                                    AutomationProperties.Name="Open search settings for the local server"
+                                    Command="{Binding Search.OpenSettingsCommand, FallbackValue={x:Null}}"
+                                    IsVisible="{Binding Search.ShowsSettingsLink, FallbackValue=False}">
+                                <TextBlock x:Name="RailLocalSearchText" Text="{Binding Search.StateText}" Classes="footerMeta" />
+                            </Button>
+                            <!-- With no Settings window to open (a server reached by URL with no profile), the controls open here. -->
+                            <Button x:Name="RailLocalSearchInlineButton" Classes="kcapGhost" Padding="2,0" Margin="-2,0,3,0" MinHeight="0"
                                     ToolTip.Tip="How the local server searches your sessions"
                                     AutomationProperties.Name="Search settings for the local server"
-                                    IsVisible="{Binding Search.StateText, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}">
-                                <TextBlock x:Name="RailLocalSearchText" Text="{Binding Search.StateText}" Classes="footerMeta" />
+                                    IsVisible="{Binding Search.ShowsInlineSettings, FallbackValue=False}">
+                                <TextBlock Text="{Binding Search.StateText}" Classes="footerMeta" />
                                 <Button.Flyout>
                                     <Flyout Placement="TopEdgeAlignedLeft" VerticalOffset="-6" FlyoutPresenterClasses="kcapPanel">
-                                        <StackPanel x:Name="RailLocalSearchPanel" Margin="12" Spacing="10" Width="300"
-                                                    DataContext="{Binding Search}" x:DataType="vm:LocalSearchViewModel">
-                                            <TextBlock Text="Search" FontSize="13.5" FontWeight="SemiBold"
-                                                       Foreground="{StaticResource KcapTextBrush}" />
-                                            <TextBlock x:Name="RailLocalSearchCurrentText" Text="{Binding CurrentText}" FontSize="12.5"
-                                                       TextWrapping="Wrap" Foreground="{StaticResource KcapTextBrush}" />
-                                            <StackPanel Spacing="6" IsEnabled="{Binding !Running}">
-                                                <ScrollViewer MaxHeight="440" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                                                    <views:SearchChoiceView DataContext="{Binding Choice}" />
-                                                </ScrollViewer>
-                                                <Button x:Name="RailSearchApplyButton" Classes="kcapChip" HorizontalAlignment="Left"
-                                                        Content="{Binding ApplyLabel}" Command="{Binding ApplyCommand}"
-                                                        IsEnabled="{Binding CanApply}" />
-                                            </StackPanel>
-                                            <TextBlock Text="Setting up search…" FontSize="12" Foreground="{StaticResource KcapMutedBrush}"
-                                                       IsVisible="{Binding Running}" />
-                                            <StackPanel Spacing="6" DataContext="{Binding Embeddings}" x:DataType="services:LocalEmbeddingProgress">
-                                                <StackPanel Spacing="4" IsVisible="{Binding Pulling}">
-                                                    <TextBlock x:Name="RailSearchPullText" Text="{Binding PullText}" FontSize="12"
-                                                               Foreground="{StaticResource KcapMutedBrush}" />
-                                                    <ProgressBar x:Name="RailSearchPullBar" Height="3" Minimum="0" Maximum="1"
-                                                                 Value="{Binding PullFraction, FallbackValue=0, TargetNullValue=0}"
-                                                                 IsIndeterminate="{Binding PullFraction, Converter={x:Static ObjectConverters.IsNull}}"
-                                                                 Foreground="{StaticResource KcapMutedBrush}" />
-                                                </StackPanel>
-                                                <TextBlock x:Name="RailSearchSummaryText" Text="{Binding Summary}" FontSize="12" TextWrapping="Wrap"
-                                                           Foreground="{StaticResource KcapMutedBrush}"
-                                                           IsVisible="{Binding Summary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                                <TextBlock Text="{Binding ReembedNote}" FontSize="12" TextWrapping="Wrap"
-                                                           Foreground="{StaticResource KcapMutedBrush}"
-                                                           IsVisible="{Binding ReembedNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                            </StackPanel>
-                                            <SelectableTextBlock x:Name="RailSearchFailureText" Text="{Binding FailureText}" FontSize="12"
-                                                                 TextWrapping="Wrap" Foreground="{StaticResource KcapDangerBrush}"
-                                                                 IsVisible="{Binding FailureText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                        </StackPanel>
+                                        <ScrollViewer MaxHeight="560" Width="440" Margin="12" VerticalScrollBarVisibility="Auto"
+                                                      HorizontalScrollBarVisibility="Disabled">
+                                            <views:SearchSettingsView x:Name="RailLocalSearchPanel" DataContext="{Binding Search}" />
+                                        </ScrollViewer>
                                     </Flyout>
                                 </Button.Flyout>
                             </Button>
