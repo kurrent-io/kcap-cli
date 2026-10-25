@@ -6,18 +6,19 @@ namespace Capacitor.App.ViewModels;
 /// Names the senders of one chat's user messages, read from the server for the chat's session. UI thread
 /// only: labels are tracked and titled there, and only the read itself leaves it. One read at a time.
 internal sealed class MessageSenderLookup(IMessageSenderSource source, TimeProvider time, CancellationToken lifetime, Action<string> log) {
-    /// Gaps before asking again about a recent message still unnamed: the server records a sender a few
-    /// seconds after the message lands. Older messages are asked about once.
+    /// Gaps between asks about one message. A recent message still unnamed is asked again on them, since the
+    /// server records a sender a few seconds after the message lands; an older one only after a failed read.
     internal static readonly TimeSpan[] Retry = [TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(15)];
     internal static readonly TimeSpan RecentWindow = TimeSpan.FromMinutes(1);
 
     internal const string Caller = "You";
     internal const string Unnamed = "User";
 
-    sealed class Entry(SenderLabel label, int retries) {
+    sealed class Entry(SenderLabel label, int unmatchedRetries) {
         public SenderLabel Label { get; } = label;
-        public int Retries { get; } = retries;
-        public int Attempt;
+        public int UnmatchedRetries { get; } = unmatchedRetries;
+        public int Unmatched;
+        public int Failed;
     }
 
     readonly Queue<Entry> _due = new();
@@ -28,10 +29,23 @@ internal sealed class MessageSenderLookup(IMessageSenderSource source, TimeProvi
     /// The read in flight, or the last one started.
     internal Task? PendingReadForTesting { get; private set; }
 
-    public void SetSession(string? sessionId) {
+    /// A title names a sender of the session the chat showed when it was read, so another session starts the
+    /// visible messages over.
+    public void SetSession(string? sessionId, IEnumerable<SenderLabel> visible) {
         if (_sessionId == sessionId) return;
         _sessionId = sessionId;
-        Pump();
+        Restart(visible);
+    }
+
+    /// Forgets every title and asks about the visible messages again: after a sign-in the viewer may be
+    /// another person, whose "You" is someone else's. Also how messages left unasked while the session was
+    /// unreadable are asked about once it may be readable.
+    public void Restart(IEnumerable<SenderLabel> visible) {
+        var labels = visible.ToList();
+        _generation++;
+        _due.Clear();
+        foreach (var label in labels) label.Title = null;
+        Track(labels);
     }
 
     public void Track(IEnumerable<SenderLabel> labels) {
@@ -56,14 +70,17 @@ internal sealed class MessageSenderLookup(IMessageSenderSource source, TimeProvi
         PendingReadForTesting = ReadAsync(_generation);
     }
 
+    bool IsCurrent(int generation, string session) => generation == _generation && _sessionId == session;
+
     async Task ReadAsync(int generation) {
         try {
-            while (_due.Count > 0 && generation == _generation && _sessionId is { } session && !lifetime.IsCancellationRequested) {
+            while (_due.Count > 0 && _sessionId is { } session && IsCurrent(generation, session) && !lifetime.IsCancellationRequested) {
                 var batch = TakeBatch();
                 var read = await source.ReadAsync(session, Request(batch), lifetime);
-                if (generation != _generation) break;
-                Apply(batch, read, generation);
-                // The session is not readable as this viewer: asking about the rest would get the same answer.
+                if (!IsCurrent(generation, session)) break;
+                Apply(batch, read, generation, session);
+                // Asking about the rest would get the same answer. They stay on screen untitled, and the next
+                // sign-in or session change asks about them again.
                 if (read.Kind is MessageSendersReadKind.Unavailable or MessageSendersReadKind.SignedOut) _due.Clear();
             }
         } catch (OperationCanceledException) when (lifetime.IsCancellationRequested) {
@@ -97,7 +114,7 @@ internal sealed class MessageSenderLookup(IMessageSenderSource source, TimeProvi
         return request;
     }
 
-    void Apply(List<Entry> batch, MessageSendersRead read, int generation) {
+    void Apply(List<Entry> batch, MessageSendersRead read, int generation, string session) {
         var byId = new Dictionary<Guid, MessageSenderDto>();
         var byNumber = new Dictionary<long, MessageSenderDto>();
         var byDispatch = new Dictionary<Guid, MessageSenderDto>();
@@ -106,7 +123,7 @@ internal sealed class MessageSenderLookup(IMessageSenderSource source, TimeProvi
             if (row.EventNumber is { } number) byNumber.TryAdd(number, row);
             if (row.DispatchId is { } dispatch) byDispatch.TryAdd(dispatch, row);
         }
-        var retry = new List<Entry>();
+        var retry = new List<(Entry Entry, TimeSpan Delay)>();
         foreach (var entry in batch) {
             var keys = entry.Label.Keys;
             var row = keys.EventId is { } id && byId.TryGetValue(id, out var r1) ? r1
@@ -114,24 +131,23 @@ internal sealed class MessageSenderLookup(IMessageSenderSource source, TimeProvi
                 : keys.DispatchId is { } dispatch && byDispatch.TryGetValue(dispatch, out var r3) ? r3
                 : null;
             if (row is not null) entry.Label.Title = TitleOf(row);
-            else if (read.Kind is MessageSendersReadKind.Ready or MessageSendersReadKind.Unreachable && entry.Attempt < entry.Retries)
-                retry.Add(entry);
+            else if (read.Kind == MessageSendersReadKind.Ready && entry.Unmatched < entry.UnmatchedRetries)
+                retry.Add((entry, Retry[entry.Unmatched++]));
+            else if (read.Kind == MessageSendersReadKind.Unreachable && entry.Failed < Retry.Length)
+                retry.Add((entry, Retry[entry.Failed++]));
         }
-        foreach (var group in retry.GroupBy(entry => entry.Attempt))
-            _ = RetryAsync([.. group], Retry[group.Key], generation);
+        foreach (var group in retry.GroupBy(r => r.Delay))
+            _ = RetryAsync([.. group.Select(r => r.Entry)], group.Key, generation, session);
     }
 
     static string TitleOf(MessageSenderDto row) =>
         row.SentByCaller ? Caller : row.SenderName is { Length: > 0 } name ? name : Unnamed;
 
-    async Task RetryAsync(List<Entry> entries, TimeSpan delay, int generation) {
+    async Task RetryAsync(List<Entry> entries, TimeSpan delay, int generation, string session) {
         try { await Task.Delay(delay, time, lifetime); }
         catch (OperationCanceledException) { return; }
-        if (generation != _generation) return;
-        foreach (var entry in entries) {
-            entry.Attempt++;
-            _due.Enqueue(entry);
-        }
+        if (!IsCurrent(generation, session)) return;
+        foreach (var entry in entries) _due.Enqueue(entry);
         Pump();
     }
 }

@@ -90,6 +90,16 @@ public class MessageSendersClientTests {
     }
 
     [Test]
+    public async Task A_success_with_a_null_sender_list_is_unreachable() {
+        using var server = Serve(200, """{"senders":null}""");
+        using var http = new HttpClient();
+
+        var read = await new MessageSendersClient(http, server.Urls[0]).ReadAsync(Dashed, AnyKey, CancellationToken.None);
+
+        await Assert.That(read.Kind).IsEqualTo(MessageSendersReadKind.Unreachable);
+    }
+
+    [Test]
     public async Task A_transport_failure_is_unreachable() {
         using var http = new HttpClient(new ThrowingHandler(new HttpRequestException("connection refused")));
 
