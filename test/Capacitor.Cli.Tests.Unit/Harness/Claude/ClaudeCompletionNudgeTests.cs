@@ -78,7 +78,10 @@ public class ClaudeCompletionNudgeTests {
         await Assert.That(decision["decision"]!.GetValue<string>()).IsEqualTo("block");
         await Assert.That(decision["reason"]!.GetValue<string>()).StartsWith("kcap: If the piece of work the user framed has reached a terminal state");
         await Assert.That(decision["reason"]!.GetValue<string>()).Contains("(1) close_loose_end each loose end whose work this session finished");
-        await Assert.That(decision["reason"]!.GetValue<string>()).Contains("list_loose_ends with claimed_session_id lists those; pass each one's claim_id");
+        // Declared and claimed ends are found two different ways: a declared one by its declaration_id or among the
+        // ends the session sighted, a claimed one by the claim.
+        await Assert.That(decision["reason"]!.GetValue<string>()).Contains("the ones it declared (pass the declaration_id, or find them with list_loose_ends by session_id)");
+        await Assert.That(decision["reason"]!.GetValue<string>()).Contains("the ones it claimed (list_loose_ends by claimed_session_id; pass each claim_id)");
         // session_id lists the ends a session sighted, which is no claim on them.
         await Assert.That(decision["reason"]!.GetValue<string>()).DoesNotContain("session_id or");
         await Assert.That(decision["reason"]!.GetValue<string>()).Contains("(2) declare any remaining loose ends with declare_loose_end");
