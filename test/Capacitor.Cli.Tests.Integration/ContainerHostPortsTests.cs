@@ -74,20 +74,23 @@ public class ContainerHostPortsTests {
         await Assert.That(reaperPort).IsLessThan(EphemeralFloor);
     }
 
-    /// <summary>Holds the port one past the latest pick, which is the one the next pick lands on.</summary>
+    /// <summary>Holds the port one past the latest pick, which is the one the next pick lands on. A candidate something
+    /// else already holds could be let go mid-test, so the test picks again until it holds one itself.</summary>
     static (int Port, TcpListener Holder) HoldTheNextPort(bool ipv6Only = false) {
-        var port = ContainerHostPorts.Next() + 1;
-        if (port > ContainerHostPorts.Last) port = ContainerHostPorts.First;
+        for (var attempt = 0; ; attempt++) {
+            var port = ContainerHostPorts.Next() + 1;
+            if (port > ContainerHostPorts.Last) port = ContainerHostPorts.First;
 
-        var holder = new TcpListener(ipv6Only ? IPAddress.IPv6Any : IPAddress.Any, port);
-        if (ipv6Only) holder.Server.DualMode = false;
+            var holder = new TcpListener(ipv6Only ? IPAddress.IPv6Any : IPAddress.Any, port);
+            if (ipv6Only) holder.Server.DualMode = false;
 
-        try {
-            holder.Start();
-        } catch (SocketException) {
-            // something else already holds it, which serves as well
+            try {
+                holder.Start();
+
+                return (port, holder);
+            } catch (SocketException) when (attempt < 20) {
+                holder.Dispose();
+            }
         }
-
-        return (port, holder);
     }
 }
