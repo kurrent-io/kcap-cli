@@ -3,7 +3,7 @@
              xmlns:views="clr-namespace:Capacitor.App.Views"
              x:Class="Capacitor.App.Views.HarnessesSettingsView" x:DataType="vm:HarnessesSettingsViewModel">
     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-        <StackPanel Classes="settingsPage">
+        <views:SettingsPage Classes="settingsPage">
             <StackPanel Classes="settingsHeader">
                 <TextBlock Classes="kcapTitle" Text="Harnesses" />
                 <TextBlock Classes="kcapSubtitle" Text="Choose which coding tools connect to kcap on this computer." TextWrapping="Wrap" />
@@ -17,21 +17,11 @@
             </StackPanel>
 
             <StackPanel Classes="settingsGroup">
-                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
-                    <StackPanel Classes="settingsGroupHeader">
-                        <TextBlock Classes="settingsGroupTitle" Text="Coding tools" />
-                        <TextBlock Classes="kcapHint" TextWrapping="Wrap"
-                                   Text="Connecting installs kcap's recording hooks, plugins and tools; disconnecting removes them. Restart a tool after a change." />
-                    </StackPanel>
-                    <Button x:Name="RescanHarnessesButton" Grid.Column="1" Classes="kcapChip settingsCompact"
-                            VerticalAlignment="Top" Command="{Binding RescanCommand}"
-                            AutomationProperties.Name="Rescan harnesses">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <views:AppIcon Kind="RefreshCw" Size="14" />
-                            <TextBlock Text="Rescan" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </Button>
-                </Grid>
+                <StackPanel Classes="settingsGroupHeader">
+                    <TextBlock Classes="settingsGroupTitle" Text="Coding tools" />
+                    <TextBlock Classes="kcapHint" TextWrapping="Wrap"
+                               Text="Connecting installs kcap's recording hooks, plugins and tools; disconnecting removes them. Restart a tool after a change." />
+                </StackPanel>
 
                 <Border Classes="settingsCard" IsVisible="{Binding !!Rows.Count}">
                     <ItemsControl x:Name="HarnessSettingsRows" ItemsSource="{Binding Rows}" IsEnabled="{Binding !Busy}">
@@ -98,9 +88,17 @@
                 <TextBlock Classes="settingsFootnote" IsVisible="{Binding !Rows.Count}"
                            Text="No coding tools found on this computer. Install one, then rescan." />
                 <TextBlock Classes="settingsFootnote" Text="Your coding tools and their existing sessions are kept either way." />
+                <Button x:Name="RescanHarnessesButton" Classes="kcapChip settingsCompact" HorizontalAlignment="Left"
+                        Command="{Binding RescanCommand}" AutomationProperties.Name="Rescan harnesses"
+                        ToolTip.Tip="Look again for coding tools installed on this computer">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <views:AppIcon Kind="RefreshCw" Size="14" />
+                        <TextBlock Text="Rescan coding tools" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
             </StackPanel>
             <TextBlock Classes="kcapHint" Text="{Binding Message}" TextWrapping="Wrap"
                        IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-        </StackPanel>
+        </views:SettingsPage>
     </ScrollViewer>
 </UserControl>

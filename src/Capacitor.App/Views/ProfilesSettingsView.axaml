@@ -5,7 +5,7 @@
              x:Class="Capacitor.App.Views.ProfilesSettingsView"
              x:DataType="vm:ProfilesSettingsViewModel">
     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-        <StackPanel Classes="settingsPage">
+        <views:SettingsPage Classes="settingsPage">
             <StackPanel Classes="settingsHeader">
                 <TextBlock x:Name="ProfilesTitleText" Classes="kcapTitle" Text="Profiles" />
                 <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
@@ -85,6 +85,6 @@
 
             <TextBlock x:Name="ProfilesMessageText" Classes="kcapHint" Text="{Binding Message}" TextWrapping="Wrap"
                        IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-        </StackPanel>
+        </views:SettingsPage>
     </ScrollViewer>
 </UserControl>

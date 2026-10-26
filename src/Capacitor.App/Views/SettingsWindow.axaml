@@ -72,7 +72,7 @@
                     </StackPanel>
                 </TabItem.Header>
                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                    <StackPanel Classes="settingsPage">
+                    <views:SettingsPage Classes="settingsPage">
                         <StackPanel Classes="settingsHeader">
                             <TextBlock x:Name="DaemonTitleText" Classes="kcapTitle" Text="Daemon" />
                             <TextBlock Classes="kcapSubtitle" Text="Manage the background service that runs agents and reviews on this computer."
@@ -108,8 +108,8 @@
                                             <TextBlock Classes="kcapHint" TextWrapping="Wrap"
                                                        Text="How this computer appears on your server. Renaming restarts the daemon and relaunches kcap." />
                                         </StackPanel>
-                                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                                            <TextBox x:Name="NameInput" Classes="kcapField" Text="{Binding Name, Mode=TwoWay}"
+                                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8" MaxWidth="400" HorizontalAlignment="Left">
+                                            <TextBox x:Name="NameInput" MinWidth="200" Classes="kcapField" Text="{Binding Name, Mode=TwoWay}"
                                                      IsEnabled="{Binding CanEdit}" AutomationProperties.Name="Machine name" />
                                             <Button x:Name="RenameButton" Grid.Column="1" Classes="kcapChip" Content="Rename"
                                                     Command="{Binding RenameCommand}" VerticalAlignment="Center"
@@ -120,14 +120,14 @@
                                                    IsVisible="{Binding NameError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                                     </StackPanel>
                                     <Border Classes="settingsDivider" />
-                                    <Grid Classes="settingsRow" ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
+                                    <StackPanel Margin="16,14" Spacing="10">
                                         <StackPanel Classes="settingsRowText">
                                             <TextBlock Classes="kcapLabel" Text="Agent capacity" />
                                             <TextBlock Classes="kcapHint" TextWrapping="Wrap"
                                                        Text="The most agents that can run at once; 0 means unlimited. Lowering it lets running agents finish." />
                                         </StackPanel>
-                                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                                            <NumericUpDown x:Name="CapacityInput" Classes="kcapField" Width="84"
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <NumericUpDown x:Name="CapacityInput" Classes="kcapField" Width="96"
                                                            Value="{Binding Capacity, Mode=TwoWay}"
                                                            Minimum="0" Maximum="2147483647" Increment="1" FormatString="0"
                                                            IsEnabled="{Binding CanEdit}" AutomationProperties.Name="Agent capacity" />
@@ -135,11 +135,10 @@
                                                     AutomationProperties.Name="Save capacity"
                                                     Command="{Binding SaveCommand}" VerticalAlignment="Center" />
                                         </StackPanel>
-                                        <TextBlock x:Name="CapacityErrorText" Grid.Row="1" Grid.ColumnSpan="2" Margin="0,8,0,0"
-                                                   Classes="kcapHint" Text="{Binding CapacityError}"
+                                        <TextBlock x:Name="CapacityErrorText" Classes="kcapHint" Text="{Binding CapacityError}"
                                                    TextWrapping="Wrap" Foreground="{StaticResource KcapDangerBrush}"
                                                    IsVisible="{Binding CapacityError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                    </Grid>
+                                    </StackPanel>
                                     <Border Classes="settingsDivider" />
                                     <Grid Classes="settingsRow" ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
                                         <StackPanel Classes="settingsRowText">
@@ -160,7 +159,7 @@
                             <TextBlock x:Name="MessageText" Classes="kcapHint" Text="{Binding Message}" TextWrapping="Wrap"
                                        IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                         </StackPanel>
-                    </StackPanel>
+                    </views:SettingsPage>
                 </ScrollViewer>
             </TabItem>
 
@@ -173,7 +172,7 @@
                     </StackPanel>
                 </TabItem.Header>
                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                    <StackPanel Classes="settingsPage">
+                    <views:SettingsPage Classes="settingsPage">
                         <StackPanel Classes="settingsHeader">
                             <TextBlock Classes="kcapTitle" Text="Experimental" />
                             <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
@@ -223,7 +222,7 @@
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
                         </Border>
-                    </StackPanel>
+                    </views:SettingsPage>
                 </ScrollViewer>
             </TabItem>
 
@@ -238,7 +237,7 @@
                     </StackPanel>
                 </TabItem.Header>
                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                    <StackPanel Classes="settingsPage">
+                    <views:SettingsPage Classes="settingsPage">
                         <StackPanel Classes="settingsHeader">
                             <TextBlock Classes="kcapTitle" Text="Appearance" />
                             <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
@@ -252,13 +251,13 @@
                         </StackPanel>
 
                         <Border Classes="settingsCard">
-                            <Grid Classes="settingsRow" ColumnDefinitions="*,Auto">
+                            <StackPanel Margin="16,14" Spacing="10">
                                 <StackPanel Classes="settingsRowText">
                                     <TextBlock Classes="kcapLabel" Text="Text size" />
                                     <TextBlock x:Name="TextSizeHint" Classes="kcapHint" TextWrapping="Wrap"
                                                Text="{Binding Appearance.ShortcutHint, FallbackValue={x:Null}}" />
                                 </StackPanel>
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
                                     <Button x:Name="TextSmallerButton" Classes="kcapChip settingsCompact"
                                             Command="{Binding Appearance.SmallerCommand, FallbackValue={x:Null}}"
                                             AutomationProperties.Name="Smaller text" ToolTip.Tip="Smaller text">
@@ -276,9 +275,9 @@
                                             Margin="4,0,0,0"
                                             Command="{Binding Appearance.ResetCommand, FallbackValue={x:Null}}" />
                                 </StackPanel>
-                            </Grid>
+                            </StackPanel>
                         </Border>
-                    </StackPanel>
+                    </views:SettingsPage>
                 </ScrollViewer>
             </TabItem>
 
@@ -290,7 +289,7 @@
                     </StackPanel>
                 </TabItem.Header>
                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                    <StackPanel Classes="settingsPage">
+                    <views:SettingsPage Classes="settingsPage">
                         <StackPanel Classes="settingsHeader">
                             <TextBlock Classes="kcapTitle" Text="Notifications" />
                             <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
@@ -305,15 +304,16 @@
 
                         <Border x:Name="NotificationAccessNotice" Classes="settingsNotice"
                                 IsVisible="{Binding NotificationAccessText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-                            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+                            <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" ColumnSpacing="12" RowSpacing="10">
                                 <views:AppIcon Kind="BellOff" Size="16" Foreground="{StaticResource KcapWarningBrush}"
-                                               VerticalAlignment="Center" />
+                                               VerticalAlignment="Top" Margin="0,1,0,0" />
                                 <TextBlock x:Name="NotificationAccessText" Grid.Column="1" Classes="kcapHint" TextWrapping="Wrap"
                                            Text="{Binding NotificationAccessText}"
                                            Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
-                                <Button x:Name="NotificationAccessButton" Grid.Column="2" Classes="kcapChip settingsCompact"
+                                <Button x:Name="NotificationAccessButton" Grid.Row="1" Grid.Column="1" Classes="kcapChip settingsCompact"
+                                        HorizontalAlignment="Left"
                                         Content="{Binding NotificationAccessAction}"
-                                        Command="{Binding NotificationAccessCommand}" VerticalAlignment="Center" />
+                                        Command="{Binding NotificationAccessCommand}" />
                             </Grid>
                         </Border>
 
@@ -369,7 +369,7 @@
                                    Text="{Binding NotificationMessage}" TextWrapping="Wrap"
                                    Foreground="{StaticResource KcapDangerBrush}"
                                    IsVisible="{Binding NotificationMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                    </StackPanel>
+                    </views:SettingsPage>
                 </ScrollViewer>
             </TabItem>
 
@@ -382,9 +382,9 @@
                     </StackPanel>
                 </TabItem.Header>
                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                    <StackPanel Classes="settingsPage">
+                    <views:SettingsPage Classes="settingsPage">
                         <views:SearchSettingsView DataContext="{Binding Search}" />
-                    </StackPanel>
+                    </views:SettingsPage>
                 </ScrollViewer>
             </TabItem>
 
@@ -408,7 +408,7 @@
                     </StackPanel>
                 </TabItem.Header>
                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                    <StackPanel Classes="settingsPage">
+                    <views:SettingsPage Classes="settingsPage">
                         <StackPanel Classes="settingsHeader">
                             <TextBlock Classes="kcapTitle" Text="Usage data" />
                             <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
@@ -440,7 +440,7 @@
                                               IsChecked="{Binding Privacy.SendUsageData, FallbackValue=False}" />
                             </Grid>
                         </Border>
-                    </StackPanel>
+                    </views:SettingsPage>
                 </ScrollViewer>
             </TabItem>
 

@@ -10,8 +10,9 @@
             <Setter Property="Foreground" Value="{StaticResource KcapWarningBrush}" />
         </Style>
     </UserControl.Styles>
+    <Panel>
     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-        <StackPanel Classes="settingsPage">
+        <views:SettingsPage Classes="settingsPage">
             <StackPanel Classes="settingsHeader">
                 <TextBlock x:Name="AccountsTitleText" Classes="kcapTitle" Text="Accounts" />
                 <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
@@ -28,27 +29,6 @@
                     IsVisible="{Binding ReadOnlyNotice, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
                 <TextBlock x:Name="AccountsNoticeText" Classes="kcapHint" Text="{Binding ReadOnlyNotice}" TextWrapping="Wrap"
                            Foreground="{StaticResource KcapTextBrush}" />
-            </Border>
-
-            <Border x:Name="AccountsNoticeBanner" Classes="settingsError" Classes.warning="{Binding Notice.IsWarning, FallbackValue=False}"
-                    IsVisible="{Binding Notice, Converter={x:Static ObjectConverters.IsNotNull}}">
-                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
-                    <Panel VerticalAlignment="Top" Margin="0,2,0,0">
-                        <views:AppIcon Kind="CircleAlert" Size="14" Foreground="{StaticResource KcapDangerBrush}"
-                                       IsVisible="{Binding !Notice.IsWarning, FallbackValue=False}" />
-                        <views:AppIcon Kind="TriangleAlert" Size="14" Foreground="{StaticResource KcapWarningBrush}"
-                                       IsVisible="{Binding Notice.IsWarning, FallbackValue=False}" />
-                    </Panel>
-                    <StackPanel Grid.Column="1" Spacing="2">
-                        <TextBlock x:Name="AccountsNoticeTitle" Classes="settingsErrorTitle" Text="{Binding Notice.Title, FallbackValue={x:Null}}" />
-                        <SelectableTextBlock Classes="settingsErrorDetail" Text="{Binding Notice.Detail, FallbackValue={x:Null}}"
-                                             IsVisible="{Binding Notice.Detail, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}" />
-                    </StackPanel>
-                    <Button Grid.Column="2" Classes="kcapGhost kcapIcon" Padding="4" MinHeight="0" VerticalAlignment="Top"
-                            Click="OnDismissNotice" AutomationProperties.Name="Dismiss" ToolTip.Tip="Dismiss">
-                        <views:AppIcon Kind="X" Size="12" />
-                    </Button>
-                </Grid>
             </Border>
 
             <ItemsControl x:Name="AccountGroups" ItemsSource="{Binding Groups}">
@@ -185,6 +165,28 @@
                 </Button.Flyout>
             </Button>
 
-        </StackPanel>
+        </views:SettingsPage>
     </ScrollViewer>
+
+        <Border x:Name="AccountsNoticeBanner" Classes="settingsError settingsToast" Classes.warning="{Binding Notice.IsWarning, FallbackValue=False}"
+                IsVisible="{Binding Notice, Converter={x:Static ObjectConverters.IsNotNull}}">
+            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                <Panel VerticalAlignment="Top" Margin="0,2,0,0">
+                    <views:AppIcon Kind="CircleAlert" Size="14" Foreground="{StaticResource KcapDangerBrush}"
+                                   IsVisible="{Binding !Notice.IsWarning, FallbackValue=False}" />
+                    <views:AppIcon Kind="TriangleAlert" Size="14" Foreground="{StaticResource KcapWarningBrush}"
+                                   IsVisible="{Binding Notice.IsWarning, FallbackValue=False}" />
+                </Panel>
+                <StackPanel Grid.Column="1" Spacing="2">
+                    <TextBlock x:Name="AccountsNoticeTitle" Classes="settingsErrorTitle" Text="{Binding Notice.Title, FallbackValue={x:Null}}" />
+                    <SelectableTextBlock Classes="settingsErrorDetail" Text="{Binding Notice.Detail, FallbackValue={x:Null}}"
+                                         IsVisible="{Binding Notice.Detail, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}" />
+                </StackPanel>
+                <Button Grid.Column="2" Classes="kcapGhost kcapIcon" Padding="4" MinHeight="0" VerticalAlignment="Top"
+                        Click="OnDismissNotice" AutomationProperties.Name="Dismiss" ToolTip.Tip="Dismiss">
+                    <views:AppIcon Kind="X" Size="12" />
+                </Button>
+            </Grid>
+        </Border>
+    </Panel>
 </UserControl>

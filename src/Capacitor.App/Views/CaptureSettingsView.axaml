@@ -4,7 +4,7 @@
              x:Class="Capacitor.App.Views.CaptureSettingsView" x:DataType="vm:CaptureSettingsViewModel">
     <Grid RowDefinitions="*,Auto" IsEnabled="{Binding !Busy}">
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-            <StackPanel Classes="settingsPage">
+            <views:SettingsPage Classes="settingsPage">
                 <StackPanel Classes="settingsHeader">
                     <TextBlock Classes="kcapTitle" Text="Capture &amp; privacy" />
                     <TextBlock Classes="kcapSubtitle" Text="Choose what gets recorded and who can read new sessions." TextWrapping="Wrap"
@@ -98,11 +98,11 @@
                     <TextBlock Classes="settingsFootnote"
                                Text="With both include lists set, a session must match a repository and a folder. Existing uploads stay on the server, and agents you launch explicitly still report their sessions." />
                 </StackPanel>
-            </StackPanel>
+            </views:SettingsPage>
         </ScrollViewer>
 
         <Border Grid.Row="1" Classes="settingsActionBar">
-            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="16" MaxWidth="680">
+            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="16" MaxWidth="680" HorizontalAlignment="Left">
                 <Button x:Name="SaveCaptureButton" Classes="kcapPrimary" Content="Save changes"
                         Command="{Binding SaveCommand}" />
                 <TextBlock x:Name="CaptureMessageText" Grid.Column="1" Classes="kcapHint" Text="{Binding Message}"

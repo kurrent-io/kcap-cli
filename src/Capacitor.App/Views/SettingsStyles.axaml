@@ -97,12 +97,10 @@
         <Setter Property="Padding" Value="10,9" />
     </Style>
 
-    <Style Selector="StackPanel.settingsPage">
+    <Style Selector="views|SettingsPage.settingsPage">
         <Setter Property="Margin" Value="32,12,32,36" />
-        <!-- Stretch, not Left: a left-aligned page sizes to its widest child, so every page's cards
-             would end at a different edge. Past the cap the column centres. -->
         <Setter Property="MaxWidth" Value="680" />
-        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
         <Setter Property="Spacing" Value="28" />
     </Style>
     <Style Selector="StackPanel.settingsHeader">
@@ -309,6 +307,16 @@
         <Setter Property="Background" Value="{StaticResource KcapDangerDimBrush}" />
         <Setter Property="CornerRadius" Value="6" />
         <Setter Property="Padding" Value="12,10" />
+    </Style>
+    <!-- Floats over the page's bottom-left, so showing or dismissing it never moves the content. -->
+    <Style Selector="Border.settingsToast">
+        <Setter Property="HorizontalAlignment" Value="Left" />
+        <Setter Property="VerticalAlignment" Value="Bottom" />
+        <Setter Property="Margin" Value="32,0,32,20" />
+        <Setter Property="MaxWidth" Value="560" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderStrongBrush}" />
+        <Setter Property="BoxShadow" Value="0 8 24 0 #66000000" />
     </Style>
     <Style Selector="Border.settingsError.warning">
         <Setter Property="Background" Value="{StaticResource KcapWarningDimBrush}" />
