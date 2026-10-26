@@ -1219,15 +1219,19 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         if (_composerEdits == queued.ComposerEdits && ComposerText == queued.Text) ComposerText = "";
     }
 
-    void RestoreQueuedRow(QueuedChatMessage message, bool inSendOrder = false) {
+    void RestoreQueuedRow(QueuedChatMessage message, bool isPredecessor = false) {
         if (message.Acknowledged) return;
         if (!_queuedMessages.Contains(message)) {
-            var next = inSendOrder ? _queuedMessages.FirstOrDefault(q => !q.IsForeign && q.SendOrder > message.SendOrder) : null;
+            var next = isPredecessor ? _queuedMessages.FirstOrDefault(q => !q.IsForeign && q.SendOrder > message.SendOrder) : null;
             if (next is null) _queuedMessages.Add(message);
             else _queuedMessages.Insert(_queuedMessages.IndexOf(next), message);
         }
-        if (!_unechoed.Contains(message)) _unechoed.Add(message);
-        _lastSent ??= message;
+        if (!_unechoed.Contains(message)) {
+            var next = isPredecessor ? _unechoed.FindIndex(q => q.SendOrder > message.SendOrder) : -1;
+            if (next < 0) _unechoed.Add(message);
+            else _unechoed.Insert(next, message);
+        }
+        if (!isPredecessor) _lastSent ??= message;
         RefreshQueue();
     }
 
@@ -1245,7 +1249,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         if (ReferenceEquals(_lastSent, message)) _lastSent = null;
         foreach (var predecessor in predecessors) {
             _queuedMessages.Remove(predecessor);
-            RestoreQueuedRow(predecessor, inSendOrder: true);
+            _unechoed.Remove(predecessor);
+            RestoreQueuedRow(predecessor, isPredecessor: true);
         }
         RefreshQueue();
     }

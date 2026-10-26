@@ -3988,6 +3988,76 @@ public class ChatTabViewModelTests {
     }
 
     [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Discarding_a_retry_keeps_its_channel_warning_when_the_original_echoes() => RunOnUiAsync(async () => {
+        var lane = new FakeServerLane();
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected));
+        using var access = new BehaviorSubject<SessionAccessState>(SessionAccessState.Established);
+        using var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
+        using var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
+        var time = new FakeTimeProvider();
+        var path = Tmp.CreateFile("discard-retry-notice.jsonl", [AssistantLine]);
+        var input = new ServerChatInput("a1", lane, access, session, hasTerminal: true, senderIdentity: Viewer("u2"));
+        var chat = new ChatTabViewModel("a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), input,
+            new NoAttachmentUploader(),
+            _ => new SeededLocalFeed(new LocalTranscriptFeed(path, TranscriptChat.For("claude")!, "a1", time, _ => { })),
+            new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time), serverQueue: queue);
+        try {
+            await WaitUntilAsync(() => chat.HasSeed, what: "the seed");
+            chat.ComposerText = "same prompt";
+            await chat.SendCommand.Execute();
+            var original = chat.QueuedMessages.Single();
+            queue.OnNext([Item("same prompt", Guid.NewGuid())]);
+            queue.OnNext([]);
+            lane.UserInputHandler = _ => Task.FromResult(HubCallOutcome.Failed("reply lost"));
+            await chat.SendQueuedCommand.Execute(original);
+            var retry = chat.QueuedMessages.Single();
+            queue.OnNext([Item("same prompt", Guid.NewGuid())]);
+            queue.OnNext([]);
+            var warning = input.Hint;
+            await Assert.That(warning).Contains("delivery unconfirmed");
+            chat.ComposerText = "keep my draft";
+            await chat.DiscardQueuedCommand.Execute(retry);
+
+            File.AppendAllText(path, User("same prompt") + "\n");
+            time.Advance(ChatTabViewModel.PollInterval);
+            await (chat.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(original.Acknowledged).IsTrue();
+            await Assert.That(input.Hint).IsEqualTo(warning);
+            await Assert.That(chat.ComposerText).IsEqualTo("keep my draft");
+        } finally { await chat.TeardownAsync(); }
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Discarding_a_retry_preserves_the_recall_order_of_distinct_prompts() => RunOnUiAsync(async () => {
+        var input = new ScriptedInput();
+        var h = new Harness(TranscriptChat.For("claude"), input: input);
+        try {
+            var path = Tmp.CreateFile("discard-retry-recall.jsonl", [AssistantLine]);
+            await h.PushAsync(Dto(path) with { AwaitingInput = true });
+            await SendAsync(h, input, "older prompt");
+            var original = h.Chat.QueuedMessages.Single();
+            var resend = h.Chat.SendQueuedCommand.Execute(original).ToTask();
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
+            await resend;
+            var retry = h.Chat.QueuedMessages.Single();
+            await SendAsync(h, input, "newer prompt");
+            await h.Chat.DiscardQueuedCommand.Execute(retry);
+            h.Chat.ComposerText = "";
+
+            await Assert.That(h.Chat.RecallOlder()).IsTrue();
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("newer prompt");
+            await Assert.That(h.Chat.RecallOlder()).IsTrue();
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("older prompt");
+            await Assert.That(h.Chat.RecallNewer()).IsTrue();
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("newer prompt");
+            await Assert.That(h.Chat.RecallNewer()).IsTrue();
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("");
+        } finally { await h.TeardownAsync(); }
+    });
+
+    [Test]
     [Arguments(false)]
     [Arguments(true)]
     [NotInParallel("AvaloniaSession")]
