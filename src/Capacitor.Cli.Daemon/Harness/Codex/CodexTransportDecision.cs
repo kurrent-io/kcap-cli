@@ -9,6 +9,13 @@ internal static class CodexTransportDecision {
     /// <summary>The lowest Codex whose app-server method set and containment probes are verified.</summary>
     public const string VersionFloor = "0.146.0";
 
+    /// <summary>Why a launch's expected transport cannot be honoured, or null when it can. Only a
+    /// Codex launch has more than one transport, so every other vendor ignores the field.</summary>
+    public static string? ExpectedTransportRejection(string vendor, string? expected) =>
+        expected is null or AppServer or Pty || !string.Equals(vendor, "codex", StringComparison.Ordinal)
+            ? null
+            : $"codex_transport_unrecognised: the server expects runtime transport '{expected}', which this daemon does not know";
+
     /// <summary>True when <paramref name="cliVersion"/> parses and is >= <see cref="VersionFloor"/>.
     /// Tolerant of surrounding text (e.g. <c>"codex-cli 0.146.0"</c>) — it extracts the first
     /// dotted numeric token.</summary>

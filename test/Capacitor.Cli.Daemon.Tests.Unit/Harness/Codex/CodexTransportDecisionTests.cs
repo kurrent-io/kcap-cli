@@ -30,4 +30,14 @@ public class CodexTransportDecisionTests {
         await Assert.That(CodexTransportDecision.MeetsFloor("0.146")).IsTrue(); // patch defaults to 0
         await Assert.That(CodexTransportDecision.MeetsFloor("0.145.99")).IsFalse();
     }
+
+    [Test]
+    [Arguments("codex", null, false)]
+    [Arguments("codex", "app-server", false)]
+    [Arguments("codex", "pty", false)]
+    [Arguments("codex", "tty", true)]
+    [Arguments("codex", "App-Server", true)]
+    [Arguments("claude", "tty", false)]
+    public async Task Only_an_unrecognised_codex_expectation_is_rejected(string vendor, string? expected, bool rejected) =>
+        await Assert.That(CodexTransportDecision.ExpectedTransportRejection(vendor, expected) is not null).IsEqualTo(rejected);
 }

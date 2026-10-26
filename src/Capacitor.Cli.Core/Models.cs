@@ -1715,7 +1715,10 @@ public readonly record struct LaunchAgentCommand(
         // The agent's session start title. TitleDerived marks one cut from the prompt, which a
         // generated title replaces; otherwise it is the caller's and stays. Null from an older server.
         string?           Title        = null,
-        bool              TitleDerived = false
+        bool              TitleDerived = false,
+        // The transport the server will validate this launch's registration against: "app-server" or
+        // "pty". Null from an older server, which leaves the daemon's own routing to decide.
+        string?           ExpectedRuntimeTransport = null
     );
 
 /// <summary>Caller-selected Codex launch posture. Valid ONLY for interactive, daemon-owned-worktree

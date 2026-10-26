@@ -323,6 +323,24 @@ public class AgentOrchestratorVendorTests {
     }
 
     [Test]
+    public async Task Unrecognised_expected_runtime_transport_is_rejected_as_semantic() {
+        var server = new SeqCaptureServerConnection();
+
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
+            server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
+            extraRuntimeFactories: [new SpyHostedAgentRuntimeFactory("codex") { SupportsUnattended = true }]);
+
+        await orch.SubmitLaunchAgentForTest(PostureCmd("agent-transport-tty", posture: null) with {
+            ExpectedRuntimeTransport = "tty", Epoch = orch.DaemonEpochForTest, Seq = 1, CommandId = "cmd-1",
+        });
+        await WaitHarness.SpinUntilAsync(() => server.Acks.Count > 0, WaitHarness.Bounded);
+
+        await Assert.That(server.Acks.Single().OutcomeKind).IsEqualTo(CommandOutcomeKind.LaunchRejected);
+        await Assert.That(server.Rejects.Single().Reason).IsEqualTo(CommandRejectedReason.Semantic);
+        await Assert.That(server.LaunchFaileds.Single().Reason).Contains("'tty'");
+    }
+
+    [Test]
     public async Task A_valid_interactive_posture_passes_the_guard() {
         // This launch still fails downstream (the repo path is deliberately bogus), but it must get
         // PAST the posture guard — proving the guard rejects only ineligible/malformed blocks.
