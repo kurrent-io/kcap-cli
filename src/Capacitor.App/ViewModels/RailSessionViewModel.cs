@@ -58,6 +58,8 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     /// Up to two initials of the owner's name, for a row that is not the signed-in user's.
     string? _ownerInitials;
     public string? OwnerInitials { get => _ownerInitials; private set => this.RaiseAndSetIfChanged(ref _ownerInitials, value); }
+    string? _ownerAvatarUrl;
+    public string? OwnerAvatarUrl { get => _ownerAvatarUrl; private set => this.RaiseAndSetIfChanged(ref _ownerAvatarUrl, value); }
     bool _showsOwner;
     public bool ShowsOwner { get => _showsOwner; private set => this.RaiseAndSetIfChanged(ref _showsOwner, value); }
     string _ownerTooltip = "";
@@ -195,6 +197,7 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
         IsTerminalSession = row.IsTerminalSession;
         IsEnded = row.IsEndedSession;
         OwnerInitials = Initials(row.OwnerName);
+        OwnerAvatarUrl = string.IsNullOrEmpty(row.OwnerAvatarUrl) ? null : row.OwnerAvatarUrl;
         ShowsOwner = OwnerInitials is not null && row.OwnerIsViewer != true;
         OwnerTooltip = row.OwnerName is { Length: > 0 } owner ? $"{owner}\nOwner" : "";
         RepoLabel = row.RepoGroupLabel;

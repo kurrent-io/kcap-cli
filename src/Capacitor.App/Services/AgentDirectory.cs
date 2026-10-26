@@ -370,6 +370,7 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
             next[i] = row with {
                 OwnerUserId = dto.Owner?.UserId,
                 OwnerName = dto.Owner?.DisplayName ?? dto.Owner?.Username,
+                OwnerAvatarUrl = dto.Owner?.AvatarUrl,
                 OwnerIsViewer = OwnerIsViewer(dto, mine.Contains(sid)),
                 LastActivityAt = dto.LastActivityAt.UtcDateTime,
             };

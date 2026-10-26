@@ -524,12 +524,15 @@
                                                                     <!-- Reserve the measured PR link width so machine and age never paint beneath its hit target. -->
                                                                     <Grid ColumnDefinitions="*,Auto">
                                                                         <WrapPanel VerticalAlignment="Center">
-                                                                            <!-- Another user's row names them by initials; identity stays in muted tokens. -->
-                                                                            <Border Width="16" Height="16" CornerRadius="8" Margin="0,0,6,0" VerticalAlignment="Center"
+                                                                            <!-- Another user's row shows their picture, or their initials until it loads or when it never does. -->
+                                                                            <Border Width="16" Height="16" CornerRadius="8" Margin="0,0,6,0" VerticalAlignment="Center" ClipToBounds="True"
                                                                                     Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
                                                                                     IsVisible="{Binding ShowsOwner}" ToolTip.Tip="{Binding OwnerTooltip}" AutomationProperties.Name="{Binding OwnerTooltip}">
-                                                                                <TextBlock Text="{Binding OwnerInitials}" FontSize="8" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                                                           Foreground="{StaticResource KcapMutedBrush}" />
+                                                                                <Panel>
+                                                                                    <TextBlock Text="{Binding OwnerInitials}" FontSize="8" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                                                               Foreground="{StaticResource KcapMutedBrush}" />
+                                                                                    <views:RemoteAvatar Url="{Binding OwnerAvatarUrl}" AutomationProperties.AccessibilityView="Raw" />
+                                                                                </Panel>
                                                                             </Border>
                                                                             <Border Classes="vendorMark" Width="16" Height="16" Margin="0,0,6,0"
                                                                                     VerticalAlignment="Center" Background="Transparent" IsVisible="{Binding HasVendor}"

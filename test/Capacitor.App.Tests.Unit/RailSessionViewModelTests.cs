@@ -437,7 +437,7 @@ public class RailSessionViewModelTests {
     static AgentRow ServerRow(string status = "ended", string ownerName = "Tony Young", bool stale = false, string? repoName = "kcap-cli", bool hosted = false) =>
         AgentRow.FromServer(new RepoSessionDto {
             SessionId = "s1", Status = status, AccessLevel = "full", Vendor = "claude", Title = "Desktop app RAM growth",
-            Owner = new() { UserId = "u2", DisplayName = ownerName },
+            Owner = new() { UserId = "u2", DisplayName = ownerName, AvatarUrl = "https://avatars.example/u2" },
             StartedAt = new DateTimeOffset(Started), LastActivityAt = new DateTimeOffset(status == "ended" ? Ended : Started),
             EndedAt = status == "ended" ? new DateTimeOffset(Ended) : null, Stale = stale,
             Repo = repoName is null ? null : new() { Hash = "h", Owner = "kurrent-io", Name = repoName },
@@ -489,6 +489,7 @@ public class RailSessionViewModelTests {
             await Assert.That(theirs.OwnerInitials).IsEqualTo("TY");
             await Assert.That(theirs.ShowsOwner).IsTrue();
             await Assert.That(theirs.OwnerTooltip).IsEqualTo("Tony Young\nOwner");
+            await Assert.That(theirs.OwnerAvatarUrl).IsEqualTo("https://avatars.example/u2");
 
             using var mine = new RailSessionViewModel(ServerRow() with { OwnerIsViewer = true }, new BehaviorSubject<string?>(null), NoPending, NotStale,
                 _ => { }, _ => { }, At(Ended));
