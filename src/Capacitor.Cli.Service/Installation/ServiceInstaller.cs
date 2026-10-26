@@ -22,6 +22,9 @@ static unsafe class ServiceInstaller {
 
     public static string InstalledBinary => Path.Combine(InstallDirectory, ServiceIdentity.ExecutableName);
 
+    /// <summary><c>Program Files\kcap</c>, which holds nothing but the service's directory</summary>
+    static string ProductDirectory => Path.GetDirectoryName(InstallDirectory)!;
+
     static bool IsElevated() {
         using var identity = WindowsIdentity.GetCurrent();
         return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
@@ -32,6 +35,10 @@ static unsafe class ServiceInstaller {
             Console.Error.WriteLine("kcap-service install needs an elevated (administrator) prompt");
             return NotElevatedExit;
         }
+
+        // A removal since the last restart queued these files for deletion, and the plan below may find the
+        // binary current and keep it: left queued, the restart would delete the service this install leaves.
+        if (CancelPendingRemoval()) Console.WriteLine("install: cancelled the removal queued for the next restart");
 
         using var service = Existing();
         var current = File.Exists(InstalledBinary) && SameBytes(sourceExe, InstalledBinary);
@@ -95,9 +102,25 @@ static unsafe class ServiceInstaller {
     /// service stops, the files at the next restart</summary>
     public static void RemoveSelf() {
         Delete();
-        foreach (var file in Directory.EnumerateFiles(InstallDirectory)) MoveFileExW(file, null, MOVEFILE_DELAY_UNTIL_REBOOT);
-        MoveFileExW(InstallDirectory, null, MOVEFILE_DELAY_UNTIL_REBOOT);
+        QueueRemoval(InstallDirectory);
         Registry.LocalMachine.DeleteSubKeyTree(Path.GetDirectoryName(ServiceIdentity.IndexKey)!, throwOnMissingSubKey: false);
+    }
+
+    /// <summary>The queue runs in order, so the product directory, empty by then, goes after the service's</summary>
+    static void QueueRemoval(string directory) {
+        foreach (var file in Directory.EnumerateFiles(directory)) MoveFileExW(file, null, MOVEFILE_DELAY_UNTIL_REBOOT);
+        MoveFileExW(directory, null, MOVEFILE_DELAY_UNTIL_REBOOT);
+        MoveFileExW(ProductDirectory, null, MOVEFILE_DELAY_UNTIL_REBOOT);
+    }
+
+    static bool CancelPendingRemoval() {
+        using var key = Registry.LocalMachine.OpenSubKey(PendingRemovals.KeyPath, writable: true);
+        if (key?.GetValue(PendingRemovals.ValueName) is not string[] operations) return false;
+        var kept = PendingRemovals.Without(operations, ProductDirectory);
+        if (kept.Length == operations.Length) return false;
+        if (kept.Length == 0) key.DeleteValue(PendingRemovals.ValueName, throwOnMissingValue: false);
+        else key.SetValue(PendingRemovals.ValueName, kept, RegistryValueKind.MultiString);
+        return true;
     }
 
     static ServiceController? Existing() {
@@ -207,9 +230,10 @@ static unsafe class ServiceInstaller {
         if (!Directory.Exists(directory)) return;
         try {
             Directory.Delete(directory, recursive: true);
+            if (Directory.Exists(ProductDirectory) && !Directory.EnumerateFileSystemEntries(ProductDirectory).Any())
+                Directory.Delete(ProductDirectory);
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
-            foreach (var file in Directory.EnumerateFiles(directory)) MoveFileExW(file, null, MOVEFILE_DELAY_UNTIL_REBOOT);
-            MoveFileExW(directory, null, MOVEFILE_DELAY_UNTIL_REBOOT);
+            QueueRemoval(directory);
             Console.WriteLine($"{directory} is removed at the next restart");
         }
     }
