@@ -2,6 +2,7 @@ using System.Net;
 using System.Security.Cryptography;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.LocalEdition;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Http;
 
@@ -178,6 +179,42 @@ public class LocalBundleClientTests {
         await Assert.That(File.ReadAllText(dest)).IsEqualTo("keep");
     }
 
+    [Test]
+    public async Task A_model_download_that_stops_receiving_bytes_fails_once_the_stall_timeout_passes() {
+        using var tmp    = new TempDir();
+        var       time   = new FakeTimeProvider();
+        var       body   = new StallingStream(new byte[1000]);
+        var       client = new LocalBundleClient(new(new Handler(_ => new(HttpStatusCode.OK) { Content = new StreamContent(body) })), time);
+
+        var download = client.DownloadModelFileAsync(new string('b', 64), new("model.onnx", new string('a', 64), 2000), tmp.PathTo("m"), null, CancellationToken.None);
+        await body.Stalled;
+
+        time.Advance(client.ModelStallTimeout - TimeSpan.FromSeconds(1));
+        await Assert.That(download.IsCompleted).IsFalse();
+
+        time.Advance(TimeSpan.FromSeconds(1));
+        var e = await Assert.ThrowsAsync<LocalModelDownloadException>(async () => await download.WaitAsync(TimeSpan.FromSeconds(30)));
+
+        await Assert.That(e!.Code).IsEqualTo(LocalModelDownloadCode.DownloadFailed);
+    }
+
+    [Test]
+    public async Task A_slow_but_steady_model_download_outlasts_the_bundle_deadline() {
+        using var tmp    = new TempDir();
+        var       time   = new FakeTimeProvider();
+        var       data   = RandomNumberGenerator.GetBytes(40_000);
+        var       client = new LocalBundleClient(new(new Handler(_ => new(HttpStatusCode.OK) {
+            Content = new StreamContent(new TricklingStream(data, 1000, () => time.Advance(TimeSpan.FromSeconds(30))))
+        })), time);
+        var dest  = tmp.PathTo("m");
+        var start = time.GetUtcNow();
+
+        await client.DownloadModelFileAsync(new string('b', 64), new("model.onnx", Convert.ToHexStringLower(SHA256.HashData(data)), data.Length), dest, null, CancellationToken.None);
+
+        await Assert.That(time.GetUtcNow() - start).IsGreaterThan(client.DownloadTimeout);
+        await Assert.That(File.ReadAllBytes(dest).SequenceEqual(data)).IsTrue();
+    }
+
     static LocalBundleManifest ManifestFor(byte[] body) =>
         new("1.3.0", "osx-arm64", "kcap-local-1.3.0-osx-arm64.tar.gz",
             Convert.ToHexStringLower(SHA256.HashData(body)), body.Length, new string('c', 64));
@@ -195,5 +232,51 @@ public class LocalBundleClientTests {
 
     sealed class Collect(List<long> into) : IProgress<long> {
         public void Report(long value) => into.Add(value);
+    }
+
+    /// <summary>Yields <paramref name="first"/> once, then never yields again until cancelled.</summary>
+    sealed class StallingStream(byte[] first) : ReadOnlyBody {
+        readonly TaskCompletionSource _stalled = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        bool _served;
+
+        public Task Stalled => _stalled.Task;
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default) {
+            if (!_served) {
+                _served = true;
+                first.CopyTo(buffer);
+                return first.Length;
+            }
+
+            _stalled.TrySetResult();
+            await Task.Delay(Timeout.Infinite, ct);
+            return 0;
+        }
+    }
+
+    /// <summary>Yields <paramref name="data"/> <paramref name="chunk"/> bytes per read, calling <paramref name="beforeRead"/> first.</summary>
+    sealed class TricklingStream(byte[] data, int chunk, Action beforeRead) : ReadOnlyBody {
+        int _offset;
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default) {
+            beforeRead();
+            var n = Math.Min(Math.Min(chunk, buffer.Length), data.Length - _offset);
+            data.AsMemory(_offset, n).CopyTo(buffer);
+            _offset += n;
+            return ValueTask.FromResult(n);
+        }
+    }
+
+    abstract class ReadOnlyBody : Stream {
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 }

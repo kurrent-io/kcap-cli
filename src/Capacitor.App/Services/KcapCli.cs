@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Capacitor.App.Services.LocalSetup;
+using Capacitor.App.Services.Mutation;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 
@@ -76,6 +77,10 @@ public interface IKcapCli {
     /// `plugin install` (+ vendorFlag, when non-null, then <paramref name="options"/>); null = the
     /// flagless Claude default.
     Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct, IReadOnlyList<string>? options = null);
+
+    /// <c>accounts add|remove|rename|rewire … --json</c>, which prints one AccountActionResultDto line.
+    /// No server overlay: the account verbs touch nothing on the server.
+    Task<ProcessResult> AccountsAsync(MutationVerb verb, AccountArgs args, CancellationToken ct);
 
     /// `import` with scope/vendor flags, streamed live via onLine — unbounded internal timeout
     /// (imports are long; ct cancellation is the only bound).
@@ -255,6 +260,23 @@ public sealed class KcapCli : IKcapCli {
 
         return await Run(cliPath, args.ToArray(),
             new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: MutationTimeout), ct).ConfigureAwait(false);
+    }
+
+    public async Task<ProcessResult> AccountsAsync(MutationVerb verb, AccountArgs args, CancellationToken ct) {
+        string[] argv = verb switch {
+            MutationVerb.AccountAdd    => ["accounts", "add", Required(args.Vendor), Required(args.Directory), "--json"],
+            MutationVerb.AccountRemove => ["accounts", "remove", Required(args.AccountId), "--json"],
+            MutationVerb.AccountRename => ["accounts", "rename", Required(args.AccountId), Required(args.Label), "--json"],
+            MutationVerb.AccountRewire => args.AccountId is { } id ? ["accounts", "rewire", id, "--json"] : ["accounts", "rewire", "--json"],
+            _                          => throw new ArgumentOutOfRangeException(nameof(verb), verb, "not an account verb"),
+        };
+        if (CliPath is not { } cliPath) return await NoCliResult().ConfigureAwait(false);
+
+        return await Run(cliPath, argv,
+            new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: MutationTimeout), ct).ConfigureAwait(false);
+
+        static string Required(string? value) =>
+            value ?? throw new ArgumentException("The account verb is missing one of its arguments.", nameof(args));
     }
 
     public async Task<StreamingResult> ImportAsync(ImportRequest request, Action<StreamedLine> onLine, CancellationToken ct) {

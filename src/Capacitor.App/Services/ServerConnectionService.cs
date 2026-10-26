@@ -41,6 +41,7 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     readonly BehaviorSubject<ServerLaneStatus> _status = new(new(ServerLaneState.Dormant));
     readonly Subject<Unit> _agentsChanged = new();
     readonly Subject<Unit> _daemonsChanged = new();
+    readonly Subject<Unit> _daemonAccountsChanged = new();
     readonly Subject<LaunchFailure> _launchFailures = new();
     readonly Subject<string> _permissionPending = new();
     readonly Subject<PermissionRespondedPing> _permissionResponded = new();
@@ -104,6 +105,7 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     public IObservable<ServerLaneStatus> Status => _status.AsObservable();
     public IObservable<Unit> AgentInstancesChanged => _agentsChanged.AsObservable();
     public IObservable<Unit> DaemonsChanged => _daemonsChanged.AsObservable();
+    public IObservable<Unit> DaemonAccountsChanged => _daemonAccountsChanged.AsObservable();
     public IObservable<LaunchFailure> LaunchFailures => _launchFailures.AsObservable();
     public IObservable<string> PermissionPending => _permissionPending.AsObservable();
     public IObservable<PermissionRespondedPing> PermissionResponded => _permissionResponded.AsObservable();
@@ -308,6 +310,7 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
             .Build();
         hub.On(HubBroadcasts.AgentInstancesChanged, () => _agentsChanged.OnNext(Unit.Default));
         hub.On(HubBroadcasts.DaemonsChanged, () => _daemonsChanged.OnNext(Unit.Default));
+        hub.On(HubBroadcasts.DaemonAccountsChanged, () => _daemonAccountsChanged.OnNext(Unit.Default));
         hub.On<string, string>(HubBroadcasts.LaunchFailed, (agentId, reason) => _launchFailures.OnNext(new(agentId, reason)));
         hub.On<string>(HubBroadcasts.PermissionPending, _permissionPending.OnNext);
         hub.On<string, string?>(HubBroadcasts.PermissionResponded, (sid, rid) => _permissionResponded.OnNext(new(sid, rid)));
@@ -373,6 +376,16 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         if (hub is not { State: HubConnectionState.Connected }) return null;
         try {
             return await hub.InvokeAsync<List<DaemonInfo>>(HubMethods.GetConnectedDaemons, ct).ConfigureAwait(false);
+        } catch (Exception) {
+            return null;
+        }
+    }
+
+    public async Task<IReadOnlyList<DaemonAccountsDto>?> GetDaemonAccountsAsync(CancellationToken ct) {
+        var hub = _hub;
+        if (hub is not { State: HubConnectionState.Connected }) return null;
+        try {
+            return await hub.InvokeAsync<List<DaemonAccountsDto>>(HubMethods.GetDaemonAccounts, ct).ConfigureAwait(false);
         } catch (Exception) {
             return null;
         }
@@ -554,6 +567,7 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         _status.Dispose();
         _agentsChanged.Dispose();
         _daemonsChanged.Dispose();
+        _daemonAccountsChanged.Dispose();
         _launchFailures.Dispose();
         _permissionPending.Dispose();
         _permissionResponded.Dispose();

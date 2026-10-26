@@ -43,7 +43,7 @@ public sealed class UninstallRunViewModel : ReactiveObject {
 
     public string Heading => State switch {
         UninstallRunState.Failed      => "kcap was not fully uninstalled",
-        UninstallRunState.TrashFailed => "Drag kcap to the Trash to finish",
+        UninstallRunState.TrashFailed => $"{_removal.FinishByHand} to finish",
         UninstallRunState.Finished    => "kcap is uninstalled",
         _                             => "Uninstalling kcap…",
     };
@@ -117,7 +117,7 @@ public sealed class UninstallRunViewModel : ReactiveObject {
 
         if (!trashed) {
             _removal.RevealBundle();
-            Lines.Add("Everything else is removed: drag kcap to the Trash to finish.");
+            Lines.Add($"Everything else is removed. {_removal.FinishByHand} to finish.");
             State = UninstallRunState.TrashFailed;
             return;
         }

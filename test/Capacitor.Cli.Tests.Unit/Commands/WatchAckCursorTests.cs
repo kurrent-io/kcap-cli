@@ -24,16 +24,23 @@ public class WatchAckCursorTests {
 
     static readonly string Sid = Guid.NewGuid().ToString("N");
 
+    /// Only an absent file is missing: a reader that waits on the count polls again through anything else.
     [Test]
     public async Task A_count_round_trips_and_anything_else_reads_as_none() {
+        await Assert.That(Cursor.TryRead(Sid, out var neverWritten)).IsNull();
+        await Assert.That(neverWritten).IsTrue();
+
         Cursor.Write(Sid, 12);
-        await Assert.That(Cursor.TryRead(Sid)).IsEqualTo(12);
+        await Assert.That(Cursor.TryRead(Sid, out var written)).IsEqualTo(12);
+        await Assert.That(written).IsFalse();
 
         await File.WriteAllTextAsync(Cursor.Path(Sid), "twelve");
-        await Assert.That(Cursor.TryRead(Sid)).IsNull();
+        await Assert.That(Cursor.TryRead(Sid, out var garbled)).IsNull();
+        await Assert.That(garbled).IsFalse();
 
         Cursor.Delete(Sid);
-        await Assert.That(Cursor.TryRead(Sid)).IsNull();
+        await Assert.That(Cursor.TryRead(Sid, out var deleted)).IsNull();
+        await Assert.That(deleted).IsTrue();
     }
 
     /// Blank lines advance the count with nothing to send, which is the one drain that needs no server.

@@ -4654,7 +4654,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     }
 
     async Task HandleSendInput(SendInputCommand cmd) {
-        var (agentId, text, attachmentIds, _) = cmd;
+        var (agentId, text, attachmentIds, dispatchId) = cmd;
 
         if (!_agents.TryGetValue(agentId, out var agent)) {
             LogSendInputUnknownAgent(agentId, _agents.Count);
@@ -4672,7 +4672,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         LogSendInputReceived(agentId, agent.Runtime.Vendor, text.Length, attachmentIds?.Length ?? 0);
 
-        var outcome = await DeliverInputAsync(agent, text, attachmentIds);
+        var outcome = await DeliverInputAsync(agent, text, attachmentIds, dispatchId);
 
         switch (outcome.Kind) {
             case InputDeliveryKind.QuitRequested:
@@ -4699,7 +4699,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// write depends on — the borrowed-snapshot refresh, attachment downloads, and the reap-claim
     /// checks that decide whether a condemned agent may still be written to — happens inside the
     /// agent's own delivery section.</summary>
-    internal async Task<InputDeliveryOutcome> DeliverInputAsync(AgentInstance agent, string text, string[]? attachmentIds) {
+    internal async Task<InputDeliveryOutcome> DeliverInputAsync(AgentInstance agent, string text, string[]? attachmentIds, Guid? dispatchId = null) {
         // Refused before the section, so nothing is downloaded for a message that was never going to
         // be delivered. The ids are re-validated here whichever lane they arrived on: the local frame
         // checks them too, but a server dispatch reaches this method directly. A borrowed cwd is the
@@ -4722,7 +4722,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // the command's meaning. The runtime is what journals a delivered prompt, so the one text it
         // never sees is recorded here: the chat renders the journal alone.
         if (!agent.Runtime.EmitsTerminalOutput && IsQuitCommand(text)) {
-            agent.Journal?.Record(AcpEventTranslator.BuildUserMessage(seq: 0, _time.GetUtcNow().ToString("O"), text));
+            agent.Journal?.Record(AcpEventTranslator.BuildUserMessage(seq: 0, _time.GetUtcNow().ToString("O"), text) with { DispatchId = dispatchId });
 
             return InputDeliveryOutcome.QuitRequested;
         }
@@ -4849,7 +4849,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
                 try {
                     // PTY runtimes use bracketed paste; ACP runtimes send a structured prompt.
-                    if (agent.BorrowedSnapshotSource is not null)
+                    if (dispatchId is { } dispatch)
+                        await agent.Runtime.SendDispatchedInputAsync(message, dispatch, waitForWrite: agent.BorrowedSnapshotSource is not null);
+                    else if (agent.BorrowedSnapshotSource is not null)
                         await agent.Runtime.SendUserInputAndWaitForWriteAsync(message);
                     else
                         await agent.Runtime.SendUserInputAsync(message);
