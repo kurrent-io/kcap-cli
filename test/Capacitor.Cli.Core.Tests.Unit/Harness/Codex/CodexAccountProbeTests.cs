@@ -13,7 +13,7 @@ public class CodexAccountProbeTests {
 
     const string Initialized = """{"jsonrpc":"2.0","id":1,"result":{"userAgent":"stub"}}""";
 
-    const string ChatGptAccount = """{"jsonrpc":"2.0","id":2,"result":{"account":{"type":"chatgpt","email":"a@example.com","planType":"pro"},"requiresOpenaiAuth":true}}""";
+    const string ChatGptAccount = """{"jsonrpc":"2.0","id":2,"result":{"account":{"type":"chatgpt","email":"a@example.com","planType":"pro"},"requiresOpenaiAuth":true,"workspaceRouting":{"accountRoutingOverride":"NO_CONSTRAINT","backendOrigin":"https://chatgpt.com","chatgptAccountId":"acct-1"}}}""";
 
     const string RateLimits = """{"jsonrpc":"2.0","id":3,"result":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":12,"windowDurationMins":300,"resetsAt":1793449575},"secondary":null,"planType":"pro"},"rateLimitsByLimitId":null,"ordinaryUsageAllowed":true,"accountId":"acct-1"}}""";
 
@@ -78,7 +78,7 @@ public class CodexAccountProbeTests {
     [Test]
     public async Task Signed_out_account_is_authoritative() {
         Skip.When(OperatingSystem.IsWindows(), "the stub codex is a POSIX shell script");
-        var probe = Probe(account: """{"jsonrpc":"2.0","id":2,"result":{"account":null,"requiresOpenaiAuth":true}}""",
+        var probe = Probe(account: """{"jsonrpc":"2.0","id":2,"result":{"account":null,"requiresOpenaiAuth":true,"workspaceRouting":null}}""",
                           limits: """{"jsonrpc":"2.0","id":3,"error":{"code":-32603,"message":"not signed in"}}""");
 
         var result = await probe.ProbeAsync(Account(), CancellationToken.None);
@@ -98,9 +98,33 @@ public class CodexAccountProbeTests {
 
         await Assert.That(result.IdentityError).IsNull();
         await Assert.That(result.Identity!.Email).IsEqualTo("a@example.com");
-        await Assert.That(result.Identity.VendorAccountId).IsNull();
+        await Assert.That(result.Identity.VendorAccountId).IsEqualTo("acct-1");
         await Assert.That(result.Limits).IsNull();
         await Assert.That(result.LimitsError).Contains("usage backend unavailable");
+    }
+
+    [Test]
+    public async Task Account_id_falls_back_to_the_usage_read_without_workspace_routing() {
+        Skip.When(OperatingSystem.IsWindows(), "the stub codex is a POSIX shell script");
+        var probe = Probe(account: """{"jsonrpc":"2.0","id":2,"result":{"account":{"type":"chatgpt","email":null,"planType":"pro"},"requiresOpenaiAuth":true}}""");
+
+        var result = await probe.ProbeAsync(Account(), CancellationToken.None);
+
+        await Assert.That(result.Identity!.VendorAccountId).IsEqualTo("acct-1");
+        await Assert.That(result.Limits).IsNotNull();
+    }
+
+    [Test]
+    public async Task Disagreeing_usage_identity_drops_the_limits_and_keeps_the_account_read_id() {
+        Skip.When(OperatingSystem.IsWindows(), "the stub codex is a POSIX shell script");
+        var probe = Probe(limits: RateLimits.Replace("\"accountId\":\"acct-1\"", "\"accountId\":\"acct-other\"", StringComparison.Ordinal));
+
+        var result = await probe.ProbeAsync(Account(), CancellationToken.None);
+
+        await Assert.That(result.IdentityError).IsNull();
+        await Assert.That(result.Identity!.VendorAccountId).IsEqualTo("acct-1");
+        await Assert.That(result.Limits).IsNull();
+        await Assert.That(result.LimitsError).IsEqualTo("usage identity does not match the signed-in account");
     }
 
     [Test]

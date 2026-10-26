@@ -49,6 +49,7 @@ public sealed class CodexAccountProbe(HarnessRegistry harnesses, UserHome home, 
         string?        identityError = null;
         string?        signIn        = null;
         JsonElement?   chatgpt       = null;
+        string?        routingId     = null;
         var            limitsDone    = false;
         string?        limitsError   = null;
         JsonElement?   limits        = null;
@@ -63,7 +64,7 @@ public sealed class CodexAccountProbe(HarnessRegistry harnesses, UserHome home, 
             }).ConfigureAwait(false);
 
             try {
-                (signIn, chatgpt) = ReadAccount(await rpc.RequestAsync("account/read", _ => { }).ConfigureAwait(false));
+                (signIn, chatgpt, routingId) = ReadAccount(await rpc.RequestAsync("account/read", _ => { }).ConfigureAwait(false));
             } catch (RpcError ex) {
                 identityError = $"account/read: {ex.Message}";
             }
@@ -90,21 +91,30 @@ public sealed class CodexAccountProbe(HarnessRegistry harnesses, UserHome home, 
 
         ct.ThrowIfCancellationRequested();
 
-        var accountId = limits is { } read ? CodexRateLimits.AccountIdFromRateLimitsRead(read) : null;
-        var identity  = identityError is null && chatgpt is { } a
-            ? new AccountIdentity(a.Str("email"), null, null, a.Str("planType"), accountId)
-            : null;
+        var usageId     = limits is { } read ? CodexRateLimits.AccountIdFromRateLimitsRead(read) : null;
         var observation = limits is { } result ? CodexRateLimits.FromRateLimitsRead(result, limitsAt) : null;
+
+        // The usage read can answer for another identity than the signed-in one; its numbers are not this login's.
+        if (routingId is not null && usageId is not null && routingId != usageId) {
+            observation = null;
+            limitsError = "usage identity does not match the signed-in account";
+        }
+
+        var identity = identityError is null && chatgpt is { } a
+            ? new AccountIdentity(a.Str("email"), null, null, a.Str("planType"), routingId ?? usageId)
+            : null;
 
         return new ProbeResult(identityError is null ? signIn : null, identity, identityError, observation, limitsError);
     }
 
-    /// <summary>The sign-in, and the account object when it is a ChatGPT login, the only kind that names one.</summary>
-    static (string? SignIn, JsonElement? ChatGpt) ReadAccount(JsonElement result) {
+    /// <summary>The sign-in, the account object when it is a ChatGPT login (the only kind that names one), and
+    /// the stable account id <c>workspaceRouting</c> carries.</summary>
+    static (string? SignIn, JsonElement? ChatGpt, string? AccountId) ReadAccount(JsonElement result) {
+        var accountId = result.Obj("workspaceRouting")?.Str("chatgptAccountId");
         if (result.Obj("account") is { } account)
-            return (SignInStates.SignedIn, account.Str("type") == "chatgpt" ? account : null);
+            return (SignInStates.SignedIn, account.Str("type") == "chatgpt" ? account : null, accountId);
 
-        return (result.Bool("requiresOpenaiAuth") == true ? SignInStates.SignedOut : null, null);
+        return (result.Bool("requiresOpenaiAuth") == true ? SignInStates.SignedOut : null, null, null);
     }
 
     async Task ShutDownAsync(Process process) {
