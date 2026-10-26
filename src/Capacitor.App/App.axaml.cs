@@ -451,6 +451,7 @@ public partial class App : Application {
         window.Closed += (_, _) => Quit(0);
         desktop.MainWindow = window;
         window.Show();
+        window.Activate();
         _ = run.RunAsync();
     }
 
@@ -1036,6 +1037,7 @@ public partial class App : Application {
                 return;
             }
             var start = Program.Host.NewCopy([.. request.RelaunchArgs]);
+            UninstallWindow.ShowHandoff(desktop.Windows);
             desktop.Exit += (_, _) => {
                 try { Process.Start(start); }
                 catch (Exception ex) { Console.Error.WriteLine($"kcap: could not start the uninstall: {ex.Message}"); }
