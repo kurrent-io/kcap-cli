@@ -116,6 +116,48 @@ public class ExperimentalSettingsViewModelTests {
         await Assert.That(vm.Problem).IsNull();
     });
 
+    /// <summary>The file is re-read only when its last-write time or length moved: here the content
+    /// changes under an unchanged fingerprint, which the row must not see until the time moves.</summary>
+    [Test]
+    public Task A_snapshot_rereads_only_a_store_whose_fingerprint_moved() => AvaloniaSession.RunOnUiAsync(async () => {
+        var store = new ExperimentalSettingsStore(Config.Root);
+        await store.SetAsync("work", Id, false, CancellationToken.None);
+        var service = Connected();
+        using var vm = new ExperimentalSettingsViewModel(store, "work", service);
+        var row = vm.Features.Single();
+        var written = File.GetLastWriteTimeUtc(store.Path);
+        var before = await File.ReadAllTextAsync(store.Path);
+
+        await File.WriteAllTextAsync(store.Path, before.Replace("false", "true "));
+        File.SetLastWriteTimeUtc(store.Path, written);
+        service.SnapshotsSubject.OnNext(Reporting(resolved: false, active: false));
+
+        await Assert.That(row.IsEnabled).IsFalse();
+
+        File.SetLastWriteTimeUtc(store.Path, written.AddSeconds(1));
+        service.SnapshotsSubject.OnNext(Reporting(resolved: true, active: true));
+
+        await Assert.That(row.IsEnabled).IsTrue();
+    });
+
+    /// <summary>A snapshot's read can start before a toggle is saved and arrive after it; applying it would
+    /// flip the row back to the old value.</summary>
+    [Test]
+    public Task A_read_that_predates_a_save_does_not_flip_the_row_back() => AvaloniaSession.RunOnUiAsync(async () => {
+        var store = new ExperimentalSettingsStore(Config.Root);
+        using var vm = new ExperimentalSettingsViewModel(store, "work", Connected());
+        var row = vm.Features.Single();
+        await store.SetAsync("work", Id, false, CancellationToken.None);
+        var stale = vm.ReadIfChanged();
+        await Assert.That(stale).IsNotNull();
+
+        row.IsEnabled = true;
+        vm.Apply(stale!.Value.Settings, stale.Value.Epoch);
+
+        await Assert.That(row.IsEnabled).IsTrue();
+        await Assert.That(store.Load("work").IsEnabled(Id)).IsTrue();
+    });
+
     [Test]
     public Task Corrupt_store_disables_the_toggles_with_the_problem() => AvaloniaSession.RunOnUiAsync(async () => {
         var store = new ExperimentalSettingsStore(Config.Root);

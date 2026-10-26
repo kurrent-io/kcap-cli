@@ -19,11 +19,16 @@ public sealed class ExperimentalSettingsViewModel : ReactiveObject, IDisposable 
     DaemonStatusDto? _snapshot;
     string? _problem;
     string? _saveProblem;
+    readonly HashSet<string> _saving = new(StringComparer.Ordinal);
+    readonly Lock _fingerprintLock = new();
+    (bool Exists, DateTime Written, long Length)? _fingerprint;
+    long _saveEpoch;
 
     public ExperimentalSettingsViewModel(ExperimentalSettingsStore store, string profile, IDaemonClientService service) {
         _store = store;
         _profile = profile;
 
+        _fingerprint = Fingerprint();
         var read = store.Load(profile);
         _problem = read.Problem;
         Features = ExperimentalFeatures.All
@@ -35,12 +40,16 @@ public sealed class ExperimentalSettingsViewModel : ReactiveObject, IDisposable 
             if (status.State != AttachState.Connected) _snapshot = null;
             Observe();
         }).DisposeWith(_subscriptions);
-        // Re-read with each snapshot: the CLI or a hand edit can flip a switch while the tab is open.
-        service.Snapshots.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(snapshot => {
-            _snapshot = snapshot;
-            Reload();
-            Observe();
-        }).DisposeWith(_subscriptions);
+        // Re-read with each snapshot, before it reaches the UI thread: the CLI or a hand edit can flip a
+        // switch while the tab is open.
+        service.Snapshots
+            .Select(snapshot => (Snapshot: snapshot, Read: ReadIfChanged()))
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(next => {
+                _snapshot = next.Snapshot;
+                if (next.Read is { } read) Apply(read.Settings, read.Epoch);
+                Observe();
+            }).DisposeWith(_subscriptions);
     }
 
     public IReadOnlyList<ExperimentalFeatureRowViewModel> Features { get; }
@@ -51,10 +60,34 @@ public sealed class ExperimentalSettingsViewModel : ReactiveObject, IDisposable 
         private set => this.RaiseAndSetIfChanged(ref _problem, value);
     }
 
-    void Reload() {
-        var read = _store.Load(_profile);
-        foreach (var row in Features) row.Load(read.Readable && read.IsEnabled(row.Id), read.Readable);
+    /// The store as it is now, or null when its last-write time and length match the last read.
+    internal (ExperimentalSettingsRead Settings, long Epoch)? ReadIfChanged() {
+        var epoch = Interlocked.Read(ref _saveEpoch);
+        var fingerprint = Fingerprint();
+        lock (_fingerprintLock) {
+            if (fingerprint == _fingerprint) return null;
+            _fingerprint = fingerprint;
+        }
+        return (_store.Load(_profile), epoch);
+    }
+
+    /// A read that a save began or ended after is stale, and a row being saved keeps the value the user
+    /// just chose; the next snapshot reads again.
+    internal void Apply(ExperimentalSettingsRead read, long epoch) {
+        if (epoch != Interlocked.Read(ref _saveEpoch)) {
+            lock (_fingerprintLock) _fingerprint = null;
+            return;
+        }
+        foreach (var row in Features) {
+            if (_saving.Contains(row.Id)) continue;
+            row.Load(read.Readable && read.IsEnabled(row.Id), read.Readable);
+        }
         Problem = read.Problem ?? _saveProblem;
+    }
+
+    (bool, DateTime, long) Fingerprint() {
+        var file = new FileInfo(_store.Path);
+        return file.Exists ? (true, file.LastWriteTimeUtc, file.Length) : (false, default, 0);
     }
 
     // Connecting, and a connection that has not yet sent a snapshot, say nothing rather than guess.
@@ -65,6 +98,8 @@ public sealed class ExperimentalSettingsViewModel : ReactiveObject, IDisposable 
     }
 
     async Task SaveAsync(ExperimentalFeatureRowViewModel row, bool enabled) {
+        _saving.Add(row.Id);
+        Interlocked.Increment(ref _saveEpoch);
         try {
             // A refusal means the file is unreadable, which the reload reports and keeps reporting until fixed.
             _saveProblem = null;
@@ -74,8 +109,13 @@ public sealed class ExperimentalSettingsViewModel : ReactiveObject, IDisposable 
         } catch (Exception ex) {
             _saveProblem = $"Could not save the setting: {ex.Message}";
             row.Revert(!enabled);
+        } finally {
+            _saving.Remove(row.Id);
+            Interlocked.Increment(ref _saveEpoch);
         }
-        Reload();
+
+        lock (_fingerprintLock) _fingerprint = Fingerprint();
+        Apply(_store.Load(_profile), Interlocked.Read(ref _saveEpoch));
     }
 
     public void Dispose() {
