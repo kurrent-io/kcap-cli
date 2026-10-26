@@ -13,6 +13,7 @@
         <StyleInclude Source="avares://kcap-desktop/Views/SettingsStyles.axaml" />
     </Window.Styles>
     <Panel>
+        <LayoutTransformControl x:Name="ScaleHost">
         <TabControl x:Name="SettingsTabs" Classes="settingsSidebar" TabStripPlacement="Left" SelectedIndex="0">
             <TabControl.Tag>
                 <StackPanel Spacing="6">
@@ -456,8 +457,9 @@
                 <views:ProfilesSettingsView DataContext="{Binding Profiles}" />
             </TabItem>
         </TabControl>
+        </LayoutTransformControl>
 
-        <!-- The client area extends under the title bar; this strip stands in for it. Nothing
+        <!-- Outside the scale, so it stays the title bar's height at any text size. The client area extends under the title bar; this strip stands in for it. Nothing
              interactive is drawn this high on any page. -->
         <Border Height="40" VerticalAlignment="Top" Background="Transparent"
                 PointerPressed="OnChromePointerPressed" />

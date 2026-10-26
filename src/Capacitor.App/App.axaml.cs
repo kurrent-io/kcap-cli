@@ -1163,7 +1163,7 @@ public partial class App : Application {
             return;
         }
 
-        var window = new SettingsWindow { DataContext = vm };
+        var window = new SettingsWindow { DataContext = vm, ContentScale = _uiScale };
         _settingsWindow = window;
         window.Closing += (_, e) => { if (vm.HasActiveOperation && !_shutdownStarted) e.Cancel = true; };
         window.Closed += (_, _) => { _settingsWindow = null; vm.Dispose(); };
