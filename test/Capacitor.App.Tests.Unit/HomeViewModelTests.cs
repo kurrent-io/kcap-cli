@@ -1,3 +1,4 @@
+using TUnit.Assertions.Enums;
 using System.Collections.Frozen;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -1786,6 +1787,33 @@ public class HomeViewModelTests {
 
             var saved = await store.LoadAsync();
             await Assert.That(saved.HarnessByRepo is null || saved.HarnessByRepo.Count == 0).IsTrue();
+        });
+    }
+
+    /// <summary>A machine advertises its repositories most recently used first. The picker lists them by
+    /// name like the local list, and the most recently used one stays the selection.</summary>
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task RemoteMachineRepositoriesAreListedByName() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var remote = new FakeRemoteAgents();
+            remote.DaemonsSubject.OnNext([
+                new DaemonInfo {
+                    Name = "home-pc", OwnerUserId = "u1", Connected = true,
+                    RepoPaths = ["/w/widgets", "/x/Engine", "/w/api"], SupportedVendors = ["codex"],
+                },
+            ]);
+            using var vm = new HomeViewModel(
+                new FakeDaemonClientService(), new AppStateStore(path), new RecordingLaunchClient(), Known(),
+                TimeProvider.System, daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"));
+
+            await vm.SelectMachineAsync("home-pc", isLocal: false);
+
+            var repos = await vm.ListRepositoriesAsync();
+            await Assert.That(repos.Select(r => r.RepoPath).ToArray())
+                .IsEquivalentTo(["/w/api", "/x/Engine", "/w/widgets"], CollectionOrdering.Matching);
+            await Assert.That(vm.SelectedRepoPath).IsEqualTo("/w/widgets");
         });
     }
 
