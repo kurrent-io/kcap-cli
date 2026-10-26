@@ -1634,9 +1634,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <summary>Resolves the Codex switch and commits the result when it differs from the committed
     /// one, under the next generation. New launches route on it from the moment it is swapped in.</summary>
     CodexTransportResolution CommitCodexResolution() {
-        var committed = _config.CodexResolution;
-        var resolved  = CodexTransportResolution.Read(
-            committed.Generation + 1, _config.ReadExperimentalSettings, () => DaemonRunner.ProbeCliVersion(_config.CodexPath));
+        var committed  = _config.CodexResolution;
+        string? problem = null;
+        var resolved   = CodexTransportResolution.Read(
+            committed.Generation + 1, _config.ReadExperimentalSettings, () => DaemonRunner.ProbeCliVersion(_config.CodexPath),
+            unreadable => { problem = unreadable; return committed; });
+
+        // Single-flighted, so the last-logged problem needs no lock.
+        if (problem is not null && problem != _unreadableSettingsProblem) LogUnreadableSettings(_logger, problem);
+        _unreadableSettingsProblem = problem;
         if (resolved.SameStateAs(committed)) return committed;
 
         _config.CodexResolution = resolved;
@@ -1644,6 +1650,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _statusNotifier.Pulse();
         return resolved;
     }
+
+    string? _unreadableSettingsProblem;
 
     /// <summary>Test seam: the most recently scheduled capability refresh, for awaiting quiescence.</summary>
     internal Task CapabilityRefreshForTest => _capabilityRefresh.Current;
@@ -6345,6 +6353,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Codex transport resolution {Generation}: switch {SwitchOn}, app-server {Active} {InactiveReason}")]
     static partial void LogCodexResolution(ILogger logger, long generation, bool switchOn, bool active, string inactiveReason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Experimental settings unreadable ({Problem}); keeping the committed Codex transport")]
+    static partial void LogUnreadableSettings(ILogger logger, string problem);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Launching agent {AgentId} for {Repo} (vendor={Vendor}, effort={Effort}, model={Model})")]
     partial void LogLaunching(string agentId, string repo, string vendor, string effort, string? model);

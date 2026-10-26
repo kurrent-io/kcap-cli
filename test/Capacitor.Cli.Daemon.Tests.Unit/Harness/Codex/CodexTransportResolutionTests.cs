@@ -1,3 +1,5 @@
+using System.Collections.Frozen;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Daemon.Harness.Codex;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Codex;
@@ -40,5 +42,28 @@ public class CodexTransportResolutionTests {
 
         await Assert.That(resolution.Active).IsFalse();
         await Assert.That(resolution.InactiveReason).IsEqualTo("Codex version could not be read");
+    }
+
+    static readonly ExperimentalSettingsRead On =
+        new(true, new Dictionary<string, bool> { ["codex-app-server"] = true }.ToFrozenDictionary(), null);
+
+    static readonly ExperimentalSettingsRead Broken = new(false, FrozenDictionary<string, bool>.Empty, "experimental.json is not valid JSON");
+
+    static readonly CodexTransportResolution Kept = new(4, true, "0.146.0", true, null);
+
+    /// <summary>Whichever read fails, before the probe or after it, the pass answers the fallback and
+    /// never a switch-off resolution.</summary>
+    [Test]
+    [Arguments(0)]
+    [Arguments(1)]
+    public async Task Read_answers_the_fallback_when_a_read_fails(int failingRead) {
+        var reads = 0;
+        string? problem = null;
+
+        var resolution = CodexTransportResolution.Read(5, () => reads++ == failingRead ? Broken : On, () => "0.146.0",
+            p => { problem = p; return Kept; });
+
+        await Assert.That(ReferenceEquals(resolution, Kept)).IsTrue();
+        await Assert.That(problem).IsEqualTo("experimental.json is not valid JSON");
     }
 }

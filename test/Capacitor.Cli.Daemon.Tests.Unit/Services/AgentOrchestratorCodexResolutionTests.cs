@@ -4,6 +4,7 @@ using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Daemon.Harness.Codex;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Pty;
+using Microsoft.Extensions.Logging;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
@@ -20,8 +21,15 @@ public class AgentOrchestratorCodexResolutionTests {
     string StubCodex(string name, string version, string before = "") =>
         Tmp.CreateExecutable(name, $"#!/bin/sh\n{before}echo 'codex-cli {version}'\n");
 
+    sealed class OrchestratorLog(CapturingLogger inner) : ILogger<AgentOrchestrator> {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => inner.BeginScope(state);
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel level, EventId id, TState state, Exception? ex, Func<TState, Exception?, string> format) =>
+            inner.Log(level, id, state, ex, format);
+    }
+
     static (AgentOrchestrator Orchestrator, CaptureServerConnection Server, DaemonConfig Config) Build(
-            string codexPath, Exception? registerThrow = null) {
+            string codexPath, Exception? registerThrow = null, CapturingLogger? log = null) {
         var config   = new DaemonConfig();
         var server   = new CaptureServerConnection(config) { RegisterDaemonThrow = registerThrow };
         var launcher = new SpyHostedAgentLauncher("codex", codexPath) { SupportsUnattended = true };
@@ -32,7 +40,8 @@ public class AgentOrchestratorCodexResolutionTests {
                 c.CodexPath         = codexPath;
                 c.UnattendedVendors = ["codex"];
             },
-            sharedConfig: config);
+            sharedConfig: config,
+            logger: log is null ? null : new OrchestratorLog(log));
         return (orch, server, config);
     }
 
@@ -109,6 +118,38 @@ public class AgentOrchestratorCodexResolutionTests {
         await Assert.That(config.CodexResolution.SwitchOn).IsTrue();
         await Assert.That(config.CodexResolution.InactiveReason).IsEqualTo("Codex 0.145.0 is below 0.146.0");
         await Assert.That(orch.StatusNotifierForTest.Version).IsGreaterThan(v0);
+    }
+
+    /// <summary>A half-written or hand-broken file says nothing about the switch, so it must not turn an
+    /// active transport off; the problem is logged once until it changes.</summary>
+    [Test]
+    public async Task An_unreadable_store_keeps_the_committed_resolution() {
+        SkipOnWindows();
+        var log = new CapturingLogger();
+        var (orch, _, config) = Build(StubCodex("codex", "0.146.0"), log: log);
+        await using var _ = orch;
+        await SwitchAsync(config, on: true);
+        await RefreshAsync(orch);
+        var committed = config.CodexResolution;
+        var store     = new ExperimentalSettingsStore(config.ConfigRoot);
+
+        await File.WriteAllTextAsync(store.Path, "{ not json");
+        await RefreshAsync(orch);
+        await RefreshAsync(orch);
+
+        await Assert.That(ReferenceEquals(config.CodexResolution, committed)).IsTrue();
+        await Assert.That(log.Warnings.Count(w => w.Contains("not valid JSON"))).IsEqualTo(1);
+
+        await File.WriteAllTextAsync(store.Path, "[1]");
+        await RefreshAsync(orch);
+
+        await Assert.That(ReferenceEquals(config.CodexResolution, committed)).IsTrue();
+        await Assert.That(log.Warnings.Count(w => w.Contains("not a JSON object"))).IsEqualTo(1);
+
+        File.Delete(store.Path);
+        await RefreshAsync(orch);
+
+        await Assert.That(config.CodexResolution.SwitchOn).IsFalse();
     }
 
     [Test]

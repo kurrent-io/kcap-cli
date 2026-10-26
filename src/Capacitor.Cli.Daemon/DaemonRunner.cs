@@ -212,7 +212,8 @@ public static partial class DaemonRunner {
 
         // Committed before the first advertisement, which carries it to the server.
         var startupCodex = Harness.Codex.CodexTransportResolution.Read(
-            1, config.ReadExperimentalSettings, () => ProbeCliVersion(config.CodexPath));
+            1, config.ReadExperimentalSettings, () => ProbeCliVersion(config.CodexPath),
+            problem => Harness.Codex.CodexTransportResolution.Unreadable(1, problem));
         config.CodexResolution = startupCodex;
 
         // The per-vendor reviewer switches. These are OPT-OUT now: unset means enabled, matching
