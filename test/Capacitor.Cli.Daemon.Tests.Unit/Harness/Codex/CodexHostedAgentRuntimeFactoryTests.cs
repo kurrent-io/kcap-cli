@@ -9,8 +9,9 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Codex;
 /// <summary>
 /// The composite codex factory's routing: a pinned transport first, then the launch class, then the
 /// switch the server last acknowledged. The app-server route is exercised through the spawn seam (a
-/// fake peer), so no child process runs.
+/// fake peer); the routing table runs a stub Codex for the version a pinned launch probes.
 /// </summary>
+[ParallelLimiter<SubprocessLimit>]
 public class CodexHostedAgentRuntimeFactoryTests {
     [TempHome] public required TempHome Home { get; init; }
     [TempDir]  public required TempDir  Tmp  { get; init; }
