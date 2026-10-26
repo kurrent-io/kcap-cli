@@ -440,7 +440,23 @@
                            Foreground="{StaticResource KcapMutedBrush}" FontSize="13.5"
                            TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis" />
 
-                <Border x:Name="ComposerCard" Classes="attachTarget" Grid.Row="3"
+                <Border x:Name="ReadOnlyBanner" Grid.Row="3" IsVisible="{Binding IsReadOnlyParticipant}"
+                        Background="{StaticResource KcapWarningDimBrush}" BorderBrush="{StaticResource KcapWarningBrush}"
+                        BorderThickness="1" CornerRadius="8" Padding="12,7">
+                    <TextBlock Text="{Binding ReadOnlyNotice, StringFormat='Read-only: {0}'}"
+                               Foreground="{StaticResource KcapWarningBrush}" TextWrapping="Wrap" />
+                </Border>
+                <TextBlock x:Name="EndedComposerHint" Grid.Row="3" Margin="14,0"
+                           Text="{Binding ComposerHint}" FontSize="12.5" Foreground="{StaticResource KcapFaintBrush}"
+                           TextWrapping="Wrap">
+                    <TextBlock.IsVisible>
+                        <MultiBinding Converter="{x:Static BoolConverters.And}">
+                            <Binding Path="!ShowsComposer" />
+                            <Binding Path="!IsReadOnlyParticipant" />
+                        </MultiBinding>
+                    </TextBlock.IsVisible>
+                </TextBlock>
+                <Border x:Name="ComposerCard" Classes="attachTarget" Grid.Row="3" IsVisible="{Binding ShowsComposer}"
                         Background="{StaticResource KcapSurfaceRaisedBrush}"
                         BorderThickness="1" CornerRadius="10" Padding="13,8,13,12">
                     <StackPanel Spacing="6">
@@ -470,7 +486,7 @@
                                     </ItemsControl.ItemsPanel>
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate x:DataType="vm:TerminalMenuChoiceViewModel">
-                                            <Button Command="{Binding Choose}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                            <Button Classes="kcapGhost" Command="{Binding Choose}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
                                                     Padding="12,8" CornerRadius="8" Background="{StaticResource KcapSurfaceBrush}"
                                                     BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1" Cursor="Hand">
                                                 <TextBlock Text="{Binding Label}" FontSize="13.5" TextWrapping="Wrap"
@@ -492,14 +508,6 @@
                         <TextBox x:Name="ComposerInput" Classes="kcapEmbedded" Text="{Binding ComposerText}" AcceptsReturn="True" TextWrapping="Wrap"
                                  MinHeight="44" MaxHeight="160" Padding="0" PlaceholderText="Write a message" IsVisible="{Binding ShowsComposer}"
                                  IsEnabled="{Binding !HasTerminalMenu}" />
-                        <!-- A flow participant is addressed through the flow protocol, never messaged
-                             directly, so the banner replaces the input rather than overlaying a dead one. -->
-                        <Border x:Name="ReadOnlyBanner" IsVisible="{Binding IsReadOnlyParticipant}"
-                                Background="{StaticResource KcapWarningDimBrush}" BorderBrush="{StaticResource KcapWarningBrush}"
-                                BorderThickness="1" CornerRadius="8" Padding="12,7">
-                            <TextBlock Text="{Binding ReadOnlyNotice, StringFormat='Read-only: {0}'}"
-                                       Foreground="{StaticResource KcapWarningBrush}" TextWrapping="Wrap" />
-                        </Border>
                         <Grid ColumnDefinitions="Auto,*,Auto,Auto">
                             <!-- The hint exists only while the gate is shut, which is exactly when a tooltip
                                  is suppressed by default. -->

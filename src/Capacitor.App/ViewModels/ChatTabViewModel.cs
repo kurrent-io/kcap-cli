@@ -804,12 +804,14 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         // goes blank there instead of offering a reply that can never be sent.
         _composerHint = Observable.CombineLatest(
                 _input.WhenAnyValue(i => i.Hint),
+                _input.WhenAnyValue(i => i.Availability),
                 this.WhenAnyValue(x => x.IsReadOnlyParticipant),
                 this.WhenAnyValue(x => x.UploadingFiles),
                 this.WhenAnyValue(x => x.TerminalMenuHint),
                 _intakeNotice,
-                (hint, readOnly, uploading, menuHint, notice) =>
-                    uploading > 0 ? $"Uploading {uploading} file{(uploading == 1 ? "" : "s")}…"
+                (hint, availability, readOnly, uploading, menuHint, notice) =>
+                    availability == SendAvailability.Ended ? (readOnly ? "" : hint)
+                        : uploading > 0 ? $"Uploading {uploading} file{(uploading == 1 ? "" : "s")}…"
                         : notice ?? (readOnly ? ""
                             : menuHint.Length > 0 ? menuHint
                             : hint))
