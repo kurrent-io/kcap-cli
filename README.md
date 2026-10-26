@@ -211,7 +211,7 @@ At a glance — each links to its section below:
 | [`kcap profile` / `use`](#profiles) | Manage and switch between servers/profiles |
 | [`kcap machine`](#machine-credentials-headless-recording) | Create credentials for CI runners and agent sandboxes |
 | [`kcap config`](#configuration) | Show and set configuration |
-| [`kcap experimental`](#codex-app-server-transport) | List experimental features and turn one on or off for the active profile |
+| [`kcap experimental`](#codex-app-server-transport) | List experimental features and turn one on or off for the profile in use |
 | [`kcap remap`](#renamed-repo-directories-kcap-remap) | Map renamed repo directories for import |
 | [`kcap ignore`](#configuration) | Exclude paths from recording |
 | [`kcap allow`](#configuration) | Restrict recording to named paths |
@@ -1998,16 +1998,16 @@ KCAP_CODEX_PATH=/opt/codex/bin/codex  kcap daemon
 
 ##### Codex app-server transport
 
-Hosted Codex agents (review-flow reviewers and interactive agents) can run over the `codex app-server` JSON-RPC protocol instead of the interactive terminal. It is an experimental feature, off by default, and is switched per profile:
+Hosted Codex agents (review-flow reviewers and interactive agents) can run over the `codex app-server` JSON-RPC protocol instead of the interactive terminal. It is an experimental feature, off by default, and is switched per profile — the one `KCAP_PROFILE` names, or else the active profile:
 
 ```bash
-kcap experimental                          # list features, whether each is on, and whether the daemon applied it
+kcap experimental                          # name the profile, then list features, whether each is on, and whether the daemon applied it
 kcap experimental enable codex-app-server  # opt in
 kcap experimental disable codex-app-server # roll back
 ```
 
 - The running daemon applies the change to its next launch without a restart, and `kcap experimental enable` waits a few seconds for it to confirm. Agents already running keep the transport they started with.
-- It takes effect only when the installed Codex meets the minimum version (**0.146.0**); otherwise the feature is saved but reported as not active, with the reason, and launches stay on the terminal.
+- It takes effect only when the installed Codex meets the minimum version (**0.146.0**); otherwise the feature is saved but reported as not active, with the reason, and new launches take the terminal. A launch the server already pinned to app-server is refused instead, since it is never moved to another transport
 - PR reviews (`kcap review`) and `kcap agent start` local spawns always use the terminal.
 - The former `KCAP_CODEX_TRANSPORT` environment variable is removed; a daemon that still sees it logs a warning naming the command above.
 

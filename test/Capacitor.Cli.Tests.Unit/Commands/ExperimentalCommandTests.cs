@@ -1,6 +1,7 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.LocalIpc;
 using Microsoft.Extensions.Time.Testing;
 
@@ -14,8 +15,8 @@ public class ExperimentalCommandTests {
 
     const string Id = "codex-app-server";
 
-    static DaemonStatusDto Status(List<ExperimentalFeatureStatusDto>? features) =>
-        new(new DaemonInfoDto("d", "1", "https://x", "connected", 5, 0), [], Experimental: features);
+    static DaemonStatusDto Status(List<ExperimentalFeatureStatusDto>? features, string connection = "connected") =>
+        new(new DaemonInfoDto("d", "1", "https://x", connection, 5, 0), [], Experimental: features);
 
     static ExperimentalFeatureStatusDto Feature(bool saved, bool active, bool acked = true, string? reason = null) =>
         new(Id, saved, active, 1, acked, reason);
@@ -24,12 +25,16 @@ public class ExperimentalCommandTests {
 
     static readonly ProbeResult NotRunning = new(false, null, null, false);
 
-    async Task<(int Exit, string Out, string Err)> Run(Func<int, ProbeResult> probe, params string[] args) {
+    Task<(int Exit, string Out, string Err)> Run(Func<int, ProbeResult> probe, params string[] args) =>
+        Run(Resolutions.None(new ConfigRoot(Tmp.Path)), (_, n) => probe(n), args);
+
+    async Task<(int Exit, string Out, string Err)> Run(
+            ProfileContext profiles, Func<string, int, ProbeResult> probe, params string[] args) {
         var time  = new FakeTimeProvider();
         var calls = 0;
         var sut = new ExperimentalCommand(
-            new ConfigRoot(Tmp.Path), time,
-            (_, _) => Task.FromResult(probe(calls++)),
+            new ConfigRoot(Tmp.Path), profiles, time,
+            (daemon, _) => Task.FromResult(probe(daemon, calls++)),
             (span, _) => { time.Advance(span); return Task.CompletedTask; });
 
         using var capture = ConsoleOutput.StartFullCapture("\n");
@@ -84,11 +89,62 @@ public class ExperimentalCommandTests {
         await Assert.That(output).Contains("Saved, but not active: Codex 0.1 is below 0.146.0");
     }
 
+    /// <summary>The commit is reported before its re-registration completes, so a healthy daemon's first
+    /// answer is always unacknowledged.</summary>
     [Test]
-    public async Task Enable_before_the_server_hears_of_it_prints_applied_locally() {
-        var (_, output, _) = await Run(_ => Running(Status([Feature(true, true, acked: false)])), "enable", Id);
+    [Arguments("connected")]
+    [Arguments("reconnecting")]
+    public async Task Enable_waits_for_the_server_to_be_told_before_applied_live(string connection) {
+        var (_, output, _) = await Run(
+            n => Running(Status([Feature(true, true, acked: n > 0)], n > 0 ? "connected" : connection)), "enable", Id);
+
+        await Assert.That(output).Contains("Applied live");
+        await Assert.That(output).DoesNotContain("Applied locally");
+    }
+
+    [Test]
+    public async Task Disable_waits_for_the_server_to_be_told_before_applied_live() {
+        var (_, output, _) = await Run(n => n switch {
+            0 => Running(Status([Feature(false, false, acked: false)])),
+            _ => Running(Status([Feature(false, false)])),
+        }, "disable", Id);
+
+        await Assert.That(output).Contains("Applied live");
+    }
+
+    [Test]
+    public async Task Enable_the_server_never_hears_of_prints_applied_locally_at_the_deadline() {
+        var (_, output, _) = await Run(_ => Running(Status([Feature(true, true, acked: false)], "disconnected")), "enable", Id);
 
         await Assert.That(output).Contains("Applied locally; the server has not been told yet");
+    }
+
+    [Test]
+    public async Task Enable_writes_the_profile_KCAP_PROFILE_selects_and_asks_its_daemon() {
+        await File.WriteAllTextAsync(Path.Combine(Tmp.Path, "config.json"), """
+            { "version": 2, "active_profile": "default",
+              "profiles": { "default": { "daemon": { "name": "home-daemon" } },
+                            "work": { "daemon": { "name": "work-daemon" } } } }
+            """);
+        using var env = EnvScope.Exclusive(ProfileOverrides.ProfileVar, "work");
+        var config   = new ConfigRoot(Tmp.Path);
+        var profiles = await AppConfig.ResolveActiveProfile([], config, ProfileOverrides.FromEnvironment(), LocalEndpoints.None);
+        var asked    = new List<string>();
+
+        var (_, output, _) = await Run(profiles, (daemon, _) => { asked.Add(daemon); return NotRunning; }, "enable", Id);
+
+        var store = new ExperimentalSettingsStore(config);
+        await Assert.That(store.Load("work").IsEnabled(Id)).IsTrue();
+        await Assert.That(store.Load("default").IsEnabled(Id)).IsFalse();
+        await Assert.That(asked).IsEquivalentTo(["work-daemon"]);
+        await Assert.That(output).Contains("(profile: work)");
+    }
+
+    [Test]
+    public async Task List_names_the_profile() {
+        var (_, output, _) = await Run(_ => NotRunning);
+
+        await Assert.That(output).Contains("Profile: default");
     }
 
     [Test]

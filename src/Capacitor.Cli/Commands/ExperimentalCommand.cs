@@ -10,20 +10,22 @@ public sealed class ExperimentalCommand {
     static readonly TimeSpan ProbeBudget = TimeSpan.FromSeconds(2);
 
     readonly ConfigRoot _config;
+    readonly ProfileContext _profiles;
     readonly TimeProvider _time;
     readonly Func<string, CancellationToken, Task<ProbeResult>> _probe;
     readonly Func<TimeSpan, CancellationToken, Task> _delay;
 
-    public ExperimentalCommand(ConfigRoot config, DaemonStore daemons, TimeProvider time)
-        : this(config, time,
+    public ExperimentalCommand(ConfigRoot config, ProfileContext profiles, DaemonStore daemons, TimeProvider time)
+        : this(config, profiles, time,
             (name, ct) => LocalControlProbe.ProbeAsync(daemons, name, time, ProbeBudget, ct),
             (span, ct) => Task.Delay(span, time, ct)) { }
 
     internal ExperimentalCommand(
-            ConfigRoot config, TimeProvider time,
+            ConfigRoot config, ProfileContext profiles, TimeProvider time,
             Func<string, CancellationToken, Task<ProbeResult>> probe,
             Func<TimeSpan, CancellationToken, Task> delay) {
-        _config = config;
+        _config   = config;
+        _profiles = profiles;
         _time   = time;
         _probe  = probe;
         _delay  = delay;
@@ -45,21 +47,19 @@ public sealed class ExperimentalCommand {
         return 1;
     }
 
-    async Task<(string Profile, string DaemonName)> ResolveAsync() {
-        var profiles = await AppConfig.LoadProfileConfig(_config);
-        var name     = profiles.Active?.Daemon?.Name;
-
-        return (profiles.ActiveName, DaemonNameResolver.Resolve([], name));
-    }
+    // The daemon keys its switches on the same profile name, KCAP_PROFILE included.
+    (string Profile, string DaemonName) Resolve() =>
+        (_profiles.Name, DaemonNameResolver.Resolve([], _profiles.DaemonName));
 
     async Task<int> ListAsync() {
-        var (profile, daemonName) = await ResolveAsync();
+        var (profile, daemonName) = Resolve();
         var store = new ExperimentalSettingsStore(_config);
         var saved = store.Load(profile);
         if (!saved.Readable) return await RefuseCorruptAsync(store, saved);
 
         var probe = await _probe(daemonName, CancellationToken.None);
 
+        await Console.Out.WriteLineAsync($"Profile: {profile}");
         foreach (var feature in ExperimentalFeatures.All) {
             var on = saved.IsEnabled(feature.Id);
             var (kind, reason) = Classify(on, probe, feature.Id);
@@ -81,7 +81,7 @@ public sealed class ExperimentalCommand {
             return 1;
         }
 
-        var (profile, daemonName) = await ResolveAsync();
+        var (profile, daemonName) = Resolve();
         var store = new ExperimentalSettingsStore(_config);
 
         if (!await store.SetAsync(profile, feature.Id, enable, CancellationToken.None))
@@ -96,6 +96,7 @@ public sealed class ExperimentalCommand {
     async Task<string> ConfirmAsync(bool saved, string daemonName, string featureId) {
         var deadline = _time.GetUtcNow() + ConfirmWindow;
 
+        // Applied locally keeps polling too: a reconnect within the window still tells the server.
         while (true) {
             var probe = await _probe(daemonName, CancellationToken.None);
             var (kind, reason) = Classify(saved, probe, featureId);
@@ -105,16 +106,17 @@ public sealed class ExperimentalCommand {
                     return "Applied live";
                 case ExperimentalFeatureStateKind.OnNotActive:
                     return $"Saved, but not active: {reason}";
-                case ExperimentalFeatureStateKind.AppliedLocally:
-                    return "Applied locally; the server has not been told yet";
                 case ExperimentalFeatureStateKind.Unknown:
                     return "Saved; the running daemon is too old to apply it. Update kcap and restart the daemon";
                 case ExperimentalFeatureStateKind.DaemonNotRunning:
                     return "Saved; the daemon is not running and will apply it when it starts";
             }
 
-            if (_time.GetUtcNow() >= deadline)
-                return "Saved; the daemon did not confirm in time. Run kcap experimental to check";
+            if (_time.GetUtcNow() >= deadline) {
+                return kind == ExperimentalFeatureStateKind.AppliedLocally
+                    ? "Applied locally; the server has not been told yet"
+                    : "Saved; the daemon did not confirm in time. Run kcap experimental to check";
+            }
 
             await _delay(PollInterval, CancellationToken.None);
         }
