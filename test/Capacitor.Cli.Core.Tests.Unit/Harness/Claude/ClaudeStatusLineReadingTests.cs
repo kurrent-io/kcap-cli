@@ -142,4 +142,18 @@ public class ClaudeStatusLineReadingTests {
         await Assert.That(ids).DoesNotContain("s2");
         await Assert.That(ids[^2..]).IsEquivalentTo(new[] { "s1", "new" });
     }
+
+    [Test]
+    public async Task Counter_below_its_baseline_is_a_new_baseline_that_later_confirms() {
+        var first   = Run(Empty, Payload(duration: 5000), T0);
+        var dropped = Run(first, Payload(duration: 1000), T0.AddMinutes(1));
+
+        await Assert.That(Window(dropped, 300).ConfirmedAt).IsNull();
+        await Assert.That(dropped.Sessions).IsEquivalentTo(new[] { new ReadingSession("s1", 1000) });
+
+        var grown = Run(dropped, Payload(duration: 2000), T0.AddMinutes(2));
+
+        await Assert.That(Window(grown, 300).ConfirmedAt).IsEqualTo(T0.AddMinutes(2));
+        await Assert.That(grown.Sessions).IsEquivalentTo(new[] { new ReadingSession("s1", 2000) });
+    }
 }
