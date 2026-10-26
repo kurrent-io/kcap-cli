@@ -110,6 +110,7 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
         new(item.Text, composerEdits: -1, generation: -1, offset: null, attachmentIds: []) { DispatchId = item.DispatchId, IsForeign = true };
 
     internal void MarkQueued(Guid dispatchId) {
+        if (DispatchId == dispatchId && _serverListed && !IsUnconfirmed) return;
         DispatchId = dispatchId;
         _serverListed = true;
         IsUnconfirmed = false;

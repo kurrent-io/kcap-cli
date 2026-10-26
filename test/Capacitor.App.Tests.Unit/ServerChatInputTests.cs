@@ -198,6 +198,7 @@ public class ServerChatInputTests {
             h.Ready();
             h.Lane.SpecialKeyHandler = _ => Task.FromResult(HubCallOutcome.NotConnected);
             await h.Input.InterruptAsync(CancellationToken.None);
+            await Assert.That(h.Input.Hint).IsEqualTo("interrupt delivery unconfirmed — check the agent's terminal");
             h.Lane.SpecialKeyHandler = _ => Task.FromResult(HubCallOutcome.Ok);
             await h.Input.InterruptAsync(CancellationToken.None);
             await Assert.That(h.Input.Hint).IsEqualTo("Enter sends · Shift+Enter for a new line");

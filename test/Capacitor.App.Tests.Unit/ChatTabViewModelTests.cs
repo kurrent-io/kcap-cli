@@ -3822,6 +3822,94 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// Snapshots carry no revision and can land out of order: a listing after an unlisting makes
+    /// the row held again, and nothing brings back a dispatch that was discarded, here or on the
+    /// server, whatever session the pane moved through meanwhile.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_late_snapshot_cannot_bring_back_a_discarded_dispatch_or_leave_a_held_one_resendable() {
+        await RunOnUiAsync(async () => {
+            var lane = new FakeServerLane();
+            lane.StatusSubject.OnNext(new(ServerLaneState.Connected));
+            var access = new BehaviorSubject<SessionAccessState>(SessionAccessState.Established);
+            var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
+            var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
+            var input = new ServerChatInput("a1", lane, access, session, hasTerminal: true);
+            var chat = new ChatTabViewModel(
+                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), input, new NoAttachmentUploader(), _ => new ScriptedFeed { ResetNext = true },
+                new RecordingOpener(), new FakeTimeProvider(), new FakePermissionService(), new SessionRuns(new FakeTimeProvider()), serverQueue: queue);
+            await WaitUntilAsync(() => chat.HasSeed, what: "the seed");
+            var serverDiscards = new List<Guid>();
+            lane.DiscardHandler = id => { serverDiscards.Add(id); return Task.FromResult(HubCallOutcome.Ok); };
+
+            chat.ComposerText = "mine";
+            await chat.SendCommand.Execute();
+            var own = chat.QueuedMessages.Single();
+            var ownId = Item("mine", Guid.NewGuid());
+            queue.OnNext([ownId]);
+            queue.OnNext([]);
+            await Assert.That(own.CanSendNow).IsTrue();
+            queue.OnNext([ownId]);
+            await Assert.That(own.CanSendNow).IsFalse();
+            await Assert.That(own.IsUnconfirmed).IsFalse();
+
+            queue.OnNext([]);
+            await chat.DiscardQueuedCommand.Execute(own);
+            await Assert.That(serverDiscards).IsEmpty();
+            queue.OnNext([ownId]);
+            await Assert.That(chat.QueuedMessages).IsEmpty();
+
+            var theirs = Item("theirs", Guid.NewGuid());
+            queue.OnNext([theirs]);
+            var reply = new TaskCompletionSource<HubCallOutcome>();
+            lane.DiscardHandler = id => { serverDiscards.Add(id); return reply.Task; };
+            var pending = chat.DiscardQueuedCommand.Execute(chat.QueuedMessages.Single()).ToTask();
+            await WaitUntilAsync(() => serverDiscards.Count == 1, what: "the discard request");
+            queue.OnNext([]);
+            queue.OnNext([theirs]);
+            await Assert.That(chat.QueuedMessages.Count).IsEqualTo(1);
+            reply.SetResult(HubCallOutcome.Ok);
+            await pending;
+            await Assert.That(chat.QueuedMessages).IsEmpty();
+
+            session.OnNext(Session("s2"));
+            session.OnNext(Session("s1"));
+            queue.OnNext([theirs, ownId]);
+            await Assert.That(chat.QueuedMessages).IsEmpty();
+            await chat.TeardownAsync();
+        });
+    }
+
+    /// A failed discard says so; a later one that succeeds takes that hint away with the row.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_discard_that_succeeds_on_retry_clears_its_failure_hint() {
+        await RunOnUiAsync(async () => {
+            var lane = new FakeServerLane();
+            lane.StatusSubject.OnNext(new(ServerLaneState.Connected));
+            var access = new BehaviorSubject<SessionAccessState>(SessionAccessState.Established);
+            var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
+            var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
+            var input = new ServerChatInput("a1", lane, access, session, hasTerminal: true);
+            var chat = new ChatTabViewModel(
+                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), input, new NoAttachmentUploader(), _ => new ScriptedFeed { ResetNext = true },
+                new RecordingOpener(), new FakeTimeProvider(), new FakePermissionService(), new SessionRuns(new FakeTimeProvider()), serverQueue: queue);
+            await WaitUntilAsync(() => chat.HasSeed, what: "the seed");
+            queue.OnNext([Item("old attempt", Guid.NewGuid())]);
+            var row = chat.QueuedMessages.Single();
+
+            lane.DiscardHandler = _ => Task.FromResult(HubCallOutcome.Failed("not yet"));
+            await chat.DiscardQueuedCommand.Execute(row);
+            await Assert.That(chat.ComposerHint).IsEqualTo("Could not discard this attempt. Try again.");
+
+            lane.DiscardHandler = _ => Task.FromResult(HubCallOutcome.Ok);
+            await chat.DiscardQueuedCommand.Execute(row);
+            await Assert.That(chat.QueuedMessages).IsEmpty();
+            await Assert.That(chat.ComposerHint).IsNotEqualTo("Could not discard this attempt. Try again.");
+            await chat.TeardownAsync();
+        });
+    }
+
     /// A retry the server listed alongside the attempt it replaced is a second pending copy, and
     /// every pending copy stays where it can be seen and discarded.
     [Test]

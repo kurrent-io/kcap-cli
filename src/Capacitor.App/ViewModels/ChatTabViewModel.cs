@@ -111,7 +111,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     bool _feedReleased;
     /// The session the listed foreign rows belong to.
     string? _queueKey;
+    // Dispatch ids are unique across sessions, and a snapshot can arrive late, so a discarded id
+    // stays retired for the life of the pane.
     readonly HashSet<Guid> _discardedDispatches = [];
+    const string DiscardFailedNotice = "Could not discard this attempt. Try again.";
     bool _discardBusy;
     string? _root;
 
@@ -938,10 +941,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             RefreshQueuedSend();
             try {
                 var discarded = await _input.DiscardQueuedAsync(id, _lifetimeToken);
-                if (_lifetimeToken.IsCancellationRequested || _queueKey != queueKey) return;
-                if (!discarded) { Notice("Could not discard this attempt. Try again."); return; }
-                _discardedDispatches.Add(id);
-                RetireDiscarded(message);
+                if (_lifetimeToken.IsCancellationRequested) return;
+                if (discarded) {
+                    if (_intakeNotice.Value == DiscardFailedNotice) Notice(null);
+                    RetireDiscarded(message);
+                } else if (_queueKey == queueKey) Notice(DiscardFailedNotice);
             } finally {
                 _discardBusy = false;
                 if (!_lifetimeToken.IsCancellationRequested) RefreshQueuedSend();
@@ -989,9 +993,13 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         foreach (var item in items) {
             // An item with no id is unkeyed, not identified as nobody's: keying it would collide
             // with every other such item and could disqualify an own send from its real match.
-            if (item.DispatchId == Guid.Empty || !listed.Add(item.DispatchId)) continue;
-            if (_discardedDispatches.Contains(item.DispatchId)) continue;
-            if (Tracked.Any(q => q.DispatchId == item.DispatchId)) continue;
+            if (item.DispatchId == Guid.Empty || _discardedDispatches.Contains(item.DispatchId) || !listed.Add(item.DispatchId)) continue;
+            // Snapshots carry no revision, so the latest listing wins: an own row wrongly left
+            // unlisted would offer a duplicate send, while one wrongly held can still be discarded.
+            if (Tracked.FirstOrDefault(q => q.DispatchId == item.DispatchId) is { } known) {
+                if (!known.IsForeign) known.MarkQueued(item.DispatchId);
+                continue;
+            }
             var own = Tracked.FirstOrDefault(q => q.DispatchId is null && !q.Acknowledged && q.MatchesText(item.Text));
             if (own is not null) own.MarkQueued(item.DispatchId);
             else _queuedMessages.Add(QueuedChatMessage.FromServer(item));
@@ -1036,7 +1044,6 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         // where no snapshot can ever arrive to retire it — leaves nothing to keep it honest.
         if (info.FeedKey != _queueKey) {
             _queueKey = info.FeedKey;
-            _discardedDispatches.Clear();
             foreach (var foreign in _queuedMessages.Where(q => q.IsForeign).ToList()) _queuedMessages.Remove(foreign);
         }
         var switched = _openFeed is { } open && info.FeedKey is { } key && key != _feedKey;
@@ -1189,6 +1196,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     }
 
     void RetireDiscarded(QueuedChatMessage message) {
+        if (message.DispatchId is { } id) {
+            _discardedDispatches.Add(id);
+            _queuedMessages.RemoveAll(_queuedMessages.Where(q => q.DispatchId == id).ToList());
+        }
         _queuedMessages.Remove(message);
         _unechoed.Remove(message);
         _superseded.RemoveAll(pair => ReferenceEquals(pair.Old, message) || ReferenceEquals(pair.Replacement, message));
