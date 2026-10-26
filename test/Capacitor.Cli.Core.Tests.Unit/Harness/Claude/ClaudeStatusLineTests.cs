@@ -26,7 +26,7 @@ public class ClaudeStatusLineTests {
     [Test]
     public async Task Install_then_unwire_round_trips_settings() {
         const string original = """{"model":"opus","statusLine":{"type":"command","command":"printf \"%s\\n\" mine","padding":2},"theme":"dark"}""";
-        File.WriteAllText(Settings, original);
+        Tmp.CreateFile("settings.json", original);
 
         await Assert.That(Install()).IsEqualTo(SettingsEdit.Changed);
         await Assert.That(Root()["statusLine"]!["padding"]!.GetValue<int>()).IsEqualTo(2);
@@ -40,7 +40,7 @@ public class ClaudeStatusLineTests {
 
     [Test]
     public async Task Install_with_no_original_records_none_and_unwire_removes_statusLine() {
-        File.WriteAllText(Settings, """{"model":"opus"}""");
+        Tmp.CreateFile("settings.json", """{"model":"opus"}""");
 
         Install();
 
@@ -56,9 +56,9 @@ public class ClaudeStatusLineTests {
 
     [Test]
     public async Task User_edit_then_rewire_backs_up_the_edit_and_reinstalls() {
-        File.WriteAllText(Settings, """{"statusLine":{"type":"command","command":"echo first"}}""");
+        Tmp.CreateFile("settings.json", """{"statusLine":{"type":"command","command":"echo first"}}""");
         Install();
-        File.WriteAllText(Settings, """{"statusLine":{"type":"command","command":"echo second"}}""");
+        Tmp.CreateFile("settings.json", """{"statusLine":{"type":"command","command":"echo second"}}""");
 
         await Assert.That(Install()).IsEqualTo(SettingsEdit.Changed);
 
@@ -68,7 +68,7 @@ public class ClaudeStatusLineTests {
 
     [Test]
     public async Task Rewire_with_ours_installed_changes_nothing() {
-        File.WriteAllText(Settings, """{"statusLine":{"type":"command","command":"echo mine"}}""");
+        Tmp.CreateFile("settings.json", """{"statusLine":{"type":"command","command":"echo mine"}}""");
         Install();
         var before = File.ReadAllText(Settings);
         var saves  = 0;
@@ -82,7 +82,7 @@ public class ClaudeStatusLineTests {
 
     [Test]
     public async Task Ours_for_another_account_is_rewritten_from_the_backup() {
-        File.WriteAllText(Settings, """{"statusLine":{"type":"command","command":"echo mine"}}""");
+        Tmp.CreateFile("settings.json", """{"statusLine":{"type":"command","command":"echo mine"}}""");
         Install("old");
 
         await Assert.That(Install("new")).IsEqualTo(SettingsEdit.Changed);
@@ -93,9 +93,9 @@ public class ClaudeStatusLineTests {
 
     [Test]
     public async Task User_edit_then_unwire_keeps_the_edit() {
-        File.WriteAllText(Settings, """{"statusLine":{"type":"command","command":"echo first"}}""");
+        Tmp.CreateFile("settings.json", """{"statusLine":{"type":"command","command":"echo first"}}""");
         Install();
-        File.WriteAllText(Settings, """{"statusLine":{"type":"command","command":"echo mine now"}}""");
+        Tmp.CreateFile("settings.json", """{"statusLine":{"type":"command","command":"echo mine now"}}""");
         var before = File.ReadAllText(Settings);
 
         var (edit, missing) = Remove();
@@ -107,11 +107,11 @@ public class ClaudeStatusLineTests {
 
     [Test]
     public async Task Padding_edit_with_ours_installed_survives_unwire() {
-        File.WriteAllText(Settings, """{"statusLine":{"type":"command","command":"echo mine"}}""");
+        Tmp.CreateFile("settings.json", """{"statusLine":{"type":"command","command":"echo mine"}}""");
         Install();
         var root = Root();
         root["statusLine"]!["padding"] = 4;
-        File.WriteAllText(Settings, root.ToJsonString());
+        Tmp.CreateFile("settings.json", root.ToJsonString());
 
         Remove();
 
@@ -121,7 +121,7 @@ public class ClaudeStatusLineTests {
 
     [Test]
     public async Task Padding_alone_keeps_the_statusLine_object_when_there_was_no_original() {
-        File.WriteAllText(Settings, """{"statusLine":{"padding":1}}""");
+        Tmp.CreateFile("settings.json", """{"statusLine":{"padding":1}}""");
         Install();
 
         Remove();
@@ -132,7 +132,7 @@ public class ClaudeStatusLineTests {
     [Test]
     public async Task Our_command_is_never_adopted_as_original() {
         var settings = new JsonObject { ["statusLine"] = new JsonObject { ["type"] = "command", ["command"] = ClaudeStatusLineCommand.For("someone", null, true) } };
-        File.WriteAllText(Settings, settings.ToJsonString());
+        Tmp.CreateFile("settings.json", settings.ToJsonString());
         var saved = new List<StatusLineBackup>();
 
         ClaudeStatusLine.Install(Settings, "acct1", null, b => { saved.Add(b); return true; }, posixShell: true);
@@ -150,7 +150,7 @@ public class ClaudeStatusLineTests {
     [MethodDataSource(nameof(EmbeddedOriginals))]
     public async Task Ours_for_a_lost_account_without_a_backup_recovers_the_embedded_original(string original) {
         var settings = new JsonObject { ["statusLine"] = new JsonObject { ["type"] = "command", ["command"] = ClaudeStatusLineCommand.For("lost-id", original, true), ["padding"] = 1 } };
-        File.WriteAllText(Settings, settings.ToJsonString());
+        Tmp.CreateFile("settings.json", settings.ToJsonString());
 
         await Assert.That(Install("new-id")).IsEqualTo(SettingsEdit.Changed);
 
@@ -166,7 +166,7 @@ public class ClaudeStatusLineTests {
     [Test]
     public async Task A_refused_save_of_the_embedded_original_writes_nothing() {
         var settings = new JsonObject { ["statusLine"] = new JsonObject { ["type"] = "command", ["command"] = ClaudeStatusLineCommand.For("lost-id", "echo mine", true) } };
-        File.WriteAllText(Settings, settings.ToJsonString());
+        Tmp.CreateFile("settings.json", settings.ToJsonString());
         var before = File.ReadAllText(Settings);
 
         await Assert.That(Install("new-id", saves: false)).IsEqualTo(SettingsEdit.Unchanged);
@@ -177,7 +177,7 @@ public class ClaudeStatusLineTests {
     [Test]
     public async Task Ours_for_this_account_without_a_backup_recovers_it_and_leaves_the_file() {
         var settings = new JsonObject { ["statusLine"] = new JsonObject { ["type"] = "command", ["command"] = ClaudeStatusLineCommand.For("acct1", "echo mine", true) } };
-        File.WriteAllText(Settings, settings.ToJsonString());
+        Tmp.CreateFile("settings.json", settings.ToJsonString());
         var before = File.ReadAllText(Settings);
 
         await Assert.That(Install()).IsEqualTo(SettingsEdit.Unchanged);
@@ -189,7 +189,7 @@ public class ClaudeStatusLineTests {
     [Test]
     public async Task The_plain_shape_without_a_backup_recovers_nothing() {
         var settings = new JsonObject { ["statusLine"] = new JsonObject { ["type"] = "command", ["command"] = ClaudeStatusLineCommand.For("lost-id", "echo mine", false) } };
-        File.WriteAllText(Settings, settings.ToJsonString());
+        Tmp.CreateFile("settings.json", settings.ToJsonString());
 
         Install("new-id");
 
@@ -199,7 +199,7 @@ public class ClaudeStatusLineTests {
 
     [Test]
     public async Task Missing_backup_with_ours_installed_removes_command_and_reports() {
-        File.WriteAllText(Settings, """{"statusLine":{"type":"command","command":"echo mine","padding":1}}""");
+        Tmp.CreateFile("settings.json", """{"statusLine":{"type":"command","command":"echo mine","padding":1}}""");
         Install();
         ForgetBackup();
 
@@ -212,7 +212,7 @@ public class ClaudeStatusLineTests {
 
     [Test]
     public async Task A_refused_backup_save_leaves_the_settings_alone() {
-        File.WriteAllText(Settings, """{"statusLine":{"type":"command","command":"echo mine"}}""");
+        Tmp.CreateFile("settings.json", """{"statusLine":{"type":"command","command":"echo mine"}}""");
         var before = File.ReadAllText(Settings);
 
         await Assert.That(Install(saves: false)).IsEqualTo(SettingsEdit.Unchanged);
@@ -226,7 +226,7 @@ public class ClaudeStatusLineTests {
     [Arguments("""{"statusLine":{"type":"command","command":42}}""")]
     [Arguments("""{"statusLine":{"type":"command","command":{"x":1}}}""")]
     public async Task Non_object_statusLine_is_refused_unchanged(string content) {
-        File.WriteAllText(Settings, content);
+        Tmp.CreateFile("settings.json", content);
         var saved = false;
 
         var install = ClaudeStatusLine.Install(Settings, "acct1", null, _ => saved = true, posixShell: true);
@@ -240,7 +240,7 @@ public class ClaudeStatusLineTests {
 
     [Test]
     public async Task Unparseable_settings_are_refused_unchanged() {
-        File.WriteAllText(Settings, "{ nope");
+        Tmp.CreateFile("settings.json", "{ nope");
 
         await Assert.That(Install()).IsEqualTo(SettingsEdit.Malformed);
         await Assert.That(_backup).IsNull();

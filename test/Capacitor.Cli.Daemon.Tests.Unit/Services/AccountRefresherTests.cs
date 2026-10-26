@@ -122,8 +122,7 @@ public class AccountRefresherTests {
 
     [Test]
     public async Task An_unreadable_registry_at_start_never_stops_the_daemon() {
-        Directory.CreateDirectory(Store.Directory);
-        await File.WriteAllTextAsync(Store.RegistryPath, "{ not json");
+        Home.CreateFile(["accounts", "accounts.json"], "{ not json");
         using var refresher = Refresher(new CountingProbe(_time));
 
         await refresher.StartAsync(CancellationToken.None);

@@ -48,8 +48,7 @@ public class PluginCommandAccountsTests {
     void SetDefaultStatusLine(string command) {
         var root = File.Exists(DefaultSettings) ? JsonNode.Parse(File.ReadAllText(DefaultSettings))!.AsObject() : [];
         root["statusLine"] = new JsonObject { ["type"] = "command", ["command"] = command };
-        Directory.CreateDirectory(Home.PathTo(".claude"));
-        File.WriteAllText(DefaultSettings, root.ToJsonString());
+        Home.CreateFile([".claude", "settings.json"], root.ToJsonString());
     }
 
     string? DefaultStatusLine() =>

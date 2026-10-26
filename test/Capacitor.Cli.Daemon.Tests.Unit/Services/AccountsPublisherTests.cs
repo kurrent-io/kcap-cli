@@ -398,8 +398,7 @@ public class AccountsPublisherTests {
         await publisher.RebuildAsync(CancellationToken.None);
         await Assert.That(Used(publisher.Current)).IsEqualTo(42.0);
 
-        var path = Path.Combine(store.Directory, "readings", $"{id}.json");
-        await File.WriteAllTextAsync(path, "{ torn");
+        var path = Home.CreateFile(["accounts", "readings", $"{id}.json"], "{ torn");
         await publisher.RebuildAsync(CancellationToken.None);
         await Assert.That(Used(publisher.Current)).IsEqualTo(42.0);
 
