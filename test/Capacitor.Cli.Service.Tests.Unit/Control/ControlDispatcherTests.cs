@@ -19,9 +19,12 @@ public class ControlDispatcherTests {
     readonly FakeEnrollmentIndex _index = new();
     int _lastUserGone;
 
-    ControlDispatcher NewDispatcher(out Supervisor supervisor) {
+    ControlDispatcher NewDispatcher(out Supervisor supervisor, bool removalStarts = true) {
         supervisor = new Supervisor(_host, new FakeTimeProvider(), new NullLog());
-        return new ControlDispatcher(supervisor, _index, () => _lastUserGone++, "1.5.0", new NullLog());
+        return new ControlDispatcher(supervisor, _index, () => {
+            _lastUserGone++;
+            return removalStarts;
+        }, "1.5.0", new NullLog());
     }
 
     static ControlResponse Parse(string line) => JsonSerializer.Deserialize(line, ControlJsonContext.Default.ControlResponse)!;
@@ -91,6 +94,49 @@ public class ControlDispatcherTests {
 
         await dispatcher.HandleAsync(Bob, """{"verb":"unenroll"}""", CancellationToken.None);
         await Assert.That(_lastUserGone).IsEqualTo(1);
+    }
+
+    /// An app uninstall has several callers unenroll the same user: the removal starts once, and every one is answered
+    [Test]
+    public async Task Unenrolls_after_the_last_user_left_are_answered_without_removing_the_service_again() {
+        _host.SignIn(1, Alice);
+        _host.StopRequestEndsDaemon = true;
+        var dispatcher = NewDispatcher(out _);
+        await dispatcher.HandleAsync(Alice, """{"verb":"enroll"}""", CancellationToken.None);
+
+        var replies = await Task.WhenAll(Enumerable.Range(0, 3).Select(_ =>
+            dispatcher.HandleAsync(Alice, """{"verb":"unenroll"}""", CancellationToken.None)));
+
+        await Assert.That(replies.Select(Parse).All(r => r.Ok)).IsTrue();
+        await Assert.That(_lastUserGone).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task An_enroll_while_the_service_removes_itself_is_refused() {
+        _host.SignIn(1, Alice);
+        _host.StopRequestEndsDaemon = true;
+        var dispatcher = NewDispatcher(out _);
+        await dispatcher.HandleAsync(Alice, """{"verb":"enroll"}""", CancellationToken.None);
+        await dispatcher.HandleAsync(Alice, """{"verb":"unenroll"}""", CancellationToken.None);
+
+        var response = Parse(await dispatcher.HandleAsync(Alice, """{"verb":"enroll"}""", CancellationToken.None));
+
+        await Assert.That(response.Ok).IsFalse();
+        await Assert.That(response.Error).IsEqualTo(ControlDispatcher.LeavingError);
+        await Assert.That(_index.IsEmpty).IsTrue();
+    }
+
+    [Test]
+    public async Task A_removal_that_could_not_start_is_tried_again_by_the_next_unenroll() {
+        _host.SignIn(1, Alice);
+        _host.StopRequestEndsDaemon = true;
+        var dispatcher = NewDispatcher(out _, removalStarts: false);
+        await dispatcher.HandleAsync(Alice, """{"verb":"enroll"}""", CancellationToken.None);
+
+        await dispatcher.HandleAsync(Alice, """{"verb":"unenroll"}""", CancellationToken.None);
+        await dispatcher.HandleAsync(Alice, """{"verb":"unenroll"}""", CancellationToken.None);
+
+        await Assert.That(_lastUserGone).IsEqualTo(2);
     }
 
     [Test]

@@ -12,10 +12,15 @@ namespace Capacitor.Cli.Service.Control;
 public sealed class ControlDispatcher {
     public const int Protocol = 1;
 
+    public const string LeavingError = "kcap-service is removing itself; install it again";
+
     readonly Dictionary<string, Func<string, CancellationToken, Task<ControlResponse>>> _verbs;
     readonly IServiceLog _log;
+    readonly Lock _indexLock = new();
+    bool _leaving; // under _indexLock
 
-    public ControlDispatcher(Supervisor supervisor, IEnrollmentIndex index, Action lastUserGone, string version, IServiceLog log) {
+    /// <param name="lastUserGone">Starts the service's removal; false when it could not, and the service stays</param>
+    public ControlDispatcher(Supervisor supervisor, IEnrollmentIndex index, Func<bool> lastUserGone, string version, IServiceLog log) {
         _log = log;
         _verbs = new(StringComparer.Ordinal) {
             ["capabilities"] = (_, _) => Task.FromResult(new ControlResponse(true, Capabilities: Capabilities(version))),
@@ -23,18 +28,26 @@ public sealed class ControlDispatcher {
             ["start"] = (sid, _) => Task.FromResult(Reply(supervisor.Start(sid))),
             ["stop"] = async (sid, ct) => Reply(await supervisor.StopAsync(sid, ct).ConfigureAwait(false)),
             ["enroll"] = (sid, _) => {
+                lock (_indexLock) {
+                    if (_leaving) return Task.FromResult(new ControlResponse(false, LeavingError));
+                }
                 var status = supervisor.Start(sid);
                 if (status.State is DaemonState.NotEnrolled or DaemonState.NoSession)
                     return Task.FromResult(new ControlResponse(false, status.Error ?? "not enrolled", StatusDto.From(status)));
-                index.Add(sid);
+                lock (_indexLock) index.Add(sid);
                 return Task.FromResult(Reply(status));
             },
+            // Several callers unenroll during one app uninstall, each held behind the first one's stop. Removal
+            // starts once, and the index it deletes is not touched after it starts.
             ["unenroll"] = async (sid, ct) => {
                 var status = await supervisor.StopAsync(sid, ct).ConfigureAwait(false);
                 supervisor.Forget(sid);
-                index.Remove(sid);
-                index.PruneDeparted();
-                if (index.IsEmpty) lastUserGone();
+                lock (_indexLock) {
+                    if (_leaving) return Reply(status);
+                    index.Remove(sid);
+                    index.PruneDeparted();
+                    if (index.IsEmpty) _leaving = lastUserGone();
+                }
                 return Reply(status);
             },
         };

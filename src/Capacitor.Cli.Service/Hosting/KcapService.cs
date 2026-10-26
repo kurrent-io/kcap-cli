@@ -67,15 +67,16 @@ sealed class KcapService : ServiceBase {
         _log.Write(why);
     }
 
-    void RemoveSelf() {
+    bool RemoveSelf() {
         _log.Write("the last enrolled user has gone; removing the service");
         try {
             ServiceInstaller.RemoveSelf();
         } catch (Exception ex) {
             _log.Write($"self-removal failed: {ex.Message}");
-            return;
+            return false;
         }
         _ = Task.Run(Stop);
+        return true;
     }
 
     protected override void Dispose(bool disposing) {
