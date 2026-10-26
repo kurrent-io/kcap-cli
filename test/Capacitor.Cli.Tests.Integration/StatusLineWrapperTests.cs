@@ -192,6 +192,40 @@ public class StatusLineWrapperTests : IDisposable {
     }
 
     [Test]
+    public async Task Terminating_the_wrapper_kills_the_original_s_background_children() {
+        var pidFile = Tmp.PathTo("grandchild.pid");
+        var script  = Tmp.CreateExecutable("original.sh", $"""
+            #!/bin/sh
+            sleep 300 &
+            echo $! > '{pidFile}.tmp'
+            mv '{pidFile}.tmp' '{pidFile}'
+            wait
+            """);
+        Register(Quoted(script));
+
+        var wrapper = Start(Payload());
+        var stdout  = wrapper.StandardOutput.ReadToEndAsync();
+        var stderr  = wrapper.StandardError.ReadToEndAsync();
+
+        var deadline = Stopwatch.StartNew();
+        while (!File.Exists(pidFile) && deadline.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(20);
+        await Assert.That(File.Exists(pidFile)).IsTrue();
+
+        var pid      = int.Parse((await File.ReadAllTextAsync(pidFile)).Trim(), System.Globalization.CultureInfo.InvariantCulture);
+        var identity = PidIdentity.Capture(pid);
+
+        using (var kill = Process.Start(new ProcessStartInfo("/bin/sh") { ArgumentList = { "-c", $"kill -TERM {wrapper.Id}" }, UseShellExecute = false })!)
+            await kill.WaitForExitAsync();
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await wrapper.WaitForExitAsync(cts.Token);
+        await Task.WhenAll(stdout, stderr).WaitAsync(cts.Token);
+
+        await Assert.That(wrapper.ExitCode).IsEqualTo(143);
+        await PidIdentity.WaitUntilGoneAsync(pid, identity, TimeSpan.FromSeconds(5));
+    }
+
+    [Test]
     [Arguments("")]
     [Arguments("not json {")]
     public async Task Empty_or_non_json_stdin_still_runs_the_original(string stdin) {

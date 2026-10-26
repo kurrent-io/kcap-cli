@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Accounts.Readings;
 using Capacitor.Cli.Core.Harness;
@@ -157,9 +158,10 @@ public static class ClaudeStatusLineEntry {
         }
     }
 
+    // The original shares Claude's process group, so its tree is killed without the runtime's SIGSTOP.
     static void Kill(Process child) {
         try {
-            child.Kill(entireProcessTree: true);
+            ProcessTree.Kill(child);
         } catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException) {
             // Already gone.
         }

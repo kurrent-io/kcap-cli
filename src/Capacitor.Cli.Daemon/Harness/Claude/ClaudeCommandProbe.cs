@@ -3,7 +3,6 @@ using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Harness;
-using Capacitor.Cli.Daemon.Services;
 
 namespace Capacitor.Cli.Daemon.Harness.Claude;
 

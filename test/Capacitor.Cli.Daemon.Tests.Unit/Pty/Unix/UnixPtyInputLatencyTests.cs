@@ -1,5 +1,5 @@
 using System.Globalization;
-using Capacitor.Cli.Daemon.Services;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Pty.Unix;
 
