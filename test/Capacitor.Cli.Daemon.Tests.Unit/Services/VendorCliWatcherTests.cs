@@ -331,7 +331,15 @@ public class VendorCliWatcherTests {
             home.CreateFile([".codex-spare", "auth.json"], "{}");
             watcher.Tick();
 
-            await Assert.That(watcher.Watched.SelectMany(w => w.CatalogPaths)).Contains(home.PathTo(".codex-spare", "auth.json"));
+            if (!watcher.Watched.SelectMany(w => w.CatalogPaths).Contains(home.PathTo(".codex-spare", "auth.json"))) {
+                static string Show(IEnumerable<(string Vendor, string CliPath, IReadOnlyList<string> CatalogPaths)> set) =>
+                    string.Join("; ", set.Select(w => $"{w.Vendor} [{w.CliPath}] {{{string.Join(", ", w.CatalogPaths)}}}"));
+                throw new InvalidOperationException(
+                    $"watched: {Show(watcher.Watched)}\n"
+                  + $"rebuilt now: {Show(VendorCliWatcher.WatchSet(config!, factories, publisher.Current))}\n"
+                  + $"accounts: {string.Join("; ", publisher.Current?.Accounts.Select(a => $"{a.Id} {a.Vendor} {a.Directory}") ?? ["<null>"])}\n"
+                  + $"supported: {string.Join(", ", config!.SupportedVendors ?? [])}");
+            }
             await Assert.That(refreshes.Count).IsEqualTo(1);
             await Assert.That(refreshes[0]).Contains(spare.Id);
 
