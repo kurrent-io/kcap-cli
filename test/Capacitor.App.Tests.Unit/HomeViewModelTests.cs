@@ -1791,7 +1791,8 @@ public class HomeViewModelTests {
     }
 
     /// <summary>A machine advertises its repositories most recently used first. The picker lists them by
-    /// name like the local list, and the most recently used one stays the selection.</summary>
+    /// name like the local list, and the most recently used one stays the selection. A Windows machine's
+    /// path is named by its last segment on any desktop.</summary>
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task RemoteMachineRepositoriesAreListedByName() {
@@ -1801,7 +1802,7 @@ public class HomeViewModelTests {
             remote.DaemonsSubject.OnNext([
                 new DaemonInfo {
                     Name = "home-pc", OwnerUserId = "u1", Connected = true,
-                    RepoPaths = ["/w/widgets", "/x/Engine", "/w/api"], SupportedVendors = ["codex"],
+                    RepoPaths = ["/w/widgets", @"Z:\x\Engine", "/w/api"], SupportedVendors = ["codex"],
                 },
             ]);
             using var vm = new HomeViewModel(
@@ -1812,7 +1813,7 @@ public class HomeViewModelTests {
 
             var repos = await vm.ListRepositoriesAsync();
             await Assert.That(repos.Select(r => r.RepoPath).ToArray())
-                .IsEquivalentTo(["/w/api", "/x/Engine", "/w/widgets"], CollectionOrdering.Matching);
+                .IsEquivalentTo(["/w/api", @"Z:\x\Engine", "/w/widgets"], CollectionOrdering.Matching);
             await Assert.That(vm.SelectedRepoPath).IsEqualTo("/w/widgets");
         });
     }

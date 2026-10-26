@@ -9,7 +9,16 @@ public enum TrayState { Stopped, Connecting, Attention, Idle, Running }
 /// Last path segment of a repo path, shared by every surface that names a repository. The status
 /// wire says which path is a worktree, so a path's shape is never read as evidence of one.
 public static class RepoLabel {
-    public static string Leaf(string? repoPath) => repoPath is null ? "—" : PlatformPaths.Leaf(repoPath);
+    static readonly char[] Separators = ['/', '\\'];
+
+    /// A path may be another machine's, advertised by its daemon, so either separator ends a segment
+    /// whatever this host uses.
+    public static string Leaf(string? repoPath) {
+        if (repoPath is null) return "—";
+
+        var trimmed = repoPath.TrimEnd(Separators);
+        return trimmed[(trimmed.LastIndexOfAny(Separators) + 1)..];
+    }
 }
 
 /// The checkout a session is presented under, shared by the rail's grouping and the workspace
