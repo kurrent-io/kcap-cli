@@ -8,13 +8,16 @@ namespace Capacitor.App.ViewModels;
 public static class ToolCards {
     const int NameCap = 80;
 
-    public static ToolCard? Build(ToolCardKind kind, string? inputJson, string? resultText) => kind switch {
-        ToolCardKind.Page     => Page(resultText),
-        ToolCardKind.Document => Document(inputJson),
-        ToolCardKind.Flow     => Flow(inputJson),
-        ToolCardKind.Agent    => Agent(inputJson, resultText),
-        _                     => null,
-    };
+    public static ToolCard? Build(ToolCardKind kind, string? inputJson, string? resultText) {
+        resultText = McpText(resultText);
+        return kind switch {
+            ToolCardKind.Page     => Page(resultText),
+            ToolCardKind.Document => Document(inputJson),
+            ToolCardKind.Flow     => Flow(inputJson),
+            ToolCardKind.Agent    => Agent(inputJson, resultText),
+            _                     => null,
+        };
+    }
 
     public static string Audience(string? visibility) => visibility switch {
         "org"    => "Org",
@@ -69,6 +72,19 @@ public static class ToolCards {
         var firstLine = prompt.Split(['\r', '\n'], 2)[0].Trim();
         return new ToolCard(ToolCardKind.Agent, "Started hosted agent", TextElision.End(firstLine, NameCap), args.Str("vendor") ?? "",
             ResultField(resultText, "url"), null);
+    }
+
+    /// The text blocks of an MCP result object, which a Codex driver records whole; any other result as given.
+    static string? McpText(string? resultText) {
+        if (string.IsNullOrEmpty(resultText) || resultText[0] != '{') return resultText;
+        try {
+            using var doc = JsonDocument.Parse(resultText);
+            if (doc.RootElement.Arr("content") is not { } content) return resultText;
+            var texts = content.EnumerateArray().Where(b => b.Str("type") == "text").Select(b => b.Str("text")).OfType<string>().ToArray();
+            return texts.Length == 0 ? resultText : string.Concat(texts);
+        } catch (JsonException) {
+            return resultText;
+        }
     }
 
     /// A `key: value` line of a `start_agent` result.

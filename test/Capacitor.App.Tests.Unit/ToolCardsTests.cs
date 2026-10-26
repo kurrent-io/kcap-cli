@@ -108,6 +108,15 @@ public class ToolCardsTests {
     }
 
     [Test]
+    public async Task An_agent_card_reads_the_link_from_a_whole_mcp_result_object() {
+        const string result = """
+            {"content":[{"type":"text","text":"status: requested\nagent_id: a1\nurl: https://kurrent.kcap.ai/agents/a1\n"}]}
+            """;
+        var agent = ToolCards.Build(ToolCardKind.Agent, """{"prompt":"Fix it","vendor":"claude"}""", result)!;
+        await Assert.That(agent.Url).IsEqualTo("https://kurrent.kcap.ai/agents/a1");
+    }
+
+    [Test]
     public async Task None_builds_nothing() {
         await Assert.That(ToolCards.Build(ToolCardKind.None, "{}", "{}")).IsNull();
     }
