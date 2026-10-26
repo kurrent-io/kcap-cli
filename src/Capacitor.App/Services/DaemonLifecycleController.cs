@@ -68,6 +68,8 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         "kcap installs a Windows service that starts your daemon whenever you sign in and restarts it if it stops. " +
         "Windows asks for administrator approval once, and the daemon still runs as you. It restarts now; anything it hosts is ended.";
 
+    internal const string MovingToWindowsServiceStatus = "Moving the daemon to the Windows service…";
+
     internal const string WindowsServiceUpdateDisclosure =
         "This version of kcap ships a newer Windows service. Updating it takes administrator approval; your daemon and its agents keep running.";
 
@@ -143,6 +145,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     bool _recoveryPending;         // under _lock
     bool _supervisionOffered;      // under _lock: the unsupervised-daemon offer is made once per run
     bool _windowsServiceOffered;   // under _lock: the Windows service install or update is offered once per run
+    bool _movingToWindowsService;  // under _lock: the moving line stays up until the daemon attaches again
     int _recoveriesSinceConnect;   // under _lock
     bool _disposed;
     int _generation;
@@ -246,7 +249,10 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             if (isFirstTerminalOutcome) _armClaimed = true;
         }
 
-        if (status.State == AttachState.Connected) _ = CheckAttachedIdentityAsync();
+        if (status.State == AttachState.Connected) {
+            WithdrawMovingToWindowsService();
+            _ = CheckAttachedIdentityAsync();
+        }
 
         if (!isFirstTerminalOutcome) {
             // A later Connected is a daemon that came up after the arm, or came back after a reload
@@ -1017,7 +1023,25 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             if (install) await _rememberWindowsServiceDeclined().ConfigureAwait(false);
             return;
         }
-        await RunLaneMutationAsync(MutationVerb.InstallWindowsService, ct).ConfigureAwait(false);
+        if (install) await MoveToWindowsServiceAsync(ct).ConfigureAwait(false);
+        else await RunLaneMutationAsync(MutationVerb.InstallWindowsService, ct).ConfigureAwait(false);
+    }
+
+    /// The takeover stops the task's daemon before the service starts its own, so for that gap the banner
+    /// says why there is no daemon instead of reporting it down.
+    async Task MoveToWindowsServiceAsync(CancellationToken ct) {
+        lock (_lock) _movingToWindowsService = true;
+        _surface.Status(MovingToWindowsServiceStatus);
+        if (!await RunLaneMutationAsync(MutationVerb.InstallWindowsService, ct).ConfigureAwait(false))
+            WithdrawMovingToWindowsService();
+    }
+
+    void WithdrawMovingToWindowsService() {
+        lock (_lock) {
+            if (!_movingToWindowsService) return;
+            _movingToWindowsService = false;
+        }
+        _surface.Withdraw(MovingToWindowsServiceStatus);
     }
 
     static bool OffersWindowsService(ServiceSnapshot snap) =>
@@ -1030,7 +1054,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _lifetime.Token);
             if (!await TryAcquireGateAsync(linked.Token).ConfigureAwait(false)) return;
             try {
-                await RunLaneMutationAsync(MutationVerb.InstallWindowsService, linked.Token).ConfigureAwait(false);
+                await MoveToWindowsServiceAsync(linked.Token).ConfigureAwait(false);
             } finally {
                 _gate.Release();
             }

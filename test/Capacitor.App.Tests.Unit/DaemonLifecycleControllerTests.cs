@@ -1943,6 +1943,39 @@ public class DaemonLifecycleControllerTests {
         await Assert.That(h.Lane.Requests.Single().Verb).IsEqualTo(MutationVerb.InstallWindowsService);
     }
 
+    /// The takeover stops the task's daemon before the service starts its own: the banner names the move,
+    /// not a daemon that is down, until the service's daemon attaches
+    [Test]
+    public async Task Moving_to_the_windows_service_is_shown_until_the_daemon_attaches_again() {
+        await using var h = new Harness();
+        h.Start();
+        h.PushConnected();
+        await h.Controller.PhaseClosed;
+
+        await h.Controller.InstallWindowsServiceAsync(CancellationToken.None);
+
+        await Assert.That(h.Surface.StatusMessages).Contains(DaemonLifecycleController.MovingToWindowsServiceStatus);
+        await Assert.That(h.Surface.Withdrawn).IsEmpty();
+
+        h.PushConnecting();
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Surface.Withdrawn.Contains(DaemonLifecycleController.MovingToWindowsServiceStatus),
+            what: "the moving line withdrawn");
+    }
+
+    [Test]
+    public async Task A_failed_move_to_the_windows_service_takes_its_line_back() {
+        await using var h = new Harness();
+        h.Lane.Behavior = (_, _) => Task.FromResult<MutationOutcome>(
+            new MutationOutcome.Failed(1, "elevation_declined", RecoverySurface.Attention));
+        h.Start();
+
+        await h.Controller.InstallWindowsServiceAsync(CancellationToken.None);
+
+        await Assert.That(h.Surface.Withdrawn).IsEquivalentTo([DaemonLifecycleController.MovingToWindowsServiceStatus]);
+    }
+
     sealed class Harness : IAsyncDisposable {
         public readonly FakeDaemonClientService Client = new();
         public readonly FakeKcapCli Cli = new();
