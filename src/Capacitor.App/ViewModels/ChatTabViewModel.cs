@@ -1222,13 +1222,21 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         }
     }
 
-    // The replacement owns the first eligible echo; its retired predecessor absorbs a further
-    // copy only when no later send can claim it. Transcript offsets cannot identify a dispatch.
+    // A server-held retry cannot claim its known predecessor's delayed echo. Otherwise the
+    // replacement owns the first eligible echo; the predecessor absorbs a further copy only
+    // when no later send can claim it. Transcript offsets cannot identify a dispatch.
     bool TakeSupersededEcho(string text, long offset) {
         for (var i = 0; i < _superseded.Count; i++) {
             var (old, replacement) = _superseded[i];
             if (old.Acknowledged || !old.Matches(text, _inputGeneration, offset)) continue;
             if (replacement.Baseline is { } fence && offset < fence) {
+                AbsorbSuperseded(old);
+                return true;
+            }
+            // A known server predecessor can echo after its removal snapshot and after a
+            // retry was queued. That echo cannot prove delivery of a retry the server still holds.
+            if (old.DispatchId is not null && replacement.IsServerHeld) {
+                Acknowledge(old);
                 AbsorbSuperseded(old);
                 return true;
             }

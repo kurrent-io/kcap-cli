@@ -3937,6 +3937,52 @@ public class ChatTabViewModelTests {
         });
     }
 
+    sealed class SeededLocalFeed(IChatTranscriptFeed inner) : IChatTranscriptFeed {
+        bool _seeded;
+        public long? CurrentOffset => inner.CurrentOffset;
+        public FeedRead ReadAppended() {
+            var read = inner.ReadAppended();
+            if (_seeded) return read;
+            _seeded = true;
+            return read with { Status = FeedStatus.Reset, SnapshotOffset = inner.CurrentOffset };
+        }
+        public void Dispose() => inner.Dispose();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_late_original_echo_does_not_retire_a_server_held_retry() => RunOnUiAsync(async () => {
+        using var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
+        using var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
+        var time = new FakeTimeProvider();
+        var path = Tmp.CreateFile("late-echo.jsonl", [AssistantLine]);
+        var chat = new ChatTabViewModel("a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null),
+            new AcceptingChatInput(), new NoAttachmentUploader(),
+            _ => new SeededLocalFeed(new LocalTranscriptFeed(path, TranscriptChat.For("claude")!, "a1", time, _ => { })),
+            new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time), serverQueue: queue);
+        try {
+            await WaitUntilAsync(() => chat.HasSeed, what: "the seed");
+            chat.ComposerText = "look";
+            await chat.SendCommand.Execute();
+            var original = chat.QueuedMessages.Single();
+            queue.OnNext([Item("look", Guid.NewGuid())]);
+            queue.OnNext([]);
+            await chat.SendQueuedCommand.Execute(original);
+            var retry = chat.QueuedMessages.Single();
+            queue.OnNext([Item("look", Guid.NewGuid())]);
+            File.AppendAllText(path, User("look") + "\n");
+            time.Advance(ChatTabViewModel.PollInterval);
+            await (chat.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(chat.QueuedMessages.Single()).IsSameReferenceAs(retry);
+            await Assert.That(retry.CanSendNow).IsFalse();
+            queue.OnNext([]);
+            File.AppendAllText(path, User("look") + "\n");
+            time.Advance(ChatTabViewModel.PollInterval);
+            await (chat.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(chat.HasQueuedMessages).IsFalse();
+        } finally { await chat.TeardownAsync(); }
+    });
+
     /// A local send nothing will ever echo — an interactive slash command — would otherwise sit in
     /// the strip for the life of the pane.
     [Test]
