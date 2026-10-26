@@ -99,6 +99,8 @@ internal sealed record WizardGraphOptions(
     UsageDataNotice?                                                             UsageNotice = null,
     // Tells the configured server this machine has kcap installed; true once it accepted.
     Func<CancellationToken, Task<bool>>?                                         ReportCliSetup = null,
+    // The visibility answers the signed-in tenant can honour; null offers every answer.
+    Func<CancellationToken, Task<VisibilityOptionsResponse?>>?                   ReadVisibilityOptions = null,
     // This app sent the user to kcap.ai's sign-up and no sign-in has committed since.
     bool                                                                         ResumeWebSignUp = false);
 
@@ -291,7 +293,8 @@ internal static class WizardComposition {
             ct => options.Probe.SetVariablesAsync(HarnessesStepViewModel.ProviderKeys, ct),
             machine,
             () => options.ResolveIdentity()?.Profile, options.ShutdownToken,
-            onLocalPath: OnLocalPath);
+            onLocalPath: OnLocalPath,
+            visibilityOptions: options.ReadVisibilityOptions);
         var history = new HistoryStepViewModel(
             cli, () => harnesses.Recording, options.Bridges.Post, machine, options.Time, OnLocalPath);
         var daemon = new DaemonEnabler(
