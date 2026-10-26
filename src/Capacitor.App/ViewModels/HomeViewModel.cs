@@ -1123,6 +1123,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         if (RemoteMachineSelected) {
             var remoteSelected = SelectedRepoPath;
             return (_selectedRemoteMachine?.RepoPaths ?? [])
+                .OrderBy(RepoLabel.Leaf, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(p => p, StringComparer.Ordinal)
                 .Select(p => new RepositoryOption(p, DefaultVendor, PathComparer.Equals(p, remoteSelected)))
                 .ToList();
         }
