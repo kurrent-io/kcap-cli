@@ -2495,6 +2495,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     async Task<CommandOutcome> LaunchAdmittedAsync(
             LaunchAgentCommand cmd, LaunchConsentOutcome consent, LaunchHold hold, ResumeLaunch? resume = null,
             CancellationToken cancel = default, Action<AgentInstance>? onPublished = null) {
+        if (cmd.ResumeSessionId is "") cmd = cmd with { ResumeSessionId = null };
         var agentId       = cmd.AgentId;
         var isPrivate     = resume?.IsPrivate ?? false;
         var prompt        = cmd.Prompt;

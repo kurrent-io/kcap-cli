@@ -49,7 +49,9 @@ public class AgentOrchestratorClaudeDiscoveryTests {
     }
 
     [Test]
-    public async Task An_in_place_launch_links_its_pinned_transcript_not_another_session_in_the_folder() {
+    [Arguments(null)]
+    [Arguments("")]
+    public async Task An_in_place_launch_links_its_pinned_transcript_not_another_session_in_the_folder(string? resumeSessionId) {
         using var repo = GitRepo.CreateWithCommit();
         var server = new CaptureServerConnection();
         await using var orch = Build(new OneChunkThenBlockPtyProcess(), server: server);
@@ -57,11 +59,14 @@ public class AgentOrchestratorClaudeDiscoveryTests {
 
         await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
             AgentId: "in-place", Prompt: "hi", Model: "opus", Effort: null, RepoPath: repo,
-            Tools: null, AttachmentIds: null, Vendor: "claude", Borrowed: true, BorrowCwd: repo));
+            Tools: null, AttachmentIds: null, Vendor: "claude", Borrowed: true, BorrowCwd: repo,
+            ResumeSessionId: resumeSessionId));
 
         await Assert.That(server.LaunchFailedCalls).IsEmpty();
         var agent  = orch.GetAgentForTest("in-place")!;
         var pinned = agent.VendorSession!;
+        await Assert.That(Guid.TryParse(pinned, out _)).IsTrue();
+        await Assert.That(agent.BridgedSinceStart).IsTrue();
         await Assert.That(agent.Work).IsEqualTo(WorkLocation.BorrowedCwd);
         await Assert.That(agent.TranscriptPath).IsNull();
         await Assert.That(agent.SessionId).IsNull();
