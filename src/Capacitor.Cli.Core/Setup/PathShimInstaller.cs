@@ -8,11 +8,14 @@ public sealed record ShimResult(ShimOutcome Outcome, string? Detail, string? Sud
 
 /// Installs a `kcap` symlink to a resolved CLI so a terminal PATH that omits the CLI's own location
 /// still finds it: in the first stable login-PATH folder this user can already write to, else at
-/// `destination`, which needs an admin prompt only when it lies outside the user's home. Mechanics only — the once-ever offer and tray-menu wiring
-/// live in the desktop app's ShimOfferCoordinator. `destination` is a parameter so tests drive the
-/// real filesystem taxonomy against a temp path instead of the actual /usr/local/bin/kcap.
+/// `destination`, which needs an admin prompt only when it lies outside the user's home. A user who
+/// cannot authorize that prompt gets the link in their own folder and that folder on PATH through
+/// `profile` instead. Mechanics only — the once-ever offer and tray-menu wiring live in the desktop
+/// app's ShimOfferCoordinator. `destination` is a parameter so tests drive the real filesystem
+/// taxonomy against a temp path instead of the actual /usr/local/bin/kcap.
 public sealed class PathShimInstaller(
-        IProcessRunner runner, ILoginShellProbe probe, string destination = PathShimInstaller.Destination, UserHome? home = null)
+        IProcessRunner runner, ILoginShellProbe probe, string destination = PathShimInstaller.Destination, UserHome? home = null,
+        ShellProfile? profile = null, Func<CancellationToken, Task<bool>>? mayElevate = null)
     : ICliPathInstaller {
     public const string Destination = "/usr/local/bin/kcap";
 
@@ -21,7 +24,10 @@ public sealed class PathShimInstaller(
     public string Disclosure => UserOwned
         ? "This links kcap into a folder on your terminal's PATH, so kcap works from any terminal."
         : "This links kcap into a folder on your terminal's PATH, so kcap works from any terminal. " +
-          "If none of those folders is writable, macOS asks once for your admin password.";
+          "If none of those folders is writable, macOS asks once for your admin password." +
+          (profile?.Disclosure is { } line
+              ? $" Without admin rights, kcap links it into ~/.local/bin instead and adds {line}, a marked line that uninstalling kcap removes."
+              : "");
 
     bool UserOwned => home is not null
         && Path.GetFullPath(destination).StartsWith(Path.TrimEndingDirectorySeparator(home.Path) + Path.DirectorySeparatorChar, StringComparison.Ordinal);
@@ -37,16 +43,17 @@ public sealed class PathShimInstaller(
 
         if (await TryLinkOnTerminalPathAsync(target, ct).ConfigureAwait(false) is { } linked) return linked;
 
-        switch (Preflight(destination, target)) {
-            case ShimPreflight.AlreadyInstalled:
-                // The symlink resolving to our target is not by itself "on PATH" (spec §5: "never
-                // report success on the symlink alone") — a prior install (or a hand-made link) can
-                // sit there while the login shell's PATH still omits /usr/local/bin. Same probe, same
-                // Installed/InstalledButNotOnPath mapping as the freshly-linked branch below.
-                return await ProbeOutcomeAsync(destination, ct).ConfigureAwait(false);
-            case ShimPreflight.Conflict:
-                return new ShimResult(ShimOutcome.Failed, $"{destination} already exists ({Describe(destination)}) and was left untouched.", null);
-        }
+        var preflight = Preflight(destination, target);
+        // A link to our target is not by itself "on PATH": the login shell's PATH can still omit its
+        // folder, so it gets the same probe as a fresh link.
+        if (preflight == ShimPreflight.AlreadyInstalled) return await ProbeOutcomeAsync(destination, ct).ConfigureAwait(false);
+
+        // Ahead of the conflict check: a user who could not replace that entry anyway still has a folder of their own.
+        if (!UserOwned && profile is not null && home is not null && !await MayElevateAsync(ct).ConfigureAwait(false))
+            return await LinkThroughProfileAsync(target, profile, home, ct).ConfigureAwait(false);
+
+        if (preflight == ShimPreflight.Conflict)
+            return new ShimResult(ShimOutcome.Failed, $"{destination} already exists ({Describe(destination)}) and was left untouched.", null);
 
         if (UserOwned) return await LinkInHomeAsync(target, destination, ct).ConfigureAwait(false);
 
@@ -74,6 +81,44 @@ public sealed class PathShimInstaller(
             return new ShimResult(ShimOutcome.Failed, ex.Message, null);
         }
         return await ProbeOutcomeAsync(destination, ct).ConfigureAwait(false);
+    }
+
+    async Task<ShimResult> LinkThroughProfileAsync(string target, ShellProfile profile, UserHome home, CancellationToken ct) {
+        var link = Path.Combine(ShellProfile.Folder(home), "kcap");
+        switch (Preflight(link, target)) {
+            case ShimPreflight.Conflict:
+                return new ShimResult(ShimOutcome.Failed, $"{link} already exists ({Describe(link)}) and was left untouched.", null);
+            case ShimPreflight.Installable:
+                try {
+                    Directory.CreateDirectory(ShellProfile.Folder(home));
+                    File.CreateSymbolicLink(link, target);
+                } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                    return new ShimResult(ShimOutcome.Failed, ex.Message, null);
+                }
+                break;
+        }
+
+        try {
+            profile.Add();
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            return new ShimResult(ShimOutcome.Failed, $"kcap was linked at {link}, but {profile.ProfilePath} could not be updated: {ex.Message}", null);
+        }
+        return await ProbeOutcomeAsync(link, ct).ConfigureAwait(false);
+    }
+
+    Task<bool> MayElevateAsync(CancellationToken ct) => mayElevate?.Invoke(ct) ?? IsAdminAsync(runner, ct);
+
+    /// Whether this user is in the `admin` group the authorization prompt asks a password from. An
+    /// unanswered question keeps the prompt, which an admin can still complete.
+    internal static async Task<bool> IsAdminAsync(IProcessRunner runner, CancellationToken ct) {
+        try {
+            var result = await runner.RunAsync("/usr/bin/id", ["-Gn"], new RunOptions(Timeout: TimeSpan.FromSeconds(5)), ct)
+                .ConfigureAwait(false);
+            if (result.ExitCode != 0 || result.TimedOut) return true;
+            return result.Stdout.Split((char[])[' ', '\n'], StringSplitOptions.RemoveEmptyEntries).Contains("admin", StringComparer.Ordinal);
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            return true;
+        }
     }
 
     async Task<ShimResult?> TryLinkOnTerminalPathAsync(string target, CancellationToken ct) {
