@@ -1,10 +1,12 @@
 using System.Collections.Frozen;
 using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Accounts.Readings;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
+using TUnit.Assertions.Enums;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
@@ -305,5 +307,104 @@ public class AccountsPublisherTests {
         } finally {
             await publisher.StopAsync(CancellationToken.None);
         }
+    }
+
+    static void Record(AccountStore store, string id, double used) {
+        var written = store.Readings.TryRecord(id, 0, null, f => f with {
+            Reading = f.Reading with { Windows = [new UsageWindowDto("five_hour", 300, used, null, null)] },
+        });
+        if (!written) throw new InvalidOperationException("reading not recorded");
+    }
+
+    static double? Used(AccountsSnapshotDto? snapshot) => snapshot?.Accounts.Single().Reading?.Windows.Single().UsedPercent;
+
+    [Test]
+    public async Task Reading_change_publishes_within_the_poll() {
+        var store = Store();
+        Add(store, "work");
+        var id   = store.Load().Accounts.Single().Id;
+        var time = new FakeTimeProvider();
+        using var publisher = Publisher(store, time);
+        var changed = new TaskCompletionSource<AccountsSnapshotDto>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await publisher.StartAsync(CancellationToken.None);
+        publisher.Changed += s => changed.TrySetResult(s);
+        try {
+            Record(store, id, 42);
+            time.Advance(Poll);
+
+            var snapshot = await changed.Task.WaitAsync(Timeout);
+            await Assert.That(snapshot.Revision).IsEqualTo(1L);
+            await Assert.That(Used(snapshot)).IsEqualTo(42.0);
+            await Assert.That(publisher.Current).IsSameReferenceAs(snapshot);
+        } finally {
+            await publisher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task Burst_of_reading_changes_sends_the_last_to_the_server() {
+        var store = Store();
+        Add(store, "work");
+        var id   = store.Load().Accounts.Single().Id;
+        var time = new FakeTimeProvider();
+        using var publisher = Publisher(store, time);
+        var sent = new List<double?>();
+        publisher.SendToServer = s => {
+            lock (sent) sent.Add(Used(s));
+            return Task.CompletedTask;
+        };
+
+        await publisher.RebuildAsync(CancellationToken.None);
+        Record(store, id, 10);
+        await publisher.RebuildAsync(CancellationToken.None);
+        Record(store, id, 20);
+        await publisher.RebuildAsync(CancellationToken.None);
+        Record(store, id, 30);
+        await publisher.RebuildAsync(CancellationToken.None);
+        await Assert.That(Sent()).IsEquivalentTo(new double?[] { null }, CollectionOrdering.Matching);
+
+        time.Advance(TimeSpan.FromSeconds(30));
+        await Assert.That(Sent()).IsEquivalentTo(new double?[] { null, 30.0 }, CollectionOrdering.Matching);
+
+        double?[] Sent() {
+            lock (sent) return [.. sent];
+        }
+    }
+
+    [Test]
+    public async Task An_unchanged_reading_rewrite_announces_nothing() {
+        var store = Store();
+        Add(store, "work");
+        var id = store.Load().Accounts.Single().Id;
+        Record(store, id, 10);
+        using var publisher = Publisher(store, new FakeTimeProvider());
+        await publisher.RebuildAsync(CancellationToken.None);
+        var announced = 0;
+        publisher.Changed += _ => Interlocked.Increment(ref announced);
+
+        Record(store, id, 10);
+        await publisher.RebuildAsync(CancellationToken.None);
+
+        await Assert.That(Volatile.Read(ref announced)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Unreadable_reading_keeps_the_previous_one() {
+        var store = Store();
+        Add(store, "work");
+        var id = store.Load().Accounts.Single().Id;
+        Record(store, id, 42);
+        using var publisher = Publisher(store, new FakeTimeProvider());
+        await publisher.RebuildAsync(CancellationToken.None);
+        await Assert.That(Used(publisher.Current)).IsEqualTo(42.0);
+
+        var path = Path.Combine(store.Directory, "readings", $"{id}.json");
+        await File.WriteAllTextAsync(path, "{ torn");
+        await publisher.RebuildAsync(CancellationToken.None);
+        await Assert.That(Used(publisher.Current)).IsEqualTo(42.0);
+
+        File.Delete(path);
+        await publisher.RebuildAsync(CancellationToken.None);
+        await Assert.That(publisher.Current!.Accounts.Single().Reading).IsNull();
     }
 }

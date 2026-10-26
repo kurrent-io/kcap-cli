@@ -82,13 +82,13 @@ public sealed class ReadingStore {
         return all;
     }
 
-    /// <summary>Length and last-write ticks of every reading file in name order, for change detection.</summary>
-    public (long Length, long Ticks)[] Stat() {
-        var stats = new List<(long, long)>();
+    /// <summary>Account id, length and last-write ticks of every reading file in name order, for change detection.</summary>
+    public (string AccountId, long Length, long Ticks)[] Stat() {
+        var stats = new List<(string, long, long)>();
         foreach (var path in ReadingPaths()) {
             try {
                 var info = new FileInfo(path);
-                if (info.Exists) stats.Add((info.Length, info.LastWriteTimeUtc.Ticks));
+                if (info.Exists) stats.Add((Path.GetFileNameWithoutExtension(path), info.Length, info.LastWriteTimeUtc.Ticks));
             } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
                 // Removed while listing.
             }

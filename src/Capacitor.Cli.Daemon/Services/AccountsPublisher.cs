@@ -1,14 +1,15 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Accounts.Readings;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
-/// The host's accounts snapshot, kept current by polling <c>accounts.json</c>, which the CLI and the
-/// desktop app write from other processes. A new snapshot is published only for a new revision or
-/// host id, so a recording-state change reaches readers with the next registry revision.
+/// The host's accounts snapshot, kept current by polling <c>accounts.json</c> and the reading files, which
+/// the CLI, the desktop app and agents write from other processes. A snapshot is published only when it
+/// differs by value from the last one, which a reading change can do under the same revision.
 /// </summary>
 internal sealed partial class AccountsPublisher(
         DaemonConfig config, UserHome home, TimeProvider time, ILogger<AccountsPublisher> logger)
@@ -23,6 +24,7 @@ internal sealed partial class AccountsPublisher(
     PeriodicTimer?             _timer;
     string?                    _hostId;
     (long Length, long Ticks)? _stat;
+    (string AccountId, long Length, long Ticks)[] _readingsStat = [];
     bool                       _settled;
     bool                       _loadWarned;
     bool                       _hostWarned;
@@ -38,8 +40,8 @@ internal sealed partial class AccountsPublisher(
 
     /// <summary>Raised under the rebuild gate so handlers see revisions in order. A handler must not
     /// throw, block, or wait on <see cref="RebuildAsync"/>; one that throws is logged and the rest still
-    /// run. Every new snapshot is announced, the one start builds included; a poll that finds the
-    /// revision unchanged announces nothing.</summary>
+    /// run. Every new snapshot is announced, the one start builds included; a rebuild equal by value to the
+    /// current snapshot announces nothing.</summary>
     public event Action<AccountsSnapshotDto>? Changed;
 
     // Seam: tests substitute a failing read.
@@ -94,19 +96,21 @@ internal sealed partial class AccountsPublisher(
         try {
             if ((_hostId ??= TryHostId(store)) is not { } hostId) return;
 
-            var stat      = Stat(store.RegistryPath);
-            var unchanged = stat == _stat;
+            var stat         = Stat(store.RegistryPath);
+            var readingsStat = store.Readings.Stat();
+            var unchanged    = stat == _stat && readingsStat.SequenceEqual(_readingsStat);
             if (unchanged && _settled && !force) return;
 
             // Two same-length writes inside one filesystem timestamp tick stat alike, so a stat is
             // trusted only once a later tick has read the file under it successfully.
             _settled = unchanged && !force;
-            if (!unchanged) _loadWarned = false;
-            _stat = stat;
+            if (stat != _stat) _loadWarned = false;
+            _stat         = stat;
+            _readingsStat = readingsStat;
 
             var read = false;
             try {
-                read = Publish(store, hostId);
+                read = Publish(store, hostId, readingsStat);
             } finally {
                 if (!read) _settled = false;
             }
@@ -116,7 +120,7 @@ internal sealed partial class AccountsPublisher(
     }
 
     /// <summary>False when the registry could not be read.</summary>
-    bool Publish(AccountStore store, string hostId) {
+    bool Publish(AccountStore store, string hostId, (string AccountId, long Length, long Ticks)[] readingsStat) {
         AccountRegistry registry;
         try {
             registry = LoadRegistry(store);
@@ -126,14 +130,36 @@ internal sealed partial class AccountsPublisher(
             return false;
         }
 
-        if (Current is { } current && current.Revision == registry.Revision && current.HostId == hostId) return true;
+        var readings = KeepUnreadable(store.Readings.LoadAll(), readingsStat, registry);
+        var next     = AccountSnapshotBuilder.Build(registry, hostId, config.DefaultDirectories, home, readings);
+        if (Current is { } current && AccountSnapshotBuilder.Equivalent(current, next)) return true;
 
-        var next = AccountSnapshotBuilder.Build(registry, hostId, config.DefaultDirectories, home);
         Volatile.Write(ref _current, next);
         _notifier.Pulse();
         Announce(next);
         QueueServerSend(next);
         return true;
+    }
+
+    // A file that exists but did not parse is mid-write or damaged, not absent: the account keeps the
+    // reading it last published until the file reads again or is removed.
+    IReadOnlyDictionary<string, ReadingFile> KeepUnreadable(
+        IReadOnlyDictionary<string, ReadingFile>      loaded,
+        (string AccountId, long Length, long Ticks)[] readingsStat,
+        AccountRegistry                               registry
+    ) {
+        if (Current is not { } current) return loaded;
+
+        Dictionary<string, ReadingFile>? kept = null;
+        foreach (var account in registry.Accounts) {
+            if (loaded.ContainsKey(account.Id) || !readingsStat.Any(s => s.AccountId == account.Id)) continue;
+            if (current.Accounts.FirstOrDefault(v => v.Id == account.Id)?.Reading is not { } previous || previous.Generation != account.Generation) continue;
+
+            kept ??= new Dictionary<string, ReadingFile>(loaded, StringComparer.Ordinal);
+            kept[account.Id] = new ReadingFile(previous, []);
+        }
+
+        return kept ?? loaded;
     }
 
     void Announce(AccountsSnapshotDto snapshot) {
