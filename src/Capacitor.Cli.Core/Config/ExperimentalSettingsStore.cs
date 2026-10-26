@@ -63,10 +63,11 @@ public sealed class ExperimentalSettingsStore(ConfigRoot root) {
             return (new JsonObject(), $"{FileName} could not be read: {e.Message}");
         }
 
-        if (string.IsNullOrWhiteSpace(text)) return (new JsonObject(), null);
+        if (string.IsNullOrWhiteSpace(text)) return (new JsonObject(), $"{FileName} is empty");
 
         try {
-            return JsonNode.Parse(text) is JsonObject obj
+            // A JsonObject with a duplicate key parses, then throws ArgumentException on first access.
+            return JsonNode.Parse(text, documentOptions: new JsonDocumentOptions { AllowDuplicateProperties = false }) is JsonObject obj
                 ? (obj, null)
                 : (new JsonObject(), $"{FileName} is not a JSON object");
         } catch (JsonException e) {

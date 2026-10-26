@@ -19,15 +19,6 @@ public class ExperimentalSettingsStoreTests {
         await Assert.That(read.IsEnabled("codex-app-server")).IsFalse();
     }
 
-    [Test]
-    public async Task Empty_file_reads_every_feature_off() {
-        await File.WriteAllTextAsync(FilePath, "");
-
-        var read = Store.Load("default");
-
-        await Assert.That(read.Readable).IsTrue();
-        await Assert.That(read.Features).IsEmpty();
-    }
 
     [Test]
     public async Task Set_then_load_round_trips_per_profile() {
@@ -50,8 +41,13 @@ public class ExperimentalSettingsStoreTests {
     }
 
     [Test]
-    public async Task Corrupt_file_reads_off_with_a_problem_and_is_never_overwritten() {
-        await File.WriteAllTextAsync(FilePath, """{"default":""");
+    [Arguments("""{"default":""")]
+    [Arguments("")]
+    [Arguments("  \n")]
+    [Arguments("""{"default":{"codex-app-server":true},"default":{}}""")]
+    [Arguments("""{"default":{"codex-app-server":true,"codex-app-server":false}}""")]
+    public async Task Unreadable_file_reads_off_with_a_problem_and_is_never_overwritten(string content) {
+        await File.WriteAllTextAsync(FilePath, content);
         var before = await File.ReadAllBytesAsync(FilePath);
 
         var read = Store.Load("default");
