@@ -405,6 +405,15 @@ public class AccountRefreshTests {
         await Assert.That(Reading!.RefreshOrigins).IsEquivalentTo([At(5), At(9)]);
     }
 
+    [Test]
+    public async Task Refresh_origins_keep_the_last_sixteen() {
+        Register(Codex("a@example.com", "idA"));
+
+        for (var at = 1; at <= 20; at++) await Refresh(Identity("a@example.com", "idA", Limits(at, at)));
+
+        await Assert.That(Reading!.RefreshOrigins).IsEquivalentTo(Enumerable.Range(5, 16).Select(At).ToArray());
+    }
+
     sealed class SimulatedCrash : Exception;
 
     [Test]

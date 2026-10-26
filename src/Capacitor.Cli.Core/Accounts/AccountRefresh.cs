@@ -8,7 +8,7 @@ namespace Capacitor.Cli.Core.Accounts;
 /// restore an older login. Its limits belong to the login its own probe saw and commit with it.</summary>
 public static class AccountRefresh {
     const int MaxRetiredSessions = 256;
-    const int MaxRefreshOrigins  = 32;
+    const int MaxRefreshOrigins  = 16;
 
     /// <summary>What the commit decided, carried from the registry change to the reading writes.</summary>
     sealed record Decision(long FromGeneration, long ToGeneration, bool MergeLimits);
