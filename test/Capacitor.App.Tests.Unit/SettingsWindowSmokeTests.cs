@@ -246,9 +246,9 @@ public class SettingsWindowSmokeTests {
             await Assert.That(HasPill(RowOf(".codex"))).IsTrue();
 
             var trust = State(RowOf("main"));
-            await Assert.That(trust.Text).IsEqualTo("Needs trust");
+            await Assert.That(trust.Text).IsEqualTo("Needs approval in Codex");
             await Assert.That(trust.Foreground).IsSameReferenceAs(window.FindResource("KcapWarningBrush"));
-            await Assert.That(ToolTip.GetTip(trust)).IsEqualTo("Trust the kcap hooks the next time you start Codex with CODEX_HOME=/u/.codex-main");
+            await Assert.That(ToolTip.GetTip(trust)).IsEqualTo("Start Codex with CODEX_HOME=/u/.codex-main and approve kcap's hooks when it asks.");
             await Assert.That(State(RowOf("home")).Text).IsEqualTo("Recording");
             await Assert.That(State(RowOf("home")).Foreground).IsSameReferenceAs(window.FindResource("KcapMutedBrush"));
             await Assert.That(Visible(RowOf(".codex"), "accountMenu")).IsNull();
@@ -286,9 +286,9 @@ public class SettingsWindowSmokeTests {
             await Assert.That(addMenu.IsOpen).IsTrue();
             await WaitUntilAsync(() => ((Control)addMenu.Content!).GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "/u/.codex-alt"));
             var texts = ((Control)addMenu.Content!).GetVisualDescendants().OfType<TextBlock>().Select(t => t.Text).ToList();
-            await Assert.That(texts).Contains("home directory");
-            await Assert.That(texts).Contains("Choose a Claude directory…");
-            await Assert.That(texts).Contains("Choose a Codex directory…");
+            await Assert.That(texts).Contains("Codex");
+            await Assert.That(texts).Contains("Choose a Claude Code folder…");
+            await Assert.That(texts).Contains("Choose a Codex folder…");
             await Assert.That(discoveries).IsEqualTo(1);
             var candidate = ((Control)addMenu.Content!).GetVisualDescendants().OfType<TextBlock>()
                 .Single(t => t.Text == "/u/.codex-alt").FindAncestorOfType<Button>()!;

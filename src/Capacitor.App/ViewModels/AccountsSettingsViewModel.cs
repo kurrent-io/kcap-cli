@@ -137,7 +137,9 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
         var read = ++_candidateReads;
         try {
             var found = await Task.Run(_discover, _token);
-            if (read == _candidateReads && !_token.IsCancellationRequested) Candidates = found;
+            // A folder already on the page is managed from its row; offering it again reads as a second account.
+            var listed = Groups.SelectMany(g => g.Rows).Select(r => r.Directory).ToHashSet(StringComparer.Ordinal);
+            if (read == _candidateReads && !_token.IsCancellationRequested) Candidates = [.. found.Where(c => !listed.Contains(c.Directory))];
         } catch (OperationCanceledException) when (_token.IsCancellationRequested) {
         } catch (Exception ex) {
             Console.Error.WriteLine($"kcap: could not look for account directories: {ex.Message}");

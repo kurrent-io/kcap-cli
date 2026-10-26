@@ -19,7 +19,7 @@ public sealed class HarnessSettingsRow : ReactiveObject {
     public string Label { get; }
     public string Signal { get; }
     public string ConnectionLabel => _wired switch {
-        true => "Recording configured", false => "Recording not configured", null => "Recording configuration unknown",
+        true => "Connected · sessions are recorded", false => "Not connected", null => "Could not check the connection",
     };
     internal bool? Wired => _wired;
     public bool IsConfigured => _wired == true;

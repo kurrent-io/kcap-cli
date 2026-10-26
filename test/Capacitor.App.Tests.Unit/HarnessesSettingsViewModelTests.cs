@@ -29,7 +29,7 @@ public class HarnessesSettingsViewModelTests {
         await Assert.That(vm.Rows.Count).IsEqualTo(1);
         var row = vm.Rows[0];
         await Assert.That(row.Signal).Contains("PATH");
-        await Assert.That(row.ConnectionLabel).IsEqualTo("Recording not configured");
+        await Assert.That(row.ConnectionLabel).IsEqualTo("Not connected");
         await Assert.That(row.ConsentNote).IsNotNull();
         cli.PluginInstallAsync("--codex", Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
             .Returns(new ProcessResult(1, "", "installation failed", false), new ProcessResult(0, "", "", false));
@@ -38,7 +38,7 @@ public class HarnessesSettingsViewModelTests {
         wired = true;
         await vm.ConnectAsync(row);
         await Assert.That(row.Message!).Contains("Setup completed");
-        await Assert.That(row.ConnectionLabel).IsEqualTo("Recording configured");
+        await Assert.That(row.ConnectionLabel).IsEqualTo("Connected · sessions are recorded");
         detected[HarnessId.Cursor] = new(false, true);
         await vm.RescanAsync();
         await Assert.That(vm.Rows.Count).IsEqualTo(2);

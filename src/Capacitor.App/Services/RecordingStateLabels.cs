@@ -13,9 +13,9 @@ public static class RecordingStateLabels {
 
     public static string Label(string vendor, string token) =>
         token == Recording ? "Recording"
-        : token == Installed ? (IsCodex(vendor) ? "Needs trust" : "Wired")
-        : token == Broken ? "Broken"
-        : token == NotWired ? "Not wired"
+        : token == Installed ? (IsCodex(vendor) ? "Needs approval in Codex" : "Ready")
+        : token == Broken ? "Needs repair"
+        : token == NotWired ? "Not set up"
         : token;
 
     public static bool IsAttention(string vendor, string token) =>
@@ -23,7 +23,9 @@ public static class RecordingStateLabels {
 
     public static string? Hint(string vendor, string token, string directory) =>
         token == Installed && IsCodex(vendor)
-            ? $"Trust the kcap hooks the next time you start Codex with CODEX_HOME={directory}"
+            ? $"Start Codex with CODEX_HOME={directory} and approve kcap's hooks when it asks."
+            : token == Broken ? "kcap's hooks in this folder are missing or changed. Reconnect from the menu."
+            : token == NotWired ? "kcap is not recording sessions from this folder yet."
             : null;
 
     static bool IsCodex(string vendor) => string.Equals(vendor, "codex", StringComparison.OrdinalIgnoreCase);

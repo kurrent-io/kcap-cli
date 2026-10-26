@@ -63,7 +63,7 @@ public class AccountsSettingsViewModelTests {
     }
 
     [Test]
-    public Task Groups_list_each_vendors_rows_with_the_default_badge_and_the_unregistered_default_as_not_wired_with_add() =>
+    public Task Groups_list_each_vendors_rows_with_the_default_badge_and_the_unregistered_default_as_not_set_up() =>
         AvaloniaSession.RunOnUiAsync(async () => {
             using var rig = new Rig(Snapshot);
             var vm = rig.Vm;
@@ -78,13 +78,13 @@ public class AccountsSettingsViewModelTests {
 
             var codex = vm.Groups[1].Rows;
             await Assert.That(codex.Count).IsEqualTo(2);
-            await Assert.That(codex[0].StateLabel).IsEqualTo("Needs trust");
+            await Assert.That(codex[0].StateLabel).IsEqualTo("Needs approval in Codex");
             await Assert.That(codex[0].StateIsAttention).IsTrue();
-            await Assert.That(codex[0].StateHint).IsEqualTo("Trust the kcap hooks the next time you start Codex with CODEX_HOME=/u/.codex-main");
+            await Assert.That(codex[0].StateHint).IsEqualTo("Start Codex with CODEX_HOME=/u/.codex-main and approve kcap's hooks when it asks.");
             var fallback = codex[1];
             await Assert.That(fallback).IsEqualTo(new AccountSettingsRow(null, "codex", "/u/.codex", ".codex", "not_wired", true));
             await Assert.That(fallback.IsUnregisteredDefault).IsTrue();
-            await Assert.That(fallback.StateLabel).IsEqualTo("Not wired");
+            await Assert.That(fallback.StateLabel).IsEqualTo("Not set up");
             await Assert.That(fallback.StateIsAttention).IsTrue();
             await Assert.That(codex[0].IsUnregisteredDefault).IsFalse();
 

@@ -93,10 +93,10 @@ public class AccountRowsTests {
     }
 
     [Test]
-    [Arguments("codex", "installed", "Needs trust", true)]
-    [Arguments("claude", "installed", "Wired", false)]
-    [Arguments("claude", "broken", "Broken", true)]
-    [Arguments("claude", "not_wired", "Not wired", true)]
+    [Arguments("codex", "installed", "Needs approval in Codex", true)]
+    [Arguments("claude", "installed", "Ready", false)]
+    [Arguments("claude", "broken", "Needs repair", true)]
+    [Arguments("claude", "not_wired", "Not set up", true)]
     [Arguments("claude", "recording", "Recording", false)]
     public async Task Labels_follow_the_token_and_vendor(string vendor, string token, string label, bool attention) {
         await Assert.That(RecordingStateLabels.Label(vendor, token)).IsEqualTo(label);
@@ -110,11 +110,13 @@ public class AccountRowsTests {
     }
 
     [Test]
-    public async Task Only_a_codex_install_that_awaits_trust_carries_a_hint() {
+    public async Task Only_a_state_that_needs_something_carries_a_hint() {
         await Assert.That(RecordingStateLabels.Hint("codex", "installed", "/u/.codex-work"))
-            .IsEqualTo("Trust the kcap hooks the next time you start Codex with CODEX_HOME=/u/.codex-work");
+            .IsEqualTo("Start Codex with CODEX_HOME=/u/.codex-work and approve kcap's hooks when it asks.");
         await Assert.That(RecordingStateLabels.Hint("claude", "installed", "/u/.claude")).IsNull();
         await Assert.That(RecordingStateLabels.Hint("codex", "recording", "/u/.codex")).IsNull();
+        await Assert.That(RecordingStateLabels.Hint("claude", "broken", "/u/.claude")).IsNotNull();
+        await Assert.That(RecordingStateLabels.Hint("claude", "not_wired", "/u/.claude")).IsNotNull();
     }
 
     [Test]

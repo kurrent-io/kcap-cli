@@ -32,10 +32,20 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
         ToggleConnectionCommand = ReactiveCommand.CreateFromTask<HarnessSettingsRow>(ToggleConnectionAsync, idle);
     }
 
-    public IReadOnlyList<HarnessSettingsRow> Rows { get => _rows; private set => this.RaiseAndSetIfChanged(ref _rows, value); }
+    public IReadOnlyList<HarnessSettingsRow> Rows {
+        get => _rows;
+        private set {
+            this.RaiseAndSetIfChanged(ref _rows, value);
+            this.RaisePropertyChanged(nameof(RescanPrompt));
+        }
+    }
     public bool Busy { get => _busy; private set => this.RaiseAndSetIfChanged(ref _busy, value); }
     public string? Message { get => _message; private set => this.RaiseAndSetIfChanged(ref _message, value); }
     public string ProfileName => _store.ProfileName;
+
+    public string RescanPrompt => Rows.Count == 0
+        ? "No coding tools found. Install one, then rescan."
+        : "Missing a tool you use? Install it, then rescan.";
     public ReactiveCommand<Unit, Unit> RescanCommand { get; }
     public ReactiveCommand<HarnessSettingsRow, Unit> ConnectCommand { get; }
     public ReactiveCommand<HarnessSettingsRow, Unit> ToggleConnectionCommand { get; }
@@ -50,7 +60,7 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
                 return HarnessRegistry.Identities.Where(h => detected.TryGetValue(h.Id, out var d) && d.Detected)
                     .Select(h => new HarnessSettingsRow(h, detected[h.Id], _isWired?.Invoke(h.Id))).ToArray();
             }, _lifetime.Token);
-            Message = Rows.Count == 0 ? "No harnesses found. Install a harness, then rescan." : null;
+            Message = null;
         } catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) {
         } catch (Exception ex) {
             Message = $"Could not detect harnesses: {ex.Message}";
