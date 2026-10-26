@@ -18,6 +18,7 @@ public sealed class ExperimentalSettingsViewModel : ReactiveObject, IDisposable 
     AttachStatus _attach = new(AttachState.Connecting, null, null);
     DaemonStatusDto? _snapshot;
     string? _problem;
+    string? _saveProblem;
 
     public ExperimentalSettingsViewModel(ExperimentalSettingsStore store, string profile, IDaemonClientService service) {
         _store = store;
@@ -26,8 +27,7 @@ public sealed class ExperimentalSettingsViewModel : ReactiveObject, IDisposable 
         var read = store.Load(profile);
         _problem = read.Problem;
         Features = ExperimentalFeatures.All
-            .Select(f => new ExperimentalFeatureRowViewModel(f, read.Readable && read.Features.TryGetValue(f.Id, out var on) && on,
-                read.Readable, SaveAsync))
+            .Select(f => new ExperimentalFeatureRowViewModel(f, read.Readable && read.IsEnabled(f.Id), read.Readable, SaveAsync))
             .ToList();
 
         service.Status.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(status => {
@@ -35,8 +35,10 @@ public sealed class ExperimentalSettingsViewModel : ReactiveObject, IDisposable 
             if (status.State != AttachState.Connected) _snapshot = null;
             Observe();
         }).DisposeWith(_subscriptions);
+        // Re-read with each snapshot: the CLI or a hand edit can flip a switch while the tab is open.
         service.Snapshots.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(snapshot => {
             _snapshot = snapshot;
+            Reload();
             Observe();
         }).DisposeWith(_subscriptions);
     }
@@ -49,6 +51,12 @@ public sealed class ExperimentalSettingsViewModel : ReactiveObject, IDisposable 
         private set => this.RaiseAndSetIfChanged(ref _problem, value);
     }
 
+    void Reload() {
+        var read = _store.Load(_profile);
+        foreach (var row in Features) row.Load(read.Readable && read.IsEnabled(row.Id), read.Readable);
+        Problem = read.Problem ?? _saveProblem;
+    }
+
     // Connecting, and a connection that has not yet sent a snapshot, say nothing rather than guess.
     void Observe() {
         var running = _attach.State == AttachState.Connected;
@@ -57,19 +65,17 @@ public sealed class ExperimentalSettingsViewModel : ReactiveObject, IDisposable 
     }
 
     async Task SaveAsync(ExperimentalFeatureRowViewModel row, bool enabled) {
-        var saved = false;
-        string? problem = null;
         try {
-            saved = await _store.SetAsync(_profile, row.Id, enabled, _lifetime.Token);
-            if (!saved) problem = _store.Load(_profile).Problem;
+            // A refusal means the file is unreadable, which the reload reports and keeps reporting until fixed.
+            _saveProblem = null;
+            if (!await _store.SetAsync(_profile, row.Id, enabled, _lifetime.Token)) row.Revert(!enabled);
         } catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) {
             return;
         } catch (Exception ex) {
-            problem = $"Could not save the setting: {ex.Message}";
+            _saveProblem = $"Could not save the setting: {ex.Message}";
+            row.Revert(!enabled);
         }
-        if (saved) { Problem = null; return; }
-        Problem = problem ?? "Could not save the setting";
-        row.Revert(!enabled);
+        Reload();
     }
 
     public void Dispose() {

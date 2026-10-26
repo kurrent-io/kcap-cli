@@ -15,19 +15,23 @@ public sealed class ExperimentalFeatureRowViewModel : ReactiveObject {
     DaemonStatusDto? _status;
     string _statusText = "";
     bool _statusIsWarning;
+    bool _canChange;
 
     internal ExperimentalFeatureRowViewModel(ExperimentalFeature feature, bool enabled, bool canChange, Func<ExperimentalFeatureRowViewModel, bool, Task> save) {
         _feature = feature;
         _enabled = enabled;
         _save = save;
-        CanChange = canChange;
+        _canChange = canChange;
         Recompute();
     }
 
     internal string Id => _feature.Id;
     public string DisplayName => _feature.DisplayName;
     public string Description => _feature.Description;
-    public bool CanChange { get; }
+    public bool CanChange {
+        get => _canChange;
+        private set => this.RaiseAndSetIfChanged(ref _canChange, value);
+    }
 
     public bool IsEnabled {
         get => _enabled;
@@ -63,6 +67,12 @@ public sealed class ExperimentalFeatureRowViewModel : ReactiveObject {
         Recompute();
     }
 
+    /// Takes the saved value without saving it back.
+    internal void Load(bool enabled, bool canChange) {
+        CanChange = canChange;
+        Revert(enabled);
+    }
+
     void Recompute() {
         if (!_hasStatus) {
             StatusText = "";
@@ -76,7 +86,7 @@ public sealed class ExperimentalFeatureRowViewModel : ReactiveObject {
             ExperimentalFeatureStateKind.Applying => "Applying…",
             ExperimentalFeatureStateKind.AppliedLocally => "Applied; the server has not been told yet",
             ExperimentalFeatureStateKind.Unknown => "This daemon is too old to apply it. Update kcap and restart the daemon",
-            ExperimentalFeatureStateKind.DaemonNotRunning => "Saved; applies when the daemon starts",
+            ExperimentalFeatureStateKind.DaemonNotRunning when _enabled => "Saved; applies when the daemon starts",
             _ => "",
         };
         StatusIsWarning = kind is ExperimentalFeatureStateKind.OnNotActive or ExperimentalFeatureStateKind.Unknown;

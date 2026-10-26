@@ -76,6 +76,47 @@ public class ExperimentalSettingsViewModelTests {
     });
 
     [Test]
+    public Task An_off_switch_on_a_stopped_daemon_shows_no_status() => AvaloniaSession.RunOnUiAsync(async () => {
+        var service = Connected();
+        using var vm = new ExperimentalSettingsViewModel(new ExperimentalSettingsStore(Config.Root), "work", service);
+        var row = vm.Features.Single();
+
+        service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, null, null));
+
+        await Assert.That(row.StatusText).IsEqualTo("");
+    });
+
+    /// <summary>A flip made by the CLI while the tab is open reaches the daemon too; reading the switch only
+    /// at open would leave the row comparing a stale value with every snapshot after it.</summary>
+    [Test]
+    public Task Each_snapshot_rereads_the_store() => AvaloniaSession.RunOnUiAsync(async () => {
+        var store = new ExperimentalSettingsStore(Config.Root);
+        var service = Connected();
+        using var vm = new ExperimentalSettingsViewModel(store, "work", service);
+        var row = vm.Features.Single();
+        service.SnapshotsSubject.OnNext(Reporting(resolved: false, active: false));
+
+        await store.SetAsync("work", Id, true, CancellationToken.None);
+        service.SnapshotsSubject.OnNext(Reporting(resolved: true, active: true));
+
+        await Assert.That(row.IsEnabled).IsTrue();
+        await Assert.That(row.StatusText).IsEqualTo("Active");
+
+        await File.WriteAllTextAsync(store.Path, "{ not json");
+        service.SnapshotsSubject.OnNext(Reporting(resolved: true, active: true));
+
+        await Assert.That(row.CanChange).IsFalse();
+        await Assert.That(vm.Problem).Contains("not valid JSON");
+
+        File.Delete(store.Path);
+        service.SnapshotsSubject.OnNext(Reporting(resolved: false, active: false));
+
+        await Assert.That(row.CanChange).IsTrue();
+        await Assert.That(row.IsEnabled).IsFalse();
+        await Assert.That(vm.Problem).IsNull();
+    });
+
+    [Test]
     public Task Corrupt_store_disables_the_toggles_with_the_problem() => AvaloniaSession.RunOnUiAsync(async () => {
         var store = new ExperimentalSettingsStore(Config.Root);
         await File.WriteAllTextAsync(store.Path, "{ not json");
