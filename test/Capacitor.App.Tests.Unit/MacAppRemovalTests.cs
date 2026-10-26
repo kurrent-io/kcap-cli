@@ -72,6 +72,23 @@ public class MacAppRemovalTests {
         await Assert.That(runner.Calls).IsEqualTo(0);
     }
 
+    [Test, RunOn(OS.MacOs), UnsupportedOSPlatform("windows")]
+    public async Task Removes_the_profile_line_with_the_local_bin_link() {
+        var bundle = Bundle();
+        Tmp.CreateDir("home", ".local", "bin");
+        var home    = new UserHome(Tmp.GetResolvedPath("home"));
+        var folder  = ShellProfile.Folder(home);
+        var profile = Tmp.CreateFile(Path.Combine("home", ".zprofile"), "export A=1\n");
+        new ShellProfile(home, "/bin/zsh").Add();
+        File.CreateSymbolicLink(Path.Combine(folder, "kcap"), Path.Combine(bundle, "Contents", "MacOS", "kcap"));
+        var removal = new MacAppRemoval(new NoProcesses(), home, bundle, [folder]);
+
+        var left = await removal.RemoveLinksAsync(CancellationToken.None);
+
+        await Assert.That(left).IsEmpty();
+        await Assert.That(File.ReadAllText(profile)).IsEqualTo("export A=1\n");
+    }
+
     [Test]
     public async Task Deletes_support_files_named_by_the_bundle_id() {
         var bundle  = Bundle();

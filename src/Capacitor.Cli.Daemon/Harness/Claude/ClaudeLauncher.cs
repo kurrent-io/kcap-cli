@@ -258,10 +258,16 @@ internal sealed partial class ClaudeLauncher(
         return new JsonObject { ["mcpServers"] = mcpServers }.ToJsonString();
     }
 
-    /// Claude needs no mandatory daemon-level flags (cwd is set via forkpty chdir), so a
-    /// local launch forwards the user's post-`--` args verbatim.
-    public LaunchArgs BuildPassthrough(LauncherContext ctx, IReadOnlyList<string> userArgs)
-        => new([.. userArgs], McpConfigPath: null);
+    /// Forwards the user's post-`--` args (cwd is set via forkpty chdir), pinning a fresh session id
+    /// in front of them unless they already choose the session: in place, every Claude session in the
+    /// folder shares the cwd, so only the id tells this agent's transcript from the user's own.
+    public LaunchArgs BuildPassthrough(LauncherContext ctx, IReadOnlyList<string> userArgs) {
+        if (ClaudeSessionArgs.SelectsSession(userArgs, out var chosen)) return new([.. userArgs], McpConfigPath: null, chosen);
+
+        var pinned = Guid.NewGuid().ToString();
+
+        return new(["--session-id", pinned, .. userArgs], McpConfigPath: null, pinned);
+    }
 
     public void Cleanup(AgentInstance agent) {
         try { RemoveClaudeProjectSymlink(agent.Worktree.Path, PathsFor(agent.Account)); } catch (Exception ex) {

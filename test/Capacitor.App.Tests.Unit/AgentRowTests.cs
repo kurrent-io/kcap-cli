@@ -8,7 +8,7 @@ public class AgentRowTests {
             string id = "s1", string status = "ended", string? repoOwner = "kurrent-io", string? repoName = "kcap-cli",
             string? cwd = "/Users/alexey/dev/kcap-cli", bool stale = false) => new() {
         SessionId = id, Status = status, AccessLevel = "full", Vendor = "claude", Title = "Desktop app RAM growth",
-        Owner = new() { UserId = "user_01", Username = "alexey", DisplayName = "Alexey Zimarev" },
+        Owner = new() { UserId = "user_01", Username = "alexey", DisplayName = "Alexey Zimarev", AvatarUrl = "https://avatars.example/user_01" },
         StartedAt = new DateTimeOffset(2026, 10, 22, 13, 4, 24, TimeSpan.Zero),
         EndedAt = status == "ended" ? new DateTimeOffset(2026, 10, 22, 16, 56, 41, TimeSpan.Zero) : null,
         LastActivityAt = new DateTimeOffset(2026, 10, 22, 16, 56, 41, TimeSpan.Zero),
@@ -30,6 +30,7 @@ public class AgentRowTests {
         await Assert.That(row.RepoGroupLabel).IsEqualTo("kurrent-io/kcap-cli");
         await Assert.That(row.OwnerUserId).IsEqualTo("user_01");
         await Assert.That(row.OwnerName).IsEqualTo("Alexey Zimarev");
+        await Assert.That(row.OwnerAvatarUrl).IsEqualTo("https://avatars.example/user_01");
         await Assert.That(row.CreatedAt).IsEqualTo(new DateTime(2026, 10, 22, 13, 4, 24, DateTimeKind.Utc));
         await Assert.That(row.EndedAt).IsEqualTo(new DateTime(2026, 10, 22, 16, 56, 41, DateTimeKind.Utc));
         await Assert.That(row.LastActivityAt).IsEqualTo(new DateTime(2026, 10, 22, 16, 56, 41, DateTimeKind.Utc));

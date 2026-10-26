@@ -1029,6 +1029,50 @@ public class WizardStartupTests {
         });
     }
 
+    /// Before a server is connected a closed window quits rather than opening an empty app; once one
+    /// is, it hands over. A finish that leaves the window up never quits.
+    [Test]
+    [Arguments(false, true, true)]
+    [Arguments(false, false, false)]
+    [Arguments(true, true, false)]
+    public async Task A_closed_window_quits_only_before_a_server_is_connected(bool connected, bool windowClosed, bool quits) {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+
+        var quit = await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(harness.Options() with { AlreadyAuthenticated = connected });
+            await graph.ViewModel.PendingEnterForTesting;
+            AppUnderTest.WizardWindowClosing(graph.ViewModel, graph.Install, userClose: true);
+
+            return AppUnderTest.QuitsAfterWizardClose(graph.ViewModel, windowClosed);
+        });
+
+        await Assert.That(quit).IsEqualTo(quits);
+    }
+
+    /// A close on Install once the server is up is connected, so the main window opens.
+    [Test]
+    public async Task A_closed_window_after_a_local_install_hands_over() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        var root = LocalSetupScript.PendingSetup(Config);
+        harness.LocalRoot = root;
+        harness.Cli.SetupLocalBehavior = (onLine, _, _) => {
+            LocalStateFiles.ClearJournal(root);
+            onLine(new StreamedLine(ProcessStreamKind.Stdout, LocalSetupScript.Committed));
+            return Task.FromResult(new StreamingResult(0, false, []));
+        };
+
+        var quit = await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(harness.Options());
+            await graph.ViewModel.PendingEnterForTesting;
+            await WizardFixtures.WaitUntilAsync(() => graph.Install.Outcome is not null, what: "the install to settle");
+            AppUnderTest.WizardWindowClosing(graph.ViewModel, graph.Install, userClose: true);
+
+            return AppUnderTest.QuitsAfterWizardClose(graph.ViewModel, windowClosed: true);
+        });
+
+        await Assert.That(quit).IsFalse();
+    }
+
     // ── the wizard graph: composition invariants ──────────────────────────────
 
     [Test]

@@ -21,6 +21,21 @@ public class SessionStatusDotsTests {
         await Assert.That(SessionStatusDots.IsWorking(status, awaitingInput, liveSubagents)).IsEqualTo(expected);
     }
 
+    /// Working is not a foreground turn on its own; it takes the daemon's attestation, and a
+    /// pending card outranks both.
+    [Test]
+    [Arguments(false, true, false, true)]
+    [Arguments(false, false, false, false)]
+    [Arguments(true, true, false, false)]
+    [Arguments(false, true, true, false)]
+    public async Task A_foreground_turn_needs_working_and_the_daemons_attestation(
+            bool awaitingInput, bool turnAttested, bool pending, bool expected) {
+        var status = SessionStatusDots.Present("Running", awaitingInput, waitsOnUser: false, liveSubagents: null, pending,
+            usageLimitSummary: null, launchStage: null, elapsed: null, turnAttested: turnAttested);
+
+        await Assert.That(status.InForegroundTurn).IsEqualTo(expected);
+    }
+
     [Test]
     public async Task A_remote_row_carries_no_count_and_never_works_by_it() {
         var row = AgentRow.FromRemote(new AgentInstanceDto {

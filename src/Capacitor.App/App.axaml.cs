@@ -1017,7 +1017,10 @@ public partial class App : Application {
         BundleRoot: bundleRoot,
         TerminalPathTimeout: UninstallTerminalPathTimeout,
         Time: _time,
-        Log: Console.Error);
+        Log: Console.Error,
+        PathProfiles: () => OperatingSystem.IsMacOS()
+            ? ShellProfile.Removable(_userHome, new KcapLinkRemover(KcapLinkFolders.For(_userHome), Path.Combine(bundleRoot, "Contents", "MacOS", "kcap")).Find())
+            : []);
 
     // The relaunched copy runs the uninstall: this process must be gone before the bundle is.
     async Task RelaunchForUninstallAsync(IClassicDesktopStyleApplicationLifetime desktop, UninstallFactsSource source) {
@@ -1303,6 +1306,7 @@ public partial class App : Application {
             ProfileOverride: _serverEnv.Profile,
             UsageNotice: _usageNotice,
             ReportCliSetup: ReportWizardCliSetupAsync,
+            ReadVisibilityOptions: ReadWizardVisibilityOptionsAsync,
             ResumeWebSignUp: WizardComposition.ResumesWebSignUp(await _appState.LoadAsync(), _time.GetUtcNow()));
         _localInstall ??= WizardComposition.NewInstallController(options);
         var graph = WizardComposition.BuildGraph(options with { Install = _localInstall });
@@ -1325,6 +1329,8 @@ public partial class App : Application {
             graph.Auth, graph.Install, () => DaemonThenLaneQuiescedAsync(graph.Daemon, lane), QuiesceShutdownCap, channel, _time);
 
         _wizardAuth = null;
+        if (QuitsAfterWizardClose(graph.ViewModel, windowClosed: !window.IsVisible) && !_shutdown.IsCancellationRequested)
+            desktop.TryShutdown();
         // A finished onboarding leaves its window up for the main surface to take over; a window the
         // user closed is gone, and the main surface builds its own.
         if (window.IsVisible) {
@@ -1384,8 +1390,7 @@ public partial class App : Application {
 
     // The main window, with the onboarding pane where the rail and launcher go. ShutdownMode is
     // deliberately untouched (OnExplicitShutdown, pinned in OnFrameworkInitializationCompleted):
-    // closing the window mid-onboarding abandons it and hands over to the normal graph, it never
-    // exits the app.
+    // closing the window never exits the app by itself; QuitsAfterWizardClose decides after the handoff.
     internal static MainWindow ShowWizardWindow(
             IClassicDesktopStyleApplicationLifetime desktop, OnboardingViewModel wizard,
             LocalInstallController? install = null, Func<bool>? shuttingDown = null, UiScaleSetting? uiScale = null) {
@@ -1425,6 +1430,12 @@ public partial class App : Application {
         wizard.RequestClose();
         return false;
     }
+
+    /// Before a server is connected the main window has nothing to show, so closing setup's window quits
+    /// rather than handing over; the next launch resumes setup. Read after the handoff, so a sign-in it
+    /// lets commit still opens the app.
+    internal static bool QuitsAfterWizardClose(OnboardingViewModel wizard, bool windowClosed) =>
+        windowClosed && !wizard.Deferrable;
 
     // One logical close (the Done step's finish and the window's own Closing both route through
     // RequestClose, which is idempotent). Shutdown ends the wait too — a quit must never sit
@@ -1884,6 +1895,37 @@ public partial class App : Application {
     }
 
     static readonly TimeSpan WizardCliSetupReportTimeout = TimeSpan.FromSeconds(30);
+
+    // Null offers every answer: a 404 for the route is silent, and any other miss is logged.
+    async Task<VisibilityOptionsResponse?> ReadWizardVisibilityOptionsAsync(CancellationToken ct) {
+        using var timeout = new CancellationTokenSource(WizardVisibilityOptionsTimeout, _time);
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
+        try {
+            if (await FreshServerLaneAsync(bounded.Token).ConfigureAwait(false) is not ({ } lane, { } profiles)) {
+                Console.Error.WriteLine("kcap: visibility options not read (no server resolved) — offering every answer");
+                return null;
+            }
+            await using var _ = lane;
+
+            var (client, status, _, _) = await lane.GetRequiredService<ICapacitorHttpClient>().ForWaitAsync(bounded.Token).ConfigureAwait(false);
+            using (client) {
+                if (status is not (AuthStatus.Ok or AuthStatus.NoAuthRequired)) {
+                    Console.Error.WriteLine($"kcap: visibility options not read ({status}) — offering every answer");
+                    return null;
+                }
+
+                var read = await ServerVisibilityOptions.ReadAsync(client, profiles.Resolution.ServerUrl!, bounded.Token).ConfigureAwait(false);
+                if (read.Problem is { } problem) Console.Error.WriteLine($"kcap: visibility options read failed ({problem}) — offering every answer");
+
+                return read.Offer;
+            }
+        } catch (Exception ex) when (!ct.IsCancellationRequested) {
+            Console.Error.WriteLine($"kcap: visibility options read failed — offering every answer: {ex.Message}");
+            return null;
+        }
+    }
+
+    static readonly TimeSpan WizardVisibilityOptionsTimeout = TimeSpan.FromSeconds(10);
 
     static string? ReportedCliVersion => typeof(CapacitorVersion).Assembly.GetName().Version?.ToString();
 

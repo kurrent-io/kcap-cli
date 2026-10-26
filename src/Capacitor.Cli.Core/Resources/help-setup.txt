@@ -224,8 +224,11 @@ changes.
   Search by meaning (local)             --builtin-embeddings,   chosen**
                                         --embedding-model,
                                         --no-embeddings
-  Default visibility                    --default-visibility    org_public
-                                                                (private
+  Default visibility                    --default-visibility    the workspace's
+                                                                default
+                                                                (org_public on
+                                                                an older
+                                                                server, private
                                                                 with --local)
   Install kcap for detected agents      --skip-harnesses,       yes
                                         --skip-<agent>-hooks

@@ -37,7 +37,20 @@ public sealed partial class MacAppRemoval : IAppRemoval {
     public async Task<IReadOnlyList<string>> RemoveLinksAsync(CancellationToken ct) {
         var remover = new KcapLinkRemover(_linkFolders, BundleBinary);
         await RemoveAsAdminAsync(remover.Remove(), ct).ConfigureAwait(false);
-        return remover.Find();
+        return [.. remover.Find(), .. RemoveProfileLines()];
+    }
+
+    IEnumerable<string> RemoveProfileLines() {
+        var left = new List<string>();
+        foreach (var profile in ShellProfile.Removable(_home, [])) {
+            try {
+                ShellProfile.Remove(profile);
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                Console.Error.WriteLine($"kcap: could not remove the PATH line from {profile}: {ex.Message}");
+                left.Add(profile);
+            }
+        }
+        return left;
     }
 
     internal async Task RemoveAsAdminAsync(IReadOnlyList<KcapLinkFailure> failures, CancellationToken ct) {

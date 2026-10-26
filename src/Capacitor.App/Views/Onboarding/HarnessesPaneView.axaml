@@ -14,7 +14,7 @@
                     <Run Text="Applies to sessions recorded on " /><Run Text="{Binding MachineName}" FontFamily="{StaticResource OnboardingMonoFont}"
                         Foreground="{StaticResource OnboardingTextBrush}" /><Run Text=". Sessions can still be shared or hidden individually." />
                 </TextBlock>
-                <ItemsControl x:Name="VisibilityOptions" ItemsSource="{x:Static vm:HarnessesStepViewModel.VisibilityOptions}"
+                <ItemsControl x:Name="VisibilityOptions" ItemsSource="{Binding VisibilityOptions}"
                               IsEnabled="{Binding Idle}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:VisibilityOption">

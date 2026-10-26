@@ -1697,6 +1697,8 @@ partial class WatchCommand(
             return; // discovery is best-effort — never break the main drain loop
         }
 
+        IReadOnlyDictionary<string, string>? spawnCalls = null;
+
         foreach (var sub in subs) {
             if (ct.IsCancellationRequested) return;
 
@@ -1713,7 +1715,9 @@ partial class WatchCommand(
 
             // Fail-closed: register the subagent (→ SubagentStarted) before its child watcher
             // streams content. On POST failure, drop from `seen` so the next tick retries.
-            if (isNew && !await PostCodexSubagentStartAsync(sessionId, childAgentId, agentType, sub.FilePath, ct)) {
+            if (isNew
+             && !await PostCodexSubagentStartAsync(sessionId, childAgentId, agentType, sub.FilePath,
+                    CodexSubagentDiscovery.SpawnCallFor(spawnCalls ??= CodexSubagentDiscovery.ReadSpawnCalls(transcriptPath), sub.AgentPath), ct)) {
                 seen.Remove(sub.FilePath);
                 continue;
             }
@@ -1727,11 +1731,11 @@ partial class WatchCommand(
     }
 
     async Task<bool> PostCodexSubagentStartAsync(
-        string sessionId, string agentId, string agentType, string subFile, CancellationToken ct
+        string sessionId, string agentId, string agentType, string subFile, string? spawnCallId, CancellationToken ct
     ) {
         try {
             using var client  = await http.ForBackgroundAsync(ct);
-            var       payload = CodexSubagentDiscovery.BuildStartPayload(sessionId, agentId, agentType, subFile);
+            var       payload = CodexSubagentDiscovery.BuildStartPayload(sessionId, agentId, agentType, subFile, spawnCallId);
             using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
             using var resp    = await client.PostWithRetryAsync($"{Url}/hooks/subagent-start", content, time, ct: ct);
 
@@ -3097,7 +3101,8 @@ partial class WatchCommand(
             string                vendor,
             IReadOnlyList<string> lines,
             IReadOnlyList<int>    lineNumbers,
-            ObservedCommit[]?     observedCommits
+            ObservedCommit[]?     observedCommits,
+            bool                  moreFollows = false
         ) => JsonSerializer.Serialize(
             new TranscriptBatch {
                 SessionId       = sessionId,
@@ -3106,6 +3111,7 @@ partial class WatchCommand(
                 LineNumbers     = lineNumbers.ToArray(),
                 Vendor          = vendor,
                 ObservedCommits = observedCommits,
+                MoreFollows     = moreFollows,
             },
             CapacitorJsonContext.Default.TranscriptBatch);
 
@@ -3159,10 +3165,20 @@ partial class WatchCommand(
         };
         var result = TranscriptSpool.AppendResult.Appended;
         if (batch.Lines.Length > 0 || commits.Pending is { Length: > 0 }) {
+            // A chunk with more to follow leaves its later commits to the next, and an import carries no commits, so it
+            // spools only with room left for them on their own.
+            var commitsOnly = commits.Pending is { Length: > 0 } pending ? BuildTranscriptSpoolBatch(sessionId, agentId, vendor, [], [], pending) : null;
+            var spooled     = false;
             foreach (var chunk in TranscriptBatchBuffer.Split(batch)) {
                 result = transcriptSpool.Append(sessionId,
-                    BuildTranscriptSpoolBatch(sessionId, agentId, vendor, chunk.Lines, chunk.LineNumbers!, chunk.ObservedCommits));
-                if (result != TranscriptSpool.AppendResult.Appended) break;
+                    BuildTranscriptSpoolBatch(sessionId, agentId, vendor, chunk.Lines, chunk.LineNumbers!, chunk.ObservedCommits, chunk.MoreFollows),
+                    chunk.MoreFollows ? commitsOnly : null);
+                if (result != TranscriptSpool.AppendResult.Appended) {
+                    if (spooled && commitsOnly is not null && transcriptSpool.Append(sessionId, commitsOnly) != TranscriptSpool.AppendResult.Appended)
+                        Log(time, $"Commits of {sessionId} could not be spooled at shutdown; they are sent again when its watcher resumes");
+                    break;
+                }
+                spooled = true;
             }
         }
 

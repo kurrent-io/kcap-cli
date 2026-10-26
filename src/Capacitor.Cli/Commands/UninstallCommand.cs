@@ -142,6 +142,11 @@ sealed class UninstallCommand(
         foreach (var link in pathLinks)
             await console.Out.WriteLineAsync($"  • Remove the kcap command link at {link}");
 
+        IReadOnlyList<string> profiles = keepPathLinks || OperatingSystem.IsWindows() ? [] : ShellProfile.Removable(home, pathLinks);
+
+        foreach (var profile in profiles)
+            await console.Out.WriteLineAsync($"  • Remove the PATH line kcap added to {profile}");
+
         if (projectRoot is not null) {
             await console.Out.WriteLineAsync(
                 $"  • Remove kcap entries from {Path.Combine(projectRoot, ".claude", "settings.local.json")}");
@@ -307,6 +312,17 @@ sealed class UninstallCommand(
                     await console.Error.WriteLineAsync($"Could not remove {failure.Path}: {failure.Reason}");
                     await console.Error.WriteLineAsync($"Remove it yourself: sudo rm {ShellQuote(failure.Path)}");
                     hadFailures = true;
+                }
+            }
+
+            if (profiles.Count > 0) {
+                foreach (var profile in ShellProfile.Removable(home, [])) {
+                    try {
+                        ShellProfile.Remove(profile);
+                    } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                        await console.Error.WriteLineAsync($"Could not remove kcap's PATH line from {profile}: {ex.Message}");
+                        hadFailures = true;
+                    }
                 }
             }
 

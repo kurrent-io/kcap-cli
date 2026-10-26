@@ -332,7 +332,7 @@ public class AgentDirectoryTests {
 
     static RepoSessionDto Listed(string id, string status = "ended", string owner = "me", string ownerName = "Alexey") => new() {
         SessionId = id, Status = status, AccessLevel = "full", Vendor = "claude", Title = id,
-        Owner = new() { UserId = owner, DisplayName = ownerName },
+        Owner = new() { UserId = owner, DisplayName = ownerName, AvatarUrl = $"https://avatars.example/{owner}" },
         StartedAt = DateTimeOffset.UnixEpoch, LastActivityAt = DateTimeOffset.UnixEpoch,
         EndedAt = status == "ended" ? DateTimeOffset.UnixEpoch : null,
     };
@@ -582,6 +582,7 @@ public class AgentDirectoryTests {
         sessions.Scope = RailScope.Team;
         var theirs = dir.Rows.Lookup("remote:b1").Value;
         await Assert.That(theirs.OwnerName).IsEqualTo("Tony Young");
+        await Assert.That(theirs.OwnerAvatarUrl).IsEqualTo("https://avatars.example/other");
         await Assert.That(theirs.OwnerIsViewer).IsNull();
         sessions.ViewerIdsSubject.OnNext(new HashSet<string>(["me"]));
         await Assert.That(dir.Rows.Lookup("remote:b1").Value.OwnerIsViewer).IsFalse();

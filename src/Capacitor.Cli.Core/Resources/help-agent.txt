@@ -34,7 +34,9 @@ Options for start:
                           or the daemon is too old to choose one
   -d, --detach            Start without attaching; prints the agent id
   --daemon <name>         Target a specific daemon (defaults to your profile's)
-  --                      Everything after this is passed to the vendor CLI verbatim
+  --                      Everything after this is passed to the vendor CLI verbatim.
+                          Claude also gets a fresh --session-id ahead of it unless
+                          these args choose the session themselves
 
 Options for stop:
   --all                   Stop every agent, including --private ones. Review and

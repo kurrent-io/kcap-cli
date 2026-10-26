@@ -186,6 +186,7 @@ public class WizardSimpleStepsTests {
         public ShimHarness() {
             Destination = Path.Combine(TempDir, "kcap");
             Target      = Path.Combine(TempDir, "target-cli");
+            Probe.KcapPathBehavior = _ => Task.FromResult<string?>(Destination);
             Installer   = new PathShimInstaller(Runner, Probe, Destination);
             Vm          = new PathFixViewModel(Installer, Store, Target);
         }

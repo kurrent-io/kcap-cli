@@ -15,8 +15,8 @@ namespace Capacitor.App.ViewModels.Onboarding;
 /// Retry and the page waits for a second Next rather than moving on as if it had worked.
 /// </summary>
 public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
-    /// The four answers the CLI offers, narrowest first, over <see cref="AppConfig.ValidVisibilities"/>.
-    public static readonly IReadOnlyList<VisibilityOption> VisibilityOptions = [
+    /// Every answer, narrowest first, offered when the server does not say which this tenant can honour
+    public static readonly IReadOnlyList<VisibilityOption> AllVisibilityOptions = [
         new("private", "Only me", "Nobody else can read them."),
         new("project", "People I share a project with", "Readable by other members of your projects that hold the repository."),
         new("org_public", "Everyone in the account, for your organization's repositories",
@@ -35,6 +35,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
     readonly Action<IEnumerable<HarnessId>> _stampOffered;
     readonly CancellationToken _shutdownToken;
     readonly Func<bool>? _onLocalPath;
+    readonly Func<CancellationToken, Task<VisibilityOptionsResponse?>>? _visibilityOptions;
 
     bool _detected;
     bool _installed;
@@ -56,8 +57,10 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
             Func<CancellationToken, Task<IReadOnlySet<string>?>> providerKeys,
             string machineName,
             Func<string?>? resolveProfileName = null, CancellationToken shutdownToken = default,
-            Func<bool>? onLocalPath = null) {
+            Func<bool>? onLocalPath = null,
+            Func<CancellationToken, Task<VisibilityOptionsResponse?>>? visibilityOptions = null) {
         _onLocalPath = onLocalPath;
+        _visibilityOptions = visibilityOptions;
         _cli = cli;
         _detect = detect;
         _declined = declined;
@@ -108,6 +111,9 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
     public bool PathResolved => PathFix is { Fixed: true };
 
     public bool CliAvailable => _cli.CliPath is not null;
+
+    /// The answers this tenant can honour, in the server's order and copy, or every answer when it does not say
+    public IReadOnlyList<VisibilityOption> VisibilityOptions { get; private set; } = AllVisibilityOptions;
 
     public string? Visibility {
         get => _visibility;
@@ -192,11 +198,19 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
     public bool DeclineVisible => SelectedCount == 0 && Rows.Count > 0;
 
     public async Task OnEnterAsync(CancellationToken ct) {
-        if (_detected) return; // re-entering must not stomp the user's choices
+        // Re-entering must not stomp the user's choices, but the offer may have changed since.
+        if (_detected) {
+            if (VisibilityVisible && _visibilityOptions is not null) {
+                Busy = true;
+                try { await OfferAsync(_visibilityOptions(ct)).ConfigureAwait(true); } finally { Busy = false; }
+            }
+            return;
+        }
         if (_onLocalPath?.Invoke() == true) Visibility = "private";
         this.RaisePropertyChanged(nameof(VisibilityVisible));
         Busy = true;
         try {
+            var offered = VisibilityVisible ? _visibilityOptions?.Invoke(ct) : null;
 
             IReadOnlyDictionary<HarnessId, DetectedAgent> detected;
             try { detected = await _detect(ct).ConfigureAwait(true); } catch (OperationCanceledException) { return; } catch (Exception ex) {
@@ -213,6 +227,8 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
                 Message = $"Could not read your settings: {ex.Message}. Go back and try again.";
                 return;
             }
+
+            if (offered is not null) await OfferAsync(offered).ConfigureAwait(true);
 
             var declined = _declined();
             var idle = this.WhenAnyValue(x => x.Busy, busy => !busy);
@@ -239,6 +255,21 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
         } finally {
             Busy = false;
         }
+    }
+
+    /// A failed read keeps every answer on screen: the step must stay answerable whatever the server does
+    async Task OfferAsync(Task<VisibilityOptionsResponse?> offered) {
+        VisibilityOptionsResponse? offer;
+        try { offer = await offered.ConfigureAwait(true); } catch (Exception ex) when (ex is not OperationCanceledException) {
+            Console.Error.WriteLine($"kcap: visibility options read failed — offering every answer: {ex.Message}");
+            offer = null;
+        }
+
+        VisibilityOptions = offer is null
+            ? AllVisibilityOptions
+            : [.. offer.Options.Select(o => new VisibilityOption(o.Key!, o.Label!, o.Detail ?? ""))];
+        this.RaisePropertyChanged(nameof(VisibilityOptions));
+        if (VisibilityOptions.All(o => o.Value != Visibility)) Visibility = null;
     }
 
     public async Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) {
