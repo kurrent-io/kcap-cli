@@ -207,11 +207,8 @@ public static partial class DaemonRunner {
          && int.TryParse(envApprovalTimeout, out var approvalTimeoutSeconds) && approvalTimeoutSeconds > 0)
             config.CodexAppServerApprovalTimeoutSeconds = approvalTimeoutSeconds;
 
-        Harness.Codex.CodexTransportDecision.BindFromEnvironment(config, Environment.GetEnvironmentVariable);
-
-        // One resolved fact for both the launch router and the certification advertisement.
-        config.CodexAppServerActive = Harness.Codex.CodexTransportDecision.ResolveActive(
-            config.CodexTransport, () => ProbeCliVersion(config.CodexPath));
+        if (Harness.Codex.LegacyCodexEnvironment.Warning(Environment.GetEnvironmentVariable) is { } legacyCodexWarning)
+            await Console.Error.WriteLineAsync(legacyCodexWarning);
 
         // The per-vendor reviewer switches. These are OPT-OUT now: unset means enabled, matching
         // Claude/Codex/Cursor/Copilot, which have never been gated. See ParseConsentFlag for the full

@@ -216,29 +216,6 @@ public class DaemonConfig {
     public string ClaudePath { get; set; } = Core.Harness.Claude.ClaudeHarness.CliBinary;
     public string CodexPath  { get; set; } = Core.Harness.Codex.CodexHarness.CliBinary;
 
-    /// <summary>Transport for hosted Codex reviewers: <c>pty</c> (default) or <c>app-server</c>.
-    /// Set via <c>KCAP_CODEX_TRANSPORT</c>. Governs NEW review-flow launches only; interactive
-    /// launches always take the PTY path in this phase. The effective decision (this selection AND
-    /// the version floor) is resolved once into <see cref="CodexAppServerActive"/>.</summary>
-    public string CodexTransport { get; set; } = "pty";
-
-    /// <summary>Resolved once at startup: true when <see cref="CodexTransport"/> is <c>app-server</c>
-    /// AND the installed Codex meets the app-server version floor. Read by BOTH the launch router and
-    /// the certification advertisement so the advertised policy and the transport used are one fact.
-    /// Never set from config directly.</summary>
-    public bool CodexAppServerActive { get; set; }
-
-    /// <summary>Per-daemon opt-in: also host INTERACTIVE Codex agents over app-server, not just
-    /// unattended reviewers. Requires <see cref="CodexAppServerActive"/> — this widens which launches
-    /// take that transport, it does not select it. Off unless an operator sets
-    /// <c>KCAP_CODEX_APPSERVER_INTERACTIVE</c> on this daemon, so turning it on moves one host.
-    ///
-    /// <para>Scope: INTERACTIVE launches the SERVER dispatches (the web launch dialog). PR review and
-    /// review flows are untouched by this switch — review flows already take app-server wherever it is
-    /// selected, and PR review stays on PTY. `kcap agent start` spawns an attachable terminal through the
-    /// local control socket, which never reaches the runtime factory, so it stays PTY regardless.</para></summary>
-    public bool CodexAppServerInteractive { get; set; }
-
     /// <summary>Seconds an interactive hosted Codex approval (<c>*/requestApproval</c>) waits for the
     /// user before failing closed (deny). Overridable via <c>KCAP_CODEX_APPSERVER_APPROVAL_TIMEOUT_SECONDS</c>.
     /// Consumed as <c>TimeSpan.FromSeconds(Math.Max(1, …))</c>.</summary>
