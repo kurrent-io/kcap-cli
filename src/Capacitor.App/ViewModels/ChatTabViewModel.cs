@@ -1543,7 +1543,6 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 _planActivity?.Clear();
                 _senders?.Clear();
                 _observedReceipts.Clear();
-                _unboundReceipts.Clear();
                 break;
         }
 

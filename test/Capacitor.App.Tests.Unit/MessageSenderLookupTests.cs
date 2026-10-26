@@ -36,6 +36,31 @@ public class MessageSenderLookupTests {
     static MessageSendersRead Ready(params MessageSenderDto[] rows) => new(MessageSendersReadKind.Ready, rows);
 
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_positive_receipt_survives_a_same_session_refresh_but_not_a_session_change(bool restart) => RunOnUiAsync(async () => {
+        var rig = new Rig();
+        var eventId = Guid.NewGuid();
+        var dispatch = Guid.NewGuid();
+        var label = Old(new(eventId));
+        rig.Source.Answer = _ => Ready(new MessageSenderDto { EventId = eventId, DispatchId = dispatch });
+        rig.Lookup.SetSession(Session, []);
+        rig.Lookup.Track([label]);
+        await rig.SettleAsync();
+        await Assert.That(rig.Lookup.HasReceipt(dispatch)).IsTrue();
+        rig.Source.Answer = _ => MessageSendersRead.Of(MessageSendersReadKind.Unreachable);
+
+        if (restart) rig.Lookup.Restart([label]);
+        else rig.Lookup.Clear();
+        await rig.SettleAsync();
+
+        await Assert.That(rig.Lookup.HasReceipt(dispatch)).IsTrue();
+        rig.Lookup.SetSession("other", []);
+        await Assert.That(rig.Lookup.HasReceipt(dispatch)).IsFalse();
+    });
+
+    [Test]
     [NotInParallel("AvaloniaSession")]
     public Task A_read_finishing_after_cancellation_neither_titles_nor_confirms_a_message() => RunOnUiAsync(async () => {
         var rig = new Rig();

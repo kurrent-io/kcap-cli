@@ -39,6 +39,7 @@ internal sealed class MessageSenderLookup(IMessageSenderSource source, TimeProvi
     public void SetSession(string? sessionId, IEnumerable<SenderLabel> visible) {
         if (_sessionId == sessionId) return;
         _sessionId = sessionId;
+        _receipts.Clear();
         Restart(visible);
     }
 
@@ -49,7 +50,6 @@ internal sealed class MessageSenderLookup(IMessageSenderSource source, TimeProvi
         var labels = visible.ToList();
         _generation++;
         _due.Clear();
-        _receipts.Clear();
         foreach (var label in labels) label.Title = null;
         Track(labels);
     }
@@ -68,7 +68,6 @@ internal sealed class MessageSenderLookup(IMessageSenderSource source, TimeProvi
     public void Clear() {
         _generation++;
         _due.Clear();
-        _receipts.Clear();
     }
 
     void Pump() {

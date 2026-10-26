@@ -34,6 +34,7 @@ public class ChatMessageSenderTests {
         public SeededLinesFeed(params ProjectedLine[] lines) : this((IReadOnlyList<ProjectedLine>)lines) { }
         bool _read;
         public long? CurrentOffset => 100;
+        public void Reset() => _read = false;
         public FeedRead ReadAppended() {
             if (_read) return new(FeedStatus.Ok, []);
             _read = true;
@@ -178,6 +179,94 @@ public class ChatMessageSenderTests {
             queue.OnNext([new() { DispatchId = dispatch, Text = "same prompt", SenderUserId = "u2" }]);
 
             await Assert.That(chat.HasQueuedMessages).IsFalse();
+        } finally { await chat.TeardownAsync(); }
+    });
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_same_session_refresh_cannot_revive_a_delivered_dispatch_from_a_late_snapshot(bool restart) => RunOnUiAsync(async () => {
+        using var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
+        using var signedIn = new Subject<ReactiveUnit>();
+        var time = new FakeTimeProvider();
+        var dispatch = Guid.NewGuid();
+        var eventId = Guid.NewGuid();
+        var feed = new SeededLinesFeed(UserLine("already delivered", 0, eventId));
+        var source = new FakeMessageSenderSource {
+            Answer = _ => new(MessageSendersReadKind.Ready, [new() { EventId = eventId, DispatchId = dispatch, SentByCaller = true }]),
+        };
+        var chat = new ChatTabViewModel("a1", AgentOrigin.Remote, Observable.Return(Session("s1")), Observable.Return<string[]?>(null),
+            new AcceptingChatPromptInput(), new NoAttachmentUploader(), _ => feed,
+            new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time),
+            sessionId: Observable.Return<string?>("s1"), serverQueue: queue, senders: source, signInCompleted: signedIn);
+        try {
+            await WaitUntilAsync(() => chat.Items.OfType<UserTurnItem>().SingleOrDefault()?.Sender.HasTitle == true, what: "the positive attribution");
+            await chat.PendingSenderReadForTesting!;
+            await chat.PendingReadForTesting!;
+            source.Answer = _ => MessageSendersRead.Of(MessageSendersReadKind.Unreachable);
+
+            if (restart) signedIn.OnNext(ReactiveUnit.Default);
+            else {
+                var before = chat.PendingReadForTesting;
+                feed.Reset();
+                time.Advance(ChatTabViewModel.PollInterval);
+                await WaitUntilAsync(() => !ReferenceEquals(before, chat.PendingReadForTesting), what: "the replay read");
+                await chat.PendingReadForTesting!;
+            }
+            if (chat.PendingSenderReadForTesting is { } read) await read;
+            queue.OnNext([new() { DispatchId = dispatch, Text = "already delivered", SenderUserId = "u2" }]);
+
+            await Assert.That(chat.HasQueuedMessages).IsFalse();
+        } finally { await chat.TeardownAsync(); }
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_same_session_reset_preserves_the_candidates_for_an_early_receipt() => RunOnUiAsync(async () => {
+        using var session = new BehaviorSubject<ChatSessionInfo>(Session("first"));
+        using var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
+        var time = new FakeTimeProvider();
+        var oldDispatch = Guid.NewGuid();
+        var newDispatch = Guid.NewGuid();
+        var eventId = Guid.NewGuid();
+        var replay = new SeededLinesFeed(UserLine("same prompt", 0, eventId));
+        var source = new FakeMessageSenderSource {
+            Answer = _ => new(MessageSendersReadKind.Ready, [new() { EventId = eventId, DispatchId = oldDispatch, SentByCaller = true }]),
+        };
+        var chat = new ChatTabViewModel("a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null),
+            new AcceptingChatPromptInput(), new NoAttachmentUploader(), key => key == "first" ? new SeededLinesFeed() : replay,
+            new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time),
+            sessionId: Observable.Return<string?>("s1"), serverQueue: queue, senders: source);
+        try {
+            await WaitUntilAsync(() => chat.HasSeed, what: "the initial seed");
+            chat.ComposerText = "same prompt";
+            await chat.SendCommand.Execute();
+            var original = chat.QueuedMessages.Single();
+            session.OnNext(Session("second"));
+            await WaitUntilAsync(() => chat.Items.OfType<UserTurnItem>().SingleOrDefault()?.Sender.HasTitle == true, what: "the early attribution");
+            await chat.PendingSenderReadForTesting!;
+            await chat.PendingReadForTesting!;
+            source.Answer = _ => MessageSendersRead.Of(MessageSendersReadKind.Unreachable);
+            var before = chat.PendingReadForTesting;
+            replay.Reset();
+            time.Advance(ChatTabViewModel.PollInterval);
+            await WaitUntilAsync(() => !ReferenceEquals(before, chat.PendingReadForTesting), what: "the same-session reset");
+            await chat.PendingReadForTesting!;
+            if (chat.PendingSenderReadForTesting is { } read) await read;
+            chat.ComposerText = "same prompt";
+            await chat.SendCommand.Execute();
+            var later = chat.QueuedMessages[^1];
+
+            queue.OnNext([
+                new() { DispatchId = oldDispatch, Text = "same prompt", SenderUserId = "u2" },
+                new() { DispatchId = newDispatch, Text = "same prompt", SenderUserId = "u2" },
+            ]);
+
+            await Assert.That(original.Acknowledged).IsTrue();
+            await Assert.That(chat.QueuedMessages.Single()).IsSameReferenceAs(later);
+            await Assert.That(later.DispatchId).IsEqualTo(newDispatch);
+            await Assert.That(later.CanSendNow).IsFalse();
         } finally { await chat.TeardownAsync(); }
     });
 
