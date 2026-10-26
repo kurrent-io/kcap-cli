@@ -790,7 +790,7 @@ public class AgentOrchestratorLocalAttachTests {
             });
 
             var config = new DaemonConfig { Store = daemons.Store, Name = "test", ServerUrl = "http://127.0.0.1:1" };
-            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), TestFences.Ipc(config, orch), TestShutdown.Ipc(orch, TestCoordinator(daemons.Store)), NullLogger<LocalControlServer>.Instance);
+            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), TestFences.Ipc(config, orch), TestShutdown.Ipc(orch, TestCoordinator(daemons.Store)), TestAccountsIpc.Inert(), NullLogger<LocalControlServer>.Instance);
             await listener.StartAsync(cts.Token);
 
             var sockPath = daemons.Store.SocketPath("test");
@@ -839,7 +839,7 @@ public class AgentOrchestratorLocalAttachTests {
             });
 
             var config = new DaemonConfig { Store = daemons.Store, Name = "test", ServerUrl = "http://127.0.0.1:1" };
-            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), TestFences.Ipc(config, orch), TestShutdown.Ipc(orch, TestCoordinator(daemons.Store)), NullLogger<LocalControlServer>.Instance);
+            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), TestFences.Ipc(config, orch), TestShutdown.Ipc(orch, TestCoordinator(daemons.Store)), TestAccountsIpc.Inert(), NullLogger<LocalControlServer>.Instance);
             await listener.StartAsync(cts.Token);
 
             var sockPath = daemons.Store.SocketPath("test");
@@ -877,7 +877,7 @@ public class AgentOrchestratorLocalAttachTests {
             orch.SeedAgentForTest("flow-1", kind: LaunchKind.ReviewFlow, flowRunId: "flow-7f3a", flowRole: "reviewer");
 
             var config = new DaemonConfig { Store = daemons.Store, Name = daemonName, ServerUrl = "http://127.0.0.1:1" };
-            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), TestFences.Ipc(config, orch), TestShutdown.Ipc(orch, TestCoordinator(daemons.Store)), NullLogger<LocalControlServer>.Instance);
+            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), TestFences.Ipc(config, orch), TestShutdown.Ipc(orch, TestCoordinator(daemons.Store)), TestAccountsIpc.Inert(), NullLogger<LocalControlServer>.Instance);
             await listener.StartAsync(cts.Token);
 
             var sockPath = daemons.Store.SocketPath(daemonName);
@@ -1051,7 +1051,7 @@ public class AgentOrchestratorLocalAttachTests {
     sealed class EnvCapturingPtyFactory : IPtyProcessFactory {
         public Dictionary<string, string>? LastEnv { get; private set; }
 
-        public IPtyProcess Spawn(string command, string[] args, string cwd, Dictionary<string, string>? extraEnv = null, ushort cols = 120, ushort rows = 40) {
+        public IPtyProcess Spawn(string command, string[] args, string cwd, Dictionary<string, string>? extraEnv = null, ushort cols = 120, ushort rows = 40, IReadOnlyCollection<string>? removeEnv = null) {
             LastEnv = extraEnv;
 
             return new StubPtyProcess();
@@ -1146,7 +1146,7 @@ public class AgentOrchestratorLocalAttachTests {
         public override Task SendTerminalDimensionsAsync(string agentId, int cols, int rows) { LastDims = (cols, rows); Calls.Add(nameof(SendTerminalDimensionsAsync)); return Task.CompletedTask; }
         public override Task LaunchFailedAsync(string agentId, string reason) { Calls.Add(nameof(LaunchFailedAsync)); return Task.CompletedTask; }
         public ConcurrentBag<AgentStartTitle?> RegisteredTitles { get; } = [];
-        public override Task<AgentRegisteredResponse> AgentRegisteredAsync(string agentId, string? prompt, string? model, string? effort, string? repoPath, string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null, string? runtimeTransport = null, string? vendor = null, AgentStartTitle? title = null, string? continuesAgentId = null) { Calls.Add(nameof(AgentRegisteredAsync)); RegisteredTitles.Add(title); return Task.FromResult(AgentRegisteredResponse.Accepted); }
+        public override Task<AgentRegisteredResponse> AgentRegisteredAsync(string agentId, string? prompt, string? model, string? effort, string? repoPath, string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null, string? runtimeTransport = null, string? vendor = null, AgentStartTitle? title = null, string? continuesAgentId = null, string? accountDirectory = null, string? accountId = null, string? accountLabel = null) { Calls.Add(nameof(AgentRegisteredAsync)); RegisteredTitles.Add(title); return Task.FromResult(AgentRegisteredResponse.Accepted); }
         public override Task AgentStatusChangedAsync(string agentId, string status, string? sessionId) { Calls.Add(nameof(AgentStatusChangedAsync)); return Task.CompletedTask; }
         public override Task AgentUnregisteredAsync(string agentId, string? stopReason = null) { Calls.Add(nameof(AgentUnregisteredAsync)); return Task.CompletedTask; }
         public override Task UpdateRepoPathsAsync() { Calls.Add(nameof(UpdateRepoPathsAsync)); return Task.CompletedTask; }

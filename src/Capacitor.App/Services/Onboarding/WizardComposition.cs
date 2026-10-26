@@ -75,6 +75,8 @@ internal sealed record WizardGraphOptions(
     IUrlOpener                                                                   UrlOpener,
     ILoginShellProbe                                                             Probe,
     Func<ILoginShellProbe, Func<CancellationToken, Task<IReadOnlyDictionary<HarnessId, DetectedAgent>>>> DetectionFeed,
+    // The built-in model set the stack setup will run offers, or null.
+    Func<CancellationToken, Task<LocalEmbeddingModelManifest?>>                  BuiltinOffer,
     string?                                                                      CliPath,
     bool                                                                         ShimApplicable,
     string?                                                                      ShimTarget,
@@ -265,6 +267,7 @@ internal static class WizardComposition {
                 : null,
             // A committed machine has nothing left to install.
             onLocalPath: () => OnLocalPath() && !CommittedLocal(),
+            builtinOffer: options.BuiltinOffer,
             recorded: () => LocalEmbeddingFile.Read(root),
             resuming: Pending);
         var connect  = new ConnectChoiceViewModel();

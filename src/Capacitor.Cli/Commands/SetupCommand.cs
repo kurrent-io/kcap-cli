@@ -2755,9 +2755,9 @@ sealed class SetupCommand(
                 return SetupExit.Refused;
             }
 
-            // The desktop app cannot answer a question, so a running Ollama is used unless a flag says otherwise.
-            var committed = await installer.InstallAsync(
-                new(args.SingleUser, args.Yes, args.Embeddings ?? new LocalEmbeddingAnswer.Ollama(null)), progress, deferral.Token);
+            var embeddings = args.Embeddings;
+            var builtin    = await LocalSetupTerminal.BuiltinModelAsync(installer, plan, embeddings, deferral.Token);
+            var committed  = await installer.InstallAsync(new(args.SingleUser, args.Yes, embeddings, builtin), progress, deferral.Token);
 
             // The app's wizard links to the dashboard before it reports anything itself.
             await PingCliSetupAsync(committed.ServerUrl, profile: "", AuthProvider.None, deferral.Token);

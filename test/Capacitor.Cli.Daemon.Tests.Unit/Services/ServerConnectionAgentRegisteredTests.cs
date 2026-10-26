@@ -81,6 +81,21 @@ public class ServerConnectionAgentRegisteredTests {
         await Assert.That(conn.LegacyCalls.Single().RuntimeTransport).IsEqualTo("pty");
     }
 
+    [Test]
+    public async Task The_registration_names_the_account_on_both_calls() {
+        var acked  = new TestServerConnection();
+        var legacy = new TestServerConnection { Acked = UnknownMethod };
+
+        await acked.AgentRegisteredAsync("agent-1", "prompt", "model", null, "/repo", accountDirectory: "/home/.claude-work", accountId: "work-id", accountLabel: "Work");
+        await legacy.AgentRegisteredAsync("agent-1", "prompt", "model", null, "/repo", accountDirectory: "/home/.claude", accountLabel: ".claude");
+
+        var named = acked.AckedCalls.Single();
+        await Assert.That((named.AccountDirectory, named.AccountId, named.AccountLabel)).IsEqualTo(((string?)"/home/.claude-work", (string?)"work-id", (string?)"Work"));
+
+        var fallback = legacy.LegacyCalls.Single();
+        await Assert.That((fallback.AccountDirectory, fallback.AccountId, fallback.AccountLabel)).IsEqualTo(((string?)"/home/.claude", (string?)null, (string?)".claude"));
+    }
+
     /// <summary>A server that predates the field ignores it, so the same registration serves both methods.</summary>
     [Test]
     public async Task The_continued_agent_rides_on_the_acked_and_the_legacy_call() {

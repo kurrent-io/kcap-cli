@@ -137,7 +137,7 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// <see cref="SendUserInputAndWaitForWriteAsync"/> callers — resolved once this turn's process has
     /// actually spawned (agy has no separate "write" step; the prompt IS the spawn argument), faulted
     /// if the turn is dropped instead (terminal, full queue, or a spawn failure).</summary>
-    sealed record PendingTurn(string Text, TaskCompletionSource? Written);
+    sealed record PendingTurn(string Text, TaskCompletionSource? Written, Guid? DispatchId = null);
 
     readonly object _stateLock = new();
     int _phase = (int)RuntimePhase.Starting;
@@ -430,6 +430,9 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
 
     public Task SendUserInputAndWaitForWriteAsync(string text) => EnqueueTurn(text, acknowledgeWrite: true);
 
+    public Task SendDispatchedInputAsync(string text, Guid dispatchId, bool waitForWrite) =>
+        EnqueueTurn(text, acknowledgeWrite: waitForWrite, dispatchId);
+
     /// <summary>Acquire-then-IMMEDIATELY-release: queues behind an in-flight turn and returns once it's
     /// done, but never itself holds <see cref="_turnGate"/> — see the class doc's rule (d), which is the
     /// exact property <see cref="TerminateAsync"/> also depends on.
@@ -481,12 +484,12 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// agent's session ending is itself the user-visible signal — a thrown error for input that raced
     /// a normal end-of-session would be noise, not news.</para>
     /// </summary>
-    Task EnqueueTurn(string text, bool acknowledgeWrite) {
+    Task EnqueueTurn(string text, bool acknowledgeWrite, Guid? dispatchId = null) {
         var written = acknowledgeWrite
             ? new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
             : null;
 
-        if (_pendingTurns.Writer.TryWrite(new PendingTurn(text, written)))
+        if (_pendingTurns.Writer.TryWrite(new PendingTurn(text, written, dispatchId)))
             return written?.Task ?? Task.CompletedTask;
 
         if (Phase == RuntimePhase.Terminal) {
@@ -580,7 +583,7 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                     // through session/update, so there is no natural agent-sourced envelope for the
                     // prompt itself, and only the single worker (holding the gate) can order it ahead
                     // of this turn's own output without racing the child's first line.
-                    Write(AcpEventTranslator.BuildUserMessage(seq: 0, NowIso(), turn.Text), agentActivity: false);
+                    Write(AcpEventTranslator.BuildUserMessage(seq: 0, NowIso(), turn.Text) with { DispatchId = turn.DispatchId }, agentActivity: false);
 
                     // The turn is in flight from here — set BEFORE the spawn, because a turn whose
                     // process is still being created is legitimately not idle. The finally is what

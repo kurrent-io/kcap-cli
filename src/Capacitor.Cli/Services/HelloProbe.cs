@@ -15,6 +15,9 @@ public sealed record HelloProbeResult(bool WellFormed, int? ProtocolVersion, str
     /// still starting. Defaults false so a well-formed test fake that never dialed a socket does not
     /// falsely read as reachable; <see cref="HelloProbe.RunAsync"/> is the only place it is set true.</summary>
     public bool Reachable { get; init; }
+
+    /// <summary>What the daemon advertised; empty when the reply carried no capabilities.</summary>
+    public IReadOnlyList<string> Capabilities { get; init; } = [];
 }
 
 /// <summary>
@@ -52,7 +55,10 @@ static class HelloProbe {
 
                 var dto = JsonSerializer.Deserialize(reply.Text, HelloIpcJsonContext.Default.HelloReplyDto);
                 if (dto is null) return ReachableNotWellFormed;
-                return new HelloProbeResult(true, dto.ProtocolVersion, dto.DaemonVersion, dto.DaemonName) { Reachable = true };
+                return new HelloProbeResult(true, dto.ProtocolVersion, dto.DaemonVersion, dto.DaemonName) {
+                    Reachable    = true,
+                    Capabilities = dto.Capabilities ?? [],
+                };
             } catch {
                 return ReachableNotWellFormed;
             }

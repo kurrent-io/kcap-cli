@@ -17,7 +17,8 @@ public static class TranscriptEnvelopes {
         var ts = evt.RecordTimestamp ?? evt.Timestamp.ToString("O", CultureInfo.InvariantCulture);
         switch (evt.Payload) {
             case UserMessageReceived m:
-                return [new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: m.Content, TimestampIso: ts)];
+                return [new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: m.Content, TimestampIso: ts,
+                    SourceEventId: evt.EventId == Guid.Empty ? null : evt.EventId)];
             case AssistantTextGenerated m:
                 return [new AcpEventEnvelope(Kind: AcpEventKind.AssistantText, Text: m.Content, TimestampIso: ts)];
             case AssistantThinkingGenerated m: {

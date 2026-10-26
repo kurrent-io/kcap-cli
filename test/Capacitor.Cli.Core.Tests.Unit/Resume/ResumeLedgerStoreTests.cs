@@ -17,7 +17,8 @@ public class ResumeLedgerStoreTests {
             "do it", "opus", "high", "/repo", "/repo/wt", WorkLocation.OwnedWorktree, "sub/dir", "sandbox", "never",
             "preset", "/mcp.json", "title", true, "server", "user-1", "User One", "owner", "2026-10-17T08:00:00Z",
             "flow-1", "reviewer", WorktreeBranch: "capacitor/wt", WorktreeIsStandalone: false, WorktreeSourceRepo: "/repo",
-            PermissionMode: "plan", InactivityBoundSeconds: 600),
+            PermissionMode: "plan", InactivityBoundSeconds: 600,
+            AccountDirectory: "/home/u/.claude-work", AccountId: "a1b2", AccountLabel: "Work"),
         ResumeState.Running, 2, "err", "pred-1", T0.AddMinutes(1), DaemonInstanceId: "instance-1", AwaitingInput: true);
 
     [Test]
@@ -49,10 +50,11 @@ public class ResumeLedgerStoreTests {
         var path = store.EntryPath("agent-1");
         var json = System.Text.RegularExpressions.Regex.Replace(
             File.ReadAllText(path),
-            ",\"(daemon_instance_id|worktree_branch|worktree_is_standalone|worktree_source_repo|permission_mode|inactivity_bound_seconds|awaiting_input)\":(\"[^\"]*\"|true|false|[0-9]+)", "");
+            ",\"(daemon_instance_id|worktree_branch|worktree_is_standalone|worktree_source_repo|permission_mode|inactivity_bound_seconds|awaiting_input|account_directory|account_id|account_label)\":(\"[^\"]*\"|true|false|[0-9]+)", "");
         await Assert.That(json).DoesNotContain("worktree_branch");
         await Assert.That(json).DoesNotContain("permission_mode");
         await Assert.That(json).DoesNotContain("inactivity_bound_seconds");
+        await Assert.That(json).DoesNotContain("account_id");
         await Assert.That(json).DoesNotContain("awaiting_input");
         File.WriteAllText(path, json);
 
@@ -65,6 +67,9 @@ public class ResumeLedgerStoreTests {
         await Assert.That(read.Launch.PermissionMode).IsNull();
         await Assert.That(read.Launch.InactivityBoundSeconds).IsNull();
         await Assert.That(read.AwaitingInput).IsNull();
+        await Assert.That(read.Launch.AccountDirectory).IsNull();
+        await Assert.That(read.Launch.AccountId).IsNull();
+        await Assert.That(read.Launch.AccountLabel).IsNull();
     }
 
     [Test]
