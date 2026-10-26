@@ -229,7 +229,6 @@
         <Setter Property="BorderBrush" Value="Transparent" />
         <Setter Property="Foreground" Value="{StaticResource OnboardingAccentHoverBrush}" />
     </Style>
-    <!-- A whole card as one action: new workspace choices and existing-workspace sign-in. -->
     <Style Selector="Button.onboardingEditionCard">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
