@@ -1,14 +1,17 @@
+using System.Globalization;
 using ReactiveUI.Reactive;
 
 namespace Capacitor.App.Services.LocalSetup;
 
-/// The `embeddings_*` lines of one setup run: the Ollama model pull and whether the step ended in search by
-/// meaning or by keyword. A skip never fails the run.
+/// The `embeddings_*` lines of one setup run: the Ollama model pull or the built-in model download, and whether the
+/// step ended in search by meaning or by keyword. A skip never fails the run.
 public sealed class LocalEmbeddingProgress : ReactiveObject {
     long _bytes;
     double? _pullFraction;
-    bool _pulling;
+    bool _pulling, _builtin;
     string? _model, _configuredModel, _replacedModel, _skipCode, _skipMessage;
+
+    const string BuiltinName = "the built-in model";
 
     public InstallRow Row { get; } = new();
 
@@ -49,6 +52,12 @@ public sealed class LocalEmbeddingProgress : ReactiveObject {
         private set => this.RaiseAndSetIfChanged(ref _skipMessage, value);
     }
 
+    /// The step works on, or ended with, the built-in model rather than an Ollama model.
+    public bool Builtin {
+        get => _builtin;
+        private set => this.RaiseAndSetIfChanged(ref _builtin, value);
+    }
+
     public bool Configured => ConfiguredModel is not null;
 
     public bool Skipped => SkipCode is not null;
@@ -69,9 +78,19 @@ public sealed class LocalEmbeddingProgress : ReactiveObject {
         var model                           => $"The search index for saved information is being built with {model} in the background.",
     };
 
-    public string? PullText => Pulling && Model is { } model
-        ? PullFraction is { } f ? $"Downloading the Ollama model {model}… {(int)Math.Round(f * 100)}%" : $"Downloading the Ollama model {model}…"
-        : null;
+    public string? PullText {
+        get {
+            if (!Pulling) return null;
+
+            var text = Builtin ? $"Downloading the built-in search model{BuiltinSize}…"
+                : Model is { } model ? $"Downloading the Ollama model {model}…"
+                : null;
+
+            return text is null || PullFraction is not { } f ? text : $"{text} {(int)Math.Round(f * 100)}%";
+        }
+    }
+
+    string BuiltinSize => _bytes > 0 ? $" ({(_bytes / (1024.0 * 1024.0)).ToString("0", CultureInfo.InvariantCulture)} MB)" : "";
 
     /// True when the line was an `embeddings_*` event.
     public bool Apply(LocalSetupLine line) {
@@ -99,7 +118,27 @@ public sealed class LocalEmbeddingProgress : ReactiveObject {
                 Model   = root.Str("model") ?? Model;
                 Pulling = false;
                 break;
+            case "embeddings_builtin_downloading":
+            case "embeddings_builtin_progress":
+                Begin();
+                Builtin = true;
+                if (root.Num("bytes") is > 0 and var size) _bytes = size;
+                Pulling      = true;
+                PullFraction = _bytes > 0 && line.Event == "embeddings_builtin_progress"
+                    ? Math.Clamp((double)(root.Num("received") ?? 0) / _bytes, 0, 1)
+                    : null;
+                break;
+            case "embeddings_configured" when root.Str("provider") == "builtin":
+                Builtin         = true;
+                Model           = BuiltinName;
+                ReplacedModel   = root.Str("replaced_model");
+                ConfiguredModel = BuiltinName;
+                SkipCode        = null;
+                SkipMessage     = null;
+                End(RowState.Done);
+                break;
             case "embeddings_configured":
+                Builtin         = false;
                 Model           = root.Str("model") ?? Model;
                 ReplacedModel   = root.Str("replaced_model");
                 ConfiguredModel = Model;

@@ -3569,6 +3569,75 @@ public class ChatTabViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task The_strip_shows_for_a_claude_session_with_an_account_and_not_from_an_older_daemon_or_another_vendor() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            try {
+                await h.PushAsync(Dto(null) with { AccountDirectory = "/home/me/.claude-work", AccountId = "acc1", AccountLabel = "work" });
+                await Assert.That(h.Chat.ShowsAccountStrip).IsTrue();
+                await Assert.That(h.Chat.AccountVendor).IsEqualTo("claude");
+                await Assert.That(h.Chat.AccountLabel).IsEqualTo("work");
+                await Assert.That(h.Chat.AccountDirectory).IsEqualTo("/home/me/.claude-work");
+
+                await h.PushAsync(Dto(null, "codex") with { AccountDirectory = "/home/me/.codex-work", AccountId = "acc2", AccountLabel = "side" });
+                await Assert.That(h.Chat.ShowsAccountStrip).IsTrue();
+                await Assert.That(h.Chat.AccountVendor).IsEqualTo("codex");
+
+                await h.PushAsync(Dto(null));
+                await Assert.That(h.Chat.ShowsAccountStrip).IsFalse();
+
+                await h.PushAsync(Dto(null, "gemini") with { AccountDirectory = "/home/me/.gemini", AccountLabel = ".gemini" });
+                await Assert.That(h.Chat.ShowsAccountStrip).IsFalse();
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_unregistered_default_shows_its_directory_as_the_label() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            try {
+                await h.PushAsync(Dto(null, "codex") with { AccountDirectory = "/home/me/.codex", AccountLabel = ".codex" });
+                await Assert.That(h.Chat.ShowsAccountStrip).IsTrue();
+                await Assert.That(h.Chat.AccountLabel).IsEqualTo(".codex");
+                await Assert.That(h.Chat.AccountDirectory).IsEqualTo("/home/me/.codex");
+
+                await h.PushAsync(Dto(null, "codex") with { AccountDirectory = @"C:\Users\me\.codex\" });
+                await Assert.That(h.Chat.ShowsAccountStrip).IsTrue();
+                await Assert.That(h.Chat.AccountLabel).IsEqualTo(".codex");
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_remote_row_carries_the_account_onto_the_strip() {
+        await RunOnUiAsync(async () => {
+            var row = AgentRow.FromRemote(new AgentInstanceDto {
+                AgentId = "a1", SessionId = "s1", Status = "running", DaemonName = "work-mac", OwnerUserId = "u1", Vendor = "codex",
+                RegisteredAt = DateTime.UtcNow,
+                AccountDirectory = "/Users/me/.codex-work", AccountId = "acc1", AccountLabel = "work",
+            });
+            using var session = new BehaviorSubject<ChatSessionInfo>(ChatSessionInfo.FromRemote(row, ended: false));
+            var time = new FakeTimeProvider();
+            var chat = new ChatTabViewModel("a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null),
+                new AcceptingChatInput(), new NoAttachmentUploader(), null, new RecordingOpener(), time,
+                new FakePermissionService(), new SessionRuns(time));
+            try {
+                await Assert.That(chat.ShowsAccountStrip).IsTrue();
+                await Assert.That(chat.AccountVendor).IsEqualTo("codex");
+                await Assert.That(chat.AccountLabel).IsEqualTo("work");
+                await Assert.That(chat.AccountDirectory).IsEqualTo("/Users/me/.codex-work");
+
+                session.OnNext(ChatSessionInfo.FromRemote(row with { AccountDirectory = null, AccountId = null, AccountLabel = null }, ended: false));
+                await Assert.That(chat.ShowsAccountStrip).IsFalse();
+            } finally { await chat.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task The_servers_queue_confirms_an_own_send_and_lists_and_retires_the_others() {
         await RunOnUiAsync(async () => {
             var queue = new Subject<IReadOnlyList<QueuedInputItem>>();

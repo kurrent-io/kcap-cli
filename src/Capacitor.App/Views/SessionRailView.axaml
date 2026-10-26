@@ -446,6 +446,11 @@
                                                     Command="{Binding OpenSettingsCommand}" Click="OnHelpFlyoutItemClick"
                                                     HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
                                                     Padding="10,8" FontSize="13.5" />
+                                            <Button x:Name="RailHelpUninstallButton" Classes="kcapGhost" Content="Uninstall kcap…"
+                                                    Command="{Binding UninstallCommand}" Click="OnHelpFlyoutItemClick"
+                                                    IsVisible="{Binding ShowsUninstall}"
+                                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                    Padding="10,8" FontSize="13.5" />
                                             <Button x:Name="RailHelpChangelogButton" Classes="kcapGhost" Content="Changelog"
                                                     Command="{Binding OpenChangelogCommand}" Click="OnHelpFlyoutItemClick"
                                                     HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"

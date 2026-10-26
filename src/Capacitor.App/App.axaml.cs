@@ -11,6 +11,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Layout;
 using Avalonia.Markup.Xaml;
 using Avalonia.Media;
+using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.Services.LocalSetup;
@@ -22,6 +23,7 @@ using Capacitor.App.ViewModels;
 using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Config;
@@ -33,6 +35,7 @@ using Capacitor.Cli.Core.PullRequests.Readers.GitHubCli;
 using Capacitor.Cli.Core.Resume;
 using Capacitor.Cli.Core.Setup;
 using Microsoft.Extensions.DependencyInjection;
+using Capacitor.App.Platform.Linux;
 using Capacitor.App.Platform.Mac;
 
 namespace Capacitor.App;
@@ -168,6 +171,7 @@ public partial class App : Application {
     PauseController? _pause;
     ConsentService? _consent;
     PermissionService? _permissions;
+    AccountsService? _accounts;
     NotificationSettingsService? _notificationSettings;
     IDesktopNotificationSink? _notificationSink;
     IDesktopNotificationAccess? _notificationAccess;
@@ -374,7 +378,7 @@ public partial class App : Application {
             await HandleStartupFailureAsync(
                 desktop, ex, _service, _shutdown,
                 [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
-                    _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _sessionAccess,
+                    _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _accounts, _sessionAccess,
                     _pullRequestTones, _launchApprovals, _webWorkspace, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending],
                 _lifecycle, _lane, _localUpgrade, _localSearch, _menuBar, _coordinator);
             await DisposeServerClientsAsync(); // after _home above
@@ -399,6 +403,7 @@ public partial class App : Application {
             _attention = null;
             _commands = null;
             _permissions = null;
+            _accounts = null;
             _sessionAccess = null;
             _pullRequestTones = null;
             _pause = null;
@@ -430,9 +435,12 @@ public partial class App : Application {
         }
         var run = OperatingSystem.IsMacOS()
             ? uninstall.BuildRun(Environment.ProcessPath, root => new MacAppRemoval(runner, _userHome, root), cli, () => Quit(0))
-            : null;
+            : OperatingSystem.IsLinux()
+                ? uninstall.BuildAppImageRun(AppImageInstall.Detect(Environment.GetEnvironmentVariable),
+                    install => new LinuxAppRemoval(runner, _userHome, install, Environment.GetEnvironmentVariable, _time), cli, () => Quit(0))
+                : null;
         if (run is null) {
-            Console.Error.WriteLine("kcap: uninstalling from the app needs the installed kcap.app.");
+            Console.Error.WriteLine("kcap: uninstalling from the app needs the installed kcap.app or the kcap AppImage.");
             // Posted: the lifetime's main loop has not started yet.
             Dispatcher.UIThread.Post(() => Quit(1));
             return;
@@ -724,6 +732,9 @@ public partial class App : Application {
             _time, _shutdown.Token, ServerSessionHttp.Responder(sessionHttp, profiles),
             sessionAgents: directory.SessionAgents);
         _permissions = permissions;
+        var accounts = new AccountsService(service, ct => AccountsSubscription.RunAsync(_daemonStore, service.DaemonName, ct), _time, _shutdown.Token);
+        _accounts = accounts;
+        lane.AccountsRevisionReached = (revision, ct) => accounts.ReachedAsync(revision, TimeSpan.FromSeconds(10), ct);
         var sessionAccess = new SessionAccessService(serverLane, _time);
         var permissionFeed = new ServerPermissionFeed(
             serverLane, sessionAccess, permissions, readDetail, directory.VendorOfSession, _time);
@@ -798,7 +809,7 @@ public partial class App : Application {
             () => LocalEndpoints.Read(_localRoot).Active?.Version, serverLane.Status, localUpgrade, lifecycleCli.LocalStartAsync,
             () => serverLane.RestartAsync(), _shutdown.Token, searchChange: localSearch) {
             Search = localSearch is null ? null : new LocalSearchViewModel(
-                () => LocalEmbeddingFile.Read(_localRoot), serverLane.Status, localSearch, localUpgrade, () => serverLane.RestartAsync(),
+                () => LocalEmbeddingFile.Read(_localRoot), ct => LocalBuiltinOffer.LookupAsync(_localRoot, ct), serverLane.Status, localSearch, localUpgrade, () => serverLane.RestartAsync(),
                 _shutdown.Token, openSettings: _openSearchSettings),
         };
         _localStack = localStack;
@@ -876,7 +887,7 @@ public partial class App : Application {
                 requestSignIn: requestSignIn,
                 lifecycleAttention: lifecycleAttention, identityReport: lifecycle.IdentityReport,
                 pullRequestSummaries: pullRequestTones.Summaries,
-                directory: directory, remoteAgents: remoteAgents, lane: serverLane,
+                directory: directory, remoteAgents: remoteAgents, lane: serverLane, localAccounts: accounts.Snapshot,
                 viewerId: viewerId, localMachineId: machineId, restartPending: restartPending.Pending,
                 // A row present on both lanes is the local one: the local socket is the richer
                 // workspace, and the directory only keeps both rows when the twin is unproven.
@@ -887,7 +898,8 @@ public partial class App : Application {
                 remoteWorkspaceFactory: BuildRemote, serverWorkspaceFactory: BuildServer,
                 sessions: sessions, railPreferences: railPreferences, profileName: profiles?.Name,
                 modelCatalog: modelCatalog.Catalog, uploader: uploader, appServerUrl: profiles?.Resolution.ServerUrl,
-                openFeedback: openFeedback, settingsAction: _appMenu.SettingsAction, adopt: TakeAdoptableWindow(),
+                openFeedback: openFeedback, settingsAction: _appMenu.SettingsAction, uninstallAction: _appMenu.UninstallAction,
+                adopt: TakeAdoptableWindow(),
                 requestSetup: () => _ = RestartForSetupAsync(desktop),
                 historyImport: _historyImport?.Run,
                 backgroundPriority: lifecycle.BackgroundPriority, reloadState: lifecycle.ReloadState,
@@ -950,6 +962,11 @@ public partial class App : Application {
         if (OperatingSystem.IsMacOS() && InstallLocation.BundleRoot(Environment.ProcessPath) is { } bundleRoot) {
             var facts = UninstallFactsFor(bundleRoot, service.DaemonName, profiles?.Resolution.ServerUrl, lifecycle, lifecycleProbe);
             _appMenu.SetUninstallAction(() => _ = RelaunchForUninstallAsync(desktop, facts));
+        } else if (OperatingSystem.IsLinux() && AppImageInstall.Detect(Environment.GetEnvironmentVariable) is not null) {
+            // The links and the CLI copy live under the staged root, so a kcap that resolves there is this app's.
+            var facts = UninstallFactsFor(AppImageInstall.StagedRoot(Environment.GetEnvironmentVariable, _userHome),
+                service.DaemonName, profiles?.Resolution.ServerUrl, lifecycle, lifecycleProbe);
+            _appMenu.SetUninstallAction(() => _ = RelaunchForUninstallAsync(desktop, facts));
         }
 
         // LAST, deliberately: anything above throwing lands in the catch with no
@@ -1011,6 +1028,10 @@ public partial class App : Application {
         try {
             var request = UninstallConfirmation.Build(await source.GatherAsync(_shutdown.Token));
             if (!await ShowLifecyclePromptDialogAsync(_coordinator?.Window, request.Prompt, _shutdown.Token)) return;
+            if (!Program.Host.CanRelaunchNow) {
+                _coordinator?.Window?.Notifier?.Notify("kcap cannot restart from where it was started. Run kcap uninstall in a terminal instead.");
+                return;
+            }
             var start = Program.Host.NewCopy([.. request.RelaunchArgs]);
             desktop.Exit += (_, _) => {
                 try { Process.Start(start); }
@@ -1066,6 +1087,12 @@ public partial class App : Application {
                 needsAppRestart: lane.IsRetired(service.DaemonName), appLifetime: _shutdown.Token,
                 notificationSettings: _notificationSettings, notificationAccess: _notificationAccess,
                 profiles: profilesVm) {
+                Accounts = _accounts is { } accounts
+                    ? new AccountsSettingsViewModel(accounts, lane.RunAsync, service.DaemonName, settings.ProfileName,
+                        discover: () => AccountDiscovery.Find(
+                            _userHome, AccountStore.Beside(_daemonStore).TryLoad() ?? new AccountRegistry(), Environment.GetEnvironmentVariable),
+                        pickDirectory: PickAccountDirectoryAsync, daemonStatus: service.Status, appLifetime: _shutdown.Token)
+                    : null,
                 Appearance = new AppearanceSettingsViewModel(_uiScale),
                 Privacy    = new PrivacySettingsViewModel(_telemetry, _config, _usageNotice),
                 Search     = _localStack?.Search,
@@ -1086,6 +1113,16 @@ public partial class App : Application {
         if (showSearch) window.ShowSearch();
         window.Show();
         window.Activate();
+    }
+
+    async Task<string?> PickAccountDirectoryAsync(CancellationToken ct) {
+        if (_settingsWindow?.StorageProvider is not { } storage) return null;
+        var folders = await storage.OpenFolderPickerAsync(new FolderPickerOpenOptions {
+            Title = "Choose a config directory",
+            AllowMultiple = false,
+        });
+        ct.ThrowIfCancellationRequested();
+        return folders is [{ } folder] ? folder.TryGetLocalPath() : null;
     }
 
     // Deferred, so each window reads the CLI version installed when it opens rather than the one
@@ -1219,7 +1256,7 @@ public partial class App : Application {
             IProcessRunner runner, ILoginShellProbe probe, ProfileContext? profiles, bool alreadyAuthenticated) {
         var cliPath = CliResolver.ResolvePath(Environment.GetEnvironmentVariable, File.Exists, Program.Host.CliDirectory);
         // Same rule as the shim coordinator's: only a resolved ABSOLUTE path is linkable.
-        var shimTarget = cliPath is not null && Path.IsPathRooted(cliPath) ? cliPath : null;
+        var shimTarget = ShimTargetFor(cliPath, Program.Host.CliOutlivesApp);
         var shimInstaller = CliPathInstallers.Create(runner, probe, _userHome);
         var shimApplicable = await ResolveShimApplicableAsync(
             shimInstaller is not null, shimTarget, ct => probe.KcapOnPathAsync(ct), _shutdown.Token);
@@ -1251,6 +1288,7 @@ public partial class App : Application {
             UrlOpener: new ShellUrlOpener(),
             Probe: probe,
             DetectionFeed: probe => HarnessesStepViewModel.BuildDetectionFeed(probe, _userHome),
+            BuiltinOffer: ct => LocalBuiltinOffer.LookupAsync(_localRoot, ct),
             CliPath: cliPath,
             ShimApplicable: shimApplicable,
             ShimTarget: shimTarget,
@@ -1573,14 +1611,15 @@ public partial class App : Application {
             IObservable<IReadOnlyDictionary<string, int>>? agentsRunningCommands = null,
             IObservable<IReadOnlyDictionary<string, RailPullRequestSummary>>? pullRequestSummaries = null,
             IAgentDirectory? directory = null, IRemoteAgentsService? remoteAgents = null,
-            IServerLane? lane = null, Func<CancellationToken, Task<string?>>? viewerId = null,
+            IServerLane? lane = null, IObservable<AccountsSnapshotDto?>? localAccounts = null,
+            Func<CancellationToken, Task<string?>>? viewerId = null,
             string? localMachineId = null, IObservable<bool>? restartPending = null,
             Func<string, AgentOrigin?>? originOf = null,
             Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
             IObservable<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>? modelCatalog = null,
             IAttachmentUploader? uploader = null, string? appServerUrl = null,
             Action<FeedbackCategory>? openFeedback = null, IObservable<Action?>? settingsAction = null,
-            (MainWindow Window, AppState State)? adopt = null,
+            IObservable<Action?>? uninstallAction = null, (MainWindow Window, AppState State)? adopt = null,
             Action? requestSetup = null, HistoryImportRun? historyImport = null,
             IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
             IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null,
@@ -1619,6 +1658,8 @@ public partial class App : Application {
             daemons: remoteAgents?.Daemons, viewerId: viewerId, laneStatus: lane?.Status,
             localMachineId: localMachineId, launchFailures: lane?.LaunchFailures, directory: resolvedDirectory,
             modelCatalog: modelCatalog, uploader: uploader, appServerUrl: appServerUrl,
+            listing: remoteAgents?.Listing, daemonAccounts: remoteAgents?.DaemonAccounts, localAccounts: localAccounts,
+            retryListing: remoteAgents is null ? null : remoteAgents.RefreshDaemonsAsync,
             launchFailed: agentId => vm?.CloseFailedLaunch(agentId)) { LocalStack = localStack, UsageNotice = usageNotice };
         if (localServer is not null) home.AttachLocalServerRecovery(localServer);
         // Same knot as home above, over the SAME `service` instance — its callbacks close over
@@ -1656,7 +1697,7 @@ public partial class App : Application {
             originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory, directory: resolvedDirectory,
             serverWorkspaceFactory: serverWorkspaceFactory, sessions: sessions,
             openFeedback: openFeedback, opener: new ShellUrlOpener(), requestSignIn: requestSignIn,
-            settingsAction: settingsAction, requestSetup: requestSetup, historyImport: historyImport,
+            settingsAction: settingsAction, uninstallAction: uninstallAction, requestSetup: requestSetup, historyImport: historyImport,
             backgroundPriority: backgroundPriority, reloadState: reloadState, isReloading: isReloading, reloadDaemon: reloadDaemon, openLaunchApprovals: openLaunchApprovals) {
             LocalStack = localStack,
             Web = web,
@@ -1713,7 +1754,7 @@ public partial class App : Application {
         // The shim links to the RESOLVED ABSOLUTE path only — CliResolver's bare "kcap" PATH
         // fallback means there is nothing to link, so the offer and the menu item both stay off
         // for the whole run.
-        var shimTarget = cliPath is not null && Path.IsPathRooted(cliPath) ? cliPath : null;
+        var shimTarget = ShimTargetFor(cliPath, Program.Host.CliOutlivesApp);
         // autoOfferSuppressed: Start() always runs — Offerable/manual install must keep working in Incomplete mode; only the once-ever auto-offer dialog is skipped.
         var shimOffer = new ShimOfferCoordinator(
             lifecycle.PhaseClosed, probe, CliPathInstallers.Create(runner, probe, _userHome), _appState, surface, shimTarget,
@@ -1727,6 +1768,10 @@ public partial class App : Application {
 
         return (lifecycle, shimOffer, consentFlip, surface, probe, cli);
     }
+
+    /// A link needs an absolute path that is still there once the app exits.
+    internal static string? ShimTargetFor(string? cliPath, bool cliOutlivesApp) =>
+        cliOutlivesApp && cliPath is not null && Path.IsPathRooted(cliPath) ? cliPath : null;
 
     internal static bool IsLocalServer(string? serverUrl, LocalRoot local) =>
         LocalEndpoints.Read(local).Classify(serverUrl) is LocalEndpointClass.Local;
@@ -2311,7 +2356,7 @@ public partial class App : Application {
             // OnShutdownRequested and settles on the ViewModel's silent-abort path.
             await DisposeUiThenConfirmShutdownAsync(
                 [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
-                    _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _sessionAccess,
+                    _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _accounts, _sessionAccess,
                     _pullRequestTones, _launchApprovals, _webWorkspace, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending],
                 DisposeLifecycleAndServiceAsync, () => _shutdownConfirmed = true, desktop, _exitCode,
                 applyOnExit: () => { if (!_setupRestarting && !_uninstallRelaunching) _updates?.ApplyPendingOnExit(); });

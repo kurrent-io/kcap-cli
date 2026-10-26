@@ -14,8 +14,14 @@ public class InstallStepViewModelTests {
 
     TelemetryProbe Probe() => TelemetryProbe.Live("setup", Config.Root);
 
-    static InstallStepViewModel Step(LocalInstallController controller, string? appProfile = "default", string? active = "default") =>
-        new(controller, () => appProfile, () => active, () => true);
+    static readonly LocalEmbeddingModelManifest Offered = new("builtin-test", 1, new('e', 64), [new("model.onnx", new('f', 64), 300L * 1024 * 1024)]);
+
+    static Func<CancellationToken, Task<LocalEmbeddingModelManifest?>> Offering(LocalEmbeddingModelManifest? offered) =>
+        _ => Task.FromResult(offered);
+
+    static InstallStepViewModel Step(LocalInstallController controller, string? appProfile = "default", string? active = "default",
+        bool builtinOffered = true) =>
+        new(controller, () => appProfile, () => active, () => true, Offering(builtinOffered ? Offered : null));
 
     static async Task EnterAndInstallAsync(InstallStepViewModel install) {
         await install.OnEnterAsync(CancellationToken.None);
@@ -331,7 +337,7 @@ public class InstallStepViewModelTests {
 
         var (offPath, onPathBefore, onPathAfter) = await AvaloniaSession.DispatchAsync(async () => {
             var controller = Controller(cli, LocalSetupScript.NoSetup(Config), Probe());
-            var install = new InstallStepViewModel(controller, () => null, () => null, () => onLocal);
+            var install = new InstallStepViewModel(controller, () => null, () => null, () => onLocal, Offering(Offered));
             var offPath = install.PassThrough;
             onLocal = true;
             var before = install.PassThrough;
@@ -394,6 +400,34 @@ public class InstallStepViewModelTests {
         await Assert.That(cli.SetupLocalEmbeddings).IsEquivalentTo([LocalEmbeddingChoice.KeywordOnly], CollectionOrdering.Matching);
     }
 
+    /// A stack whose manifest names no built-in model cannot honour that choice, so the page neither offers nor
+    /// recommends it, and an unchosen run still passes no flag.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task The_builtin_option_and_recommendation_follow_what_the_stack_offers(bool offered) {
+        var cli = new FakeKcapCli { SetupLocalBehavior = LocalSetupScript.Prints(0, LocalSetupScript.Committed) };
+
+        var (enabled, builtin, status, description) = await AvaloniaSession.DispatchAsync(async () => {
+            var install = Step(Controller(cli, LocalSetupScript.NoSetup(Config), Probe()), builtinOffered: offered);
+            await install.OnEnterAsync(CancellationToken.None);
+            var shown = (install.Search.BuiltinEnabled, install.Search.UseBuiltin, install.Search.BuiltinStatus, install.Search.BuiltinDescription);
+
+            await install.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+
+            return shown;
+        });
+
+        await Assert.That(enabled).IsEqualTo(offered);
+        await Assert.That(builtin).IsEqualTo(offered);
+        await Assert.That(status is null).IsEqualTo(offered);
+        if (offered) await Assert.That(description).Contains("(about 300 MB)");
+        await Assert.That(cli.SetupLocalEmbeddings.Single().Args).IsEmpty();
+        await Assert.That(cli.SetupLocalEmbeddings.Single().Provider)
+            .IsEqualTo(offered ? LocalEmbeddingProvider.Builtin : LocalEmbeddingProvider.None);
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_choice_starts_from_the_recorded_model_and_a_retry_keeps_it() {
@@ -401,8 +435,8 @@ public class InstallStepViewModelTests {
 
         var (other, model) = await AvaloniaSession.DispatchAsync(async () => {
             var install = new InstallStepViewModel(
-                Controller(cli, LocalSetupScript.NoSetup(Config), Probe()), () => "default", () => "default", () => true,
-                () => new LocalEmbeddingSetting("nomic-embed-text"));
+                Controller(cli, LocalSetupScript.NoSetup(Config), Probe()), () => "default", () => "default", () => true, Offering(Offered),
+                () => LocalEmbeddingSetting.Ollama("nomic-embed-text"));
             await EnterAndInstallAsync(install);
             await install.TryAgainCommand.Execute().ToTask();
 
@@ -424,7 +458,7 @@ public class InstallStepViewModelTests {
         var choice = await AvaloniaSession.DispatchAsync(async () => {
             var install = new InstallStepViewModel(
                 Controller(cli, LocalSetupScript.PendingSetup(Config, recorded: false), Probe()), () => "default", () => "default",
-                () => true, () => null, resuming: () => true);
+                () => true, Offering(Offered), () => null, resuming: () => true);
             await install.OnEnterAsync(CancellationToken.None);
 
             return install.ChoiceVisible;
@@ -442,7 +476,7 @@ public class InstallStepViewModelTests {
         var choice = await AvaloniaSession.DispatchAsync(async () => {
             var install = new InstallStepViewModel(
                 Controller(cli, LocalSetupScript.PendingSetup(Config), Probe()), () => "default", () => "default",
-                () => true, () => LocalEmbeddingSetting.Declined, resuming: () => true);
+                () => true, Offering(Offered), () => LocalEmbeddingSetting.Declined, resuming: () => true);
             await install.OnEnterAsync(CancellationToken.None);
 
             return install.ChoiceVisible;
@@ -486,7 +520,7 @@ public class InstallStepViewModelTests {
         var (canInstall, error) = await AvaloniaSession.DispatchAsync(async () => {
             var install = Step(Controller(cli, LocalSetupScript.NoSetup(Config), Probe()));
             await install.OnEnterAsync(CancellationToken.None);
-            install.Search.UseMeaning = true;
+            install.Search.UseOllama  = true;
             install.Search.UseOther   = true;
             install.Search.OtherModel = name;
 

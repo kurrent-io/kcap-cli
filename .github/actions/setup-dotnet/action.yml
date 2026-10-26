@@ -1,0 +1,32 @@
+name: Setup .NET
+description: actions/setup-dotnet, installing the SDK the channel's published release metadata names
+
+inputs:
+  cache:
+    description: Passed to actions/setup-dotnet
+    default: "false"
+  cache-dependency-path:
+    description: Passed to actions/setup-dotnet
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    # A channel install follows aka.ms, which moves to a new SDK mid-release and points at a storage
+    # account that refuses public reads, failing every job. An explicit version downloads from the CDN,
+    # and latest-sdk only moves once the release is out. When no version resolves, global.json picks the SDK.
+    - name: Resolve the SDK version
+      id: sdk
+      shell: bash
+      run: |
+        channel=$(sed -n 's/.*"version": *"\([0-9]*\.[0-9]*\)\..*/\1/p' global.json | head -n 1)
+        version=$(curl -fsSL --retry 3 "https://builds.dotnet.microsoft.com/dotnet/release-metadata/$channel/releases.json" \
+          | grep -o '"latest-sdk": *"[^"]*"' | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/') || version=""
+        echo "SDK: ${version:-none resolved, global.json decides}"
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+
+    - uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: ${{ steps.sdk.outputs.version }}
+        cache: ${{ inputs.cache }}
+        cache-dependency-path: ${{ inputs.cache-dependency-path }}

@@ -23,6 +23,7 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     readonly Func<string?>          _configActiveProfile;
     readonly Func<bool>             _onLocalPath;
     readonly Func<LocalEmbeddingSetting?> _recorded;
+    readonly Func<CancellationToken, Task<LocalEmbeddingModelManifest?>> _builtinOffer;
     readonly Func<bool>             _resuming;
     CancellationToken               _lifetime;
     string?                         _refusal;
@@ -30,15 +31,18 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     IReadOnlyList<InstallStepRow>   _rows = [];
     LocalSetupProgress?             _watched;
 
+    /// <param name="builtinOffer">The built-in model set the stack setup will run offers, or null; asked before the choice shows.</param>
     /// <param name="recorded">The installation's recorded embedding setting; a disk read, run off the UI thread.</param>
     /// <param name="resuming">True while an earlier setup is unfinished: the page finishes it without asking again.</param>
     public InstallStepViewModel(
             LocalInstallController controller, Func<string?> appProfile, Func<string?> configActiveProfile,
-            Func<bool> onLocalPath, Func<LocalEmbeddingSetting?>? recorded = null, Func<bool>? resuming = null) {
+            Func<bool> onLocalPath, Func<CancellationToken, Task<LocalEmbeddingModelManifest?>> builtinOffer,
+            Func<LocalEmbeddingSetting?>? recorded = null, Func<bool>? resuming = null) {
         _controller          = controller;
         _appProfile          = appProfile;
         _configActiveProfile = configActiveProfile;
         _onLocalPath         = onLocalPath;
+        _builtinOffer        = builtinOffer;
         _recorded            = recorded ?? (() => null);
         _resuming            = resuming ?? (() => false);
 
@@ -174,14 +178,29 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
         }
         Search.Prefill(recorded);
         // Only a known answer resumes unasked: the earlier run's choice may never have reached the record.
-        if (_resuming() && (_controller.Embeddings ?? Known(recorded)) is { } known) await _controller.StartAsync(known, ct);
-        else ChoiceVisible = true;
+        if (_resuming() && (_controller.Embeddings ?? Known(recorded)) is { } known) {
+            await _controller.StartAsync(known, ct);
+            return;
+        }
+
+        LocalEmbeddingModelManifest? offered;
+        try {
+            offered = await _builtinOffer(ct);
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            return;
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"kcap app: looking up the built-in search model failed: {ex.Message}");
+            offered = null;
+        }
+        Search.OfferBuiltin(offered);
+        ChoiceVisible = true;
     }
 
     static LocalEmbeddingChoice? Known(LocalEmbeddingSetting? recorded) => recorded switch {
-        null              => null,
-        { Model: null }   => LocalEmbeddingChoice.KeywordOnly,
-        { Model: { } m }  => new LocalEmbeddingChoice(m),
+        null                                         => null,
+        { Provider: LocalEmbeddingProvider.Builtin } => LocalEmbeddingChoice.Builtin,
+        { Model: null }                              => LocalEmbeddingChoice.KeywordOnly,
+        { Model: { } m }                             => new LocalEmbeddingChoice(m),
     };
 
     public async Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) {

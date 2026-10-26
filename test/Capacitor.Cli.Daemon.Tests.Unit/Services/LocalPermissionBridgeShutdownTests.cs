@@ -132,7 +132,8 @@ public class LocalPermissionBridgeShutdownTests {
 
     [Test, NotInParallel(nameof(LocalPermissionBridgeShutdownTests))]
     public async Task Context_arriving_after_admission_closed_is_rejected_untracked() {
-        var (bridge, _, _, tmp) = Build();
+        // The drain cannot expire, so the second request meets the accept loop and not a closing listener.
+        var (bridge, _, _, tmp) = Build(new FrozenWallClock());
         try {
             var hold = new TaskCompletionSource();
             bridge.BeforeHandlerRunsForTest = () => hold.Task;

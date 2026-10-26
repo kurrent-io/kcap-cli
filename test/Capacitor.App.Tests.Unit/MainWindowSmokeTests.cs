@@ -1504,7 +1504,7 @@ public class MainWindowSmokeTests {
 
     /// Off macOS the help flyout carries the app menu's Settings, Changelog and version — the only
     /// in-window route to Settings where no native menu bar is drawn. Settings stays inert until the
-    /// app hands it an action.
+    /// app hands it an action, and Uninstall is not shown until the app can remove itself.
     [Test]
     [NotInParallel("AvaloniaSession")]
     [Arguments(true)]
@@ -1513,10 +1513,12 @@ public class MainWindowSmokeTests {
         var service = new FakeDaemonClientService();
         service.SnapshotsSubject.OnNext(Snap());
         var settings = new System.Reactive.Subjects.BehaviorSubject<Action?>(null);
+        var uninstall = new System.Reactive.Subjects.BehaviorSubject<Action?>(null);
         var opener = new RecordingOpener();
         var opened = 0;
+        var uninstalls = 0;
         var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
-            opener: opener, settingsAction: settings, appMenuInWindow: inWindow);
+            opener: opener, settingsAction: settings, uninstallAction: uninstall, appMenuInWindow: inWindow);
         var window = new MainWindow { DataContext = vm };
         try {
             window.Show();
@@ -1536,10 +1538,14 @@ public class MainWindowSmokeTests {
             await Assert.That(changelogButton.Content).IsEqualTo("Changelog");
             await Assert.That(rail.FindControl<TextBlock>("RailAppVersionText")!.Text).StartsWith("Desktop app ");
             await Assert.That(settingsButton.IsEffectivelyEnabled).IsFalse();
+            var uninstallButton = rail.FindControl<Button>("RailHelpUninstallButton")!;
+            await Assert.That(uninstallButton.IsVisible).IsFalse();
 
             settings.OnNext(() => opened++);
+            uninstall.OnNext(() => uninstalls++);
             Dispatcher.UIThread.RunJobs();
             await Assert.That(settingsButton.IsEffectivelyEnabled).IsTrue();
+            await Assert.That(uninstallButton.IsEffectivelyVisible).IsEqualTo(inWindow);
             if (inWindow) {
                 ClickFlyoutButton(settingsButton);
                 await Assert.That(flyout.IsOpen).IsFalse();
@@ -1550,6 +1556,12 @@ public class MainWindowSmokeTests {
                 ClickFlyoutButton(changelogButton);
                 await Assert.That(flyout.IsOpen).IsFalse();
                 await Assert.That(opener.Opened).IsEquivalentTo([AppMenuBar.ChangelogUrl]);
+
+                flyout.ShowAt(help);
+                Dispatcher.UIThread.RunJobs();
+                ClickFlyoutButton(uninstallButton);
+                await Assert.That(flyout.IsOpen).IsFalse();
+                await Assert.That(uninstalls).IsEqualTo(1);
             } else {
                 flyout.Hide();
                 Dispatcher.UIThread.RunJobs();
@@ -1888,7 +1900,7 @@ public class MainWindowSmokeTests {
         await Assert.That(visibleWhileIn).IsFalse();
     }
 
-    static void ClickFlyoutButton(Button button) {
+    internal static void ClickFlyoutButton(Button button) {
         Dispatcher.UIThread.RunJobs();
         var top = TopLevel.GetTopLevel(button)
             ?? throw new InvalidOperationException("Flyout button is not attached to a TopLevel.");

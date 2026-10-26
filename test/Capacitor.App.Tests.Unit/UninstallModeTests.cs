@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Capacitor.App.Platform.Linux;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core;
@@ -52,6 +53,23 @@ public class UninstallModeTests {
         Tmp.CreateDir("kcap.app/Contents/MacOS");
         if (withInfoPlist) Tmp.CreateFile("kcap.app/Contents/Info.plist", "<plist/>");
         return Tmp.PathTo("kcap.app/Contents/MacOS/kcap-desktop");
+    }
+
+    /// <summary>Only an AppImage the running app came from, and that is still on disk, may reach the removal.</summary>
+    [Test]
+    public async Task A_linux_run_needs_the_appimage_it_came_from() {
+        var cli     = new FakeKcapCli();
+        var removal = new Removal();
+        var image   = Tmp.CreateFile("kcap-x86_64.AppImage", "image");
+        AppImageInstall? handed = null;
+
+        await Assert.That(new UninstallMode(false).BuildAppImageRun(null, _ => removal, cli, () => { })).IsNull();
+        await Assert.That(new UninstallMode(false).BuildAppImageRun(new AppImageInstall(Tmp.PathTo("gone.AppImage")), _ => removal, cli, () => { })).IsNull();
+
+        var run = new UninstallMode(false).BuildAppImageRun(new AppImageInstall(image), install => { handed = install; return removal; }, cli, () => { });
+
+        await Assert.That(run).IsNotNull();
+        await Assert.That(handed!.Image).IsEqualTo(image);
     }
 
     [Test]

@@ -118,6 +118,10 @@ internal sealed class LocalSetupArgsTests {
 
         var (skip, _) = LocalSetupArgs.Parse(["setup", "--local", "--json", "--no-embeddings"], kcapUrlEnv: null);
         await Assert.That(skip!.Embeddings).IsEqualTo(new LocalEmbeddingAnswer.Skip());
+
+        var (builtin, builtinError) = LocalSetupArgs.Parse(["setup", "--local", "--json", "--builtin-embeddings"], kcapUrlEnv: null);
+        await Assert.That(builtinError).IsNull();
+        await Assert.That(builtin!.Embeddings).IsEqualTo(new LocalEmbeddingAnswer.Builtin());
     }
 
     [Test]
@@ -139,10 +143,10 @@ internal sealed class LocalSetupArgsTests {
     }
 
     [Test]
-    public async Task No_embedding_flag_leaves_the_answer_open() {
+    public async Task No_embedding_flag_leaves_the_choice_to_the_default() {
         var (parsed, _) = LocalSetupArgs.Parse(["setup", "--local", "--no-prompt"], kcapUrlEnv: null);
 
-        await Assert.That(parsed!.Embeddings).IsNull();
+        await Assert.That(parsed!.Embeddings).IsEqualTo(new LocalEmbeddingAnswer.Default());
     }
 
     [Test]
@@ -157,8 +161,11 @@ internal sealed class LocalSetupArgsTests {
     }
 
     [Test]
-    public async Task Both_embedding_flags_contradict_each_other() {
-        var (parsed, error) = LocalSetupArgs.Parse(["setup", "--local", "--no-embeddings", "--embedding-model", "mxbai-embed-large"], kcapUrlEnv: null);
+    [Arguments("--no-embeddings", "--embedding-model", "mxbai-embed-large")]
+    [Arguments("--builtin-embeddings", "--embedding-model", "mxbai-embed-large")]
+    [Arguments("--builtin-embeddings", "--no-embeddings")]
+    public async Task Two_embedding_answers_contradict_each_other(params string[] flags) {
+        var (parsed, error) = LocalSetupArgs.Parse(["setup", "--local", .. flags], kcapUrlEnv: null);
 
         await Assert.That(parsed).IsNull();
         await Assert.That(error).Contains("contradict");

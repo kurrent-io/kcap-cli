@@ -93,6 +93,7 @@ public class ServerConnectionServiceTests {
     static readonly Dictionary<string, object?[]> WirePushes = new() {
         [HubBroadcasts.AgentInstancesChanged]   = [],
         [HubBroadcasts.DaemonsChanged]          = [],
+        [HubBroadcasts.DaemonAccountsChanged]   = [],
         [HubBroadcasts.LaunchFailed]            = ["a1", "reason"],
         [HubBroadcasts.PermissionPending]       = ["s1"],
         [HubBroadcasts.PermissionResponded]     = ["s1", "r1"],
