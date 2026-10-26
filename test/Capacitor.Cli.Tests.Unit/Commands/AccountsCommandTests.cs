@@ -88,6 +88,32 @@ public class AccountsCommandTests {
     }
 
     [Test]
+    public async Task Remove_deletes_the_reading() {
+        var dir = ClaudeDir();
+        using var capture = ConsoleOutput.StartCapture();
+        await Sut().HandleAsync(["accounts", "add", "claude", dir]);
+        var id = Store.Load().Accounts.Single().Id;
+        await Assert.That(Store.Readings.TryRecord(id, 0, null, f => f)).IsTrue();
+
+        var exit = await Sut().HandleAsync(["accounts", "remove", dir]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(Store.Readings.LoadAll().ContainsKey(id)).IsFalse();
+        await Assert.That(File.Exists(Path.Combine(Store.Directory, "readings", $"{id}.json"))).IsFalse();
+    }
+
+    [Test]
+    public async Task Rename_marks_the_label_as_user_set() {
+        var dir = ClaudeDir();
+        using var capture = ConsoleOutput.StartCapture();
+        await Sut().HandleAsync(["accounts", "add", "claude", dir]);
+
+        await Sut().HandleAsync(["accounts", "rename", dir, ".claude-work"]);
+
+        await Assert.That(Store.Load().Accounts.Single().LabelSetByUser == true).IsTrue();
+    }
+
+    [Test]
     public async Task Remove_by_id_prefix_works() {
         var dir = ClaudeDir();
         using var capture = ConsoleOutput.StartCapture();

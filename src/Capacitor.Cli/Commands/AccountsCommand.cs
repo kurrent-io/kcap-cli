@@ -104,7 +104,19 @@ public sealed class AccountsCommand(AccountStore accounts, PluginEnvironment env
             return await Finish("remove", account.Id, false, steps, committed, error);
         }
 
-        var (_, revision) = Registry(() => accounts.MutateWithRevision(r => (r with { Accounts = [.. r.Accounts.Where(a => a.Id != account.Id)] }, 0)));
+        string? leftover = null;
+        var (_, revision) = Registry(() => accounts.MutateWithReadings(
+            (r, _) => (r with { Accounts = [.. r.Accounts.Where(a => a.Id != account.Id)] }, 0),
+            (_, held) => {
+                try {
+                    held.Delete(account.Id);
+                } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                    leftover = ex.Message;
+                }
+            }));
+
+        // A reading of an unregistered account is never written again, so a leftover file is only a warning.
+        if (leftover is not null) await Console.Error.WriteLineAsync($"Warning: could not delete the usage reading of {account.Label}: {leftover}");
         await Say($"Removed {account.Vendor} account {account.Label}. {account.Directory} was left in place.");
         return await Finish("remove", account.Id, true, steps, revision);
     }
@@ -113,7 +125,7 @@ public sealed class AccountsCommand(AccountStore accounts, PluginEnvironment env
         if (string.IsNullOrWhiteSpace(label)) return await Usage("rename");
         if (Resolve(idOrDir) is not { } account) return await NotFound("rename", idOrDir);
 
-        var (_, revision) = Registry(() => accounts.MutateWithRevision(r => (r with { Accounts = [.. r.Accounts.Select(a => a.Id == account.Id ? a with { Label = label } : a)] }, 0)));
+        var (_, revision) = Registry(() => accounts.MutateWithRevision(r => (r with { Accounts = [.. r.Accounts.Select(a => a.Id == account.Id ? a with { Label = label, LabelSetByUser = true } : a)] }, 0)));
         await Say($"Renamed to {label}.");
         return await Finish("rename", account.Id, true, [], revision);
     }
