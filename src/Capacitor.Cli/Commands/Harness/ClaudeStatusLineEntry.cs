@@ -93,15 +93,15 @@ public static class ClaudeStatusLineEntry {
 
     // No WorkingDirectory and no environment edits: the child inherits both from this process.
     static async Task<int> RunOriginalAsync(string original, byte[] stdin, Task<int> signaled) {
-        var posix = ClaudeStatusLineCommand.PosixShell(Environment.GetEnvironmentVariable);
-        var psi   = new ProcessStartInfo(posix ? "sh" : "powershell") {
+        var shell = ClaudeStatusLineCommand.PosixShellPath(Environment.GetEnvironmentVariable);
+        var psi   = new ProcessStartInfo(shell ?? "powershell") {
             RedirectStandardInput  = true,
             RedirectStandardOutput = true,
             RedirectStandardError  = true,
             UseShellExecute        = false,
         };
 
-        if (posix) {
+        if (shell is not null) {
             psi.ArgumentList.Add("-c");
         } else {
             psi.ArgumentList.Add("-NoProfile");

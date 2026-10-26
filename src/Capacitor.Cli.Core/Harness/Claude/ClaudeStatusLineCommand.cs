@@ -55,21 +55,25 @@ public static class ClaudeStatusLineCommand {
         return true;
     }
 
-    public static bool PosixShell(Func<string, string?> env) => PosixShell(env, OperatingSystem.IsWindows(), File.Exists);
+    public static bool PosixShell(Func<string, string?> env) => PosixShellPath(env) is not null;
 
-    /// <summary>Claude runs a status line through Git Bash when it finds one, and through PowerShell otherwise.</summary>
-    internal static bool PosixShell(Func<string, string?> env, bool windows, Func<string, bool> fileExists) {
-        if (!windows) return true;
+    public static string? PosixShellPath(Func<string, string?> env) => PosixShellPath(env, OperatingSystem.IsWindows(), File.Exists);
 
-        if (env("CLAUDE_CODE_GIT_BASH_PATH") is { Length: > 0 } configured && fileExists(configured)) return true;
+    /// <summary>The POSIX shell to run a status line with, null for none. Claude runs a status line through Git
+    /// Bash when it finds one, and through PowerShell otherwise; on Windows <c>sh</c> need not be on PATH.</summary>
+    internal static string? PosixShellPath(Func<string, string?> env, bool windows, Func<string, bool> fileExists) {
+        if (!windows) return "sh";
+
+        if (env("CLAUDE_CODE_GIT_BASH_PATH") is { Length: > 0 } configured && fileExists(configured)) return configured;
 
         foreach (var dir in (env("PATH") ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) {
             if (!fileExists(Path.Combine(dir, "git.exe"))) continue;
 
-            return fileExists(Path.GetFullPath(Path.Combine(dir, "..", "bin", "bash.exe")));
+            var bash = Path.GetFullPath(Path.Combine(dir, "..", "bin", "bash.exe"));
+            return fileExists(bash) ? bash : null;
         }
 
-        return false;
+        return null;
     }
 
     static string SingleQuoted(string value) => "'" + value.Replace("'", "'\\''") + "'";

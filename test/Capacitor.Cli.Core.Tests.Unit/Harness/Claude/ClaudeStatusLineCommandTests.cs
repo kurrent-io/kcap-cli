@@ -46,44 +46,44 @@ public class ClaudeStatusLineCommandTests {
     }
 
     [Test]
-    public async Task Off_windows_a_posix_shell_is_assumed_without_probing() {
+    public async Task Off_windows_sh_is_assumed_without_probing() {
         var probed = false;
 
-        var posix = ClaudeStatusLineCommand.PosixShell(_ => { probed = true; return null; }, windows: false, _ => { probed = true; return false; });
+        var shell = ClaudeStatusLineCommand.PosixShellPath(_ => { probed = true; return null; }, windows: false, _ => { probed = true; return false; });
 
-        await Assert.That(posix).IsTrue();
+        await Assert.That(shell).IsEqualTo("sh");
         await Assert.That(probed).IsFalse();
     }
 
     [Test]
-    public async Task On_windows_the_configured_git_bash_counts() {
-        var bash = Tmp.CreateFile("bash.exe");
+    public async Task On_windows_the_configured_git_bash_is_the_shell() {
+        var bash = Tmp.PathTo("Programs", "bash.exe");
 
-        var posix = ClaudeStatusLineCommand.PosixShell(n => n == "CLAUDE_CODE_GIT_BASH_PATH" ? bash : null, windows: true, File.Exists);
+        var shell = ClaudeStatusLineCommand.PosixShellPath(n => n == "CLAUDE_CODE_GIT_BASH_PATH" ? bash : null, windows: true, p => p == bash);
 
-        await Assert.That(posix).IsTrue();
+        await Assert.That(shell).IsEqualTo(bash);
     }
 
     [Test]
-    public async Task On_windows_bash_beside_git_on_path_counts() {
-        Tmp.CreateFile(Path.Combine("Git", "bin", "bash.exe"));
-        Tmp.CreateFile(Path.Combine("Git", "cmd", "git.exe"));
+    public async Task On_windows_bash_beside_git_on_path_is_the_shell() {
+        var bash = Tmp.PathTo("Git", "bin", "bash.exe");
         var path = $"{Tmp.PathTo("empty")};{Tmp.PathTo("Git", "cmd")}";
+        HashSet<string> existing = [bash, Tmp.PathTo("Git", "cmd", "git.exe")];
 
-        var posix = ClaudeStatusLineCommand.PosixShell(n => n == "PATH" ? path : null, windows: true, File.Exists);
+        var shell = ClaudeStatusLineCommand.PosixShellPath(n => n == "PATH" ? path : null, windows: true, existing.Contains);
 
-        await Assert.That(posix).IsTrue();
+        await Assert.That(shell).IsEqualTo(bash);
     }
 
     [Test]
-    public async Task On_windows_git_without_bash_and_a_missing_configured_bash_do_not_count() {
-        Tmp.CreateFile(Path.Combine("Git", "cmd", "git.exe"));
+    public async Task On_windows_git_without_bash_and_a_missing_configured_bash_give_no_shell() {
+        HashSet<string> existing = [Tmp.PathTo("Git", "cmd", "git.exe")];
         var path = Tmp.PathTo("Git", "cmd");
 
-        var posix = ClaudeStatusLineCommand.PosixShell(
-            n => n switch { "PATH" => path, "CLAUDE_CODE_GIT_BASH_PATH" => Tmp.PathTo("missing.exe"), _ => null }, windows: true, File.Exists);
+        var shell = ClaudeStatusLineCommand.PosixShellPath(
+            n => n switch { "PATH" => path, "CLAUDE_CODE_GIT_BASH_PATH" => Tmp.PathTo("missing.exe"), _ => null }, windows: true, existing.Contains);
 
-        await Assert.That(posix).IsFalse();
+        await Assert.That(shell).IsNull();
     }
 
     public static IEnumerable<Func<(string Original, string Expected)>> Originals() {
