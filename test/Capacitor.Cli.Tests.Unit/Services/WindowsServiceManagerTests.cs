@@ -1,4 +1,5 @@
 using Capacitor.Cli.Services;
+using TUnit.Assertions.Enums;
 
 namespace Capacitor.Cli.Tests.Unit.Services;
 
@@ -12,7 +13,12 @@ public class WindowsServiceManagerTests {
     readonly FakeTaskManager _tasks = new();
     readonly Dictionary<string, string> _written = [];
 
-    WindowsServiceManager Manager() => new(Config.Root, _pipe, _store, _tasks, (path, content, _) => _written[path] = content);
+    WindowsServiceManager Manager() => new(Config.Root, _pipe, _store, _tasks,
+        stopDaemon: id => {
+            _tasks.Calls.Add($"stop {id}");
+            return true;
+        },
+        writeFile: (path, content, _) => _written[path] = content);
 
     static ServiceSpec Spec(string id = "laptop", int? maxAgents = null) => new(
         id, Daemon, @"C:\Users\alice\.config\kcap\daemon-laptop.log",
@@ -40,15 +46,23 @@ public class WindowsServiceManagerTests {
         await Assert.That(_pipe.Verbs).IsEquivalentTo(["enroll", "stop"]);
     }
 
+    /// The daemon is stopped before the task goes: retiring the task alone kills it, agents and all
     [Test]
-    public async Task A_scheduled_task_for_the_name_is_retired_before_the_service_takes_it() {
+    public async Task A_scheduled_task_for_the_name_is_stopped_then_retired_before_the_service_takes_it() {
         _tasks.Installed.Add("laptop");
 
         var ok = Manager().Install(Spec(), startNow: true, out _);
 
         await Assert.That(ok).IsTrue();
-        await Assert.That(_tasks.Calls).IsEquivalentTo(["uninstall laptop"]);
+        await Assert.That(_tasks.Calls).IsEquivalentTo(["stop laptop", "uninstall laptop"], CollectionOrdering.Matching);
         await Assert.That(_tasks.Installed).IsEmpty();
+    }
+
+    [Test]
+    public async Task Without_a_scheduled_task_no_daemon_is_stopped() {
+        Manager().Install(Spec(), startNow: true, out _);
+
+        await Assert.That(_tasks.Calls).IsEmpty();
     }
 
     [Test]
@@ -63,7 +77,7 @@ public class WindowsServiceManagerTests {
         await Assert.That(ok).IsFalse();
         await Assert.That(error).IsEqualTo("the daemon path does not exist");
         await Assert.That(_store.Current).IsEqualTo(previous);
-        await Assert.That(_tasks.Calls).IsEquivalentTo(["uninstall laptop", "install laptop"]);
+        await Assert.That(_tasks.Calls).IsEquivalentTo(["stop laptop", "uninstall laptop", "install laptop"]);
     }
 
     /// A retire can fail after it has ended the task's daemon, as one the user may not delete does; the task is
@@ -77,7 +91,7 @@ public class WindowsServiceManagerTests {
 
         await Assert.That(ok).IsFalse();
         await Assert.That(error).Contains("task is busy");
-        await Assert.That(_tasks.Calls).IsEquivalentTo(["uninstall laptop", "start laptop"]);
+        await Assert.That(_tasks.Calls).IsEquivalentTo(["stop laptop", "uninstall laptop", "start laptop"]);
         await Assert.That(_store.Current).IsNull();
         await Assert.That(_pipe.Verbs).IsEmpty();
     }

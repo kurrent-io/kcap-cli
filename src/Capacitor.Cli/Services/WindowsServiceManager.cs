@@ -1,5 +1,8 @@
+using System.Net.Sockets;
 using System.Text.Json;
+using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.Cli.Services;
 
@@ -14,6 +17,7 @@ namespace Capacitor.Cli.Services;
 /// </summary>
 sealed class WindowsServiceManager(
         ConfigRoot config, IServicePipe pipe, IServiceEnrollmentStore enrollments, IServiceManager? tasks,
+        Func<string, bool>? stopDaemon = null,
         UnitFileWriter? writeFile = null) : IServiceManager {
     static readonly TimeSpan Quick = TimeSpan.FromSeconds(5);
 
@@ -21,6 +25,7 @@ sealed class WindowsServiceManager(
     static readonly TimeSpan Slow = TimeSpan.FromSeconds(30);
 
     readonly UnitFileWriter _write = writeFile ?? ((path, content, encoding) => ServiceFiles.WriteOwnerOnly(path, content, encoding));
+    readonly Func<string, bool> _stopDaemon = stopDaemon ?? StopKeepingAgents;
 
     public string Describe() => "Windows service kcap-service";
 
@@ -68,6 +73,10 @@ sealed class WindowsServiceManager(
         var previous = enrollments.Read();
         var task = tasks?.TryListInstalled()?.Contains(spec.ServiceId) == true;
 
+        // Retiring the task alone ends its daemon with schtasks /End, a kill that also ends its agents. Stopped
+        // first, it exits 0, which ends the task's loop, and the service's daemon resumes the kept agents.
+        if (task) _stopDaemon(spec.ServiceId);
+
         // The task's daemon holds the name; the service's launch would only be refused while it runs. A retire
         // can fail after it has already ended that daemon (a task the user may not delete), so the task is
         // started again rather than left registered with nothing running.
@@ -101,6 +110,16 @@ sealed class WindowsServiceManager(
 
         error = null;
         return true;
+    }
+
+    static bool StopKeepingAgents(string name) {
+        try {
+            return DaemonShutdownClient.StopAndWaitAsync(
+                DaemonStore.FromEnvironment(), name, new ShutdownRequestDto("keep", "final"), DaemonCommands.StopExitWait,
+                TimeProvider.System, CancellationToken.None).GetAwaiter().GetResult();
+        } catch (Exception ex) when (ex is SocketException or IOException) {
+            return false;
+        }
     }
 
     public void WriteAndBootstrap(ServiceSpec spec) {
