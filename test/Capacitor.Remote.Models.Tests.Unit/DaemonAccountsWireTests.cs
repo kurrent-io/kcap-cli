@@ -126,4 +126,22 @@ public class DaemonAccountsWireTests {
             LimitId = null, WindowMinutes = null, ResetsAt = null, SignaledAt = at,
         });
     }
+
+    [Test]
+    public async Task A_window_without_a_limit_id_binds_and_the_rest_of_the_list_survives() {
+        const string json = """
+            {"daemon_name":"box","host_id":"h1","revision":7,"accounts":[
+              {"id":"a1","vendor":"codex","directory":"/u/.codex-a","directory_key":"/u/.codex-a","label":"a","recording_state":"recording",
+               "reading":{"generation":0,"windows":[{"window_minutes":300,"used_percent":10},{"limit_id":"codex","window_minutes":10080,"used_percent":20}]}},
+              {"id":"a2","vendor":"claude","directory":"/u/.claude-b","directory_key":"/u/.claude-b","label":"b","recording_state":"recording"}],
+             "defaults":[]}
+            """;
+
+        var row = JsonSerializer.Deserialize(json, RemoteModelsJsonContext.Default.DaemonAccountsDto)!;
+
+        await Assert.That(row.Accounts!.Select(a => a.Id)).IsEquivalentTo(["a1", "a2"]);
+        var windows = row.Accounts![0].Reading!.Windows!;
+        await Assert.That(windows[0].LimitId).IsNull();
+        await Assert.That(windows[1].LimitId).IsEqualTo("codex");
+    }
 }
