@@ -1,3 +1,4 @@
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
@@ -40,9 +41,10 @@ public sealed class ExperimentalSettingsViewModel : ReactiveObject, IDisposable 
             if (status.State != AttachState.Connected) _snapshot = null;
             Observe();
         }).DisposeWith(_subscriptions);
-        // Re-read with each snapshot, before it reaches the UI thread: the CLI or a hand edit can flip a
-        // switch while the tab is open.
+        // Re-read with each snapshot, on the thread pool whichever thread emitted it: the CLI or a hand edit
+        // can flip a switch while the tab is open. ObserveOn keeps snapshot order, so reads stay in sequence.
         service.Snapshots
+            .ObserveOn(TaskPoolScheduler.Default)
             .Select(snapshot => (Snapshot: snapshot, Read: ReadIfChanged()))
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(next => {

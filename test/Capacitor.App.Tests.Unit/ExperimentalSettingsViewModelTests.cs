@@ -17,6 +17,8 @@ public class ExperimentalSettingsViewModelTests {
         return service;
     }
 
+    static Task Until(Func<bool> condition, string what) => WorkspaceFixtures.WaitUntilAsync(condition, what: what);
+
     static DaemonStatusDto Reporting(
             bool resolved, bool active, bool acknowledged = true, string? reason = null, bool failed = false) =>
         FakeDaemonClientService.Snap() with {
@@ -67,32 +69,49 @@ public class ExperimentalSettingsViewModelTests {
         await Assert.That(row.StatusText).IsEqualTo("");
 
         service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
-        await Assert.That(row.StatusText).IsEqualTo("This daemon is too old to apply it. Update kcap and restart the daemon");
+        await Until(() => row.StatusText == "This daemon is too old to apply it. Update kcap and restart the daemon", "a pre-feature daemon");
         await Assert.That(row.StatusIsWarning).IsTrue();
 
         service.SnapshotsSubject.OnNext(Reporting(resolved: false, active: false));
-        await Assert.That(row.StatusText).IsEqualTo("");
+        await Until(() => row.StatusText == "", "an off switch");
 
         row.IsEnabled = true;
         await Assert.That(row.StatusText).IsEqualTo("Applying…");
         await Assert.That(row.StatusIsWarning).IsFalse();
 
         service.SnapshotsSubject.OnNext(Reporting(resolved: true, active: true));
-        await Assert.That(row.StatusText).IsEqualTo("Active");
+        await Until(() => row.StatusText == "Active", "active");
 
         service.SnapshotsSubject.OnNext(Reporting(resolved: true, active: true, acknowledged: false));
-        await Assert.That(row.StatusText).IsEqualTo("Applying…");
+        await Until(() => row.StatusText == "Applying…", "applying");
 
         service.SnapshotsSubject.OnNext(Reporting(resolved: true, active: true, acknowledged: false, failed: true));
-        await Assert.That(row.StatusText).IsEqualTo("Applied; the server has not been told yet");
+        await Until(() => row.StatusText == "Applied; the server has not been told yet", "applied locally");
 
         service.SnapshotsSubject.OnNext(Reporting(resolved: true, active: false, reason: "codex is older than 0.146.0"));
-        await Assert.That(row.StatusText).IsEqualTo("On, not active: codex is older than 0.146.0");
+        await Until(() => row.StatusText == "On, not active: codex is older than 0.146.0", "not active");
         await Assert.That(row.StatusIsWarning).IsTrue();
 
         service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, null, null));
         await Assert.That(row.StatusText).IsEqualTo("Saved; applies when the daemon starts");
         await Assert.That(row.StatusIsWarning).IsFalse();
+    });
+
+    /// <summary>Snapshots can arrive on the UI thread. The store is read off it, so nothing the snapshot
+    /// carries can have been applied by the time the emit returns there.</summary>
+    [Test]
+    public Task A_snapshot_emitted_on_the_ui_thread_reads_the_store_off_it() => AvaloniaSession.RunOnUiAsync(async () => {
+        var store = new ExperimentalSettingsStore(Config.Root);
+        var service = Connected();
+        using var vm = new ExperimentalSettingsViewModel(store, "work", service);
+        await vm.Loaded;
+        var row = vm.Features.Single();
+        await store.SetAsync("work", Id, true, CancellationToken.None);
+
+        service.SnapshotsSubject.OnNext(Reporting(resolved: true, active: true));
+
+        await Assert.That(row.IsEnabled).IsFalse();
+        await Until(() => row.IsEnabled && row.StatusText == "Active", "the snapshot's read");
     });
 
     [Test]
@@ -121,21 +140,19 @@ public class ExperimentalSettingsViewModelTests {
         await store.SetAsync("work", Id, true, CancellationToken.None);
         service.SnapshotsSubject.OnNext(Reporting(resolved: true, active: true));
 
-        await Assert.That(row.IsEnabled).IsTrue();
-        await Assert.That(row.StatusText).IsEqualTo("Active");
+        await Until(() => row.IsEnabled && row.StatusText == "Active", "the CLI's flip");
 
         await File.WriteAllTextAsync(store.Path, "{ not json");
         service.SnapshotsSubject.OnNext(Reporting(resolved: true, active: true));
 
-        await Assert.That(row.CanChange).IsFalse();
+        await Until(() => !row.CanChange, "the corrupt store");
         await Assert.That(vm.Problem).Contains("not valid JSON");
 
         File.Delete(store.Path);
         service.SnapshotsSubject.OnNext(Reporting(resolved: false, active: false));
 
-        await Assert.That(row.CanChange).IsTrue();
+        await Until(() => row.CanChange && vm.Problem is null, "the removed store");
         await Assert.That(row.IsEnabled).IsFalse();
-        await Assert.That(vm.Problem).IsNull();
     });
 
     /// <summary>The file is re-read only when its last-write time or length moved: here the content
@@ -153,14 +170,15 @@ public class ExperimentalSettingsViewModelTests {
 
         await File.WriteAllTextAsync(store.Path, before.Replace("false", "true "));
         File.SetLastWriteTimeUtc(store.Path, written);
-        service.SnapshotsSubject.OnNext(Reporting(resolved: false, active: false));
+        service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
 
+        await Until(() => row.StatusText != "", "the first snapshot");
         await Assert.That(row.IsEnabled).IsFalse();
 
         File.SetLastWriteTimeUtc(store.Path, written.AddSeconds(1));
         service.SnapshotsSubject.OnNext(Reporting(resolved: true, active: true));
 
-        await Assert.That(row.IsEnabled).IsTrue();
+        await Until(() => row.IsEnabled, "the moved fingerprint");
     });
 
     /// <summary>A snapshot's read can start before a toggle is saved and arrive after it; applying it would
