@@ -473,16 +473,10 @@ public class DaemonStatusIpcTests {
     }
 
     /// <summary>
-    /// Qodo (production): a client vanishing mid-push makes <c>FrameCodec.WriteAsync</c> throw
-    /// <see cref="IOException"/>/<see cref="SocketException"/>, which only
-    /// <see cref="OperationCanceledException"/> was treated as normal termination for — the
-    /// exception bubbled out of <c>HandleSubscribeAsync</c> to <c>LocalControlServer</c>'s
-    /// generic catch and logged "Local control connection faulted" at Warning for a routine
-    /// disconnect. Drives <see cref="DaemonStatusIpc.HandleSubscribeAsync"/> directly against a
-    /// fake stream (no socket/LocalControlServer involved) whose first write (the immediate
-    /// snapshot) succeeds and whose second write throws — deterministic, no OS-level raciness
-    /// between the read-side EOF watcher and the write path. Before the fix, this IOException
-    /// escaped uncaught; after it, <c>HandleSubscribeAsync</c> returns cleanly.
+    /// A subscriber vanishing mid-push makes the write throw <see cref="IOException"/>, a routine
+    /// disconnect that <see cref="DaemonStatusIpc.HandleSubscribeAsync"/> must absorb rather than let
+    /// reach the server's faulted-connection warning. Drives it against a fake stream whose second
+    /// write throws, so the write path is hit deterministically.
     /// </summary>
     [Test]
     public async Task HandleSubscribeAsync_absorbs_a_write_side_disconnect_without_faulting() {
@@ -507,8 +501,6 @@ public class DaemonStatusIpcTests {
                 // exactly what a real vanished subscriber does mid-push.
                 orchestrator.SeedAgentForTest("throw-trigger");
 
-                // Must return cleanly within the deadline: before the fix this IOException would
-                // propagate out of HandleSubscribeAsync uncaught (only OCE was absorbed).
                 await handleTask.WaitAsync(TimeSpan.FromSeconds(5));
                 await Assert.That(statusIpc.ActiveSubscribersForTest).IsEqualTo(0);
             } finally {
@@ -564,7 +556,7 @@ public class DaemonStatusIpcTests {
         });
     }
 
-    [Test, ExcludeOn(OS.Windows)] // §5: StatusSubscribe on a shutting-down daemon — the connection just closes
+    [Test, ExcludeOn(OS.Windows)] // StatusSubscribe on a shutting-down daemon: the connection just closes
     public async Task Daemon_shutdown_closes_the_subscription() {
         await RunAsync("st-h", async (h, ct) => {
             await using var s = await ConnectAsync(h.SockPath, ct);

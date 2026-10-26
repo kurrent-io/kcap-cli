@@ -1598,11 +1598,8 @@ public static partial class DaemonRunner {
             var factory = byVendor[vendor];
             var isCodex = IsCodex(vendor);
             if ((isCodex ? codex.LauncherPolicyVersion : LauncherPolicyVersion(vendor, codexAppServer: false)) is not { } policyVersion) continue;
-            // Trust-by-default: a vendor's borrowed-review capability is a property of its FACTORY,
-            // never of the installed build's identity. Gating this on an exact-build match made an
-            // ordinary vendor auto-update silently withdraw the capability (and the server then
-            // resolved workspace_mode=fallback, reviewing a stale committed base with nobody told).
-            // See docs/superpowers/specs/2026-07-27-ai1528-trust-by-default-borrowed-review-design.md.
+            // A property of the factory, never of the installed build: gating it on the build would let a
+            // vendor auto-update silently withdraw it and send reviewers back to a stale base.
             var borrowedSupported = factory.SupportsBorrowedReviewFlow;
             // Reviewer MODEL override support: advertised true ONLY when this vendor — already known
             // installed + unattended-certified by ComputeUnattendedVendors above — also carries a
@@ -1667,7 +1664,6 @@ public static partial class DaemonRunner {
     /// per launch. A change on disk is logged once, when it is re-advertised.
     /// Pure over the computed capabilities — same reasoning as
     /// <see cref="ShouldWarnCursorUnavailable"/> — so it is testable without booting the DI host.
-    /// See docs/superpowers/specs/2026-07-27-ai1528-trust-by-default-borrowed-review-design.md.
     /// </summary>
     internal static void LogUnattendedVendorIdentities(
             ILogger logger, IEnumerable<UnattendedVendorCapability> capabilities) {

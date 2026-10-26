@@ -81,7 +81,6 @@ internal sealed class DaemonStatusIpc(
     }
 
     List<ExperimentalFeatureStatusDto> ExperimentalForStatus() {
-        // One read of each reference, so the two cannot come from different generations.
         var committed = config.CodexResolution;
         var acknowledged = config.AcknowledgedCodexResolution;
         var told = acknowledged.Generation >= committed.Generation;

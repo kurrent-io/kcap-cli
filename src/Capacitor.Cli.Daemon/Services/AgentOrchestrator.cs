@@ -2565,12 +2565,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             var certificationCheck = EvaluateReviewerCertification(
                 cmd.Vendor, version, _server.CurrentConnectionId, certification);
             if (!certificationCheck.Ok) {
-                // Codex review round 2 (P1): tell the caller FIRST. Recomputing capabilities re-runs
-                // the REGISTRATION probe — three 10s attempts plus backoff — so doing it before the
-                // notification meant a failed launch probe cost ~10s here and then ~30.75s more
-                // before the caller heard anything. The single-attempt launch probe did not bound the
-                // launch path at all while this sat in front of the rejection; my claim that it did
-                // was wrong.
+                // Tell the caller first: the refresh below re-runs the registration probe (three 10s
+                // attempts plus backoff), which would otherwise hold the rejection back for ~30s.
                 await LaunchFailedUnlessPrivateAsync(isPrivate, cmd.AgentId,
                     $"{(certificationCheck.Transient ? "reviewer_certification_transient" : "reviewer_certification_changed")}: {certificationCheck.Reason}.");
 
