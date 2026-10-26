@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Reactive;
 using System.Reactive.Linq;
 using Capacitor.App.Services;
@@ -63,7 +64,8 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
     async Task ConfigureAsync(HarnessSettingsRow row, bool remove) {
         if (Busy || !Rows.Contains(row)) return;
         Busy = true;
-        row.Message = remove ? "Disconnecting…" : "Connecting…";
+        row.Report(remove ? "Disconnecting…" : "Connecting…");
+        var failed = remove ? $"Could not disconnect {row.Label}" : $"Could not connect {row.Label}";
         try {
             await Task.Run(_store.LoadProfile, _lifetime.Token);
             var result = remove
@@ -72,24 +74,27 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
             bool? wired = _isWired is null ? null : await Task.Run(() => _isWired(row.Id), _lifetime.Token);
             row.SetWired(wired);
             if (result.TimedOut)
-                row.Message = "The change timed out. Rescan to check the connection before trying again.";
+                row.Report("The change timed out. Rescan to check the connection before trying again.", failed);
             else if (result.ExitCode != 0)
-                row.Message = string.IsNullOrWhiteSpace(result.Stderr)
-                    ? $"Could not {(remove ? "disconnect" : "connect")} (exit {result.ExitCode}). Try again."
-                    : result.Stderr.Trim();
+                row.Report(string.IsNullOrWhiteSpace(result.Stderr)
+                    ? $"The kcap command line exited with code {result.ExitCode}. Try again."
+                    : result.Stderr.Trim(), failed);
             else if (wired is null)
-                row.Message = "The command finished, but the connection could not be verified. Rescan to check it.";
+                row.Report("The command finished, but the connection could not be verified. Rescan to check it.", "Could not verify the change");
             else if (wired.Value == remove)
-                row.Message = remove ? "Some recording setup remains. Try disconnecting again." : "Recording is not configured yet. Try connecting again.";
+                row.Report(remove ? "Some recording setup remains. Try disconnecting again." : "Recording is not configured yet. Try connecting again.", failed);
             else
-                row.Message = remove
+                row.Report(remove
                     ? "Disconnected. Restart this harness to unload kcap. Existing sessions are kept."
-                    : "Setup completed. Restart this harness to load the changes.";
+                    : "Setup completed. Restart this harness to load the changes.");
             if (result is { ExitCode: 0, TimedOut: false } && !string.IsNullOrWhiteSpace(result.Stderr))
-                row.Message += $"\n{result.Stderr.Trim()}";
+                row.Report($"{row.Message}\n{result.Stderr.Trim()}");
         } catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) {
         } catch (Exception ex) {
-            row.Message = $"Could not {(remove ? "disconnect" : "connect")} this harness: {ex.Message}";
+            // A missing or unlaunchable CLI surfaces as the OS's spawn error, which names a path but not the fix.
+            row.Report(ex is Win32Exception
+                ? "kcap could not start its command line tool. Reinstall kcap, then try again."
+                : ex.Message, failed);
         } finally {
             row.SetWired(row.Wired);
             Busy = false;

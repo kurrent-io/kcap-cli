@@ -7,12 +7,11 @@
             <StackPanel Classes="settingsHeader">
                 <TextBlock Classes="kcapTitle" Text="Harnesses" />
                 <TextBlock Classes="kcapSubtitle" Text="Choose which coding tools connect to kcap on this computer." TextWrapping="Wrap" />
-                <Border Classes="settingsContextChip" ToolTip.Tip="Connections record to this profile">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <TextBlock Text="Profile" FontSize="11" FontWeight="Medium"
-                                   Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
-                        <TextBlock Text="{Binding ProfileName}" FontSize="12" FontWeight="SemiBold"
-                                   Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                <Border Classes="settingsContextChip" ToolTip.Tip="These settings apply only to this profile">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <views:AppIcon Kind="UserRound" Size="12" />
+                        <TextBlock Text="Profile" />
+                        <TextBlock Classes="scopeName" Text="{Binding ProfileName}" />
                     </StackPanel>
                 </Border>
             </StackPanel>
@@ -39,40 +38,56 @@
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:HarnessSettingsRow">
                                 <Border Classes="settingsListRow">
-                                    <Grid Classes="settingsRow" ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
+                                    <Grid Classes="settingsRow" ColumnDefinitions="Auto,Auto,*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="12">
                                         <CheckBox Classes="settingsHarnessCheck" IsChecked="{Binding IsConfigured, Mode=OneWay}"
                                                   AutomationProperties.Name="{Binding Label, StringFormat='Connect {0} to kcap'}"
                                                   AutomationProperties.HelpText="{Binding ConnectionLabel}" ToolTip.Tip="{Binding Signal}"
                                                   Command="{Binding $parent[ItemsControl].((vm:HarnessesSettingsViewModel)DataContext).ToggleConnectionCommand}"
-                                                  CommandParameter="{Binding}">
-                                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
-                                                <ContentControl VerticalAlignment="Center"
-                                                                Content="{Binding Id, Converter={x:Static views:VendorGlyphConverter.Instance}, ConverterParameter=16}" />
-                                                <StackPanel Grid.Column="1" Classes="settingsRowText">
-                                                    <TextBlock Classes="kcapLabel" Text="{Binding Label}" TextWrapping="Wrap" />
-                                                    <TextBlock Classes="kcapHint" Text="{Binding ConnectionLabel}" TextWrapping="Wrap" />
-                                                </StackPanel>
-                                            </Grid>
-                                        </CheckBox>
-                                        <Button Grid.Column="1" Classes="kcapGhost settingsCompact" Content="Repair"
+                                                  CommandParameter="{Binding}" />
+                                        <Border Grid.Column="1" Classes="settingsGlyphTile">
+                                            <ContentControl HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                            Content="{Binding Id, Converter={x:Static views:VendorGlyphConverter.Instance}, ConverterParameter=16}" />
+                                        </Border>
+                                        <StackPanel Grid.Column="2" Classes="settingsRowText">
+                                            <TextBlock Classes="kcapLabel" Text="{Binding Label}" TextWrapping="Wrap" />
+                                            <TextBlock Classes="kcapHint" Text="{Binding ConnectionLabel}" TextWrapping="Wrap" />
+                                        </StackPanel>
+                                        <Button Grid.Column="3" Classes="kcapGhost settingsCompact" Content="Repair"
                                                 VerticalAlignment="Center"
                                                 AutomationProperties.Name="{Binding Label, StringFormat='Repair {0} connection'}"
                                                 ToolTip.Tip="Reinstall kcap's hooks for this tool"
                                                 IsVisible="{Binding IsConfigured}"
                                                 Command="{Binding $parent[ItemsControl].((vm:HarnessesSettingsViewModel)DataContext).ConnectCommand}"
                                                 CommandParameter="{Binding}" />
-                                        <StackPanel Grid.Row="1" Grid.ColumnSpan="2" Margin="58,0,0,0" Spacing="4">
+                                        <StackPanel Grid.Row="1" Grid.Column="2" Grid.ColumnSpan="2" Spacing="8">
                                             <StackPanel.IsVisible>
                                                 <MultiBinding Converter="{x:Static BoolConverters.Or}">
                                                     <Binding Path="ConsentNote" Converter="{x:Static StringConverters.IsNotNullOrEmpty}" />
                                                     <Binding Path="Message" Converter="{x:Static StringConverters.IsNotNullOrEmpty}" />
                                                 </MultiBinding>
                                             </StackPanel.IsVisible>
-                                            <TextBlock Classes="settingsFootnote" Text="{Binding ConsentNote}" Margin="0,6,0,0"
+                                            <TextBlock Classes="settingsFootnote" Text="{Binding ConsentNote}" Margin="0,8,0,0"
                                                        IsVisible="{Binding ConsentNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                            <TextBlock Classes="kcapHint" Text="{Binding Message}" TextWrapping="Wrap" Margin="0,6,0,0"
-                                                       Foreground="{StaticResource KcapTextBrush}"
-                                                       IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                            <TextBlock Classes="kcapHint" Text="{Binding Message}" TextWrapping="Wrap" Margin="0,8,0,0"
+                                                       Foreground="{StaticResource KcapTextBrush}">
+                                                <TextBlock.IsVisible>
+                                                    <MultiBinding Converter="{x:Static BoolConverters.And}">
+                                                        <Binding Path="Message" Converter="{x:Static StringConverters.IsNotNullOrEmpty}" />
+                                                        <Binding Path="ErrorTitle" Converter="{x:Static StringConverters.IsNullOrEmpty}" />
+                                                    </MultiBinding>
+                                                </TextBlock.IsVisible>
+                                            </TextBlock>
+                                            <Border Classes="settingsError" Margin="0,8,0,0"
+                                                    IsVisible="{Binding ErrorTitle, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+                                                    <views:AppIcon Kind="CircleAlert" Size="14" Foreground="{StaticResource KcapDangerBrush}"
+                                                                   VerticalAlignment="Top" Margin="0,2,0,0" />
+                                                    <StackPanel Grid.Column="1" Spacing="2">
+                                                        <TextBlock Classes="settingsErrorTitle" Text="{Binding ErrorTitle}" />
+                                                        <SelectableTextBlock Classes="settingsErrorDetail" Text="{Binding Message}" />
+                                                    </StackPanel>
+                                                </Grid>
+                                            </Border>
                                         </StackPanel>
                                     </Grid>
                                 </Border>
