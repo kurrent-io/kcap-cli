@@ -216,6 +216,31 @@ public class DaemonConfig {
     public string ClaudePath { get; set; } = Core.Harness.Claude.ClaudeHarness.CliBinary;
     public string CodexPath  { get; set; } = Core.Harness.Codex.CodexHarness.CliBinary;
 
+    /// <summary>The Codex resolution this daemon routes on and advertises. Swapped whole by the
+    /// capability refresh; readers on other threads take the reference once.</summary>
+    internal Harness.Codex.CodexTransportResolution CodexResolution {
+        get => Volatile.Read(ref _codexResolution);
+        set => Volatile.Write(ref _codexResolution, value);
+    }
+
+    Harness.Codex.CodexTransportResolution _codexResolution = Harness.Codex.CodexTransportResolution.Unresolved;
+
+    /// <summary>The last resolution a registration carried to the server. A launch that names no
+    /// transport follows this one, since it is what the server dispatched against.</summary>
+    internal Harness.Codex.CodexTransportResolution AcknowledgedCodexResolution {
+        get => Volatile.Read(ref _acknowledgedCodexResolution);
+        set => Volatile.Write(ref _acknowledgedCodexResolution, value);
+    }
+
+    Harness.Codex.CodexTransportResolution _acknowledgedCodexResolution = Harness.Codex.CodexTransportResolution.Unresolved;
+
+    public long ServerAcknowledgedCodexGeneration => AcknowledgedCodexResolution.Generation;
+
+    /// <summary>This daemon's profile's experimental switches, read from disk now. Empty when no
+    /// profile was resolved.</summary>
+    public ExperimentalSettingsRead ReadExperimentalSettings() =>
+        ProfileNameOrNull is { } profile ? new ExperimentalSettingsStore(ConfigRoot).Load(profile) : ExperimentalSettingsRead.Empty;
+
     /// <summary>Seconds an interactive hosted Codex approval (<c>*/requestApproval</c>) waits for the
     /// user before failing closed (deny). Overridable via <c>KCAP_CODEX_APPSERVER_APPROVAL_TIMEOUT_SECONDS</c>.
     /// Consumed as <c>TimeSpan.FromSeconds(Math.Max(1, …))</c>.</summary>

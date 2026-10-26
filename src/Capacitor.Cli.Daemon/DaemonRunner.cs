@@ -200,7 +200,7 @@ public static partial class DaemonRunner {
                 await Console.Error.WriteLineAsync($"Warning: ignoring invalid KCAP_MAX_AGENTS={maxAgents}");
         }
 
-        // Before the transport decision below, which probes whatever CodexPath ends up naming.
+        // Before the Codex resolution below, which probes whatever CodexPath ends up naming.
         BindVendorOverrides(config, harnesses.Select(h => h.Id), Environment.GetEnvironmentVariable);
 
         if (Environment.GetEnvironmentVariable("KCAP_CODEX_APPSERVER_APPROVAL_TIMEOUT_SECONDS") is { Length: > 0 } envApprovalTimeout
@@ -209,6 +209,11 @@ public static partial class DaemonRunner {
 
         if (Harness.Codex.LegacyCodexEnvironment.Warning(Environment.GetEnvironmentVariable) is { } legacyCodexWarning)
             await Console.Error.WriteLineAsync(legacyCodexWarning);
+
+        // Committed before the first advertisement; acknowledged once the first registration lands.
+        var startupCodex = Harness.Codex.CodexTransportResolution.Read(
+            1, config.ReadExperimentalSettings, () => ProbeCliVersion(config.CodexPath));
+        config.CodexResolution = startupCodex;
 
         // The per-vendor reviewer switches. These are OPT-OUT now: unset means enabled, matching
         // Claude/Codex/Cursor/Copilot, which have never been gated. See ParseConsentFlag for the full
@@ -463,10 +468,7 @@ public static partial class DaemonRunner {
                 sp.GetRequiredService<TimeProvider>()
             )
         );
-        // Codex is the ONE vendor with two transports. The composite factory routes review-flow
-        // launches to codex app-server when this daemon resolved it active (config.CodexAppServerActive),
-        // and delegates everything else — every interactive launch, and all launches under the PTY
-        // default — to the wrapped PTY factory, byte-identically to before.
+        // Codex is the one vendor with two transports; its composite factory picks one per launch.
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp => {
             var codexLauncher = sp.GetServices<IHostedAgentLauncher>().SingleOrDefault(l => l.Vendor == "codex")
                     ?? throw new InvalidOperationException("No IHostedAgentLauncher registered for vendor 'codex'");
@@ -623,6 +625,9 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton<VendorCliWatcher>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<VendorCliWatcher>());
 
+        builder.Services.AddSingleton<ExperimentalSettingsWatcher>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<ExperimentalSettingsWatcher>());
+
         builder.Services.AddSingleton<RepoStoreWatcher>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<RepoStoreWatcher>());
 
@@ -687,7 +692,7 @@ public static partial class DaemonRunner {
         config.VendorCatalogBaselines =
             VendorModelCatalogs.FingerprintCatalogPaths(runtimeFactories, config.SupportedVendors);
         config.UnattendedVendorCapabilities =
-            ComputeUnattendedVendorCapabilities(runtimeFactories, config, config.UnattendedVendors);
+            ComputeUnattendedVendorCapabilities(runtimeFactories, config, config.CodexResolution, config.UnattendedVendors);
         config.VendorModels =
             await VendorModelCatalogs.ProbeAsync(runtimeFactories, config.SupportedVendors, CancellationToken.None);
         foreach (var (vendor, models) in config.VendorModels) LogVendorModels(logger, vendor, models.Length);
@@ -815,6 +820,8 @@ public static partial class DaemonRunner {
                 try {
                     await connection.ConnectAsync(lifetime.ApplicationStopping);
                     LogStartupPhase(logger, "server connected");
+                    if (config.AcknowledgedCodexResolution.Generation < startupCodex.Generation)
+                        config.AcknowledgedCodexResolution = startupCodex;
                 } catch (Exception ex) when (nameInUse) {
                     // ConnectAsync's initial-connect path threw because of NameInUse. OnNameInUse
                     // already fired and set our flag; the host hasn't started its main loop yet, so
@@ -1564,12 +1571,14 @@ public static partial class DaemonRunner {
 
     internal const string MuseVendor = "muse";
 
+    /// <param name="codex">The committed resolution Codex's policy, transport and — when the switch is
+    /// on, which is when the resolution probed it — version are read from.</param>
     /// <param name="advertised">The already-classified advertised vendors, when the caller has them.
     /// Passing them avoids re-running a classification that spawns vendor binaries; omitting them
     /// recomputes, which is what the tests and any other caller want.</param>
     internal static IReadOnlyList<UnattendedVendorCapability> ComputeUnattendedVendorCapabilities(
             IEnumerable<IHostedAgentRuntimeFactory> factories, DaemonConfig config,
-            IEnumerable<string>? advertised = null) {
+            Harness.Codex.CodexTransportResolution codex, IEnumerable<string>? advertised = null) {
         var unattended = advertised?.ToArray() ?? ComputeUnattendedVendors(factories, config);
         var byVendor   = factories.ToDictionary(f => f.Vendor, StringComparer.Ordinal);
 
@@ -1577,7 +1586,9 @@ public static partial class DaemonRunner {
         // under one ceiling, rather than blocking startup for the sum across every advertised vendor.
         // A vendor whose binary is unresolved is not probed at all — its version stays null, exactly as
         // an inline probe of an empty path would leave it.
+        var codexFromResolution = codex.SwitchOn;
         var probePaths = unattended
+            .Where(v => !(codexFromResolution && IsCodex(v)))
             .Where(v => byVendor.TryGetValue(v, out var f) && !string.IsNullOrEmpty(f.CliPath))
             .ToDictionary(v => v, v => byVendor[v].CliPath, StringComparer.Ordinal);
         var probedVersions = ProbeVendorsConcurrently(
@@ -1586,9 +1597,8 @@ public static partial class DaemonRunner {
         var capabilities = new List<UnattendedVendorCapability>();
         foreach (var vendor in unattended) {
             var factory = byVendor[vendor];
-            // Codex's policy follows the same resolved field the launch router uses, so the certified
-            // policy and the transport actually launched cannot diverge.
-            if (LauncherPolicyVersion(vendor, config.CodexAppServerActive) is not { } policyVersion) continue;
+            var isCodex = IsCodex(vendor);
+            if ((isCodex ? codex.LauncherPolicyVersion : LauncherPolicyVersion(vendor, codexAppServer: false)) is not { } policyVersion) continue;
             // Trust-by-default: a vendor's borrowed-review capability is a property of its FACTORY,
             // never of the installed build's identity. Gating this on an exact-build match made an
             // ordinary vendor auto-update silently withdraw the capability (and the server then
@@ -1603,7 +1613,7 @@ public static partial class DaemonRunner {
             var modelResolver = factory.ReviewerModelResolver;
             capabilities.Add(new(
                 vendor,
-                probedVersions.GetValueOrDefault(vendor),
+                isCodex && codexFromResolution ? codex.CliVersion : probedVersions.GetValueOrDefault(vendor),
                 policyVersion,
                 borrowedSupported,
                 borrowedSupported ? factory.BorrowedReviewContainment : null,
@@ -1611,13 +1621,13 @@ public static partial class DaemonRunner {
                 ReviewerModelPolicyVersion: modelResolver?.PolicyVersion,
                 // Caller-selected launch posture, advertised per vendor rather than per platform —
                 // the seam is platform-neutral, and only the Codex launcher honours a posture block.
-                SupportsLaunchPosture: string.Equals(vendor, "codex", StringComparison.Ordinal),
-                InteractiveTransport: string.Equals(vendor, "codex", StringComparison.Ordinal)
-                    ? Harness.Codex.CodexTransportDecision.InteractiveTransport(config)
-                    : null));
+                SupportsLaunchPosture: isCodex,
+                InteractiveTransport: isCodex ? codex.InteractiveTransport : null));
         }
         return capabilities;
     }
+
+    static bool IsCodex(string vendor) => HarnessNames.From(vendor) == HarnessId.Codex;
 
     /// <summary>Fingerprints each advertised vendor's binary through the factory that launches it —
     /// the same path the version probe runs. A vendor with no locatable binary maps to null.</summary>

@@ -1574,10 +1574,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     }
 
     /// <summary>
-    /// Re-probes the vendors advertised at startup and re-registers when the advertisement changed
-    /// — the one path through which a running daemon updates what the server knows about its CLI
-    /// versions and vendor model catalogs. Returns at once; the work is single-flighted off the caller's stack so a burst of
-    /// requests coalesces and the last publication is always the newest probe.
+    /// Re-resolves the Codex switch, re-probes the vendors advertised at startup and re-registers when
+    /// the advertisement changed or the server has not yet seen the committed Codex resolution — the one
+    /// path through which a running daemon updates what the server knows about its CLI versions, vendor
+    /// model catalogs and Codex transport. Returns at once; the work is single-flighted off the caller's
+    /// stack so a burst of requests coalesces and the last publication is always the newest probe.
     /// </summary>
     /// <param name="republishUnchanged">Re-register even when the local advertisement already
     /// reads the same, for a caller that knows the server's copy differs.</param>
@@ -1592,9 +1593,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             async () => {
                 var republish    = Interlocked.Exchange(ref _republishRequested, 0) == 1;
                 var probeCatalog = Interlocked.Exchange(ref _catalogProbeRequested, 0) == 1;
+
+                var codex = CommitCodexResolution();
+
                 var current   = _config.UnattendedVendorCapabilities;
                 var fresh     = DaemonRunner.RetainAdvertisedVersions(current,
-                    DaemonRunner.ComputeUnattendedVendorCapabilities(_runtimeFactories.Values, _config, _config.UnattendedVendors));
+                    DaemonRunner.ComputeUnattendedVendorCapabilities(_runtimeFactories.Values, _config, codex, _config.UnattendedVendors));
 
                 var previousCatalog = _config.VendorModels;
                 var supported       = _config.SupportedVendors ?? [];
@@ -1608,8 +1612,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     : VendorModelCatalogs.Merge(previousCatalog,
                         await VendorModelCatalogs.ProbeAsync(_runtimeFactories.Values, catalogVendors, _shutdownCts.Token));
                 var catalogChanged = !VendorModelCatalogs.Equal(previousCatalog, mergedCatalog);
+                var unacknowledged = _config.AcknowledgedCodexResolution.Generation != codex.Generation;
 
-                if (!republish && !catalogChanged && current is not null && current.SequenceEqual(fresh)) return;
+                if (!republish && !catalogChanged && !unacknowledged && current is not null && current.SequenceEqual(fresh)) return;
 
                 _config.UnattendedVendorCapabilities = fresh;
                 // One reference swap: status serializers on other threads may be enumerating the old one.
@@ -1621,9 +1626,28 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 LogReAdvertising(_logger, reason,
                     string.Join(", ", fresh.Select(c => $"{c.Vendor} {c.CliVersion ?? DaemonRunner.UnknownCliVersion}")));
                 await _server.ReRegisterAsync();
+
+                if (unacknowledged) {
+                    _config.AcknowledgedCodexResolution = codex;
+                    _statusNotifier.Pulse();
+                }
             },
             ex => _logger.LogDebug(ex,
                 "Capability refresh ({Reason}) failed; the next registration or launch re-evaluates it.", reason));
+    }
+
+    /// <summary>Resolves the Codex switch and commits the result when it differs from the committed
+    /// one, under the next generation. New launches route on it from the moment it is swapped in.</summary>
+    CodexTransportResolution CommitCodexResolution() {
+        var committed = _config.CodexResolution;
+        var resolved  = CodexTransportResolution.Read(
+            committed.Generation + 1, _config.ReadExperimentalSettings, () => DaemonRunner.ProbeCliVersion(_config.CodexPath));
+        if (resolved.SameStateAs(committed)) return committed;
+
+        _config.CodexResolution = resolved;
+        LogCodexResolution(_logger, resolved.Generation, resolved.SwitchOn, resolved.Active, resolved.InactiveReason ?? "");
+        _statusNotifier.Pulse();
+        return resolved;
     }
 
     /// <summary>Test seam: the most recently scheduled capability refresh, for awaiting quiescence.</summary>
@@ -6323,6 +6347,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     // no such line at all.
     [LoggerMessage(Level = LogLevel.Information, Message = "Re-advertising unattended vendor capabilities ({Reason}): {Versions}")]
     static partial void LogReAdvertising(ILogger logger, string reason, string versions);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Codex transport resolution {Generation}: switch {SwitchOn}, app-server {Active} {InactiveReason}")]
+    static partial void LogCodexResolution(ILogger logger, long generation, bool switchOn, bool active, string inactiveReason);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Launching agent {AgentId} for {Repo} (vendor={Vendor}, effort={Effort}, model={Model})")]
     partial void LogLaunching(string agentId, string repo, string vendor, string effort, string? model);
