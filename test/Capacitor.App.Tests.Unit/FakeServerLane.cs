@@ -31,6 +31,7 @@ sealed class FakeServerLane : IServerLane {
     public Func<Task<IReadOnlyList<DaemonInfo>?>> DaemonsHandler = () => Task.FromResult<IReadOnlyList<DaemonInfo>?>([]);
     public Func<Task<IReadOnlyList<DaemonAccountsDto>?>> DaemonAccountsHandler = () => Task.FromResult<IReadOnlyList<DaemonAccountsDto>?>([]);
     public Func<string, Task<HubCallOutcome>> StopHandler = _ => Task.FromResult(HubCallOutcome.Ok);
+    public Func<Guid, Task<HubCallOutcome>> DiscardHandler = _ => Task.FromResult(HubCallOutcome.Ok);
     public Func<string, Task<HubCallOutcome>> SubscribeChatHandler = _ => Task.FromResult(HubCallOutcome.Ok);
     public Func<string, Task<HubCallOutcome>> UnsubscribeChatHandler = _ => Task.FromResult(HubCallOutcome.Ok);
     public Func<string, Task<HubCallOutcome>> AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Ok);
@@ -167,6 +168,8 @@ sealed class FakeServerLane : IServerLane {
         Append(ref _userInputs, (agentId, text));
         return UserInputHandler(agentId);
     }
+
+    public Task<HubCallOutcome> DiscardQueuedInputAsync(string agentId, Guid dispatchId, CancellationToken ct) => DiscardHandler(dispatchId);
 
     public Task<HubCallOutcome> SendSpecialKeyAsync(string agentId, string key, CancellationToken ct) {
         Append(ref _calls, $"key:{agentId}:{key}");

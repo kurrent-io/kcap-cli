@@ -163,6 +163,10 @@ public sealed partial class WorkContextViewModel {
     public string RequesterInitial { get => _requesterInitial; private set => this.RaiseAndSetIfChanged(ref _requesterInitial, value); }
     string? _requesterId;
     ViewerIdentityDto? _viewer;
+    public ViewerIdentityDto? ViewerIdentity {
+        get => _viewer;
+        private set => this.RaiseAndSetIfChanged(ref _viewer, value);
+    }
     string? _requesterAvatarUrl;
     public string? RequesterAvatarUrl { get => _requesterAvatarUrl; private set => this.RaiseAndSetIfChanged(ref _requesterAvatarUrl, value); }
 
@@ -230,7 +234,7 @@ public sealed partial class WorkContextViewModel {
             : GitHubAvatarUrl(_requesterId);
 
     void ForgetViewer() {
-        _viewer = null;
+        ViewerIdentity = null;
         ResolveRequesterAvatar();
     }
 
@@ -296,7 +300,7 @@ public sealed partial class WorkContextViewModel {
     }
 
     void ApplyReady(WorkContextRead read) {
-        _viewer = read.Viewer;
+        ViewerIdentity = read.Viewer;
         ResolveRequesterAvatar();
         if (read.Primary is null) {
             ClearCard();
