@@ -5,6 +5,12 @@
              x:Class="Capacitor.App.Views.ChatTabView"
              x:DataType="vm:ChatTabViewModel">
     <UserControl.Styles>
+        <!-- The composer already uses the normal ghost hover fill. Step up one surface
+             so the attachment action remains visible on hover and press. -->
+        <Style Selector="Button#AttachButton.kcapGhost:not(:disabled):pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button#AttachButton.kcapGhost:not(:disabled):pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapBorderBrush}" />
+        </Style>
         <Style Selector="Border.toolGroup">
             <Setter Property="Margin" Value="0,4,0,22" />
         </Style>
