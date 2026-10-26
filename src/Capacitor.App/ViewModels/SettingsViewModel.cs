@@ -169,6 +169,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     public PrivacySettingsViewModel? Privacy { get; init; }
     /// <summary>The local server's search, when this app runs one. The app owns it, so closing Settings leaves it running.</summary>
     public LocalSearchViewModel? Search { get; init; }
+    public ExperimentalSettingsViewModel? Experimental { get; init; }
 
     /// What the OS calls the app that holds its notification switches.
     internal static string SystemSettingsName { get; } = OperatingSystem.IsWindows() ? "Windows Settings" : "System Settings";
@@ -419,6 +420,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
         Accounts?.Dispose();
         Appearance?.Dispose();
         Privacy?.Dispose();
+        Experimental?.Dispose();
         _lifetime.Dispose();
     }
 }

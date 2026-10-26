@@ -51,7 +51,8 @@ running notes file that every PR edits.
   different anchor — `DaemonStoreTests` guards it.
 - **Local control IPC is append-only and capability-gated.** `FrameType` values are never reused or
   renumbered, and `LocalControlCapabilities.Current` is assembled beside the routing switch so
-  nothing can be advertised without a live handler.
+  nothing can be advertised without a live handler, or, for a capability that gates a status field,
+  without the daemon filling that field.
 - **Server-origin launch and stop share one serial lane**, sequenced and un-sequenced alike, so
   arrival order survives. One lock guards handler admission and the processor's single null→live
   transition: there is no second command domain, ever.

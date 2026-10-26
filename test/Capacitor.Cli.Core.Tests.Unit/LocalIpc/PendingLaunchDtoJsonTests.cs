@@ -15,7 +15,7 @@ public class PendingLaunchDtoJsonTests {
 
         await Assert.That(json).EndsWith(
             """
-            "agents":[],"pending":[{"id":"p1","vendor":"claude","repo_path":"/repo","title":"Fix the flaky test","created_at":"2026-09-01T00:00:00Z","stage":"spawned","kind":"review"}],"busy":null}
+            "agents":[],"pending":[{"id":"p1","vendor":"claude","repo_path":"/repo","title":"Fix the flaky test","created_at":"2026-09-01T00:00:00Z","stage":"spawned","kind":"review"}],"busy":null,"experimental":null}
             """);
     }
 

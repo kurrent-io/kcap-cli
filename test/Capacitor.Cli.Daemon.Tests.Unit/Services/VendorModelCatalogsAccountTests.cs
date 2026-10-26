@@ -132,7 +132,7 @@ public class VendorModelCatalogsAccountTests {
 
         await using var connection = new ServerConnection(config, new FixedCredentialSource(), NullLoggerFactory.Instance,
             NullLogger<ServerConnection>.Instance, TimeProvider.System);
-        var connect = connection.BuildDaemonConnect("mac", [], [], null);
+        var connect = connection.BuildDaemonConnect("mac", [], [], null, config.Advertisement);
         await Assert.That(ReferenceEquals(connect.VendorModelsByAccount, config.VendorModelsByAccount)).IsTrue();
 
         var status = JsonSerializer.Deserialize(

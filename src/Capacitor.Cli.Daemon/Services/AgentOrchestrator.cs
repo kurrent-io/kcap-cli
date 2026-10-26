@@ -1582,27 +1582,32 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     }
 
     /// <summary>
-    /// Re-probes the vendors advertised at startup and re-registers when the advertisement changed
-    /// — the one path through which a running daemon updates what the server knows about its CLI
-    /// versions and vendor model catalogs. Returns at once; the work is single-flighted off the caller's stack so a burst of
-    /// requests coalesces and the last publication is always the newest probe.
+    /// Re-resolves the Codex switch, re-probes the vendors advertised at startup and re-registers when
+    /// the advertisement changed or the server has not yet seen the committed Codex resolution — the one
+    /// path through which a running daemon updates what the server knows about its CLI versions, vendor
+    /// model catalogs and Codex transport. Returns at once; the work is single-flighted off the caller's
+    /// stack so a burst of requests coalesces and the last publication is always the newest probe.
     /// </summary>
     /// <param name="republishUnchanged">Re-register even when the local advertisement already
     /// reads the same, for a caller that knows the server's copy differs.</param>
-    internal void RefreshAdvertisedCapabilities(string reason, bool republishUnchanged = false) {
+    /// <param name="probeCatalogs">False for a caller with no reason to think a model catalog changed,
+    /// which then spawns no catalog probe.</param>
+    internal void RefreshAdvertisedCapabilities(string reason, bool republishUnchanged = false, bool probeCatalogs = true) {
         // Sticky rather than captured by the delegate: a request folded into a running pass reruns
         // THAT pass's delegate, which would otherwise carry the earlier caller's answer.
         if (republishUnchanged) Interlocked.Exchange(ref _republishRequested, 1);
-        // A republish-only caller has no reason to think a catalog changed, so it spawns no probe.
-        else Interlocked.Exchange(ref _catalogProbeRequested, 1);
+        else if (probeCatalogs) Interlocked.Exchange(ref _catalogProbeRequested, 1);
 
         _capabilityRefresh.Trigger(
             async () => {
                 var republish    = Interlocked.Exchange(ref _republishRequested, 0) == 1;
                 var probeCatalog = Interlocked.Exchange(ref _catalogProbeRequested, 0) == 1;
+
+                var codex = CommitCodexResolution();
+
                 var current   = _config.UnattendedVendorCapabilities;
                 var fresh     = DaemonRunner.RetainAdvertisedVersions(current,
-                    DaemonRunner.ComputeUnattendedVendorCapabilities(_runtimeFactories.Values, _config, _config.UnattendedVendors));
+                    DaemonRunner.ComputeUnattendedVendorCapabilities(_runtimeFactories.Values, _config, codex, _config.UnattendedVendors), codex);
 
                 var previousCatalog   = _config.VendorModels;
                 var previousByAccount = _config.VendorModelsByAccount;
@@ -1636,10 +1641,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     previousByAccount, accountProbe is null ? new Dictionary<string, VendorModelOption[]>() : await accountProbe, live);
                 var catalogChanged  = !VendorModelCatalogs.Equal(previousCatalog, mergedCatalog)
                                    || !VendorModelCatalogs.Equal(previousByAccount, mergedByAccount);
+                var unacknowledged = _config.AcknowledgedCodexResolution.Generation != codex.Generation;
 
-                if (!republish && !catalogChanged && current is not null && current.SequenceEqual(fresh)) return;
+                if (!republish && !catalogChanged && !unacknowledged && current is not null && current.SequenceEqual(fresh)) return;
 
-                _config.UnattendedVendorCapabilities = fresh;
+                _config.Advertise(fresh, codex);
                 // One reference swap: status serializers on other threads may be enumerating the old one.
                 // Pulsed before the re-register so a failed one cannot keep the change from local subscribers.
                 if (catalogChanged) {
@@ -1655,6 +1661,25 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 "Capability refresh ({Reason}) failed; the next registration or launch re-evaluates it.", reason));
     }
 
+    /// <summary>Resolves the Codex switch and commits the result when it differs from the committed
+    /// one, under the next generation. New launches route on it from the moment it is swapped in.</summary>
+    CodexTransportResolution CommitCodexResolution() {
+        var committed  = _config.CodexResolution;
+        string? problem = null;
+        var resolved   = CodexTransportResolution.Read(
+            committed.Generation + 1, _config.ReadExperimentalSettings, () => DaemonRunner.ProbeCliVersion(_config.CodexPath),
+            unreadable => { problem = unreadable; return committed; });
+
+        if (problem is not null && problem != _config.ExperimentalSettingsProblem) LogUnreadableSettings(_logger, problem);
+        _config.ExperimentalSettingsProblem = problem;
+        if (resolved.SameStateAs(committed)) return committed;
+
+        _config.CodexResolution = resolved;
+        LogCodexResolution(_logger, resolved.Generation, resolved.SwitchOn, resolved.Active, resolved.InactiveReason ?? "");
+        _statusNotifier.Pulse();
+        return resolved;
+    }
+
     /// <summary>Test seam: the most recently scheduled capability refresh, for awaiting quiescence.</summary>
     internal Task CapabilityRefreshForTest => _capabilityRefresh.Current;
 
@@ -1668,6 +1693,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// </summary>
     internal void RepublishRegistration(string reason) => RefreshAdvertisedCapabilities(reason, republishUnchanged: true);
 
+    /// <summary>Re-resolves the experimental switches and re-advertises what they change, without
+    /// re-probing any model catalog.</summary>
+    internal void RefreshExperimentalSettings(string reason) => RefreshAdvertisedCapabilities(reason, probeCatalogs: false);
+
     internal AgentLiveness ReadLiveness(string agentId) {
         // Order matters: check _agents first (Live/Quarantined-by-status), then _quarantine, then Dead.
         // The add-to-quarantine-before-remove-from-_agents invariant makes this ordering false-Dead-free.
@@ -1677,10 +1706,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         return AgentLiveness.Dead;
     }
 
-    /// <summary>Phase B (D4 §6.4(2a)): the kill-quarantine snapshot for the status report.</summary>
+    /// <summary>The kill-quarantine snapshot for the status report.</summary>
     internal IReadOnlyList<QuarantinedAgentInfo> QuarantineSnapshot() => _quarantine?.Snapshot() ?? [];
 
-    /// <summary>Phase B (D4 §6.4(2a)): the daemon's admission gate — EVERY live registry entry
+    /// <summary>The daemon's admission gate — EVERY live registry entry
     /// (not just Starting/Running — a Completed/Failed agent still mid-teardown holds its slot until
     /// CleanupAgentAsync's count-preserving remove) PLUS unconfirmed-death quarantined ones. Using the
     /// full <c>_agents.Count</c> (rather than <see cref="ActiveCount"/>, whose Starting/Running meaning is
@@ -2583,6 +2612,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
         }
 
+        if (CodexTransportDecision.ExpectedTransportRejection(cmd.Vendor, cmd.ExpectedRuntimeTransport) is { } transportRejection) {
+            await LaunchFailedUnlessPrivateAsync(isPrivate, cmd.AgentId, transportRejection);
+
+            return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
+        }
+
         if (isReviewFlow && cmd.ReviewerCertification is { } certification) {
             var version = string.Equals(cmd.Vendor, "claude", StringComparison.Ordinal)
                 ? DaemonRunner.ProbeCliVersionForLaunch(_config.ClaudePath)
@@ -2590,12 +2625,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             var certificationCheck = EvaluateReviewerCertification(
                 cmd.Vendor, version, _server.CurrentConnectionId, certification);
             if (!certificationCheck.Ok) {
-                // Codex review round 2 (P1): tell the caller FIRST. Recomputing capabilities re-runs
-                // the REGISTRATION probe — three 10s attempts plus backoff — so doing it before the
-                // notification meant a failed launch probe cost ~10s here and then ~30.75s more
-                // before the caller heard anything. The single-attempt launch probe did not bound the
-                // launch path at all while this sat in front of the rejection; my claim that it did
-                // was wrong.
+                // Tell the caller first: the refresh below re-runs the registration probe (three 10s
+                // attempts plus backoff), which would otherwise hold the rejection back for ~30s.
                 await LaunchFailedUnlessPrivateAsync(isPrivate, cmd.AgentId,
                     $"{(certificationCheck.Transient ? "reviewer_certification_transient" : "reviewer_certification_changed")}: {certificationCheck.Reason}.");
 
@@ -2976,6 +3007,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 IsPrivate: isPrivate,
                 PinnedSessionId: pinnedSessionId,
                 RequestedTransport: resume?.Entry.Transport,
+                ExpectedRuntimeTransport: cmd.ExpectedRuntimeTransport,
                 PersistenceProbe: () => _agents.TryGetValue(agentId, out var bound) ? bound.AcpForwarder?.Forwarder : null,
                 Account: account
             );
@@ -6437,6 +6469,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     // no such line at all.
     [LoggerMessage(Level = LogLevel.Information, Message = "Re-advertising unattended vendor capabilities ({Reason}): {Versions}")]
     static partial void LogReAdvertising(ILogger logger, string reason, string versions);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Codex transport resolution {Generation}: switch {SwitchOn}, app-server {Active} {InactiveReason}")]
+    static partial void LogCodexResolution(ILogger logger, long generation, bool switchOn, bool active, string inactiveReason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Experimental settings unreadable ({Problem}); keeping the committed Codex transport")]
+    static partial void LogUnreadableSettings(ILogger logger, string problem);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Launching agent {AgentId} for {Repo} (vendor={Vendor}, effort={Effort}, model={Model})")]
     partial void LogLaunching(string agentId, string repo, string vendor, string effort, string? model);
