@@ -108,7 +108,7 @@ public static class AccountRefresh {
         if (vendor is HarnessId.Codex) {
             var detail = result.LimitsError
                       ?? (writeFailed is not null ? $"could not write the reading: {writeFailed}"
-                        : result.Limits is null   ? "no limits reported"
+                        : result.Limits is null   ? result.LimitsNote ?? "no limits reported"
                         : decision is null        ? superseded
                         : decision.MergeLimits    ? "recorded"
                                                   : "dropped: the account's login changed during the refresh");

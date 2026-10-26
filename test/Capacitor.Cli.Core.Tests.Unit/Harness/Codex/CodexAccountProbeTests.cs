@@ -86,7 +86,25 @@ public class CodexAccountProbeTests {
         await Assert.That(result.IdentityError).IsNull();
         await Assert.That(result.SignIn).IsEqualTo(SignInStates.SignedOut);
         await Assert.That(result.Identity).IsNull();
-        await Assert.That(result.LimitsError).Contains("not signed in");
+        await Assert.That(result.LimitsError).IsNull();
+        await Assert.That(result.LimitsNote).IsEqualTo("not signed in");
+        await Assert.That(File.ReadAllText(Log)).DoesNotContain("account/rateLimits/read");
+    }
+
+    [Test]
+    public async Task Api_key_account_skips_the_limits_read() {
+        Skip.When(OperatingSystem.IsWindows(), "the stub codex is a POSIX shell script");
+        var probe = Probe(account: """{"jsonrpc":"2.0","id":2,"result":{"account":{"type":"apiKey"},"requiresOpenaiAuth":true,"workspaceRouting":null}}""",
+                          limits: """{"jsonrpc":"2.0","id":3,"error":{"code":-32603,"message":"chatgpt authentication required"}}""");
+
+        var result = await probe.ProbeAsync(Account(), CancellationToken.None);
+
+        await Assert.That(result.IdentityError).IsNull();
+        await Assert.That(result.SignIn).IsEqualTo(SignInStates.SignedIn);
+        await Assert.That(result.LimitsError).IsNull();
+        await Assert.That(result.Limits).IsNull();
+        await Assert.That(result.LimitsNote).IsEqualTo("no ChatGPT account");
+        await Assert.That(File.ReadAllText(Log)).DoesNotContain("account/rateLimits/read");
     }
 
     [Test]

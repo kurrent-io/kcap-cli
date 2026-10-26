@@ -369,6 +369,18 @@ public class AccountRefreshTests {
     }
 
     [Test]
+    public async Task Limits_step_without_a_chatgpt_login_succeeds_with_the_probe_s_note() {
+        Register(Codex("a@example.com", "idA"));
+
+        var outcome = await Refresh(new ProbeResult(SignInStates.SignedOut, null, null, null, null, "not signed in"));
+
+        var limits = outcome.Steps.Single(s => s.Name == "limits");
+        await Assert.That(limits.Succeeded).IsTrue();
+        await Assert.That(limits.Detail).IsEqualTo("not signed in");
+        await Assert.That(Account.LimitsError).IsNull();
+    }
+
+    [Test]
     public async Task Signed_out_answer_keeps_the_recorded_identity() {
         Register(Codex("a@example.com", "idA") with { SignIn = SignInStates.SignedIn });
 

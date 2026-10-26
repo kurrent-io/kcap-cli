@@ -52,6 +52,7 @@ public sealed class CodexAccountProbe(HarnessRegistry harnesses, UserHome home, 
         string?        routingId     = null;
         var            limitsDone    = false;
         string?        limitsError   = null;
+        string?        limitsNote    = null;
         JsonElement?   limits        = null;
         DateTimeOffset limitsAt      = default;
 
@@ -70,11 +71,17 @@ public sealed class CodexAccountProbe(HarnessRegistry harnesses, UserHome home, 
             }
             identityDone = true;
 
-            try {
-                limits   = await rpc.RequestAsync("account/rateLimits/read", w => w.WriteBoolean("excludeResetCreditDetails", true)).ConfigureAwait(false);
-                limitsAt = time.GetUtcNow();
-            } catch (RpcError ex) {
-                limitsError = $"account/rateLimits/read: {ex.Message}";
+            // Only a ChatGPT login has usage limits; asking without one fails every time.
+            limitsNote = identityError is not null || chatgpt is not null ? null
+                       : signIn == SignInStates.SignedOut                ? "not signed in"
+                                                                         : "no ChatGPT account";
+            if (limitsNote is null) {
+                try {
+                    limits   = await rpc.RequestAsync("account/rateLimits/read", w => w.WriteBoolean("excludeResetCreditDetails", true)).ConfigureAwait(false);
+                    limitsAt = time.GetUtcNow();
+                } catch (RpcError ex) {
+                    limitsError = $"account/rateLimits/read: {ex.Message}";
+                }
             }
             limitsDone = true;
         } catch (OperationCanceledException) when (!ct.IsCancellationRequested) {
@@ -104,7 +111,7 @@ public sealed class CodexAccountProbe(HarnessRegistry harnesses, UserHome home, 
             ? new AccountIdentity(a.Str("email"), null, null, a.Str("planType"), routingId ?? usageId)
             : null;
 
-        return new ProbeResult(identityError is null ? signIn : null, identity, identityError, observation, limitsError);
+        return new ProbeResult(identityError is null ? signIn : null, identity, identityError, observation, limitsError, limitsNote);
     }
 
     /// <summary>The sign-in, the account object when it is a ChatGPT login (the only kind that names one), and
