@@ -102,14 +102,17 @@ public class AgentOrchestratorClaudeDiscoveryTests {
     }
 
     [Test]
-    public async Task A_resume_in_place_links_its_existing_transcript_not_another_one_in_the_folder() {
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task A_resume_in_place_links_its_existing_transcript_not_another_one_in_the_folder(bool staleServerSession) {
         var cwd = Tmp.CreateDir("repo");
         var server = new CaptureServerConnection();
         await using var orch = Build(new ScriptedPtyProcess(), cwd, server);
         var own = Stage(cwd, Own);
         File.SetLastWriteTimeUtc(own, DateTime.UtcNow.AddDays(-2));
         _launcher.OnPrepare = ctx => Stage(ctx.Worktree.Path, Foreign);
-        orch.ResumeLedger!.Write(InPlaceEntry("resumed", cwd, Own));
+        var entry = InPlaceEntry("resumed", cwd, Own);
+        orch.ResumeLedger!.Write(staleServerSession ? entry with { SessionId = SessionIds.Canonical(Foreign) } : entry);
 
         orch.LoadResumeLedger();
         await orch.ResumeOnBootAsync(CancellationToken.None);
