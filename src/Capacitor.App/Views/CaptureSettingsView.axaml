@@ -26,10 +26,24 @@
                         <TextBlock Classes="kcapHint" TextWrapping="Wrap"
                                    Text="Sessions already on the server keep their visibility." />
                     </StackPanel>
+                    <Border Classes="settingsError warning" IsVisible="{Binding !VisibilityEditable}">
+                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+                            <views:AppIcon Kind="TriangleAlert" Size="14" Foreground="{StaticResource KcapWarningBrush}"
+                                           VerticalAlignment="Top" Margin="0,2,0,0" />
+                            <TextBlock Grid.Column="1" Classes="settingsErrorTitle" FontWeight="Normal"
+                                       Text="Your server's sharing options could not be loaded, so this stays as it is for now. Your recording rules still save." />
+                        </Grid>
+                    </Border>
                     <Border Classes="settingsCard">
                         <ListBox x:Name="VisibilityInput" Classes="settingsChoices" ItemsSource="{Binding VisibilityOptions}"
                                  SelectedValueBinding="{Binding Value}" SelectedValue="{Binding Visibility, Mode=TwoWay}"
                                  AutomationProperties.Name="Default session visibility">
+                            <ListBox.IsEnabled>
+                                <MultiBinding Converter="{x:Static BoolConverters.And}">
+                                    <Binding Path="VisibilityEditable" />
+                                    <Binding Path="!Loading" />
+                                </MultiBinding>
+                            </ListBox.IsEnabled>
                             <ListBox.ItemTemplate>
                                 <DataTemplate x:DataType="onboarding:VisibilityOption">
                                     <StackPanel Spacing="2">

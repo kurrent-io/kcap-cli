@@ -1086,12 +1086,20 @@ public partial class App : Application {
             daemonName, settings.ProfileName, probe.TerminalPathAsync,
             canonicalServer: ServerIdentity.Canonicalize(settings.ServerUrl));
         var harnesses = HarnessRegistry.FromEnvironment(_userHome);
+        var shimInstaller = CliPathInstallers.Create(runner, probe, _userHome);
+        var shimTarget = ShimTargetFor(cli.CliPath, Program.Host.CliOutlivesApp);
         return new HarnessesSettingsViewModel(settings, cli,
             HarnessesStepViewModel.BuildDetectionFeed(probe, _userHome), _shutdown.Token,
-            id => harnesses[id].Signals.IsWired);
+            id => harnesses[id].Signals.IsWired,
+            ensureTerminalCommand: shimInstaller is null || shimTarget is null ? null : async ct => {
+                // An inconclusive probe never offers an install, as in setup.
+                if (await probe.KcapOnPathAsync(ct) != false) return null;
+                var fix = new PathFixViewModel(shimInstaller, _appState, shimTarget);
+                return await fix.InstallAsync(ct) ? null : fix.Message;
+            });
     }
 
-    async Task<VisibilityOptionsResponse?> ReadSettingsVisibilityOptionsAsync(SettingsProfileStore settings, CancellationToken ct) {
+    async Task<VisibilityOptionsRead?> ReadSettingsVisibilityOptionsAsync(SettingsProfileStore settings, CancellationToken ct) {
         using var timeout = new CancellationTokenSource(WizardVisibilityOptionsTimeout, _time);
         using var bounded = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
         try {
@@ -1102,7 +1110,7 @@ public partial class App : Application {
                 if (status is not (AuthStatus.Ok or AuthStatus.NoAuthRequired)) return null;
                 var read = await ServerVisibilityOptions.ReadAsync(client, settings.ServerUrl, bounded.Token).ConfigureAwait(false);
                 if (read.Problem is { } problem) Console.Error.WriteLine($"kcap: settings visibility options read failed: {problem}");
-                return read.Offer;
+                return read;
             }
         } catch (Exception ex) when (!ct.IsCancellationRequested) {
             Console.Error.WriteLine($"kcap: settings visibility options read failed: {ex.Message}");

@@ -80,9 +80,9 @@ public class CaptureSettingsViewModelTests {
     [Test]
     public Task Tenant_options_clear_an_unavailable_choice_and_refuse_to_save_it() => AvaloniaSession.RunOnUiAsync(async () => {
         var store = Seed();
-        using var vm = new CaptureSettingsViewModel(store, visibilityOptions: _ => Task.FromResult<VisibilityOptionsResponse?>(new() {
+        using var vm = new CaptureSettingsViewModel(store, visibilityOptions: _ => Task.FromResult<VisibilityOptionsRead?>(new(new() {
             Options = [new() { Key = "project", Label = "Project members" }], DefaultVisibility = "project",
-        }));
+        }, null)));
         await vm.RefreshVisibilityOptionsAsync();
         await Assert.That(vm.Visibility).IsNull();
         await Assert.That(vm.VisibilityOptions.Select(o => o.Value)).IsEquivalentTo(new[] { "project" });
@@ -106,5 +106,65 @@ public class CaptureSettingsViewModelTests {
         await vm.SaveAsync();
         await Assert.That(store.LoadProfile().DefaultVisibility).IsEqualTo("private");
         await Assert.That(store.LoadProfile().AllowedRepos).IsEquivalentTo(new[] { "team/repo" });
+    });
+
+    /// A failed read says nothing about the tenant: the page keeps the stored audience rather than
+    /// offering every stop, and recording rules still save.
+    [Test]
+    public Task A_failed_options_read_keeps_the_stored_audience_and_still_saves_rules() => AvaloniaSession.RunOnUiAsync(async () => {
+        var store = Seed();
+        await store.SaveCaptureAsync(new Profile { DefaultVisibility = "project" }, CancellationToken.None);
+        using var vm = new CaptureSettingsViewModel(store,
+            visibilityOptions: _ => Task.FromResult<VisibilityOptionsRead?>(VisibilityOptionsRead.Failed("HTTP 500")));
+        await vm.RefreshVisibilityOptionsAsync();
+        await Assert.That(vm.VisibilityEditable).IsFalse();
+        vm.Visibility = "public";
+        vm.AllowedRepos = "team/repo";
+        await vm.SaveAsync();
+        await Assert.That(store.LoadProfile().DefaultVisibility).IsEqualTo("project");
+        await Assert.That(store.LoadProfile().AllowedRepos).IsEquivalentTo(new[] { "team/repo" });
+    });
+
+    [Test]
+    public Task A_server_without_the_options_route_offers_every_audience() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var vm = new CaptureSettingsViewModel(Seed(),
+            visibilityOptions: _ => Task.FromResult<VisibilityOptionsRead?>(VisibilityOptionsRead.NotServed));
+        await vm.RefreshVisibilityOptionsAsync();
+        await Assert.That(vm.VisibilityEditable).IsTrue();
+        await Assert.That(vm.VisibilityOptions.Count).IsEqualTo(4);
+    });
+
+    /// Reading the options is not a save, so it holds nothing Settings would wait on to close.
+    [Test]
+    public Task Reading_options_is_loading_not_busy() => AvaloniaSession.RunOnUiAsync(async () => {
+        var read = new TaskCompletionSource<VisibilityOptionsRead?>();
+        using var vm = new CaptureSettingsViewModel(Seed(), visibilityOptions: _ => read.Task);
+        var refresh = vm.RefreshVisibilityOptionsAsync();
+        await Assert.That(vm.Loading).IsTrue();
+        await Assert.That(vm.Busy).IsFalse();
+        read.SetResult(VisibilityOptionsRead.NotServed);
+        await refresh;
+        await Assert.That(vm.Loading).IsFalse();
+    });
+
+    [Test]
+    public Task A_hand_edited_audience_reads_as_the_cli_reads_it() => AvaloniaSession.RunOnUiAsync(async () => {
+        var store = Seed();
+        await store.SaveCaptureAsync(new Profile { DefaultVisibility = "Private" }, CancellationToken.None);
+        using var vm = new CaptureSettingsViewModel(store);
+        await Assert.That(vm.Visibility).IsEqualTo("private");
+        vm.AllowedRepos = "team/repo";
+        await vm.SaveAsync();
+        await Assert.That(store.LoadProfile().AllowedRepos).IsEquivalentTo(new[] { "team/repo" });
+    });
+
+    [Test]
+    public Task Folder_rules_accept_the_home_forms_the_cli_expands() => AvaloniaSession.RunOnUiAsync(async () => {
+        var store = Seed();
+        using var vm = new CaptureSettingsViewModel(store);
+        var native = "~" + Path.DirectorySeparatorChar + "Projects";
+        vm.AllowedPaths = $"~/work\n{native}";
+        await vm.SaveAsync();
+        await Assert.That(store.LoadProfile().AllowedPaths).IsEquivalentTo(new[] { "~/work", native });
     });
 }

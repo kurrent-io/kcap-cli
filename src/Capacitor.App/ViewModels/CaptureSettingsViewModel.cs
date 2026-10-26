@@ -11,7 +11,8 @@ namespace Capacitor.App.ViewModels;
 public sealed class CaptureSettingsViewModel : ReactiveObject, IDisposable {
     readonly SettingsProfileStore _store;
     readonly CancellationTokenSource _lifetime;
-    readonly Func<CancellationToken, Task<VisibilityOptionsResponse?>>? _visibilityOptions;
+    readonly Func<CancellationToken, Task<VisibilityOptionsRead?>>? _visibilityOptions;
+    readonly string _storedVisibility;
     string? _visibility;
     string _allowedRepos;
     string _excludedRepos;
@@ -19,20 +20,23 @@ public sealed class CaptureSettingsViewModel : ReactiveObject, IDisposable {
     string _excludedPaths;
     string? _message;
     bool _busy;
+    bool _loading;
+    bool _visibilityEditable = true;
 
     public CaptureSettingsViewModel(SettingsProfileStore store, CancellationToken appLifetime = default,
-            bool isLocal = false, Func<CancellationToken, Task<VisibilityOptionsResponse?>>? visibilityOptions = null) {
+            bool isLocal = false, Func<CancellationToken, Task<VisibilityOptionsRead?>>? visibilityOptions = null) {
         _store = store;
         VisibilityVisible = !isLocal;
         _visibilityOptions = visibilityOptions;
         _lifetime = CancellationTokenSource.CreateLinkedTokenSource(appLifetime);
         var profile = store.LoadProfile();
-        _visibility = profile.DefaultVisibility;
+        _storedVisibility = NormalizeVisibility(profile.DefaultVisibility);
+        _visibility = _storedVisibility;
         _allowedRepos = string.Join('\n', profile.AllowedRepos);
         _excludedRepos = string.Join('\n', profile.ExcludedRepos);
         _allowedPaths = string.Join('\n', profile.AllowedPaths);
         _excludedPaths = string.Join('\n', profile.ExcludedPaths);
-        SaveCommand = ReactiveCommand.CreateFromTask(SaveAsync, this.WhenAnyValue(x => x.Busy).Select(b => !b));
+        SaveCommand = ReactiveCommand.CreateFromTask(SaveAsync, this.WhenAnyValue(x => x.Busy, x => x.Loading, (busy, loading) => !busy && !loading));
     }
 
     public string ProfileName => _store.ProfileName;
@@ -44,28 +48,42 @@ public sealed class CaptureSettingsViewModel : ReactiveObject, IDisposable {
     public string AllowedPaths { get => _allowedPaths; set => this.RaiseAndSetIfChanged(ref _allowedPaths, value); }
     public string ExcludedPaths { get => _excludedPaths; set => this.RaiseAndSetIfChanged(ref _excludedPaths, value); }
     public string? Message { get => _message; private set => this.RaiseAndSetIfChanged(ref _message, value); }
+    /// A save in progress: the one Capture operation closing Settings must wait for.
     public bool Busy { get => _busy; private set => this.RaiseAndSetIfChanged(ref _busy, value); }
+    /// Reading the server's sharing options: read-only, so closing may abandon it.
+    public bool Loading { get => _loading; private set => this.RaiseAndSetIfChanged(ref _loading, value); }
+    /// False when the server's options could not be read; the stored choice is then kept as it is.
+    public bool VisibilityEditable { get => _visibilityEditable; private set => this.RaiseAndSetIfChanged(ref _visibilityEditable, value); }
     public ReactiveCommand<Unit, Unit> SaveCommand { get; }
 
     public async Task RefreshVisibilityOptionsAsync() {
-        if (!VisibilityVisible || _visibilityOptions is null || Busy) return;
-        Busy = true;
+        if (!VisibilityVisible || _visibilityOptions is null || Busy || Loading) return;
+        Loading = true;
         try {
-            var offer = await _visibilityOptions(_lifetime.Token);
-            VisibilityOptions = offer is null ? HarnessesStepViewModel.AllVisibilityOptions
-                : [.. offer.Options.Select(o => new VisibilityOption(o.Key!, o.Label!, o.Detail ?? ""))];
+            var read = await _visibilityOptions(_lifetime.Token);
+            // Only a server that does not serve the route means "every stop"; a failed read says nothing
+            // about this tenant, so it must not offer audiences the server may not honour.
+            if (read is not { Problem: null } answered) {
+                VisibilityEditable = false;
+                return;
+            }
+            VisibilityEditable = true;
+            VisibilityOptions = answered.Offer is { } offer
+                ? [.. offer.Options.Select(o => new VisibilityOption(o.Key!, o.Label!, o.Detail ?? ""))]
+                : HarnessesStepViewModel.AllVisibilityOptions;
             this.RaisePropertyChanged(nameof(VisibilityOptions));
             if (VisibilityOptions.All(o => o.Value != Visibility)) Visibility = null;
         } catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) {
         } catch (Exception ex) {
+            VisibilityEditable = false;
             Console.Error.WriteLine($"kcap: settings visibility options read failed: {ex.Message}");
-        } finally { Busy = false; }
+        } finally { Loading = false; }
     }
 
     internal async Task SaveAsync() {
-        if (Busy) return;
-        var visibility = VisibilityVisible ? Visibility : "private";
-        if (visibility is null || !VisibilityOptions.Any(o => o.Value == visibility)) {
+        if (Busy || Loading) return;
+        var visibility = !VisibilityVisible ? "private" : VisibilityEditable ? Visibility : _storedVisibility;
+        if (visibility is null || (VisibilityEditable && VisibilityVisible && !VisibilityOptions.Any(o => o.Value == visibility))) {
             Message = "Choose who can read new sessions.";
             return;
         }
@@ -77,7 +95,7 @@ public sealed class CaptureSettingsViewModel : ReactiveObject, IDisposable {
         }
         var allowedPaths = Lines(AllowedPaths);
         var excludedPaths = Lines(ExcludedPaths);
-        if (allowedPaths.Concat(excludedPaths).Any(p => !Path.IsPathFullyQualified(p) && p != "~" && !p.StartsWith("~/", StringComparison.Ordinal))) {
+        if (allowedPaths.Concat(excludedPaths).Any(p => !Path.IsPathFullyQualified(p) && !IsHomeRelative(p))) {
             Message = "Enter absolute folder paths or paths starting with ~/, one per line.";
             return;
         }
@@ -93,6 +111,16 @@ public sealed class CaptureSettingsViewModel : ReactiveObject, IDisposable {
             Message = $"Could not save capture settings: {ex.Message}";
         } finally { Busy = false; }
     }
+
+    // The forms the CLI's path normaliser expands: ~/ everywhere, and ~\ where that is the separator.
+    static bool IsHomeRelative(string path) =>
+        path == "~" || path.StartsWith("~/", StringComparison.Ordinal)
+                    || path.StartsWith("~" + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+
+    // The CLI reads a hand-edited or migrated value the same way, so a "Private" on disk is not a
+    // choice the page fails to recognise.
+    static string NormalizeVisibility(string? raw) =>
+        raw?.ToLowerInvariant() is { } lower && AppConfig.ValidVisibilities.Contains(lower) ? lower : "org_public";
 
     static string[] Lines(string? text) => (text ?? "").Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
         .Distinct(StringComparer.Ordinal).ToArray();
