@@ -23,10 +23,14 @@ public static class RecordingStateLabels {
 
     public static string? Hint(string vendor, string token, string directory) =>
         token == Installed && IsCodex(vendor)
-            ? $"Start Codex with CODEX_HOME={directory} and approve kcap's hooks when it asks."
+            ? "Start Codex once with this account and approve kcap's hooks when it asks."
             : token == Broken ? "kcap's hooks in this folder are missing or changed. Reconnect from the menu."
             : token == NotWired ? "kcap is not recording sessions from this folder yet."
             : null;
+
+    /// The command that does what the hint asks, when there is one to run.
+    public static string? Command(string vendor, string token, string directory) =>
+        token == Installed && IsCodex(vendor) ? $"CODEX_HOME={directory} codex" : null;
 
     static bool IsCodex(string vendor) => string.Equals(vendor, "codex", StringComparison.OrdinalIgnoreCase);
 }

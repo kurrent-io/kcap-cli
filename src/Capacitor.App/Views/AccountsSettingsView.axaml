@@ -75,14 +75,17 @@
                                                             <Button Classes="kcapGhost settingsCompact" Content="Cancel" VerticalAlignment="Center"
                                                                     Command="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).CancelRenameCommand}" />
                                                         </StackPanel>
-                                                        <TextBlock Classes="kcapHint" Text="{Binding Directory}" TextWrapping="Wrap"
-                                                                   FontFamily="{StaticResource OnboardingMonoFont}" FontSize="12" />
+                                                        <SelectableTextBlock Text="{Binding Directory}" TextWrapping="Wrap"
+                                                                             FontFamily="{StaticResource OnboardingMonoFont}" FontSize="12"
+                                                                             Foreground="{StaticResource KcapMutedBrush}" />
                                                         <TextBlock Classes="kcapHint accountState" Classes.attention="{Binding StateIsAttention}"
                                                                    Text="{Binding StateLabel}" ToolTip.Tip="{Binding StateHint}" Margin="0,2,0,0" />
                                                         <TextBlock Classes="settingsFootnote" Text="{Binding StateHint}"
                                                                    IsVisible="{Binding StateHint, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                                        <views:CommandChip Text="{Binding StateCommand}" HorizontalAlignment="Left" Margin="0,4,0,0"
+                                                                           IsVisible="{Binding StateCommand, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                                                     </StackPanel>
-                                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Top" Margin="0,-5,0,0">
                                                         <Button Classes="kcapChip settingsCompact accountAdd" Content="Set up" IsVisible="{Binding IsUnregisteredDefault}"
                                                                 ToolTip.Tip="Record sessions from this folder"
                                                                 AutomationProperties.Name="{Binding Label, StringFormat='Add {0} account'}"

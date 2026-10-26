@@ -5,11 +5,11 @@
              x:Name="Root" VerticalAlignment="Center">
     <Border Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
             BorderThickness="1" CornerRadius="6" Padding="8,0,2,0">
-        <StackPanel Orientation="Horizontal" Spacing="4">
-            <SelectableTextBlock Text="{Binding #Root.Text}" VerticalAlignment="Center"
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
+            <SelectableTextBlock Text="{Binding #Root.Text}" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,4"
                                  FontFamily="{StaticResource OnboardingMonoFont}" FontSize="12"
                                  Foreground="{StaticResource KcapTextBrush}" />
-            <Button x:Name="CopyButton" Classes="kcapGhost kcapIcon" Padding="5" MinHeight="0"
+            <Button x:Name="CopyButton" Grid.Column="1" Classes="kcapGhost kcapIcon" Padding="5" MinHeight="0"
                     Click="OnCopyClick" ToolTip.Tip="Copy"
                     AutomationProperties.Name="{Binding #Root.Text, StringFormat='Copy {0}'}">
                 <Panel>
@@ -17,6 +17,6 @@
                     <views:AppIcon x:Name="CopiedIcon" Kind="Check" Size="12" IsVisible="False" />
                 </Panel>
             </Button>
-        </StackPanel>
+        </Grid>
     </Border>
 </UserControl>

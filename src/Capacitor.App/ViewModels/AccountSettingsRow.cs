@@ -8,5 +8,6 @@ public sealed record AccountSettingsRow(string? Id, string Vendor, string Direct
     public string StateLabel => RecordingStateLabels.Label(Vendor, RecordingState);
     public bool StateIsAttention => RecordingStateLabels.IsAttention(Vendor, RecordingState);
     public string? StateHint => RecordingStateLabels.Hint(Vendor, RecordingState, Directory);
+    public string? StateCommand => RecordingStateLabels.Command(Vendor, RecordingState, Directory);
     public bool IsUnregisteredDefault => Id is null;
 }

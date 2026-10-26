@@ -80,7 +80,8 @@ public class AccountsSettingsViewModelTests {
             await Assert.That(codex.Count).IsEqualTo(2);
             await Assert.That(codex[0].StateLabel).IsEqualTo("Needs approval in Codex");
             await Assert.That(codex[0].StateIsAttention).IsTrue();
-            await Assert.That(codex[0].StateHint).IsEqualTo("Start Codex with CODEX_HOME=/u/.codex-main and approve kcap's hooks when it asks.");
+            await Assert.That(codex[0].StateHint).IsEqualTo("Start Codex once with this account and approve kcap's hooks when it asks.");
+            await Assert.That(codex[0].StateCommand).IsEqualTo("CODEX_HOME=/u/.codex-main codex");
             var fallback = codex[1];
             await Assert.That(fallback).IsEqualTo(new AccountSettingsRow(null, "codex", "/u/.codex", ".codex", "not_wired", true));
             await Assert.That(fallback.IsUnregisteredDefault).IsTrue();
