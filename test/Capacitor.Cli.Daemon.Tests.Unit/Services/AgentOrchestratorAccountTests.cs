@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Accounts.Readings;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
@@ -9,6 +10,7 @@ using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Resume;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Pty;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
@@ -42,10 +44,12 @@ public class AgentOrchestratorAccountTests {
     string RefusalFor(string accountId) =>
         AccountResolution.Resolve(Store.TryLoad(), HarnessId.Claude, accountId, ClaudeDefault).Refusal!;
 
-    AgentOrchestrator Build(CaptureServerConnection server, SpyPtyProcessFactory pty, SpyHostedAgentLauncher launcher, string? allowedRepo = null) =>
+    AgentOrchestrator Build(CaptureServerConnection server, SpyPtyProcessFactory pty, SpyHostedAgentLauncher launcher, string? allowedRepo = null,
+            AccountReadingSink? readings = null) =>
         AgentOrchestratorHarness.BuildOrchestrator(
             server, pty, new Dictionary<string, IHostedAgentLauncher> { [launcher.Vendor] = launcher },
             allowedRepoPath: allowedRepo,
+            readings: readings,
             configure: c => {
                 c.Accounts           = Store;
                 c.DefaultDirectories = new Dictionary<HarnessId, string> { [HarnessId.Claude] = ClaudeDefault, [HarnessId.Codex] = CodexDefault };
@@ -427,5 +431,34 @@ public class AgentOrchestratorAccountTests {
         while (await FrameCodec.ReadAsync(client.WrittenStream, default) is { } f) frames.Add(f);
 
         return frames;
+    }
+
+    /// <summary>The menu blocks the account the agent launched under, with the unknown constraint: the
+    /// scrape names no window, so no reset lifts it.</summary>
+    [Test]
+    public async Task Claude_limit_menu_blocks_the_agents_account() {
+        Register(WorkId, HarnessId.Claude, Tmp.CreateDir(".claude-work"), "Work");
+        using var repo = GitRepo.CreateWithCommit();
+        var pty = new ScriptedPtyProcess();
+        using var sink = new AccountReadingSink(Store, TimeProvider.System, NullLogger<AccountReadingSink>.Instance);
+        await using var orch = Build(new CaptureServerConnection(), new SpyPtyProcessFactory(pty), Spy(), repo, sink);
+
+        await orch.HandleLaunchAgentForTest(Launch("acct-limit", repo, WorkId));
+        pty.Emit(
+            "You've hit your session limit · resets 3:10pm\n\n" +
+            "What do you want to do?\n\n" +
+            "1. Stop and wait for limit to reset\n" +
+            "2. Wait here, then continue automatically shortly\n");
+
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        ReadingFile? file;
+        while ((file = Store.Readings.LoadAll().GetValueOrDefault(WorkId)) is not { Reading.Blocked.BlockedAt: not null }) {
+            if (DateTime.UtcNow > deadline) throw new TimeoutException("the limit menu recorded no block");
+            await Task.Delay(10);
+        }
+
+        await Assert.That(orch.GetAgentForTest("acct-limit")!.UsageLimit).IsNotNull();
+        await Assert.That(file.Reading.Blocked!.Constraints.Select(c => c.ResetsAt)).IsEquivalentTo(new DateTimeOffset?[] { null });
+        await Assert.That(Store.Readings.LoadAll().Keys).IsEquivalentTo([WorkId]);
     }
 }

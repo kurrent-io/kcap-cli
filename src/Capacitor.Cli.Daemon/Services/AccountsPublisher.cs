@@ -29,6 +29,7 @@ internal sealed partial class AccountsPublisher(
     bool                       _loadWarned;
     bool                       _hostWarned;
     bool                       _pollWarned;
+    Dictionary<string, DateTimeOffset?>? _blockedSeen;
 
     readonly Lock _sendLock = new();
     ITimer?       _trailingSend;
@@ -50,6 +51,11 @@ internal sealed partial class AccountsPublisher(
     /// <summary>Takes a new snapshot to the server, at most once per <see cref="ServerSendInterval"/>: a change
     /// inside the interval waits for its end and sends whatever snapshot is current then.</summary>
     public Func<AccountsSnapshotDto, Task>? SendToServer { get; set; }
+
+    /// <summary>Asks for a refresh of an account whose block advanced since the last snapshot. An advance a
+    /// refresh wrote is skipped, whichever daemon ran it: it records its origin in the same replace as the
+    /// block, so a refresh never triggers another. Called under the rebuild gate; it must not block.</summary>
+    public Action<string>? RequestRefresh { get; set; }
 
     public long Version => _notifier.Version;
 
@@ -137,6 +143,7 @@ internal sealed partial class AccountsPublisher(
         Volatile.Write(ref _current, next);
         _notifier.Pulse();
         Announce(next);
+        RequestBlockedRefreshes(next, readings);
         QueueServerSend(next);
         return true;
     }
@@ -160,6 +167,27 @@ internal sealed partial class AccountsPublisher(
         }
 
         return kept ?? loaded;
+    }
+
+    // The first snapshot is the baseline: a block it already carries is the startup refresh's to look at.
+    void RequestBlockedRefreshes(AccountsSnapshotDto snapshot, IReadOnlyDictionary<string, ReadingFile> readings) {
+        var seen = new Dictionary<string, DateTimeOffset?>(StringComparer.Ordinal);
+        foreach (var account in snapshot.Accounts) {
+            var blockedAt = account.Reading?.Blocked?.BlockedAt;
+            seen[account.Id] = blockedAt;
+
+            if (_blockedSeen is null || blockedAt is not { } at) continue;
+            if (_blockedSeen.GetValueOrDefault(account.Id) is { } previous && at <= previous) continue;
+            if (readings.GetValueOrDefault(account.Id)?.RefreshOrigins?.Contains(at) == true) continue;
+
+            try {
+                RequestRefresh?.Invoke(account.Id);
+            } catch (Exception ex) {
+                LogHandlerFailed(logger, ex);
+            }
+        }
+
+        _blockedSeen = seen;
     }
 
     void Announce(AccountsSnapshotDto snapshot) {

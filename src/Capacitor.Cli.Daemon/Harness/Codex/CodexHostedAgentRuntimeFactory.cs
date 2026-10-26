@@ -49,7 +49,8 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     public CodexHostedAgentRuntimeFactory(
             CodexLauncher launcher, IHostedAgentRuntimeFactory ptyDelegate, DaemonConfig config,
             ILoggerFactory loggerFactory, TimeProvider time, CodexAppServerSpawnFactory? spawnFactory = null,
-            ServerConnection? connection = null, PolicyJudgeGateway? policyJudge = null) {
+            ServerConnection? connection = null, PolicyJudgeGateway? policyJudge = null, AccountReadingSink? readings = null) {
+        _readings      = readings;
         _time          = time;
         _launcher      = launcher;
         _pty           = ptyDelegate;
@@ -63,6 +64,7 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     }
 
     readonly PolicyJudgeGateway? _policyJudge;
+    readonly AccountReadingSink? _readings;
 
     /// <summary>A governed interactive launch evaluates each approval before it reaches a card; a reviewer
     /// (approvals never raised) and an ungoverned launch take none.</summary>
@@ -212,7 +214,9 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
             requestInteraction: _connection is { } c ? c.RequestAcpInteractionAsync : null,
             approvalTimeout: TimeSpan.FromSeconds(Math.Max(1, _config.CodexAppServerApprovalTimeoutSeconds)),
             journal: ctx.Journal,
-            policy: PolicySeamFor(ctx, approval));
+            policy: PolicySeamFor(ctx, approval),
+            account: ctx.Account,
+            postReading: _readings is { } readings ? readings.Post : null);
 
         // StartAsync may spawn a child before it throws (a failed hooks/list, thread/start, or initial
         // turn on the fail-closed paths). The orchestrator never receives a runtime it did not get a

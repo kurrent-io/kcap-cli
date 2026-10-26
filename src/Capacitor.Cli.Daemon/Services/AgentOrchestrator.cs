@@ -7,6 +7,7 @@ using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Accounts.Readings;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
@@ -833,9 +834,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // passes the singleton the control socket fences.
             AdmissionFence?                                   admissionFence = null,
             // Null outside DaemonRunner: no accounts, so no catalog is probed per account.
-            AccountsPublisher?                                accounts = null
+            AccountsPublisher?                                accounts = null,
+            // Null outside DaemonRunner: limit hits seen on screen are not recorded.
+            AccountReadingSink?                               readings = null
         ) {
         AccountsSnapshot = accounts is null ? static () => null : () => accounts.Current;
+        _readings        = readings;
         _admission = admissionFence ?? new AdmissionFence(
             config.Store.RetiringMarkerPath(config.Name), config.InstanceId, time,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<AdmissionFence>.Instance);
@@ -1660,6 +1664,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     /// <summary>The host's accounts as last published; the per-account catalogs follow it.</summary>
     internal Func<AccountsSnapshotDto?> AccountsSnapshot { get; set; }
+
+    readonly AccountReadingSink? _readings;
 
     /// <summary>
     /// Re-sends the registration on the current connection so the server's copy of a connect
@@ -3638,6 +3644,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         screen.Resize(agent.CurrentCols, agent.CurrentRows);
         var (usageLimit, dialog) = screen.Observe(data);
         if (Equals(agent.UsageLimit, usageLimit) && Equals(agent.TerminalDialog, dialog)) return;
+        // The menu names no window, so the block is the unknown constraint.
+        if (agent.UsageLimit is null && usageLimit is not null)
+            _readings?.Post(agent.Account, new ReadingObservation(
+                _time.GetUtcNow(), Fresh: false, [], null, null, [new LimitSignal(null, null)],
+                LimitReachedReported: false, LimitStateKnown: false));
         agent.UsageLimit     = usageLimit;
         agent.TerminalDialog = dialog;
         _statusNotifier.Pulse();

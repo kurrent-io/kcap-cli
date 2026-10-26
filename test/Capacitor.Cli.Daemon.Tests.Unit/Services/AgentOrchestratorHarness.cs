@@ -44,7 +44,8 @@ internal static class AgentOrchestratorHarness {
             IHttpClientFactory?                                 httpClientFactory      = null,
             // The clock behind the subagent-expiry timer and every activity clock a seeded agent
             // gets by default; a test that drives expiry passes its own.
-            TimeProvider?                                       timeProvider           = null
+            TimeProvider?                                       timeProvider           = null,
+            AccountReadingSink?                                 readings               = null
         ) {
         var daemonStore    = new TempDaemonStore();
         var configRoot   = new TempConfigRoot();
@@ -118,7 +119,8 @@ internal static class AgentOrchestratorHarness {
             logger ?? NullLogger<AgentOrchestrator>.Instance,
             consentGate,
             deferProcessorPublication,
-            time
+            time,
+            readings
         );
     }
 
@@ -150,7 +152,8 @@ internal static class AgentOrchestratorHarness {
                 ILogger<AgentOrchestrator>                              logger,
                 LaunchConsentGate                                       consentGate,
                 bool                                                    deferProcessorPublication,
-                TimeProvider                                            time
+                TimeProvider                                            time,
+                AccountReadingSink?                                     readings
             ) : base(
             config,
             configRoot.Root,
@@ -173,7 +176,8 @@ internal static class AgentOrchestratorHarness {
             // Wired unconditionally so the launch path builds a snapshot exactly as production does.
             // The scratch config root and a fresh checkout carry no approval documents, so every test
             // that writes none still gets an empty snapshot and no upload.
-            policySnapshots: new PolicySnapshotProvider(configRoot.Root)
+            policySnapshots: new PolicySnapshotProvider(configRoot.Root),
+            readings: readings
         ) {
             _tmp    = tmp;
             _config = configRoot;

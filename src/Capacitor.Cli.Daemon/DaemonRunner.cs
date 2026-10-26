@@ -491,7 +491,8 @@ public static partial class DaemonRunner {
                 sp.GetRequiredService<ILoggerFactory>(),
                 time,
                 connection: sp.GetRequiredService<ServerConnection>(), // interactive approvals reach the user through it
-                policyJudge: sp.GetRequiredService<PolicyJudgeGateway>());
+                policyJudge: sp.GetRequiredService<PolicyJudgeGateway>(),
+                readings: sp.GetRequiredService<AccountReadingSink>());
         });
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
             new AcpHostedAgentRuntimeFactory(
@@ -636,6 +637,14 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton<AccountsPublisher>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<AccountsPublisher>());
         builder.Services.AddSingleton<AccountsIpc>();
+        builder.Services.AddSingleton(sp => new AccountReadingSink(config.Accounts, time, sp.GetRequiredService<ILogger<AccountReadingSink>>()));
+        builder.Services.AddSingleton(sp => new AccountRefresher(
+            config,
+            account => account.Vendor == HarnessId.Codex
+                ? new Core.Harness.Codex.CodexAccountProbe(harnesses, userHome, time)
+                : new Core.Harness.Claude.ClaudeIdentityProbe(harnesses, userHome, time),
+            time, sp.GetRequiredService<ILogger<AccountRefresher>>()));
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<AccountRefresher>());
 
         builder.Services.AddSingleton<RepoStoreWatcher>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<RepoStoreWatcher>());
@@ -754,6 +763,7 @@ public static partial class DaemonRunner {
 
         connection.GetAccountsSnapshot = () => accounts.Current;
         accounts.SendToServer          = connection.AccountsChangedAsync;
+        accounts.RequestRefresh        = host.Services.GetRequiredService<AccountRefresher>().Request;
 
         // Death-rattle instrumentation: without these, a daemon dying mid-run
         // (signal, OOM, unobserved-task FailFast, native crash) leaves no trace
