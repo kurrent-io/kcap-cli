@@ -18,10 +18,11 @@ public class MessageSenderLookupTests {
         public FakeTimeProvider Time { get; } = new(Now);
         public FakeMessageSenderSource Source { get; } = new();
         public List<string> Logged { get; } = [];
+        public List<Guid> Delivered { get; } = [];
         public CancellationTokenSource Lifetime { get; } = new();
         public MessageSenderLookup Lookup { get; }
 
-        public Rig() => Lookup = new MessageSenderLookup(Source, Time, Lifetime.Token, Logged.Add);
+        public Rig() => Lookup = new MessageSenderLookup(Source, Time, Lifetime.Token, Logged.Add, Delivered.Add);
 
         public async Task SettleAsync() {
             await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
@@ -33,6 +34,25 @@ public class MessageSenderLookupTests {
     static SenderLabel Recent(MessageKeys keys) => new(keys, Now);
 
     static MessageSendersRead Ready(params MessageSenderDto[] rows) => new(MessageSendersReadKind.Ready, rows);
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_read_finishing_after_cancellation_neither_titles_nor_confirms_a_message() => RunOnUiAsync(async () => {
+        var rig = new Rig();
+        var eventId = Guid.NewGuid();
+        var label = Old(new(eventId));
+        rig.Source.Answer = _ => {
+            rig.Lifetime.Cancel();
+            return Ready(new MessageSenderDto { EventId = eventId, DispatchId = Guid.NewGuid(), SentByCaller = true });
+        };
+        rig.Lookup.SetSession(Session, []);
+
+        rig.Lookup.Track([label]);
+        await rig.SettleAsync();
+
+        await Assert.That(label.HasTitle).IsFalse();
+        await Assert.That(rig.Delivered).IsEmpty();
+    });
 
     [Test]
     [NotInParallel("AvaloniaSession")]

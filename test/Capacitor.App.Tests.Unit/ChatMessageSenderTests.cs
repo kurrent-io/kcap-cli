@@ -5,6 +5,7 @@ using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.MessageSenders;
+using Capacitor.Remote.Models;
 using Microsoft.Extensions.Time.Testing;
 using static Capacitor.App.Tests.Unit.AvaloniaSession;
 using static Capacitor.App.Tests.Unit.WorkspaceFixtures;
@@ -28,6 +29,90 @@ public class ChatMessageSenderTests {
 
     static ProjectedLine UserLine(string text, long offset, Guid? sourceEventId = null, Guid? dispatchId = null) => new(
         new ChatProjectionResult([new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: text, SourceEventId: sourceEventId, DispatchId: dispatchId)], [text], []), offset);
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("AvaloniaSession")]
+    public Task Server_attribution_confirms_the_retry_without_confusing_its_predecessor(bool oldEchoArrivesFirst) => RunOnUiAsync(async () => {
+        using var access = new BehaviorSubject<SessionAccessState>(SessionAccessState.Established);
+        using var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
+        var time = new FakeTimeProvider();
+        var lane = new FakeServerLane();
+        var input = new AcceptingChatPromptInput();
+        var originalId = Guid.NewGuid();
+        var retryId = Guid.NewGuid();
+        var receipts = new List<MessageSenderDto>();
+        var senders = new FakeMessageSenderSource { Answer = _ => new(MessageSendersReadKind.Ready, receipts.ToArray()) };
+        var feed = new RemoteTranscriptFeed("s1", "gemini", access,
+            (_, _) => Task.FromResult(new SessionDetailFetch(RemoteFixtures.Detail())), lane, time, _ => { });
+        var chat = new ChatTabViewModel("a1", AgentOrigin.Remote, Observable.Return(Session("s1")), Observable.Return<string[]?>(null),
+            input, new NoAttachmentUploader(), _ => feed, new RecordingOpener(), time,
+            new FakePermissionService(), new SessionRuns(time), sessionId: Observable.Return<string?>("s1"),
+            serverQueue: queue, senders: senders);
+        try {
+            await WaitUntilAsync(() => chat.HasSeed && lane.Tails.Count == 1, what: "the seed and live tail");
+            chat.ComposerText = "same prompt";
+            await chat.SendCommand.Execute();
+            var original = chat.QueuedMessages.Single();
+            queue.OnNext([new() { DispatchId = originalId, Text = "same prompt", SenderUserId = "u1" }]);
+            queue.OnNext([]);
+            chat.ComposerText = "unrelated draft";
+            await chat.SendQueuedCommand.Execute(original);
+            var retry = chat.QueuedMessages.Single();
+            queue.OnNext([new() { DispatchId = retryId, Text = "same prompt", SenderUserId = "u1" }]);
+
+            if (oldEchoArrivesFirst) {
+                receipts.Add(new() { EventNumber = 4, DispatchId = originalId, SenderUserId = "u1", SentByCaller = true });
+                lane.PushStreamEvent(RemoteFixtures.Envelope("s1", 4, CanonicalEventTypes.UserMessageReceived, """{"content":"same prompt"}"""));
+                await WaitUntilAsync(() => chat.Items.OfType<UserTurnItem>().Count() == 1, what: "the predecessor echo");
+                if (chat.PendingSenderReadForTesting is { } oldRead) await oldRead;
+                await Assert.That(chat.QueuedMessages.Single()).IsSameReferenceAs(retry);
+            }
+
+            receipts.Add(new() { EventNumber = 6, DispatchId = retryId, SenderUserId = "u1", SentByCaller = true });
+            lane.PushStreamEvent(RemoteFixtures.Envelope("s1", 6, CanonicalEventTypes.UserMessageReceived, """{"content":"same prompt"}"""));
+            await WaitUntilAsync(() => chat.Items.OfType<UserTurnItem>().LastOrDefault()?.Sender.HasTitle == true
+                && chat.Items.OfType<UserTurnItem>().Count() == (oldEchoArrivesFirst ? 2 : 1), what: "the retry echo and attribution");
+            if (chat.PendingSenderReadForTesting is { } read) await read;
+            queue.OnNext([]);
+
+            await Assert.That(chat.HasQueuedMessages).IsFalse();
+            await Assert.That(chat.ComposerText).IsEqualTo("unrelated draft");
+            await Assert.That(input.Sends).IsEqualTo(2);
+        } finally { await chat.TeardownAsync(); }
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_late_queue_snapshot_cannot_revive_a_dispatch_already_attributed_to_a_message() => RunOnUiAsync(async () => {
+        using var access = new BehaviorSubject<SessionAccessState>(SessionAccessState.Established);
+        using var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
+        var time = new FakeTimeProvider();
+        var lane = new FakeServerLane();
+        var dispatch = Guid.NewGuid();
+        var senders = new FakeMessageSenderSource {
+            Answer = _ => new(MessageSendersReadKind.Ready, [new() { EventNumber = 6, DispatchId = dispatch, SentByCaller = true }]),
+        };
+        var feed = new RemoteTranscriptFeed("s1", "gemini", access,
+            (_, _) => Task.FromResult(new SessionDetailFetch(RemoteFixtures.Detail())), lane, time, _ => { });
+        var chat = new ChatTabViewModel("a1", AgentOrigin.Remote, Observable.Return(Session("s1")), Observable.Return<string[]?>(null),
+            new AcceptingChatPromptInput(), new NoAttachmentUploader(), _ => feed, new RecordingOpener(), time,
+            new FakePermissionService(), new SessionRuns(time), sessionId: Observable.Return<string?>("s1"),
+            serverQueue: queue, senders: senders);
+        try {
+            await WaitUntilAsync(() => chat.HasSeed && lane.Tails.Count == 1, what: "the seed and tail");
+            chat.ComposerText = "same prompt";
+            await chat.SendCommand.Execute();
+            lane.PushStreamEvent(RemoteFixtures.Envelope("s1", 6, CanonicalEventTypes.UserMessageReceived, """{"content":"same prompt"}"""));
+            await WaitUntilAsync(() => chat.Items.OfType<UserTurnItem>().SingleOrDefault()?.Sender.HasTitle == true, what: "the echo and attribution");
+            await Assert.That(chat.HasQueuedMessages).IsFalse();
+
+            queue.OnNext([new() { DispatchId = dispatch, Text = "same prompt", SenderUserId = "u1" }]);
+
+            await Assert.That(chat.HasQueuedMessages).IsFalse();
+        } finally { await chat.TeardownAsync(); }
+    });
 
     [Test]
     [NotInParallel("AvaloniaSession")]

@@ -711,7 +711,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _runs = runs;
         _runs.Changed += RefreshRuns;
         _lifetimeToken = _lifetime.Token;
-        _senders = senders is null ? null : new MessageSenderLookup(senders, time, _lifetimeToken, LogOnce);
+        _senders = senders is null ? null : new MessageSenderLookup(senders, time, _lifetimeToken, LogOnce, ConfirmAttributedDispatch);
         _phase = openFeed is null ? ChatTabPhase.Unavailable : ChatTabPhase.Waiting;
 
         // A local session's id names an app-server session only while the local daemon reports
@@ -993,7 +993,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             .Distinct().OrderBy(q => q.SendOrder).ToList();
         foreach (var item in items.OrderBy(item => item.DispatchedAt)) {
             // Empty ids cannot distinguish dispatches or establish ownership.
-            if (item.DispatchId == Guid.Empty || _discardedDispatches.Contains(item.DispatchId) || !listed.Add(item.DispatchId)) continue;
+            if (item.DispatchId == Guid.Empty || _discardedDispatches.Contains(item.DispatchId)
+                || _senders?.HasReceipt(item.DispatchId) == true || !listed.Add(item.DispatchId)) continue;
             // Snapshots have no revision; listing a known own row must disable its retry.
             if (attempts.FirstOrDefault(q => q.DispatchId == item.DispatchId) is { } known) {
                 if (!known.IsForeign) {
@@ -1215,6 +1216,18 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         queued.Acknowledged = true;
         _queuedMessages.Remove(queued);
         ConfirmDelivery(queued);
+    }
+
+    // Text alone cannot distinguish a retry from its predecessor. The server's attribution
+    // identifies the dispatch whose transcript receipt it actually matched.
+    void ConfirmAttributedDispatch(Guid dispatchId) {
+        var attempts = Tracked.Concat(_superseded.Select(pair => pair.Old)).Distinct()
+            .Where(queued => queued.DispatchId == dispatchId).ToArray();
+        foreach (var queued in attempts) {
+            if (!queued.Acknowledged) Acknowledge(queued);
+            AbsorbSuperseded(queued);
+        }
+        RefreshQueue();
     }
 
     // Every predecessor follows the newest retry's ordering and transcript boundary. On refusal,
