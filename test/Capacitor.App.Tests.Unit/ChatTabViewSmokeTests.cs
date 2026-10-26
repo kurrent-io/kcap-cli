@@ -268,7 +268,7 @@ public class ChatTabViewSmokeTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task An_ended_session_keeps_its_terminal_dialog_action_accessible_without_a_composer() {
+    public async Task An_ended_session_hides_stale_terminal_controls_and_shows_the_ended_hint() {
         await RunOnUiAsync(async () => {
             var host = new Host();
             var path = Tmp.CreateFile("ended-dialog.jsonl", [UserLine]);
@@ -284,15 +284,19 @@ public class ChatTabViewSmokeTests {
                 host.Settle();
                 var openTerminal = host.View.FindControl<Button>("TerminalMenuOpenTerminal")!;
                 await Assert.That(openTerminal.IsEffectivelyVisible).IsTrue();
+                Click(host, openTerminal);
+                await Assert.That(opened).IsTrue();
 
                 host.Daemon.Agents.AddOrUpdate(agent with { Status = "Completed" });
                 host.Settle();
 
                 await Assert.That(host.Composer.IsEffectivelyVisible).IsFalse();
                 await Assert.That(host.View.FindControl<Border>("ComposerCard")!.IsEffectivelyVisible).IsFalse();
-                await Assert.That(openTerminal.IsEffectivelyVisible).IsTrue();
-                Click(host, openTerminal);
-                await Assert.That(opened).IsTrue();
+                await Assert.That(openTerminal.IsEffectivelyVisible).IsFalse();
+                await Assert.That(openTerminal.Focus()).IsFalse();
+                var hint = host.View.FindControl<TextBlock>("EndedComposerHint")!;
+                await Assert.That(hint.IsEffectivelyVisible).IsTrue();
+                await Assert.That(hint.Text).IsEqualTo("This session has ended");
             } finally { await host.CloseAsync(); }
         });
     }
