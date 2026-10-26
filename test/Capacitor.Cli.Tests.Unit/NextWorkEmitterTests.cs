@@ -52,7 +52,20 @@ public class NextWorkEmitterTests {
     public async Task The_guidance_names_deferral_and_completion() {
         await Assert.That(NextWorkEmitter.Guidance).Contains("Finish a listed item before starting new work.");
         await Assert.That(NextWorkEmitter.Guidance).Contains("declare it at that moment with declare_loose_end (one call per item, never \"none\")");
-        await Assert.That(NextWorkEmitter.Guidance).EndsWith(NextWorkEmitter.CompletionInstruction);
+        await Assert.That(NextWorkEmitter.Guidance).Contains(NextWorkEmitter.CompletionInstruction);
+        await Assert.That(NextWorkEmitter.Guidance).EndsWith(NextWorkEmitter.StartAgentOffer);
+    }
+
+    /// <summary>The offer is conditional on the tool, since a harness without the flows MCP or a server
+    /// without agent start cannot honour it, and it never licenses a start the user did not ask for.</summary>
+    [Test]
+    public async Task The_guidance_offers_a_separate_hosted_agent_only_where_start_agent_exists() {
+        var text = NextWorkEmitter.StartAgentOffer;
+
+        await Assert.That(text).Contains("If start_agent is among your tools");
+        await Assert.That(text).Contains("handed to a separate hosted agent");
+        await Assert.That(text).Contains("Start one only when the user asks");
+        await Assert.That(text).Contains("target_key");
     }
 
     /// <summary>The unit is the piece of work, not the request: the instruction names the terminal states,

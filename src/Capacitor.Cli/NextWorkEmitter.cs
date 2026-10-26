@@ -58,7 +58,13 @@ static partial class NextWorkEmitter {
     internal const string Guidance =
         "Finish a listed item before starting new work. When you decide to defer something in this " +
         "session, declare it at that moment with declare_loose_end (one call per item, never \"none\"). " +
-        CompletionInstruction;
+        CompletionInstruction + " " + StartAgentOffer;
+
+    // Kept out of CompletionInstruction: the workitems MCP instructions it leads sit at Claude Code's cap.
+    internal const string StartAgentOffer =
+        "If start_agent is among your tools, end that presentation by saying the user can have any listed " +
+        "item handed to a separate hosted agent. Start one only when the user asks, following the " +
+        "start-agents skill, with the item's target_key from get_next_work as work_item.";
 
     // Without the explicit "question answered with nothing pending" case, agents present after every reply.
     internal const string CompletionInstruction =
