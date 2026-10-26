@@ -1,5 +1,6 @@
 <Styles xmlns="https://github.com/avaloniaui"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:Capacitor.App.Views">
     <Styles.Resources>
         <!-- Input outlines need 3:1 against the card; KcapBorderStrongBrush falls short of that. -->
         <SolidColorBrush x:Key="SettingsControlBorderBrush" Color="#616B80" />
@@ -16,14 +17,18 @@
         <Setter Property="Template">
             <ControlTemplate>
                 <Grid ColumnDefinitions="208,*">
-                    <!-- The window's buttons sit over the top of the sidebar, so the list starts below them. -->
+                    <!-- The window's buttons sit over the top of the sidebar, so it starts below them. The
+                         TabControl's Tag is the sidebar header: the profile the grouped pages edit. -->
                     <Border Background="{StaticResource KcapSurfaceBrush}"
                             BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,0,1,0">
-                        <ScrollViewer Margin="0,52,0,0" VerticalScrollBarVisibility="Auto"
-                                      HorizontalScrollBarVisibility="Disabled">
-                            <ItemsPresenter Name="PART_ItemsPresenter" Margin="10,0,10,16"
-                                            ItemsPanel="{TemplateBinding ItemsPanel}" />
-                        </ScrollViewer>
+                        <Grid RowDefinitions="Auto,*" Margin="0,44,0,0">
+                            <ContentPresenter Content="{TemplateBinding Tag}" Margin="10,0,10,6" />
+                            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Disabled">
+                                <ItemsPresenter Name="PART_ItemsPresenter" Margin="10,0,10,16"
+                                                ItemsPanel="{TemplateBinding ItemsPanel}" />
+                            </ScrollViewer>
+                        </Grid>
                     </Border>
                     <!-- Each page pads inside its own ScrollViewer, so the scrollbar sits at the window edge. -->
                     <ContentPresenter Grid.Column="1" Name="PART_SelectedContentHost" Margin="0,40,0,0"
@@ -73,8 +78,23 @@
     <Style Selector="TabItem.settingsNav:focus-visible">
         <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
     </Style>
-    <Style Selector="TabItem.settingsNav.groupStart">
-        <Setter Property="Margin" Value="0,12,0,0" />
+    <!-- A group caption in the sidebar: a disabled, unfocusable item, so arrow keys pass over it. -->
+    <Style Selector="TabItem.settingsNavHeader">
+        <Setter Property="IsEnabled" Value="False" />
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="IsTabStop" Value="False" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <ContentPresenter Content="{TemplateBinding Header}" Padding="10,18,10,6"
+                                  FontSize="11.5" FontWeight="SemiBold" LetterSpacing="0.2"
+                                  Foreground="{StaticResource KcapFaintBrush}" />
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <Style Selector="Button.settingsProfileCard">
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="Padding" Value="10,9" />
     </Style>
 
     <Style Selector="StackPanel.settingsPage">
@@ -166,14 +186,28 @@
         <Setter Property="FontWeight" Value="SemiBold" />
         <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
     </Style>
+    <!-- Every page names its scope: the profile it edits, or every profile on this computer. -->
     <Style Selector="Border.settingsContextChip">
-        <Setter Property="Padding" Value="9,4" />
+        <Setter Property="Padding" Value="8,4,10,4" />
         <Setter Property="CornerRadius" Value="999" />
         <Setter Property="HorizontalAlignment" Value="Left" />
         <Setter Property="Margin" Value="0,6,0,0" />
         <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
         <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
         <Setter Property="BorderThickness" Value="1" />
+    </Style>
+    <Style Selector="Border.settingsContextChip views|AppIcon">
+        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Border.settingsContextChip TextBlock">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+    </Style>
+    <Style Selector="Border.settingsContextChip TextBlock.scopeName">
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
     </Style>
     <Style Selector="Border.settingsNotice">
         <Setter Property="Background" Value="{StaticResource KcapWarningDimBrush}" />
@@ -257,11 +291,36 @@
     </Style>
 
     <Style Selector="CheckBox.settingsHarnessCheck">
-        <Setter Property="HorizontalAlignment" Value="Stretch" />
-        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
         <Setter Property="VerticalAlignment" Value="Center" />
-        <Setter Property="MinHeight" Value="20" />
-        <Setter Property="Padding" Value="12,0,0,0" />
+        <Setter Property="MinWidth" Value="0" />
+        <Setter Property="Padding" Value="0" />
+    </Style>
+    <!-- Vendor logos differ in shape and weight; a shared tile gives them one optical size. -->
+    <Style Selector="Border.settingsGlyphTile">
+        <Setter Property="Width" Value="32" />
+        <Setter Property="Height" Value="32" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+    </Style>
+    <Style Selector="Border.settingsError">
+        <Setter Property="Background" Value="{StaticResource KcapDangerDimBrush}" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Padding" Value="12,10" />
+    </Style>
+    <Style Selector="TextBlock.settingsErrorTitle">
+        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="SelectableTextBlock.settingsErrorDetail">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="LineHeight" Value="18" />
+        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        <Setter Property="TextWrapping" Value="Wrap" />
     </Style>
     <Style Selector="Button.settingsCompact">
         <Setter Property="Padding" Value="10,5" />

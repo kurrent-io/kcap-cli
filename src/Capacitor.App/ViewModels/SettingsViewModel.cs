@@ -169,6 +169,8 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     public bool CanManageNotifications => _notificationSettings is not null;
 
     public ProfilesSettingsViewModel? Profiles { get; }
+    public string ProfileName => _settings.ProfileName;
+    public string ServerLabel => Uri.TryCreate(_settings.ServerUrl, UriKind.Absolute, out var url) ? url.Authority : _settings.ServerUrl;
     public CaptureSettingsViewModel Capture { get; }
     public HarnessesSettingsViewModel? Harnesses { get; }
     public bool HasActiveOperation => IsBusy || Capture.Busy || Harnesses?.Busy == true;

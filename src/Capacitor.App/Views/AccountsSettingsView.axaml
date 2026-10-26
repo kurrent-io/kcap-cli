@@ -16,6 +16,12 @@
                 <TextBlock x:Name="AccountsTitleText" Classes="kcapTitle" Text="Accounts" />
                 <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
                            Text="Manage Claude and Codex accounts on this computer. Choose an account when you start a session." />
+                <Border Classes="settingsContextChip" ToolTip.Tip="Shared by every profile on this computer">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <views:AppIcon Kind="Laptop" Size="12" />
+                        <TextBlock Text="All profiles on this computer" />
+                    </StackPanel>
+                </Border>
             </StackPanel>
 
             <Border Classes="settingsNotice"

@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:vm="clr-namespace:Capacitor.App.ViewModels" xmlns:onboarding="clr-namespace:Capacitor.App.ViewModels.Onboarding"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
+             xmlns:views="clr-namespace:Capacitor.App.Views" xmlns:onboarding="clr-namespace:Capacitor.App.ViewModels.Onboarding"
              x:Class="Capacitor.App.Views.CaptureSettingsView" x:DataType="vm:CaptureSettingsViewModel">
     <Grid RowDefinitions="*,Auto" IsEnabled="{Binding !Busy}">
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
@@ -10,12 +11,11 @@
                                IsVisible="{Binding VisibilityVisible}" />
                     <TextBlock Classes="kcapSubtitle" Text="Choose what gets recorded. Sessions on your local server stay private." TextWrapping="Wrap"
                                IsVisible="{Binding !VisibilityVisible}" />
-                    <Border Classes="settingsContextChip" ToolTip.Tip="These settings belong to this profile">
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <TextBlock Text="Profile" FontSize="11" FontWeight="Medium"
-                                       Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
-                            <TextBlock Text="{Binding ProfileName}" FontSize="12" FontWeight="SemiBold"
-                                       Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                    <Border Classes="settingsContextChip" ToolTip.Tip="These settings apply only to this profile">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <views:AppIcon Kind="UserRound" Size="12" />
+                            <TextBlock Text="Profile" />
+                            <TextBlock Classes="scopeName" Text="{Binding ProfileName}" />
                         </StackPanel>
                     </Border>
                 </StackPanel>

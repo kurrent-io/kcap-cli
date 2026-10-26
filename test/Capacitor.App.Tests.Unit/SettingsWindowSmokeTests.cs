@@ -48,16 +48,16 @@ public class SettingsWindowSmokeTests {
             var daemonPosition = daemon.TranslatePoint(default, window)!.Value;
             var alertsPosition = alerts.TranslatePoint(default, window)!.Value;
             await Assert.That(alertsPosition.X).IsEqualTo(daemonPosition.X);
-            await Assert.That(alertsPosition.Y).IsLessThan(daemonPosition.Y);
+            await Assert.That(daemonPosition.Y).IsLessThan(alertsPosition.Y);
 
             Click(window, alerts);
             await Assert.That(tabs.SelectedItem).IsEqualTo(alerts);
             await Assert.That(window.FindControl<ToggleSwitch>("PermissionNotificationsToggle")!.IsEffectivelyVisible).IsTrue();
             alerts.Focus(NavigationMethod.Tab);
-            window.KeyPressQwerty(PhysicalKey.ArrowDown, RawInputModifiers.None);
-            window.KeyReleaseQwerty(PhysicalKey.ArrowDown, RawInputModifiers.None);
+            window.KeyPressQwerty(PhysicalKey.ArrowUp, RawInputModifiers.None);
+            window.KeyReleaseQwerty(PhysicalKey.ArrowUp, RawInputModifiers.None);
             Settle(window);
-            await Assert.That(tabs.SelectedItem).IsEqualTo(window.FindControl<TabItem>("CaptureTab"));
+            await Assert.That(tabs.SelectedItem).IsEqualTo(daemon);
 
             window.Width = window.MinWidth;
             window.Height = window.MinHeight;
