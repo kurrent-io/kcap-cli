@@ -115,13 +115,14 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     /// registration against. Unpinned, a PR review stays on PTY and anything else follows the resolution
     /// the server last acknowledged, since that is the advertisement it dispatched against. A pinned
     /// app-server launch on a Codex below the floor is refused, never moved to PTY, which the server
-    /// would refuse at registration.
+    /// would refuse at registration. The floor is checked against the Codex installed now: the
+    /// resolution's version is only as fresh as the last capability refresh.
     /// </summary>
     internal CodexRoute Route(RuntimeStartContext ctx) {
         var pinned = Recognised(ctx.RequestedTransport) ?? Recognised(ctx.ExpectedRuntimeTransport);
         if (pinned == CodexTransportDecision.Pty) return new(AppServer: false, Refusal: null);
         if (pinned == CodexTransportDecision.AppServer) {
-            var version = _config.CodexResolution.CliVersion ?? DaemonRunner.ProbeCliVersionForLaunch(_pty.CliPath);
+            var version = DaemonRunner.ProbeCliVersionForLaunch(_pty.CliPath);
             return CodexTransportDecision.MeetsFloor(version)
                 ? new(AppServer: true, Refusal: null)
                 : new(AppServer: false, Refusal:

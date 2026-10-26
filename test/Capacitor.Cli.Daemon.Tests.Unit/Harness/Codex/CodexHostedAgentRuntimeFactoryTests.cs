@@ -92,8 +92,8 @@ public class CodexHostedAgentRuntimeFactoryTests {
             RecordingPtyFactory pty, bool appServerActive, CodexAppServerSpawnFactory? spawn = null) =>
         new(NewLauncher(), pty, ConfigWith(switchOn: appServerActive), NullLoggerFactory.Instance, TimeProvider.System, spawn);
 
-    /// <summary>A Codex at the factory's CLI path reporting <paramref name="version"/>, for a pinned launch
-    /// on a daemon whose switch is off and whose resolution therefore carries no version.</summary>
+    /// <summary>A Codex at the factory's CLI path reporting <paramref name="version"/>, which a pinned
+    /// app-server launch probes.</summary>
     string CodexReporting(string version) =>
         Tmp.CreateExecutable("codex", $"#!/bin/sh\necho 'codex-cli {version}'\n");
 
@@ -101,7 +101,7 @@ public class CodexHostedAgentRuntimeFactoryTests {
     public enum Kind { Interactive, ReviewFlow, PrReview }
 
     /// <summary>The installed Codex reports <c>version</c> both to the resolution, when the switch is on,
-    /// and at the factory's CLI path, which a pinned launch probes when the switch is off.</summary>
+    /// and at the factory's CLI path, which a pinned launch probes.</summary>
     [Test]
     [Arguments("pty",        "app-server", Kind.Interactive, true,  "0.146.0", false, false)]
     [Arguments("app-server", "pty",        Kind.Interactive, false, "0.146.0", true,  false)]
@@ -172,10 +172,29 @@ public class CodexHostedAgentRuntimeFactoryTests {
         await Assert.That(route.AppServer).IsEqualTo(acknowledgedActive);
     }
 
+    /// <summary>Codex can be upgraded or downgraded between capability refreshes, so the resolution's
+    /// version cannot decide a pinned launch either way.</summary>
+    [Test]
+    [Arguments("0.146.0", "0.145.9", true)]
+    [Arguments("0.145.9", "0.146.0", false)]
+    public async Task A_pinned_app_server_launch_checks_the_installed_codex_not_the_resolution(
+            string resolved, string installed, bool refused) {
+        Skip.Unless(!OperatingSystem.IsWindows(), "The stub Codex is a POSIX shell script.");
+        var factory = new CodexHostedAgentRuntimeFactory(
+            NewLauncher(), new RecordingPtyFactory(CodexReporting(installed)), ConfigWith(switchOn: true, resolved),
+            NullLoggerFactory.Instance, TimeProvider.System);
+
+        var route = factory.Route(Ctx(isReviewFlow: false, Home.PathTo("routing")) with { ExpectedRuntimeTransport = "app-server" });
+
+        await Assert.That(route.AppServer).IsEqualTo(!refused);
+        await Assert.That(route.Refusal is not null).IsEqualTo(refused);
+    }
+
     [Test]
     public async Task A_pinned_app_server_launch_below_the_floor_is_refused_without_starting_pty() {
+        Skip.Unless(!OperatingSystem.IsWindows(), "The stub Codex is a POSIX shell script.");
         using var wt = new TempDir();
-        var pty = new RecordingPtyFactory();
+        var pty = new RecordingPtyFactory(CodexReporting("0.145.9"));
         var factory = new CodexHostedAgentRuntimeFactory(
             NewLauncher(), pty, ConfigWith(switchOn: true, version: "0.145.9"), NullLoggerFactory.Instance, TimeProvider.System);
 
