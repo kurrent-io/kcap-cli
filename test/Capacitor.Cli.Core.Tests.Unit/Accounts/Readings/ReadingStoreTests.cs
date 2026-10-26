@@ -181,14 +181,24 @@ public class ReadingStoreTests {
     public async Task A_failed_registry_save_skips_the_reading_writes() {
         var store = Registered(Store(), Codex("a"));
         store.Readings.TryRecord("a", 0, null, Observe(0));
+        var before   = File.ReadAllText(ReadingPath(store, "a"));
+        var deleted  = false;
 
         File.Delete(store.RegistryPath);
-        Directory.CreateDirectory(store.RegistryPath);
+        Tmp.CreateDir("accounts", "accounts.json");
 
-        await Assert.That(() => store.MutateWithReadings(
-            (r, _) => (r with { Revision = 9 }, 0),
-            (_, held) => held.Delete("a"))).Throws<IOException>();
+        // Replacing a directory fails as IOException on Unix and UnauthorizedAccessException on Windows.
+        Exception? thrown = null;
+        try {
+            store.MutateWithReadings(
+                (r, _) => (r with { Revision = 9 }, 0),
+                (_, held) => { deleted = true; held.Delete("a"); });
+        } catch (Exception ex) {
+            thrown = ex;
+        }
 
-        await Assert.That(File.Exists(ReadingPath(store, "a"))).IsTrue();
+        await Assert.That(thrown is IOException or UnauthorizedAccessException).IsTrue();
+        await Assert.That(deleted).IsFalse();
+        await Assert.That(File.ReadAllText(ReadingPath(store, "a"))).IsEqualTo(before);
     }
 }

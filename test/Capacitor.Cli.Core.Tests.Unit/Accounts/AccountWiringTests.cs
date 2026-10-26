@@ -13,7 +13,7 @@ public class AccountWiringTests {
     AccountStore Store => new(Home.PathTo("accounts"));
 
     VendorAccount Account(HarnessId vendor, string dirName) {
-        var dir     = Directory.CreateDirectory(Home.PathTo(dirName)).FullName;
+        string dir  = Home.CreateDir(dirName);
         var account = new VendorAccount(dirName, vendor, AccountDirectory.Normalize(dir), dirName, DateTimeOffset.UnixEpoch);
         Store.Mutate(r => (r with { Accounts = [.. r.Accounts, account] }, 0));
         return account;
@@ -358,9 +358,10 @@ public class AccountWiringTests {
     [MethodDataSource(nameof(InterruptionPoints))]
     public async Task Interrupted_install((string Name, Func<AccountStore, string, string> Point) c) {
         var work     = Account(HarnessId.Claude, ".claude-work");
-        var settings = Home.CreateFile(".claude-work/settings.json", """{"model":"opus","statusLine":{"type":"command","command":"echo mine","padding":3}}""");
+        var settings = Home.CreateFile([".claude-work", "settings.json"], """{"model":"opus","statusLine":{"type":"command","command":"echo mine","padding":3}}""");
         var store    = Store;
-        var point    = c.Point(store, settings);
+        // A fault point matches by exact string, so arm it with the path wiring derives, not the test's spelling of it.
+        var point    = c.Point(store, AccountLayouts.Claude(Home, work.Directory).UserSettings);
 
         using (FaultPoints.Arm(p => { if (p == point) throw new SimulatedCrash(); })) {
             await Assert.That(() => {
