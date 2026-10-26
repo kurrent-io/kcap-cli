@@ -13,20 +13,24 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
     readonly IKcapCli _cli;
     readonly Func<HarnessId, bool>? _isWired;
     readonly Func<CancellationToken, Task<IReadOnlyDictionary<HarnessId, DetectedAgent>>> _detect;
+    readonly Func<CancellationToken, Task<string?>>? _ensureTerminalCommand;
     readonly CancellationTokenSource _lifetime;
     IReadOnlyList<HarnessSettingsRow> _rows = [];
     bool _busy;
+    bool _scanning;
     string? _message;
 
     public HarnessesSettingsViewModel(SettingsProfileStore store, IKcapCli cli,
             Func<CancellationToken, Task<IReadOnlyDictionary<HarnessId, DetectedAgent>>> detect,
-            CancellationToken appLifetime = default, Func<HarnessId, bool>? isWired = null) {
+            CancellationToken appLifetime = default, Func<HarnessId, bool>? isWired = null,
+            Func<CancellationToken, Task<string?>>? ensureTerminalCommand = null) {
         _store = store;
         _cli = cli;
         _isWired = isWired;
         _detect = detect;
+        _ensureTerminalCommand = ensureTerminalCommand;
         _lifetime = CancellationTokenSource.CreateLinkedTokenSource(appLifetime);
-        var idle = this.WhenAnyValue(x => x.Busy).Select(b => !b);
+        var idle = this.WhenAnyValue(x => x.Busy, x => x.Scanning, (busy, scanning) => !busy && !scanning);
         RescanCommand = ReactiveCommand.CreateFromTask(RescanAsync, idle);
         ConnectCommand = ReactiveCommand.CreateFromTask<HarnessSettingsRow>(ConnectAsync, idle);
         ToggleConnectionCommand = ReactiveCommand.CreateFromTask<HarnessSettingsRow>(ToggleConnectionAsync, idle);
@@ -39,7 +43,10 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
             this.RaisePropertyChanged(nameof(RescanPrompt));
         }
     }
+    /// Connecting or disconnecting a tool: the harness operation closing Settings must wait for.
     public bool Busy { get => _busy; private set => this.RaiseAndSetIfChanged(ref _busy, value); }
+    /// Looking for installed tools: read-only, so closing may abandon it.
+    public bool Scanning { get => _scanning; private set => this.RaiseAndSetIfChanged(ref _scanning, value); }
     public string? Message { get => _message; private set => this.RaiseAndSetIfChanged(ref _message, value); }
     public string ProfileName => _store.ProfileName;
 
@@ -51,8 +58,8 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
     public ReactiveCommand<HarnessSettingsRow, Unit> ToggleConnectionCommand { get; }
 
     public async Task RescanAsync() {
-        if (Busy) return;
-        Busy = true;
+        if (Busy || Scanning) return;
+        Scanning = true;
         Message = "Looking for harnesses…";
         try {
             Rows = await Task.Run(async () => {
@@ -64,7 +71,7 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
         } catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) {
         } catch (Exception ex) {
             Message = $"Could not detect harnesses: {ex.Message}";
-        } finally { Busy = false; }
+        } finally { Scanning = false; }
     }
 
     internal Task ToggleConnectionAsync(HarnessSettingsRow row) => ConfigureAsync(row, remove: row.IsConfigured);
@@ -72,12 +79,17 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
     internal Task ConnectAsync(HarnessSettingsRow row) => ConfigureAsync(row, remove: false);
 
     async Task ConfigureAsync(HarnessSettingsRow row, bool remove) {
-        if (Busy || !Rows.Contains(row)) return;
+        if (Busy || Scanning || !Rows.Contains(row)) return;
         Busy = true;
         row.Report(remove ? "Disconnecting…" : "Connecting…");
         var failed = remove ? $"Could not disconnect {row.Label}" : $"Could not connect {row.Label}";
         try {
             await Task.Run(_store.LoadProfile, _lifetime.Token);
+            // Hooks call the bare kcap command, so connecting first puts kcap on the terminal PATH, as setup does.
+            if (!remove && _ensureTerminalCommand is { } ensure && await ensure(_lifetime.Token) is { } problem) {
+                row.Report(problem, failed);
+                return;
+            }
             var result = remove
                 ? await _cli.PluginRemoveAsync(row.Id.PluginInstallFlag, _lifetime.Token)
                 : await _cli.PluginInstallAsync(row.Id.PluginInstallFlag, _lifetime.Token);

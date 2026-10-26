@@ -124,7 +124,7 @@ public class SettingsWindowSmokeTests {
             await Assert.That(window.FindControl<ToggleSwitch>("PermissionNotificationsToggle")!.IsEffectivelyEnabled).IsFalse();
             await Assert.That(window.FindControl<ToggleSwitch>("QuestionNotificationsToggle")!.IsEffectivelyEnabled).IsFalse();
             await Assert.That(window.FindControl<ToggleSwitch>("IdleNotificationsToggle")!.IsEffectivelyEnabled).IsFalse();
-            tabs.SelectedIndex = 0;
+            tabs.SelectedItem = window.FindControl<TabItem>("DaemonTab");
             Dispatcher.UIThread.RunJobs();
             await Assert.That(name.IsEffectivelyVisible).IsTrue();
         } finally { window.Close(); }

@@ -161,4 +161,32 @@ public class HarnessesSettingsViewModelTests {
         await Assert.That(row.Message!).Contains("preserved");
     });
 
+
+    /// Looking for tools is read-only, so it holds nothing Settings would wait on to close.
+    [Test]
+    public Task Rescanning_is_scanning_not_busy() => AvaloniaSession.RunOnUiAsync(async () => {
+        var detect = new TaskCompletionSource<IReadOnlyDictionary<HarnessId, DetectedAgent>>();
+        using var vm = new HarnessesSettingsViewModel(Seed(), Substitute.For<IKcapCli>(), _ => detect.Task);
+        var scan = vm.RescanAsync();
+        await Assert.That(vm.Scanning).IsTrue();
+        await Assert.That(vm.Busy).IsFalse();
+        detect.SetResult(new Dictionary<HarnessId, DetectedAgent>());
+        await scan;
+        await Assert.That(vm.Scanning).IsFalse();
+    });
+
+    /// Hooks call the bare kcap command, so a connect whose terminal command could not be put on
+    /// the PATH installs nothing and says why.
+    [Test]
+    public Task Connect_stops_when_the_terminal_command_cannot_be_installed() => AvaloniaSession.RunOnUiAsync(async () => {
+        var cli = Substitute.For<IKcapCli>();
+        using var vm = new HarnessesSettingsViewModel(Seed(), cli,
+            _ => Task.FromResult<IReadOnlyDictionary<HarnessId, DetectedAgent>>(new Dictionary<HarnessId, DetectedAgent> { [HarnessId.Claude] = new(true, true) }),
+            ensureTerminalCommand: _ => Task.FromResult<string?>("Cancelled. Nothing changed."));
+        await vm.RescanAsync();
+        await vm.ConnectAsync(vm.Rows[0]);
+        await Assert.That(vm.Rows[0].ErrorTitle).IsNotNull();
+        await Assert.That(vm.Rows[0].Message).IsEqualTo("Cancelled. Nothing changed.");
+        await cli.DidNotReceive().PluginInstallAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>());
+    });
 }
