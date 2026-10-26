@@ -131,7 +131,7 @@ public class SettingsWindowSmokeTests {
     });
 
     [Test]
-    public Task Profiles_tab_lists_rows_with_chip_actions_and_profile_marks() => AvaloniaSession.RunOnUiAsync(async () => {
+    public Task Profiles_tab_lists_rows_with_a_usage_mark_and_a_menu_for_secondary_actions() => AvaloniaSession.RunOnUiAsync(async () => {
         ConfigMutator.Mutate(Config.Root, c => c with {
             ActiveProfile = "work",
             Profiles = new() {
@@ -165,15 +165,23 @@ public class SettingsWindowSmokeTests {
             // A TabItem's own visual tree is its header only; the selected tab's content is hosted
             // by the TabControl's PART_SelectedContentHost, so the row content is found from tabs.
             var chips = tabs.GetVisualDescendants().OfType<Button>().Where(b => b.Classes.Contains("kcapChip")).ToList();
-            await Assert.That(chips.Any(b => b.Content as string == "Sign in")).IsTrue();
-            await Assert.That(chips.Any(b => b.Content as string == "Remove" && b.IsVisible)).IsTrue();
+            await Assert.That(chips.Any(b => b.Content as string == "Sign in" && b.IsEffectivelyVisible)).IsTrue();
 
             var marks = tabs.GetVisualDescendants().OfType<TextBlock>()
                 .Where(t => t.Classes.Contains("profileMark") && t.IsEffectivelyVisible)
                 .Select(t => t.Text).ToList();
-            await Assert.That(marks.Count).IsEqualTo(2);
-            await Assert.That(marks).Contains("Active");
-            await Assert.That(marks).Contains("This app");
+            await Assert.That(string.Join(",", marks)).IsEqualTo("In use");
+
+            var menu = tabs.GetVisualDescendants().OfType<Button>()
+                .Single(b => b.Classes.Contains("profileMenu") && b.IsEffectivelyVisible);
+            await Assert.That(AutomationProperties.GetName(menu)).IsEqualTo("Actions for other");
+            Click(window, menu);
+            var flyout = (Flyout)menu.Flyout!;
+            await Assert.That(flyout.IsOpen).IsTrue();
+            var remove = ((Control)flyout.Content!).GetVisualDescendants().OfType<Button>().Single(b => b.Classes.Contains("profileRemove"));
+            await Assert.That(remove.IsEffectivelyVisible).IsTrue();
+            await Assert.That(remove.FindAncestorOfType<FlyoutPresenter>()!.Classes.Contains("kcapPanel")).IsTrue();
+            flyout.Hide();
 
             var statuses = tabs.GetVisualDescendants().OfType<TextBlock>().Where(t => t.Classes.Contains("profileStatus")).Select(t => t.Text).ToList();
             await Assert.That(statuses).Contains("Signed out");

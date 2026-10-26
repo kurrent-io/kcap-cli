@@ -54,8 +54,13 @@ public sealed class ProfilesSettingsViewModel : ReactiveObject {
 
     public IReadOnlyList<ProfileRow> Rows {
         get => _rows;
-        private set => this.RaiseAndSetIfChanged(ref _rows, value);
+        private set {
+            this.RaiseAndSetIfChanged(ref _rows, value);
+            this.RaisePropertyChanged(nameof(ListedRows));
+        }
     }
+
+    public IReadOnlyList<ProfileRow> ListedRows => [.. _rows.Where(r => !r.IsPlaceholder)];
 
     public string? Message {
         get => _message;
