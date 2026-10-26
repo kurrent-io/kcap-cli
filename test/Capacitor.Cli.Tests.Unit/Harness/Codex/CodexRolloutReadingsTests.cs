@@ -155,4 +155,46 @@ public class CodexRolloutReadingsTests {
 
         await Assert.That(Stored()!.Windows.Single().ConfirmedAt).IsEqualTo(DateTimeOffset.Parse("2026-10-24T23:30:00.000Z", System.Globalization.CultureInfo.InvariantCulture));
     }
+
+    [Test]
+    public async Task A_batch_writes_once_and_equals_applying_the_lines_one_by_one() {
+        string[] lines = [
+            Line($$"""{"limit_id":"codex","primary":{{Window(10, 300)}},"secondary":{{Window(20)}},"plan_type":"pro"}""", "2026-10-24T23:01:00.000Z"),
+            Line($$"""{"limit_id":"codex","primary":{{Window(30, 300)}}}""", "2026-10-24T23:02:00.000Z"),
+            Line($$"""{"limit_id":"codex","primary":{{Window(100, 300)}},"rate_limit_reached_type":"rate_limit_reached"}""", "2026-10-24T23:03:00.000Z"),
+        ];
+
+        var second = new AccountStore(Tmp.PathTo("accounts2"));
+        second.Mutate(r => (r with { Accounts = _accounts.Load().Accounts }, 0));
+        var single = new CodexRolloutReadings(second.Readings, second.Load().Accounts.Single(), "s1");
+        foreach (var line in lines) single.Observe(line);
+
+        var before = _accounts.Readings.Stat();
+        Producer().Observe(lines);
+
+        await Assert.That(ReadingMerge.Equivalent(Stored()!, second.Readings.LoadAll()["b"].Reading)).IsTrue();
+        await Assert.That(_accounts.Readings.Stat().Length).IsEqualTo(before.Length + 1);
+        await Assert.That(Stored()!.Windows.Single(w => w.WindowMinutes == 300).UsedPercent).IsEqualTo(100.0);
+    }
+
+    [Test]
+    public async Task A_block_followed_by_a_later_clear_in_one_batch_ends_cleared() {
+        Producer().Observe([
+            Line($$"""{"limit_id":"codex","primary":{{Window(100)}},"rate_limit_reached_type":"rate_limit_reached"}""", "2026-10-24T23:00:00.000Z"),
+            Line($$"""{"limit_id":"codex","primary":{{Window(5)}}}""", "2026-10-24T23:10:00.000Z"),
+        ]);
+
+        await Assert.That(ReadingMerge.IsBlocked(Stored()!, Produced)).IsFalse();
+    }
+
+    [Test]
+    public async Task A_batch_without_token_counts_does_not_touch_the_readings() {
+        Producer().Observe([
+            """{"type":"event_msg","payload":{"type":"agent_message","message":"hi"}}""",
+            """{"type":"response_item","payload":{"type":"message"}}""",
+        ]);
+
+        await Assert.That(_accounts.Readings.Stat().Length).IsEqualTo(0);
+        await Assert.That(File.Exists(Path.Combine(_accounts.Directory, "readings.lock"))).IsFalse();
+    }
 }
