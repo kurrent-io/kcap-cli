@@ -80,7 +80,7 @@ public class ConnectWithRetryTests {
         internal override Task StopHubAsync(CancellationToken ct) =>
             StopHold?.Task ?? Task.CompletedTask;
 
-        internal override Task RegisterDaemonAsync(Action<UnattendedAdvertisement> connected) {
+        internal override Task RegisterDaemonAsync(RegistrationAttempt attempt) {
             RegisterCalls++;
             OnRegisterAttempt?.Invoke();
 
@@ -95,7 +95,8 @@ public class ConnectWithRetryTests {
                 return Task.FromException(new InvalidOperationException("simulated DaemonConnect failure"));
             }
 
-            connected(_config.Advertisement);
+            attempt.Sending(_config.Advertisement);
+            attempt.Accept();
 
             if (FailAgentRecoveryRemaining > 0) {
                 FailAgentRecoveryRemaining--;

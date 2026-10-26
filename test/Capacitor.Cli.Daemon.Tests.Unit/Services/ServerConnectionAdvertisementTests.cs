@@ -125,11 +125,13 @@ public class ServerConnectionAdvertisementTests {
         config, new FixedCredentialSource(), NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, TimeProvider.System) {
         public List<DaemonConnect> Connects { get; } = [];
 
+        public Exception? InvokeThrows { get; init; }
+
         internal override HubConnectionState HubState => HubConnectionState.Connected;
 
         internal override Task InvokeDaemonConnectRawAsync(DaemonConnect connect) {
             Connects.Add(connect);
-            return Task.CompletedTask;
+            return InvokeThrows is { } ex ? Task.FromException(ex) : Task.CompletedTask;
         }
     }
 
@@ -168,6 +170,24 @@ public class ServerConnectionAdvertisementTests {
 
         await Assert.That(config.AcknowledgedCodexResolution).IsSameReferenceAs(codex);
         await Assert.That(config.FailedCodexGeneration).IsEqualTo(0L);
+    }
+
+    /// <summary>A refresh commits a newer advertisement while the registration is being assembled and the
+    /// send then fails: the failure belongs to what the payload carried, not to the older one.</summary>
+    [Test]
+    public async Task A_failed_send_marks_the_advertisement_its_payload_carried() {
+        var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1", ConfigRoot = Config.Root };
+        config.Advertise(new List<UnattendedVendorCapability>(), CodexTransportResolution.Resolve(1, switchOn: false, () => null));
+        var newer = CodexTransportResolution.Resolve(2, switchOn: true, () => "0.146.0");
+        await using var conn = new RecordingConnection(config) { InvokeThrows = new InvalidOperationException("hub down") };
+        conn.GetLiveAgentIds = () => {
+            config.Advertise(new List<UnattendedVendorCapability>(), newer);
+            return [];
+        };
+
+        await Assert.That(conn.ReRegisterAsync).Throws<InvalidOperationException>();
+
+        await Assert.That(config.FailedCodexGeneration).IsEqualTo(newer.Generation);
     }
 
     [Test]
