@@ -31,7 +31,7 @@
 
 1. A Claude settings file whose `statusLine` is not an object (a string, an array) or whose `command` is not a string: wiring leaves it untouched and reports the step failed, never throws or overwrites. Test in Task 3.
 2. Two Claude sessions on one account feeding the wrapper alternately: each keeps its own `total_api_duration_ms` baseline, so session A's counter never confirms session B's replay. Test in Task 4.
-3. A Codex `token_count` line whose `rate_limits` is `null`, or whose `primary` and `secondary` are both null: no reading is written and nothing throws on the watcher. Test in Task 6.
+3. A Codex `token_count` line whose `rate_limits` is `null` writes nothing; one whose `primary` and `secondary` are both null records only its plan and credits, never clears a block; neither throws on the watcher. Test in Tasks 5 and 6.
 4. A reading file that is truncated or not JSON: the producer replaces it with a fresh reading (the observation still lands), and the daemon keeps publishing the previous good reading rather than dropping the account. Test in Tasks 2 and 8.
 5. The wrapper run with stdin closed immediately (empty) or with non-JSON stdin: it still runs the original with the same (empty) bytes and passes its exit code through. Test in Task 4.
 
@@ -68,8 +68,8 @@ Docs: `README.md`, `src/Capacitor.Cli.Core/Resources/help-*.txt`.
   - `BlockConstraintDto(string? LimitId, int? WindowMinutes, DateTimeOffset? ResetsAt, DateTimeOffset SignaledAt)`; a null `ResetsAt` is the unknown constraint.
   - `BlockedMarkerDto(DateTimeOffset? BlockedAt, DateTimeOffset? ClearedAt, BlockConstraintDto[] Constraints)`
   - `AccountReadingDto(long Generation, UsageWindowDto[] Windows, string? Plan, CreditsDto? Credits, BlockedMarkerDto? Blocked)`
-  - `LimitSignal(string? LimitId, int? WindowMinutes)`; both null means the signal names no window.
-  - `ReadingObservation(DateTimeOffset ProducedAt, bool Fresh, IReadOnlyList<UsageWindowDto> Windows, string? Plan, CreditsDto? Credits, LimitSignal? Limit, bool LimitReachedReported)`; `Windows` carry no `ConfirmedAt` (the merge sets it). `LimitReachedReported` is the Codex `rate_limit_reached_type` being non-null; Claude producers pass false.
+  - `LimitSignal(string? LimitId, int? WindowMinutes)`: both set names one window; only `LimitId` names a limit; both null names nothing.
+  - `ReadingObservation(DateTimeOffset ProducedAt, bool Fresh, IReadOnlyList<UsageWindowDto> Windows, string? Plan, CreditsDto? Credits, IReadOnlyList<LimitSignal> Limits, bool LimitReachedReported)`; `Windows` carry no `ConfirmedAt` (the merge sets it). One observation is one vendor response, however many limit ids it covers, so a complete response can clear. `LimitReachedReported` is any Codex `rate_limit_reached_type` in the response being non-null; Claude producers pass false.
   - `static class ReadingMerge`:
     - `AccountReadingDto Apply(AccountReadingDto held, ReadingObservation observation)`
     - `AccountReadingDto Merge(AccountReadingDto held, AccountReadingDto incoming)` (snapshot merge; same generation assumed, the caller handles generation)
@@ -78,12 +78,14 @@ Docs: `README.md`, `src/Capacitor.Cli.Core/Resources/help-*.txt`.
     - `AccountReadingDto Empty(long generation)`
 
 Rules the implementation must follow (spec 5.1, 5.4):
-- Window merge per key: incoming later `ResetsAt` replaces; same keeps the higher `UsedPercent`; earlier is ignored. A non-null reset beats a null one; two nulls keep the higher percentage. `ConfirmedAt` is the maximum of both sides; a replaced window takes the incoming `ConfirmedAt`.
+- Window merge per key: incoming later `ResetsAt` replaces; same keeps the higher `UsedPercent`; earlier is ignored. A non-null reset beats a null one; two nulls keep the higher percentage.
+- `ConfirmedAt`, one rule for `Apply` and `Merge`: when the window is the same window (equal `ResetsAt`, both null included) it is the maximum of both sides; when a later reset replaces the window it is the incoming side's value, null included, because a confirmation of the previous window says nothing about the new one; an ignored stale window changes nothing.
 - `Apply` stamps `ConfirmedAt = ProducedAt` on each observed window only when `Fresh`; a replay with an equal value changes nothing; a fresh equal value moves `ConfirmedAt` forward.
 - Windows the observation does not mention are kept (sparse updates never clear).
-- `Plan` and `Credits` take the observation's non-null value.
-- Limit signal (`Limit` non-null): add constraints — the named window with its held reset; else every held-or-observed window at or above 100% with its reset; else one unknown constraint. `SignaledAt = ProducedAt`; `BlockedAt = max(BlockedAt, ProducedAt)`.
-- Clearing: a `Fresh` observation with `ProducedAt > BlockedAt`, `LimitReachedReported == false`, no `Limit`, covering every window key the held reading has, all below 100%, sets `ClearedAt = ProducedAt` and empties `Constraints`.
+- `Plan` and `Credits` take the observation's non-null value; an observation with no windows still records them.
+- Limit signals: each signal adds constraints — a named window with its reset (observed, else held); a named limit: that limit's windows at or above 100%, else that limit's only window when it has exactly one, else one unknown constraint; a signal naming nothing: every window at or above 100%, else one unknown constraint. `SignaledAt = ProducedAt`. A signal at or before `ClearedAt` adds nothing. `BlockedAt = max(BlockedAt, ProducedAt)` otherwise.
+- Clearing: a `Fresh` observation with `ProducedAt > BlockedAt` and `ProducedAt > ClearedAt`, `LimitReachedReported == false`, no `Limits`, at least one window, covering every window key the held reading has, all below 100%, sets `ClearedAt = ProducedAt` and drops constraints with `SignaledAt <= ClearedAt`. An observation with no windows never clears.
+- `Apply` ends by normalizing the marker with the merge rule below, so `Apply` and `Merge` keep the same monotonic evidence.
 - Marker merge: max `BlockedAt`, max `ClearedAt`, union of constraints with `SignaledAt > ClearedAt` (dedupe by all fields).
 - `IsBlocked`: `BlockedAt > (ClearedAt ?? MinValue)` and any constraint is unknown or has `ResetsAt > now`.
 
@@ -103,6 +105,13 @@ Rules the implementation must follow (spec 5.1, 5.4):
   - `Older_snapshot_replayed_after_expiry_stays_unblocked`
   - `Unknown_constraint_with_expired_window_constraints_stays_blocked`
   - `Explicit_signal_blocks_below_100_percent`
+  - `Late_older_clear_never_moves_clearedAt_back` (block t10, clear t30, fresh all-below t20, then merge a block snapshot of t25: still cleared at t30, not blocked)
+  - `Replayed_old_signal_after_clear_cannot_poison_a_later_block` (clear t30, unknown signal t20, named block t40: one constraint, the named one)
+  - `Named_limit_signal_constrains_only_that_limit`, `Named_window_below_100_uses_its_reset`
+  - `Metadata_only_observation_records_plan_and_never_clears` (unknown block held, observation with plan and credits and no windows)
+  - `Limit_only_observation_still_blocks`
+  - `Complete_multi_limit_response_clears_an_unknown_block` (held limits A and B, one observation covering both below 100%)
+  - `Replacement_by_later_reset_takes_incoming_confirmation` (null and older incoming `ConfirmedAt`), `Same_window_keeps_max_confirmation`, and both orderings of a null against a non-null reset
 - [ ] **Step 2: Run** `dotnet run --project test/Capacitor.Cli.Core.Tests.Unit/Capacitor.Cli.Core.Tests.Unit.csproj -- --treenode-filter "/*/*/ReadingMergeTests/*"`; expected: build fails (types missing).
 - [ ] **Step 3: Implement** the records and `ReadingMerge` in the files listed.
 - [ ] **Step 4: Run** both test classes; expected: all pass.
@@ -118,22 +127,22 @@ Rules the implementation must follow (spec 5.1, 5.4):
 **Interfaces:**
 - Consumes: Task 1 records.
 - Produces:
-  - `VendorAccount` trailing fields (JSON names in brackets): `Generation` long = 0 [`generation`], `RetiredSessions` string[]? [`retired_sessions`], `StatusLine` `StatusLineBackup?` [`status_line`], plus the Task 5 identity fields declared here so the record changes once: `Email`, `OrgId`, `OrgName`, `Plan` string? [`email`, `org_id`, `org_name`, `plan`], `SignIn` string? [`sign_in`], `ProbeSeq` long [`probe_seq`], `CommittedProbeSeq` long [`committed_probe_seq`], `RefreshedAt` DateTimeOffset? [`refreshed_at`], `RefreshError` string? [`refresh_error`], `LimitsError` string? [`limits_error`], `LabelSetByUser` bool [`label_set_by_user`].
+  - `VendorAccount` trailing fields (JSON names in brackets): `Generation` long = 0 [`generation`], `RetiredSessions` string[]? [`retired_sessions`], `StatusLine` `StatusLineBackup?` [`status_line`], plus the Task 5 identity fields declared here so the record changes once: `Email`, `OrgId`, `OrgName`, `Plan` string? [`email`, `org_id`, `org_name`, `plan`], `VendorAccountId` string? [`vendor_account_id`] (Codex `chatgptAccountId` as `account/rateLimits/read` reports it in `accountId`), `SignIn` string? [`sign_in`], `ProbeSeq` long [`probe_seq`], `CommittedProbeSeq` long [`committed_probe_seq`], `RefreshedAt` DateTimeOffset? [`refreshed_at`], `RefreshError` string? [`refresh_error`], `LimitsError` string? [`limits_error`], `LabelSetByUser` bool? [`label_set_by_user`]. A null `LabelSetByUser` (every slice-3 entry) counts as user-set unless the label equals `Path.GetFileName` of the directory, the default `kcap accounts add` gave it; rename writes true, and a refresh that replaces the label with the email writes false.
   - `StatusLineBackup(string? Original)` [`original`]: null property on the account means no backup; `Original == null` means the backup is "none".
   - `ReadingSession(string SessionId, long? ApiDurationMs)`; `ReadingFile(AccountReadingDto Reading, ReadingSession[] Sessions)`.
   - `AccountStore`:
     - `ReadingStore Readings { get; }` (directory `readings/` beside `accounts.json`, lock file `readings.lock`)
-    - `(T Result, long Revision) MutateWithRevision<T>(change, Action<AccountRegistry>? afterSave)` — `afterSave` runs after the save, still under `accounts.lock`
-    - `(T Result, long Revision) MutateHeld<T>(change)` — the same save without taking the lock; the caller holds `Lock()`
+    - `(T Result, long Revision) MutateWithReadings<T>(Func<AccountRegistry, HeldReadings, (AccountRegistry Next, T Result)> change, Action<AccountRegistry, HeldReadings>? afterSave = null)` — takes `accounts.lock`, then `readings.lock`, loads the registry, runs `change`, saves when `Next` is a new reference, runs `afterSave` with the saved registry, and releases both. Both locks are held from the first read to the last write, so no producer can commit between collecting a reading's sessions and retiring them.
+    - `(T Result, long Revision) MutateHeld<T>(change)` — the plain registry save without taking `accounts.lock`; the caller holds `Lock()` (status line backups during wiring)
+    - `VendorAccount? FindHeld(string id)` — a fresh read by id for a caller holding `Lock()`
+  - `HeldReadings` (constructed only inside `MutateWithReadings`): `ReadingFile? Read(string accountId)`, `void Write(string accountId, ReadingFile file)`, `void Delete(string accountId)`.
   - `ReadingStore`:
     - `IDisposable? TryLock(TimeSpan budget)` — null on contention (budget 50 ms for producers)
-    - `IDisposable Lock()` — for holders of `accounts.lock` (10 s default)
-    - `bool TryRecord(string accountId, long producerGeneration, string? sessionId, Func<ReadingFile, ReadingFile> update)` — takes `TryLock(50 ms)`; reads `accounts.json` without `accounts.lock`; writes nothing when the account is gone, its generation differs from `producerGeneration`, or `sessionId` is in `RetiredSessions`; otherwise loads the file (missing or unparseable = `ReadingFile(Empty(generation), [])`), applies `update`, and replaces atomically. False when nothing was written. Never throws for IO, lock or parse failures.
-    - `void DeleteHeld(string accountId)` — caller holds `Lock()`
+    - `bool TryRecord(string accountId, long producerGeneration, string? sessionId, Func<ReadingFile, ReadingFile> update)` — takes `TryLock(50 ms)`; reads `accounts.json` without `accounts.lock`; writes nothing when the account is gone, its generation differs from `producerGeneration`, or `sessionId` is in `RetiredSessions`; otherwise loads the file — missing, unparseable, or of another generation than the validated one all read as `ReadingFile(Empty(generation), [])` — applies `update`, and replaces atomically. False when nothing was written. Never throws for IO, lock or parse failures. Must not be called while holding `readings.lock` (not re-entrant): code inside `MutateWithReadings` uses `HeldReadings`.
     - `IReadOnlyDictionary<string, ReadingFile> LoadAll()` — skips unreadable files
     - `(long Length, long Ticks)[] Stat()` — for the publisher's change detection
     - Seam: `internal Action? AfterMembershipCheck { get; set; }`
-  - Removal (`kcap accounts remove`): the registry mutation passes `afterSave: _ => { using (store.Readings.Lock()) store.Readings.DeleteHeld(id); }`.
+  - Removal (`kcap accounts remove`) uses `MutateWithReadings` and deletes the reading in `afterSave`.
 
 - [ ] **Step 1: Write the failing tests:**
   - `Registry_entry_without_new_fields_loads_with_generation_zero` (a slice-3 `accounts.json` literal)
@@ -142,6 +151,8 @@ Rules the implementation must follow (spec 5.1, 5.4):
   - `TryRecord_skips_when_the_lock_is_held` (hold `Lock()` on another thread; returns false within 1 s)
   - `Writer_paused_after_membership_while_removal_runs_does_not_recreate_the_file` (use `AfterMembershipCheck` to run a removal on another thread, which must block on `readings.lock` and then delete; the file is absent at the end)
   - `Unparseable_reading_file_is_replaced_by_the_next_observation`
+  - `Reading_of_an_older_generation_is_reset_by_the_next_observation` (registry saved at generation 2 with the generation-1 file left behind, as after a crash between save and delete)
+  - `Legacy_label_counts_as_user_set_unless_it_is_the_directory_name`
   - `Remove_deletes_the_reading` (command-level, through `AccountsCommand`)
 - [ ] **Step 2: Run** `--treenode-filter "/*/*/ReadingStoreTests/*"`; expected: compile failure.
 - [ ] **Step 3: Implement.**
@@ -152,7 +163,7 @@ Rules the implementation must follow (spec 5.1, 5.4):
 
 **Files:**
 - Create: `Harness/Claude/ClaudeStatusLine.cs`, `Harness/Claude/ClaudeStatusLineCommand.cs`
-- Modify: `Accounts/AccountWiring.cs` (Claude wire and unwire add a `statusline` step), every `AccountWiring.Wire`/`Unwire` call site (`AccountsCommand`, `AccountSetupStep`, `PluginCommand`, uninstall)
+- Modify: `Accounts/AccountWiring.cs` (Claude wire and unwire add a `statusline` step), every `AccountWiring.Wire`/`Unwire` call site (`AccountsCommand`, `AccountSetupStep`, `PluginCommand`, uninstall), and the default-directory paths that bypass `AccountWiring`: `PluginCommand.InstallClaudeLayout` / `RemoveClaudeLayout` (the `UserAccountsAsync` filter excludes the default) and `AccountSetupStep`'s loop, which skips the environment default. Each calls `AccountWiring.WireStatusLine` / `UnwireStatusLine` for the registered default under `accounts.lock`, so setup, `plugin --if-installed`, `plugin remove` and uninstall all cover it.
 - Test: `test/Capacitor.Cli.Core.Tests.Unit/Harness/Claude/ClaudeStatusLineTests.cs`, `ClaudeStatusLineCommandTests.cs`, additions to `Accounts/AccountWiringTests.cs`
 
 **Interfaces:**
@@ -165,11 +176,14 @@ Rules the implementation must follow (spec 5.1, 5.4):
   - `static class ClaudeStatusLine`:
     - `SettingsEdit Install(string settingsPath, string accountId, StatusLineBackup? backup, Func<StatusLineBackup, bool> saveBackup, bool posixShell)` — reads the current `statusLine.command`; if it is ours, rewrites only when the id differs and returns; otherwise calls `saveBackup(new(currentOrNull))` first and writes ours only when it returned true. Owns `command` and `type` (`"command"`) only.
     - `(SettingsEdit Edit, bool BackupMissing) Remove(string settingsPath, StatusLineBackup? backup)` — while ours: restore the original, or remove `command` and `type` and an emptied `statusLine`; a missing backup removes `command`/`type` and reports `BackupMissing`. When not ours: no edit.
-  - `AccountWiring.Wire(VendorAccount account, UserHome home, WiringOptions options, AccountStore store)` and `Unwire(VendorAccount account, UserHome home, AccountStore store)`; both run under the caller's held `accounts.lock`, and save or clear the backup with `store.MutateHeld`. Unwire discards the backup on success, keeps it on failure.
+  - `AccountWiring.Wire(VendorAccount account, UserHome home, WiringOptions options, AccountStore store)` and `Unwire(VendorAccount account, UserHome home, AccountStore store)`; both run under the caller's held `accounts.lock`. The account a caller passes may have been resolved before the lock, so the status line step re-reads it with `store.FindHeld(account.Id)` and works from that entry's `StatusLine`; an absent entry gives a failed `statusline` step ("account removed") and no settings edit. Backups are saved or cleared with `store.MutateHeld`. Unwire discards the backup on success, keeps it on failure.
+  - `AccountWiring.WireStatusLine(string accountId, UserHome home, AccountStore store) : WiringStep` and `UnwireStatusLine(string accountId, UserHome home, AccountStore store) : WiringStep` — the Claude status line step alone, for the default-directory paths named under Files; same held-lock contract.
   - `JsonSettingsFile.Edit` stays the only writer: a non-object `statusLine` or a non-string `command` returns `SettingsEdit.Malformed` from the edit callback path (add a way for the callback to refuse, e.g. throw a private exception mapped to `Malformed`).
 
 - [ ] **Step 1: Write the failing tests:**
-  - `Install_then_unwire_round_trips_settings_exactly` (byte-for-byte equality with the original file, including other keys and `padding`)
+  - `Install_then_unwire_round_trips_settings` — `JsonSettingsFile` re-serializes indented, so the criterion is semantic JSON equality (`JsonNode.DeepEquals`) with the original, property order and every unrelated key and `padding` preserved; the input fixture is compact, single-line JSON with an escaped character so the test cannot pass by already matching the serializer's format
+  - `Stale_account_snapshot_unwire_uses_the_current_backup` (resolve the account, then rewire with a different original through another `AccountStore` before the unwire takes the lock; the unwire restores the newer original)
+  - `Default_directory_gets_the_wrapper_from_setup_and_plugin_refresh` and `Plugin_remove_and_uninstall_restore_the_default_original` (command-level, through `PluginCommand` and `AccountSetupStep` with the environment default registered)
   - `Install_with_no_original_records_none_and_unwire_removes_statusLine`
   - `User_edit_then_rewire_backs_up_the_edit_and_reinstalls`
   - `Rewire_with_ours_installed_changes_nothing`
@@ -197,7 +211,7 @@ Rules the implementation must follow (spec 5.1, 5.4):
 **Interfaces:**
 - Consumes: `ReadingStore.TryRecord`, `ReadingMerge.Apply`, `ClaudeStatusLineCommand.PosixShell`.
 - Produces:
-  - `static class ClaudeStatusLineReading { ReadingFile? Apply(ReadingFile held, JsonElement payload, DateTimeOffset now); }` — null when the payload has no `rate_limits`. Windows: `five_hour` → (`claude`, 300), `seven_day` → (`claude`, 10080); `used_percentage`, `resets_at` epoch seconds. Fresh only when `cost.total_api_duration_ms` exceeds the session's recorded baseline; the first sighting records the baseline and merges not-fresh; a payload without the counter is never fresh and records nothing. Sessions keyed by `session_id`; cap the list at 64, dropping the oldest.
+  - `static class ClaudeStatusLineReading { ReadingFile? Apply(ReadingFile held, JsonElement payload, DateTimeOffset now); }` — null when the payload has no `rate_limits`. Windows: `five_hour` → (`claude`, 300), `seven_day` → (`claude`, 10080); `used_percentage`, `resets_at` epoch seconds. Fresh only when `cost.total_api_duration_ms` exceeds the session's recorded baseline; the first sighting records the baseline and merges not-fresh; a payload without the counter merges its windows not-fresh and records or moves no baseline. Sessions keyed by `session_id`; cap the list at 64, dropping the oldest.
   - `static class ClaudeStatusLineEntry { Task<int> RunAsync(string[] args, AccountStore accounts, CancellationToken ct); }`:
     1. Reads stdin to end as bytes.
     2. If `--account <id>` names a registered Claude account and stdin parses as a JSON object with `rate_limits`, calls `TryRecord(id, account.Generation, sessionId, f => ClaudeStatusLineReading.Apply(f, payload, now) ?? f)`. Every exception is swallowed.
@@ -205,12 +219,12 @@ Rules the implementation must follow (spec 5.1, 5.4):
     4. On SIGTERM, SIGINT or SIGHUP (`PosixSignalRegistration`) kills the child's tree and exits.
   - `Program.cs`: `if (command == "statusline") return await ClaudeStatusLineEntry.RunAsync(args, AccountStore.Beside(DaemonStore.FromEnvironment()), CancellationToken.None);` placed before `NestedHarness.ShedInheritedHosting()`.
 
-- [ ] **Step 1: Write the failing unit tests** (`ClaudeStatusLineReadingTests`): `First_run_records_baseline_and_leaves_freshness_unknown`, `Unchanged_repeat_after_baseline_stays_unknown`, `Api_duration_increase_confirms`, `Repeated_payload_with_unchanged_counter_does_not_move_confirmedAt`, `New_response_with_equal_values_moves_confirmedAt`, `Payload_without_counter_is_never_fresh`, `Missing_rate_limits_writes_nothing`, `One_window_only_merges_that_window`, `Two_sessions_keep_separate_baselines` (Review Focus 2).
+- [ ] **Step 1: Write the failing unit tests** (`ClaudeStatusLineReadingTests`): `First_run_records_baseline_and_leaves_freshness_unknown`, `Unchanged_repeat_after_baseline_stays_unknown`, `Api_duration_increase_confirms`, `Repeated_payload_with_unchanged_counter_does_not_move_confirmedAt`, `New_response_with_equal_values_moves_confirmedAt`, `Payload_without_counter_keeps_its_windows_but_is_never_fresh` (percentages and resets stored, `ConfirmedAt` null, no baseline), `Missing_rate_limits_writes_nothing`, `One_window_only_merges_that_window`, `Two_sessions_keep_separate_baselines` (Review Focus 2).
 - [ ] **Step 2: Write the failing integration tests** (`StatusLineWrapperTests`, spawning the real binary through `KcapProcess` with a `TempDaemonPaths` store, no server config, and `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` pointed at a closed local port; mark `[ParallelLimiter<SubprocessLimit>]`):
   - `Reading_merged_from_stdin` (reading file appears with both windows)
   - `Original_gets_identical_stdin_env_and_cwd_and_passes_output_and_exit_code` (original is `sh` script written by `tmp.CreateExecutable` that echoes stdin, an env marker and `pwd`, writes to stderr, exits 3)
   - `No_original_prints_nothing_and_exits_zero`
-  - `Held_readings_lock_skips_capture_and_original_still_prints_promptly` (hold `Readings.Lock()` in the test; wrapper finishes under 2 s)
+  - `Held_readings_lock_skips_capture_and_original_still_prints_promptly` (hold `readings.lock` from the test through `Readings.TryLock`; wrapper finishes under 2 s)
   - `Slow_original_is_killed_when_the_wrapper_is_terminated` (original `sleep 30` via `sh`; SIGTERM the wrapper; `PidIdentity` of the child reports gone)
   - `Empty_or_non_json_stdin_still_runs_the_original` (Review Focus 5)
   - `No_network_call` — the proxy port records no connection
@@ -229,27 +243,29 @@ Rules the implementation must follow (spec 5.1, 5.4):
 **Interfaces:**
 - Consumes: Task 1 merge, Task 2 store and fields.
 - Produces:
-  - `AccountIdentity(string? Email, string? OrgId, string? OrgName, string? Plan)` with `string? Key(HarnessId vendor)` — Claude `orgId + "\n" + email`, Codex `email`; null when the parts are missing.
-  - `ProbeResult(string? SignIn, AccountIdentity? Identity, string? IdentityError, IReadOnlyList<ReadingObservation>? Limits, string? LimitsError)` — `SignIn` is `signed_in` / `signed_out` from an authoritative answer, else null (left unchanged as `unknown`).
+  - `AccountIdentity(string? Email, string? OrgId, string? OrgName, string? Plan, string? VendorAccountId)` with `static bool Differs(HarnessId vendor, AccountIdentity recorded, AccountIdentity probed)`. Claude: differs when `OrgId` or `Email` differ. Codex (`account/read` has no account id, `account/rateLimits/read` carries it as `accountId`): differs when the emails differ, or when both sides carry a `VendorAccountId` and they differ; a probe without one (limits failed) compares emails only and keeps the recorded id. Never differs while the recorded side has no email and no id (first probe).
+  - `ProbeResult(string? SignIn, AccountIdentity? Identity, string? IdentityError, ReadingObservation? Limits, string? LimitsError)` — `SignIn` is `signed_in` / `signed_out` from an authoritative answer, else null (left unchanged as `unknown`).
   - `interface IAccountProbe { Task<ProbeResult> ProbeAsync(VendorAccount account, CancellationToken ct); }`
   - `ClaudeIdentityProbe(HarnessRegistry harnesses, UserHome home, TimeProvider time) : IAccountProbe` — runs `claude auth status --json` with the account's `CLAUDE_CONFIG_DIR` plan from `VendorHomeVariable.Plan`, 10 s timeout; `loggedIn`, `email`, `orgId`, `orgName`, `subscriptionType`. No limits (Claude readings come from the wrapper).
   - `CodexAccountProbe(HarnessRegistry harnesses, UserHome home, TimeProvider time) : IAccountProbe` — starts `codex app-server` with `CODEX_HOME` planned the same way, cwd the system temp directory, 10 s overall; sends `initialize` (`clientInfo` name `kcap`), then `account/read` (`{}`), then `account/rateLimits/read` (`{"excludeResetCreditDetails":true}`); answers any server-to-client request with a JSON-RPC error; kills the process at the end. `account` null with `requiresOpenaiAuth` true is `signed_out`; a `chatgpt` account gives email and `planType`; an error response for one method fills that method's error and leaves the other's result.
   - `static class CodexRateLimits`:
     - `ReadingObservation? FromRollout(JsonElement rateLimits, DateTimeOffset producedAt)` — snake_case shape (`limit_id`, `primary`/`secondary` with `used_percent`, `window_minutes`, `resets_at`, `plan_type`, `credits{has_credits,unlimited,balance}`, `rate_limit_reached_type`)
     - `ReadingObservation? FromAppServer(JsonElement snapshot, DateTimeOffset producedAt)` — camelCase (`limitId`, `usedPercent`, `windowDurationMins`, `resetsAt`, `planType`, `credits{hasCredits,unlimited,balance}`, `rateLimitReachedType`)
-    - both: `Fresh = true`; a null `limitId` maps to `"codex"`; a window without a duration is skipped; null when no window survives and nothing else is reported; a non-null reached type sets `LimitReachedReported` and `Limit = new LimitSignal(null, null)`.
-    - `IReadOnlyList<ReadingObservation> FromRateLimitsRead(JsonElement result, DateTimeOffset producedAt)` — every entry of `rateLimitsByLimitId` when present, else `rateLimits`.
+    - both: `Fresh = true`; a null `limitId` maps to `"codex"`; a window without a duration is skipped; null when the snapshot is null or reports no window, plan, credits or reached type (so a both-null `primary`/`secondary` with a plan still records the plan, and records nothing else). A non-null reached type sets `LimitReachedReported` and adds `new LimitSignal(limitId, null)`: the reached type names no window, so the signal names the snapshot's limit and Task 1's named-limit rule picks the window (the one at 100%, else the limit's only window, else unknown).
+    - `ReadingObservation? FromRateLimitsRead(JsonElement result, DateTimeOffset producedAt)` — one observation for the whole response: the windows and signals of every entry of `rateLimitsByLimitId` when present, else of `rateLimits`, so a complete all-below response can clear.
+    - `string? AccountIdFromRateLimitsRead(JsonElement result)` — the response's `accountId`.
   - `static class AccountRefresh { Task<RefreshOutcome> RunAsync(AccountStore store, string accountId, IAccountProbe probe, TimeProvider time, CancellationToken ct); }` with `RefreshOutcome(bool Found, IReadOnlyList<WiringStep> Steps, long Revision)` (steps `identity` and, for Codex, `limits`). Algorithm (spec 3.2):
     1. Under `accounts.lock`: `ProbeSeq += 1`; remember `seq`, `generation`.
     2. Probe outside every lock.
-    3. Commit with `MutateWithRevision(change, afterSave)` (lock order accounts then readings): stamp `RefreshedAt`; set or clear `RefreshError`/`LimitsError`. If the probe answered and `seq > CommittedProbeSeq`: set `CommittedProbeSeq = seq`, `SignIn`, identity fields; when the stored identity key is non-null and differs from the new one, `Generation += 1` and move the current reading's session ids into `RetiredSessions` (cap 256); replace a label the user never set with the email. In `afterSave`, holding `Readings.Lock()`: on a generation change delete the reading; then merge the probe's limits into the reading under the resulting generation when the identity was applied, or when the probe failed and the generation is still `generation`; drop limits when superseded.
+    3. Commit with `MutateWithReadings` (both locks held throughout): always stamp `RefreshedAt` and bump the revision. If `seq <= CommittedProbeSeq` (a newer probe committed first), stop there: no identity, error or limits change. Otherwise set `CommittedProbeSeq = seq`, then `RefreshError` from the identity step and `LimitsError` from the limits step (cleared on success). If the identity step answered: set `SignIn` and the identity fields; when `AccountIdentity.Differs`, `Generation += 1`, append the session ids of `held.Read(id)` to `RetiredSessions` (cap 256, oldest dropped) and `held.Delete(id)`; replace a label that is not user-set with the email. Then, when the probe returned limits and the generation is now either the one the identity commit produced or, for a failed identity step, still `generation`, merge them with `held.Write` under the current generation.
   - `kcap accounts refresh [<id>]`: refreshes one or every account; text output per account and `--json` as `AccountActionResultDto` with action `refresh` and the committed revision. `kcap accounts add` refreshes after its wiring commit; its result reports the wiring steps plus the refresh steps and the later revision.
 
 - [ ] **Step 1: Write the failing tests:**
   - `CodexRateLimitsTests`: the rollout line captured from a real Codex 0.164 session (single `codex` window of 10080 minutes, credits, plan `pro`) as a literal; both windows; several limit ids; credits; limit reached with a window at 100% and without; null `rate_limits`, and both windows null (Review Focus 3); the app-server camelCase shape; `rateLimitsByLimitId` preferred over `rateLimits`.
   - `ClaudeIdentityProbeTests` (stub `claude` executable from `tmp.CreateExecutable` printing canned JSON and recording its `CLAUDE_CONFIG_DIR`): signed in, signed out, crash (non-zero, no JSON) gives an error and no sign-in, `CLAUDE_CONFIG_DIR` removed for `~/.claude` and set for another directory.
   - `CodexAccountProbeTests` (stub app-server script replying line by line): identity and limits; `account/read` success with limits failure; unsupported method (JSON-RPC `-32601`) for `account/rateLimits/read`; a server request mid-stream is answered with an error and the probe still completes; no reply within the deadline gives errors on both steps.
-  - `AccountRefreshTests` (fake `IAccountProbe` with controllable completion): `First_probe_records_identity_without_bumping_generation`; `Login_change_bumps_generation_deletes_reading_and_retires_sessions`; `Single_refresh_discovering_login_B_leaves_B_identity_and_B_limits`; `Overlapping_refreshes_completing_in_reverse_order_leave_the_newer_login`; `Superseded_refresh_drops_its_limits`; `Failed_probe_sets_error_and_keeps_identity_and_reading`; `Failed_probe_merges_limits_only_under_unchanged_generation`; `Limits_failure_records_limits_error_and_keeps_identity`; `Unchanged_refresh_still_bumps_revision_and_stamps_refreshedAt`; `Retired_session_late_observation_is_dropped` (TryRecord after the bump); `User_label_survives_identity`.
+  - `AccountRefreshTests` (fake `IAccountProbe` with controllable completion): `First_probe_records_identity_without_bumping_generation`; `Login_change_bumps_generation_deletes_reading_and_retires_sessions`; `Single_refresh_discovering_login_B_leaves_B_identity_and_B_limits`; `Overlapping_refreshes_completing_in_reverse_order_leave_the_newer_login`; `Superseded_refresh_drops_its_limits`; `Failed_probe_sets_error_and_keeps_identity_and_reading`; `Failed_probe_merges_limits_only_under_unchanged_generation`; `Limits_failure_records_limits_error_and_keeps_identity`; `Unchanged_refresh_still_bumps_revision_and_stamps_refreshedAt`; `Retired_session_late_observation_is_dropped` (TryRecord after the bump); `Producer_committing_just_before_retirement_has_its_session_retired` (a producer holding `readings.lock` writes session S while the refresh waits; S ends up in `RetiredSessions`); `User_label_survives_identity`; `Legacy_renamed_label_survives_the_first_refresh` (slice-3 registry literal); `Superseded_probe_leaves_errors_as_the_newer_probe_set_them` (reversed completion for success-then-error and error-then-success, and identity success with a limits error); `Same_email_different_codex_account_id_bumps_generation`; `Codex_probe_without_account_id_compares_emails_only`.
+  - `CodexRateLimitsTests` additionally: `Reached_type_with_cached_percentages_below_100_constrains_the_limits_only_window`, `Reached_type_with_two_windows_at_different_resets_constrains_the_one_at_100`, `Both_windows_null_with_plan_records_only_the_plan`, `Rate_limits_read_with_two_limit_ids_is_one_observation`.
   - Accounts command: `refresh --json reports steps and revision`; `add` result carries the refresh revision.
 - [ ] **Step 2: Run** the classes; expected: compile failure.
 - [ ] **Step 3: Implement.** Document `kcap accounts refresh [<id>]` in README and help text.
@@ -280,7 +296,7 @@ Rules the implementation must follow (spec 5.1, 5.4):
 
 **Files:**
 - Create: `src/Capacitor.Cli.Daemon/Services/AccountReadingSink.cs`, `Services/AccountRefresher.cs`
-- Modify: `Accounts/ResolvedAccount.cs` and `Accounts/AccountResolution.cs` (Core), `Harness/Codex/CodexAppServerHostedAgentRuntime.cs`, `Services/AgentOrchestrator.cs` (`NoteScreen`), `DaemonRunner.cs`
+- Modify: `Accounts/ResolvedAccount.cs` and `Accounts/AccountResolution.cs` (Core), `Harness/Codex/CodexHostedAgentRuntimeFactory.cs` (`StartAppServerAsync` passes `ctx.Account` and the sink into the runtime), `Harness/Codex/CodexAppServerHostedAgentRuntime.cs` (and `CodexAppServerLaunch` if that is where the runtime's construction arguments live), `Services/AgentOrchestrator.cs` (`NoteScreen`), `Services/AccountsPublisher.cs` (limit-hit refresh trigger), `DaemonRunner.cs`
 - Test: `test/Capacitor.Cli.Daemon.Tests.Unit/Services/AccountReadingSinkTests.cs`, `AccountRefresherTests.cs`, additions to the app-server runtime and orchestrator usage-limit tests
 
 **Interfaces:**
@@ -288,11 +304,12 @@ Rules the implementation must follow (spec 5.1, 5.4):
 - Produces:
   - `ResolvedAccount(string Directory, string? AccountId, string Label, long Generation = 0)` — resolution copies the registry entry's generation; the resume ledger keeps its existing three fields, and a resume re-resolves (so the generation is current).
   - `sealed class AccountReadingSink(AccountStore? store, TimeProvider time, ILogger<AccountReadingSink> logger)` with `void Post(ResolvedAccount? account, ReadingObservation observation)` — non-blocking (bounded channel of 256, drop oldest); a background loop calls `TryRecord(account.AccountId, account.Generation, null, f => f with { Reading = ReadingMerge.Apply(f.Reading, observation) })`. Drops when `account?.AccountId` is null.
-  - `sealed class AccountRefresher(...) : BackgroundService` — refreshes every registered account once at daemon start, sequentially, through `AccountRefresh.RunAsync` with the Task 5 probes; `void Request(string accountId)` queues one (coalescing duplicates).
-  - App-server runtime: `case "account/rateLimits/updated"` posts `CodexRateLimits.FromAppServer(params.rateLimits, receivedAt)` to the sink for `ctx.Account`.
-  - `NoteScreen`: when `usageLimit` turns non-null for a Claude agent, posts `new ReadingObservation(now, Fresh: false, [], null, null, new LimitSignal(null, null), false)` for `agent.Account` and calls `AccountRefresher.Request` for its id; neither waits.
+  - `sealed class AccountRefresher(...) : BackgroundService` — refreshes every registered account once at daemon start, sequentially, through `AccountRefresh.RunAsync` with the Task 5 probes; `void Request(string accountId)` queues one, coalescing a request for an account already queued or running.
+  - Limit-hit refresh, one path for every producer (Claude menu, Codex rollout in the watcher process, app-server notification, refresh): the publisher, on each new snapshot, calls `AccountRefresher.Request` for every account whose reading's `Blocked.BlockedAt` advanced past the value it last saw. The refresher skips a request for an account it finished refreshing within the last 10 minutes, so a refresh whose own response reports a reached limit does not refresh again in a loop.
+  - The runtime receives `ResolvedAccount? Account` and `Action<ResolvedAccount?, ReadingObservation>? PostReading` as constructor arguments, passed by `CodexHostedAgentRuntimeFactory.StartAppServerAsync` from `ctx.Account` and the daemon's sink (the factory takes the sink through its own constructor, registered in `DaemonRunner`). `HandleNotification` adds `case "account/rateLimits/updated"` posting `CodexRateLimits.FromAppServer(params.rateLimits, receivedAt)`; posting never blocks the read loop.
+  - `NoteScreen`: when `usageLimit` turns non-null for a Claude agent, posts `new ReadingObservation(now, Fresh: false, [], null, null, [new LimitSignal(null, null)], false)` for `agent.Account`; it does not wait.
 
-- [ ] **Step 1: Write the failing tests:** `Posts_for_an_unregistered_default_record_nothing`; `Post_never_blocks_when_the_lock_is_held`; `App_server_rateLimits_update_lands_on_the_agents_account_not_the_default` (runtime test double, two registered Codex accounts, the agent on the non-default one); `Notification_from_a_retired_generation_is_dropped`; `Claude_limit_menu_blocks_the_agents_account_and_queues_a_refresh`; `Refresher_probes_every_account_at_start`; `Refresh_failure_never_stops_the_daemon`.
+- [ ] **Step 1: Write the failing tests:** `Posts_for_an_unregistered_default_record_nothing`; `Post_never_blocks_when_the_lock_is_held`; `App_server_rateLimits_update_lands_on_the_agents_account_not_the_default` (a runtime built by `CodexHostedAgentRuntimeFactory.StartAppServerAsync` with a stub app-server, two registered Codex accounts, the agent on the non-default one, asserting the captured account and its launch generation); `Notification_from_a_retired_generation_is_dropped`; `Claude_limit_menu_blocks_the_agents_account`; `Advanced_blockedAt_requests_one_refresh` (from a Codex rollout-written reading too); `Refresh_reporting_a_reached_limit_does_not_refresh_again_within_the_cooldown`; `Duplicate_requests_coalesce`; `Refresher_probes_every_account_at_start`; `Refresh_failure_never_stops_the_daemon`.
 - [ ] **Step 2: Run**; expected: failures.
 - [ ] **Step 3: Implement** and register the sink and refresher in `DaemonRunner`.
 - [ ] **Step 4: Run** the daemon classes touched; all pass.
@@ -307,7 +324,7 @@ Rules the implementation must follow (spec 5.1, 5.4):
 **Interfaces:**
 - Consumes: everything above.
 - Produces:
-  - `AccountViewDto` trailing optional members: `string? Email, string? OrgId, string? OrgName, string? Plan, string? SignIn, long Generation = 0, DateTimeOffset? RefreshedAt, string? RefreshError, string? LimitsError, AccountReadingDto? Reading`. Never the status line backup, retired sessions or Claude baselines.
+  - `AccountViewDto` trailing optional members: `string? Email, string? OrgId, string? OrgName, string? Plan, string? VendorAccountId, string? SignIn, long Generation = 0, DateTimeOffset? RefreshedAt, string? RefreshError, string? LimitsError, AccountReadingDto? Reading`. Never the status line backup, retired sessions or Claude baselines.
   - `AccountSnapshotBuilder.Build(registry, hostId, defaults, home, IReadOnlyDictionary<string, ReadingFile> readings)` — attaches `ReadingFile.Reading` only when its `Generation` equals the entry's.
   - `AccountsPublisher` republishes when the registry revision, the host id, or `Readings.Stat()` changes, and announces only when the built snapshot differs by value (same revision allowed); an unreadable reading file keeps the reading from the previous snapshot for that account (Review Focus 4). The 30-second trailing server throttle is unchanged.
   - `ListedAccountDto` (Remote.Models) gains the same trailing fields with a `ListedReadingDto` mirror of `AccountReadingDto`, so the app binds what the server will serve.
