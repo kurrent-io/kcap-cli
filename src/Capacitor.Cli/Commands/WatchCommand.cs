@@ -3094,7 +3094,8 @@ partial class WatchCommand(
             string                vendor,
             IReadOnlyList<string> lines,
             IReadOnlyList<int>    lineNumbers,
-            ObservedCommit[]?     observedCommits
+            ObservedCommit[]?     observedCommits,
+            bool                  moreFollows = false
         ) => JsonSerializer.Serialize(
             new TranscriptBatch {
                 SessionId       = sessionId,
@@ -3103,6 +3104,7 @@ partial class WatchCommand(
                 LineNumbers     = lineNumbers.ToArray(),
                 Vendor          = vendor,
                 ObservedCommits = observedCommits,
+                MoreFollows     = moreFollows,
             },
             CapacitorJsonContext.Default.TranscriptBatch);
 
@@ -3156,10 +3158,17 @@ partial class WatchCommand(
         };
         var result = TranscriptSpool.AppendResult.Appended;
         if (batch.Lines.Length > 0 || commits.Pending is { Length: > 0 }) {
+            var spooled = false;
             foreach (var chunk in TranscriptBatchBuffer.Split(batch)) {
                 result = transcriptSpool.Append(sessionId,
-                    BuildTranscriptSpoolBatch(sessionId, agentId, vendor, chunk.Lines, chunk.LineNumbers!, chunk.ObservedCommits));
-                if (result != TranscriptSpool.AppendResult.Appended) break;
+                    BuildTranscriptSpoolBatch(sessionId, agentId, vendor, chunk.Lines, chunk.LineNumbers!, chunk.ObservedCommits, chunk.MoreFollows));
+                if (result != TranscriptSpool.AppendResult.Appended) {
+                    // The chunk already spooled left its later commits to this one, and an import carries no commits.
+                    if (spooled && chunk.ObservedCommits is { Length: > 0 } pending)
+                        transcriptSpool.Append(sessionId, BuildTranscriptSpoolBatch(sessionId, agentId, vendor, [], [], pending));
+                    break;
+                }
+                spooled = true;
             }
         }
 

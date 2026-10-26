@@ -18,6 +18,7 @@ public class TranscriptBatchBufferTests {
         await Assert.That(batches[0].LineNumbers!).IsEquivalentTo(new[] { 2, 4 });
         await Assert.That(batches[1].LineNumbers!).IsEquivalentTo(new[] { 7 });
         await Assert.That(batches.All(x => x is { SessionId: "parent", AgentId: "child", Vendor: "codex", Strict: true })).IsTrue();
+        await Assert.That(batches.Select(x => x.MoreFollows)).IsEquivalentTo(new[] { true, false });
     }
 
     [Test]

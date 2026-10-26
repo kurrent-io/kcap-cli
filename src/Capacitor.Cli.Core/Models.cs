@@ -48,6 +48,12 @@ record TranscriptBatch {
     [JsonPropertyName("observed_commits")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ObservedCommit[]? ObservedCommits { get; init; }
+
+    // Every chunk of a split read but its last: the server leaves a commit stamped after this chunk's lines to a later
+    // chunk, which carries the same commits.
+    [JsonPropertyName("more_follows")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool MoreFollows { get; init; }
 }
 
 public record ErrorEntry(
