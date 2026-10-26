@@ -1713,7 +1713,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             var label = item is UserTurnItem turn ? turn.Sender
                 : item is ShellCommandItem { HasCommand: true } shell ? shell.Sender : null;
             if (label is null) continue;
-            _observedReceipts.TryAdd(label, candidates ?? CaptureReceiptCandidates());
+            if (!_observedReceipts.ContainsKey(label))
+                _observedReceipts.Add(label, candidates ?? CaptureReceiptCandidates());
             yield return label;
         }
     }
