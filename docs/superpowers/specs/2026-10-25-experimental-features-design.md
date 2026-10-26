@@ -53,11 +53,15 @@ One static list of feature descriptors in `Capacitor.Cli.Core`, each with: id, d
 
 The daemon watches `experimental.json`. When its profile's entry changes, it re-resolves each feature and applies the ones that can apply live. A change from the desktop app, the CLI or a hand edit all arrive the same way
 
-For `codex-app-server`, the effective state is always "switch on AND installed Codex meets the 0.146.0 floor", re-resolved on two triggers: a change to the switch, and every Codex version change the existing `VendorCliWatcher` already detects. So upgrading Codex past the floor activates a switched-on feature without anyone touching it, and a downgrade below the floor deactivates it (my call). On either trigger:
+For `codex-app-server`, the effective state is always "switch on AND installed Codex meets the 0.146.0 floor", re-resolved on two triggers: a change to the switch, and every Codex version change the existing `VendorCliWatcher` already detects. So upgrading Codex past the floor activates a switched-on feature without anyone touching it, and a downgrade below the floor deactivates it (my call)
 
-1. Re-resolve `CodexAppServerActive` through `CodexTransportDecision`
-2. Swap the resolved state as one value, so the launch router and the capability advertisement never read a half-updated pair
-3. Re-advertise through `AgentOrchestrator.RefreshAdvertisedCapabilities`, so the server learns the new interactive transport and launcher policy version. The re-resolve belongs inside that single-flighted refresh, so a burst of triggers coalesces and the last publication reflects the newest state
+Both triggers run inside `AgentOrchestrator.RefreshAdvertisedCapabilities`, which is single-flighted, so a burst coalesces and the last publication reflects the newest state. Each pass:
+
+1. Reads the switch and probes the Codex version once, producing one immutable resolution: switch value, probed version, effective transport for new reviewer and interactive launches, launcher policy version, and a generation number
+2. Re-reads the switch after the probe; if it changed during the probe, discards the resolution and reruns the pass
+3. Commits the resolution with a single reference swap. The launch router, the capability advertisement and the status snapshot all read that one reference, and `ComputeUnattendedVendorCapabilities` takes the Codex version and transport from it rather than probing or reading `DaemonConfig` again, so a policy, a version and a transport from different generations can never be published together
+4. Pulses `DaemonStatusNotifier` on every commit, whether or not the advertisement or the model catalog changed
+5. Re-registers with the server. A failed re-registration leaves the committed resolution in place (it already governs routing) and is reported in status as "applied locally, server not yet told" until a later re-registration succeeds
 
 Running agents are untouched
 
@@ -65,9 +69,10 @@ Running agents are untouched
 
 The switch picks the transport for a launch that has none pinned. A launch that already names its transport keeps it whatever the switch says now (my call, from the anti-goals):
 
-- a resume names the transport its agent ran on (`RequestedTransport`, as today)
-- an interactive launch carries the transport the server expected (below)
-- a reviewer launch carries the launcher policy it was staged with (`codex-appserver-unattended-v2` or `codex-unattended-v1`), which names its transport
+- a resume or restart-resume names the transport its agent ran on, from the resume ledger (`RequestedTransport`, as today)
+- a server launch, reviewer or interactive, carries the transport the server expected for it (below)
+
+Launch classes the switch does not touch (my call, matching today's router): PR reviews stay on PTY, and local terminal spawns (`kcap agent start`, which bypasses the hosted runtime factory) stay on PTY. "Reviewers" in this design means unattended review-flow reviewers
 
 `CodexHostedAgentRuntimeFactory.UsesAppServer` therefore stops gating a pinned transport on `CodexAppServerActive`. Its only gate for a pinned app-server launch is the version floor, probed on demand when the switch is off and no resolved version is at hand. A pinned app-server launch on a Codex below the floor is refused, as a parked reviewer's PTY resume is today, never silently moved to PTY
 
@@ -79,8 +84,21 @@ The server records the transport a launch must register with at the moment it di
 
 Required behaviour: the daemon launches in the transport the server expected for that launch
 
-- **Interactive:** an additive field on the interactive launch command carries the transport the server recorded in the launch intent, and the router honours it as a pinned transport. A launch from a server that sends no such field falls back to the daemon's current setting. Hub payload rules in the server's `docs/gotchas/SIGNALR.md` apply: a new field on the existing record, never a new arity
-- **Reviewers:** no new field. The staged launch already names its launcher policy, and the router derives the transport from it. The server's sequenced reviewer staging and its replay are unchanged, so a launch recovered long after a flip still runs on the transport it was staged with, subject only to the version floor (my call)
+One additive field on the launch command (`LaunchAgentCommand`), `ExpectedRuntimeTransport`, carries the transport the server will validate the registration against, and the router honours it as a pinned transport:
+
+- **Interactive:** the server fills it from the transport it records in the launch intent
+- **Reviewers:** the server fills it from the reviewer launch expectation it already derives from the selected daemon's advertised policy (`RuntimeTransports.FromLauncherPolicy`). The launch command carries no other usable policy for Codex: `ReviewerCertification.RequiredLauncherPolicyVersion` is optional and its daemon-side check only knows Claude's policy, so the router cannot infer a reviewer's transport today. Because the field is part of the staged command body, a reviewer launch replayed after recovery, however long after a flip, still names the transport it was staged with
+
+Rules for the field:
+
+- present and `app-server`: launch on app-server if the installed Codex meets the floor, otherwise refuse the launch with a reason naming the version. Never fall back to PTY, which the server would refuse anyway
+- present and `pty`: launch on PTY
+- present and unrecognised: refuse the launch
+- absent (an older server): use the committed resolution, as today
+
+Hub payload rules in the server's `docs/gotchas/SIGNALR.md` apply: a new field on the existing record, never a new arity. Adding the field to the staged reviewer command changes its stored body and hash; the server change has to keep already-staged commands without the field replayable
+
+Acceptance cases the plan must cover, in both flip directions: an interactive launch dispatched before a flip and started after it; a reviewer launch likewise; a reviewer launch replayed from staging after a flip; a flip while the version probe is running; a resume and a restart-resume of an agent on each transport
 
 A launch expecting app-server that arrives after the switch went off runs on app-server. That starts one app-server agent after the switch is off, which is the right outcome: refusing it fails work the user did not ask to stop
 
@@ -91,6 +109,9 @@ A new "Experimental" tab in the Settings window, after Privacy, built from the r
 - on and active
 - on but not active, with the reason (for Codex: the installed version is below 0.146.0, or the version could not be read)
 - off
+- applying: saved, and the daemon has not yet reported a resolution that includes it
+- applied locally, server not yet told (re-registration failed)
+- unknown: the running daemon is too old to report experimental features, so it keeps its previous mode until it is updated and restarted
 - daemon not running: the setting is saved and applies when it starts
 
 Saving writes the attached profile's entry in `experimental.json`. The tab never restarts the daemon
@@ -103,11 +124,20 @@ kcap experimental enable <feature>
 kcap experimental disable <feature>
 ```
 
-`enable` and `disable` write the active profile's entry in `experimental.json`, then wait briefly for the daemon's status to reflect the change and print one line: applied live, saved but not active (with the reason), or saved and the daemon is not running. An unknown feature id is refused with the list of known ids
+`enable` and `disable` write the active profile's entry in `experimental.json`, then wait briefly for a status snapshot from the active profile's daemon and print one line:
+
+- applied live: only once a snapshot reports a resolution generation that includes the new saved value
+- saved but not active, with the reason
+- applied locally, server not yet told
+- saved; the running daemon is too old to apply it, update kcap and restart the daemon
+- saved; the daemon did not confirm in time, and `kcap experimental` shows its state
+- saved; the daemon is not running and applies it when it starts
+
+An unknown feature id is refused with the list of known ids
 
 ### Effective state reporting
 
-The daemon's local status (`DaemonStatusDto`) gains the effective state of each experimental feature and, when it differs from the saved value, a reason. Both surfaces read it. An older daemon that sends nothing is shown as unknown, never as off
+The daemon's local status (`DaemonStatusDto`) gains, per experimental feature, the saved value it last resolved, the effective state, the resolution generation, and a reason whenever saved and effective differ or the server has not been told. Both surfaces read it, and compare its saved value with the file to tell "applying" from "applied". An older daemon that sends nothing is shown as unknown, never as off
 
 ### Leftover environment variables
 
