@@ -34,10 +34,9 @@ internal static class CodexJudgeDeclarationReader {
         var deadline = time.GetUtcNow() + reReadBudget;
         int? known = null;
         while (true) {
-            // A cursor that exists but cannot be read is mid-replace (Windows refuses a reader during the
-            // rename), so it is polled again rather than taken for a session with no watcher.
-            if (cursor.TryRead(sessionId) is { } count) known = count;
-            else if (!cursor.Exists(sessionId)) return new(null, "no_ack_cursor");
+            // A cursor that cannot be read may be mid-replace, so only a missing one means no watcher.
+            if (cursor.TryRead(sessionId, out var missing) is { } count) known = count;
+            else if (missing) return new(null, "no_ack_cursor");
 
             // The newest human line is not yet acknowledged: the watcher is about to send it.
             if (scan.NewestHuman <= known || time.GetUtcNow() >= deadline) break;
