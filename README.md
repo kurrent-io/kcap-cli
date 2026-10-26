@@ -212,6 +212,7 @@ At a glance — each links to its section below:
 | [`kcap repos`](#repository-paths) | Manage known repo paths for the launch dialog |
 | [`kcap projects` / `project`](#projects) | List and inspect projects |
 | [`kcap accounts`](#accounts) | Record every Claude and Codex account, not only the default |
+| [`kcap statusline`](#claude-status-line-kcap-statusline) | Internal: the status line wiring installs in each Claude account; not run by hand |
 | [`kcap profile` / `use`](#profiles) | Manage and switch between servers/profiles |
 | [`kcap machine`](#machine-credentials-headless-recording) | Create credentials for CI runners and agent sandboxes |
 | [`kcap config`](#configuration) | Show and set configuration |
@@ -2457,6 +2458,10 @@ kcap accounts remove <id|dir>                  # remove kcap's recording and for
 `<id|dir>` is an account id prefix (at least 4 characters) or its directory. `kcap agent start <claude|codex> --account <id|dir>` starts a [local agent](#local-agents-kcap-agent) under one. `kcap setup` offers the directories it discovers in your home folder. `remove` leaves the directory and its login untouched. Codex asks you to trust the kcap hooks once per home, the next time you start it with that `CODEX_HOME`. For a Codex account, `add` and `rewire` also enable Codex sandbox network access for your server(s), as `kcap plugin install --codex` does; pass `--skip-codex-network-access` to leave that home's `config.toml` network keys untouched.
 
 `add`, `remove`, `rename` and `rewire` accept `--json`: stdout then carries exactly one JSON line (`action`, `account_id`, `succeeded`, `steps` with `name`/`succeeded`/`detail`, `revision`, `error`) and errors still go to stderr. `revision` is the account registry revision the command committed after its wiring attempt (`null` when it committed nothing), so a reader that sees a snapshot at or past it knows the snapshot follows that attempt. `add` and `rewire` commit one even when wiring finds nothing to change, and an `add` whose wiring fails still registers the account and records the failure. A `remove` that cannot unwire leaves the account registered, records the failure on it and commits a revision too, since it may have unwired part of the account. The exit code is 0 only when `succeeded` is true. `list` ignores the flag.
+
+#### Claude status line (`kcap statusline`)
+
+Wiring a Claude account sets its `settings.json` `statusLine.command` to `kcap statusline --account <id>`, guarded so that a missing `kcap` still runs your own command. It is internal and not meant to be run by hand. On each status line update it reads the JSON Claude Code pipes in and, when that carries `rate_limits` (Pro and Max plans), records the account's 5-hour and 7-day usage in a local reading file beside the account registry. It then runs the status line command it replaced, through `sh -c` (PowerShell on Windows without Git Bash), with the same stdin, environment and working directory, and passes its output and exit code through; with no earlier command it prints nothing. It makes no network call, and a failure to record never blocks or changes the status line. kcap owns only `statusLine.command` and its `type`: `padding` and the other properties stay yours, and `kcap accounts remove` puts the original command back. A project's own `statusLine` overrides the account's, so sessions in that project record no usage.
 
 ### Profiles
 

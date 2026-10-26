@@ -27,6 +27,10 @@ if (args.Length < 1) {
 
 var command = args[0];
 
+// Ahead of everything else, so the original status line sees the environment Claude gave it.
+if (command == "statusline")
+    return await ClaudeStatusLineEntry.RunAsync(args, AccountStore.Beside(DaemonStore.FromEnvironment()), CancellationToken.None);
+
 NestedHarness.ShedInheritedHosting();
 
 // `skills sync --auto` outlives the hook that spawned it, and that hook closes the pipe read ends as
