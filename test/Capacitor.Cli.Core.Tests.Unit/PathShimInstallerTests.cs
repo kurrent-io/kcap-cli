@@ -601,6 +601,40 @@ public class PathShimInstallerTests {
         await Assert.That(await PathShimInstaller.IsAdminAsync(runner, CancellationToken.None)).IsTrue();
     }
 
+
+    [Test]
+    public async Task An_existing_admin_link_off_path_still_gets_the_user_fallback() {
+        Skip.When(OperatingSystem.IsWindows(), "macOS lstat semantics");
+        using var tmp = new TempDir();
+        var home = new UserHome(tmp.Path);
+        var target = tmp.CreateFile("target-cli");
+        var admin = tmp.PathTo("admin-kcap");
+        File.CreateSymbolicLink(admin, target);
+        var probe = new FakeLoginShellProbe {
+            KcapOnPathBehavior = _ => Task.FromResult<bool?>(File.Exists(tmp.PathTo(".zprofile"))),
+        };
+        var installer = new PathShimInstaller(new FakeProcessRunner(), probe, home: home,
+            profile: new ShellProfile(home, "/bin/zsh"), mayElevate: _ => Task.FromResult(false));
+        var result = await Install(installer, admin, target, CancellationToken.None);
+        await Assert.That(result.Outcome).IsEqualTo(ShimOutcome.Installed);
+        await Assert.That(new FileInfo(tmp.PathTo(".local", "bin", "kcap")).LinkTarget).IsEqualTo(target);
+        await Assert.That(new FileInfo(admin).LinkTarget).IsEqualTo(target);
+    }
+
+    [Test]
+    [Arguments("/bin/fish", "safe")]
+    [Arguments("/bin/zsh", "a!b")]
+    public async Task Unsupported_profile_fallback_does_not_create_a_link(string shell, string folder) {
+        Skip.When(OperatingSystem.IsWindows(), "macOS lstat semantics");
+        using var tmp = new TempDir();
+        var home = new UserHome(tmp.CreateDir(folder));
+        var installer = new PathShimInstaller(new FakeProcessRunner(), new FakeLoginShellProbe(), home: home,
+            profile: new ShellProfile(home, shell), mayElevate: _ => Task.FromResult(false));
+        var result = await Install(installer, tmp.PathTo("admin-kcap"), tmp.CreateFile("target-cli"), CancellationToken.None);
+        await Assert.That(result.Outcome).IsEqualTo(ShimOutcome.Failed);
+        await Assert.That(Directory.Exists(Path.Combine(home.Path, ".local"))).IsFalse();
+    }
+
     static FakeLoginShellProbe ResolvingTo(string resolved, string terminalPath) => new() {
         TerminalPathBehavior = _ => Task.FromResult<string?>(terminalPath),
         KcapOnPathBehavior   = _ => Task.FromResult<bool?>(true),

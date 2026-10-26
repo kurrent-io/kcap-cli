@@ -46,7 +46,12 @@ public sealed class PathShimInstaller(
         var preflight = Preflight(destination, target);
         // A link to our target is not by itself "on PATH": the login shell's PATH can still omit its
         // folder, so it gets the same probe as a fresh link.
-        if (preflight == ShimPreflight.AlreadyInstalled) return await ProbeOutcomeAsync(destination, ct).ConfigureAwait(false);
+        if (preflight == ShimPreflight.AlreadyInstalled) {
+            var existing = await ProbeOutcomeAsync(destination, ct).ConfigureAwait(false);
+            if (existing.Outcome != ShimOutcome.InstalledButNotOnPath || UserOwned || profile is null || home is null
+                || await MayElevateAsync(ct).ConfigureAwait(false)) return existing;
+            return await LinkThroughProfileAsync(target, profile, home, ct).ConfigureAwait(false);
+        }
 
         // Ahead of the conflict check: a user who could not replace that entry anyway still has a folder of their own.
         if (!UserOwned && profile is not null && home is not null && !await MayElevateAsync(ct).ConfigureAwait(false))
@@ -84,6 +89,9 @@ public sealed class PathShimInstaller(
     }
 
     async Task<ShimResult> LinkThroughProfileAsync(string target, ShellProfile profile, UserHome home, CancellationToken ct) {
+        if (profile.Disclosure is null)
+            return new ShimResult(ShimOutcome.Failed, "This shell or home path does not support automatic PATH setup. Add ~/.local/bin to your shell's PATH manually.", null);
+
         var link = Path.Combine(ShellProfile.Folder(home), "kcap");
         switch (Preflight(link, target)) {
             case ShimPreflight.Conflict:
@@ -99,7 +107,8 @@ public sealed class PathShimInstaller(
         }
 
         try {
-            profile.Add();
+            if (!profile.Add())
+                return new ShimResult(ShimOutcome.Failed, "The shell profile could not be configured. Add ~/.local/bin to your shell's PATH manually.", null);
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             return new ShimResult(ShimOutcome.Failed, $"kcap was linked at {link}, but {profile.ProfilePath} could not be updated: {ex.Message}", null);
         }

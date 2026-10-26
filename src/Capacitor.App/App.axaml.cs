@@ -1017,7 +1017,10 @@ public partial class App : Application {
         BundleRoot: bundleRoot,
         TerminalPathTimeout: UninstallTerminalPathTimeout,
         Time: _time,
-        Log: Console.Error);
+        Log: Console.Error,
+        PathProfiles: () => OperatingSystem.IsMacOS()
+            ? ShellProfile.Removable(_userHome, new KcapLinkRemover(KcapLinkFolders.For(_userHome), Path.Combine(bundleRoot, "Contents", "MacOS", "kcap")).Find())
+            : []);
 
     // The relaunched copy runs the uninstall: this process must be gone before the bundle is.
     async Task RelaunchForUninstallAsync(IClassicDesktopStyleApplicationLifetime desktop, UninstallFactsSource source) {

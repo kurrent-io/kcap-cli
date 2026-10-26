@@ -37,12 +37,36 @@ public sealed class ShellProfile(UserHome home, string? shell) {
     public bool Add() {
         if (ProfilePath is not { } profile || Line(Folder(home)) is not { } line) return false;
 
-        var text = File.Exists(profile) ? Read(profile) : "";
-        if (IndexOfBlock(text) >= 0) return true;
-
-        var block = text.Length > 0 && !text.EndsWith('\n') ? $"\n{BeginAfterNewline}" : Begin;
-        using var stream = new FileStream(profile, FileMode.Append, FileAccess.Write, FileShare.Read);
-        stream.Write(Encoding.UTF8.GetBytes($"{block}\n{line}\n{End}\n"));
+        using var stream = new FileStream(profile, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, bufferSize: 1);
+        var text = Read(stream);
+        var begin = IndexOfBlock(text);
+        var marker = begin >= 0 && IndexOfLine(text, BeginAfterNewline, begin) == begin ? BeginAfterNewline : Begin;
+        var expected = AsBytes($"{marker}\n{line}\n{End}\n");
+        var position = text.Length;
+        string append;
+        if (begin >= 0) {
+            if (Without(text, AsBytes(line)) is not null) return true;
+            // Only a byte-for-byte prefix at EOF can be an interrupted append. User additions are
+            // never interpreted as ours, even when they sit between our markers.
+            var partial = text[begin..];
+            if (!expected.StartsWith(partial, StringComparison.Ordinal)) throw Modified(profile);
+            append = expected[partial.Length..];
+        } else {
+            var block = text.Length > 0 && !text.EndsWith('\n') ? $"\n{BeginAfterNewline}" : Begin;
+            append = AsBytes($"{block}\n{line}\n{End}\n");
+        }
+        VerifyUnchanged(stream, text);
+        try {
+            stream.Position = position;
+            stream.Write(Bytes.GetBytes(append));
+            stream.Flush();
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            // A short append is safe to roll back only while every byte still matches our write.
+            var current = Read(stream);
+            if (current.StartsWith(text, StringComparison.Ordinal)
+                && append.StartsWith(current[text.Length..], StringComparison.Ordinal)) stream.SetLength(position);
+            throw;
+        }
         return true;
     }
 
@@ -59,29 +83,52 @@ public sealed class ShellProfile(UserHome home, string? shell) {
 
     /// Removes every kcap block from the file, leaving every other byte as it was.
     public static void Remove(string profile) {
-        var text = Read(profile);
+        using var stream = new FileStream(profile, FileMode.Open, FileAccess.ReadWrite, FileShare.None, bufferSize: 1);
+        var text = Read(stream);
         var next = text;
-        while (Without(next) is { } shorter) next = shorter;
-        if (!ReferenceEquals(next, text)) File.WriteAllBytes(profile, Bytes.GetBytes(next));
+        var home = new UserHome(Path.GetDirectoryName(Path.GetFullPath(profile))!);
+        var line = Line(Folder(home));
+        if (line is null && IndexOfBlock(text) >= 0) throw Modified(profile);
+        while (line is not null && Without(next, AsBytes(line)) is { } shorter) next = shorter;
+        if (IndexOfBlock(next) >= 0) throw Modified(profile);
+        if (next == text) return;
+        VerifyUnchanged(stream, text);
+        stream.Position = 0;
+        stream.Write(Bytes.GetBytes(next));
+        stream.SetLength(next.Length);
+        stream.Flush();
     }
 
-    internal static string? Without(string text) {
+    internal static string? Without(string text, string line) {
         var begin = IndexOfBlock(text);
         if (begin < 0) return null;
-        // An unterminated block may have had the user's own lines typed into it; leave it alone.
-        var end = IndexOfLine(text, End, begin);
-        if (end < 0) return null;
-
-        var after = text.IndexOf('\n', end);
-        var rest  = after < 0 ? "" : text[(after + 1)..];
-        // Once the user has added lines after the block, that newline ends their line too.
-        if (rest.Length == 0 && begin > 0 && IndexOfLine(text, BeginAfterNewline, begin) == begin) begin--;
+        var marker = IndexOfLine(text, BeginAfterNewline, begin) == begin ? BeginAfterNewline : Begin;
+        var block = $"{marker}\n{line}\n{End}\n";
+        if (!text.AsSpan(begin).StartsWith(block, StringComparison.Ordinal)) return null;
+        var rest = text[(begin + block.Length)..];
+        if (rest.Length == 0 && begin > 0 && marker == BeginAfterNewline) begin--;
         return text[..begin] + rest;
+    }
+
+    static IOException Modified(string profile) => new($"{profile} contains an incomplete or modified kcap PATH block; review it manually before retrying.");
+
+    static string AsBytes(string text) => Bytes.GetString(Encoding.UTF8.GetBytes(text));
+
+    static string Read(Stream stream) {
+        stream.Position = 0;
+        using var buffer = new MemoryStream();
+        stream.CopyTo(buffer);
+        return Bytes.GetString(buffer.ToArray());
+    }
+
+    static void VerifyUnchanged(Stream stream, string original) {
+        if (Read(stream) != original)
+            throw new IOException("The shell profile changed during PATH cleanup. Retry with other profile editors closed.");
     }
 
     // The path goes inside double quotes, so a character the shell expands there is refused.
     internal static string? Line(string folder) =>
-        folder.IndexOfAny(['"', '$', '`', '\\', '\n', '\r']) >= 0 ? null : $"export PATH=\"$PATH:{folder}\"";
+        folder.IndexOfAny(['"', '$', '`', '!', '\\', '\n', '\r']) >= 0 ? null : $"export PATH=\"$PATH:{folder}\"";
 
     // File.ReadAllText would honour a BOM and decode the file, and the rewrite would then lose it.
     static string Read(string profile) => Bytes.GetString(File.ReadAllBytes(profile));
@@ -104,9 +151,15 @@ public sealed class ShellProfile(UserHome home, string? shell) {
 
     static bool Carries(string profile) {
         try {
-            return File.Exists(profile) && IndexOfBlock(Read(profile)) >= 0;
-        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            return IndexOfBlock(Read(profile)) >= 0;
+        } catch (FileNotFoundException) {
             return false;
+        } catch (DirectoryNotFoundException) {
+            return false;
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            // Include an uninspectable candidate so Remove retries and its caller reports incomplete
+            // cleanup, rather than treating a read failure as proof that no PATH block remains.
+            return true;
         }
     }
 

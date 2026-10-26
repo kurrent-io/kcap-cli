@@ -122,14 +122,14 @@ public class ShellProfileTests {
     public async Task An_unterminated_block_is_left_alone() {
         var text = $"{ShellProfile.Begin}\nexport PATH=\"$PATH:/x\"\nexport MINE=1\n";
 
-        await Assert.That(ShellProfile.Without(text)).IsNull();
+        await Assert.That(ShellProfile.Without(text, "export PATH=\"$PATH:/x\"")).IsNull();
     }
 
     [Test]
     public async Task A_marker_inside_a_line_is_not_a_block() {
         var text = $"echo '{ShellProfile.Begin}'\necho '{ShellProfile.End}'\n";
 
-        await Assert.That(ShellProfile.Without(text)).IsNull();
+        await Assert.That(ShellProfile.Without(text, "export PATH=\"$PATH:/x\"")).IsNull();
     }
 
     [Test]
@@ -152,4 +152,47 @@ public class ShellProfileTests {
         File.Delete(link);
         await Assert.That(ShellProfile.Removable(Home, [])).IsEquivalentTo([profile]);
     }
+    [Test]
+    public async Task History_expansion_in_a_home_path_is_refused() {
+        var home = new UserHome(Tmp.CreateDir("a!b"));
+        await Assert.That(new ShellProfile(home, "/bin/bash").Add()).IsFalse();
+        await Assert.That(File.Exists(Path.Combine(home.Path, ".bash_profile"))).IsFalse();
+    }
+
+    [Test]
+    [Arguments(0)]
+    [Arguments(8)]
+    [Arguments(30)]
+    public async Task Retry_repairs_an_interrupted_owned_append(int missing) {
+        var partial = Block[..(Block.Length - missing - 1)];
+        var profile = Tmp.CreateFile(".zprofile", "export A=1\n" + partial);
+        new ShellProfile(Home, "/bin/zsh").Add();
+        await Assert.That(File.ReadAllText(profile)).IsEqualTo("export A=1\n" + Block);
+    }
+
+    [Test]
+    public async Task Modified_blocks_are_preserved_and_reported() {
+        var text = Block.Replace(ShellProfile.End, "export MINE=1\n" + ShellProfile.End);
+        var profile = Tmp.CreateFile(".zprofile", text);
+        await Assert.That(() => ShellProfile.Remove(profile)).Throws<IOException>();
+        await Assert.That(File.ReadAllText(profile)).IsEqualTo(text);
+        await Assert.That(() => new ShellProfile(Home, "/bin/zsh").Add()).Throws<IOException>();
+    }
+
+    [Test]
+    public async Task An_unreadable_profile_is_returned_for_cleanup_to_report() {
+        var profile = Tmp.CreateFile(".zprofile", Block);
+        using var held = new FileStream(profile, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        await Assert.That(ShellProfile.Removable(Home, [])).IsEquivalentTo([profile]);
+    }
+
+    [Test]
+    public async Task Removal_refuses_a_profile_that_another_writer_holds() {
+        var profile = Tmp.CreateFile(".zprofile", Block);
+        using (var held = new FileStream(profile, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite)) {
+            await Assert.That(() => ShellProfile.Remove(profile)).Throws<IOException>();
+        }
+        await Assert.That(File.ReadAllText(profile)).IsEqualTo(Block);
+    }
+
 }
