@@ -26,7 +26,18 @@ sealed class RegistryServiceEnrollmentStore : IServiceEnrollmentStore {
         else key.DeleteValue("MaxAgents", throwOnMissingValue: false);
     }
 
-    public void Delete() => Registry.CurrentUser.DeleteSubKeyTree(KeyPath, throwOnMissingSubKey: false);
+    public void Delete() {
+        Registry.CurrentUser.DeleteSubKeyTree(KeyPath, throwOnMissingSubKey: false);
+        DeleteIfEmpty(@"Software\Kurrent\kcap");
+        DeleteIfEmpty(@"Software\Kurrent");
+    }
+
+    static void DeleteIfEmpty(string path) {
+        using (var key = Registry.CurrentUser.OpenSubKey(path)) {
+            if (key is null || key.SubKeyCount > 0 || key.ValueCount > 0) return;
+        }
+        Registry.CurrentUser.DeleteSubKey(path, throwOnMissingSubKey: false);
+    }
 
     static void Set(RegistryKey key, string name, string? value) {
         if (value is null) key.DeleteValue(name, throwOnMissingValue: false);
