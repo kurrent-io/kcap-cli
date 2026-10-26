@@ -17,8 +17,9 @@ public class ExperimentalSettingsViewModelTests {
         return service;
     }
 
-    static DaemonStatusDto Reporting(bool resolved, bool active, bool acknowledged = true, string? reason = null) =>
-        FakeDaemonClientService.Snap() with {
+    static DaemonStatusDto Reporting(
+            bool resolved, bool active, bool acknowledged = true, string? reason = null, string connection = "connected") =>
+        FakeDaemonClientService.Snap(connection: connection) with {
             Experimental = [new ExperimentalFeatureStatusDto(Id, resolved, active, 1, acknowledged, reason)],
         };
 
@@ -60,6 +61,9 @@ public class ExperimentalSettingsViewModelTests {
         await Assert.That(row.StatusText).IsEqualTo("Active");
 
         service.SnapshotsSubject.OnNext(Reporting(resolved: true, active: true, acknowledged: false));
+        await Assert.That(row.StatusText).IsEqualTo("Applying…");
+
+        service.SnapshotsSubject.OnNext(Reporting(resolved: true, active: true, acknowledged: false, connection: "reconnecting"));
         await Assert.That(row.StatusText).IsEqualTo("Applied; the server has not been told yet");
 
         service.SnapshotsSubject.OnNext(Reporting(resolved: true, active: false, reason: "codex is older than 0.146.0"));
