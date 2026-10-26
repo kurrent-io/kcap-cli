@@ -1219,15 +1219,22 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         if (_composerEdits == queued.ComposerEdits && ComposerText == queued.Text) ComposerText = "";
     }
 
-    void RestoreQueuedRow(QueuedChatMessage message) {
+    void RestoreQueuedRow(QueuedChatMessage message, bool inSendOrder = false) {
         if (message.Acknowledged) return;
-        if (!_queuedMessages.Contains(message)) _queuedMessages.Add(message);
+        if (!_queuedMessages.Contains(message)) {
+            var next = inSendOrder ? _queuedMessages.FirstOrDefault(q => !q.IsForeign && q.SendOrder > message.SendOrder) : null;
+            if (next is null) _queuedMessages.Add(message);
+            else _queuedMessages.Insert(_queuedMessages.IndexOf(next), message);
+        }
         if (!_unechoed.Contains(message)) _unechoed.Add(message);
         _lastSent ??= message;
         RefreshQueue();
     }
 
     void RetireDiscarded(QueuedChatMessage message) {
+        var predecessors = _superseded
+            .Where(pair => ReferenceEquals(pair.Replacement, message) && !pair.Old.Acknowledged)
+            .Select(pair => pair.Old).Distinct().OrderBy(q => q.SendOrder).ToArray();
         if (message.DispatchId is { } id) {
             _discardedDispatches.Add(id);
             _queuedMessages.RemoveAll(_queuedMessages.Where(q => q.DispatchId == id).ToList());
@@ -1236,6 +1243,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _unechoed.Remove(message);
         _superseded.RemoveAll(pair => ReferenceEquals(pair.Old, message) || ReferenceEquals(pair.Replacement, message));
         if (ReferenceEquals(_lastSent, message)) _lastSent = null;
+        foreach (var predecessor in predecessors) {
+            _queuedMessages.Remove(predecessor);
+            RestoreQueuedRow(predecessor, inSendOrder: true);
+        }
         RefreshQueue();
     }
 

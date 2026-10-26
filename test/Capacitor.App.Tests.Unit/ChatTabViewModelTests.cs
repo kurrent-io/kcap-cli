@@ -3991,6 +3991,67 @@ public class ChatTabViewModelTests {
     [Arguments(false)]
     [Arguments(true)]
     [NotInParallel("AvaloniaSession")]
+    public Task Discarding_a_retry_restores_its_original_before_later_matching_sends(bool laterSend) => RunOnUiAsync(async () => {
+        var lane = new FakeServerLane();
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected));
+        using var access = new BehaviorSubject<SessionAccessState>(SessionAccessState.Established);
+        using var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
+        using var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
+        var time = new FakeTimeProvider();
+        var path = Tmp.CreateFile("discard-retry.jsonl", [AssistantLine]);
+        var chat = new ChatTabViewModel("a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null),
+            new ServerChatInput("a1", lane, access, session, hasTerminal: true, senderIdentity: Viewer("u2")),
+            new NoAttachmentUploader(),
+            _ => new SeededLocalFeed(new LocalTranscriptFeed(path, TranscriptChat.For("claude")!, "a1", time, _ => { })),
+            new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time), serverQueue: queue);
+        try {
+            await WaitUntilAsync(() => chat.HasSeed, what: "the seed");
+            chat.ComposerText = "same prompt";
+            await chat.SendCommand.Execute();
+            var original = chat.QueuedMessages.Single();
+            var first = Item("same prompt", Guid.NewGuid());
+            queue.OnNext([first]);
+            queue.OnNext([]);
+            await chat.SendQueuedCommand.Execute(original);
+            var retry = chat.QueuedMessages.Single();
+            var second = Item("same prompt", Guid.NewGuid());
+            queue.OnNext([second]);
+            queue.OnNext([]);
+            await Assert.That(retry.IsUnconfirmed).IsTrue();
+
+            QueuedChatMessage? later = null;
+            if (laterSend) {
+                chat.ComposerText = "same prompt";
+                await chat.SendCommand.Execute();
+                later = chat.QueuedMessages.Single(q => !ReferenceEquals(q, retry));
+                queue.OnNext([first]);
+            }
+            chat.ComposerText = "keep my draft";
+            await chat.DiscardQueuedCommand.Execute(retry);
+            await Assert.That(chat.ComposerText).IsEqualTo("keep my draft");
+
+            if (later is null) {
+                queue.OnNext([first, second]);
+                await Assert.That(chat.QueuedMessages.Single()).IsSameReferenceAs(original);
+                await Assert.That(original.IsForeign).IsFalse();
+                await Assert.That(original.DispatchId).IsEqualTo(first.DispatchId);
+            } else {
+                File.AppendAllText(path, User("same prompt") + "\n");
+                time.Advance(ChatTabViewModel.PollInterval);
+                await (chat.PendingReadForTesting ?? Task.CompletedTask);
+                await Assert.That(original.Acknowledged).IsTrue();
+                await Assert.That(later.Acknowledged).IsFalse();
+                await Assert.That(chat.QueuedMessages.Single()).IsSameReferenceAs(later);
+                queue.OnNext([second]);
+            }
+            await Assert.That(chat.QueuedMessages.Contains(retry)).IsFalse();
+        } finally { await chat.TeardownAsync(); }
+    });
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("AvaloniaSession")]
     public async Task A_retry_listed_beside_its_original_hides_neither_attempt(bool listingBeforeAcceptance) {
         await RunOnUiAsync(async () => {
             using var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
