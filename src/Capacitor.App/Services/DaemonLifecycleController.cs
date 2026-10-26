@@ -251,7 +251,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         if (!isFirstTerminalOutcome) {
             // A later Connected is a daemon that came up after the arm, or came back after a reload
             // outside the app: read its spawn type, arm nothing.
-            if (status.State == AttachState.Connected) _ = PassiveReadAsync();
+            if (status.State == AttachState.Connected) _ = LaterConnectedAsync();
             else if (status.State == AttachState.Unreachable && status.Reason != IncompatibleReason
                      && !_autoActionsPermanentlyClosed)
                 _ = RunRecoveryAsync((status.State, status.Reason));
@@ -313,10 +313,23 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         return snap;
     }
 
-    async Task PassiveReadAsync() {
-        try { await ReadStatusAsync(_lifetime.Token).ConfigureAwait(false); }
-        catch (OperationCanceledException) { /* shutdown */ }
-        catch (Exception ex) { Console.Error.WriteLine($"kcap: daemon lifecycle passive status read failed: {ex.Message}"); }
+    /// The startup branch starting the daemon is what an update looks like, so this Connected is the
+    /// run's only chance at the Windows service offer the first-outcome reconciliation would have made.
+    async Task LaterConnectedAsync() {
+        try {
+            if (await ReadStatusAsync(_lifetime.Token).ConfigureAwait(false) is not { } passive || !OffersWindowsService(passive)) return;
+            if (!await TryAcquireGateAsync(_lifetime.Token).ConfigureAwait(false)) return;
+            try {
+                if (IsCurrentlyAttached() && await QueryStatusForActionAsync(_lifetime.Token).ConfigureAwait(false) is { } snap)
+                    await OfferWindowsServiceAsync(snap, _lifetime.Token).ConfigureAwait(false);
+            } finally {
+                _gate.Release();
+            }
+        } catch (OperationCanceledException) {
+            // shutdown
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"kcap: daemon lifecycle later-connect status read failed: {ex.Message}");
+        }
     }
 
     void NoteSnapshot(ServiceSnapshot? snap, long readStart) {
@@ -988,9 +1001,8 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     /// service older than the bundled one. Asked once per run and only while the daemon is idle; a declined
     /// install is remembered and not asked again, leaving the explicit action</summary>
     async Task OfferWindowsServiceAsync(ServiceSnapshot snap, CancellationToken ct) {
-        var install = snap.Supervisor == "windows_scheduled_task" && snap.WindowsServiceInstallable == true;
-        var update  = snap.Supervisor == "windows_service" && snap.ServiceUpgradeAvailable == true;
-        if (!install && !update) return;
+        if (!OffersWindowsService(snap)) return;
+        var install = snap.Supervisor == "windows_scheduled_task";
 
         lock (_lock) {
             if (_windowsServiceOffered) return;
@@ -1007,6 +1019,10 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         }
         await RunLaneMutationAsync(MutationVerb.InstallWindowsService, ct).ConfigureAwait(false);
     }
+
+    static bool OffersWindowsService(ServiceSnapshot snap) =>
+        (snap.Supervisor == "windows_scheduled_task" && snap.WindowsServiceInstallable == true)
+        || (snap.Supervisor == "windows_service" && snap.ServiceUpgradeAvailable == true);
 
     /// <summary>The explicit "run as a Windows service" action, available after a declined offer</summary>
     public async Task InstallWindowsServiceAsync(CancellationToken ct) {

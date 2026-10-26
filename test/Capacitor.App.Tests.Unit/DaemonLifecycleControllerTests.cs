@@ -1861,6 +1861,24 @@ public class DaemonLifecycleControllerTests {
         await Assert.That(h.Lane.Requests[0].Verb).IsEqualTo(MutationVerb.InstallWindowsService);
     }
 
+    /// The update path: the installer stopped the daemon, so the app's first outcome is unreachable and
+    /// the daemon it starts connects later. That Connected is the run's only chance to make the offer.
+    [Test]
+    public async Task A_daemon_that_connects_after_the_startup_branch_is_offered_the_windows_service() {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(TaskSupervised());
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
+        h.Start();
+
+        h.PushUnreachable();
+        await h.Controller.PhaseClosed;
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Lane.Requests.Count == 1, what: "the Windows service install");
+        await Assert.That(h.Surface.Prompts.Single().Kind).IsEqualTo(LifecyclePrompt.KindWindowsService);
+        await Assert.That(h.Lane.Requests[0].Verb).IsEqualTo(MutationVerb.InstallWindowsService);
+    }
+
     [Test]
     public async Task Declining_the_windows_service_is_remembered_and_not_asked_again() {
         await using var h = new Harness();
