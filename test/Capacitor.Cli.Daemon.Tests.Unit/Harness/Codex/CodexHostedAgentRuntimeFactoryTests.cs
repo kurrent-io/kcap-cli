@@ -7,10 +7,9 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Codex;
 
 /// <summary>
-/// The composite codex factory's ROUTING: review-flow launches go to app-server only when the daemon
-/// resolved it active; every interactive launch, and all launches under the PTY default, delegate to
-/// the wrapped PTY factory. The app-server route is exercised through the spawn seam (a fake peer),
-/// so no child process runs; the delegation cases never touch the launcher at all.
+/// The composite codex factory's routing: a pinned transport first, then the launch class, then the
+/// switch the server last acknowledged. The app-server route is exercised through the spawn seam (a
+/// fake peer), so no child process runs.
 /// </summary>
 public class CodexHostedAgentRuntimeFactoryTests {
     [TempHome] public required TempHome Home { get; init; }
@@ -71,104 +70,77 @@ public class CodexHostedAgentRuntimeFactoryTests {
         IsReview: false, IsReviewFlow: isReviewFlow, Review: null,
         Cols: 80, Rows: 24, ServerUrl: "https://t.example", DaemonBridgeUrl: null, CapacitorPath: "/opt/kcap");
 
+    static DaemonConfig ConfigWith(bool active, string? version = "0.146.0") {
+        var resolution = new CodexTransportResolution(1, active, version, active, null);
+        return new DaemonConfig {
+            CodexResolution             = resolution,
+            AcknowledgedCodexResolution = resolution,
+            Version                     = "0.146.0",
+        };
+    }
+
     CodexHostedAgentRuntimeFactory Factory(
-            RecordingPtyFactory pty, bool appServerActive, CodexAppServerSpawnFactory? spawn = null,
-            bool appServerInteractive = false) =>
-        new(NewLauncher(), pty,
-            new DaemonConfig {
-                CodexAppServerActive      = appServerActive,
-                CodexAppServerInteractive = appServerInteractive,
-                Version                   = "0.146.0",
-            },
-            NullLoggerFactory.Instance, TimeProvider.System, spawn);
+            RecordingPtyFactory pty, bool appServerActive, CodexAppServerSpawnFactory? spawn = null) =>
+        new(NewLauncher(), pty, ConfigWith(appServerActive), NullLoggerFactory.Instance, TimeProvider.System, spawn);
 
     // ── Routing decision ─────────────────────────────────────────────────────────────────────
-    [Test]
-    [Arguments(false, true,  false)] // not active -> pty even for a review flow
-    [Arguments(true,  false, false)] // active, interactive, not opted in -> pty
-    [Arguments(true,  true,  true)]  // active + review flow -> app-server
-    public async Task UsesAppServer_gates_on_active_AND_review_flow(bool active, bool isReviewFlow, bool expected) {
-        using var wt = new TempDir();
-        var factory = Factory(new RecordingPtyFactory(), active);
-        await Assert.That(factory.UsesAppServer(Ctx(isReviewFlow, wt.Path))).IsEqualTo(expected);
-    }
+    public enum Kind { Interactive, ReviewFlow, PrReview }
 
-    /// <summary>The per-daemon opt-in widens app-server to interactive launches on THIS daemon only.
-    /// Reviewers are unaffected by it, and it cannot switch a daemon whose transport is still PTY —
-    /// which is what lets one daemon run interactive on app-server while a fleet stays on PTY.</summary>
     [Test]
-    [Arguments(true,  false, true,  true)]  // opted in + active, interactive launch -> app-server
-    [Arguments(true,  true,  true,  true)]  // opted in + active, review flow        -> app-server
-    [Arguments(false, false, true,  false)] // NOT opted in, interactive             -> pty
-    [Arguments(true,  false, false, false)] // opted in but transport still pty      -> pty
-    public async Task UsesAppServer_admits_interactive_only_where_the_daemon_opted_in(
-            bool interactiveOptIn, bool isReviewFlow, bool active, bool expected) {
-        using var wt = new TempDir();
-        var factory = Factory(new RecordingPtyFactory(), active, appServerInteractive: interactiveOptIn);
-        await Assert.That(factory.UsesAppServer(Ctx(isReviewFlow, wt.Path))).IsEqualTo(expected);
-    }
-
-    /// <summary>The opt-in names INTERACTIVE, and a PR review is not that. Expressed as "not a review
-    /// flow" the switch would move PR review too — a launch class the operator never opted in — so this
-    /// pins the third class explicitly rather than leaving it to the negative form.</summary>
-    [Test]
-    public async Task UsesAppServer_leaves_a_pr_review_on_pty_even_when_the_daemon_opted_in() {
-        using var wt = new TempDir();
-        var factory = Factory(new RecordingPtyFactory(), appServerActive: true, appServerInteractive: true);
-        var prReview = Ctx(isReviewFlow: false, wt.Path) with { IsReview = true };
-
-        await Assert.That(factory.UsesAppServer(prReview)).IsFalse();
-        // Control: the same daemon DOES take an interactive launch to app-server.
-        await Assert.That(factory.UsesAppServer(Ctx(isReviewFlow: false, wt.Path))).IsTrue();
-    }
-
-    /// <summary>The env spelling is the operator's only lever, so it is pinned directly: affirmative
-    /// spellings turn it on — trimmed and case-insensitive, so an ordinary shell export is not silently
-    /// discarded — and everything else, including "0", "false" and a typo, leaves it off. Off is the safe
-    /// direction; a value the parser does not know must never move a daemon.</summary>
-    [Test]
-    [Arguments("1", true)]
-    [Arguments("true", true)]
-    [Arguments("TRUE", true)]
-    [Arguments("True", true)]
-    [Arguments("yes", true)]
-    [Arguments("on", true)]
-    [Arguments("TrUe", true)]
-    [Arguments("ON", true)]
-    [Arguments("Yes", true)]
-    [Arguments("  true  ", true)]
-    [Arguments("\ttrue\n", true)]
-    [Arguments("   ", false)]
-    [Arguments("0", false)]
-    [Arguments("false", false)]
-    [Arguments("off", false)]
-    [Arguments("no", false)]
-    [Arguments("app-server", false)]
-    [Arguments("", false)]
-    [Arguments(null, false)]
-    public async Task Interactive_opt_in_accepts_only_affirmative_spellings(string? value, bool expected) =>
-        await Assert.That(CodexTransportDecision.IsInteractiveOptIn(value)).IsEqualTo(expected);
-
-    /// <summary>Routing and advertisement are two halves of one fact. The server records the advertised
-    /// interactive transport as the launch's expected transport and refuses a registration that claims
-    /// otherwise, so if the router ever disagreed with <see cref="CodexTransportDecision.InteractiveTransport"/>
-    /// every interactive launch on that daemon would be stopped at registration.</summary>
-    [Test]
-    [Arguments(false, false)]
-    [Arguments(true,  false)]
-    [Arguments(false, true)]
-    [Arguments(true,  true)]
-    public async Task Interactive_routing_and_the_advertised_interactive_transport_are_one_fact(bool active, bool optIn) {
-        var config  = new DaemonConfig { CodexAppServerActive = active, CodexAppServerInteractive = optIn, Version = "0.146.0" };
+    [Arguments("pty",        "app-server", Kind.Interactive, true,  "0.146.0", false, false)]
+    [Arguments("app-server", "pty",        Kind.Interactive, false, "0.146.0", true,  false)]
+    [Arguments(null,         "app-server", Kind.ReviewFlow,  false, "0.146.0", true,  false)]
+    [Arguments(null,         "pty",        Kind.ReviewFlow,  true,  "0.146.0", false, false)]
+    [Arguments(null,         "app-server", Kind.Interactive, true,  "0.145.9", false, true)]
+    [Arguments(null,         null,         Kind.PrReview,    true,  "0.146.0", false, false)]
+    [Arguments(null,         null,         Kind.ReviewFlow,  true,  "0.146.0", true,  false)]
+    [Arguments(null,         null,         Kind.Interactive, false, "0.146.0", false, false)]
+    public async Task Route_follows_precedence(
+            string? requested, string? expected, Kind kind, bool acknowledgedActive, string version,
+            bool appServer, bool refused) {
         var factory = new CodexHostedAgentRuntimeFactory(
-            NewLauncher(), new RecordingPtyFactory(), config, NullLoggerFactory.Instance, TimeProvider.System,
-            null);
+            NewLauncher(), new RecordingPtyFactory(), ConfigWith(acknowledgedActive, version),
+            NullLoggerFactory.Instance, TimeProvider.System);
+        var ctx = Ctx(kind == Kind.ReviewFlow, Home.PathTo("routing")) with {
+            IsReview                 = kind == Kind.PrReview,
+            RequestedTransport       = requested,
+            ExpectedRuntimeTransport = expected,
+        };
 
-        // The routing decision never touches the worktree, so a path under the injected home is enough.
-        var routed     = factory.UsesAppServer(Ctx(isReviewFlow: false, Home.PathTo("interactive-routing")));
-        var advertised = CodexTransportDecision.InteractiveTransport(config) == CodexTransportDecision.AppServer;
+        var route = factory.Route(ctx);
 
-        await Assert.That(routed).IsEqualTo(advertised);
+        await Assert.That(route.AppServer).IsEqualTo(appServer);
+        await Assert.That(route.Refusal is not null).IsEqualTo(refused);
+        if (refused) await Assert.That(route.Refusal).Contains(version).And.Contains(CodexTransportDecision.VersionFloor);
+    }
+
+    /// <summary>A field-absent interactive launch and the advertisement it was dispatched against are
+    /// one fact: the server refuses a registration on any other transport.</summary>
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Field_absent_interactive_routing_matches_the_acknowledged_advertisement(bool active) {
+        var config  = ConfigWith(active);
+        var factory = new CodexHostedAgentRuntimeFactory(
+            NewLauncher(), new RecordingPtyFactory(), config, NullLoggerFactory.Instance, TimeProvider.System);
+
+        var routed = factory.Route(Ctx(isReviewFlow: false, Home.PathTo("interactive-routing")));
+
+        await Assert.That(routed.AppServer ? CodexTransportDecision.AppServer : CodexTransportDecision.Pty)
+            .IsEqualTo(config.AcknowledgedCodexResolution.InteractiveTransport);
+    }
+
+    [Test]
+    public async Task A_pinned_app_server_launch_below_the_floor_is_refused_without_starting_pty() {
+        using var wt = new TempDir();
+        var pty = new RecordingPtyFactory();
+        var factory = new CodexHostedAgentRuntimeFactory(
+            NewLauncher(), pty, ConfigWith(active: false, version: "0.145.9"), NullLoggerFactory.Instance, TimeProvider.System);
+
+        await Assert.That(() => factory.StartAsync(
+                Ctx(isReviewFlow: true, wt.Path) with { ExpectedRuntimeTransport = "app-server" }, CancellationToken.None))
+            .Throws<InvalidOperationException>();
+        await Assert.That(pty.StartCalls).IsEqualTo(0);
     }
 
     [Test]
@@ -178,18 +150,6 @@ public class CodexHostedAgentRuntimeFactoryTests {
         var factory = Factory(pty, appServerActive: false);
 
         var start = await factory.StartAsync(Ctx(isReviewFlow: true, wt.Path), CancellationToken.None);
-
-        await Assert.That(pty.StartCalls).IsEqualTo(1);
-        await Assert.That(start.Runtime).IsTypeOf<StubRuntime>();
-    }
-
-    [Test]
-    public async Task Interactive_launch_delegates_to_pty_even_when_app_server_is_active() {
-        using var wt = new TempDir();
-        var pty = new RecordingPtyFactory();
-        var factory = Factory(pty, appServerActive: true);
-
-        var start = await factory.StartAsync(Ctx(isReviewFlow: false, wt.Path), CancellationToken.None);
 
         await Assert.That(pty.StartCalls).IsEqualTo(1);
         await Assert.That(start.Runtime).IsTypeOf<StubRuntime>();
@@ -209,20 +169,22 @@ public class CodexHostedAgentRuntimeFactoryTests {
     /// <summary>A resumed local session was a terminal; on a daemon whose interactive launches go to
     /// app-server it must come back as one, or <c>agent attach</c> has nothing to attach to.</summary>
     [Test]
-    public async Task A_resume_requesting_pty_starts_the_pty_launcher_on_a_daemon_opted_into_app_server() {
+    public async Task A_resume_requesting_pty_starts_the_pty_launcher_on_a_daemon_with_app_server_active() {
         using var wt = new TempDir();
         var pty = new RecordingPtyFactory();
-        var factory = Factory(pty, appServerActive: true, appServerInteractive: true);
-        var resumed = Ctx(isReviewFlow: false, wt.Path) with { ResumeSessionId = "thread-1", RequestedTransport = "pty" };
+        var factory = Factory(pty, appServerActive: true);
+        var resumed = Ctx(isReviewFlow: false, wt.Path) with {
+            ResumeSessionId = "thread-1", RequestedTransport = "pty", ExpectedRuntimeTransport = "app-server",
+        };
 
-        await Assert.That(factory.UsesAppServer(resumed)).IsFalse();
         await factory.StartAsync(resumed, CancellationToken.None);
 
         await Assert.That(pty.StartCalls).IsEqualTo(1);
     }
 
+    /// <summary>A parked reviewer's transcript is envelope-sourced, so a PTY resume would fork it.</summary>
     [Test]
-    public async Task A_reviewer_resume_without_the_app_server_route_refuses_to_start_a_pty_session() {
+    public async Task Pty_review_flow_resume_is_still_refused() {
         using var wt = new TempDir();
         var pty = new RecordingPtyFactory();
         var factory = Factory(pty, appServerActive: false);
@@ -230,16 +192,6 @@ public class CodexHostedAgentRuntimeFactoryTests {
         await Assert.That(() => factory.StartAsync(Ctx(isReviewFlow: true, wt.Path) with { ResumeSessionId = "thread-parked-1" }, CancellationToken.None))
             .Throws<InvalidOperationException>();
         await Assert.That(pty.StartCalls).IsEqualTo(0);
-    }
-
-    [Test]
-    public async Task A_resume_requesting_app_server_takes_app_server_without_the_interactive_opt_in() {
-        using var wt = new TempDir();
-        var factory = Factory(new RecordingPtyFactory(), appServerActive: true, appServerInteractive: false);
-        var resumed = Ctx(isReviewFlow: false, wt.Path) with { RequestedTransport = "app-server" };
-
-        await Assert.That(factory.UsesAppServer(resumed)).IsTrue();
-        await Assert.That(factory.UsesAppServer(Ctx(isReviewFlow: false, wt.Path))).IsFalse();
     }
 
     [Test]
