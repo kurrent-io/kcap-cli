@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json.Nodes;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Harness;
 
@@ -54,9 +55,10 @@ public class StatusLineWrapperTests : IDisposable {
 
     static string Quoted(string path) => "'" + path + "'";
 
-    Process Start(string stdin, string? workingDirectory = null) {
+    Process Start(string stdin, string? workingDirectory = null, string? daemonsDir = null) {
         var psi = KcapProcess.StartInfo(Daemons.Store, Config.Root, "statusline", "--account", AccountId);
         psi.WorkingDirectory = workingDirectory ?? Tmp.Path;
+        if (daemonsDir is not null) psi.Environment[DaemonStore.DaemonsDirEnvVar] = daemonsDir;
 
         var proxy = $"http://127.0.0.1:{((IPEndPoint) _proxy.LocalEndpoint).Port}";
         foreach (var name in new[] { "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy" })
@@ -80,8 +82,8 @@ public class StatusLineWrapperTests : IDisposable {
         return process;
     }
 
-    async Task<(int ExitCode, string Stdout, string Stderr)> RunAsync(string stdin, string? workingDirectory = null) {
-        var process = Start(stdin, workingDirectory);
+    async Task<(int ExitCode, string Stdout, string Stderr)> RunAsync(string stdin, string? workingDirectory = null, string? daemonsDir = null) {
+        var process = Start(stdin, workingDirectory, daemonsDir);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var stdout = process.StandardOutput.ReadToEndAsync(cts.Token);
@@ -135,6 +137,22 @@ public class StatusLineWrapperTests : IDisposable {
         Register(original: null);
 
         var r = await RunAsync(Payload());
+
+        await Assert.That(r.ExitCode).IsEqualTo(0);
+        await Assert.That(r.Stdout).IsEmpty();
+        await Assert.That(r.Stderr).IsEmpty();
+    }
+
+    /// <summary>The filesystem root has no parent to put <c>accounts</c> beside, so resolving the store
+    /// throws; the uncreatable path only fails later, on the first read.</summary>
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task Unusable_daemons_directory_prints_nothing_and_exits_zero(bool root) {
+        var blocker    = Tmp.CreateFile("blocker");
+        var daemonsDir = root ? Path.GetPathRoot(Tmp.Path)! : Path.Combine(blocker, "daemons");
+
+        var r = await RunAsync(Payload(), daemonsDir: daemonsDir);
 
         await Assert.That(r.ExitCode).IsEqualTo(0);
         await Assert.That(r.Stdout).IsEmpty();

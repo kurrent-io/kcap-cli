@@ -17,7 +17,16 @@ public static class ClaudeStatusLineEntry {
     // Covers parse, registry read and the locked write together; past it the original runs regardless.
     static readonly TimeSpan CaptureBudget = TimeSpan.FromMilliseconds(500);
 
-    public static async Task<int> RunAsync(string[] args, AccountStore accounts, CancellationToken ct) {
+    /// <summary>Never throws: it runs ahead of the top-level handler, and a crash trace would replace the status line.</summary>
+    public static async Task<int> RunAsync(string[] args, Func<AccountStore> accounts, CancellationToken ct) {
+        try {
+            return await RunAsync(args, accounts(), ct);
+        } catch (Exception) {
+            return 0;
+        }
+    }
+
+    static async Task<int> RunAsync(string[] args, AccountStore accounts, CancellationToken ct) {
         var signaled      = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         var registrations = RegisterSignals(signaled);
         await using var cancel = ct.Register(() => signaled.TrySetResult(130));
@@ -135,7 +144,11 @@ public static class ClaudeStatusLineEntry {
             return await signaled;
         }
 
-        await finished;
+        try {
+            await finished;
+        } catch (Exception) {
+            // The child has exited: a failed copy loses output, never the original's status.
+        }
         return child.ExitCode;
     }
 

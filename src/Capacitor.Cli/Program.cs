@@ -29,7 +29,7 @@ var command = args[0];
 
 // Ahead of everything else, so the original status line sees the environment Claude gave it.
 if (command == "statusline")
-    return await ClaudeStatusLineEntry.RunAsync(args, AccountStore.Beside(DaemonStore.FromEnvironment()), CancellationToken.None);
+    return await ClaudeStatusLineEntry.RunAsync(args, () => AccountStore.Beside(DaemonStore.FromEnvironment()), CancellationToken.None);
 
 NestedHarness.ShedInheritedHosting();
 
