@@ -122,9 +122,10 @@ public sealed class ExperimentalCommand {
         }
     }
 
-    // A reachable daemon whose snapshot did not arrive is still settling, not too old.
+    // A reachable daemon whose snapshot did not arrive is still settling, not too old; one whose hello and
+    // snapshot may come from different processes (a restart between the dials) confirms nothing.
     static (ExperimentalFeatureStateKind Kind, string? Reason) Classify(bool saved, ProbeResult probe, string featureId) =>
-        probe.Reachable && probe.Snapshot is null
+        probe.Reachable && (probe.Snapshot is null || !probe.IdentityConsistent)
             ? (ExperimentalFeatureStateKind.Applying, null)
             : ExperimentalFeatureState.Classify(saved, probe.Reachable, probe.Snapshot, featureId);
 

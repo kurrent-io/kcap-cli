@@ -112,6 +112,16 @@ public class ExperimentalCommandTests {
         await Assert.That(output).Contains("Applied live");
     }
 
+    /// <summary>A probe whose hello and status may have reached different daemons cannot confirm anything,
+    /// however settled its snapshot looks.</summary>
+    [Test]
+    public async Task Enable_keeps_polling_while_the_probe_is_identity_inconsistent() {
+        var (_, output, _) = await Run(_ => new ProbeResult(true, null, Status([Feature(true, true)]), false), "enable", Id);
+
+        await Assert.That(output).Contains("Saved; the daemon did not confirm in time. Run kcap experimental to check");
+        await Assert.That(output).DoesNotContain("Applied live");
+    }
+
     /// <summary>A registration can fail while the hub stays connected; the daemon's flag, not the
     /// connection, says the server was not told.</summary>
     [Test]
@@ -123,7 +133,7 @@ public class ExperimentalCommandTests {
 
     [Test]
     public async Task Enable_writes_the_profile_KCAP_PROFILE_selects_and_asks_its_daemon() {
-        await File.WriteAllTextAsync(Path.Combine(Tmp.Path, "config.json"), """
+        Tmp.CreateFile("config.json", """
             { "version": 2, "active_profile": "default",
               "profiles": { "default": { "daemon": { "name": "home-daemon" } },
                             "work": { "daemon": { "name": "work-daemon" } } } }
@@ -159,8 +169,7 @@ public class ExperimentalCommandTests {
 
     [Test]
     public async Task Corrupt_store_is_refused_and_left_untouched() {
-        var path = Path.Combine(Tmp.Path, ExperimentalSettingsStore.FileName);
-        await File.WriteAllTextAsync(path, "{ not json");
+        var path = Tmp.CreateFile(ExperimentalSettingsStore.FileName, "{ not json");
 
         var (exit, _, error) = await Run(_ => NotRunning, "enable", Id);
 
