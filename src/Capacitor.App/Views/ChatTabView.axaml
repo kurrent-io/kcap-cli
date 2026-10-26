@@ -419,17 +419,28 @@
                                                            FontSize="11" Foreground="{StaticResource KcapFaintBrush}" />
                                                 <TextBlock Text="Delivery unconfirmed" IsVisible="{Binding IsUnconfirmed}"
                                                            FontSize="11" Foreground="{StaticResource KcapMutedBrush}" />
-                                                <TextBlock Text="Queued by another client" IsVisible="{Binding IsForeign}"
+                                                <TextBlock Text="Delivery unconfirmed" IsVisible="{Binding IsForeign}"
+                                                           ToolTip.Tip="The server recorded this send but has no matching delivery receipt. This does not mean the agent is still waiting to run it."
                                                            FontSize="11" Foreground="{StaticResource KcapFaintBrush}" />
                                             </StackPanel>
-                                            <Button x:Name="SendQueuedButton" Grid.Column="1" Classes="kcapPrimary" Content="Send"
-                                                    Command="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).SendQueuedCommand}"
-                                                    CommandParameter="{Binding}"
-                                                    IsVisible="{Binding CanSendNow}"
-                                                    Height="24" Padding="12,0" Margin="12,0,0,0"
-                                                    VerticalAlignment="Center" VerticalContentAlignment="Center"
-                                                    FontSize="13" FontWeight="SemiBold" CornerRadius="7"
-                                                    AutomationProperties.Name="Send queued message" />
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" Margin="12,0,0,0" VerticalAlignment="Center">
+                                                <Button x:Name="DiscardQueuedButton" Classes="kcapChip" Content="Discard"
+                                                        Command="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).DiscardQueuedCommand}"
+                                                        CommandParameter="{Binding}" IsVisible="{Binding CanDiscard}"
+                                                        ToolTip.Tip="Stop tracking this message. It is not cancelled: the agent may still receive it."
+                                                        BorderThickness="1" Height="24" Padding="10,0" VerticalContentAlignment="Center"
+                                                        FontSize="13" FontWeight="SemiBold" CornerRadius="7" Cursor="Hand"
+                                                        AutomationProperties.Name="Discard unresolved message" />
+                                                <Button x:Name="SendQueuedButton" Classes="kcapPrimary" Content="Send again"
+                                                        ToolTip.Tip="Send this message again. The original message may still arrive."
+                                                        Command="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).SendQueuedCommand}"
+                                                        CommandParameter="{Binding}"
+                                                        IsVisible="{Binding CanSendNow}"
+                                                        Height="24" Padding="12,0"
+                                                        VerticalAlignment="Center" VerticalContentAlignment="Center"
+                                                        FontSize="13" FontWeight="SemiBold" CornerRadius="7"
+                                                        AutomationProperties.Name="Send queued message again" />
+                                            </StackPanel>
                                         </Grid>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
