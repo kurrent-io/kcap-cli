@@ -88,7 +88,13 @@ One additive field on the launch command (`LaunchAgentCommand`), `ExpectedRuntim
 
 - **Interactive:** the server fills it from the transport it records in the launch intent
 - **Reviewers:** the server fills it from the reviewer launch expectation it already derives from the selected daemon's advertised policy (`RuntimeTransports.FromLauncherPolicy`). The launch command carries no other usable policy for Codex: `ReviewerCertification.RequiredLauncherPolicyVersion` is optional and its daemon-side check only knows Claude's policy, so the router cannot infer a reviewer's transport today. Because the field is part of the staged command body, a reviewer launch replayed after recovery, however long after a flip, still names the transport it was staged with
-- **Every other Codex launch the server sends:** the server records a reviewer expectation only on the foreground sequenced path, so the legacy and direct reviewer paths, PR reviews and recovery relaunches validate against whatever `CapacitorHub` falls back to (the live entry, else PTY). On every Codex launch the server sets the field to exactly the transport its registration check will expect for that launch, so the daemon and the check can never disagree. One rule, one source: a helper beside `InteractiveLaunchIntentRecorder.ExpectedTransport` that the send sites and the validation share
+- **The other server send paths.** Today the server records a reviewer expectation only on the foreground sequenced path, so a fresh launch on any other path validates against `CapacitorHub`'s PTY default (the live-entry fallback applies only to a reconnect of an existing agent). The expectation is set per launch class, and recorded and sent together, so the daemon and the registration check never disagree:
+  - review-flow reviewer on any path (foreground sequenced, legacy, direct): recorded and sent from the selected daemon's advertised launcher policy, as the foreground path does now. The legacy and direct paths gain the record they lack
+  - recovery relaunch of a staged reviewer: the replayed body carries the transport it was staged with, and the server re-records that same value as the expectation
+  - PR review: always `pty`, recorded and sent, matching the router's exclusion of PR reviews from app-server
+  - interactive: from the launch intent, as above
+
+  One helper per class decides the value, shared by the send site and the expectation it records
 
 Rules for the field:
 
@@ -103,7 +109,7 @@ With an older server the anti-goal holds only partly: a launch the server dispat
 
 Hub payload rules in the server's `docs/gotchas/SIGNALR.md` apply: a new field on the existing record, never a new arity. Adding the field to the staged reviewer command changes its stored body and hash; the server change has to keep already-staged commands without the field replayable
 
-Acceptance cases the plan must cover, in both flip directions: an interactive launch dispatched before a flip and started after it; a reviewer launch likewise; a reviewer launch replayed from staging after a flip; a flip while the version probe is running; a field-absent launch from an older server before and after the re-registration is acknowledged; a resume and a restart-resume of an interactive agent on each transport and of an app-server reviewer, each keeping its ledger transport even when the command also carries a different `ExpectedRuntimeTransport`; a PTY reviewer resume still refused
+Acceptance cases the plan must cover, in both flip directions: an interactive launch dispatched before a flip and started after it; a reviewer launch likewise; a reviewer launch replayed from staging after a flip; a flip while the version probe is running; a field-absent launch from an older server before and after the re-registration is acknowledged; a resume and a restart-resume of an interactive agent on each transport and of an app-server reviewer, each keeping its ledger transport even when the command also carries a different `ExpectedRuntimeTransport`; a PTY reviewer resume still refused; a PR review with the switch on, sent and started on PTY; a legacy and a direct review-flow reviewer with the switch on and off, each sent and started on the transport its selected policy names
 
 A launch expecting app-server that arrives after the switch went off runs on app-server. That starts one app-server agent after the switch is off, which is the right outcome: refusing it fails work the user did not ask to stop
 
