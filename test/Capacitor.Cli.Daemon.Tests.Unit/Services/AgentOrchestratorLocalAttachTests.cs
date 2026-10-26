@@ -12,6 +12,7 @@ using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Pty;
 using Microsoft.Extensions.Logging.Abstractions;
+using TUnit.Assertions.Enums;
 using TUnit.Core.Enums;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
@@ -77,7 +78,7 @@ public class AgentOrchestratorLocalAttachTests {
         var a = launcher.BuildPassthrough(CtxFor("/r"), ["--model", "opus", "fix it"]);
 
         await Assert.That(Guid.TryParseExact(a.SessionId, "D", out _)).IsTrue();
-        await Assert.That(a.Args).IsEquivalentTo(new[] { "--session-id", a.SessionId!, "--model", "opus", "fix it" });
+        await Assert.That(a.Args).IsEquivalentTo(new[] { "--session-id", a.SessionId!, "--model", "opus", "fix it" }, CollectionOrdering.Matching);
     }
 
     /// <summary>Claude refuses <c>--session-id</c> beside a flag that picks the session itself.</summary>

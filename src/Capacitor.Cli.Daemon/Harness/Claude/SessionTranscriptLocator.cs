@@ -38,22 +38,40 @@ internal static class SessionTranscriptLocator {
         TryLocateWinner(projectDir, worktreePath, spawnedAtUtc, ruledOut)?.SessionId;
 
     /// <summary>
-    /// The transcript of <paramref name="sessionId"/> in <paramref name="projectDir"/>, with its normalized
-    /// id and link-resolved path, or null until Claude has created it. Neither spawn time nor cwd is
-    /// consulted: a resumed transcript predates the spawn, and the file name alone names the session.
-    /// Claude names the file by the id it was given; a dashless id falls back to the dashed spelling.
+    /// Finds the named transcript in the current project first, then across sibling project directories.
+    /// Distinct cross-project copies are ambiguous. Spawn time and cwd cannot identify a resumed session;
+    /// its exact id names the file, with a dashed spelling as fallback for a dashless id.
     /// </summary>
     internal static (string SessionId, string Path)? TryLocateSession(string projectDir, string sessionId) {
         if (SessionIds.Canonical(sessionId) is not { } wanted || !Guid.TryParseExact(wanted, "N", out var guid)) return null;
 
-        var dir = ResolveDirectory(projectDir);
+        var names = new[] { sessionId.Trim(), guid.ToString("D") };
+        if (FindIn(projectDir) is { } own) return (wanted, own);
 
-        foreach (var name in (string[])[sessionId.Trim(), guid.ToString("D")]) {
-            var path = Path.Combine(dir, name + ".jsonl");
-            if (File.Exists(path)) return (wanted, path);
+        try {
+            if (Directory.GetParent(projectDir) is not { Exists: true } projects) return null;
+
+            string? winner = null;
+            foreach (var sibling in projects.EnumerateDirectories()) {
+                if (FindIn(sibling.FullName) is not { } candidate) continue;
+                if (winner is not null && !string.Equals(winner, candidate, DefaultPathComparison)) return null;
+                winner = candidate;
+            }
+
+            return winner is null ? null : (wanted, winner);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            return null;
         }
 
-        return null;
+        string? FindIn(string directory) {
+            var resolved = ResolveDirectory(directory);
+            foreach (var name in names) {
+                var path = Path.Combine(resolved, name + ".jsonl");
+                if (File.Exists(path)) return path;
+            }
+
+            return null;
+        }
     }
 
     /// <summary>

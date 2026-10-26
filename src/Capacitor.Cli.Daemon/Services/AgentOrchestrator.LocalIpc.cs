@@ -560,7 +560,7 @@ internal partial class AgentOrchestrator {
 
             agent = new AgentInstance(agentId, null, "", null, cwd, vendor, runtime, worktree, new CancellationTokenSource(), resolution.Account) {
                 CreatedAt = startedAtUtc, LastOutputAt = startedAtUtc,
-                SessionId = built.SessionId, VendorSession = built.SessionId,
+                VendorSession = built.SessionId,
                 // Every launch path goes through CreateActivityClock(), even this PTY-only one that stamps
                 // no stage: a hand-built clock is how the stage-report wiring goes silently missing.
                 ActivityClock  = CreateActivityClock(),

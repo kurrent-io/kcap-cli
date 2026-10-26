@@ -462,7 +462,8 @@ public class AgentOrchestratorContinueTests : IDisposable {
         var agent  = f.Orch.GetAgentForTest(ctx.AgentId)!;
         var pinned = ctx.PinnedSessionId;
         await Assert.That(pinned).IsNotNull();
-        await Assert.That(agent.SessionId).IsEqualTo(pinned);
+        await Assert.That(agent.SessionId).IsNull();
+        await Assert.That(agent.VendorSession).IsEqualTo(pinned);
         await Assert.That(f.Orch.ResumeLedger!.TryRead(ctx.AgentId)!.VendorSession).IsEqualTo(pinned);
 
         await Task.Delay(f.Config.ResumeReadinessWindow * 3);

@@ -390,4 +390,46 @@ public class SessionTranscriptLocatorTests {
 
         await Assert.That(SessionTranscriptLocator.TryLocateSession(tmp.PathTo("projects", "-absent"), Pinned)).IsNull();
     }
+
+    [Test]
+    public async Task TryLocateSession_finds_a_known_transcript_in_another_project() {
+        using var tmp = new TempDir();
+        var own = tmp.CreateFile(["projects", "-original", Pinned + ".jsonl"], TranscriptLine(Worktree) + "\n");
+
+        var found = SessionTranscriptLocator.TryLocateSession(tmp.PathTo("projects", "-new"), Pinned);
+
+        await Assert.That(found?.Path).IsEqualTo(own);
+    }
+
+    [Test]
+    public async Task TryLocateSession_prefers_the_current_project_over_a_copy_elsewhere() {
+        using var tmp = new TempDir();
+        var own = tmp.CreateFile(["projects", "-current", Pinned + ".jsonl"], TranscriptLine(Worktree) + "\n");
+        tmp.CreateFile(["projects", "-other", Pinned + ".jsonl"], TranscriptLine(Worktree) + "\n");
+
+        var found = SessionTranscriptLocator.TryLocateSession(tmp.PathTo("projects", "-current"), Pinned);
+
+        await Assert.That(found?.Path).IsEqualTo(own);
+    }
+
+    [Test]
+    public async Task TryLocateSession_rejects_distinct_cross_project_copies() {
+        using var tmp = new TempDir();
+        tmp.CreateFile(["projects", "-one", Pinned + ".jsonl"], TranscriptLine(Worktree) + "\n");
+        tmp.CreateFile(["projects", "-two", Pinned + ".jsonl"], TranscriptLine(Worktree) + "\n");
+
+        await Assert.That(SessionTranscriptLocator.TryLocateSession(tmp.PathTo("projects", "-new"), Pinned)).IsNull();
+    }
+
+    [Test]
+    public async Task TryLocateSession_treats_symlinked_project_directories_as_one_transcript() {
+        using var tmp = new TempDir();
+        var source = tmp.CreateDir("projects", "-source");
+        var own = source.CreateFile(Pinned + ".jsonl", TranscriptLine(Worktree) + "\n");
+        Directory.CreateSymbolicLink(tmp.PathTo("projects", "-link"), source);
+
+        var found = SessionTranscriptLocator.TryLocateSession(tmp.PathTo("projects", "-new"), Pinned);
+
+        await Assert.That(found?.Path).IsEqualTo(own);
+    }
 }

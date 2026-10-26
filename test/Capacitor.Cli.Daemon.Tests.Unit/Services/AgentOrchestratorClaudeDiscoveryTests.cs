@@ -61,16 +61,44 @@ public class AgentOrchestratorClaudeDiscoveryTests {
 
         await Assert.That(server.LaunchFailedCalls).IsEmpty();
         var agent  = orch.GetAgentForTest("in-place")!;
-        var pinned = agent.SessionId!;
+        var pinned = agent.VendorSession!;
         await Assert.That(agent.Work).IsEqualTo(WorkLocation.BorrowedCwd);
         await Assert.That(agent.TranscriptPath).IsNull();
+        await Assert.That(agent.SessionId).IsNull();
 
         var own = Stage(agent.Worktree.Path, pinned);
         await WaitHarness.PollUntilAsync(() => agent.TranscriptPath is not null);
 
         await Assert.That(agent.TranscriptPath).IsEqualTo(own);
-        await Assert.That(agent.SessionId).IsEqualTo(pinned);
+        await Assert.That(agent.SessionId).IsEqualTo(SessionIds.Canonical(pinned));
         await Assert.That(Reported(server, "in-place")).DoesNotContain(SessionIds.Canonical(Foreign));
+    }
+
+    [Test]
+    public async Task A_server_requested_resume_in_place_links_the_requested_transcript() {
+        using var repo = GitRepo.CreateWithCommit();
+        var server = new CaptureServerConnection();
+        await using var orch = Build(new OneChunkThenBlockPtyProcess(), server: server);
+        string? own = null;
+        _launcher.OnPrepare = ctx => {
+            own = Stage(ctx.Worktree.Path, Own);
+            Stage(ctx.Worktree.Path, Foreign);
+        };
+
+        await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
+            AgentId: "server-resume", Prompt: "hi", Model: "opus", Effort: null, RepoPath: repo,
+            Tools: null, AttachmentIds: null, Vendor: "claude", Borrowed: true, BorrowCwd: repo,
+            ResumeSessionId: Own));
+
+        await Assert.That(server.LaunchFailedCalls).IsEmpty();
+        var agent = orch.GetAgentForTest("server-resume")!;
+        await Assert.That(agent.VendorSession).IsEqualTo(Own);
+        await WaitHarness.PollUntilAsync(() => agent.TranscriptPath is not null);
+
+        await Assert.That(agent.TranscriptPath).IsEqualTo(own);
+        await Assert.That(agent.SessionId).IsEqualTo(SessionIds.Canonical(Own));
+        await Assert.That(orch.ResumeLedger!.TryRead(agent.Id)!.VendorSession).IsEqualTo(Own);
+        await Assert.That(Reported(server, agent.Id)).DoesNotContain(SessionIds.Canonical(Foreign));
     }
 
     [Test]
@@ -110,7 +138,8 @@ public class AgentOrchestratorClaudeDiscoveryTests {
         await orch.HandleLocalSpawnAsync(FrameCodec.Spawn("claude", WorkLocation.BorrowedCwd, isPrivate: false, cwd, [], 80, 24), client, default);
 
         var agent = orch.GetAgentForTest(orch.SnapshotAgentsForStatus().Single().Id)!;
-        await Assert.That(agent.SessionId).IsEqualTo(Own);
+        await Assert.That(agent.SessionId).IsNull();
+        await Assert.That(agent.VendorSession).IsEqualTo(Own);
         await Assert.That(orch.ResumeLedger!.TryRead(agent.Id)!.VendorSession).IsEqualTo(Own);
 
         var own = Stage(agent.Worktree.Path, Own);

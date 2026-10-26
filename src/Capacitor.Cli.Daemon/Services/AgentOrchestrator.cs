@@ -66,7 +66,7 @@ internal record AgentInstance(
     ) {
     public string?              SessionId         { get; set; }
 
-    /// The vendor's own session id, the one a resume hands back to the vendor CLI.
+    /// The vendor's resume id, which can be reserved before a transcript confirms SessionId.
     public string?              VendorSession     { get; set; }
 
     /// Set when this agent stops to be resumed by a successor daemon: teardown then keeps its
@@ -3090,8 +3090,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 CreatedAt = startedAtUtc, LastOutputAt = startedAtUtc,
                 // Set in the initializer, not after: PublishAgent below is the first snapshot anyone
                 // reads, and RegisterAgentAsync after it can stall on a server outage.
-                SessionId           = start.Transcript is { } t ? SessionIds.Canonical(t.AcpSessionId) : pinnedSessionId ?? resume?.Entry.SessionId,
-                VendorSession       = start.Runtime.VendorResumeToken ?? start.Transcript?.AcpSessionId ?? pinnedSessionId ?? resume?.Entry.VendorSession,
+                SessionId           = start.Transcript is { } t ? SessionIds.Canonical(t.AcpSessionId) : resume?.Entry.SessionId,
+                VendorSession       = start.Runtime.VendorResumeToken ?? start.Transcript?.AcpSessionId ?? pinnedSessionId ?? cmd.ResumeSessionId ?? resume?.Entry.VendorSession,
                 TranscriptPath      = start.Transcript is null ? null : journal.IsOpen ? journal.Path : null,
                 Journal             = start.Transcript is null ? null : journal,
                 ActivityClock       = activityClock,

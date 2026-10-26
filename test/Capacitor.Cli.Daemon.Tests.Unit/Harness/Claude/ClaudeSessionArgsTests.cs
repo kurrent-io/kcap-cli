@@ -14,6 +14,8 @@ public class ClaudeSessionArgsTests {
     [Arguments(new[] { "--session-id=" + Id, "fix it" }, true, Id)]
     [Arguments(new[] { "--resume", Id, "go on" }, true, Id)]
     [Arguments(new[] { "--model", "opus", "--resume=" + Id }, true, Id)]
+    [Arguments(new[] { "--model=opus", "--resume", Id }, true, Id)]
+    [Arguments(new[] { "--model=opus", "--session-id", Id }, true, Id)]
     [Arguments(new[] { "-r", Id }, true, Id)]
     [Arguments(new[] { "--resume", Id, "--fork-session" }, true, null)]
     [Arguments(new[] { "--resume" }, true, null)]

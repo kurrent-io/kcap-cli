@@ -366,7 +366,7 @@ internal partial class AgentOrchestrator {
             AccountId:              account?.AccountId,
             AccountLabel:           account?.Label);
 
-        return NewRunningEntry(cmd.AgentId, cmd.Vendor, PreStartTransport, pinnedSessionId, pinnedSessionId, launch, prior: null);
+        return NewRunningEntry(cmd.AgentId, cmd.Vendor, PreStartTransport, null, pinnedSessionId ?? cmd.ResumeSessionId, launch, prior: null);
     }
 
     ResumeLedgerEntry NewRunningEntry(

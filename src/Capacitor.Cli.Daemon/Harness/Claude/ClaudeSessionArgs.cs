@@ -10,7 +10,7 @@ internal static class ClaudeSessionArgs {
     /// that is another option's value: without Claude's option table a value cannot be told from a flag, and
     /// counting it only costs the pin. <paramref name="sessionId"/> is set only when nothing else could
     /// explain the args: a lone <c>--session-id</c> or <c>--resume</c> UUID, in a position no other option's
-    /// value can take — first, or after a token that is not a flag.</summary>
+    /// value can take — first, after a non-flag, or after a long option with an attached value.</summary>
     internal static bool SelectsSession(IReadOnlyList<string> args, out string? sessionId) {
         sessionId = null;
         string? named   = null;
@@ -34,7 +34,8 @@ internal static class ClaudeSessionArgs {
             }
 
             flags++;
-            if (i == 0 || !args[i - 1].StartsWith('-')) named = value;
+            if (i == 0 || !args[i - 1].StartsWith('-')
+             || args[i - 1].StartsWith("--", StringComparison.Ordinal) && args[i - 1].Contains('=')) named = value;
         }
 
         if (flags == 1 && Guid.TryParseExact(named, "D", out _)) sessionId = named;
