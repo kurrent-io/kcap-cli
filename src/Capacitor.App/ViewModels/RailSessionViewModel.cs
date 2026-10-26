@@ -197,8 +197,10 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
         IsTerminalSession = row.IsTerminalSession;
         IsEnded = row.IsEndedSession;
         OwnerInitials = Initials(row.OwnerName);
-        OwnerAvatarUrl = string.IsNullOrEmpty(row.OwnerAvatarUrl) ? null : row.OwnerAvatarUrl;
-        ShowsOwner = OwnerInitials is not null && row.OwnerIsViewer != true;
+        var avatar = string.IsNullOrEmpty(row.OwnerAvatarUrl) ? null : row.OwnerAvatarUrl;
+        ShowsOwner = (OwnerInitials is not null || avatar is not null) && row.OwnerIsViewer != true;
+        // A hidden badge's avatar still fetches, so only a shown one gets the URL.
+        OwnerAvatarUrl = ShowsOwner ? avatar : null;
         OwnerTooltip = row.OwnerName is { Length: > 0 } owner ? $"{owner}\nOwner" : "";
         RepoLabel = row.RepoGroupLabel;
         Meta = IsStarting ? LaunchStages.Label(row.LaunchStage) : MetaFor(row);

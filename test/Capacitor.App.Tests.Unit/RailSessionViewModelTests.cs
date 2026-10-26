@@ -494,6 +494,12 @@ public class RailSessionViewModelTests {
             using var mine = new RailSessionViewModel(ServerRow() with { OwnerIsViewer = true }, new BehaviorSubject<string?>(null), NoPending, NotStale,
                 _ => { }, _ => { }, At(Ended));
             await Assert.That(mine.ShowsOwner).IsFalse();
+            await Assert.That(mine.OwnerAvatarUrl).IsNull();
+
+            using var nameless = new RailSessionViewModel(ServerRow() with { OwnerName = null, OwnerIsViewer = false }, new BehaviorSubject<string?>(null), NoPending, NotStale,
+                _ => { }, _ => { }, At(Ended));
+            await Assert.That(nameless.ShowsOwner).IsTrue();
+            await Assert.That(nameless.OwnerAvatarUrl).IsEqualTo("https://avatars.example/u2");
 
             using var unknown = new RailSessionViewModel(ServerRow(), new BehaviorSubject<string?>(null), NoPending, NotStale,
                 _ => { }, _ => { }, At(Ended));
