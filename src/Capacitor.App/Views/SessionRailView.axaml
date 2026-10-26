@@ -597,10 +597,10 @@
                     </ItemsControl>
                     <StackPanel x:Name="RailPaging" DataContext="{Binding Rail}" x:DataType="vm:SessionRailViewModel"
                                 Margin="8,8,8,6" Spacing="4" IsVisible="{Binding Converter={x:Static ObjectConverters.IsNotNull}}">
-                        <Button x:Name="RailShowMoreButton" Classes="kcapGhost" Content="Show 20 more" Command="{Binding ShowMoreCommand}"
+                        <Button x:Name="RailShowMoreButton" Classes="kcapGhost" Content="Load more ended sessions" Command="{Binding ShowMoreCommand}"
                                 IsVisible="{Binding ShowsShowMore}" HorizontalAlignment="Stretch" Padding="10,5" FontSize="12.5" />
                         <TextBlock x:Name="RailLoadedText" Text="{Binding LoadedText}" Classes="railMeta" Foreground="{StaticResource KcapFaintBrush}"
-                                   Margin="8,0" IsVisible="{Binding LoadedText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                   TextWrapping="Wrap" Margin="8,0" IsVisible="{Binding LoadedText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                         <TextBlock x:Name="RailCapNote" Text="{x:Static vm:SessionRailViewModel.CapNote}" Classes="railMeta"
                                    Foreground="{StaticResource KcapFaintBrush}" Margin="8,0" TextWrapping="Wrap" IsVisible="{Binding AtCap}" />
                         <TextBlock x:Name="RailLiveNotShownText" Text="{Binding LiveNotShownText}" Classes="railMeta"
