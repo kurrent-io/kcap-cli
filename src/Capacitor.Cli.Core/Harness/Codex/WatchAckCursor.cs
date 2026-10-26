@@ -36,6 +36,8 @@ public sealed class WatchAckCursor(ConfigRoot config) {
         }
     }
 
+    public bool Exists(string sessionId) => File.Exists(Path(sessionId));
+
     public void Delete(string sessionId) {
         try {
             File.Delete(Path(sessionId));
