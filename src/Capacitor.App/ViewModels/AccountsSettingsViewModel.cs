@@ -29,7 +29,7 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
     bool _canManage;
     IReadOnlyList<AccountVendorGroup> _groups = [];
     IReadOnlyList<AccountCandidate> _candidates = [];
-    string? _message;
+    AccountsNotice? _notice;
     bool _isBusy;
     AccountSettingsRow? _renaming;
     string _renameDraft = "";
@@ -92,10 +92,12 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
         : _snapshot is null ? "Accounts are listed once the daemon is connected"
         : null;
 
-    public string? Message {
-        get => _message;
-        private set => this.RaiseAndSetIfChanged(ref _message, value);
+    public AccountsNotice? Notice {
+        get => _notice;
+        private set => this.RaiseAndSetIfChanged(ref _notice, value);
     }
+
+    public void DismissNotice() => Notice = null;
 
     public bool IsBusy {
         get => _isBusy;
@@ -142,17 +144,16 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
         }
     }
 
-    internal static string OutcomeMessage(MutationVerb verb, string label, MutationOutcome outcome) {
-        var (done, infinitive, doing) = Words(verb);
+    internal static AccountsNotice? OutcomeNotice(MutationVerb verb, string label, MutationOutcome outcome) {
+        var (_, infinitive, doing) = Words(verb);
+        var failed = $"Could not {infinitive} {label}";
         return outcome switch {
-            MutationOutcome.Succeeded                   => $"{done} {label}",
-            MutationOutcome.Failed { Reason: { } why }  => $"Could not {infinitive} {label}: {why}",
-            MutationOutcome.Failed failed               => $"Could not {infinitive} {label} (exit code {failed.ExitCode})",
-            MutationOutcome.Refused { Reason: var why } => RefusalRemedy(why) is { } remedy
-                ? $"Could not {infinitive} {label}. {remedy}"
-                : $"Could not {infinitive} {label}: {why}",
+            MutationOutcome.Succeeded                   => null,
+            MutationOutcome.Failed { Reason: { } why }  => new(failed, why),
+            MutationOutcome.Failed exit                 => new(failed, $"The kcap command line exited with code {exit.ExitCode}."),
+            MutationOutcome.Refused { Reason: var why } => new(failed, RefusalRemedy(why) is { } remedy ? $"{remedy}." : why),
             // Unconfirmed, and every case the lane never produces for an account verb: none reads as done.
-            _                                           => $"{doing} {label} could not be confirmed; the list shows the current state",
+            _                                           => new($"{doing} {label} could not be confirmed", "The list shows the current state.", IsWarning: true),
         };
     }
 
@@ -190,7 +191,7 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
     async Task AddFromPickerAsync(string vendor) {
         if (!CanAct) return;
         IsBusy = true;
-        Message = null;
+        Notice = null;
         try {
             string? directory;
             try {
@@ -198,7 +199,7 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
             } catch (OperationCanceledException) when (_token.IsCancellationRequested) {
                 return;
             } catch (Exception ex) {
-                Message = $"Could not open the folder picker: {ex.Message}";
+                Notice = new("Could not open the folder picker", ex.Message);
                 return;
             }
             if (directory is not { Length: > 0 }) return;
@@ -225,7 +226,7 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
     async Task RunAsync(MutationVerb verb, string label, AccountArgs args) {
         if (!CanAct) return;
         IsBusy = true;
-        Message = null;
+        Notice = null;
         try {
             await SendAsync(verb, label, args);
         } finally { IsBusy = false; }
@@ -234,10 +235,10 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
     async Task SendAsync(MutationVerb verb, string label, AccountArgs args) {
         var request = MutationRequestFactory.ForAccount(verb, args, _daemonName, _profileName);
         try {
-            Message = OutcomeMessage(verb, label, await _runMutation(request, _token));
+            Notice = OutcomeNotice(verb, label, await _runMutation(request, _token));
         } catch (OperationCanceledException) when (_token.IsCancellationRequested) {
         } catch (Exception ex) {
-            Message = $"Could not {Words(verb).Infinitive} {label}: {ex.Message}";
+            Notice = new($"Could not {Words(verb).Infinitive} {label}", ex.Message);
         }
     }
 

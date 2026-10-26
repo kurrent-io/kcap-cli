@@ -34,7 +34,8 @@
                                                            Margin="0,0,6,0" />
                                                 <views:CommandChip Text="kcap profile add" Margin="0,2" />
                                             </WrapPanel>
-                                            <TextBlock Classes="kcapHint profileStatus" Text="{Binding StatusLabel}" IsVisible="{Binding ShowsStatus}" />
+                                            <TextBlock Classes="kcapHint profileStatus" Classes.attention="{Binding StatusNeedsAttention}"
+                                                       Text="{Binding StatusLabel}" IsVisible="{Binding ShowsStatus}" />
                                         </StackPanel>
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
                                             <Button Classes="kcapChip settingsCompact profileSignIn" Content="{Binding SignInLabel}"

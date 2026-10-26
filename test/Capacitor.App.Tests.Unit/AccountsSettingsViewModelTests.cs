@@ -215,46 +215,42 @@ public class AccountsSettingsViewModelTests {
         pending.SetResult(new MutationOutcome.Succeeded());
         await removing;
         await Assert.That(vm.IsBusy).IsFalse();
-        await Assert.That(vm.Message).IsEqualTo("Removed work");
+        await Assert.That(vm.Notice).IsNull();
 
         rig.Outcome = _ => Task.FromResult<MutationOutcome>(new MutationOutcome.Failed(1, "plugin: hooks.json is read-only", RecoverySurface.Attention));
         await vm.RewireCommand.Execute(work).ToTask();
-        await Assert.That(vm.Message).IsEqualTo("Could not re-wire work: plugin: hooks.json is read-only");
+        await Assert.That(vm.Notice).IsEqualTo(new AccountsNotice("Could not re-wire work", "plugin: hooks.json is read-only"));
 
         rig.Outcome = _ => Task.FromResult<MutationOutcome>(new MutationOutcome.Unconfirmed("snapshot_not_seen"));
         await vm.AddDefaultCommand.Execute(rig.Row(".codex")).ToTask();
-        await Assert.That(vm.Message).IsEqualTo("Adding .codex could not be confirmed; the list shows the current state");
+        await Assert.That(vm.Notice).IsEqualTo(new AccountsNotice("Adding .codex could not be confirmed", "The list shows the current state.", IsWarning: true));
 
         rig.Outcome = _ => Task.FromResult<MutationOutcome>(new MutationOutcome.Refused("cli_below_floor", RecoverySurface.Attention));
         await vm.AddDefaultCommand.Execute(rig.Row(".codex")).ToTask();
-        await Assert.That(vm.Message).IsEqualTo("Could not add .codex. Update kcap on this machine to manage accounts");
+        await Assert.That(vm.Notice).IsEqualTo(new AccountsNotice("Could not add .codex", "Update kcap on this machine to manage accounts."));
         await Assert.That(rig.Requests.Count).IsEqualTo(4);
     });
 
     [Test]
-    public async Task Outcome_messages_name_the_action_and_never_read_an_unconfirmed_outcome_as_done() {
-        await Assert.That(AccountsSettingsViewModel.OutcomeMessage(MutationVerb.AccountAdd, "work", new MutationOutcome.Succeeded()))
-            .IsEqualTo("Added work");
-        await Assert.That(AccountsSettingsViewModel.OutcomeMessage(MutationVerb.AccountRename, "work to client", new MutationOutcome.Succeeded()))
-            .IsEqualTo("Renamed work to client");
-        await Assert.That(AccountsSettingsViewModel.OutcomeMessage(MutationVerb.AccountRewire, "work", new MutationOutcome.Succeeded()))
-            .IsEqualTo("Re-wired work");
-        await Assert.That(AccountsSettingsViewModel.OutcomeMessage(MutationVerb.AccountRemove, "work", new MutationOutcome.Failed(2, null, RecoverySurface.Attention)))
-            .IsEqualTo("Could not remove work (exit code 2)");
-        await Assert.That(AccountsSettingsViewModel.OutcomeMessage(MutationVerb.AccountRemove, "work", new MutationOutcome.UnconfirmedNoAttach()))
-            .IsEqualTo("Removing work could not be confirmed; the list shows the current state");
+    public async Task Outcome_notices_name_the_action_and_never_read_an_unconfirmed_outcome_as_done() {
+        await Assert.That(AccountsSettingsViewModel.OutcomeNotice(MutationVerb.AccountAdd, "work", new MutationOutcome.Succeeded())).IsNull();
+        await Assert.That(AccountsSettingsViewModel.OutcomeNotice(MutationVerb.AccountRemove, "work", new MutationOutcome.Failed(2, null, RecoverySurface.Attention)))
+            .IsEqualTo(new AccountsNotice("Could not remove work", "The kcap command line exited with code 2."));
+        await Assert.That(AccountsSettingsViewModel.OutcomeNotice(MutationVerb.AccountRemove, "work", new MutationOutcome.UnconfirmedNoAttach()))
+            .IsEqualTo(new AccountsNotice("Removing work could not be confirmed", "The list shows the current state.", IsWarning: true));
     }
 
     [Test]
-    [Arguments("cli_below_floor", "Could not add work. Update kcap on this machine to manage accounts")]
-    [Arguments("cli_version_unknown", "Could not add work. Update kcap on this machine to manage accounts")]
-    [Arguments("cli_override_missing", "Could not add work. Update kcap on this machine to manage accounts")]
-    [Arguments("cli_not_found", "Could not add work. Install the kcap command line to manage accounts")]
-    [Arguments("daemon_renamed_restart_app", "Could not add work. Restart the app to manage accounts")]
-    [Arguments("some_new_refusal", "Could not add work: some_new_refusal")]
+    [Arguments("cli_below_floor", "Update kcap on this machine to manage accounts.")]
+    [Arguments("cli_version_unknown", "Update kcap on this machine to manage accounts.")]
+    [Arguments("cli_override_missing", "Update kcap on this machine to manage accounts.")]
+    [Arguments("cli_not_found", "Install the kcap command line to manage accounts.")]
+    [Arguments("daemon_renamed_restart_app", "Restart the app to manage accounts.")]
+    [Arguments("some_new_refusal", "some_new_refusal")]
     public async Task A_refusal_reads_as_what_to_do_and_an_unknown_one_keeps_its_reason(string reason, string expected) =>
-        await Assert.That(AccountsSettingsViewModel.OutcomeMessage(
-            MutationVerb.AccountAdd, "work", new MutationOutcome.Refused(reason, RecoverySurface.Attention))).IsEqualTo(expected);
+        await Assert.That(AccountsSettingsViewModel.OutcomeNotice(
+            MutationVerb.AccountAdd, "work", new MutationOutcome.Refused(reason, RecoverySurface.Attention)))
+            .IsEqualTo(new AccountsNotice("Could not add work", expected));
 
     [Test]
     public Task Rename_needs_a_changed_non_blank_label() => AvaloniaSession.RunOnUiAsync(async () => {
@@ -288,7 +284,7 @@ public class AccountsSettingsViewModelTests {
         await vm.CommitRenameCommand.Execute().ToTask();
         await Assert.That(vm.Renaming).IsNull();
         await Assert.That(rig.Requests.Single().Account!.Label).IsEqualTo("client");
-        await Assert.That(vm.Message).IsEqualTo("Renamed work to client");
+        await Assert.That(vm.Notice).IsNull();
     });
 
     [Test]

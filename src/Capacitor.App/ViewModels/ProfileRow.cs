@@ -16,7 +16,12 @@ public sealed record ProfileRow(string Name, string? ServerUrl, bool IsActive, b
     };
 
     public bool HasServer => ServerUrl is { Length: > 0 };
-    public bool ShowsStatus => Status is not ProfileCredentialStatus.NoServer;
+    /// Signed in is the normal state, so only a status that needs something is shown.
+    public bool ShowsStatus => Status is not (ProfileCredentialStatus.NoServer or ProfileCredentialStatus.SignedIn
+        or ProfileCredentialStatus.NoSignInNeeded);
+
+    /// A profile in use that cannot reach its server is the one that needs you now.
+    public bool StatusNeedsAttention => ShowsStatus && (IsActive || IsBound);
 
     /// The blank profile every config starts with, never given a server: nothing to show or do.
     public bool IsPlaceholder => Name == ProfileConfig.DefaultName && !HasServer && !IsActive && !IsBound;

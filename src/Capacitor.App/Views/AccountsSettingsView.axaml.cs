@@ -12,6 +12,8 @@ public partial class AccountsSettingsView : UserControl {
 
     void OnMenuOpened(object? sender, EventArgs e) => _openMenu = sender as FlyoutBase;
 
+    void OnDismissNotice(object? sender, RoutedEventArgs e) => (DataContext as AccountsSettingsViewModel)?.DismissNotice();
+
     void OnAddMenuOpening(object? sender, EventArgs e) => (DataContext as AccountsSettingsViewModel)?.RefreshCandidates();
 
     // The command and its parameter are read before the menu hides: closed, its content leaves the

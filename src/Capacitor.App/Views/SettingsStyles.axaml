@@ -310,11 +310,17 @@
         <Setter Property="CornerRadius" Value="6" />
         <Setter Property="Padding" Value="12,10" />
     </Style>
+    <Style Selector="Border.settingsError.warning">
+        <Setter Property="Background" Value="{StaticResource KcapWarningDimBrush}" />
+    </Style>
     <Style Selector="TextBlock.settingsErrorTitle">
         <Setter Property="FontSize" Value="12.5" />
         <Setter Property="FontWeight" Value="SemiBold" />
         <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
         <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="TextBlock.profileStatus.attention">
+        <Setter Property="Foreground" Value="{StaticResource KcapWarningBrush}" />
     </Style>
     <Style Selector="SelectableTextBlock.settingsErrorDetail">
         <Setter Property="FontSize" Value="12" />
