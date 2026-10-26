@@ -130,6 +130,28 @@ public class CodexHostedAgentRuntimeFactoryTests {
             .IsEqualTo(config.AcknowledgedCodexResolution.InteractiveTransport);
     }
 
+    /// <summary>Between a commit and the registration that carries it, the server still dispatches
+    /// against the older advertisement, so a launch naming no transport follows the acknowledged
+    /// resolution whichever way the two differ.</summary>
+    [Test]
+    [Arguments(Kind.Interactive, true)]
+    [Arguments(Kind.Interactive, false)]
+    [Arguments(Kind.ReviewFlow,  true)]
+    [Arguments(Kind.ReviewFlow,  false)]
+    public async Task Field_absent_launch_follows_the_acknowledged_resolution_not_the_committed_one(Kind kind, bool acknowledgedActive) {
+        var config = new DaemonConfig {
+            CodexResolution             = new CodexTransportResolution(2, !acknowledgedActive, "0.146.0", !acknowledgedActive, null),
+            AcknowledgedCodexResolution = new CodexTransportResolution(1, acknowledgedActive, "0.146.0", acknowledgedActive, null),
+            Version                     = "0.146.0",
+        };
+        var factory = new CodexHostedAgentRuntimeFactory(
+            NewLauncher(), new RecordingPtyFactory(), config, NullLoggerFactory.Instance, TimeProvider.System);
+
+        var route = factory.Route(Ctx(kind == Kind.ReviewFlow, Home.PathTo("routing")));
+
+        await Assert.That(route.AppServer).IsEqualTo(acknowledgedActive);
+    }
+
     [Test]
     public async Task A_pinned_app_server_launch_below_the_floor_is_refused_without_starting_pty() {
         using var wt = new TempDir();

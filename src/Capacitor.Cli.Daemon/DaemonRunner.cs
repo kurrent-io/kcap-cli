@@ -210,7 +210,7 @@ public static partial class DaemonRunner {
         if (Harness.Codex.LegacyCodexEnvironment.Warning(Environment.GetEnvironmentVariable) is { } legacyCodexWarning)
             await Console.Error.WriteLineAsync(legacyCodexWarning);
 
-        // Committed before the first advertisement; acknowledged once the first registration lands.
+        // Committed before the first advertisement, which carries it to the server.
         var startupCodex = Harness.Codex.CodexTransportResolution.Read(
             1, config.ReadExperimentalSettings, () => ProbeCliVersion(config.CodexPath));
         config.CodexResolution = startupCodex;
@@ -691,8 +691,8 @@ public static partial class DaemonRunner {
             FingerprintUnattendedVendors(config.Binaries, runtimeFactories, config.SupportedVendors);
         config.VendorCatalogBaselines =
             VendorModelCatalogs.FingerprintCatalogPaths(runtimeFactories, config.SupportedVendors);
-        config.UnattendedVendorCapabilities =
-            ComputeUnattendedVendorCapabilities(runtimeFactories, config, config.CodexResolution, config.UnattendedVendors);
+        var startupCapabilities = ComputeUnattendedVendorCapabilities(runtimeFactories, config, startupCodex, config.UnattendedVendors);
+        config.Advertise(startupCapabilities, startupCodex);
         config.VendorModels =
             await VendorModelCatalogs.ProbeAsync(runtimeFactories, config.SupportedVendors, CancellationToken.None);
         foreach (var (vendor, models) in config.VendorModels) LogVendorModels(logger, vendor, models.Length);
@@ -701,7 +701,7 @@ public static partial class DaemonRunner {
         // Which build of each unattended vendor was installed when this daemon started. Recorded at
         // startup (like the Cursor-unavailable warning below) rather than per launch, and reported
         // without any comparison against a validated-build record.
-        LogUnattendedVendorIdentities(logger, config.UnattendedVendorCapabilities);
+        LogUnattendedVendorIdentities(logger, startupCapabilities);
 
         // The counterpart of the line above. A withheld vendor used to vanish from advertisement in
         // silence: the refusal text existed, but only the launch path threw it — and advertisement is
@@ -820,8 +820,6 @@ public static partial class DaemonRunner {
                 try {
                     await connection.ConnectAsync(lifetime.ApplicationStopping);
                     LogStartupPhase(logger, "server connected");
-                    if (config.AcknowledgedCodexResolution.Generation < startupCodex.Generation)
-                        config.AcknowledgedCodexResolution = startupCodex;
                 } catch (Exception ex) when (nameInUse) {
                     // ConnectAsync's initial-connect path threw because of NameInUse. OnNameInUse
                     // already fired and set our flag; the host hasn't started its main loop yet, so

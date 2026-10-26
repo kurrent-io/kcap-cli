@@ -11,8 +11,8 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 /// Captures LaunchFailedAsync calls and no-ops the other server-side methods
 /// so the orchestrator's launch flow doesn't touch a real SignalR connection.
 /// </summary>
-sealed class CaptureServerConnection() : ServerConnection(
-    new() { Name = "test", ServerUrl = "http://127.0.0.1:1" },
+sealed class CaptureServerConnection(DaemonConfig? config = null) : ServerConnection(
+    config ?? new() { Name = "test", ServerUrl = "http://127.0.0.1:1" },
     new FixedCredentialSource(),
     NullLoggerFactory.Instance,
     NullLogger<ServerConnection>.Instance
@@ -55,7 +55,7 @@ sealed class CaptureServerConnection() : ServerConnection(
     /// <c>ReRegisterAsync</c> lands here). No-op'd: there is no hub to register with.</summary>
     public int RegisterDaemonCalls => Volatile.Read(ref _registerDaemonCalls);
 
-    public Exception? RegisterDaemonThrow { get; init; }
+    public Exception? RegisterDaemonThrow { get; set; }
 
     internal override Task RegisterDaemonAsync() {
         Interlocked.Increment(ref _registerDaemonCalls);

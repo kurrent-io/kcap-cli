@@ -1616,7 +1616,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
                 if (!republish && !catalogChanged && !unacknowledged && current is not null && current.SequenceEqual(fresh)) return;
 
-                _config.UnattendedVendorCapabilities = fresh;
+                _config.Advertise(fresh, codex);
                 // One reference swap: status serializers on other threads may be enumerating the old one.
                 // Pulsed before the re-register so a failed one cannot keep the change from local subscribers.
                 if (catalogChanged) {
@@ -1626,11 +1626,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 LogReAdvertising(_logger, reason,
                     string.Join(", ", fresh.Select(c => $"{c.Vendor} {c.CliVersion ?? DaemonRunner.UnknownCliVersion}")));
                 await _server.ReRegisterAsync();
-
-                if (unacknowledged) {
-                    _config.AcknowledgedCodexResolution = codex;
-                    _statusNotifier.Pulse();
-                }
             },
             ex => _logger.LogDebug(ex,
                 "Capability refresh ({Reason}) failed; the next registration or launch re-evaluates it.", reason));

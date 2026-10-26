@@ -163,7 +163,23 @@ public class DaemonConfig {
     /// yet or in tests that bypass the runner.
     /// </summary>
     public string[]? UnattendedVendors { get; set; }
-    public IReadOnlyList<UnattendedVendorCapability>? UnattendedVendorCapabilities { get; set; }
+
+    /// <summary>Setting this keeps the Codex resolution already paired with the capabilities; a caller
+    /// that computed them from a resolution publishes both through <see cref="Advertise"/>.</summary>
+    public IReadOnlyList<UnattendedVendorCapability>? UnattendedVendorCapabilities {
+        get => Advertisement.Capabilities;
+        set => Advertisement = Advertisement with { Capabilities = value };
+    }
+
+    internal UnattendedAdvertisement Advertisement {
+        get => Volatile.Read(ref _advertisement);
+        private set => Volatile.Write(ref _advertisement, value);
+    }
+
+    UnattendedAdvertisement _advertisement = UnattendedAdvertisement.None;
+
+    internal void Advertise(IReadOnlyList<UnattendedVendorCapability> capabilities, Harness.Codex.CodexTransportResolution codex) =>
+        Advertisement = new(capabilities, codex);
 
     /// <summary>Installed vendors whose runtime can host a single-pass PR review — the server offers and
     /// admits only these for one. <c>null</c> before the runner has probed.</summary>
@@ -233,6 +249,17 @@ public class DaemonConfig {
     }
 
     Harness.Codex.CodexTransportResolution _acknowledgedCodexResolution = Harness.Codex.CodexTransportResolution.Unresolved;
+
+    /// <summary>Records that a registration carried <paramref name="sent"/>. Only a newer generation
+    /// moves it, since registrations from different paths can finish out of order.</summary>
+    /// <returns>True when the acknowledgement moved.</returns>
+    internal bool AcknowledgeCodex(Harness.Codex.CodexTransportResolution sent) {
+        while (true) {
+            var current = AcknowledgedCodexResolution;
+            if (sent.Generation <= current.Generation) return false;
+            if (ReferenceEquals(Interlocked.CompareExchange(ref _acknowledgedCodexResolution, sent, current), current)) return true;
+        }
+    }
 
     public long ServerAcknowledgedCodexGeneration => AcknowledgedCodexResolution.Generation;
 

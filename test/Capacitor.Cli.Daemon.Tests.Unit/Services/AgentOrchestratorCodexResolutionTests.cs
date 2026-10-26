@@ -22,18 +22,18 @@ public class AgentOrchestratorCodexResolutionTests {
 
     static (AgentOrchestrator Orchestrator, CaptureServerConnection Server, DaemonConfig Config) Build(
             string codexPath, Exception? registerThrow = null) {
-        var server   = new CaptureServerConnection { RegisterDaemonThrow = registerThrow };
+        var config   = new DaemonConfig();
+        var server   = new CaptureServerConnection(config) { RegisterDaemonThrow = registerThrow };
         var launcher = new SpyHostedAgentLauncher("codex", codexPath) { SupportsUnattended = true };
-        DaemonConfig? captured = null;
         var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(),
             new Dictionary<string, IHostedAgentLauncher> { ["codex"] = launcher },
-            configure: config => {
-                config.CodexPath         = codexPath;
-                config.UnattendedVendors = ["codex"];
-                captured = config;
-            });
-        return (orch, server, captured!);
+            configure: c => {
+                c.CodexPath         = codexPath;
+                c.UnattendedVendors = ["codex"];
+            },
+            sharedConfig: config);
+        return (orch, server, config);
     }
 
     static Task SwitchAsync(DaemonConfig config, bool on) =>
@@ -122,6 +122,33 @@ public class AgentOrchestratorCodexResolutionTests {
 
         await Assert.That(config.CodexResolution.Active).IsTrue();
         await Assert.That(config.CodexResolution.Generation).IsGreaterThan(config.AcknowledgedCodexResolution.Generation);
+    }
+
+    /// <summary>The refresh's own registration fails; a later one from another path (here the
+    /// heartbeat's) carries the same advertisement, so it must acknowledge the resolution behind it.</summary>
+    [Test]
+    public async Task A_later_registration_from_another_path_acknowledges_the_committed_resolution() {
+        SkipOnWindows();
+        var (orch, server, config) = Build(StubCodex("codex", "0.146.0"), registerThrow: new InvalidOperationException("hub down"));
+        await using var _ = orch;
+        await SwitchAsync(config, on: true);
+        await RefreshTolerantAsync(orch);
+        await Assert.That(config.AcknowledgedCodexResolution.Generation).IsLessThan(config.CodexResolution.Generation);
+
+        server.RegisterDaemonThrow = null;
+        await server.ReRegisterAsync();
+
+        await Assert.That(ReferenceEquals(config.AcknowledgedCodexResolution, config.CodexResolution)).IsTrue();
+    }
+
+    [Test]
+    public async Task An_older_registration_finishing_last_does_not_move_the_acknowledgement_back() {
+        var config = new DaemonConfig();
+        var newer  = new CodexTransportResolution(3, true, "0.146.0", true, null);
+
+        await Assert.That(config.AcknowledgeCodex(newer)).IsTrue();
+        await Assert.That(config.AcknowledgeCodex(newer with { Generation = 2 })).IsFalse();
+        await Assert.That(ReferenceEquals(config.AcknowledgedCodexResolution, newer)).IsTrue();
     }
 
     [Test]

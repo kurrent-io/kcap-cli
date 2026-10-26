@@ -593,7 +593,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                     // A connected hub has accepted the bearer, whatever registration then makes of it.
                     if (HubState == HubConnectionState.Connected) CredentialHealth.ObserveConnected();
 
-                    await RegisterDaemonAsync();
+                    await RegisterAndAcknowledgeAsync();
                     _connectedTimestamp = _time.GetTimestamp();
                     LogConnected(_config.Name);
                     _statusNotifier.Pulse();
@@ -840,7 +840,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         CommitNegotiatedIdentity();
         _statusNotifier.Pulse();
         LogReconnected();
-        await RegisterDaemonAsync();
+        await RegisterAndAcknowledgeAsync();
         _connectedTimestamp = _time.GetTimestamp();
         CredentialHealth.ObserveConnected();
     }
@@ -862,7 +862,15 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// the heartbeat loop when the server reports it doesn't recognise this
     /// connection as a daemon (slot displaced or never registered).
     /// </summary>
-    public Task ReRegisterAsync() => RegisterDaemonAsync();
+    public Task ReRegisterAsync() => RegisterAndAcknowledgeAsync();
+
+    /// <summary>Every registration path ends here. The advertisement is read before the send, so the
+    /// registration carries it or a newer one and the acknowledgement can lag the server, never lead it.</summary>
+    async Task RegisterAndAcknowledgeAsync() {
+        var advertised = _config.Advertisement;
+        await RegisterDaemonAsync();
+        if (_config.AcknowledgeCodex(advertised.Codex)) _statusNotifier.Pulse();
+    }
 
     public async Task<bool> CredentialChangedAsync(CancellationToken ct) =>
         Volatile.Read(ref _negotiatedAs) is { } negotiated
