@@ -15,6 +15,9 @@ sealed class SpyHostedAgentLauncher(string vendor, string cliPath) : IHostedAgen
 
     public LauncherContext? LastContext { get; private set; }
 
+    /// <summary>The session a local launch reports running under, as a vendor that pins one does.</summary>
+    public string? PassthroughSessionId { get; init; }
+
     /// <summary>Runs inside <see cref="Prepare"/>, after the launch wrote its pre-start ledger entry and
     /// before the PTY spawns.</summary>
     public Action<LauncherContext>? OnPrepare { get; set; }
@@ -38,7 +41,7 @@ sealed class SpyHostedAgentLauncher(string vendor, string cliPath) : IHostedAgen
     public LaunchArgs BuildPassthrough(LauncherContext ctx, IReadOnlyList<string> userArgs) {
         BuildArgsCalls++;
 
-        return new LaunchArgs(Args: [.. userArgs], McpConfigPath: null);
+        return new LaunchArgs(Args: [.. userArgs], McpConfigPath: null, PassthroughSessionId);
     }
 
     public void Cleanup(AgentInstance agent) {

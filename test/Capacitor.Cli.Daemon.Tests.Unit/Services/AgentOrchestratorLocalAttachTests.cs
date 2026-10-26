@@ -72,10 +72,27 @@ public class AgentOrchestratorLocalAttachTests {
     }
 
     [Test]
-    public async Task Claude_passthrough_forwards_user_args_verbatim() {
+    public async Task Claude_passthrough_pins_a_fresh_session_ahead_of_the_user_args() {
         var launcher = new ClaudeLauncher(LauncherCfg(), TestHarnesses.Under(Home), NullLogger<ClaudeLauncher>.Instance);
         var a = launcher.BuildPassthrough(CtxFor("/r"), ["--model", "opus", "fix it"]);
-        await Assert.That(a.Args).IsEquivalentTo(new[] { "--model", "opus", "fix it" });
+
+        await Assert.That(Guid.TryParseExact(a.SessionId, "D", out _)).IsTrue();
+        await Assert.That(a.Args).IsEquivalentTo(new[] { "--session-id", a.SessionId!, "--model", "opus", "fix it" });
+    }
+
+    /// <summary>Claude refuses <c>--session-id</c> beside a flag that picks the session itself.</summary>
+    [Test]
+    public async Task Claude_passthrough_forwards_args_that_choose_the_session_verbatim() {
+        var launcher = new ClaudeLauncher(LauncherCfg(), TestHarnesses.Under(Home), NullLogger<ClaudeLauncher>.Instance);
+        const string resumed = "0123abcd-0000-4000-8000-0123456789ab";
+
+        var continued = launcher.BuildPassthrough(CtxFor("/r"), ["-c"]);
+        var resume    = launcher.BuildPassthrough(CtxFor("/r"), ["--resume", resumed]);
+
+        await Assert.That(continued.Args).IsEquivalentTo(new[] { "-c" });
+        await Assert.That(continued.SessionId).IsNull();
+        await Assert.That(resume.Args).IsEquivalentTo(new[] { "--resume", resumed });
+        await Assert.That(resume.SessionId).IsEqualTo(resumed);
     }
 
     [Test]
@@ -184,7 +201,9 @@ public class AgentOrchestratorLocalAttachTests {
         using var tmp = new TempDir();
         var server    = new TripwireServerConnection();
         var pty       = new EnvCapturingPtyFactory();
-        var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", "spy-claude") };
+        var launchers = new Dictionary<string, IHostedAgentLauncher> {
+            ["claude"] = new SpyHostedAgentLauncher("claude", "spy-claude") { PassthroughSessionId = "0123abcd-0000-4000-8000-0123456789ab" }
+        };
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, pty, launchers);
 
         foreach (var isPrivate in new[] { false, true }) {

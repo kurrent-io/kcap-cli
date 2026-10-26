@@ -560,10 +560,9 @@ internal partial class AgentOrchestrator {
 
             agent = new AgentInstance(agentId, null, "", null, cwd, vendor, runtime, worktree, new CancellationTokenSource(), resolution.Account) {
                 CreatedAt = startedAtUtc, LastOutputAt = startedAtUtc,
-                // Every launch path must go through CreateActivityClock() so the stage-advance report
-                // wiring is attached by construction. Inert here today (a local spawn is PTY-only and
-                // stamps no stage) — but a hand-built clock is exactly how that wiring goes silently
-                // missing the day this path grows an ACP runtime.
+                SessionId = built.SessionId, VendorSession = built.SessionId,
+                // Every launch path goes through CreateActivityClock(), even this PTY-only one that stamps
+                // no stage: a hand-built clock is how the stage-report wiring goes silently missing.
                 ActivityClock  = CreateActivityClock(),
                 IsPrivate      = isPrivate,
                 StartTitle     = startTitle,

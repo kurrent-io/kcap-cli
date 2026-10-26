@@ -1039,14 +1039,16 @@ internal partial class AgentOrchestrator {
             ? Task.CompletedTask
             : _server.ReportAgentEndedForShutdownAsync(entry.AgentId, entry.SessionId, "Completed", SupersededReason, null, ct);
 
-    /// <summary>Runs the takeover off the lane, once, as soon as the successor has both its own session
-    /// id and the session it continues: either may arrive first, the id at publish or by discovery.</summary>
+    /// <summary>Runs the takeover off the lane, once, as soon as the successor's session exists and the
+    /// session it continues is known: either may come first. A terminal agent's pinned id names no
+    /// session until its transcript is found, so its takeover waits for discovery.</summary>
     void StartContinuationTakeover(AgentInstance agent, string? previousSession = null) {
         string previous, current;
 
         lock (_ledgerLock) {
             if (previousSession is not null) agent.ContinuedFromSessionId = previousSession;
             if (agent.ContinuedFromSessionId is not { } from || agent.SessionId is not { } own) return;
+            if (agent.Runtime is not IAcpTranscriptSource && agent.TranscriptPath is null) return;
 
             agent.ContinuedFromSessionId = null;
             (previous, current) = (from, own);
