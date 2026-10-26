@@ -827,7 +827,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         if (GetAccountsSnapshot?.Invoke() is not { } current) return Task.CompletedTask;
 
         var sent = _connectAccounts;
-        return sent is not null && sent.HostId == current.HostId && sent.Revision == current.Revision
+        return sent is not null && AccountSnapshotBuilder.Equivalent(sent, current)
             ? Task.CompletedTask
             : AccountsChangedAsync(current);
     }
