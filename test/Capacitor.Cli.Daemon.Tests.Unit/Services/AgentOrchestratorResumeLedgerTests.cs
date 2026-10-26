@@ -247,7 +247,7 @@ public class AgentOrchestratorResumeLedgerTests {
     }
 
     [Test]
-    public async Task A_claude_launch_writes_the_pinned_id_as_vendor_and_kcap_session() {
+    public async Task A_claude_launch_keeps_its_unconfirmed_pin_only_as_the_vendor_session() {
         using var repoPath = GitRepo.CreateWithCommit();
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), AgentOrchestratorHarness.Launcher("claude"),
@@ -258,9 +258,9 @@ public class AgentOrchestratorResumeLedgerTests {
         var agent = orch.GetAgentForTest("pin-launch")!;
         var entry = orch.ResumeLedger!.TryRead("pin-launch")!;
         await Assert.That(Guid.TryParse(entry.VendorSession, out _)).IsTrue();
-        await Assert.That(entry.SessionId).IsEqualTo(entry.VendorSession);
+        await Assert.That(entry.SessionId).IsNull();
         await Assert.That(agent.VendorSession).IsEqualTo(entry.VendorSession);
-        await Assert.That(agent.SessionId).IsEqualTo(entry.VendorSession);
+        await Assert.That(agent.SessionId).IsNull();
     }
 
     static AgentOrchestrator Build() => AgentOrchestratorHarness.BuildOrchestrator(

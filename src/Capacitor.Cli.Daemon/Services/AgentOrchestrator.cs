@@ -66,7 +66,7 @@ internal record AgentInstance(
     ) {
     public string?              SessionId         { get; set; }
 
-    /// The vendor's own session id, the one a resume hands back to the vendor CLI.
+    /// The vendor's resume id, which can be reserved before a transcript confirms SessionId.
     public string?              VendorSession     { get; set; }
 
     /// Set when this agent stops to be resumed by a successor daemon: teardown then keeps its
@@ -2495,6 +2495,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     async Task<CommandOutcome> LaunchAdmittedAsync(
             LaunchAgentCommand cmd, LaunchConsentOutcome consent, LaunchHold hold, ResumeLaunch? resume = null,
             CancellationToken cancel = default, Action<AgentInstance>? onPublished = null) {
+        if (cmd.ResumeSessionId is "") cmd = cmd with { ResumeSessionId = null };
         var agentId       = cmd.AgentId;
         var isPrivate     = resume?.IsPrivate ?? false;
         var prompt        = cmd.Prompt;
@@ -2921,7 +2922,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             journal = TranscriptJournal.ForAgent(_pidRecordRoot, agentId, _logger, _time);
 
-            var pinnedSessionId = resume is null ? MintPinnedSessionId(cmd) : null;
+            var pinnedSessionId = cmd.ResumeSessionId is null ? MintPinnedSessionId(cmd) : null;
 
             var runtimeCtx = new RuntimeStartContext(
                 AgentId: agentId,
@@ -3085,13 +3086,17 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // and LastOutputAt anchors the stuck-in-Starting window while CreatedAt is the age the
             // server and the rail report.
             var startedAtUtc = _time.GetUtcNow().UtcDateTime;
+            var resumedSessionId = resume?.Entry.SessionId;
+            if (string.Equals(cmd.Vendor, "claude", StringComparison.OrdinalIgnoreCase) && cmd.ResumeSessionId is { } requestedSession
+             && SessionIds.Canonical(resumedSessionId) != SessionIds.Canonical(requestedSession))
+                resumedSessionId = null;
 
             var agent = new AgentInstance(agentId, prompt, registeredModel, effort, repoPath, cmd.Vendor, runtime, worktree, cts, account) {
                 CreatedAt = startedAtUtc, LastOutputAt = startedAtUtc,
                 // Set in the initializer, not after: PublishAgent below is the first snapshot anyone
                 // reads, and RegisterAgentAsync after it can stall on a server outage.
-                SessionId           = start.Transcript is { } t ? SessionIds.Canonical(t.AcpSessionId) : pinnedSessionId ?? resume?.Entry.SessionId,
-                VendorSession       = start.Runtime.VendorResumeToken ?? start.Transcript?.AcpSessionId ?? pinnedSessionId ?? resume?.Entry.VendorSession,
+                SessionId           = start.Transcript is { } t ? SessionIds.Canonical(t.AcpSessionId) : resumedSessionId,
+                VendorSession       = start.Runtime.VendorResumeToken ?? start.Transcript?.AcpSessionId ?? pinnedSessionId ?? cmd.ResumeSessionId ?? resume?.Entry.VendorSession,
                 TranscriptPath      = start.Transcript is null ? null : journal.IsOpen ? journal.Path : null,
                 Journal             = start.Transcript is null ? null : journal,
                 ActivityClock       = activityClock,
@@ -5835,16 +5840,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     static readonly TimeSpan CodexTurnObserveInterval = TimeSpan.FromSeconds(2);
     static readonly TimeSpan CodexTurnObserveTimeout  = TimeSpan.FromMinutes(2);
 
-    /// Locates the transcript a freshly spawned agent writes — Claude's per-worktree
-    /// project dir (a symlink onto the source repo's, shared with the user's own sessions,
-    /// so the locator disambiguates by cwd), Codex's rollout tree (disambiguated by cwd and
-    /// spawn time), Muse's log from its runtime's session or the launch's hosted-session marker. A vendor without a
-    /// locator is a no-op. Best-effort background work, cancelled with the agent; it never blocks
-    /// a launch.
+    /// Locates the transcript a freshly spawned agent writes — Claude's project dir (by the session
+    /// id the agent holds, else by cwd), Codex's rollout tree (by cwd and spawn time), Muse's log from
+    /// its runtime's session or the launch's hosted-session marker. A vendor without a locator, or a
+    /// launch whose transcript it could not tell apart from another session's, is a no-op.
+    /// Best-effort background work, cancelled with the agent; it never blocks a launch.
     Task DetectSessionIdAsync(AgentInstance agent, string vendor, DateTime spawnedAtUtc) {
         Func<ISet<string>, (string SessionId, string Path)?>? locate = vendor.ToLowerInvariant() switch {
-            "claude" => ruledOut => SessionTranscriptLocator.TryLocateWinner(
-                ClaudePathsFor(agent.Account).ProjectDir(agent.Worktree.Path), agent.Worktree.Path, spawnedAtUtc, ruledOut),
+            "claude" => ClaudeTranscriptLocator(agent, spawnedAtUtc),
             "codex"  => ruledOut => CodexSessionRolloutLocator.TryLocateWinner(
                 CodexPathsFor(agent.Account).Sessions, agent.Worktree.Path, spawnedAtUtc, ruledOut),
             "muse"   => _ => MuseHostedSessionLocator.TryLocate(
@@ -5859,6 +5862,25 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         agent.DiscoveryTask = task;
         return task;
     }
+
+    /// Null for an in-place agent with no session id: every Claude session in a borrowed folder
+    /// shares its cwd, so a cwd match there could be the user's own session.
+    Func<ISet<string>, (string SessionId, string Path)?>? ClaudeTranscriptLocator(AgentInstance agent, DateTime spawnedAtUtc) {
+        var projectDir = ClaudePathsFor(agent.Account).ProjectDir(agent.Worktree.Path);
+
+        if ((agent.VendorSession ?? agent.SessionId) is { } known)
+            return _ => SessionTranscriptLocator.TryLocateSession(projectDir, known);
+
+        if (agent.Work == WorkLocation.BorrowedCwd) {
+            LogSessionIdUndiscoverable(agent.Id);
+
+            return null;
+        }
+
+        return ruledOut => SessionTranscriptLocator.TryLocateWinner(projectDir, agent.Worktree.Path, spawnedAtUtc, ruledOut);
+    }
+
+    internal Task DetectSessionIdForTest(AgentInstance agent, DateTime spawnedAtUtc) => DetectSessionIdAsync(agent, agent.Vendor, spawnedAtUtc);
 
     internal Task RunDiscoveryForTest(AgentInstance agent, Func<ISet<string>, (string SessionId, string Path)?> locate) {
         var task = RunDiscoveryAsync(agent, locate);
@@ -5876,7 +5898,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             var       warnTask = WarnIfStillUnlinkedAsync(agent, warnCts.Token);
 
             try {
-                await discovery.RunAsync(locate, async winner => {
+                await discovery.RunAsync(ruledOut => OwnTranscript(agent, locate(ruledOut), ruledOut), async winner => {
                     if (cts.IsCancellationRequested || agent.Status is "Completed" or "Failed") return;
 
                     // Mutation first, pulse second — and the pulse before any server call, which can
@@ -5902,9 +5924,22 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         }
     }
 
+    /// <summary>Null for a transcript under a session other than the one the agent already holds: that is
+    /// another session's file, and linking it would report that session as this agent's. Ruled out by
+    /// path, so a locator that caches by path moves past it.</summary>
+    (string SessionId, string Path)? OwnTranscript(AgentInstance agent, (string SessionId, string Path)? found, ISet<string> ruledOut) {
+        if (found is not { } candidate || agent.SessionId is not { } own
+         || SessionIds.Canonical(candidate.SessionId) == SessionIds.Canonical(own))
+            return found;
+
+        if (ruledOut.Add(candidate.Path)) LogForeignTranscriptSkipped(agent.Id, candidate.SessionId, own);
+
+        return null;
+    }
+
     /// <summary>Says, once and early, what the operator is otherwise left to infer from silence.
     /// Never cancels or reaps the launch — detection keeps running while the agent is alive, and
-    /// a slow first turn or startup prompt still links once the transcript records its cwd.</summary>
+    /// a slow first turn or startup prompt still links once its transcript turns up.</summary>
     async Task WarnIfStillUnlinkedAsync(AgentInstance agent, CancellationToken ct) {
         try {
             await Task.Delay(SessionIdSlowWarnAfter, _time, ct).ConfigureAwait(false);
@@ -5912,7 +5947,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return;
         }
 
-        if (agent.SessionId is null)
+        if (agent.TranscriptPath is null)
             LogSessionIdSlow(agent.Id, SessionIdSlowWarnAfter.TotalSeconds);
     }
 
@@ -6741,8 +6776,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     [LoggerMessage(Level = LogLevel.Warning, Message = "Transcript-based session-id detection failed for agent {AgentId}; nothing else assigns one, so this agent stays unlinked")]
     partial void LogSessionIdDetectFailed(Exception ex, string agentId);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Agent {AgentId} still has no session id {Seconds:F0}s after spawn; the surface is showing 'waiting for session to start'. Detection continues while the agent is running.")]
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Agent {AgentId} still has no transcript {Seconds:F0}s after spawn; the surface is showing 'waiting for session to start'. Detection continues while the agent is running.")]
     partial void LogSessionIdSlow(string agentId, double seconds);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Agent {AgentId} found transcript of session {Found}, not its own session {Own}; not linking it")]
+    partial void LogForeignTranscriptSkipped(string agentId, string found, string own);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Agent {AgentId} runs in place with no known session id; its transcript is not discovered, since another session in the same folder would match")]
+    partial void LogSessionIdUndiscoverable(string agentId);
 
     [GeneratedRegex(@"\x1B\[[0-9;]*[A-Za-z]|\x1B\].*?\x07|\x1B[()][AB012]|\x1B\[[\?]?[0-9;]*[hlm]")]
     private static partial Regex StripAnsiRegex();

@@ -370,11 +370,11 @@ public class AgentOrchestratorAccountTests {
 
         await orch.HandleLaunchAgentForTest(Launch("acct-claude-session", repo, WorkId));
 
-        // A Claude launch pins its session id, so both transcripts carry that name and only the path differs.
+        // Both account layouts hold the reserved vendor ID; the discovered path identifies the chosen account.
         var agent    = orch.GetAgentForTest("acct-claude-session")!;
         var worktree = agent.Worktree.Path;
-        StageTranscript(new ClaudePaths(DaemonHome, null).ProjectDir(worktree), agent.SessionId!, worktree);
-        var transcript = StageTranscript(AccountLayouts.Claude(DaemonHome, work).ProjectDir(worktree), agent.SessionId!, worktree);
+        StageTranscript(new ClaudePaths(DaemonHome, null).ProjectDir(worktree), agent.VendorSession!, worktree);
+        var transcript = StageTranscript(AccountLayouts.Claude(DaemonHome, work).ProjectDir(worktree), agent.VendorSession!, worktree);
 
         await WaitHarness.PollUntilAsync(() => agent.TranscriptPath is not null);
 

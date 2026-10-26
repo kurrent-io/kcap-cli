@@ -285,12 +285,37 @@ public class AgentStatusSnapshotTests {
         var orch    = fixture.Orchestrator;
         try {
             var agent = orch.SeedAgentForTest("pty-2");
-            agent.SessionId = "pre-known";
+            agent.SessionId = "0a0a0a0a-1111-4111-8111-000000000001";
 
-            await orch.RunDiscoveryForTest(agent, _ => ("other", "/t.jsonl"));
+            await orch.RunDiscoveryForTest(agent, _ => ("0a0a0a0a111141118111000000000001", "/t.jsonl"));
 
-            await Assert.That(agent.SessionId).IsEqualTo("pre-known");
+            await Assert.That(agent.SessionId).IsEqualTo("0a0a0a0a-1111-4111-8111-000000000001");
             await Assert.That(agent.TranscriptPath).IsEqualTo("/t.jsonl");
+        } finally {
+            await fixture.CleanupAsync();
+        }
+    }
+
+    /// A transcript under another session id is someone else's, whatever matched it: the agent is linked
+    /// to its own once that turns up.
+    [Test]
+    public async Task Discovery_passes_over_a_transcript_of_another_session_than_the_known_one() {
+        var fixture = Build();
+        var orch    = fixture.Orchestrator;
+        try {
+            var agent = orch.SeedAgentForTest("pty-3");
+            agent.SessionId = "pre-known";
+            var offered = new List<string>();
+
+            await orch.RunDiscoveryForTest(agent, ruledOut => {
+                var next = ruledOut.Contains("/foreign.jsonl") ? ("pre-known", "/own.jsonl") : ("foreign", "/foreign.jsonl");
+                offered.Add(next.Item2);
+                return next;
+            });
+
+            await Assert.That(offered).IsEquivalentTo(["/foreign.jsonl", "/own.jsonl"]);
+            await Assert.That(agent.SessionId).IsEqualTo("pre-known");
+            await Assert.That(agent.TranscriptPath).IsEqualTo("/own.jsonl");
         } finally {
             await fixture.CleanupAsync();
         }
