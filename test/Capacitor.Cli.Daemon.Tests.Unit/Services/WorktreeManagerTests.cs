@@ -75,7 +75,7 @@ public class WorktreeManagerTests {
     /// </summary>
     [Test]
     public async Task CreateAsync_fetches_a_head_that_moves_a_submodule_whose_remote_is_unreachable() {
-        var sub      = GitRepo.CreateWithCommit("sub");
+        using var sub = GitRepo.CreateWithCommit("sub");
         using var up = GitRepo.CreateWithCommit("upstream");
         up.Do("-c", "protocol.file.allow=always", "submodule", "add", sub, "vendored");
         up.Commit("add submodule");
@@ -94,9 +94,12 @@ public class WorktreeManagerTests {
         up.Commit("move the submodule");
         up.Do("update-ref", "refs/pull/7/head", up.Head);
         var head = up.Head;
-        sub.Dispose();
-        // A recursing fetch could otherwise reach the moved commit, and the HEAD assertion would prove nothing.
-        await Assert.That(Directory.Exists(sub.Path)).IsFalse();
+        // The clone's submodule remote must not exist: a recursing fetch that could reach the moved commit would make
+        // the HEAD assertion prove nothing. Repointed rather than deleted, since Windows keeps git's read-only files.
+        var missing = cloneDir.PathTo("no-such-remote");
+        GitRepo.At(clone.PathTo("vendored")).Do("remote", "set-url", "origin", missing);
+        clone.Do("config", "submodule.vendored.url", missing);
+        await Assert.That(Directory.Exists(missing)).IsFalse();
 
         var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
         var worktree = await manager.CreateAsync(clone, name: "review-pr-7", baseRef: "refs/pull/7/head");
