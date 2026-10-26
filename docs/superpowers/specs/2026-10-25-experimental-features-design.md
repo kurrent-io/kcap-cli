@@ -94,11 +94,15 @@ Rules for the field:
 - present and `app-server`: launch on app-server if the installed Codex meets the floor, otherwise refuse the launch with a reason naming the version. Never fall back to PTY, which the server would refuse anyway
 - present and `pty`: launch on PTY
 - present and unrecognised: refuse the launch
-- absent (an older server): use the committed resolution, as today
+- absent (an older server): use the last resolution the server has acknowledged, meaning the one whose re-registration completed, not the newest committed one. A launch the older server dispatched against its previous advertisement therefore still starts on that transport while the re-registration is in flight
+
+A resume's ledger transport (`resume?.Entry.Transport`) wins over `ExpectedRuntimeTransport` on the same command, so an existing agent is never routed by a fresh server expectation. The existing refusal of a review-flow resume on PTY stays: a parked reviewer's transcript is envelope-sourced and only app-server can resume it
+
+With an older server the anti-goal holds only partly: a launch the server dispatches concurrently with the re-registration, and that reaches the daemon after the acknowledgement, can still be refused. The field closes that gap, so the guarantee is complete only once the server carries the change
 
 Hub payload rules in the server's `docs/gotchas/SIGNALR.md` apply: a new field on the existing record, never a new arity. Adding the field to the staged reviewer command changes its stored body and hash; the server change has to keep already-staged commands without the field replayable
 
-Acceptance cases the plan must cover, in both flip directions: an interactive launch dispatched before a flip and started after it; a reviewer launch likewise; a reviewer launch replayed from staging after a flip; a flip while the version probe is running; a resume and a restart-resume of an agent on each transport
+Acceptance cases the plan must cover, in both flip directions: an interactive launch dispatched before a flip and started after it; a reviewer launch likewise; a reviewer launch replayed from staging after a flip; a flip while the version probe is running; a field-absent launch from an older server before and after the re-registration is acknowledged; a resume and a restart-resume of an interactive agent on each transport and of an app-server reviewer, each keeping its ledger transport even when the command also carries a different `ExpectedRuntimeTransport`; a PTY reviewer resume still refused
 
 A launch expecting app-server that arrives after the switch went off runs on app-server. That starts one app-server agent after the switch is off, which is the right outcome: refusing it fails work the user did not ask to stop
 
