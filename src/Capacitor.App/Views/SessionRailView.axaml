@@ -346,7 +346,7 @@
                         </StackPanel>
                         <TextBlock x:Name="RailVersionText" Text="{Binding VersionDisplay, StringFormat='kcap {0}'}" Classes="footerMeta"
                                    Classes.restartPending="{Binding RestartPending}"
-                                   IsVisible="{Binding VersionDisplay, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                   IsVisible="{Binding RestartPending}">
                             <ToolTip.Tip>
                                 <StackPanel Spacing="2">
                                     <TextBlock Text="{Binding RestartPendingText}" TextWrapping="Wrap"

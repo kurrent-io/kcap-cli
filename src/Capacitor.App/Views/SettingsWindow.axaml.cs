@@ -3,7 +3,9 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Input.Platform;
 using Avalonia.Media;
+using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using ReactiveUI.Reactive;
@@ -48,6 +50,21 @@ public partial class SettingsWindow : Window {
 
     void OnProfileCardClick(object? sender, RoutedEventArgs e) {
         if (ProfilesTab.IsVisible) SettingsTabs.SelectedItem = ProfilesTab;
+    }
+
+    async void OnCopyVersionInfo(object? sender, RoutedEventArgs e) {
+        if ((DataContext as SettingsViewModel)?.About is not { } about || Clipboard is not { } clipboard) return;
+        try {
+            await clipboard.SetTextAsync(about.VersionReport);
+            AboutCopyText.Text = "Copied";
+            AboutCopyIcon.Kind = Lucide.Avalonia.LucideIconKind.Check;
+        } catch (Exception) {
+            AboutCopyText.Text = "Copy failed";
+        }
+        DispatcherTimer.RunOnce(() => {
+            AboutCopyText.Text = "Copy version info";
+            AboutCopyIcon.Kind = Lucide.Avalonia.LucideIconKind.Copy;
+        }, TimeSpan.FromSeconds(1.5));
     }
 
     public void ShowSearch() => SettingsTabs.SelectedItem = SearchTab;

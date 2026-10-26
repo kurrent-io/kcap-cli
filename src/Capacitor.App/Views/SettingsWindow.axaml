@@ -444,6 +444,99 @@
                 </ScrollViewer>
             </TabItem>
 
+            <TabItem x:Name="AboutTab" Classes="settingsNav" AutomationProperties.Name="About kcap"
+                     IsVisible="{Binding About, Converter={x:Static ObjectConverters.IsNotNull}}">
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <views:AppIcon Kind="Info" Size="16" />
+                        <TextBlock Text="About" VerticalAlignment="Center" />
+                    </StackPanel>
+                </TabItem.Header>
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <views:SettingsPage Classes="settingsPage">
+                        <StackPanel Classes="settingsHeader">
+                            <TextBlock Classes="kcapTitle" Text="About kcap" />
+                            <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
+                                       Text="What is installed on this computer, and how to keep it up to date." />
+                            <Border Classes="settingsContextChip" ToolTip.Tip="Shared by every profile on this computer">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <views:AppIcon Kind="Laptop" Size="12" />
+                                    <TextBlock Text="All profiles on this computer" />
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+
+                        <StackPanel Classes="settingsGroup">
+                            <TextBlock Classes="settingsGroupTitle" Text="Versions" />
+                            <Border Classes="settingsCard">
+                                <StackPanel>
+                                    <Grid Classes="settingsRow" ColumnDefinitions="140,*">
+                                        <TextBlock Classes="kcapLabel" Text="Desktop app" VerticalAlignment="Center" />
+                                        <SelectableTextBlock x:Name="AboutAppVersionText" Grid.Column="1" Text="{Binding About.AppVersion, FallbackValue={x:Null}}"
+                                                             FontFamily="{StaticResource OnboardingMonoFont}" FontSize="12.5"
+                                                             Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                                    </Grid>
+                                    <Border Classes="settingsDivider" />
+                                    <Grid Classes="settingsRow" ColumnDefinitions="140,*">
+                                        <TextBlock Classes="kcapLabel" Text="Command line" VerticalAlignment="Center" />
+                                        <SelectableTextBlock x:Name="AboutCliVersionText" Grid.Column="1" Text="{Binding About.CliVersion, FallbackValue={x:Null}}"
+                                                             FontFamily="{StaticResource OnboardingMonoFont}" FontSize="12.5"
+                                                             Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                                    </Grid>
+                                    <Border Classes="settingsDivider" />
+                                    <Grid Classes="settingsRow" ColumnDefinitions="140,*">
+                                        <TextBlock Classes="kcapLabel" Text="Daemon" VerticalAlignment="Center" />
+                                        <SelectableTextBlock x:Name="AboutDaemonVersionText" Grid.Column="1" Text="{Binding About.DaemonVersion, FallbackValue={x:Null}}"
+                                                             FontFamily="{StaticResource OnboardingMonoFont}" FontSize="12.5"
+                                                             Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                                    </Grid>
+                                    <StackPanel IsVisible="{Binding About.LocalStack, Converter={x:Static ObjectConverters.IsNotNull}, FallbackValue=False}">
+                                        <Border Classes="settingsDivider" />
+                                    <Grid Classes="settingsRow" ColumnDefinitions="140,*">
+                                        <TextBlock Classes="kcapLabel" Text="Local server" VerticalAlignment="Center" />
+                                        <SelectableTextBlock x:Name="AboutLocalVersionText" Grid.Column="1" Text="{Binding About.LocalStack.Version, FallbackValue={x:Null}}"
+                                                             FontFamily="{StaticResource OnboardingMonoFont}" FontSize="12.5"
+                                                             Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                                    </Grid>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button x:Name="AboutUpdateButton" Classes="kcapChip settingsCompact"
+                                        Content="{Binding About.Update.Label, FallbackValue={x:Null}}"
+                                        Command="{Binding About.UpdateCommand, FallbackValue={x:Null}}"
+                                        IsVisible="{Binding About.UpdateVisible, FallbackValue=False}" />
+                                <Button x:Name="AboutCopyButton" Classes="kcapChip settingsCompact" Click="OnCopyVersionInfo"
+                                        ToolTip.Tip="Copy these versions and your OS, for a bug report">
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <views:AppIcon x:Name="AboutCopyIcon" Kind="Copy" Size="14" />
+                                        <TextBlock x:Name="AboutCopyText" Text="Copy version info" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
+                        </StackPanel>
+
+                        <StackPanel Classes="settingsGroup">
+                            <TextBlock Classes="settingsGroupTitle" Text="Help" />
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button Classes="kcapChip settingsCompact" Command="{Binding About.OpenDocsCommand, FallbackValue={x:Null}}">
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <TextBlock Text="Documentation" VerticalAlignment="Center" />
+                                        <views:AppIcon Kind="ExternalLink" Size="14" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Classes="kcapChip settingsCompact" Command="{Binding About.OpenReleaseNotesCommand, FallbackValue={x:Null}}">
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <TextBlock Text="Release notes" VerticalAlignment="Center" />
+                                        <views:AppIcon Kind="ExternalLink" Size="14" />
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
+                        </StackPanel>
+                    </views:SettingsPage>
+                </ScrollViewer>
+            </TabItem>
+
             <TabItem Classes="settingsNavHeader" Header="Profiles" IsVisible="{Binding Profiles, Converter={x:Static ObjectConverters.IsNotNull}}" />
 
             <TabItem x:Name="ProfilesTab" Classes="settingsNav" AutomationProperties.Name="Profiles"

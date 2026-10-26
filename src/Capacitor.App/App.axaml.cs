@@ -1078,13 +1078,18 @@ public partial class App : Application {
         "kcap will restart to reopen setup. Your running sessions will keep going, and your settings and sign-in will stay intact."
         + (importRunning ? " Your history import will stop. Sessions already imported are kept; you can retry from setup." : ""));
 
-    HarnessesSettingsViewModel CreateHarnessesSettings(SettingsProfileStore settings, string daemonName) {
+    (KcapCli Cli, ILoginShellProbe Probe, ProcessRunner Runner) SettingsCli(SettingsProfileStore settings, string daemonName) {
         var runner = new ProcessRunner(_time);
         var probe = TerminalPathProbe.Create(runner, Environment.GetEnvironmentVariable);
         var cli = new KcapCli(runner,
             CliResolver.ResolvePath(Environment.GetEnvironmentVariable, File.Exists, Program.Host.CliDirectory),
             daemonName, settings.ProfileName, probe.TerminalPathAsync,
             canonicalServer: ServerIdentity.Canonicalize(settings.ServerUrl));
+        return (cli, probe, runner);
+    }
+
+    HarnessesSettingsViewModel CreateHarnessesSettings(SettingsProfileStore settings, string daemonName) {
+        var (cli, probe, runner) = SettingsCli(settings, daemonName);
         var harnesses = HarnessRegistry.FromEnvironment(_userHome);
         var shimInstaller = CliPathInstallers.Create(runner, probe, _userHome);
         var shimTarget = ShimTargetFor(cli.CliPath, Program.Host.CliOutlivesApp);
@@ -1165,6 +1170,8 @@ public partial class App : Application {
                 Privacy    = new PrivacySettingsViewModel(_telemetry, _config, _usageNotice),
                 Search     = _localStack?.Search,
                 Experimental = new ExperimentalSettingsViewModel(new ExperimentalSettingsStore(_config), settings.ProfileName, service),
+                About = new AboutSettingsViewModel(service, SettingsCli(settings, service.DaemonName).Cli.VersionAsync, _localStack,
+                    _updates?.MenuItem, _updates is { } updates ? updates.RunMenuActionAsync : null, appLifetime: _shutdown.Token),
             };
         } catch (Exception ex) {
             notifier.Notify($"Could not open settings: {ex.Message}");
@@ -1179,6 +1186,7 @@ public partial class App : Application {
         // add` made in a terminal shows up on return without a file watcher.
         window.Activated += (_, _) => _ = profilesVm.RefreshAsync();
         _ = profilesVm.RefreshAsync();
+        _ = vm.About?.LoadAsync();
         if (showSearch) window.ShowSearch();
         _ = vm.Harnesses!.RescanAsync();
         _ = vm.Capture.RefreshVisibilityOptionsAsync();
