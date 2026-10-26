@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json.Nodes;
+using Capacitor.Cli.Core;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -15,19 +16,19 @@ namespace Capacitor.Cli.Tests.Integration;
 /// leaks between tests, and asserts on the wire-level JSON-RPC envelopes
 /// the server emits plus the HTTP calls WireMock observed.
 /// </summary>
-public class McpFlowsServerTests : IDisposable {
+public class McpFlowsServerTests : IAsyncDisposable {
     [TempDaemonPaths] public required TempDaemonStore Daemons { get; init; }
     [TempConfigRoot]  public required TempConfigRoot  Config  { get; init; }
     [GitRepo]         public required GitRepo         Repo    { get; init; }
 
     readonly WireMockServer _server           = WireMockServer.Start();
     readonly List<Process>  _spawnedProcesses = [];
-    readonly List<(int Pid, DateTime StartTime)> _orphans = [];
+    readonly List<(int Pid, string Identity)> _orphans = [];
 
     [Before(Test)]
     public void InitWorkspaceRepo() => Repo.AddRemote("https://github.com/test-owner/test-repo.git");
 
-    public void Dispose() {
+    public async ValueTask DisposeAsync() {
         foreach (var p in _spawnedProcesses) {
             try {
                 if (!p.HasExited) p.Kill(entireProcessTree: true);
@@ -37,14 +38,19 @@ public class McpFlowsServerTests : IDisposable {
             }
         }
 
-        // Only the process that was started: a pid freed by an orphan that already exited can belong to anything now
-        foreach (var (pid, startTime) in _orphans) {
+        // Only the process that was started: a pid freed by an orphan that already exited can belong to anything now.
+        // Waited out, so no orphan outlives the test holding its pipes.
+        foreach (var (pid, identity) in _orphans) {
             try {
-                using var orphan = Process.GetProcessById(pid);
-                if (!orphan.HasExited && orphan.StartTime == startTime) orphan.Kill(entireProcessTree: true);
+                if (ProcessStartToken.Matches(pid, identity) == true) {
+                    using var orphan = Process.GetProcessById(pid);
+                    orphan.Kill(entireProcessTree: true);
+                }
             } catch {
                 // already gone
             }
+
+            await PidIdentity.WaitUntilGoneAsync(pid, identity, TimeSpan.FromSeconds(10));
         }
 
         _server.Stop();
@@ -135,7 +141,7 @@ public class McpFlowsServerTests : IDisposable {
         process.WaitForExit();
         if (process.ExitCode != 0) throw new InvalidOperationException($"The shell could not start the server: exit {process.ExitCode}");
         var pid = int.Parse(File.ReadAllText(pidFile).Trim(), CultureInfo.InvariantCulture);
-        using (var orphan = Process.GetProcessById(pid)) _orphans.Add((pid, orphan.StartTime));
+        _orphans.Add((pid, PidIdentity.Capture(pid)));
 
         return process;
     }
