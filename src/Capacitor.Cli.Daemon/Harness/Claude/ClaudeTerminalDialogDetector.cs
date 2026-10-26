@@ -13,7 +13,8 @@ internal static class ClaudeTerminalDialogDetector {
     // the prompt box. Every such panel closes with Esc, whatever else its footer offers, and its
     // lists scroll, so the rows on screen are not all the choices there are.
     const string PanelEdge = "▔▔▔▔▔▔▔▔";
-    const char   MoreBelow = '↓';
+    // The viewport marker is padded apart from content; arrows inside text are not controls.
+    const string ScrollMarker = "  ↓";
 
     /// <param name="cols">The width the screen was drawn at, which decides where a label wrapped.</param>
     internal static TerminalDialogDto? Parse(string screen, int cols) => Read(screen, cols).Dialog;
@@ -27,7 +28,7 @@ internal static class ClaudeTerminalDialogDetector {
         var footerText = lines[footer].Trim();
         var select = footerText.StartsWith(SelectFooter, StringComparison.Ordinal);
         string[] region;
-        if (PanelTop(lines, footer, cols) is { } top && (ClosesWithEsc(footerText) || ScrolledPastFooter(footerText))) {
+        if (PanelTop(lines, footer) is { } top && (ClosesWithEsc(footerText) || ScrolledPastFooter(footerText))) {
             // A panel scrolled past its footer still holds the keyboard; its last row is content.
             region = ClosesWithEsc(footerText) ? lines[(top + 1)..footer] : lines[(top + 1)..(footer + 1)];
             select = false;
@@ -89,9 +90,9 @@ internal static class ClaudeTerminalDialogDetector {
     }
 
     /// The panel edge nearest the footer, unless a prompt box sits between them.
-    static int? PanelTop(string[] lines, int footer, int cols) {
+    static int? PanelTop(string[] lines, int footer) {
         for (var i = footer - 1; i >= 0; i--) {
-            if (IsPromptRule(lines[i], cols)) return null;
+            if (IsPromptRule(lines[i])) return null;
             if (lines[i].TrimStart().StartsWith(PanelEdge, StringComparison.Ordinal)) return i;
         }
         return null;
@@ -100,12 +101,11 @@ internal static class ClaudeTerminalDialogDetector {
     static bool ClosesWithEsc(string footer) =>
         footer.Split(" · ").Any(hint => hint is "Esc to cancel" or "Esc to close");
 
-    static bool ScrolledPastFooter(string footer) => footer.StartsWith(MoreBelow) || footer.EndsWith(MoreBelow);
+    static bool ScrolledPastFooter(string footer) =>
+        footer.EndsWith(ScrollMarker, StringComparison.Ordinal)
+        && !footer.AsSpan(0, footer.Length - ScrollMarker.Length).Trim().IsEmpty;
 
-    static bool IsPromptRule(string line, int cols) {
-        var trimmed = line.Trim();
-        return trimmed.Length >= cols / 2 && trimmed.All(c => c == '─');
-    }
+    static bool IsPromptRule(string line) => line.Length > 0 && !char.IsWhiteSpace(line[0]) && IsRule(line);
 
     static List<string> Paragraphs(IEnumerable<string> lines) {
         var paragraphs = new List<string>();

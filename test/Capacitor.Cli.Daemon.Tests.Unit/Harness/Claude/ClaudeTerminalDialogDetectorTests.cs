@@ -319,6 +319,71 @@ public class ClaudeTerminalDialogDetectorTests {
         await Assert.That(dialog.Screen).Contains("Trim ~/repo/CLAUDE.md");
     }
 
+    [Test]
+    [Arguments("   Build finished ↓")]
+    [Arguments("   ↓ Build details")]
+    [Arguments("   ↓")]
+    public async Task A_retained_panel_edge_does_not_make_ordinary_arrow_output_a_dialog(string output) {
+        var screen = Panel("   Build output", output);
+
+        await Assert.That(ClaudeTerminalDialogDetector.Parse(screen, 120)).IsNull();
+    }
+
+    [Test]
+    [Arguments(40)]
+    [Arguments(120)]
+    public async Task A_padded_scroll_marker_can_arrive_after_the_panel_content(int cols) {
+        var watcher = new ClaudeScreenWatcher(cols, 40);
+        var screen = string.Join('\n', new string('▔', cols), "   Usage", "", "   More details          ↓");
+        var arrow = screen.IndexOf('↓');
+
+        await Assert.That(watcher.Observe(Utf8(screen[..arrow])).Dialog).IsNull();
+        var dialog = watcher.Observe(Utf8(screen[arrow..])).Dialog;
+
+        await Assert.That(dialog).IsNotNull();
+        await Assert.That(dialog!.Screen).Contains("More details");
+        await Assert.That(dialog.Options).IsEmpty();
+    }
+
+    [Test]
+    [Arguments(120, 40)]
+    [Arguments(40, 12)]
+    public async Task A_short_external_rule_separates_a_select_dialog_from_a_retained_panel(int cols, int ruleLength) {
+        var screen = string.Join('\n',
+            new string('▔', cols),
+            "   Settings  Status",
+            new string('─', ruleLength),
+            "  Pick a server",
+            "",
+            "    Use this one",
+            "  ❯ Use the other",
+            "",
+            "  Enter to confirm · Esc to cancel");
+
+        var dialog = ClaudeTerminalDialogDetector.Parse(screen, cols);
+
+        await Assert.That(dialog).IsNotNull();
+        await Assert.That(dialog!.Heading).IsEqualTo("Pick a server");
+        await Assert.That(dialog.Options.ToArray()).IsEquivalentTo(new[] { "Use this one", "Use the other" }, CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task An_indented_separator_keeps_a_panel_list_screen_only() {
+        var screen = Panel(
+            "   Release notes",
+            "   " + new string('─', 40),
+            "   ❯ Version 2.1.310",
+            "     Version 2.1.309",
+            "",
+            "   Enter to confirm · Esc to cancel");
+
+        var dialog = ClaudeTerminalDialogDetector.Parse(screen, 120);
+
+        await Assert.That(dialog).IsNotNull();
+        await Assert.That(dialog!.Options).IsEmpty();
+        await Assert.That(dialog.Screen).Contains("Version 2.1.309");
+    }
+
     /// The rows on screen are a window onto a list that scrolls, so they are not offered as the
     /// panel's whole set of answers even under a select footer.
     [Test]
