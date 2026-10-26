@@ -451,6 +451,7 @@ public partial class App : Application {
         window.Closed += (_, _) => Quit(0);
         desktop.MainWindow = window;
         window.Show();
+        window.Activate();
         _ = run.RunAsync();
     }
 
@@ -1041,6 +1042,7 @@ public partial class App : Application {
                 catch (Exception ex) { Console.Error.WriteLine($"kcap: could not start the uninstall: {ex.Message}"); }
             };
             relaunchRegistered = true;
+            UninstallWindow.ShowHandoff(desktop.Windows);
             desktop.TryShutdown();
         } catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) {
         } catch (Exception ex) {
