@@ -268,6 +268,37 @@ public class ChatTabViewSmokeTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task An_ended_session_keeps_its_terminal_dialog_action_accessible_without_a_composer() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            var path = Tmp.CreateFile("ended-dialog.jsonl", [UserLine]);
+            await host.AttachAsync(path);
+            var opened = false;
+            host.Chat.ShowTerminal = () => opened = true;
+            var agent = Agent("a1", "claude", hasTerminal: true) with {
+                TranscriptPath = path, Status = "Running",
+                TerminalDialog = new TerminalDialogDto("", "", [], -1, "Choose an MCP server"),
+            };
+            try {
+                host.Daemon.Agents.AddOrUpdate(agent);
+                host.Settle();
+                var openTerminal = host.View.FindControl<Button>("TerminalMenuOpenTerminal")!;
+                await Assert.That(openTerminal.IsEffectivelyVisible).IsTrue();
+
+                host.Daemon.Agents.AddOrUpdate(agent with { Status = "Completed" });
+                host.Settle();
+
+                await Assert.That(host.Composer.IsEffectivelyVisible).IsFalse();
+                await Assert.That(host.View.FindControl<Border>("ComposerCard")!.IsEffectivelyVisible).IsFalse();
+                await Assert.That(openTerminal.IsEffectivelyVisible).IsTrue();
+                Click(host, openTerminal);
+                await Assert.That(opened).IsTrue();
+            } finally { await host.CloseAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task The_account_strip_sits_under_the_composer_card_inside_the_band() {
         await RunOnUiAsync(async () => {
             var host = new Host();
