@@ -203,11 +203,15 @@ internal sealed partial class VendorCliWatcher : BackgroundService {
     }
 
     protected override async Task ExecuteAsync(CancellationToken ct) {
-        if (_config is not null && _factories is not null) {
-            _recorded = _config.UnattendedVendorBaselines;
-            Watched   = WatchSet(_config, _factories, _accounts());
+        // Runs off the caller's thread, so a tick may already have rebuilt the set: build and assign
+        // under the gate, from the accounts as they are now, or a stale set lands over the rebuilt one.
+        lock (_gate) {
+            if (_config is not null && _factories is not null) {
+                _recorded = _config.UnattendedVendorBaselines;
+                Watched   = WatchSet(_config, _factories, _accounts());
+            }
+            PrimeBaselinesUnlocked();
         }
-        PrimeBaselines();
 
         using var timer = new PeriodicTimer(PollInterval, _time);
         try {
