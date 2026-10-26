@@ -35,6 +35,26 @@ public static class ClaudeStatusLineCommand {
         return id.Length > 0 && !id.Any(char.IsWhiteSpace) ? id : null;
     }
 
+    /// <summary>The original a POSIX guard carries, so a lost backup can be recovered from the settings file
+    /// instead of discarding the user's command. False for the plain shape, which carries none.</summary>
+    internal static bool TryOriginalOf(string command, out string? original) {
+        original = null;
+        if (AccountOf(command) is null || !command.StartsWith(Guard, StringComparison.Ordinal)) return false;
+
+        var rest   = command[Guard.Length..];
+        var branch = rest[(rest.IndexOf(Else, StringComparison.Ordinal) + Else.Length)..^End.Length];
+        if (branch == ":") return true;
+
+        const string run = "exec sh -c '";
+        if (!branch.StartsWith(run, StringComparison.Ordinal) || branch.Length < run.Length + 1 || branch[^1] != '\'') return false;
+
+        var quoted = branch[run.Length..^1];
+        if (quoted.Replace("'\\''", "").Contains('\'')) return false;
+
+        original = quoted.Replace("'\\''", "'");
+        return true;
+    }
+
     public static bool PosixShell(Func<string, string?> env) => PosixShell(env, OperatingSystem.IsWindows(), File.Exists);
 
     /// <summary>Claude runs a status line through Git Bash when it finds one, and through PowerShell otherwise.</summary>

@@ -93,6 +93,23 @@ public class ClaudeStatusLineCommandTests {
         yield return () => ("while read -r l; do echo \"got $l\"; done <<'EOF'\nfirst\nEOF\necho after", "got first\nafter\n");
     }
 
+    [Test]
+    [MethodDataSource(nameof(Originals))]
+    public async Task The_embedded_original_parses_back_out_of_the_guard((string Original, string Expected) c) {
+        var found = ClaudeStatusLineCommand.TryOriginalOf(ClaudeStatusLineCommand.For("abc123", c.Original, posixShell: true), out var original);
+
+        await Assert.That(found).IsTrue();
+        await Assert.That(original).IsEqualTo(c.Original);
+    }
+
+    [Test]
+    public async Task A_guard_without_an_original_parses_as_none_and_the_plain_shape_as_unknown() {
+        await Assert.That(ClaudeStatusLineCommand.TryOriginalOf(ClaudeStatusLineCommand.For("a", null, true), out var none)).IsTrue();
+        await Assert.That(none).IsNull();
+        await Assert.That(ClaudeStatusLineCommand.TryOriginalOf(ClaudeStatusLineCommand.For("a", "echo x", false), out _)).IsFalse();
+        await Assert.That(ClaudeStatusLineCommand.TryOriginalOf("echo mine", out _)).IsFalse();
+    }
+
     [Test, ExcludeOn(OS.Windows)]
     [MethodDataSource(nameof(Originals))]
     public async Task Guard_parses_with_sh_n((string Original, string Expected) c) {

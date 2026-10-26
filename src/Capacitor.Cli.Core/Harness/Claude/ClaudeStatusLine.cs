@@ -24,9 +24,17 @@ public static class ClaudeStatusLine {
             var current = CommandOf(root);
 
             if (ClaudeStatusLineCommand.AccountOf(current) is { } installed) {
+                var original = backup?.Original;
+
+                // A registry entry lost and re-adopted under a new id still has its original inside our guard.
+                if (backup is null && ClaudeStatusLineCommand.TryOriginalOf(current!, out var embedded)) {
+                    if (!saveBackup(new StatusLineBackup(embedded))) return false;
+                    original = embedded;
+                }
+
                 if (installed == accountId) return false;
 
-                Write(root, ClaudeStatusLineCommand.For(accountId, backup?.Original, posixShell));
+                Write(root, ClaudeStatusLineCommand.For(accountId, original, posixShell));
                 return true;
             }
 

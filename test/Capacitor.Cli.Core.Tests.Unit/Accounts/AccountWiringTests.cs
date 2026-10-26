@@ -280,6 +280,25 @@ public class AccountWiringTests {
     }
 
     [Test]
+    public async Task A_re_adopted_account_recovers_the_original_from_a_lost_entry_guard() {
+        const string original = "echo 'it'\"'\"'s' # mine\ncat <<'EOF'\nline\nEOF";
+        var work     = Account(HarnessId.Claude, ".claude-work");
+        var settings = new JsonObject { ["statusLine"] = new JsonObject { ["type"] = "command", ["command"] = ClaudeStatusLineCommand.For("lost-entry", original, true) } };
+        Home.CreateFile(".claude-work/settings.json", settings.ToJsonString());
+
+        var steps = Wire(work);
+
+        await Assert.That(AccountWiring.Succeeded(steps)).IsTrue();
+        await Assert.That(BackupOf(work)).IsEqualTo(new StatusLineBackup(original));
+        await Assert.That(ClaudeStatusLineCommand.AccountOf(StatusLineCommand(".claude-work"))).IsEqualTo(work.Id);
+
+        var unwired = Unwire(work);
+
+        await Assert.That(AccountWiring.Succeeded(unwired)).IsTrue();
+        await Assert.That(StatusLineCommand(".claude-work")).IsEqualTo(original);
+    }
+
+    [Test]
     public async Task Malformed_settings_left_untouched_and_account_reports_broken() {
         var work = Account(HarnessId.Claude, ".claude-work");
         Home.CreateFile(".claude-work/settings.json", """{"statusLine":"echo mine"}""");

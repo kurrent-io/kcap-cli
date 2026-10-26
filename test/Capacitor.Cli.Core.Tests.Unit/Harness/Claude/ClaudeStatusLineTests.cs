@@ -137,8 +137,64 @@ public class ClaudeStatusLineTests {
 
         ClaudeStatusLine.Install(Settings, "acct1", null, b => { saved.Add(b); return true; }, posixShell: true);
 
-        await Assert.That(saved.Count).IsEqualTo(0);
+        await Assert.That(saved).IsEquivalentTo([new StatusLineBackup(null)]);
         await Assert.That(Command()).IsEqualTo(ClaudeStatusLineCommand.For("acct1", null, posixShell: true));
+    }
+
+    public static IEnumerable<Func<string>> EmbeddedOriginals() {
+        yield return () => "echo 'single quoted' \"it's\" # a trailing comment";
+        yield return () => "while read -r l; do echo \"got $l\"; done <<'EOF'\nfirst\nEOF\necho after";
+    }
+
+    [Test]
+    [MethodDataSource(nameof(EmbeddedOriginals))]
+    public async Task Ours_for_a_lost_account_without_a_backup_recovers_the_embedded_original(string original) {
+        var settings = new JsonObject { ["statusLine"] = new JsonObject { ["type"] = "command", ["command"] = ClaudeStatusLineCommand.For("lost-id", original, true), ["padding"] = 1 } };
+        File.WriteAllText(Settings, settings.ToJsonString());
+
+        await Assert.That(Install("new-id")).IsEqualTo(SettingsEdit.Changed);
+
+        await Assert.That(_backup).IsEqualTo(new StatusLineBackup(original));
+        await Assert.That(Command()).IsEqualTo(ClaudeStatusLineCommand.For("new-id", original, posixShell: true));
+
+        Remove();
+
+        await Assert.That(Command()).IsEqualTo(original);
+        await Assert.That(Root()["statusLine"]!["padding"]!.GetValue<int>()).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_refused_save_of_the_embedded_original_writes_nothing() {
+        var settings = new JsonObject { ["statusLine"] = new JsonObject { ["type"] = "command", ["command"] = ClaudeStatusLineCommand.For("lost-id", "echo mine", true) } };
+        File.WriteAllText(Settings, settings.ToJsonString());
+        var before = File.ReadAllText(Settings);
+
+        await Assert.That(Install("new-id", saves: false)).IsEqualTo(SettingsEdit.Unchanged);
+
+        await Assert.That(File.ReadAllText(Settings)).IsEqualTo(before);
+    }
+
+    [Test]
+    public async Task Ours_for_this_account_without_a_backup_recovers_it_and_leaves_the_file() {
+        var settings = new JsonObject { ["statusLine"] = new JsonObject { ["type"] = "command", ["command"] = ClaudeStatusLineCommand.For("acct1", "echo mine", true) } };
+        File.WriteAllText(Settings, settings.ToJsonString());
+        var before = File.ReadAllText(Settings);
+
+        await Assert.That(Install()).IsEqualTo(SettingsEdit.Unchanged);
+
+        await Assert.That(_backup).IsEqualTo(new StatusLineBackup("echo mine"));
+        await Assert.That(File.ReadAllText(Settings)).IsEqualTo(before);
+    }
+
+    [Test]
+    public async Task The_plain_shape_without_a_backup_recovers_nothing() {
+        var settings = new JsonObject { ["statusLine"] = new JsonObject { ["type"] = "command", ["command"] = ClaudeStatusLineCommand.For("lost-id", "echo mine", false) } };
+        File.WriteAllText(Settings, settings.ToJsonString());
+
+        Install("new-id");
+
+        await Assert.That(_backup).IsNull();
+        await Assert.That(Command()).IsEqualTo(ClaudeStatusLineCommand.For("new-id", null, posixShell: true));
     }
 
     [Test]
