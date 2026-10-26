@@ -1,5 +1,6 @@
 using System.Net.Sockets;
 using System.Text.Json;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalIpc;
 using Microsoft.AspNetCore.SignalR.Client;
 
@@ -74,8 +75,21 @@ internal sealed class DaemonStatusIpc(
                 Profile: config.ProfileNameOrNull),
             agents,
             orchestrator.SnapshotPendingForStatus(),
-            orchestrator.BusyForStatus());
+            orchestrator.BusyForStatus(),
+            ExperimentalForStatus());
         return JsonSerializer.Serialize(dto, StatusIpcJsonContext.Default.DaemonStatusDto);
+    }
+
+    List<ExperimentalFeatureStatusDto> ExperimentalForStatus() {
+        // One read of each reference, so the two cannot come from different generations.
+        var committed = config.CodexResolution;
+        var acknowledged = config.AcknowledgedCodexResolution;
+        var told = acknowledged.Generation >= committed.Generation;
+        var reason = committed.SwitchOn && !committed.Active ? committed.InactiveReason
+            : !told ? "the server has not been told yet"
+            : null;
+
+        return [new(ExperimentalFeatures.CodexAppServer.Id, committed.SwitchOn, committed.Active, committed.Generation, told, reason)];
     }
 
     /// Wire spelling of <see cref="HubConnectionState"/>. Internal (not private) so

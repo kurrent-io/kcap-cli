@@ -444,6 +444,31 @@ public class DaemonStatusIpcTests {
     /// escaped uncaught; after it, <c>HandleSubscribeAsync</c> returns cleanly.
     /// </summary>
     [Test]
+    public async Task Snapshot_reports_the_committed_codex_resolution() {
+        var (orchestrator, statusIpc, daemons, config) = BuildBareStatusIpc("status-ipc-experimental");
+        try {
+            config.CodexResolution = new(4, true, "0.150.0", true, null);
+            config.AcknowledgedCodexResolution = new(3, true, "0.150.0", true, null);
+
+            var dto = JsonSerializer.Deserialize(statusIpc.Snapshot(), StatusIpcJsonContext.Default.DaemonStatusDto)!;
+
+            await Assert.That(dto.Experimental!.Single()).IsEqualTo(
+                new ExperimentalFeatureStatusDto("codex-app-server", true, true, 4, false, "the server has not been told yet"));
+
+            config.CodexResolution = new(5, true, "0.100.0", false, "Codex is too old");
+            config.AcknowledgedCodexResolution = new(5, true, "0.100.0", false, "Codex is too old");
+
+            dto = JsonSerializer.Deserialize(statusIpc.Snapshot(), StatusIpcJsonContext.Default.DaemonStatusDto)!;
+
+            await Assert.That(dto.Experimental!.Single()).IsEqualTo(
+                new ExperimentalFeatureStatusDto("codex-app-server", true, false, 5, true, "Codex is too old"));
+        } finally {
+            await orchestrator.DisposeAsync();
+            daemons.Dispose();
+        }
+    }
+
+    [Test]
     public async Task Snapshot_carries_the_configured_vendor_models() {
         var (orchestrator, statusIpc, daemons, config) = BuildBareStatusIpc("status-ipc-vendor-models");
         try {
