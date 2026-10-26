@@ -960,8 +960,7 @@ switch (command) {
             return await Run<ClaudeHookCommand>().HandlePlanEdit(new StringReader(claudeHookBody!));
         }
         if (args.Contains("--claude") && baseUrl is not null)
-            claudeHookBody = ClaudeSessionStartClaim.Prepare(claudeHookBody!, config,
-                () => ProcessHelpers.GetCodingAgentPid("claude", allowFallback: false));
+            claudeHookBody = await Run<ClaudeHookCommand>().PrepareForDrain(claudeHookBody!);
 
         // The global drain reaps stale process claims as well as retained spool files. A Claude
         // start must claim its live process first, so an old PID cannot end that resumed session.

@@ -58,6 +58,12 @@ public sealed class ClaudeHookCommand(
     /// <see cref="HookBudget.Safety"/>; must match the session-start timeout in <c>kcap/hooks/hooks.json</c>.</summary>
     internal static readonly TimeSpan SessionStartCeiling = TimeSpan.FromSeconds(9);
 
+    public Task<string> PrepareForDrain(string body) =>
+        ClaudeSessionStartClaim.PrepareAsync(body, config,
+            () => ProcessHelpers.GetCodingAgentPid("claude", allowFallback: false),
+            id => ShouldSuppressCaptureAsync(id, body, "session-start", profiles.Effective,
+                clock.Budget(Ceiling("session-start"))));
+
     public Task<int> Handle(TextReader stdin, TextWriter? stdout = null) {
         var spool = new HookSpool(config, clock.Time);
         spool.ReapOlderThan(TimeSpan.FromDays(30));

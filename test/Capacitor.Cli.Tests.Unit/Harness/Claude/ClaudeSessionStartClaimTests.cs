@@ -18,6 +18,8 @@ public class ClaudeSessionStartClaimTests {
     const string Session = "aaaaaaaa111144448888bbbbbbbbbbbb";
     const string OldToken = "lx:another-boot:1";
 
+    static Task<bool> NeverSuppress(string _) => Task.FromResult(false);
+
     static string Hook(string source) => new JsonObject {
         ["hook_event_name"] = "SessionStart", ["session_id"] = "aaaaaaaa-1111-4444-8888-bbbbbbbbbbbb",
         ["source"] = source, ["transcript_path"] = "/t/resumed.jsonl", ["cwd"] = "/repo",
@@ -38,7 +40,7 @@ public class ClaudeSessionStartClaimTests {
         DeadClaim(900_001, Session);
         DeadClaim(900_002, "true-orphan");
         var body = Hook(source);
-        var prepared = ClaudeSessionStartClaim.Prepare(body, Config.Root, () => Environment.ProcessId);
+        var prepared = await ClaudeSessionStartClaim.PrepareAsync(body, Config.Root, () => Environment.ProcessId, NeverSuppress);
         var lifecycle = new HookSpool(Config.Root, TimeProvider.System);
         var http = new FixedCapacitorHttpClient();
         var profiles = Resolutions.At(Server, Config.Root);
@@ -65,7 +67,7 @@ public class ClaudeSessionStartClaimTests {
         var sessions = AgentSessions.OnThisMachine(Config.Root);
         sessions.Claim(Environment.ProcessId, SessionId.Parse("previous")!);
 
-        var prepared = ClaudeSessionStartClaim.Prepare(Hook("clear"), Config.Root, () => Environment.ProcessId);
+        var prepared = await ClaudeSessionStartClaim.PrepareAsync(Hook("clear"), Config.Root, () => Environment.ProcessId, NeverSuppress);
 
         await Assert.That(JsonNode.Parse(prepared)?["previous_session_id"]?.GetValue<string>()).IsEqualTo("previous");
         await Assert.That(sessions.Of(Environment.ProcessId)?.Value).IsEqualTo(Session);
@@ -76,11 +78,12 @@ public class ClaudeSessionStartClaimTests {
     [Arguments("null")]
     [Arguments("{\"hook_event_name\":\"SessionEnd\",\"session_id\":\"other\"}")]
     [Arguments("{\"hook_event_name\":\"SessionStart\",\"session_id\":\"../bad\"}")]
+    [Arguments("{\"hook_event_name\":\"SessionStart\",\"session_id\":\"other\"}")]
     public async Task A_body_that_cannot_prove_a_session_start_does_not_replace_a_claim(string body) {
         var sessions = AgentSessions.OnThisMachine(Config.Root);
         sessions.Claim(Environment.ProcessId, SessionId.Parse("previous")!);
 
-        await Assert.That(ClaudeSessionStartClaim.Prepare(body, Config.Root, () => Environment.ProcessId)).IsEqualTo(body);
+        await Assert.That(await ClaudeSessionStartClaim.PrepareAsync(body, Config.Root, () => Environment.ProcessId, NeverSuppress)).IsEqualTo(body);
         await Assert.That(sessions.Of(Environment.ProcessId)?.Value).IsEqualTo("previous");
     }
 
@@ -88,11 +91,12 @@ public class ClaudeSessionStartClaimTests {
     public async Task An_unresolved_agent_ancestor_does_not_claim_the_hook_process() {
         var body = Hook("resume");
 
-        await Assert.That(ClaudeSessionStartClaim.Prepare(body, Config.Root, () => null)).IsEqualTo(body);
+        await Assert.That(await ClaudeSessionStartClaim.PrepareAsync(body, Config.Root, () => null, NeverSuppress)).IsEqualTo(body);
         await Assert.That(AgentSessions.OnThisMachine(Config.Root).LiveClaimant(SessionId.Parse(Session)!)).IsNull();
     }
 
     [Test]
+    [ParallelLimiter<SubprocessLimit>]
     [Arguments(false)]
     [Arguments(true)]
     public async Task A_suppressed_start_cannot_queue_an_end_when_its_process_exits(bool excluded) {
@@ -101,10 +105,16 @@ public class ClaudeSessionStartClaimTests {
         var profiles = Resolutions.Of(new Profile { ExcludedPaths = excluded ? ["/repo"] : [] }, serverUrl: "ftp://host");
         var http = new FixedCapacitorHttpClient();
         var spool = new HookSpool(Config.Root, TimeProvider.System);
-        var prepared = ClaudeSessionStartClaim.Prepare(Hook("startup"), Config.Root, () => agent.Pid);
-        var command = new ClaudeHookCommand(Config.Root, profiles, new HookClock(TimeProvider.System), Home,
+        var clock = new HookClock(TimeProvider.System);
+        var command = new ClaudeHookCommand(Config.Root, profiles, clock, Home,
             TestHarnesses.Under(Home), HostedAgent.Terminal, http, TestWatchers.For(Config.Root, profiles, http),
             FakeProcessStarter.Refusing(), new GitProviderRouter(), new WorkingDirectory(AppContext.BaseDirectory), TestAccounts.None);
+        var body = Hook("startup");
+        var prepared = await ClaudeSessionStartClaim.PrepareAsync(body, Config.Root, () => agent.Pid,
+            id => command.ShouldSuppressCaptureAsync(id, body, "session-start", profiles.Effective,
+                clock.Budget(ClaudeHookCommand.SessionStartCeiling)));
+        await Assert.That(AgentSessions.OnThisMachine(Config.Root).IsClaimed(SessionId.Parse(Session)!)).IsFalse();
+        await Assert.That(AgentSessions.OnThisMachine(Config.Root).LiveClaimant(SessionId.Parse(Session)!)).IsNull();
 
         await command.HandleWithDeps(spool, new StringReader(prepared),
             () => throw new InvalidOperationException("an unusable URL must not construct a client"), TextWriter.Null);
@@ -113,9 +123,22 @@ public class ClaudeSessionStartClaimTests {
         await Assert.That(agent.WaitForExit(TimeSpan.FromSeconds(5))).IsTrue();
 
         var exited = AgentSessions.OnThisMachine(Config.Root).ReapExited(Server);
-        await Assert.That(exited.Select(e => e.Session.Value)).IsEquivalentTo(new[] { Session });
+        await Assert.That(exited).IsEmpty();
         AgentHookPoster.SpoolEnds(exited, Server, spool, TimeProvider.System);
 
         await Assert.That(spool.HasBacklog(Session)).IsFalse();
+    }
+
+    [Test]
+    public async Task A_capture_probe_failure_preserves_the_body_and_existing_claim() {
+        var sessions = AgentSessions.OnThisMachine(Config.Root);
+        sessions.Claim(Environment.ProcessId, SessionId.Parse("previous")!);
+        var body = Hook("clear");
+
+        var prepared = await ClaudeSessionStartClaim.PrepareAsync(body, Config.Root, () => Environment.ProcessId,
+            _ => Task.FromException<bool>(new IOException("capture probe failed")));
+
+        await Assert.That(prepared).IsEqualTo(body);
+        await Assert.That(sessions.Of(Environment.ProcessId)?.Value).IsEqualTo("previous");
     }
 }
