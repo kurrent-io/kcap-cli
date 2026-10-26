@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Capacitor.Cli.Commands.Harness;
 using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Harness.Claude;
@@ -10,7 +11,7 @@ static class ClaudeSessionStartClaim {
             string body, ConfigRoot config, Func<int?> agentPid, Func<string, Task<bool>> shouldSuppress) {
         try {
             if (JsonNode.Parse(body) is not JsonObject hook
-             || Text(hook, "hook_event_name") != "SessionStart"
+             || ClaudeHookCommand.ToKebab(Text(hook, "hook_event_name") ?? "") != "session-start"
              || SessionId.Parse(Text(hook, "session_id")) is not { } session
              || Text(hook, "transcript_path") is null
              || agentPid() is not { } pid)

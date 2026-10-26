@@ -1360,7 +1360,7 @@ public sealed class ClaudeHookCommand(
     /// <c>session_start</c>, and <c>session-start</c> all return
     /// <c>session-start</c>.
     /// </summary>
-    static string ToKebab(string s) {
+    internal static string ToKebab(string s) {
         if (string.IsNullOrEmpty(s)) return s;
 
         var sb = new StringBuilder(s.Length + 4);

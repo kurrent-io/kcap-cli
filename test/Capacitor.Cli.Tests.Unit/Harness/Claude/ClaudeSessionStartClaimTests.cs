@@ -20,8 +20,8 @@ public class ClaudeSessionStartClaimTests {
 
     static Task<bool> NeverSuppress(string _) => Task.FromResult(false);
 
-    static string Hook(string source) => new JsonObject {
-        ["hook_event_name"] = "SessionStart", ["session_id"] = "aaaaaaaa-1111-4444-8888-bbbbbbbbbbbb",
+    static string Hook(string source, string eventName = "SessionStart") => new JsonObject {
+        ["hook_event_name"] = eventName, ["session_id"] = "aaaaaaaa-1111-4444-8888-bbbbbbbbbbbb",
         ["source"] = source, ["transcript_path"] = "/t/resumed.jsonl", ["cwd"] = "/repo",
     }.ToJsonString();
 
@@ -34,12 +34,18 @@ public class ClaudeSessionStartClaimTests {
     }
 
     [Test]
-    [Arguments("resume")]
-    [Arguments("compact")]
-    public async Task A_live_session_start_is_not_ended_by_the_global_orphan_drain(string source) {
+    [Arguments("resume", "SessionStart")]
+    [Arguments("compact", "SessionStart")]
+    [Arguments("resume", "sessionStart")]
+    [Arguments("compact", "sessionStart")]
+    [Arguments("resume", "session_start")]
+    [Arguments("compact", "session_start")]
+    [Arguments("resume", "session-start")]
+    [Arguments("compact", "session-start")]
+    public async Task A_live_session_start_is_not_ended_by_the_global_orphan_drain(string source, string eventName) {
         DeadClaim(900_001, Session);
         DeadClaim(900_002, "true-orphan");
-        var body = Hook(source);
+        var body = Hook(source, eventName);
         var prepared = await ClaudeSessionStartClaim.PrepareAsync(body, Config.Root, () => Environment.ProcessId, NeverSuppress);
         var lifecycle = new HookSpool(Config.Root, TimeProvider.System);
         var http = new FixedCapacitorHttpClient();
@@ -63,11 +69,15 @@ public class ClaudeSessionStartClaimTests {
     }
 
     [Test]
-    public async Task A_clear_start_preserves_its_predecessor_before_claiming_the_new_session() {
+    [Arguments("SessionStart")]
+    [Arguments("sessionStart")]
+    [Arguments("session_start")]
+    [Arguments("session-start")]
+    public async Task A_clear_start_preserves_its_predecessor_before_claiming_the_new_session(string eventName) {
         var sessions = AgentSessions.OnThisMachine(Config.Root);
         sessions.Claim(Environment.ProcessId, SessionId.Parse("previous")!);
 
-        var prepared = await ClaudeSessionStartClaim.PrepareAsync(Hook("clear"), Config.Root, () => Environment.ProcessId, NeverSuppress);
+        var prepared = await ClaudeSessionStartClaim.PrepareAsync(Hook("clear", eventName), Config.Root, () => Environment.ProcessId, NeverSuppress);
 
         await Assert.That(JsonNode.Parse(prepared)?["previous_session_id"]?.GetValue<string>()).IsEqualTo("previous");
         await Assert.That(sessions.Of(Environment.ProcessId)?.Value).IsEqualTo(Session);
