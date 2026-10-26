@@ -94,7 +94,8 @@ public sealed class AccountsCommand(AccountStore accounts, PluginEnvironment env
     async Task<int> Remove(string idOrDir) {
         if (Resolve(idOrDir) is not { } account) return await NotFound("remove", idOrDir);
 
-        var steps = Guarded(() => AccountWiring.Unwire(account, env.Home));
+        IReadOnlyList<WiringStep> steps;
+        using (Registry(accounts.Lock)) steps = Guarded(() => AccountWiring.Unwire(account, env.Home, accounts));
         if (AccountWiring.HasFatalFailure(steps)) {
             // A partial unwire changed the account on disk, so the failure is committed like a failed wiring.
             var summary   = AccountWiring.FailureSummary(steps);
@@ -157,7 +158,7 @@ public sealed class AccountsCommand(AccountStore accounts, PluginEnvironment env
 
     async Task<(IReadOnlyList<WiringStep> Steps, long Revision, string? Error)> WireAndReport(VendorAccount account) {
         IReadOnlyList<WiringStep> steps;
-        using (Registry(accounts.Lock)) steps = Guarded(() => AccountWiring.Wire(account, env.Home, Options));
+        using (Registry(accounts.Lock)) steps = Guarded(() => AccountWiring.Wire(account, env.Home, Options, accounts));
         BetweenWiringAndStamp?.Invoke();
 
         // The stamp's Mutate takes the lock held above, so it must come after that block. Committing after the

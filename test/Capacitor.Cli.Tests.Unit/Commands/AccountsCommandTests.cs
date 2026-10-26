@@ -269,7 +269,7 @@ public class AccountsCommandTests {
         await Assert.That(result.Succeeded).IsFalse();
         await Assert.That(result.AccountId).IsEqualTo(account.Id);
         await Assert.That(result.Revision).IsEqualTo(registry.Revision);
-        await Assert.That(result.Steps.Single(s => !s.Succeeded).Name).IsEqualTo("plugin");
+        await Assert.That(result.Steps.Where(s => !s.Succeeded).Select(s => s.Name)).IsEquivalentTo(["plugin", "statusline"]);
         await Assert.That(result.Error).Contains("plugin");
         await Assert.That(account.WiringFailure).Contains("plugin");
         await Assert.That(account.WiredAt).IsNull();
@@ -292,7 +292,7 @@ public class AccountsCommandTests {
         await Assert.That(result.Succeeded).IsTrue();
         await Assert.That(result.Error).IsNull();
         await Assert.That(result.Revision).IsEqualTo(registry.Revision);
-        await Assert.That(result.Steps.Select(s => (s.Name, s.Succeeded))).IsEquivalentTo([("plugin", true)]);
+        await Assert.That(result.Steps.Select(s => (s.Name, s.Succeeded))).IsEquivalentTo([("plugin", true), ("statusline", true)]);
         await Assert.That(account.WiredAt).IsNotNull();
         await Assert.That(account.WiringFailure).IsNull();
         await Assert.That(capture.GetCapturedOutput()).Contains("\"account_id\":").And.Contains("\"revision\":");
@@ -313,7 +313,8 @@ public class AccountsCommandTests {
         await Assert.That(result.Action).IsEqualTo("remove");
         await Assert.That(result.AccountId).IsEqualTo(id);
         await Assert.That(result.Succeeded).IsTrue();
-        await Assert.That(result.Revision).IsEqualTo(revision + 1);
+        // Unwiring discards the status line backup before the removal commits.
+        await Assert.That(result.Revision).IsEqualTo(revision + 2);
         await Assert.That(Store.Load().Revision).IsEqualTo(result.Revision);
     }
 
@@ -334,7 +335,7 @@ public class AccountsCommandTests {
         await Assert.That(result.Action).IsEqualTo("remove");
         await Assert.That(result.AccountId).IsEqualTo(account.Id);
         await Assert.That(result.Succeeded).IsFalse();
-        await Assert.That(result.Steps.Single(s => !s.Succeeded).Name).IsEqualTo("plugin");
+        await Assert.That(result.Steps.Where(s => !s.Succeeded).Select(s => s.Name)).IsEquivalentTo(["plugin", "statusline"]);
         await Assert.That(result.Error).Contains("It stays registered.");
         await Assert.That(result.Revision).IsEqualTo(before.Revision + 1);
         await Assert.That(after.Revision).IsEqualTo(result.Revision);
@@ -385,7 +386,7 @@ public class AccountsCommandTests {
         var result = SingleResult(capture.GetCapturedOutput());
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(result.AccountId).IsNull();
-        await Assert.That(result.Steps.Length).IsEqualTo(2);
+        await Assert.That(result.Steps.Length).IsEqualTo(4);
         await Assert.That(result.Revision).IsEqualTo(Store.Load().Revision);
     }
 

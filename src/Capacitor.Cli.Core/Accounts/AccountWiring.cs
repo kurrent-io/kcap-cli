@@ -7,34 +7,89 @@ using Capacitor.Cli.Core.Harness.Codex;
 namespace Capacitor.Cli.Core.Accounts;
 
 public static class AccountWiring {
-    const string NetworkStep = "network";
+    const string NetworkStep          = "network";
+    const string StatusLineStep       = "statusline";
+    const string StatusLineBackupStep = "statusline backup";
 
     public static bool Succeeded(IReadOnlyList<WiringStep> steps) => steps.All(s => s.Succeeded);
 
-    /// <summary>A failed sandbox-network step is a warning: the account still records.</summary>
+    /// <summary>A failed sandbox-network step is a warning: the account still records. So is a status line
+    /// removed without a backup to restore, since there is nothing left to retry.</summary>
     public static bool HasFatalFailure(IReadOnlyList<WiringStep> steps) =>
-        steps.Any(s => !s.Succeeded && s.Name != NetworkStep);
+        steps.Any(s => !s.Succeeded && s.Name is not (NetworkStep or StatusLineBackupStep));
 
     public static string FailureSummary(IReadOnlyList<WiringStep> steps) =>
         string.Join(", ", steps.Where(s => !s.Succeeded).Select(s => $"{s.Name}: {s.Detail}"));
 
-    public static IReadOnlyList<WiringStep> Wire(VendorAccount account, UserHome home, WiringOptions options) =>
+    /// <summary>The caller holds <paramref name="store"/>'s lock.</summary>
+    public static IReadOnlyList<WiringStep> Wire(VendorAccount account, UserHome home, WiringOptions options, AccountStore store) =>
         account.Vendor switch {
-            HarnessId.Claude => WireClaude(AccountLayouts.Claude(home, account.Directory), options),
+            HarnessId.Claude => [WireClaude(AccountLayouts.Claude(home, account.Directory), options), WireStatusLine(account.Id, home, store)],
             HarnessId.Codex  => WireCodex(AccountLayouts.Codex(home, account.Directory), options),
             _                => [new WiringStep("vendor", false, $"{account.Vendor} has no accounts")],
         };
 
-    public static IReadOnlyList<WiringStep> Unwire(VendorAccount account, UserHome home) {
+    /// <summary>The caller holds <paramref name="store"/>'s lock.</summary>
+    public static IReadOnlyList<WiringStep> Unwire(VendorAccount account, UserHome home, AccountStore store) {
         if (!Directory.Exists(account.Directory))
             return [new WiringStep("directory", true, $"{account.Directory} no longer exists; nothing to unwire")];
 
         return account.Vendor switch {
-            HarnessId.Claude => [Step("plugin", ClaudePluginWriter.Remove(AccountLayouts.Claude(home, account.Directory).UserSettings))],
-            HarnessId.Codex  => UnwireCodex(AccountLayouts.Codex(home, account.Directory)),
-            _                => [],
+            HarnessId.Claude => [
+                Step("plugin", ClaudePluginWriter.Remove(AccountLayouts.Claude(home, account.Directory).UserSettings)),
+                UnwireStatusLine(account.Id, home, store),
+            ],
+            HarnessId.Codex => UnwireCodex(AccountLayouts.Codex(home, account.Directory)),
+            _               => [],
         };
     }
+
+    /// <summary>The Claude status line alone, for the environment's default directory, whose plugin is wired by
+    /// its own layout path. The caller holds <paramref name="store"/>'s lock; the entry is re-read under it, because
+    /// an account resolved before the lock can carry a backup another process has since replaced.</summary>
+    public static WiringStep WireStatusLine(string accountId, UserHome home, AccountStore store) =>
+        StatusLine(store, accountId, account => {
+            var removed = false;
+            var edit = ClaudeStatusLine.Install(
+                AccountLayouts.Claude(home, account.Directory).UserSettings, accountId, account.StatusLine,
+                backup => {
+                    var kept = SetBackup(store, accountId, backup);
+                    removed = !kept;
+                    return kept;
+                },
+                ClaudeStatusLineCommand.PosixShell(Environment.GetEnvironmentVariable));
+
+            return removed ? AccountRemoved : Step(StatusLineStep, edit);
+        });
+
+    /// <summary>Discards the backup once the settings no longer need it, and keeps it when the edit failed.</summary>
+    public static WiringStep UnwireStatusLine(string accountId, UserHome home, AccountStore store) =>
+        StatusLine(store, accountId, account => {
+            var (edit, missing) = ClaudeStatusLine.Remove(AccountLayouts.Claude(home, account.Directory).UserSettings, account.StatusLine);
+            var step            = Step(StatusLineStep, edit);
+            if (!step.Succeeded) return step;
+
+            if (account.StatusLine is not null) SetBackup(store, accountId, null);
+
+            return missing ? new(StatusLineBackupStep, false, "no backup of the original status line; removed kcap's command") : step;
+        });
+
+    static readonly WiringStep AccountRemoved = new(StatusLineStep, false, "account removed");
+
+    static WiringStep StatusLine(AccountStore store, string accountId, Func<VendorAccount, WiringStep> change) {
+        try {
+            return store.FindHeld(accountId) is { } account ? change(account) : AccountRemoved;
+        } catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) {
+            return new(StatusLineStep, false, $"account registry unusable: {ex.Message}");
+        }
+    }
+
+    static bool SetBackup(AccountStore store, string accountId, StatusLineBackup? backup) =>
+        store.MutateHeld(r => r.Accounts.FirstOrDefault(a => a.Id == accountId) switch {
+            null                                     => (r, false),
+            { } entry when entry.StatusLine == backup => (r, true),
+            _ => (r with { Accounts = [.. r.Accounts.Select(a => a.Id == accountId ? a with { StatusLine = backup } : a)] }, true),
+        }).Result;
 
     public static RecordingState State(VendorAccount account, UserHome home) => State(account.Vendor, account.Directory, home);
 
@@ -60,10 +115,10 @@ public static class AccountWiring {
         }
     }
 
-    static IReadOnlyList<WiringStep> WireClaude(ClaudePaths paths, WiringOptions options) =>
+    static WiringStep WireClaude(ClaudePaths paths, WiringOptions options) =>
         options.PluginDir is null
-            ? [new WiringStep("plugin", false, "kcap plugin directory not found; reinstall kcap via npm")]
-            : [Step("plugin", ClaudePluginWriter.Install(paths.UserSettings, options.PluginDir))];
+            ? new WiringStep("plugin", false, "kcap plugin directory not found; reinstall kcap via npm")
+            : Step("plugin", ClaudePluginWriter.Install(paths.UserSettings, options.PluginDir));
 
     static IReadOnlyList<WiringStep> WireCodex(CodexPaths paths, WiringOptions options) {
         var steps = new List<WiringStep> { Step("hooks", CodexHooksWriter.Install(paths.UserHooksJson)) };
