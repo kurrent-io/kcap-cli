@@ -90,7 +90,8 @@ public class CodexHostedAgentRuntimeFactoryTests {
 
     CodexHostedAgentRuntimeFactory Factory(
             RecordingPtyFactory pty, bool appServerActive, CodexAppServerSpawnFactory? spawn = null) =>
-        new(NewLauncher(), pty, ConfigWith(switchOn: appServerActive), NullLoggerFactory.Instance, TimeProvider.System, spawn);
+        new(NewLauncher(), pty, ConfigWith(switchOn: appServerActive), NullLoggerFactory.Instance, TimeProvider.System, spawn,
+            installedVersion: () => "0.146.0");
 
     /// <summary>A Codex at the factory's CLI path reporting <paramref name="version"/>, which a pinned
     /// app-server launch probes.</summary>
@@ -142,7 +143,8 @@ public class CodexHostedAgentRuntimeFactoryTests {
     public async Task Field_absent_interactive_routing_matches_the_acknowledged_advertisement(bool active) {
         var config  = ConfigWith(switchOn: active);
         var factory = new CodexHostedAgentRuntimeFactory(
-            NewLauncher(), new RecordingPtyFactory(), config, NullLoggerFactory.Instance, TimeProvider.System);
+            NewLauncher(), new RecordingPtyFactory(), config, NullLoggerFactory.Instance, TimeProvider.System,
+            installedVersion: () => "0.146.0");
 
         var routed = factory.Route(Ctx(isReviewFlow: false, Home.PathTo("interactive-routing")));
 
@@ -165,11 +167,31 @@ public class CodexHostedAgentRuntimeFactoryTests {
             Version                     = "0.146.0",
         };
         var factory = new CodexHostedAgentRuntimeFactory(
-            NewLauncher(), new RecordingPtyFactory(), config, NullLoggerFactory.Instance, TimeProvider.System);
+            NewLauncher(), new RecordingPtyFactory(), config, NullLoggerFactory.Instance, TimeProvider.System,
+            installedVersion: () => "0.146.0");
 
         var route = factory.Route(Ctx(kind == Kind.ReviewFlow, Home.PathTo("routing")));
 
         await Assert.That(route.AppServer).IsEqualTo(acknowledgedActive);
+    }
+
+    /// <summary>A launch naming no transport that follows an app-server advertisement is checked against the
+    /// Codex installed now. Below the floor it is refused, never moved to PTY, since the server expects
+    /// app-server, and the daemon is asked to re-advertise.</summary>
+    [Test]
+    [Arguments("0.146.0", false)]
+    [Arguments("0.145.9", true)]
+    public async Task An_unpinned_app_server_launch_checks_the_installed_codex(string installed, bool refused) {
+        var refreshes = new List<string>();
+        var factory = new CodexHostedAgentRuntimeFactory(
+            NewLauncher(), new RecordingPtyFactory(), ConfigWith(switchOn: true), NullLoggerFactory.Instance, TimeProvider.System,
+            refreshCapabilities: refreshes.Add, installedVersion: () => installed);
+
+        var route = factory.Route(Ctx(isReviewFlow: false, Home.PathTo("routing")));
+
+        await Assert.That(route.AppServer).IsEqualTo(!refused);
+        await Assert.That(route.Refusal is not null).IsEqualTo(refused);
+        await Assert.That(refreshes.Count).IsEqualTo(refused ? 1 : 0);
     }
 
     /// <summary>Codex can be upgraded or downgraded between capability refreshes, so the resolution's

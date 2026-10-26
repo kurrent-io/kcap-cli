@@ -492,7 +492,9 @@ public static partial class DaemonRunner {
                 sp.GetRequiredService<ILoggerFactory>(),
                 time,
                 connection: sp.GetRequiredService<ServerConnection>(), // interactive approvals reach the user through it
-                policyJudge: sp.GetRequiredService<PolicyJudgeGateway>());
+                policyJudge: sp.GetRequiredService<PolicyJudgeGateway>(),
+                // Resolved per call: the orchestrator is built from the runtime factories.
+                refreshCapabilities: reason => sp.GetRequiredService<AgentOrchestrator>().RefreshAdvertisedCapabilities(reason));
         });
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
             new AcpHostedAgentRuntimeFactory(

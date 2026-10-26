@@ -32,10 +32,14 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     /// <param name="connection">The server connection whose <c>RequestAcpInteractionAsync</c> forwards an
     /// interactive launch's approvals to the user (§2.3). Null in tests that never exercise interactive
     /// approvals; reviewers (approvalPolicy:never) never build an approval bridge regardless.</param>
+    /// <param name="refreshCapabilities">Asks the daemon to re-probe and re-advertise, when a launch finds the
+    /// installed Codex no longer matches what was advertised. Null leaves the advertisement to the next refresh.</param>
+    /// <param name="installedVersion">Test seam only: production probes the Codex at the PTY factory's CLI path.</param>
     public CodexHostedAgentRuntimeFactory(
             CodexLauncher launcher, IHostedAgentRuntimeFactory ptyDelegate, DaemonConfig config,
             ILoggerFactory loggerFactory, TimeProvider time, CodexAppServerSpawnFactory? spawnFactory = null,
-            ServerConnection? connection = null, PolicyJudgeGateway? policyJudge = null) {
+            ServerConnection? connection = null, PolicyJudgeGateway? policyJudge = null,
+            Action<string>? refreshCapabilities = null, Func<string?>? installedVersion = null) {
         _time          = time;
         _launcher      = launcher;
         _pty           = ptyDelegate;
@@ -46,7 +50,12 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
             ?? ((cli, args, seed, cwd, env, removeEnv, cfg, lf) => DefaultSpawnFactory(cli, args, seed, cwd, env, removeEnv, cfg, lf, time));
         _connection    = connection;
         _policyJudge   = policyJudge;
+        _refreshCapabilities = refreshCapabilities;
+        _installedVersion    = installedVersion ?? (() => DaemonRunner.ProbeCliVersionForLaunch(_pty.CliPath));
     }
+
+    readonly Action<string>? _refreshCapabilities;
+    readonly Func<string?>   _installedVersion;
 
     readonly PolicyJudgeGateway? _policyJudge;
 
@@ -113,26 +122,27 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     /// <summary>
     /// A pinned transport wins: the ledger's for a resume, else the one the server will validate the
     /// registration against. Unpinned, a PR review stays on PTY and anything else follows the resolution
-    /// the server last acknowledged, since that is the advertisement it dispatched against. A pinned
-    /// app-server launch on a Codex below the floor is refused, never moved to PTY, which the server
-    /// would refuse at registration. The floor is checked against the Codex installed now: the
-    /// resolution's version is only as fresh as the last capability refresh.
+    /// the server last acknowledged, since that is the advertisement it dispatched against. Every
+    /// app-server launch is checked against the Codex installed now, since the advertised version is
+    /// only as fresh as the last capability refresh. Below the floor the launch is refused, never moved
+    /// to PTY, which the server would refuse at registration, and the daemon is asked to re-advertise.
     /// </summary>
     internal CodexRoute Route(RuntimeStartContext ctx) {
         var pinned = Recognised(ctx.RequestedTransport) ?? Recognised(ctx.ExpectedRuntimeTransport);
-        if (pinned == CodexTransportDecision.Pty) return new(AppServer: false, Refusal: null);
-        if (pinned == CodexTransportDecision.AppServer) {
-            var version = DaemonRunner.ProbeCliVersionForLaunch(_pty.CliPath);
-            return CodexTransportDecision.MeetsFloor(version)
-                ? new(AppServer: true, Refusal: null)
-                : new(AppServer: false, Refusal:
-                    $"codex: this launch must run on app-server, which needs Codex {CodexTransportDecision.VersionFloor} or later; " +
-                    $"the installed Codex is {version ?? "of an unreadable version"}.");
-        }
+        var appServer = pinned switch {
+            CodexTransportDecision.Pty       => false,
+            CodexTransportDecision.AppServer => true,
+            _ => !(ctx.IsReview && !ctx.IsReviewFlow) && _config.AcknowledgedCodexResolution.Active,
+        };
+        if (!appServer) return new(AppServer: false, Refusal: null);
 
-        if (ctx.IsReview && !ctx.IsReviewFlow) return new(AppServer: false, Refusal: null);
+        var version = _installedVersion();
+        if (CodexTransportDecision.MeetsFloor(version)) return new(AppServer: true, Refusal: null);
 
-        return new(AppServer: _config.AcknowledgedCodexResolution.Active, Refusal: null);
+        _refreshCapabilities?.Invoke("the installed Codex is below the app-server floor");
+        return new(AppServer: false, Refusal:
+            $"codex: this launch must run on app-server, which needs Codex {CodexTransportDecision.VersionFloor} or later; " +
+            $"the installed Codex is {version ?? "of an unreadable version"}.");
     }
 
     static string? Recognised(string? transport) =>
