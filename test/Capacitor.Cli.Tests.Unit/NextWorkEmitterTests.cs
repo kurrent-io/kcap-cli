@@ -78,15 +78,15 @@ public class NextWorkEmitterTests {
         await Assert.That(fallback).IsEqualTo(offered ? $"{NextWorkEmitter.InstructionOnly} {NextWorkEmitter.StartAgentOffer}" : NextWorkEmitter.InstructionOnly);
     }
 
-    /// <summary>The offer never licenses a start the user did not ask for, and is honoured only by a
-    /// harness that has the tool.</summary>
+    /// <summary>The offer never licenses a start the user did not ask for, is honoured only by a harness
+    /// that has the tool, and hands start_agent only the target keys it accepts.</summary>
     [Test]
     public async Task The_start_agent_offer_waits_for_the_user_and_the_tool() {
         var text = NextWorkEmitter.StartAgentOffer;
 
         await Assert.That(text).StartsWith("If start_agent is among your tools");
         await Assert.That(text).Contains("Start one only when the user asks");
-        await Assert.That(text).Contains("target_key from get_next_work as work_item");
+        await Assert.That(text).Contains("target_key from get_next_work as work_item only when it is a wi: or le: key");
     }
 
     /// <summary>The unit is the piece of work, not the request: the instruction names the terminal states,

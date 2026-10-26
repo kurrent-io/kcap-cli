@@ -65,7 +65,8 @@ static partial class NextWorkEmitter {
     internal const string StartAgentOffer =
         "If start_agent is among your tools, end that presentation by saying the user can have any listed " +
         "item handed to a separate hosted agent. Start one only when the user asks, following the " +
-        "start-agents skill, with the item's target_key from get_next_work as work_item.";
+        "start-agents skill: pass the item's target_key from get_next_work as work_item only when it is a wi: " +
+        "or le: key, and for any other item choose work_item as that skill says.";
 
     // Without the explicit "question answered with nothing pending" case, agents present after every reply.
     internal const string CompletionInstruction =
