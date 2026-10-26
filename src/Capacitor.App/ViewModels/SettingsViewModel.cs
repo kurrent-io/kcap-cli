@@ -18,6 +18,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     readonly string _runningName;
     readonly Func<string, CancellationToken, Task<bool>> _targetRunning;
     readonly Func<MutationRequest, CancellationToken, Task<MutationOutcome>> _runMutation;
+    readonly Func<CancellationToken, Task<MutationOutcome?>>? _moveToWindowsService;
     readonly Func<LifecyclePrompt, CancellationToken, Task<bool>> _confirm;
     readonly Func<CancellationToken, Task<bool>> _relaunch;
     readonly bool _canRenameOnPlatform;
@@ -60,12 +61,14 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
             bool nameOverridden = false, bool needsAppRestart = false, CancellationToken appLifetime = default,
             NotificationSettingsService? notificationSettings = null,
             IDesktopNotificationAccess? notificationAccess = null, ProfilesSettingsViewModel? profiles = null,
+            Func<CancellationToken, Task<MutationOutcome?>>? moveToWindowsService = null,
             Func<CancellationToken, Task<ServiceSnapshot?>>? serviceStatus = null) {
         _settings = settings;
         _ops = ops;
         _runningName = service.DaemonName;
         _targetRunning = targetRunning;
         _runMutation = runMutation;
+        _moveToWindowsService = moveToWindowsService;
         _confirm = confirm;
         _relaunch = relaunch;
         _canRenameOnPlatform = canRenameOnPlatform;
@@ -91,7 +94,8 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
         NotificationAccessCommand = ReactiveCommand.CreateFromTask(ResolveNotificationAccessAsync).DisposeWith(_subscriptions);
         WindowsServiceCommand = ReactiveCommand.CreateFromTask(InstallWindowsServiceAsync,
             this.WhenAnyValue(x => x.IsBusy, x => x.WindowsServiceOffered, (busy, offered) => !busy && offered)).DisposeWith(_subscriptions);
-        if (serviceStatus is not null && OperatingSystem.IsWindows()) _ = LoadWindowsServiceOfferAsync(serviceStatus);
+        if (serviceStatus is not null && moveToWindowsService is not null && OperatingSystem.IsWindows())
+            _ = LoadWindowsServiceOfferAsync(serviceStatus);
         service.Status.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(status => {
             _status = status;
             if (status.State != AttachState.Connected) _snapshot = null;
@@ -303,21 +307,17 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
         IsBusy = true;
         WindowsServiceMessage = null;
         try {
-            if (!await _confirm(new LifecyclePrompt(LifecyclePrompt.KindWindowsService, null, null, false,
-                    DaemonLifecycleController.WindowsServiceDisclosure), _lifetime.Token)) return;
-            var refused = MutationRequestFactory.TryBuild(MutationVerb.InstallWindowsService, _settings.ProfileName,
-                _settings.ServerUrl, DaemonStore.Sanitize(_runningName), out var request);
-            if (refused is not null) {
-                WindowsServiceMessage = "Could not resolve the profile for the daemon. Restart the app and try again.";
-                return;
-            }
+            var resumes = _status.Capabilities?.Contains(DaemonLifecycleController.ResumeCapability) == true;
+            var disclosure = DaemonLifecycleController.WindowsServiceDisclosure(_snapshot?.Daemon.ActiveAgents ?? 0, resumes);
+            if (!await _confirm(new LifecyclePrompt(LifecyclePrompt.KindWindowsService, null, null, false, disclosure), _lifetime.Token)) return;
             WindowsServiceMessage = "Waiting for administrator approval…";
-            var outcome = await _runMutation(request!, _lifetime.Token);
+            var outcome = await _moveToWindowsService!(_lifetime.Token);
             WindowsServiceMessage = outcome switch {
                 MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout => "The daemon now runs under the kcap Windows service.",
                 MutationOutcome.Refused { Reason: "elevation_declined" } => "The administrator prompt was declined; nothing changed.",
                 MutationOutcome.UnconfirmedNoAttach =>
                     "The administrator prompt was not answered in time, so nothing changed. Run it again from here when you can approve it.",
+                null => "Nothing changed. Restart the app and try again.",
                 _ => "The Windows service could not take the daemon over; it keeps its Scheduled Task.",
             };
             if (outcome is MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout) WindowsServiceOffered = false;

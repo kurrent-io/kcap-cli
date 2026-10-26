@@ -1858,7 +1858,7 @@ public class DaemonLifecycleControllerTests {
 
         await WaitUntilAsync(() => h.Lane.Requests.Count == 1, what: "the Windows service install");
         await Assert.That(h.Surface.Prompts.Single().Kind).IsEqualTo(LifecyclePrompt.KindWindowsService);
-        await Assert.That(h.Surface.Prompts.Single().Disclosure).IsEqualTo(DaemonLifecycleController.WindowsServiceDisclosure);
+        await Assert.That(h.Surface.Prompts.Single().Disclosure).IsEqualTo(DaemonLifecycleController.WindowsServiceDisclosure(0, resumes: false));
         await Assert.That(h.Lane.Requests[0].Verb).IsEqualTo(MutationVerb.InstallWindowsService);
     }
 
@@ -1950,6 +1950,39 @@ public class DaemonLifecycleControllerTests {
         await Task.Delay(50);
         await Assert.That(h.Surface.Prompts).IsEmpty();
         await Assert.That(h.DeclinesRemembered).IsEqualTo(0);
+    }
+
+    /// The move stops the daemon keeping its agents, so a daemon that resumes them is asked while they run
+    [Test]
+    public async Task A_busy_daemon_that_resumes_its_agents_is_offered_the_windows_service() {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(TaskSupervised());
+        h.Start();
+        h.PushSnapshot(activeAgents: 2);
+
+        h.Client.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, [DaemonLifecycleController.ResumeCapability]));
+
+        await WaitUntilAsync(() => h.Surface.Prompts.Count == 1, what: "the Windows service offer");
+        await Assert.That(h.Surface.Prompts[0].Disclosure).IsEqualTo(DaemonLifecycleController.WindowsServiceDisclosure(2, resumes: true));
+    }
+
+    /// One that cannot resume them waits for idle, without spending the run's offer
+    [Test]
+    public async Task A_busy_daemon_that_cannot_resume_is_offered_once_it_reconnects_idle() {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(TaskSupervised());
+        h.Start();
+        h.PushSnapshot(activeAgents: 1);
+        h.PushConnected();
+        await WaitUntilAsync(() => h.Cli.StatusCallCount == 1, what: "the reconciliation query");
+        await h.Controller.PhaseClosed;
+        await Assert.That(h.Surface.Prompts).IsEmpty();
+
+        h.PushSnapshot(activeAgents: 0);
+        h.PushConnecting();
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Surface.Prompts.Count == 1, what: "the Windows service offer");
     }
 
     [Test]

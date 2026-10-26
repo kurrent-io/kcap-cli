@@ -64,9 +64,13 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     internal const string UnsupervisedAttention =
         "The daemon is running outside the daemon service, so nothing restarts it after a crash or a restart.";
 
-    internal const string WindowsServiceDisclosure =
+    /// <summary>The move stops the daemon keeping its agents, so one that resumes them carries them over</summary>
+    internal static string WindowsServiceDisclosure(int activeAgents, bool resumes) =>
         "kcap installs a Windows service that starts your daemon whenever you sign in and restarts it if it stops. " +
-        "Windows asks for administrator approval once, and the daemon still runs as you. It restarts now; anything it hosts is ended.";
+        "Windows asks for administrator approval once, and the daemon still runs as you. It restarts now" +
+        (activeAgents == 0 || !resumes ? "."
+            : $"; its {activeAgents} running agent{(activeAgents == 1 ? " is" : "s are")} resumed under the service " +
+              "unless daemon.auto_resume is off.");
 
     internal const string MovingToWindowsServiceStatus = "Moving the daemon to the Windows service…";
 
@@ -632,19 +636,23 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     }
 
     /// Routes execution through the lane, then kicks reattach unless the graph requires a restart.
-    async Task<bool> RunLaneMutationAsync(MutationVerb verb, CancellationToken ct) {
-        if (RequireAppRestart()) return false;
+    async Task<bool> RunLaneMutationAsync(MutationVerb verb, CancellationToken ct) =>
+        await RunLaneMutationOutcomeAsync(verb, ct).ConfigureAwait(false) is MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout;
+
+    /// <returns>Null when the app must restart first, before or after the attempt</returns>
+    async Task<MutationOutcome?> RunLaneMutationOutcomeAsync(MutationVerb verb, CancellationToken ct) {
+        if (RequireAppRestart()) return null;
         var profileName = await _resolveProfileName().ConfigureAwait(false);
         var refusal = MutationRequestFactory.TryBuild(verb, profileName, _canonicalServer, _client.DaemonName, out var request);
         if (refusal is MutationOutcome.Refused(var guardReason, _)) {
             _surface.Status($"kcap: {guardReason}");
-            return false;
+            return refusal;
         }
 
         var outcome = await _runMutation(request!, ct).ConfigureAwait(false);
-        if (RequireAppRestart()) return false;
+        if (RequireAppRestart()) return null;
         _ = _client.RestartLoopAsync(); // any mutation attempt may have restarted the daemon; kicking reattach is idempotent
-        return outcome is MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout;
+        return outcome;
     }
 
     /// The ONE accept path for a unit rewrite this controller offers, so a future dialog can never
@@ -1014,21 +1022,24 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     }
 
     /// <summary>The task supervising a daemon the bundled Windows service could take over, or an installed
-    /// service older than the bundled one. Asked once per run and only while the daemon is idle; a declined
-    /// install is remembered and not asked again, leaving the explicit action</summary>
+    /// service older than the bundled one. Asked once per run; a declined install is remembered and not asked
+    /// again, leaving the explicit action. The update leaves the daemon running, and the move resumes its
+    /// agents, so only a busy daemon that cannot resume them waits, without spending the run's offer</summary>
     async Task OfferWindowsServiceAsync(ServiceSnapshot snap, CancellationToken ct) {
         if (!OffersWindowsService(snap)) return;
         var install = snap.Supervisor == "windows_scheduled_task";
+        var resumes = ResumesAgents();
+        if (install && _latestBusy && !resumes) return;
 
         lock (_lock) {
             if (_windowsServiceOffered) return;
             _windowsServiceOffered = true;
         }
-        if (_latestBusy || (install && await _windowsServiceDeclined().ConfigureAwait(false))) return;
+        if (install && await _windowsServiceDeclined().ConfigureAwait(false)) return;
 
         var prompt = new LifecyclePrompt(
             install ? LifecyclePrompt.KindWindowsService : LifecyclePrompt.KindWindowsServiceUpdate, null, CliVersion, false,
-            install ? WindowsServiceDisclosure : WindowsServiceUpdateDisclosure);
+            install ? WindowsServiceDisclosure(_latestActiveAgents, resumes) : WindowsServiceUpdateDisclosure);
         if (!await _surface.ConfirmAsync(prompt, ct).ConfigureAwait(false)) {
             if (install) await _rememberWindowsServiceDeclined().ConfigureAwait(false);
             return;
@@ -1039,12 +1050,13 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
     /// The takeover stops the task's daemon before the service starts its own, so for that gap the banner
     /// says why there is no daemon instead of reporting it down.
-    async Task MoveToWindowsServiceAsync(CancellationToken ct) {
+    async Task<MutationOutcome?> MoveToWindowsServiceAsync(CancellationToken ct) {
         lock (_lock) _movingToWindowsService = true;
         _isMovingToService.OnNext(true);
         _surface.Status(MovingToWindowsServiceStatus);
-        if (!await RunLaneMutationAsync(MutationVerb.InstallWindowsService, ct).ConfigureAwait(false))
-            WithdrawMovingToWindowsService();
+        var outcome = await RunLaneMutationOutcomeAsync(MutationVerb.InstallWindowsService, ct).ConfigureAwait(false);
+        if (outcome is not (MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout)) WithdrawMovingToWindowsService();
+        return outcome;
     }
 
     void WithdrawMovingToWindowsService() {
@@ -1060,18 +1072,19 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         (snap.Supervisor == "windows_scheduled_task" && snap.WindowsServiceInstallable == true)
         || (snap.Supervisor == "windows_service" && snap.ServiceUpgradeAvailable == true);
 
-    /// <summary>The explicit "run as a Windows service" action, available after a declined offer</summary>
-    public async Task InstallWindowsServiceAsync(CancellationToken ct) {
+    /// <summary>The explicit "run as a Windows service" action in Settings, available after a declined offer</summary>
+    /// <returns>Null when nothing ran: the app is shutting down or must restart first</returns>
+    public async Task<MutationOutcome?> InstallWindowsServiceAsync(CancellationToken ct) {
         try {
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _lifetime.Token);
-            if (!await TryAcquireGateAsync(linked.Token).ConfigureAwait(false)) return;
+            if (!await TryAcquireGateAsync(linked.Token).ConfigureAwait(false)) return null;
             try {
-                await MoveToWindowsServiceAsync(linked.Token).ConfigureAwait(false);
+                return await MoveToWindowsServiceAsync(linked.Token).ConfigureAwait(false);
             } finally {
                 _gate.Release();
             }
         } catch (OperationCanceledException) {
-            // shutdown or a cancelled click — nothing to surface
+            return null;
         }
     }
 

@@ -16,24 +16,28 @@ namespace Capacitor.App.Tests.Unit;
 public class SettingsWindowsServiceTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
-    readonly List<MutationRequest> _requests = [];
     readonly List<LifecyclePrompt> _prompts = [];
+    int _moves;
 
     static ServiceSnapshot Snapshot(string supervisor, bool installable) =>
         new("daemon-a", true, "running", null, null, 7, 7, false, false, Supervisor: supervisor, WindowsServiceInstallable: installable);
 
-    SettingsViewModel MakeViewModel(ServiceSnapshot? snapshot, MutationOutcome outcome, bool confirm = true) {
+    SettingsViewModel MakeViewModel(ServiceSnapshot? snapshot, MutationOutcome outcome, bool confirm = true, int activeAgents = 0) {
         ConfigMutator.Mutate(Config.Root, c => c with { Profiles = new() {
             ["work"] = new Profile { ServerUrl = "https://work.example", Daemon = new DaemonSettings { Name = "daemon-a" } }
         } });
         var service = new FakeDaemonClientService();
-        service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["settings/1"]));
-        service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
+        service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["settings/1", DaemonLifecycleController.ResumeCapability]));
+        service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(active: activeAgents));
         return new SettingsViewModel(new SettingsProfileStore(Config.Root, "work", "https://work.example"),
             service, new ScriptedLocalControlOps(), (_, _) => Task.FromResult(false),
-            (request, _) => { _requests.Add(request); return Task.FromResult(outcome); },
+            (_, _) => throw new InvalidOperationException("the move runs through the lifecycle controller"),
             (prompt, _) => { _prompts.Add(prompt); return Task.FromResult(confirm); },
             _ => Task.FromResult(false), true, Task.CompletedTask, (_, _) => Task.FromResult(true),
+            moveToWindowsService: _ => {
+                _moves++;
+                return Task.FromResult<MutationOutcome?>(outcome);
+            },
             serviceStatus: _ => Task.FromResult(snapshot));
     }
 
@@ -46,17 +50,28 @@ public class SettingsWindowsServiceTests {
     }
 
     [Test]
-    public Task A_task_supervised_installable_daemon_offers_the_service_and_installs_it_through_the_lane() => AvaloniaSession.RunOnUiAsync(async () => {
+    public Task A_task_supervised_installable_daemon_offers_the_service_and_moves_the_daemon_to_it() => AvaloniaSession.RunOnUiAsync(async () => {
         using var vm = MakeViewModel(Snapshot("windows_scheduled_task", installable: true), new MutationOutcome.Succeeded());
         await SettleAsync(() => vm.WindowsServiceOffered);
 
         await vm.WindowsServiceCommand.Execute();
 
         await Assert.That(_prompts.Single().Kind).IsEqualTo(LifecyclePrompt.KindWindowsService);
-        await Assert.That(_requests.Single().Verb).IsEqualTo(MutationVerb.InstallWindowsService);
+        await Assert.That(_moves).IsEqualTo(1);
         await Assert.That(vm.WindowsServiceMessage).IsEqualTo("The daemon now runs under the kcap Windows service.");
         await Assert.That(vm.WindowsServiceOffered).IsFalse();
         await Assert.That(vm.WindowsServiceVisible).IsTrue();
+    });
+
+    [Test]
+    public Task The_confirmation_says_running_agents_are_resumed_under_the_service() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var vm = MakeViewModel(Snapshot("windows_scheduled_task", installable: true), new MutationOutcome.Succeeded(), activeAgents: 2);
+        await SettleAsync(() => vm.WindowsServiceOffered);
+
+        await vm.WindowsServiceCommand.Execute();
+
+        await Assert.That(_prompts.Single().Disclosure).IsEqualTo(DaemonLifecycleController.WindowsServiceDisclosure(2, resumes: true));
+        await Assert.That(_prompts.Single().Disclosure).Contains("its 2 running agents are resumed under the service");
     });
 
     [Test]
@@ -89,7 +104,7 @@ public class SettingsWindowsServiceTests {
 
         await vm.WindowsServiceCommand.Execute();
 
-        await Assert.That(_requests).IsEmpty();
+        await Assert.That(_moves).IsEqualTo(0);
     });
 
     [Test]
