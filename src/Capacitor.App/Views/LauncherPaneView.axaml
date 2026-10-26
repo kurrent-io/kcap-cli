@@ -71,14 +71,11 @@
 
                         <Grid ColumnDefinitions="*,Auto">
                             <WrapPanel ItemSpacing="8" LineSpacing="8" VerticalAlignment="Center">
-                                <Button x:Name="AttachButton"
+                                <Button x:Name="AttachButton" Classes="kcapGhost"
                                         IsEnabled="{Binding CanAttach}" ToolTip.Tip="{Binding AttachHint}"
                                         ToolTip.ShowOnDisabled="True" AutomationProperties.Name="Attach files"
-                                        Width="26" Height="26" Padding="0" FontSize="15" CornerRadius="999" Cursor="Hand"
-                                        HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
-                                        Background="{StaticResource KcapSurfaceRaisedBrush}"
-                                        BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
-                                        Foreground="{StaticResource KcapMutedBrush}">
+                                        Width="26" Height="26" Padding="0" FontSize="15" Cursor="Hand"
+                                        HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
                                     <views:AppIcon Kind="Paperclip" Size="16" />
                                 </Button>
 
