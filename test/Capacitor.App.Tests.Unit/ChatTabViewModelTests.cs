@@ -3910,30 +3910,56 @@ public class ChatTabViewModelTests {
         });
     }
 
-    /// A retry the server listed alongside the attempt it replaced is a second pending copy, and
-    /// every pending copy stays where it can be seen and discarded.
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_retry_listed_beside_its_original_hides_neither_attempt() {
+    public async Task A_retry_listed_beside_its_original_hides_neither_attempt(bool listingBeforeAcceptance) {
         await RunOnUiAsync(async () => {
-            var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
-            var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
-            var chat = new ChatTabViewModel(
-                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), new NoAttachmentUploader(), _ => new ScriptedFeed { ResetNext = true },
-                new RecordingOpener(), new FakeTimeProvider(), new FakePermissionService(), new SessionRuns(new FakeTimeProvider()), serverQueue: queue);
-            await WaitUntilAsync(() => chat.HasSeed, what: "the seed");
-            chat.ComposerText = "do it";
-            await chat.SendCommand.Execute();
-            var original = chat.QueuedMessages.Single();
-            await Assert.That(original.CanSendNow).IsTrue();
+            using var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
+            using var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
+            var time = new FakeTimeProvider();
+            var input = new ScriptedInput();
+            var path = Tmp.CreateFile("retry-listing.jsonl", [AssistantLine]);
+            var chat = new ChatTabViewModel("a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null),
+                input, new NoAttachmentUploader(),
+                _ => new SeededLocalFeed(new LocalTranscriptFeed(path, TranscriptChat.For("claude")!, "a1", time, _ => { })),
+                new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time), serverQueue: queue);
+            try {
+                await WaitUntilAsync(() => chat.HasSeed, what: "the seed");
+                chat.ComposerText = "do it";
+                var send = chat.SendCommand.Execute().ToTask();
+                input.Pending!.SetResult(ChatSendOutcome.Accepted);
+                await send;
+                var original = chat.QueuedMessages.Single();
+                await Assert.That(original.CanSendNow).IsTrue();
 
-            await chat.SendQueuedCommand.Execute(original);
-            var retry = chat.QueuedMessages.Single();
-            await Assert.That(retry).IsNotSameReferenceAs(original);
-            queue.OnNext([Item("do it", Guid.NewGuid()), Item("do it", Guid.NewGuid())]);
-            await Assert.That(chat.QueuedMessages.Count).IsEqualTo(2);
-            await Assert.That(retry.CanSendNow).IsFalse();
-            await chat.TeardownAsync();
+                var resend = chat.SendQueuedCommand.Execute(original).ToTask();
+                var first = Item("do it", Guid.NewGuid()) with { DispatchedAt = DateTimeOffset.UnixEpoch };
+                var second = Item("do it", Guid.NewGuid()) with { DispatchedAt = DateTimeOffset.UnixEpoch.AddSeconds(1) };
+                if (listingBeforeAcceptance) queue.OnNext([second, first]);
+                input.Pending!.SetResult(ChatSendOutcome.Accepted);
+                await resend;
+                if (!listingBeforeAcceptance) queue.OnNext([second, first]);
+                await Assert.That(chat.QueuedMessages.Count).IsEqualTo(2);
+                await Assert.That(original.DispatchId).IsEqualTo(first.DispatchId);
+                await Assert.That(chat.QueuedMessages.Contains(original)).IsTrue();
+                var retry = chat.QueuedMessages.Single(q => !ReferenceEquals(q, original));
+                await Assert.That(retry.IsForeign).IsFalse();
+                await Assert.That(retry.DispatchId).IsEqualTo(second.DispatchId);
+                await Assert.That(original.CanSendNow || retry.CanSendNow).IsFalse();
+
+                File.AppendAllText(path, User("do it") + "\n");
+                time.Advance(ChatTabViewModel.PollInterval);
+                await (chat.PendingReadForTesting ?? Task.CompletedTask);
+                queue.OnNext([second]);
+                await Assert.That(chat.QueuedMessages.Single()).IsSameReferenceAs(retry);
+                queue.OnNext([]);
+                File.AppendAllText(path, User("do it") + "\n");
+                time.Advance(ChatTabViewModel.PollInterval);
+                await (chat.PendingReadForTesting ?? Task.CompletedTask);
+                await Assert.That(chat.HasQueuedMessages).IsFalse();
+            } finally { await chat.TeardownAsync(); }
         });
     }
 

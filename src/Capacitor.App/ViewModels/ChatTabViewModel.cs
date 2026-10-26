@@ -985,24 +985,28 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         serverQueue?.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(ApplyServerQueue).DisposeWith(_disposables);
     }
 
-    /// The server's queue for this session, whoever queued it. An own send it lists is queued
-    /// for certain; a prompt of nobody's here is another client's; a prompt it no longer lists
-    /// was delivered or withdrawn. Own sends still leave with the transcript's echo.
+    /// Reconcile pending server dispatches; only a transcript echo confirms an own send.
     void ApplyServerQueue(IReadOnlyList<QueuedInputItem> items) {
         var listed = new HashSet<Guid>();
-        foreach (var item in items) {
-            // An item with no id is unkeyed, not identified as nobody's: keying it would collide
-            // with every other such item and could disqualify an own send from its real match.
+        // A retry can precede its original's first listing. Match both attempts in send order.
+        var attempts = Tracked.Concat(_superseded.Select(pair => pair.Old))
+            .Distinct().OrderBy(q => q.SendOrder).ToList();
+        foreach (var item in items.OrderBy(item => item.DispatchedAt)) {
+            // Empty ids cannot distinguish dispatches or establish ownership.
             if (item.DispatchId == Guid.Empty || _discardedDispatches.Contains(item.DispatchId) || !listed.Add(item.DispatchId)) continue;
-            // Snapshots carry no revision, so the latest listing wins: an own row wrongly left
-            // unlisted would offer a duplicate send, while one wrongly held can still be discarded.
-            if (Tracked.FirstOrDefault(q => q.DispatchId == item.DispatchId) is { } known) {
-                if (!known.IsForeign) known.MarkQueued(item.DispatchId);
+            // Snapshots have no revision; listing a known own row must disable its retry.
+            if (attempts.FirstOrDefault(q => q.DispatchId == item.DispatchId) is { } known) {
+                if (!known.IsForeign) {
+                    known.MarkQueued(item.DispatchId);
+                    if (!known.Acknowledged && !Tracked.Contains(known)) _queuedMessages.Add(known);
+                }
                 continue;
             }
-            var own = Tracked.FirstOrDefault(q => q.DispatchId is null && !q.Acknowledged && q.MatchesText(item.Text));
-            if (own is not null) own.MarkQueued(item.DispatchId);
-            else _queuedMessages.Add(QueuedChatMessage.FromServer(item));
+            var own = attempts.FirstOrDefault(q => q.DispatchId is null && !q.Acknowledged && q.MatchesText(item.Text));
+            if (own is not null) {
+                own.MarkQueued(item.DispatchId);
+                if (!Tracked.Contains(own)) _queuedMessages.Add(own);
+            } else _queuedMessages.Add(QueuedChatMessage.FromServer(item));
         }
         foreach (var gone in _queuedMessages.Where(q => q.IsForeign && q.DispatchId is { } id && !listed.Contains(id)).ToList())
             _queuedMessages.Remove(gone);
