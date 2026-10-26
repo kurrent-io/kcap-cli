@@ -1,8 +1,8 @@
 namespace Capacitor.Cli.Daemon.Harness.Codex;
 
-/// <summary>The environment variables that selected the Codex transport before the
-/// <c>codex-app-server</c> experimental switch. A service unit installed earlier can still carry them;
-/// the daemon ignores them and says so once at startup.</summary>
+/// <summary>Environment variables the daemon ignores but warns about once at startup: an installed
+/// service unit can still set them, and the Codex transport is chosen only by the
+/// <c>codex-app-server</c> experimental feature.</summary>
 internal static class LegacyCodexEnvironment {
     public static readonly string[] RemovedVariables = ["KCAP_CODEX_TRANSPORT", "KCAP_CODEX_APPSERVER_INTERACTIVE"];
 
