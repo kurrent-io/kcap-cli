@@ -868,7 +868,12 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// registration carries it or a newer one and the acknowledgement can lag the server, never lead it.</summary>
     async Task RegisterAndAcknowledgeAsync() {
         var advertised = _config.Advertisement;
-        await RegisterDaemonAsync();
+        try {
+            await RegisterDaemonAsync();
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            if (_config.CodexRegistrationFailed(advertised.Codex)) _statusNotifier.Pulse();
+            throw;
+        }
         if (_config.AcknowledgeCodex(advertised.Codex)) _statusNotifier.Pulse();
     }
 

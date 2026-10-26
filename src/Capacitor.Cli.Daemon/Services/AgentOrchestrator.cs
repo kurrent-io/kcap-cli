@@ -1641,9 +1641,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             committed.Generation + 1, _config.ReadExperimentalSettings, () => DaemonRunner.ProbeCliVersion(_config.CodexPath),
             unreadable => { problem = unreadable; return committed; });
 
-        // Single-flighted, so the last-logged problem needs no lock.
-        if (problem is not null && problem != _unreadableSettingsProblem) LogUnreadableSettings(_logger, problem);
-        _unreadableSettingsProblem = problem;
+        if (problem is not null && problem != _config.ExperimentalSettingsProblem) LogUnreadableSettings(_logger, problem);
+        _config.ExperimentalSettingsProblem = problem;
         if (resolved.SameStateAs(committed)) return committed;
 
         _config.CodexResolution = resolved;
@@ -1651,8 +1650,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _statusNotifier.Pulse();
         return resolved;
     }
-
-    string? _unreadableSettingsProblem;
 
     /// <summary>Test seam: the most recently scheduled capability refresh, for awaiting quiescence.</summary>
     internal Task CapabilityRefreshForTest => _capabilityRefresh.Current;

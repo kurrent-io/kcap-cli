@@ -441,7 +441,13 @@ public class DaemonStatusIpcTests {
             var dto = JsonSerializer.Deserialize(statusIpc.Snapshot(), StatusIpcJsonContext.Default.DaemonStatusDto)!;
 
             await Assert.That(dto.Experimental!.Single()).IsEqualTo(
-                new ExperimentalFeatureStatusDto("codex-app-server", true, true, 4, false, "the server has not been told yet"));
+                new ExperimentalFeatureStatusDto("codex-app-server", true, true, 4, false, "the server has not been told yet", false));
+
+            config.CodexRegistrationFailed(config.CodexResolution);
+            dto = JsonSerializer.Deserialize(statusIpc.Snapshot(), StatusIpcJsonContext.Default.DaemonStatusDto)!;
+
+            await Assert.That(dto.Experimental!.Single()).IsEqualTo(
+                new ExperimentalFeatureStatusDto("codex-app-server", true, true, 4, false, "the server has not been told yet", true));
 
             config.CodexResolution = new(5, true, "0.100.0", false, "Codex is too old");
             config.AcknowledgedCodexResolution = new(5, true, "0.100.0", false, "Codex is too old");
@@ -449,7 +455,13 @@ public class DaemonStatusIpcTests {
             dto = JsonSerializer.Deserialize(statusIpc.Snapshot(), StatusIpcJsonContext.Default.DaemonStatusDto)!;
 
             await Assert.That(dto.Experimental!.Single()).IsEqualTo(
-                new ExperimentalFeatureStatusDto("codex-app-server", true, false, 5, true, "Codex is too old"));
+                new ExperimentalFeatureStatusDto("codex-app-server", true, false, 5, true, "Codex is too old", false));
+
+            config.CodexResolution = config.AcknowledgedCodexResolution = new(6, false, null, false, null);
+            config.ExperimentalSettingsProblem = "experimental.json is not valid JSON";
+            dto = JsonSerializer.Deserialize(statusIpc.Snapshot(), StatusIpcJsonContext.Default.DaemonStatusDto)!;
+
+            await Assert.That(dto.Experimental!.Single().Reason).IsEqualTo("experimental.json is not valid JSON");
         } finally {
             await orchestrator.DisposeAsync();
             daemons.Dispose();

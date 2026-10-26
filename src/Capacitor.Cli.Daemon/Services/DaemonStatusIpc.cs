@@ -84,11 +84,13 @@ internal sealed class DaemonStatusIpc(
         var committed = config.CodexResolution;
         var acknowledged = config.AcknowledgedCodexResolution;
         var told = acknowledged.Generation >= committed.Generation;
-        var reason = committed.SwitchOn && !committed.Active ? committed.InactiveReason
+        var failed = !told && config.FailedCodexGeneration >= committed.Generation;
+        var reason = config.ExperimentalSettingsProblem
+            ?? (committed.SwitchOn && !committed.Active ? committed.InactiveReason
             : !told ? "the server has not been told yet"
-            : null;
+            : null);
 
-        return [new(ExperimentalFeatures.CodexAppServer.Id, committed.SwitchOn, committed.Active, committed.Generation, told, reason)];
+        return [new(ExperimentalFeatures.CodexAppServer.Id, committed.SwitchOn, committed.Active, committed.Generation, told, reason, failed)];
     }
 
     /// Wire spelling of <see cref="HubConnectionState"/>. Internal (not private) so

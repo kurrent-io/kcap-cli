@@ -15,12 +15,12 @@ public static class ExperimentalFeatureState {
         if (feature.ResolvedSaved != saved) return (ExperimentalFeatureStateKind.Applying, null);
         if (saved && !feature.Active) return (ExperimentalFeatureStateKind.OnNotActive, feature.Reason);
 
-        // A commit is reported before the re-registration that carries it, so a connected daemon that has
-        // not yet told the server is still applying; one that is not connected cannot tell it.
+        // A commit is reported before the re-registration that carries it, so it is still applying until
+        // that registration fails.
         if (!feature.ServerAcknowledged) {
-            return string.Equals(status!.Daemon.Connection, "connected", StringComparison.Ordinal)
-                ? (ExperimentalFeatureStateKind.Applying, null)
-                : (ExperimentalFeatureStateKind.AppliedLocally, null);
+            return feature.RegistrationFailed == true
+                ? (ExperimentalFeatureStateKind.AppliedLocally, null)
+                : (ExperimentalFeatureStateKind.Applying, null);
         }
 
         return feature.Active

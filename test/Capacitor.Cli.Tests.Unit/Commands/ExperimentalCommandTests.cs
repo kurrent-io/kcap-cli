@@ -18,8 +18,8 @@ public class ExperimentalCommandTests {
     static DaemonStatusDto Status(List<ExperimentalFeatureStatusDto>? features, string connection = "connected") =>
         new(new DaemonInfoDto("d", "1", "https://x", connection, 5, 0), [], Experimental: features);
 
-    static ExperimentalFeatureStatusDto Feature(bool saved, bool active, bool acked = true, string? reason = null) =>
-        new(Id, saved, active, 1, acked, reason);
+    static ExperimentalFeatureStatusDto Feature(bool saved, bool active, bool acked = true, string? reason = null, bool? failed = null) =>
+        new(Id, saved, active, 1, acked, reason, failed);
 
     static ProbeResult Running(DaemonStatusDto status) => new(true, null, status, true);
 
@@ -92,11 +92,11 @@ public class ExperimentalCommandTests {
     /// <summary>The commit is reported before its re-registration completes, so a healthy daemon's first
     /// answer is always unacknowledged.</summary>
     [Test]
-    [Arguments("connected")]
-    [Arguments("reconnecting")]
-    public async Task Enable_waits_for_the_server_to_be_told_before_applied_live(string connection) {
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Enable_waits_for_the_server_to_be_told_before_applied_live(bool firstAttemptFailed) {
         var (_, output, _) = await Run(
-            n => Running(Status([Feature(true, true, acked: n > 0)], n > 0 ? "connected" : connection)), "enable", Id);
+            n => Running(Status([n == 0 ? Feature(true, true, acked: false, failed: firstAttemptFailed) : Feature(true, true)])), "enable", Id);
 
         await Assert.That(output).Contains("Applied live");
         await Assert.That(output).DoesNotContain("Applied locally");
@@ -112,9 +112,11 @@ public class ExperimentalCommandTests {
         await Assert.That(output).Contains("Applied live");
     }
 
+    /// <summary>A registration can fail while the hub stays connected; the daemon's flag, not the
+    /// connection, says the server was not told.</summary>
     [Test]
-    public async Task Enable_the_server_never_hears_of_prints_applied_locally_at_the_deadline() {
-        var (_, output, _) = await Run(_ => Running(Status([Feature(true, true, acked: false)], "disconnected")), "enable", Id);
+    public async Task Enable_whose_registration_failed_prints_applied_locally_at_the_deadline() {
+        var (_, output, _) = await Run(_ => Running(Status([Feature(true, true, acked: false, failed: true)])), "enable", Id);
 
         await Assert.That(output).Contains("Applied locally; the server has not been told yet");
     }

@@ -139,6 +139,7 @@ public class AgentOrchestratorCodexResolutionTests {
 
         await Assert.That(ReferenceEquals(config.CodexResolution, committed)).IsTrue();
         await Assert.That(log.Warnings.Count(w => w.Contains("not valid JSON"))).IsEqualTo(1);
+        await Assert.That(config.ExperimentalSettingsProblem).Contains("not valid JSON");
 
         await File.WriteAllTextAsync(store.Path, "[1]");
         await RefreshAsync(orch);
@@ -150,6 +151,7 @@ public class AgentOrchestratorCodexResolutionTests {
         await RefreshAsync(orch);
 
         await Assert.That(config.CodexResolution.SwitchOn).IsFalse();
+        await Assert.That(config.ExperimentalSettingsProblem).IsNull();
     }
 
     [Test]
@@ -163,6 +165,7 @@ public class AgentOrchestratorCodexResolutionTests {
 
         await Assert.That(config.CodexResolution.Active).IsTrue();
         await Assert.That(config.CodexResolution.Generation).IsGreaterThan(config.AcknowledgedCodexResolution.Generation);
+        await Assert.That(config.FailedCodexGeneration).IsEqualTo(config.CodexResolution.Generation);
     }
 
     /// <summary>The refresh's own registration fails; a later one from another path (here the

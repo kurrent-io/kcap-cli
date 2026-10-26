@@ -263,6 +263,29 @@ public class DaemonConfig {
 
     public long ServerAcknowledgedCodexGeneration => AcknowledgedCodexResolution.Generation;
 
+    /// <summary>The newest Codex generation a registration attempt carried and failed to deliver. It
+    /// stands for the committed resolution only while that one is still unacknowledged.</summary>
+    internal long FailedCodexGeneration => Volatile.Read(ref _failedCodexGeneration);
+
+    long _failedCodexGeneration;
+
+    /// <returns>True when the failed generation moved.</returns>
+    internal bool CodexRegistrationFailed(Harness.Codex.CodexTransportResolution sent) {
+        while (true) {
+            var current = FailedCodexGeneration;
+            if (sent.Generation <= current) return false;
+            if (Interlocked.CompareExchange(ref _failedCodexGeneration, sent.Generation, current) == current) return true;
+        }
+    }
+
+    /// <summary>Why <c>experimental.json</c> could not be read on the last resolution pass; null when it was.</summary>
+    internal string? ExperimentalSettingsProblem {
+        get => Volatile.Read(ref _experimentalSettingsProblem);
+        set => Volatile.Write(ref _experimentalSettingsProblem, value);
+    }
+
+    string? _experimentalSettingsProblem;
+
     /// <summary>This daemon's profile's experimental switches, read from disk now. Empty when no
     /// profile was resolved.</summary>
     public ExperimentalSettingsRead ReadExperimentalSettings() =>
