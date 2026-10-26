@@ -1037,12 +1037,12 @@ public partial class App : Application {
                 return;
             }
             var start = Program.Host.NewCopy([.. request.RelaunchArgs]);
+            UninstallWindow.ShowHandoff(desktop.Windows);
             desktop.Exit += (_, _) => {
                 try { Process.Start(start); }
                 catch (Exception ex) { Console.Error.WriteLine($"kcap: could not start the uninstall: {ex.Message}"); }
             };
             relaunchRegistered = true;
-            UninstallWindow.ShowHandoff(desktop.Windows);
             desktop.TryShutdown();
         } catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) {
         } catch (Exception ex) {
