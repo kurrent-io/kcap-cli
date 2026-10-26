@@ -581,8 +581,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     void RefreshQueuedSend() {
         bool? idle = _status == "Running" && _awaitingInput is null && !SessionStatusDots.IsWorking(_status, _awaitingInput, _liveSubagents)
             ? null : AgentIsIdle;
-        var can = AgentCanTakeQueuedNow;
-        foreach (var queued in _queuedMessages) queued.SetPickup(idle, can, !_discardBusy && !IsReadOnlyParticipant && _input.CanDiscardQueued);
+        // A discard in flight keeps its row from being sent again under it.
+        var can = AgentCanTakeQueuedNow && !_discardBusy;
+        var discard = !_discardBusy && !IsReadOnlyParticipant;
+        foreach (var queued in _queuedMessages) queued.SetPickup(idle, can, discard, discard && _input.CanDiscardQueued);
     }
 
     void RefreshAgentStatus() {
@@ -922,8 +924,15 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         });
         _disposables.Add(SendQueuedCommand);
 
+        // Discarding stops tracking a message; it cannot recall one the agent may already have.
+        // A row no server holds is this pane's alone to drop.
         DiscardQueuedCommand = ReactiveCommand.CreateFromTask<QueuedChatMessage>(async message => {
-            if (!message.CanDiscard || _discardBusy || message.DispatchId is not { } id || !_queuedMessages.Contains(message)) return;
+            if (!message.CanDiscard || _discardBusy || !_queuedMessages.Contains(message)) return;
+            if (!message.IsServerHeld) {
+                RetireDiscarded(message);
+                return;
+            }
+            if (message.DispatchId is not { } id) return;
             var queueKey = _queueKey;
             _discardBusy = true;
             RefreshQueuedSend();
@@ -932,9 +941,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 if (_lifetimeToken.IsCancellationRequested || _queueKey != queueKey) return;
                 if (!discarded) { Notice("Could not discard this attempt. Try again."); return; }
                 _discardedDispatches.Add(id);
-                _queuedMessages.Remove(message);
-                _unechoed.Remove(message);
-                RefreshQueue();
+                RetireDiscarded(message);
             } finally {
                 _discardBusy = false;
                 if (!_lifetimeToken.IsCancellationRequested) RefreshQueuedSend();
@@ -985,7 +992,6 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             if (item.DispatchId == Guid.Empty || !listed.Add(item.DispatchId)) continue;
             if (_discardedDispatches.Contains(item.DispatchId)) continue;
             if (Tracked.Any(q => q.DispatchId == item.DispatchId)) continue;
-            if (_superseded.Any(pair => pair.Old.DispatchId == item.DispatchId)) continue;
             var own = Tracked.FirstOrDefault(q => q.DispatchId is null && !q.Acknowledged && q.MatchesText(item.Text));
             if (own is not null) own.MarkQueued(item.DispatchId);
             else _queuedMessages.Add(QueuedChatMessage.FromServer(item));
@@ -1179,6 +1185,14 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         if (!_queuedMessages.Contains(message)) _queuedMessages.Add(message);
         if (!_unechoed.Contains(message)) _unechoed.Add(message);
         _lastSent ??= message;
+        RefreshQueue();
+    }
+
+    void RetireDiscarded(QueuedChatMessage message) {
+        _queuedMessages.Remove(message);
+        _unechoed.Remove(message);
+        _superseded.RemoveAll(pair => ReferenceEquals(pair.Old, message) || ReferenceEquals(pair.Replacement, message));
+        if (ReferenceEquals(_lastSent, message)) _lastSent = null;
         RefreshQueue();
     }
 

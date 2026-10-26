@@ -3777,7 +3777,56 @@ public class ChatTabViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task An_idle_server_listed_send_can_be_retried_without_reappearing_as_another_clients_message() {
+    public async Task A_held_send_is_discarded_through_the_server_and_an_unlisted_one_here() {
+        await RunOnUiAsync(async () => {
+            var lane = new FakeServerLane();
+            lane.StatusSubject.OnNext(new(ServerLaneState.Connected));
+            var access = new BehaviorSubject<SessionAccessState>(SessionAccessState.Established);
+            var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
+            var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
+            var input = new ServerChatInput("a1", lane, access, session, hasTerminal: true);
+            var chat = new ChatTabViewModel(
+                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), input, new NoAttachmentUploader(), _ => new ScriptedFeed { ResetNext = true },
+                new RecordingOpener(), new FakeTimeProvider(), new FakePermissionService(), new SessionRuns(new FakeTimeProvider()), serverQueue: queue);
+            await WaitUntilAsync(() => chat.HasSeed, what: "the seed");
+            var discarded = new List<Guid>();
+            var reply = new TaskCompletionSource<HubCallOutcome>();
+            lane.DiscardHandler = id => { discarded.Add(id); return reply.Task; };
+
+            chat.ComposerText = "held";
+            await chat.SendCommand.Execute();
+            chat.ComposerText = "dropped";
+            await chat.SendCommand.Execute();
+            var held = chat.QueuedMessages.Single(q => q.Text == "held");
+            var dropped = chat.QueuedMessages.Single(q => q.Text == "dropped");
+            var heldId = Guid.NewGuid();
+            queue.OnNext([Item("held", heldId), Item("dropped", Guid.NewGuid())]);
+            queue.OnNext([Item("held", heldId)]);
+            await Assert.That(held.CanSendNow).IsFalse();
+            await Assert.That(held.CanDiscard).IsTrue();
+            await Assert.That(dropped.CanSendNow).IsTrue();
+
+            var pending = chat.DiscardQueuedCommand.Execute(held).ToTask();
+            await WaitUntilAsync(() => !held.CanDiscard, what: "discard in flight");
+            await Assert.That(dropped.CanSendNow).IsFalse();
+            reply.SetResult(HubCallOutcome.Ok);
+            await pending;
+            await Assert.That(discarded).IsEquivalentTo([heldId]);
+            await Assert.That(dropped.CanSendNow).IsTrue();
+
+            await chat.DiscardQueuedCommand.Execute(dropped);
+            await Assert.That(chat.QueuedMessages).IsEmpty();
+            await Assert.That(discarded).IsEquivalentTo([heldId]);
+            await Assert.That(lane.UserInputs).IsEquivalentTo([("a1", "held"), ("a1", "dropped")]);
+            await chat.TeardownAsync();
+        });
+    }
+
+    /// A retry the server listed alongside the attempt it replaced is a second pending copy, and
+    /// every pending copy stays where it can be seen and discarded.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_retry_listed_beside_its_original_hides_neither_attempt() {
         await RunOnUiAsync(async () => {
             var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
             var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
@@ -3788,22 +3837,40 @@ public class ChatTabViewModelTests {
             chat.ComposerText = "do it";
             await chat.SendCommand.Execute();
             var original = chat.QueuedMessages.Single();
-            var dispatch = Item("do it", Guid.NewGuid());
-            queue.OnNext([dispatch]);
             await Assert.That(original.CanSendNow).IsTrue();
 
             await chat.SendQueuedCommand.Execute(original);
             var retry = chat.QueuedMessages.Single();
-            await Assert.That(ReferenceEquals(original, retry)).IsFalse();
-            queue.OnNext([dispatch]);
-            await Assert.That(chat.QueuedMessages.Single()).IsSameReferenceAs(retry);
-            await Assert.That(retry.IsForeign).IsFalse();
-
-            var replacementDispatch = Item("do it", Guid.NewGuid());
-            queue.OnNext([dispatch, replacementDispatch]);
-            await Assert.That(chat.QueuedMessages.Single()).IsSameReferenceAs(retry);
-            await Assert.That(retry.DispatchId).IsEqualTo(replacementDispatch.DispatchId);
+            await Assert.That(retry).IsNotSameReferenceAs(original);
+            queue.OnNext([Item("do it", Guid.NewGuid()), Item("do it", Guid.NewGuid())]);
+            await Assert.That(chat.QueuedMessages.Count).IsEqualTo(2);
+            await Assert.That(retry.CanSendNow).IsFalse();
             await chat.TeardownAsync();
+        });
+    }
+
+    /// A local send nothing will ever echo — an interactive slash command — would otherwise sit in
+    /// the strip for the life of the pane.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_local_send_with_no_receipt_can_be_discarded_and_keeps_the_draft() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            try {
+                var path = Tmp.CreateFile("t.jsonl", [AssistantLine]);
+                await h.PushAsync(Dto(path) with { AwaitingInput = true });
+                await SendAsync(h, input, "/status");
+                var row = h.Chat.QueuedMessages.Single();
+                await Assert.That(row.PickupNote).IsEqualTo(QueuedChatMessage.IdlePickupNote);
+                await Assert.That(row.CanDiscard).IsTrue();
+                h.Chat.ComposerText = "next thought";
+
+                await h.Chat.DiscardQueuedCommand.Execute(row);
+                await Assert.That(h.Chat.QueuedMessages).IsEmpty();
+                await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+                await Assert.That(h.Chat.ComposerText).IsEqualTo("next thought");
+            } finally { await h.TeardownAsync(); }
         });
     }
 
@@ -3831,7 +3898,7 @@ public class ChatTabViewModelTests {
             await Assert.That(chat.QueuedMessages.Count).IsEqualTo(2);
             await Assert.That(own.IsUnconfirmed).IsFalse();
             await Assert.That(own.IsAwaitingPickup).IsTrue();
-            await Assert.That(own.CanSendNow).IsTrue();
+            await Assert.That(own.CanSendNow).IsFalse();
             var foreign = chat.QueuedMessages.Single(q => q.IsForeign);
             await Assert.That(foreign.Text).IsEqualTo("and this");
             await Assert.That(foreign.IsAwaitingPickup).IsFalse();
@@ -3842,10 +3909,14 @@ public class ChatTabViewModelTests {
 
             // The own message leaves with the transcript's echo, never with the queue alone — but a
             // dispatch the server stopped listing was delivered or withdrawn, and only the echo can
-            // say which, so the row stops promising a pickup.
+            // say which, so the row stops promising a pickup and is no longer the server's to retire.
             queue.OnNext([]);
             await Assert.That(chat.QueuedMessages.Single()).IsSameReferenceAs(own);
             await Assert.That(own.IsAwaitingPickup).IsFalse();
+            await Assert.That(own.IsUnconfirmed).IsTrue();
+            await Assert.That(own.CanSendNow).IsTrue();
+            await Assert.That(own.CanDiscard).IsTrue();
+            await Assert.That(chat.QueueSummary).IsEqualTo("1 message unconfirmed");
 
             // An item the server sent no id for is unkeyed: nothing here can retire it later, so
             // it is neither shown nor allowed to match a send of this pane's own.

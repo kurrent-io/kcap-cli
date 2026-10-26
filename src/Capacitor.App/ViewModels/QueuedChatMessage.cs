@@ -71,20 +71,24 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
         null => UnknownPickupNote,
     };
 
-    internal void SetPickup(bool? agentIdle, bool canSend, bool canDiscard = false) {
+    /// <param name="canDiscard">Whether a row no server holds can be dropped from the strip.</param>
+    /// <param name="canDiscardHeld">Whether the channel can ask the server to drop a row it holds.</param>
+    internal void SetPickup(bool? agentIdle, bool canSend, bool canDiscard, bool canDiscardHeld) {
         var idleChanged = _agentIdle != agentIdle;
         _agentIdle = agentIdle;
-        // Recovery is explicit: the original dispatch may still arrive, so the action says
-        // Send again rather than implying that it moves the existing dispatch forward.
-        CanSendNow = canSend && !IsForeign && !Acknowledged && AttachmentIds.Count == 0;
-        CanDiscard = canDiscard && DispatchId is not null && !Acknowledged;
+        // The server retires the oldest pending dispatch an echo matches, so a second copy of a
+        // held prompt would be the one left pending. A held row can only be discarded.
+        CanSendNow = canSend && !IsForeign && !Acknowledged && AttachmentIds.Count == 0 && !IsServerHeld;
+        CanDiscard = !Acknowledged && (IsServerHeld ? canDiscardHeld : canDiscard);
         if (idleChanged) this.RaisePropertyChanged(nameof(PickupNote));
     }
 
     /// An own send the channel accepted but the transcript has not echoed: the runtime reads a
-    /// prompt queued behind its current turn only when that turn's step ends. A dispatch the server
-    /// has stopped listing was delivered or withdrawn, and only the echo can say which.
-    public bool IsAwaitingPickup => !IsForeign && !IsUnconfirmed && (DispatchId is null || _serverListed);
+    /// prompt queued behind its current turn only when that turn's step ends.
+    public bool IsAwaitingPickup => !IsForeign && !IsUnconfirmed;
+
+    /// In the server's queue now, so only the server can retire it.
+    internal bool IsServerHeld => IsForeign || DispatchId is not null && _serverListed;
 
     internal void MarkUnconfirmed() => IsUnconfirmed = true;
 
@@ -92,11 +96,12 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
     internal Guid? DispatchId { get; private set; }
     bool _serverListed;
 
+    /// The server dropped it because the agent echoed it, the daemon refused it, someone discarded
+    /// it or the run ended. Only an echo here can tell delivery from the rest.
     internal void MarkUnlisted() {
         if (!_serverListed) return;
         _serverListed = false;
-        this.RaisePropertyChanged(nameof(IsAwaitingPickup));
-        this.RaisePropertyChanged(nameof(PickupNote));
+        MarkUnconfirmed();
     }
     /// A server entry unmatched to this pane's sends. Its originating client is unknown.
     public bool IsForeign { get; private init; }
