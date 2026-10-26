@@ -34,8 +34,9 @@ public sealed class AccountStore {
     public AccountRegistry Load() {
         if (!File.Exists(RegistryPath)) return new AccountRegistry();
         AccountRegistry registry;
+        // Producers read without accounts.lock; a reader denying writers would fail a concurrent save's rename on Windows.
         try {
-            registry = JsonSerializer.Deserialize(File.ReadAllText(RegistryPath), AccountRegistryJsonContext.Default.AccountRegistry)
+            registry = JsonSerializer.Deserialize(File.ReadAllTextShared(RegistryPath), AccountRegistryJsonContext.Default.AccountRegistry)
                 ?? throw new InvalidDataException($"{RegistryPath} is empty.");
         } catch (JsonException ex) {
             throw new InvalidDataException($"{RegistryPath} is not a valid account registry.", ex);
@@ -121,7 +122,7 @@ public sealed class AccountStore {
         using var _ = Lock();
         if (File.Exists(HostPath)) {
             try {
-                if (JsonSerializer.Deserialize(File.ReadAllText(HostPath), AccountRegistryJsonContext.Default.HostIdentity) is { HostId: { Length: > 0 } existing })
+                if (JsonSerializer.Deserialize(File.ReadAllTextShared(HostPath), AccountRegistryJsonContext.Default.HostIdentity) is { HostId: { Length: > 0 } existing })
                     return existing;
             } catch (JsonException ex) {
                 throw new InvalidDataException($"{HostPath} is not a valid host identity.", ex);
