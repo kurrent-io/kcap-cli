@@ -1607,7 +1607,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
                 var current   = _config.UnattendedVendorCapabilities;
                 var fresh     = DaemonRunner.RetainAdvertisedVersions(current,
-                    DaemonRunner.ComputeUnattendedVendorCapabilities(_runtimeFactories.Values, _config, codex, _config.UnattendedVendors));
+                    DaemonRunner.ComputeUnattendedVendorCapabilities(_runtimeFactories.Values, _config, codex, _config.UnattendedVendors), codex);
 
                 var previousCatalog   = _config.VendorModels;
                 var previousByAccount = _config.VendorModelsByAccount;
