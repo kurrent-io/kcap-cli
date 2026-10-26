@@ -431,18 +431,6 @@ public class DaemonStatusIpcTests {
         });
     }
 
-    /// <summary>
-    /// Qodo (production): a client vanishing mid-push makes <c>FrameCodec.WriteAsync</c> throw
-    /// <see cref="IOException"/>/<see cref="SocketException"/>, which only
-    /// <see cref="OperationCanceledException"/> was treated as normal termination for — the
-    /// exception bubbled out of <c>HandleSubscribeAsync</c> to <c>LocalControlServer</c>'s
-    /// generic catch and logged "Local control connection faulted" at Warning for a routine
-    /// disconnect. Drives <see cref="DaemonStatusIpc.HandleSubscribeAsync"/> directly against a
-    /// fake stream (no socket/LocalControlServer involved) whose first write (the immediate
-    /// snapshot) succeeds and whose second write throws — deterministic, no OS-level raciness
-    /// between the read-side EOF watcher and the write path. Before the fix, this IOException
-    /// escaped uncaught; after it, <c>HandleSubscribeAsync</c> returns cleanly.
-    /// </summary>
     [Test]
     public async Task Snapshot_reports_the_committed_codex_resolution() {
         var (orchestrator, statusIpc, daemons, config) = BuildBareStatusIpc("status-ipc-experimental");
@@ -484,6 +472,18 @@ public class DaemonStatusIpcTests {
         }
     }
 
+    /// <summary>
+    /// Qodo (production): a client vanishing mid-push makes <c>FrameCodec.WriteAsync</c> throw
+    /// <see cref="IOException"/>/<see cref="SocketException"/>, which only
+    /// <see cref="OperationCanceledException"/> was treated as normal termination for — the
+    /// exception bubbled out of <c>HandleSubscribeAsync</c> to <c>LocalControlServer</c>'s
+    /// generic catch and logged "Local control connection faulted" at Warning for a routine
+    /// disconnect. Drives <see cref="DaemonStatusIpc.HandleSubscribeAsync"/> directly against a
+    /// fake stream (no socket/LocalControlServer involved) whose first write (the immediate
+    /// snapshot) succeeds and whose second write throws — deterministic, no OS-level raciness
+    /// between the read-side EOF watcher and the write path. Before the fix, this IOException
+    /// escaped uncaught; after it, <c>HandleSubscribeAsync</c> returns cleanly.
+    /// </summary>
     [Test]
     public async Task HandleSubscribeAsync_absorbs_a_write_side_disconnect_without_faulting() {
         var (orchestrator, statusIpc, daemons, _) = BuildBareStatusIpc("status-ipc-throw-test");
