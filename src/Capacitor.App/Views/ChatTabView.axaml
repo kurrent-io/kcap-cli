@@ -503,7 +503,7 @@
                         <Grid ColumnDefinitions="Auto,*,Auto,Auto">
                             <!-- The hint exists only while the gate is shut, which is exactly when a tooltip
                                  is suppressed by default. -->
-                            <Button x:Name="AttachButton" IsVisible="{Binding ShowsComposer}"
+                            <Button x:Name="AttachButton" Classes="kcapGhost" IsVisible="{Binding ShowsComposer}"
                                     IsEnabled="{Binding Attachments.CanAttach}" ToolTip.Tip="{Binding Attachments.AttachHint}"
                                     ToolTip.ShowOnDisabled="True" AutomationProperties.Name="Attach files"
                                     Width="24" Height="24" Padding="0" FontSize="15" CornerRadius="7" Cursor="Hand"
