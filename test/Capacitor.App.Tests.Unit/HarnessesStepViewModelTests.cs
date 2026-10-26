@@ -438,7 +438,10 @@ public class HarnessesStepViewModelTests {
 
     async Task<(Harness, PathFixViewModel)> HarnessWithPathFix(ProcessResult installResult) {
         var dir = Path.GetDirectoryName(ConfigPath)!;
-        var probe = new FakeLoginShellProbe { KcapOnPathBehavior = _ => Task.FromResult<bool?>(true) };
+        var probe = new FakeLoginShellProbe {
+            KcapOnPathBehavior = _ => Task.FromResult<bool?>(true),
+            KcapPathBehavior = _ => Task.FromResult<string?>(Path.Combine(dir, "shim-kcap")),
+        };
         var fix = new PathFixViewModel(
             new PathShimInstaller(new ScriptedProcessRunner(installResult), probe, Path.Combine(dir, "shim-kcap")),
             new WizardFixtures.NoopAppStateStore(), Path.Combine(dir, "bundled-kcap"));

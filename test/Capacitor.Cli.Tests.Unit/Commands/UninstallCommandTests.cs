@@ -698,6 +698,50 @@ public class UninstallCommandTests {
         }
     }
 
+    [Test, ExcludeOn(OS.Windows)]
+    public async Task Uninstall_removes_the_profile_line_with_its_link() {
+        await using var fixture = await Fixture.CreateAsync();
+        var (links, link) = LocalBinLinkFixture(fixture);
+        var profile = Path.Combine(fixture.Home, ".zprofile");
+        File.WriteAllText(profile, "export A=1\n");
+        new ShellProfile(fixture.UserHome, "/bin/zsh").Add();
+
+        var exit = await NewCommand(fixture, links: links).HandleAsync(["uninstall", "--yes", "--keep-config"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(new FileInfo(link).LinkTarget).IsNull();
+        await Assert.That(File.ReadAllText(profile)).IsEqualTo("export A=1\n");
+        await Assert.That(fixture.Out.ToString()).Contains($"Remove the PATH line kcap added to {profile}");
+    }
+
+    /// The line also serves a link another install put there.
+    [Test, ExcludeOn(OS.Windows)]
+    public async Task Uninstall_keeps_the_profile_line_while_another_link_needs_it() {
+        await using var fixture = await Fixture.CreateAsync();
+        var (_, link) = LocalBinLinkFixture(fixture);
+        var profile = Path.Combine(fixture.Home, ".zprofile");
+        new ShellProfile(fixture.UserHome, "/bin/zsh").Add();
+        var before = File.ReadAllText(profile);
+
+        var exit = await NewCommand(fixture).HandleAsync(["uninstall", "--yes", "--keep-config"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(new FileInfo(link).LinkTarget).IsNotNull();
+        await Assert.That(File.ReadAllText(profile)).IsEqualTo(before);
+    }
+
+    static (KcapLinkRemover Links, string Link) LocalBinLinkFixture(Fixture f) {
+        f.Temp.CreateFile("kcap-bin", "x");
+        f.Temp.CreateDir(".local", "bin");
+
+        var binary = f.Temp.PathTo("kcap-bin");
+        var folder = ShellProfile.Folder(f.UserHome);
+        var link   = Path.Combine(folder, "kcap");
+        File.CreateSymbolicLink(link, binary);
+
+        return (new KcapLinkRemover([folder], binary), link);
+    }
+
     static (KcapLinkRemover Links, string Link, string Binary) LinkFixture(Fixture f) {
         f.Temp.CreateFile("kcap-bin", "x");
         f.Temp.CreateDir("link-bin");
