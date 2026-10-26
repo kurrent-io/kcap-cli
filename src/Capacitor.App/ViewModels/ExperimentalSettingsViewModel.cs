@@ -28,11 +28,9 @@ public sealed class ExperimentalSettingsViewModel : ReactiveObject, IDisposable 
         _store = store;
         _profile = profile;
 
-        _fingerprint = Fingerprint();
-        var read = store.Load(profile);
-        _problem = read.Problem;
+        // The switches stay locked until the first read lands; it runs off the UI thread like every other.
         Features = ExperimentalFeatures.All
-            .Select(f => new ExperimentalFeatureRowViewModel(f, read.Readable && read.IsEnabled(f.Id), read.Readable, SaveAsync))
+            .Select(f => new ExperimentalFeatureRowViewModel(f, false, false, SaveAsync))
             .ToList();
 
         service.Status.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(status => {
@@ -50,7 +48,12 @@ public sealed class ExperimentalSettingsViewModel : ReactiveObject, IDisposable 
                 if (next.Read is { } read) Apply(read.Settings, read.Epoch);
                 Observe();
             }).DisposeWith(_subscriptions);
+
+        Loaded = LoadAsync();
     }
+
+    /// Completes once the store's first read has been applied.
+    internal Task Loaded { get; }
 
     public IReadOnlyList<ExperimentalFeatureRowViewModel> Features { get; }
 
@@ -61,11 +64,13 @@ public sealed class ExperimentalSettingsViewModel : ReactiveObject, IDisposable 
     }
 
     /// The store as it is now, or null when its last-write time and length match the last read.
-    internal (ExperimentalSettingsRead Settings, long Epoch)? ReadIfChanged() {
+    internal (ExperimentalSettingsRead Settings, long Epoch)? ReadIfChanged() => Read(onlyIfChanged: true);
+
+    (ExperimentalSettingsRead Settings, long Epoch)? Read(bool onlyIfChanged) {
         var epoch = Interlocked.Read(ref _saveEpoch);
         var fingerprint = Fingerprint();
         lock (_fingerprintLock) {
-            if (fingerprint == _fingerprint) return null;
+            if (onlyIfChanged && fingerprint == _fingerprint) return null;
             _fingerprint = fingerprint;
         }
         return (_store.Load(_profile), epoch);
@@ -83,6 +88,12 @@ public sealed class ExperimentalSettingsViewModel : ReactiveObject, IDisposable 
             row.Load(read.Readable && read.IsEnabled(row.Id), read.Readable);
         }
         Problem = read.Problem ?? _saveProblem;
+    }
+
+    // Reads off the UI thread; constructed and saved on it, so each continuation applies back on it.
+    async Task LoadAsync() {
+        var read = (await Task.Run(() => Read(onlyIfChanged: false)))!.Value;
+        Apply(read.Settings, read.Epoch);
     }
 
     (bool, DateTime, long) Fingerprint() {
@@ -114,8 +125,7 @@ public sealed class ExperimentalSettingsViewModel : ReactiveObject, IDisposable 
             Interlocked.Increment(ref _saveEpoch);
         }
 
-        lock (_fingerprintLock) _fingerprint = Fingerprint();
-        Apply(_store.Load(_profile), Interlocked.Read(ref _saveEpoch));
+        await LoadAsync();
     }
 
     public void Dispose() {

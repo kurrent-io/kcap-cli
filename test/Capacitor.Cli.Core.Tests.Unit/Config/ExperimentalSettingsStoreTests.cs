@@ -28,6 +28,21 @@ public class ExperimentalSettingsStoreTests {
         await Assert.That(Store.Load("work").IsEnabled("codex-app-server")).IsFalse();
     }
 
+    /// <summary>The desktop switch saves from the UI thread, so waiting out another writer's lock must
+    /// happen after <c>SetAsync</c> has returned its task.</summary>
+    [Test]
+    public async Task Set_waits_for_the_lock_off_the_calling_thread() {
+        Task<bool> set;
+        using (Config.Root.AcquireLock(ExperimentalSettingsStore.FileName)) {
+            set = Store.SetAsync("default", "codex-app-server", true, CancellationToken.None);
+            await Task.Delay(100);
+            await Assert.That(set.IsCompleted).IsFalse();
+        }
+
+        await Assert.That(await set).IsTrue();
+        await Assert.That(Store.Load("default").IsEnabled("codex-app-server")).IsTrue();
+    }
+
     [Test]
     public async Task Set_preserves_unknown_profiles_and_ids() {
         await File.WriteAllTextAsync(FilePath, """{"work":{"future-x":true},"default":{"future-y":false}}""");

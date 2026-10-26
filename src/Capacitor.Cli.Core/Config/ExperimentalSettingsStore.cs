@@ -27,12 +27,15 @@ public sealed class ExperimentalSettingsStore(ConfigRoot root) {
     }
 
     /// <returns>False when the file is unreadable and was left untouched.</returns>
-    public Task<bool> SetAsync(string profile, string featureId, bool enabled, CancellationToken ct) {
-        ct.ThrowIfCancellationRequested();
+    /// <remarks>The lock wait (up to 10 s) and the file I/O run on the thread pool, so a UI thread can call this.</remarks>
+    public Task<bool> SetAsync(string profile, string featureId, bool enabled, CancellationToken ct) =>
+        Task.Run(() => Set(profile, featureId, enabled), ct);
+
+    bool Set(string profile, string featureId, bool enabled) {
         using var _ = root.AcquireLock(FileName);
 
         var (document, problem) = ReadDocument();
-        if (problem is not null) return Task.FromResult(false);
+        if (problem is not null) return false;
 
         if (document[profile] is not JsonObject section) {
             section = new JsonObject();
@@ -49,7 +52,7 @@ public sealed class ExperimentalSettingsStore(ConfigRoot root) {
             if (File.Exists(temp)) File.Delete(temp);
         }
 
-        return Task.FromResult(true);
+        return true;
     }
 
     (JsonObject Document, string? Problem) ReadDocument() {
