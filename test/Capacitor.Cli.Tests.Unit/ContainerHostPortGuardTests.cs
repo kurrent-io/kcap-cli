@@ -15,10 +15,12 @@ public partial class ContainerHostPortGuardTests {
     [GeneratedRegex(@"\.WithPortBinding\s*\((?!\s*ContainerHostPorts\.Next\s*\(\s*\)\s*,(?!\s*(?:true\b|assignRandomHostPort\s*:)))")]
     private static partial Regex DockerChosenBinding();
 
-    [GeneratedRegex(@"new\s+(?:[\w.]+\.)?(?:KurrentDb|PostgreSql)Builder\s*\(|(?:[\w.]+\.)?(?:KurrentDb|PostgreSql)Builder\??\s+\w+\s*=\s*(?:[^;=]*?[?:]\s*)?new\s*\(")]
+    // A target-typed new counts as a builder only directly after the declaration or a top-level conditional's ? or :,
+    // never after a colon inside an argument list, such as a named argument.
+    [GeneratedRegex(@"new\s+(?:[\w.]+\.)?(?:KurrentDb|PostgreSql)Builder\s*\(|(?:[\w.]+\.)?(?:KurrentDb|PostgreSql)Builder\??\s+\w+\s*=\s*(?:(?:[^;=()]|\((?>[^()]+|\((?<d>)|\)(?<-d>))*(?(d)(?!))\))*?[?:]\s*)?new\s*\(")]
     private static partial Regex PublishingBuilder();
 
-    [GeneratedRegex(@"\G(?:new\s+(?:[\w.]+\.)?(?:KurrentDb|PostgreSql)Builder\s*\(|(?:[\w.]+\.)?(?:KurrentDb|PostgreSql)Builder\??\s+\w+\s*=\s*(?:[^;=]*?[?:]\s*)?new\s*\()")]
+    [GeneratedRegex(@"\G(?:new\s+(?:[\w.]+\.)?(?:KurrentDb|PostgreSql)Builder\s*\(|(?:[\w.]+\.)?(?:KurrentDb|PostgreSql)Builder\??\s+\w+\s*=\s*(?:(?:[^;=()]|\((?>[^()]+|\((?<d>)|\)(?<-d>))*(?(d)(?!))\))*?[?:]\s*)?new\s*\()")]
     private static partial Regex PublishingBuilderHere();
 
     [GeneratedRegex(@"\.WithPortBinding\s*\(\s*ContainerHostPorts\.Next\s*\(\s*\)\s*,(?!\s*(?:true\b|assignRandomHostPort\s*:))")]
@@ -49,6 +51,7 @@ public partial class ContainerHostPortGuardTests {
     [Arguments("(new KurrentDbBuilder(image), new ContainerBuilder(i).WithPortBinding(ContainerHostPorts.Next(), 80))")]
     [Arguments("var b = flag ? new KurrentDbBuilder(image) : new KurrentDbBuilder(image).WithPortBinding(ContainerHostPorts.Next(), 2113);")]
     [Arguments("KurrentDbBuilder b = flag ? new(image) : new KurrentDbBuilder(image).WithPortBinding(ContainerHostPorts.Next(), 2113);")]
+    [Arguments("KurrentDbBuilder b = Ready(x) ? new(image) : Make();")]
     public async Task Pattern_flags_a_port_docker_chooses(string code) =>
         await Assert.That(PublishesOnDockersChoice(code)).IsTrue();
 
@@ -59,6 +62,7 @@ public partial class ContainerHostPortGuardTests {
     [Arguments("// .WithPortBinding(2113, true)\n.WithPortBinding(ContainerHostPorts.Next(), Port)")]
     [Arguments("new KurrentDbBuilder(ImageFactory().Build()).WithPortBinding(ContainerHostPorts.Next(), 2113).Build()")]
     [Arguments("new KurrentDbBuilder(image).WithX(new PostgreSqlBuilder(p).WithPortBinding(ContainerHostPorts.Next(), 5432).Build()).WithPortBinding(ContainerHostPorts.Next(), 2113).Build()")]
+    [Arguments("KurrentDbBuilder b = Create(options: new(image));")]
     public async Task Pattern_passes_a_port_picked_below_the_ephemeral_range(string code) =>
         await Assert.That(PublishesOnDockersChoice(code)).IsFalse();
 
