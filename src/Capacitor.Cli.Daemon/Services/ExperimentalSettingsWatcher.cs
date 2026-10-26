@@ -23,7 +23,7 @@ internal sealed partial class ExperimentalSettingsWatcher : BackgroundService {
     public ExperimentalSettingsWatcher(
             DaemonConfig config, AgentOrchestrator orchestrator, ILogger<ExperimentalSettingsWatcher> logger, TimeProvider time)
         : this(new ExperimentalSettingsStore(config.ConfigRoot).Path,
-            reason => orchestrator.RefreshAdvertisedCapabilities(reason),
+            orchestrator.RefreshExperimentalSettings,
             () => config.ReadExperimentalSettings().IsEnabled(ExperimentalFeatures.CodexAppServer.Id) != config.CodexResolution.SwitchOn,
             time, logger) { }
 

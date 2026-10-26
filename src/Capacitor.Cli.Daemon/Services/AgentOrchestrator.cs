@@ -1582,12 +1582,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// </summary>
     /// <param name="republishUnchanged">Re-register even when the local advertisement already
     /// reads the same, for a caller that knows the server's copy differs.</param>
-    internal void RefreshAdvertisedCapabilities(string reason, bool republishUnchanged = false) {
+    /// <param name="probeCatalogs">False for a caller with no reason to think a model catalog changed,
+    /// which then spawns no catalog probe.</param>
+    internal void RefreshAdvertisedCapabilities(string reason, bool republishUnchanged = false, bool probeCatalogs = true) {
         // Sticky rather than captured by the delegate: a request folded into a running pass reruns
         // THAT pass's delegate, which would otherwise carry the earlier caller's answer.
         if (republishUnchanged) Interlocked.Exchange(ref _republishRequested, 1);
-        // A republish-only caller has no reason to think a catalog changed, so it spawns no probe.
-        else Interlocked.Exchange(ref _catalogProbeRequested, 1);
+        else if (probeCatalogs) Interlocked.Exchange(ref _catalogProbeRequested, 1);
 
         _capabilityRefresh.Trigger(
             async () => {
@@ -1662,6 +1663,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// burst of changes coalesces and the last publication carries the newest config.
     /// </summary>
     internal void RepublishRegistration(string reason) => RefreshAdvertisedCapabilities(reason, republishUnchanged: true);
+
+    /// <summary>Re-resolves the experimental switches and re-advertises what they change, without
+    /// re-probing any model catalog.</summary>
+    internal void RefreshExperimentalSettings(string reason) => RefreshAdvertisedCapabilities(reason, probeCatalogs: false);
 
     internal AgentLiveness ReadLiveness(string agentId) {
         // Order matters: check _agents first (Live/Quarantined-by-status), then _quarantine, then Dead.
