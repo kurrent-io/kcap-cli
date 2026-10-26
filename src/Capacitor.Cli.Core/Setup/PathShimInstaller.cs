@@ -90,7 +90,7 @@ public sealed class PathShimInstaller(
 
     async Task<ShimResult> LinkThroughProfileAsync(string target, ShellProfile profile, UserHome home, CancellationToken ct) {
         if (profile.Disclosure is null)
-            return new ShimResult(ShimOutcome.Failed, "This shell or home path does not support automatic PATH setup. Add ~/.local/bin to your shell's PATH manually.", null);
+            return new ShimResult(ShimOutcome.Failed, "This shell or home path does not support automatic PATH setup. Create ~/.local/bin, link kcap in that folder to your installed CLI, then add ~/.local/bin to your shell's PATH manually.", null);
 
         var link = Path.Combine(ShellProfile.Folder(home), "kcap");
         switch (Preflight(link, target)) {
