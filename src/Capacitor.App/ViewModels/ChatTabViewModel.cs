@@ -114,6 +114,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     // Dispatch ids are unique across sessions, and a snapshot can arrive late, so a discarded id
     // stays retired for the life of the pane.
     readonly HashSet<Guid> _discardedDispatches = [];
+    sealed record ReceiptCandidates(string? QueueKey, QueuedChatMessage[] Attempts);
+    readonly Dictionary<SenderLabel, ReceiptCandidates> _observedReceipts = [];
+    readonly Dictionary<Guid, ReceiptCandidates> _unboundReceipts = [];
     const string DiscardFailedNotice = "Could not discard this attempt. Try again.";
     bool _discardBusy;
     string? _root;
@@ -587,7 +590,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         // A discard in flight keeps its row from being sent again under it.
         var can = AgentCanTakeQueuedNow && !_discardBusy;
         var discard = !_discardBusy && !IsReadOnlyParticipant;
-        foreach (var queued in _queuedMessages) queued.SetPickup(idle, can, discard, discard && _input.CanDiscardQueued);
+        foreach (var queued in _queuedMessages)
+            queued.SetPickup(idle, can, discard && (_origin != AgentOrigin.Remote || queued.DispatchId is not null), discard && _input.CanDiscardQueued);
     }
 
     void RefreshAgentStatus() {
@@ -993,8 +997,22 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             .Distinct().OrderBy(q => q.SendOrder).ToList();
         foreach (var item in items.OrderBy(item => item.DispatchedAt)) {
             // Empty ids cannot distinguish dispatches or establish ownership.
-            if (item.DispatchId == Guid.Empty || _discardedDispatches.Contains(item.DispatchId)
-                || _senders?.HasReceipt(item.DispatchId) == true || !listed.Add(item.DispatchId)) continue;
+            if (item.DispatchId == Guid.Empty || _discardedDispatches.Contains(item.DispatchId)) continue;
+            if (_senders?.HasReceipt(item.DispatchId) == true) {
+                // The receipt can precede the first listing, but only an attempt present when
+                // that message was observed can acquire its id. A later identical send cannot.
+                if (_unboundReceipts.TryGetValue(item.DispatchId, out var candidates) && candidates.QueueKey == _queueKey) {
+                    var received = candidates.Attempts.FirstOrDefault(q => attempts.Contains(q) && q.DispatchId is null
+                        && !q.Acknowledged && SameSender(q, item) && q.MatchesText(item.Text));
+                    if (received is not null) {
+                        received.MarkQueued(item.DispatchId);
+                        ConfirmAttributedDispatch(item.DispatchId, null);
+                        _unboundReceipts.Remove(item.DispatchId);
+                    }
+                }
+                continue;
+            }
+            if (!listed.Add(item.DispatchId)) continue;
             // Snapshots have no revision; listing a known own row must disable its retry.
             if (attempts.FirstOrDefault(q => q.DispatchId == item.DispatchId) is { } known) {
                 if (!known.IsForeign) {
@@ -1003,7 +1021,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 }
                 continue;
             }
-            var own = attempts.FirstOrDefault(q => q.DispatchId is null && !q.Acknowledged && q.MatchesText(item.Text));
+            var own = attempts.FirstOrDefault(q => q.DispatchId is null && !q.Acknowledged && SameSender(q, item) && q.MatchesText(item.Text));
             if (own is not null) {
                 own.MarkQueued(item.DispatchId);
                 if (!Tracked.Contains(own)) _queuedMessages.Add(own);
@@ -1015,6 +1033,13 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             own.MarkUnlisted();
         RefreshQueue();
     }
+
+    static bool SameSender(QueuedChatMessage own, QueuedInputItem item) =>
+        item.SenderUserId is { Length: > 0 } sender && own.SenderIdentity?.Owns(sender) == true;
+
+    ReceiptCandidates CaptureReceiptCandidates() => new(_queueKey,
+        Tracked.Concat(_superseded.Select(pair => pair.Old)).Distinct()
+            .Where(q => q.DispatchId is null && !q.Acknowledged).OrderBy(q => q.SendOrder).ToArray());
 
     void OnSession(ChatSessionInfo info) {
         if (_isOwnedByCurrentUser != info.IsOwnedByCurrentUser) {
@@ -1162,6 +1187,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _runs.Clear();
         _planActivity?.Clear();
         _senders?.Clear();
+        _observedReceipts.Clear();
+        _unboundReceipts.Clear();
         _feedKey = key;
         var previous = _lease;
         _lease = new FeedLease(open(key), Interlocked.Increment(ref _generation), SignalFeedRead);
@@ -1220,9 +1247,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     // Text alone cannot distinguish a retry from its predecessor. The server's attribution
     // identifies the dispatch whose transcript receipt it actually matched.
-    void ConfirmAttributedDispatch(Guid dispatchId) {
+    void ConfirmAttributedDispatch(Guid dispatchId, SenderLabel? label) {
         var attempts = Tracked.Concat(_superseded.Select(pair => pair.Old)).Distinct()
             .Where(queued => queued.DispatchId == dispatchId).ToArray();
+        if (attempts.Length == 0 && label is not null && _observedReceipts.TryGetValue(label, out var candidates)
+            && candidates.Attempts.Length > 0) _unboundReceipts.TryAdd(dispatchId, candidates);
         foreach (var queued in attempts) {
             if (!queued.Acknowledged) Acknowledge(queued);
             AbsorbSuperseded(queued);
@@ -1334,9 +1363,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         // feed not yet seeded; the draft waits for Send to open again.
         if (HasTerminalMenu || !CanSendBeforeSeed) return null;
         var chipIds = files.Select(f => f.Id).ToList();
+        var sender = _input.SenderIdentity;
         var queued = new QueuedChatMessage(snapshot, ownsDraft ? edits : -1, _inputGeneration, CurrentOffset, chipIds) {
             SendOrder = ++_nextSendOrder,
             SentIdle = AgentIsIdle && _awaitingInput == true && !HasTerminalMenu,
+            SenderIdentity = sender is null ? null : sender with { Ids = sender.Ids.ToArray() },
         };
         if (!queued.HasBaseline) Interlocked.Increment(ref _baselineVersion);
         _lastSent = queued;
@@ -1447,9 +1478,12 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     }
 
     async Task ApplyAsync(int generation, FeedRead read) {
+        // Projection may run in the background after Prepare enables Send. Those later sends
+        // cannot acquire dispatches from the history this read is already replaying.
+        var candidates = CaptureReceiptCandidates();
         if (!Prepare(generation, read)) return;
         if (read.Lines.Count == 0) {
-            Finish(read, cursor: null);
+            Finish(read, cursor: null, candidates);
             return;
         }
         // Building every row shares the UI thread with the switch cover's timer, so a long
@@ -1461,7 +1495,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         } else
             cursor = ProjectLines(read, cursor, matchSends: true, _literalInputHistory);
         if (generation != Volatile.Read(ref _generation)) return;
-        Finish(read, cursor);
+        Finish(read, cursor, candidates);
     }
 
     // A queued send is matched as the lines are replayed. An open group or shell is already on
@@ -1508,6 +1542,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 _runs.Clear();
                 _planActivity?.Clear();
                 _senders?.Clear();
+                _observedReceipts.Clear();
+                _unboundReceipts.Clear();
                 break;
         }
 
@@ -1632,7 +1668,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         return cursor;
     }
 
-    void Finish(FeedRead read, LineCursor? cursor) {
+    void Finish(FeedRead read, LineCursor? cursor, ReceiptCandidates candidates) {
         if (cursor is not null) {
             _openGroup = cursor.OpenGroup;
             _openShell = cursor.OpenShell;
@@ -1649,7 +1685,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                     _history.Observe(AttachmentTrailer.Strip(text));
             if (cursor.Fresh.Count > 0) {
                 _items.AddRange(cursor.Fresh);
-                _senders?.Track(SenderLabels(cursor.Fresh));
+                _senders?.Track(SenderLabels(cursor.Fresh, candidates));
             }
         }
         Phase = ChatTabPhase.Reading;
@@ -1673,10 +1709,13 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     SenderLabel SenderOf(AcpEventEnvelope e, long offset) =>
         new(new MessageKeys(e.SourceEventId, _origin == AgentOrigin.Remote ? offset : null, e.DispatchId), Timestamp(e.TimestampIso));
 
-    static IEnumerable<SenderLabel> SenderLabels(IEnumerable<ChatItemViewModel> items) {
+    IEnumerable<SenderLabel> SenderLabels(IEnumerable<ChatItemViewModel> items, ReceiptCandidates? candidates = null) {
         foreach (var item in items) {
-            if (item is UserTurnItem turn) yield return turn.Sender;
-            else if (item is ShellCommandItem { HasCommand: true } shell) yield return shell.Sender;
+            var label = item is UserTurnItem turn ? turn.Sender
+                : item is ShellCommandItem { HasCommand: true } shell ? shell.Sender : null;
+            if (label is null) continue;
+            _observedReceipts.TryAdd(label, candidates ?? CaptureReceiptCandidates());
+            yield return label;
         }
     }
 

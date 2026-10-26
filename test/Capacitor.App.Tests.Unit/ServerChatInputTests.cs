@@ -1,6 +1,7 @@
 using System.Reactive.Subjects;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
+using Capacitor.Cli.Core.WorkItems;
 using Capacitor.Remote.Models;
 using static Capacitor.App.Tests.Unit.AvaloniaSession;
 
@@ -16,16 +17,74 @@ public class ServerChatInputTests {
         public readonly BehaviorSubject<ChatSessionInfo> Session = new(Info("Running"));
         public readonly ServerChatInput Input;
 
-        public Harness(bool hasTerminal = false) => Input = new ServerChatInput("a1", Lane, Access, Session, hasTerminal);
+        public Harness(bool hasTerminal = false, IObservable<ViewerIdentityDto?>? senderIdentity = null) =>
+            Input = new ServerChatInput("a1", Lane, Access, Session, hasTerminal, senderIdentity);
 
         public static ChatSessionInfo Info(string status, bool ended = false) =>
             new(status, status, "gemini", null, null, null, ended, "", "s1");
 
-        public void Ready() {
-            Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: "u1", Epoch: 1));
+        public void Ready(string? subject = "u1") {
+            Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: subject, Epoch: 1));
             Access.OnNext(SessionAccessState.Established);
         }
     }
+
+    [Test]
+    [Arguments("issuer-subject")]
+    [Arguments(null)]
+    public Task The_sender_uses_the_viewer_identity_instead_of_the_token_subject(string? subject) => RunOnUiAsync(async () => {
+        string[] aliases = ["github:42"];
+        using var identity = new BehaviorSubject<ViewerIdentityDto?>(new() { UserId = "canonical-user", Ids = aliases });
+        var h = new Harness(senderIdentity: identity);
+        try {
+            h.Ready(subject);
+            var captured = h.Input.SenderIdentity;
+            await Assert.That(captured).IsNotNull();
+            await Assert.That(captured!.UserId).IsEqualTo("canonical-user");
+            aliases[0] = "github:99";
+            await Assert.That(captured.Owns("42")).IsTrue();
+            await Assert.That(captured.Owns("github:99")).IsFalse();
+            await Assert.That(await h.Input.SendAsync("hello", [], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Accepted);
+            await Assert.That(h.Lane.UserInputs).Contains(("a1", "hello"));
+        } finally { h.Input.Dispose(); }
+    });
+
+    [Test]
+    public Task An_unknown_viewer_does_not_guess_a_sender_or_disable_messaging() => RunOnUiAsync(async () => {
+        using var identity = new BehaviorSubject<ViewerIdentityDto?>(null);
+        var h = new Harness(senderIdentity: identity);
+        try {
+            h.Ready("issuer-subject");
+            await Assert.That(h.Input.SenderIdentity).IsNull();
+            await Assert.That(h.Input.SenderUserId).IsNull();
+            await Assert.That(h.Input.CanAcceptText).IsTrue();
+            await Assert.That(await h.Input.SendAsync("hello", [], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Accepted);
+            await Assert.That(h.Lane.UserInputs).Contains(("a1", "hello"));
+        } finally { h.Input.Dispose(); }
+    });
+
+    [Test]
+    public Task The_sender_forgets_an_identity_across_account_changes_and_reconnects() => RunOnUiAsync(async () => {
+        using var identity = new BehaviorSubject<ViewerIdentityDto?>(new() { UserId = "first" });
+        var h = new Harness(senderIdentity: identity);
+        try {
+            h.Ready("issuer-subject");
+            await Assert.That(h.Input.SenderIdentity!.UserId).IsEqualTo("first");
+            identity.OnNext(null);
+            await Assert.That(h.Input.SenderIdentity).IsNull();
+            await Assert.That(h.Input.CanAcceptText).IsTrue();
+            identity.OnNext(new() { UserId = "second" });
+            await Assert.That(h.Input.SenderIdentity!.UserId).IsEqualTo("second");
+            h.Lane.StatusSubject.OnNext(new(ServerLaneState.Retrying, Epoch: 1));
+            await Assert.That(h.Input.SenderIdentity).IsNull();
+            identity.OnNext(new() { UserId = "first" });
+            h.Lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "issuer-subject", Epoch: 2));
+            await Assert.That(h.Input.SenderIdentity).IsNull();
+            await Assert.That(h.Input.CanAcceptText).IsTrue();
+            identity.OnNext(new() { UserId = "second" });
+            await Assert.That(h.Input.SenderIdentity!.UserId).IsEqualTo("second");
+        } finally { h.Input.Dispose(); }
+    });
 
     [Test]
     public async Task An_idle_remote_session_can_accept_and_send_input() {

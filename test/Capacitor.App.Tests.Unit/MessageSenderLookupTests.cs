@@ -22,7 +22,7 @@ public class MessageSenderLookupTests {
         public CancellationTokenSource Lifetime { get; } = new();
         public MessageSenderLookup Lookup { get; }
 
-        public Rig() => Lookup = new MessageSenderLookup(Source, Time, Lifetime.Token, Logged.Add, Delivered.Add);
+        public Rig() => Lookup = new MessageSenderLookup(Source, Time, Lifetime.Token, Logged.Add, (id, _) => Delivered.Add(id));
 
         public async Task SettleAsync() {
             await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);

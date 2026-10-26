@@ -6,7 +6,7 @@ namespace Capacitor.App.ViewModels;
 /// Names the senders of one chat's user messages, read from the server for the chat's session. UI thread
 /// only: labels are tracked and titled there, and only the read itself leaves it. One read at a time.
 internal sealed class MessageSenderLookup(IMessageSenderSource source, TimeProvider time, CancellationToken lifetime, Action<string> log,
-        Action<Guid>? delivered = null) {
+        Action<Guid, SenderLabel>? delivered = null) {
     /// Gaps between asks about one message. A recent message still unnamed is asked again on them, since the
     /// server records a sender a few seconds after the message lands; an older one only after a failed read.
     internal static readonly TimeSpan[] Retry = [TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(15)];
@@ -140,7 +140,7 @@ internal sealed class MessageSenderLookup(IMessageSenderSource source, TimeProvi
             if (row is not null) {
                 entry.Label.Title = TitleOf(row);
                 if (read.Kind == MessageSendersReadKind.Ready && row.DispatchId is { } receipt
-                    && receipt != Guid.Empty && _receipts.Add(receipt)) delivered?.Invoke(receipt);
+                    && receipt != Guid.Empty && _receipts.Add(receipt)) delivered?.Invoke(receipt, entry.Label);
             }
             else if (read.Kind == MessageSendersReadKind.Ready && entry.Unmatched < entry.UnmatchedRetries)
                 retry.Add((entry, Retry[entry.Unmatched++]));

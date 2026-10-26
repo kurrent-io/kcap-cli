@@ -285,9 +285,6 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
                 ShowsArtefactsTab = show;
                 if (!show && IsArtefactsActive) ActiveTab = RemoteTab.Chat;
             }).DisposeWith(_disposables);
-        ChatInput input = row.Origin == AgentOrigin.Server
-            ? new ReadOnlyChatInput()
-            : new ServerChatInput(row.Id, lane, _accessStates, _session, HostedHarnessCatalog.ShowsTerminal(null, row.Vendor));
         var runs = _runs = new SessionRuns(time);
         commands?.Track($"remote:{row.Id}", runs).DisposeWith(_disposables);
         WorkContext = new WorkContextViewModel(_presence, workContext, time, opener, runs,
@@ -318,6 +315,10 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         _accessStates.Where(s => s == SessionAccessState.Established)
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => Artefacts.Refresh()).DisposeWith(_disposables);
+        ChatInput input = row.Origin == AgentOrigin.Server
+            ? new ReadOnlyChatInput()
+            : new ServerChatInput(row.Id, lane, _accessStates, _session, HostedHarnessCatalog.ShowsTerminal(null, row.Vendor),
+                WorkContext.WhenAnyValue(context => context.ViewerIdentity));
         Chat = new ChatTabViewModel(
             row.Id, AgentOrigin.Remote, _session, Observable.Return<string[]?>(null), input, new NoAttachmentUploader(),
             key => new RemoteTranscriptFeed(key, row.Vendor, _accessStates, readDetail, lane, time, Log),

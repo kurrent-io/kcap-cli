@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.WorkItems;
 using Capacitor.Remote.Models;
 using ReactiveUI.Reactive;
 
@@ -26,6 +27,7 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
     internal bool SentIdle { get; set; }
     internal bool IsSlashCommand =>
         AttachmentIds.Count == 0 && Normalize(Text) is ['/', ..] command && !command.Contains('\n');
+    internal ViewerIdentityDto? SenderIdentity { get; init; }
     int _generation = generation;
     long? _offset = offset;
     internal bool HasBaseline => _offset.HasValue;

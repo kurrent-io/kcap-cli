@@ -1,4 +1,5 @@
 using Capacitor.App.Services;
+using Capacitor.Cli.Core.WorkItems;
 using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
@@ -12,6 +13,9 @@ public abstract class ChatInput : ReactiveObject, IDisposable {
     /// False carries its reason in <see cref="AttachHint"/>.
     public abstract bool CanAttach { get; }
     public abstract string? AttachHint { get; }
+    /// The authenticated sender captured by a remote send; null when the channel cannot establish it.
+    public virtual string? SenderUserId => null;
+    public virtual ViewerIdentityDto? SenderIdentity => SenderUserId is { Length: > 0 } id ? new() { UserId = id } : null;
     /// Acceptance may clear the composer; an unconfirmed delivery must await transcript evidence.
     public abstract Task<ChatSendOutcome> SendAsync(string text, IReadOnlyList<string> attachmentIds, CancellationToken ct);
     /// The caller has transcript evidence for its latest send. Older receipts must not clear a

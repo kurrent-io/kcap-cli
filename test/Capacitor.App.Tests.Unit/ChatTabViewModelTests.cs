@@ -8,6 +8,7 @@ using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.WorkItems;
 using Capacitor.Models.Transcripts.Harness.Claude;
 using Capacitor.Remote.Models;
 using DynamicData;
@@ -1530,6 +1531,7 @@ public class ChatTabViewModelTests {
 
     /// A scripted ChatInput for composer tests: SendAsync completes when the test says so.
     sealed class ScriptedInput : ChatInput {
+        public override string? SenderUserId => "u2";
         public TaskCompletionSource<ChatSendOutcome>? Pending;
         public int Disposals;
         public bool CanAttachValue = true;
@@ -3600,7 +3602,8 @@ public class ChatTabViewModelTests {
 
     /// A channel that takes every send, for the queue tests: the transcript, not the channel,
     /// is what retires a message.
-    class AcceptingChatInput : ChatInput {
+    class AcceptingChatInput(string? senderUserId = "u2") : ChatInput {
+        public override string? SenderUserId => senderUserId;
         public override SendAvailability Availability => SendAvailability.Ready;
         public override bool CanAcceptText => true;
         public override string Hint => "";
@@ -3654,6 +3657,9 @@ public class ChatTabViewModelTests {
         public long? CurrentOffset => 0;
         public void Dispose() { }
     }
+
+    static IObservable<ViewerIdentityDto?> Viewer(string? id) =>
+        Observable.Return<ViewerIdentityDto?>(id is null ? null : new() { UserId = id });
 
     static QueuedInputItem Item(string text, Guid id, string? sender = "u2") => new() { DispatchId = id, Text = text, SenderUserId = sender };
 
@@ -3733,11 +3739,11 @@ public class ChatTabViewModelTests {
     public async Task Discard_removes_only_the_confirmed_attempt_and_preserves_failed_discards_and_the_draft() {
         await RunOnUiAsync(async () => {
             var lane = new FakeServerLane();
-            lane.StatusSubject.OnNext(new(ServerLaneState.Connected));
+            lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u2"));
             var access = new BehaviorSubject<SessionAccessState>(SessionAccessState.Established);
             var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
             var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
-            var input = new ServerChatInput("a1", lane, access, session, hasTerminal: true);
+            var input = new ServerChatInput("a1", lane, access, session, hasTerminal: true, senderIdentity: Viewer("u2"));
             var chat = new ChatTabViewModel(
                 "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), input, new NoAttachmentUploader(), _ => new ScriptedFeed { ResetNext = true },
                 new RecordingOpener(), new FakeTimeProvider(), new FakePermissionService(), new SessionRuns(new FakeTimeProvider()), serverQueue: queue);
@@ -3780,11 +3786,11 @@ public class ChatTabViewModelTests {
     public async Task A_held_send_is_discarded_through_the_server_and_an_unlisted_one_here() {
         await RunOnUiAsync(async () => {
             var lane = new FakeServerLane();
-            lane.StatusSubject.OnNext(new(ServerLaneState.Connected));
+            lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u2"));
             var access = new BehaviorSubject<SessionAccessState>(SessionAccessState.Established);
             var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
             var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
-            var input = new ServerChatInput("a1", lane, access, session, hasTerminal: true);
+            var input = new ServerChatInput("a1", lane, access, session, hasTerminal: true, senderIdentity: Viewer("u2"));
             var chat = new ChatTabViewModel(
                 "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), input, new NoAttachmentUploader(), _ => new ScriptedFeed { ResetNext = true },
                 new RecordingOpener(), new FakeTimeProvider(), new FakePermissionService(), new SessionRuns(new FakeTimeProvider()), serverQueue: queue);
@@ -3830,11 +3836,11 @@ public class ChatTabViewModelTests {
     public async Task A_late_snapshot_cannot_bring_back_a_discarded_dispatch_or_leave_a_held_one_resendable() {
         await RunOnUiAsync(async () => {
             var lane = new FakeServerLane();
-            lane.StatusSubject.OnNext(new(ServerLaneState.Connected));
+            lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u2"));
             var access = new BehaviorSubject<SessionAccessState>(SessionAccessState.Established);
             var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
             var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
-            var input = new ServerChatInput("a1", lane, access, session, hasTerminal: true);
+            var input = new ServerChatInput("a1", lane, access, session, hasTerminal: true, senderIdentity: Viewer("u2"));
             var chat = new ChatTabViewModel(
                 "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), input, new NoAttachmentUploader(), _ => new ScriptedFeed { ResetNext = true },
                 new RecordingOpener(), new FakeTimeProvider(), new FakePermissionService(), new SessionRuns(new FakeTimeProvider()), serverQueue: queue);
@@ -3880,17 +3886,88 @@ public class ChatTabViewModelTests {
         });
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_remote_discard_waits_for_the_attempts_dispatch_identity() => RunOnUiAsync(async () => {
+        var lane = new FakeServerLane();
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u2"));
+        using var access = new BehaviorSubject<SessionAccessState>(SessionAccessState.Established);
+        using var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
+        using var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
+        var time = new FakeTimeProvider();
+        var chat = new ChatTabViewModel("a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null),
+            new ServerChatInput("a1", lane, access, session, hasTerminal: true, senderIdentity: Viewer("u2")), new NoAttachmentUploader(), _ => new ScriptedFeed { ResetNext = true },
+            new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time), serverQueue: queue);
+        try {
+            await WaitUntilAsync(() => chat.HasSeed, what: "the seed");
+            chat.ComposerText = "same prompt";
+            await chat.SendCommand.Execute();
+            var own = chat.QueuedMessages.Single();
+            await Assert.That(own.CanDiscard).IsFalse();
+            await chat.DiscardQueuedCommand.Execute(own);
+            await Assert.That(chat.QueuedMessages.Single()).IsSameReferenceAs(own);
+            var item = Item("same prompt", Guid.NewGuid());
+            queue.OnNext([item]);
+            await Assert.That(own.CanDiscard).IsTrue();
+            lane.DiscardHandler = id => {
+                if (id != item.DispatchId) throw new InvalidOperationException("Wrong dispatch");
+                return Task.FromResult(HubCallOutcome.Ok);
+            };
+            await chat.DiscardQueuedCommand.Execute(own);
+            queue.OnNext([item]);
+            await Assert.That(chat.QueuedMessages).IsEmpty();
+        } finally { await chat.TeardownAsync(); }
+    });
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("AvaloniaSession")]
+    public Task Same_text_from_another_sender_does_not_assign_their_dispatch_to_an_own_attempt(bool callerKnown) => RunOnUiAsync(async () => {
+        var lane = new FakeServerLane();
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: callerKnown ? "u2" : null));
+        using var access = new BehaviorSubject<SessionAccessState>(SessionAccessState.Established);
+        using var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
+        using var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
+        var time = new FakeTimeProvider();
+        var chat = new ChatTabViewModel("a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null),
+            new ServerChatInput("a1", lane, access, session, hasTerminal: true, senderIdentity: Viewer(callerKnown ? "u2" : null)), new NoAttachmentUploader(), _ => new ScriptedFeed { ResetNext = true },
+            new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time), serverQueue: queue);
+        try {
+            await WaitUntilAsync(() => chat.HasSeed, what: "the seed");
+            chat.ComposerText = "same prompt";
+            await chat.SendCommand.Execute();
+            var own = chat.QueuedMessages.Single();
+            var theirs = Item("same prompt", Guid.NewGuid(), "u1");
+            var mine = Item("same prompt", Guid.NewGuid(), "u2");
+            queue.OnNext([theirs, mine]);
+
+            if (!callerKnown) {
+                await Assert.That(own.DispatchId).IsNull();
+                await Assert.That(own.CanDiscard).IsFalse();
+                await Assert.That(chat.QueuedMessages.Count).IsEqualTo(3);
+                return;
+            }
+            await Assert.That(own.DispatchId).IsEqualTo(mine.DispatchId);
+            var discarded = new List<Guid>();
+            lane.DiscardHandler = id => { discarded.Add(id); return Task.FromResult(HubCallOutcome.Ok); };
+            await chat.DiscardQueuedCommand.Execute(own);
+            await Assert.That(discarded).IsEquivalentTo([mine.DispatchId]);
+            await Assert.That(chat.QueuedMessages.Single().DispatchId).IsEqualTo(theirs.DispatchId);
+        } finally { await chat.TeardownAsync(); }
+    });
+
     /// A failed discard says so; a later one that succeeds takes that hint away with the row.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_discard_that_succeeds_on_retry_clears_its_failure_hint() {
         await RunOnUiAsync(async () => {
             var lane = new FakeServerLane();
-            lane.StatusSubject.OnNext(new(ServerLaneState.Connected));
+            lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u2"));
             var access = new BehaviorSubject<SessionAccessState>(SessionAccessState.Established);
             var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
             var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
-            var input = new ServerChatInput("a1", lane, access, session, hasTerminal: true);
+            var input = new ServerChatInput("a1", lane, access, session, hasTerminal: true, senderIdentity: Viewer("u2"));
             var chat = new ChatTabViewModel(
                 "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), input, new NoAttachmentUploader(), _ => new ScriptedFeed { ResetNext = true },
                 new RecordingOpener(), new FakeTimeProvider(), new FakePermissionService(), new SessionRuns(new FakeTimeProvider()), serverQueue: queue);
@@ -4041,7 +4118,7 @@ public class ChatTabViewModelTests {
             var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
             var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
             var chat = new ChatTabViewModel(
-                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), new NoAttachmentUploader(), _ => new ScriptedFeed { ResetNext = true },
+                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput("u1"), new NoAttachmentUploader(), _ => new ScriptedFeed { ResetNext = true },
                 new RecordingOpener(), new FakeTimeProvider(), new FakePermissionService(), new SessionRuns(new FakeTimeProvider()), serverQueue: queue);
             await WaitUntilAsync(() => chat.HasSeed, what: "the seed");
 
