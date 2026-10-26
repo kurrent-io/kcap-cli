@@ -1951,17 +1951,21 @@ public class DaemonLifecycleControllerTests {
         h.Start();
         h.PushConnected();
         await h.Controller.PhaseClosed;
+        var moving = false;
+        using var _ = h.Controller.IsMovingToWindowsService.Subscribe(m => moving = m);
 
         await h.Controller.InstallWindowsServiceAsync(CancellationToken.None);
 
         await Assert.That(h.Surface.StatusMessages).Contains(DaemonLifecycleController.MovingToWindowsServiceStatus);
         await Assert.That(h.Surface.Withdrawn).IsEmpty();
+        await Assert.That(moving).IsTrue();
 
         h.PushConnecting();
         h.PushConnected();
 
         await WaitUntilAsync(() => h.Surface.Withdrawn.Contains(DaemonLifecycleController.MovingToWindowsServiceStatus),
             what: "the moving line withdrawn");
+        await Assert.That(moving).IsFalse();
     }
 
     [Test]

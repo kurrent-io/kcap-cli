@@ -904,6 +904,7 @@ public partial class App : Application {
                 historyImport: _historyImport?.Run,
                 backgroundPriority: lifecycle.BackgroundPriority, reloadState: lifecycle.ReloadState,
                 isReloading: lifecycle.IsReloading, reloadDaemon: lifecycle.ReloadServiceAsync,
+                movingToWindowsService: lifecycle.IsMovingToWindowsService,
                 localServer: localServer, localStack: localStack, uiScale: _uiScale, usageNotice: _usageNotice,
                 web: webWorkspace, openLaunchApprovals: launchApprovals.Show)),
             // Both close paths release the workspace: hide-to-tray keeps the window (and its
@@ -1631,6 +1632,7 @@ public partial class App : Application {
             Action? requestSetup = null, HistoryImportRun? historyImport = null,
             IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
             IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null,
+            IObservable<bool>? movingToWindowsService = null,
             LocalServerRecoveryViewModel? localServer = null, LocalStackViewModel? localStack = null,
             UiScaleSetting? uiScale = null, UsageDataNotice? usageNotice = null,
             WebWorkspaceViewModel? web = null, Action? openLaunchApprovals = null,
@@ -1706,7 +1708,8 @@ public partial class App : Application {
             serverWorkspaceFactory: serverWorkspaceFactory, sessions: sessions,
             openFeedback: openFeedback, opener: new ShellUrlOpener(), requestSignIn: requestSignIn,
             settingsAction: settingsAction, uninstallAction: uninstallAction, requestSetup: requestSetup, historyImport: historyImport,
-            backgroundPriority: backgroundPriority, reloadState: reloadState, isReloading: isReloading, reloadDaemon: reloadDaemon, openLaunchApprovals: openLaunchApprovals) {
+            backgroundPriority: backgroundPriority, reloadState: reloadState, isReloading: isReloading, reloadDaemon: reloadDaemon, openLaunchApprovals: openLaunchApprovals,
+            movingToWindowsService: movingToWindowsService) {
             LocalStack = localStack,
             Web = web,
         };

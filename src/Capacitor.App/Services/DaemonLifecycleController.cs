@@ -115,6 +115,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     readonly BehaviorSubject<bool>         _backgroundPriority = new(false);
     readonly BehaviorSubject<ReloadState?> _reloadState        = new(null);
     readonly BehaviorSubject<bool>         _isReloading        = new(false);
+    readonly BehaviorSubject<bool>         _isMovingToService  = new(false);
     IDisposable? _snapshots;
     DaemonInfoDto? _latestDaemon;
     string? _reportedMismatch; // under _lock: the identity mismatch last reported, so a reattach does not repeat it
@@ -185,6 +186,9 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     public IObservable<ReloadState?> ReloadState => _reloadState;
     /// True from the claim before the prompt until the outcome is recorded and the follow-up read is done.
     public IObservable<bool> IsReloading => _isReloading.DistinctUntilChanged();
+
+    /// <summary>From the move to the Windows service until the daemon attaches again: no daemon, on purpose</summary>
+    public IObservable<bool> IsMovingToWindowsService => _isMovingToService.DistinctUntilChanged();
 
     /// The capability a daemon that keeps its agents for a successor advertises; one without it ends them on a reload.
     internal const string ResumeCapability = "shutdown/1";
@@ -1031,6 +1035,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     /// says why there is no daemon instead of reporting it down.
     async Task MoveToWindowsServiceAsync(CancellationToken ct) {
         lock (_lock) _movingToWindowsService = true;
+        _isMovingToService.OnNext(true);
         _surface.Status(MovingToWindowsServiceStatus);
         if (!await RunLaneMutationAsync(MutationVerb.InstallWindowsService, ct).ConfigureAwait(false))
             WithdrawMovingToWindowsService();
@@ -1041,6 +1046,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             if (!_movingToWindowsService) return;
             _movingToWindowsService = false;
         }
+        _isMovingToService.OnNext(false);
         _surface.Withdraw(MovingToWindowsServiceStatus);
     }
 

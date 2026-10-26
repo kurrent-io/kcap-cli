@@ -360,6 +360,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             HistoryImportRun? historyImport = null,
             IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
             IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null, Action? openLaunchApprovals = null,
+            IObservable<bool>? movingToWindowsService = null,
             Func<string, RemoteSessionViewModel?>? serverWorkspaceFactory = null, IServerSessionsService? sessions = null) {
         _service = service;
         _serverFactory = serverWorkspaceFactory;
@@ -418,8 +419,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         // commands must exist and be assertable pre-activation — see the class doc comment.
         // One primary action at a time: Start when nothing is listening (spawn/reattach via the
         // lifecycle); Reconnect when Start is not the right next step (skew, or still connecting).
+        // The move to the Windows service takes the daemon down and brings it back itself: a Start offered
+        // in that gap reads as a failure the user must fix.
         var canStart = service.Status
-            .Select(s => s.State == AttachState.Unreachable && s.Reason == UnreachableReason)
+            .CombineLatest(movingToWindowsService ?? Observable.Return(false),
+                (s, moving) => s.State == AttachState.Unreachable && s.Reason == UnreachableReason && !moving)
             .ObserveOn(RxSchedulers.MainThreadScheduler);
         var canRetry = service.Status
             .Select(s =>
