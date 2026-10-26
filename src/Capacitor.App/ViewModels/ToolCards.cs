@@ -12,7 +12,7 @@ public static class ToolCards {
         ToolCardKind.Page     => Page(resultText),
         ToolCardKind.Document => Document(inputJson),
         ToolCardKind.Flow     => Flow(inputJson),
-        ToolCardKind.Agent    => Agent(inputJson),
+        ToolCardKind.Agent    => Agent(inputJson, resultText),
         _                     => null,
     };
 
@@ -63,11 +63,24 @@ public static class ToolCards {
         return new ToolCard(ToolCardKind.Flow, title, kind, args.Str("vendor") ?? "", null, null);
     }
 
-    static ToolCard? Agent(string? inputJson) {
+    static ToolCard? Agent(string? inputJson, string? resultText) {
         if (Args(inputJson) is not { } args) return null;
         var prompt = args.Str("prompt") ?? "";
         var firstLine = prompt.Split(['\r', '\n'], 2)[0].Trim();
-        return new ToolCard(ToolCardKind.Agent, "Started hosted agent", TextElision.End(firstLine, NameCap), args.Str("vendor") ?? "", null, null);
+        return new ToolCard(ToolCardKind.Agent, "Started hosted agent", TextElision.End(firstLine, NameCap), args.Str("vendor") ?? "",
+            ResultField(resultText, "url"), null);
+    }
+
+    /// A `key: value` line of a `start_agent` result.
+    static string? ResultField(string? resultText, string key) {
+        if (string.IsNullOrEmpty(resultText)) return null;
+        var prefix = key + ": ";
+        foreach (var line in resultText.Split('\n')) {
+            if (!line.StartsWith(prefix, StringComparison.Ordinal)) continue;
+            var value = line[prefix.Length..].Trim();
+            return value.Length == 0 ? null : value;
+        }
+        return null;
     }
 
     static JsonElement? Args(string? inputJson) {
