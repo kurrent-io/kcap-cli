@@ -20,14 +20,17 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 public class ConnectWithRetryTests {
     static readonly TimeSpan HangGuard = TimeSpan.FromSeconds(5);
 
-    sealed class RetryTestConnection(DaemonStatusNotifier? notifier = null, DaemonConfig? config = null) : ServerConnection(
-        config ?? new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1" },
-        new FixedCredentialSource(),
-        NullLoggerFactory.Instance,
-        NullLogger<ServerConnection>.Instance,
-        TimeProvider.System,
-        notifier
-    ) {
+    sealed class RetryTestConnection : ServerConnection {
+        readonly DaemonConfig _config;
+
+        public RetryTestConnection(DaemonStatusNotifier? notifier = null, DaemonConfig? config = null)
+            : this(notifier, config ?? new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1" }, 0) { }
+
+        RetryTestConnection(DaemonStatusNotifier? notifier, DaemonConfig config, int _) : base(
+                config, new FixedCredentialSource(), NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance,
+                TimeProvider.System, notifier) =>
+            _config = config;
+
         public HubConnectionState State { get; set; } = HubConnectionState.Disconnected;
         public bool Ready { get; set; }
 
@@ -74,24 +77,24 @@ public class ConnectWithRetryTests {
         internal override Task StopHubAsync(CancellationToken ct) =>
             StopHold?.Task ?? Task.CompletedTask;
 
-        internal override Task RegisterDaemonAsync() {
+        internal override Task<UnattendedAdvertisement> RegisterDaemonAsync() {
             RegisterCalls++;
             OnRegisterAttempt?.Invoke();
 
             // Mirror the real hub-invoke contract: DaemonConnect can only succeed on a
             // Connected transport ("cannot be called if the connection is not active").
             if (State != HubConnectionState.Connected)
-                return Task.FromException(new InvalidOperationException("The 'InvokeCoreAsync' method cannot be called if the connection is not active"));
+                return Task.FromException<UnattendedAdvertisement>(new InvalidOperationException("The 'InvokeCoreAsync' method cannot be called if the connection is not active"));
 
             if (FailRegisterRemaining > 0) {
                 FailRegisterRemaining--;
 
-                return Task.FromException(new InvalidOperationException("simulated DaemonConnect failure"));
+                return Task.FromException<UnattendedAdvertisement>(new InvalidOperationException("simulated DaemonConnect failure"));
             }
 
             Ready = true;
 
-            return Task.CompletedTask;
+            return Task.FromResult(_config.Advertisement);
         }
     }
 
@@ -131,6 +134,31 @@ public class ConnectWithRetryTests {
         await Assert.That(Status().Experimental!.Single().RegistrationFailed == true).IsFalse();
         await Assert.That(ExperimentalFeatureState.Classify(true, true, Status(), ExperimentalFeatures.CodexAppServer.Id).Kind)
             .IsEqualTo(ExperimentalFeatureStateKind.Active);
+    }
+
+    /// <summary>A refresh commits a newer advertisement while an attempt is in flight; the attempt's
+    /// failure belongs to the advertisement it carried, so the newer one is not reported as undelivered.</summary>
+    [Test]
+    public async Task A_failed_attempt_marks_only_the_advertisement_it_carried() {
+        var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1" };
+        var carried = CodexTransportResolution.Resolve(1, switchOn: true, () => "0.146.0");
+        config.Advertise([], carried);
+        var start = new TaskCompletionSource();
+        var conn = new RetryTestConnection(config: config) {
+            StartHold          = start,
+            ConnectRetryDelays = [TimeSpan.FromMinutes(5)],
+        };
+
+        using var cts = new CancellationTokenSource();
+        var loop = conn.ConnectWithRetryAsync(cts.Token);
+        while (conn.StartCalls == 0) await Task.Delay(5);
+        config.Advertise([], CodexTransportResolution.Resolve(2, switchOn: false, () => "0.146.0"));
+        start.SetException(new HttpRequestException("connection refused"));
+        while (config.FailedCodexGeneration == 0) await Task.Delay(5);
+        await cts.CancelAsync();
+        try { await loop.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+
+        await Assert.That(config.FailedCodexGeneration).IsEqualTo(carried.Generation);
     }
 
     [Test]

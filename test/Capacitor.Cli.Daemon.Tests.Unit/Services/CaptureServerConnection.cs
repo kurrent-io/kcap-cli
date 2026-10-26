@@ -11,12 +11,16 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 /// Captures LaunchFailedAsync calls and no-ops the other server-side methods
 /// so the orchestrator's launch flow doesn't touch a real SignalR connection.
 /// </summary>
-sealed class CaptureServerConnection(DaemonConfig? config = null) : ServerConnection(
-    config ?? new() { Name = "test", ServerUrl = "http://127.0.0.1:1" },
-    new FixedCredentialSource(),
-    NullLoggerFactory.Instance,
-    NullLogger<ServerConnection>.Instance
-, TimeProvider.System) {
+sealed class CaptureServerConnection : ServerConnection {
+    readonly DaemonConfig _config;
+
+    public CaptureServerConnection(DaemonConfig? config = null)
+        : this(config ?? new() { Name = "test", ServerUrl = "http://127.0.0.1:1" }, 0) { }
+
+    CaptureServerConnection(DaemonConfig config, int _) : base(
+            config, new FixedCredentialSource(), NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, TimeProvider.System) =>
+        _config = config;
+
     public            string?                               ConnectionIdForTest { get; init; } = "connection-1";
     internal override string?                               CurrentConnectionId => ConnectionIdForTest;
     readonly List<(string AgentId, string Reason)> _launchFailedCalls = [];
@@ -57,9 +61,11 @@ sealed class CaptureServerConnection(DaemonConfig? config = null) : ServerConnec
 
     public Exception? RegisterDaemonThrow { get; set; }
 
-    internal override Task RegisterDaemonAsync() {
+    internal override Task<UnattendedAdvertisement> RegisterDaemonAsync() {
         Interlocked.Increment(ref _registerDaemonCalls);
-        return RegisterDaemonThrow is { } ex ? Task.FromException(ex) : Task.CompletedTask;
+        return RegisterDaemonThrow is { } ex
+            ? Task.FromException<UnattendedAdvertisement>(ex)
+            : Task.FromResult(_config.Advertisement);
     }
 
     public override async Task LaunchFailedAsync(string agentId, string reason) {
