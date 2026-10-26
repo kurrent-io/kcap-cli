@@ -477,6 +477,34 @@ public class SettingsWindowSmokeTests {
         } finally { completion.TrySetResult(new ProcessResult(1, "", "canceled", false)); window.Close(); }
     });
 
+    [Test]
+    public Task Failed_harness_disconnect_restores_the_checked_state_for_retry() => AvaloniaSession.RunOnUiAsync(async () => {
+        ConfigMutator.Mutate(Config.Root, c => c with { Profiles = new() {
+            ["work"] = new Profile { ServerUrl = "https://work.example" }
+        } });
+        var cli = Substitute.For<IKcapCli>();
+        cli.PluginRemoveAsync("--codex", Arg.Any<CancellationToken>()).Returns(new ProcessResult(1, "", "Could not remove hooks", false));
+        var harnesses = new HarnessesSettingsViewModel(new SettingsProfileStore(Config.Root, "work", "https://work.example"), cli,
+            _ => Task.FromResult<IReadOnlyDictionary<HarnessId, DetectedAgent>>(new Dictionary<HarnessId, DetectedAgent> {
+                [HarnessId.Codex] = new(true, true)
+            }), isWired: _ => true);
+        using var notifications = new NotificationSettingsService(Config.PathTo("notifications.json"));
+        using var vm = MakeViewModel(notifications, harnesses: harnesses);
+        await harnesses.RescanAsync();
+        var window = new SettingsWindow { DataContext = vm };
+        try {
+            window.Show();
+            Click(window, window.FindControl<TabItem>("HarnessesTab")!);
+            var checkbox = window.GetVisualDescendants().OfType<CheckBox>().Single();
+            Click(window, checkbox);
+            await WaitUntilAsync(() => !harnesses.Busy);
+            Settle(window);
+            await Assert.That(checkbox.IsChecked).IsTrue();
+            await Assert.That(checkbox.IsEffectivelyEnabled).IsTrue();
+            await Assert.That(harnesses.Rows[0].Message).IsEqualTo("Could not remove hooks");
+        } finally { window.Close(); }
+    });
+
     SettingsViewModel MakeViewModel(NotificationSettingsService notifications, IDesktopNotificationAccess? access = null, HarnessesSettingsViewModel? harnesses = null) {
         var service = new FakeDaemonClientService();
         service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["settings/1"]));
