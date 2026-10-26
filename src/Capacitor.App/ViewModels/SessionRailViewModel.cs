@@ -238,8 +238,12 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
         var commands = (agentsRunningCommands ?? Observable.Return<IReadOnlyDictionary<string, int>>(
                 FrozenDictionary<string, int>.Empty)).ObserveOn(RxSchedulers.MainThreadScheduler).Replay(1).RefCount();
 
+        // The pager counts ended sessions, so under Live it has nothing to page.
         var paging = (sessions?.Paging ?? Observable.Return(new ServerSessionsPaging(0, 0, 1, false, false)))
-            .ObserveOn(RxSchedulers.MainThreadScheduler).Replay(1).RefCount();
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .CombineLatest(this.WhenAnyValue(x => x.State),
+                (p, state) => state == RailState.Live ? new ServerSessionsPaging(0, 0, p.Pages, false, false) : p)
+            .Replay(1).RefCount();
         _loadedText = paging.Select(p => p.Total == 0 && p.Loaded == 0 ? "" : $"{p.Loaded} of {p.Total}")
             .ToProperty(this, x => x.LoadedText, initialValue: "").DisposeWith(_disposables);
         _showsShowMore = paging.Select(p => p.CanShowMore)

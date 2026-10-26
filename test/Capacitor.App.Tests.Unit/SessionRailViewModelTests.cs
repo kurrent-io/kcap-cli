@@ -670,6 +670,29 @@ public class SessionRailViewModelTests {
         });
     }
 
+    /// The pager counts ended sessions, which the Live filter hides.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Live_filter_hides_the_ended_pager() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var (directory, sessions, _, _, rail) = BuildWithControls();
+            using (directory) using (sessions) using (rail) {
+                sessions.PagingSubject.OnNext(new ServerSessionsPaging(500, 1000, 25, false, true));
+                rail.State = RailState.Live;
+                await Assert.That(rail.AtCap).IsFalse();
+
+                sessions.PagingSubject.OnNext(new ServerSessionsPaging(60, 1846, 3, true, false));
+                await Assert.That(rail.LoadedText).IsEqualTo("");
+                await Assert.That(rail.ShowsShowMore).IsFalse();
+                await Assert.That(await rail.ShowMoreCommand.CanExecute.FirstAsync()).IsFalse();
+
+                rail.State = RailState.Ended;
+                await Assert.That(rail.LoadedText).IsEqualTo("60 of 1846");
+                await Assert.That(rail.ShowsShowMore).IsTrue();
+            }
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Live_not_shown_renders_the_remainder_line() {
