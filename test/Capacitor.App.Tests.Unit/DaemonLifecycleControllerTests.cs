@@ -1141,7 +1141,8 @@ public class DaemonLifecycleControllerTests {
 
     [Test]
     public async Task Indicator_is_left_alone_by_an_unknown_word_an_empty_word_or_a_failed_read() {
-        await using var h = new Harness();
+        // Off Windows, so a failed read is not followed by the Windows service offer's own read
+        await using var h = new Harness { OffersSupervision = false };
         var words = new Queue<string?>(["adaptive", "app", "", null]);
         h.Cli.StatusBehavior = _ => {
             var word = words.Dequeue();
@@ -1877,6 +1878,24 @@ public class DaemonLifecycleControllerTests {
         await WaitUntilAsync(() => h.Lane.Requests.Count == 1, what: "the Windows service install");
         await Assert.That(h.Surface.Prompts.Single().Kind).IsEqualTo(LifecyclePrompt.KindWindowsService);
         await Assert.That(h.Lane.Requests[0].Verb).IsEqualTo(MutationVerb.InstallWindowsService);
+    }
+
+    /// That daemon connects mid-transaction, where the read its Connected makes can fail: the offer is settled
+    /// by a read under the gate, not dropped for the run
+    [Test]
+    public async Task A_failed_read_when_the_started_daemon_connects_still_leads_to_the_offer() {
+        await using var h = new Harness();
+        var reads = 0;
+        h.Cli.StatusBehavior = _ => Task.FromResult(++reads == 2 ? null : (ServiceSnapshot?)TaskSupervised());
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
+        h.Start();
+
+        h.PushUnreachable();
+        await h.Controller.PhaseClosed;
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Lane.Requests.Count == 1, what: "the Windows service install");
+        await Assert.That(h.Surface.Prompts.Single().Kind).IsEqualTo(LifecyclePrompt.KindWindowsService);
     }
 
     [Test]

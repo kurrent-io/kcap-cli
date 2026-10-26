@@ -323,11 +323,17 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         return snap;
     }
 
-    /// The startup branch starting the daemon is what an update looks like, so this Connected is the
-    /// run's only chance at the Windows service offer the first-outcome reconciliation would have made.
+    /// The startup branch starting the daemon is what an update looks like, so this Connected is the run's only
+    /// chance at the Windows service offer. That daemon connects while the branch still holds the gate inside its
+    /// install transaction, where a status read can fail outright: on Windows a failed read is settled under the
+    /// gate rather than taken as nothing to offer.
     async Task LaterConnectedAsync() {
         try {
-            if (await ReadStatusAsync(_lifetime.Token).ConfigureAwait(false) is not { } passive || !OffersWindowsService(passive)) return;
+            var passive = await ReadStatusAsync(_lifetime.Token).ConfigureAwait(false);
+            if (passive is null ? !OffersSupervision() : !OffersWindowsService(passive)) return;
+            lock (_lock) {
+                if (_windowsServiceOffered) return;
+            }
             if (!await TryAcquireGateAsync(_lifetime.Token).ConfigureAwait(false)) return;
             try {
                 if (IsCurrentlyAttached() && await QueryStatusForActionAsync(_lifetime.Token).ConfigureAwait(false) is { } snap)
