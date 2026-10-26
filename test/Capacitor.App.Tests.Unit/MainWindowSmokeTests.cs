@@ -559,6 +559,49 @@ public class MainWindowSmokeTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public Task Rail_pagination_tracks_the_filter_and_disappears_when_fully_loaded() => AvaloniaSession.RunOnUiAsync(async () => {
+        var service = new FakeDaemonClientService();
+        using var directory = new FakeAgentDirectory();
+        using var sessions = new FakeServerSessionsService();
+        using var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System, sessions: sessions);
+        var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System, rail: rail);
+        var window = new MainWindow { DataContext = vm };
+        try {
+            window.Show();
+            sessions.PagingSubject.OnNext(new ServerSessionsPaging(20, 84, 1, true, false));
+            Dispatcher.UIThread.RunJobs();
+            var view = window.FindDescendantOfType<SessionRailView>()!;
+            var more = view.FindControl<Button>("RailShowMoreButton")!;
+            var count = view.FindControl<TextBlock>("RailLoadedText")!;
+            var cap = view.FindControl<TextBlock>("RailCapNote")!;
+            await Assert.That(more.IsVisible).IsTrue();
+            await Assert.That(more.Content).IsEqualTo("Load more ended sessions");
+            await Assert.That(count.Text).IsEqualTo("20 of 84 ended sessions loaded");
+
+            rail.State = RailState.Live;
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(more.IsVisible).IsFalse();
+            await Assert.That(count.IsVisible).IsFalse();
+            await Assert.That(cap.IsVisible).IsFalse();
+
+            rail.State = RailState.Ended;
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(more.IsVisible).IsTrue();
+            await Assert.That(count.IsVisible).IsTrue();
+
+            sessions.PagingSubject.OnNext(new ServerSessionsPaging(4, 4, 1, false, false));
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(more.IsVisible).IsFalse();
+            await Assert.That(count.IsVisible).IsFalse();
+            await Assert.That(cap.IsVisible).IsFalse();
+        } finally {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public Task Clicking_the_team_segment_changes_the_rails_scope_and_persists_it() => AvaloniaSession.RunOnUiAsync(async () => {
         var service = new FakeDaemonClientService();
         service.StatusSubject.OnNext(new(AttachState.Connected, null, null));
