@@ -11,6 +11,8 @@ namespace Capacitor.App.ViewModels;
 /// delivery is the transcript's — the same unconfirmed-until-echoed rule as the local frame.
 internal sealed class ServerChatInput : ChatInput {
     const string Unconfirmed = "delivery unconfirmed — check the chat before sending again";
+    const string InterruptUnconfirmed = "interrupt delivery unconfirmed — check the agent's terminal";
+    const string InterruptDenied = "you cannot interrupt this session";
 
     readonly string _agentId;
     readonly IServerLane _lane;
@@ -22,6 +24,9 @@ internal sealed class ServerChatInput : ChatInput {
     bool _sending;
     bool _disposed;
     string? _notice;
+    // Bumped by every send and availability change, so an interrupt reply that lands after one of
+    // them leaves the newer hint alone.
+    int _noticeVersion;
 
     public ServerChatInput(string agentId, IServerLane lane, IObservable<SessionAccessState> access, IObservable<ChatSessionInfo> session, bool hasTerminal) {
         _agentId = agentId;
@@ -35,7 +40,10 @@ internal sealed class ServerChatInput : ChatInput {
     void Apply(Action update) {
         var before = Availability;
         update();
-        if (Availability != before) _notice = null;
+        if (Availability != before) {
+            _notice = null;
+            _noticeVersion++;
+        }
         Raise();
     }
 
@@ -73,7 +81,7 @@ internal sealed class ServerChatInput : ChatInput {
     public override async Task<ChatSendOutcome> SendAsync(string text, IReadOnlyList<string> attachmentIds, CancellationToken ct) {
         if (_disposed || !CanAcceptText || ct.IsCancellationRequested) return ChatSendOutcome.Rejected;
         if (attachmentIds.Count > 0) return Settle(ChatSendOutcome.Rejected, AttachHint);
-        _sending = true; _notice = null; Raise();
+        _sending = true; _notice = null; _noticeVersion++; Raise();
         HubCallOutcome outcome;
         try {
             outcome = await _lane.SendUserInputAsync(_agentId, text, ct);
@@ -87,30 +95,33 @@ internal sealed class ServerChatInput : ChatInput {
         };
     }
 
+    /// The hub taking the key proves nothing about the agent stopping, so only a refusal or an
+    /// unknown outcome is worth a hint; a later success clears just that hint.
     public override async Task InterruptAsync(CancellationToken ct) {
         if (!CanInterrupt || ct.IsCancellationRequested) return;
+        var version = _noticeVersion;
+        string? notice;
         try {
-            var outcome = await _lane.SendSpecialKeyAsync(_agentId, SpecialKeys.Escape, ct);
-            if (_disposed) return;
-            _notice = outcome.Result switch {
-                HubCallResult.Ok => "Interrupt requested; waiting for the agent",
-                HubCallResult.Denied => "you cannot interrupt this session",
-                _ => "interrupt delivery unconfirmed — check the agent's terminal",
+            notice = (await _lane.SendSpecialKeyAsync(_agentId, SpecialKeys.Escape, ct)).Result switch {
+                HubCallResult.Ok     => null,
+                HubCallResult.Denied => InterruptDenied,
+                _                    => InterruptUnconfirmed,
             };
-            Raise();
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
         catch (Exception ex) {
             Console.Error.WriteLine($"kcap: composer interrupt failed: {ex.Message}");
-            if (_disposed) return;
-            _notice = "interrupt delivery unconfirmed — check the agent's terminal";
-            Raise();
+            notice = InterruptUnconfirmed;
         }
+        if (_disposed || version != _noticeVersion) return;
+        if (notice is null && _notice is not (InterruptUnconfirmed or InterruptDenied)) return;
+        _notice = notice;
+        Raise();
     }
 
     ChatSendOutcome Settle(ChatSendOutcome outcome, string? notice) {
         if (_disposed) return outcome;
-        _sending = false; _notice = notice; Raise();
+        _sending = false; _notice = notice; _noticeVersion++; Raise();
         return outcome;
     }
 

@@ -144,16 +144,68 @@ public class ServerChatInputTests {
     }
 
     [Test]
-    [Arguments(HubCallResult.Ok, "Interrupt requested; waiting for the agent")]
+    [Arguments(HubCallResult.Ok, "Enter sends · Shift+Enter for a new line")]
     [Arguments(HubCallResult.Denied, "you cannot interrupt this session")]
     [Arguments(HubCallResult.NotConnected, "interrupt delivery unconfirmed — check the agent's terminal")]
-    public async Task Interrupt_reports_the_hub_outcome_without_claiming_the_agent_stopped(HubCallResult result, string hint) {
+    public async Task Interrupt_reports_a_refused_or_unknown_outcome_and_never_claims_the_agent_stopped(HubCallResult result, string hint) {
         await RunOnUiAsync(async () => {
             var h = new Harness(hasTerminal: true);
             h.Ready();
             h.Lane.SpecialKeyHandler = _ => Task.FromResult(new HubCallOutcome(result));
             await h.Input.InterruptAsync(CancellationToken.None);
             await Assert.That(h.Input.Hint).IsEqualTo(hint);
+            h.Input.Dispose();
+        });
+    }
+
+    /// The interrupt's reply is older news than a send that settled or a session that ended while
+    /// it was on the wire.
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task A_late_interrupt_reply_leaves_a_newer_hint_alone(bool sessionEnds) {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(hasTerminal: true);
+            h.Ready();
+            var reply = new TaskCompletionSource<HubCallOutcome>();
+            h.Lane.SpecialKeyHandler = _ => reply.Task;
+            var interrupt = h.Input.InterruptAsync(CancellationToken.None);
+
+            string expected;
+            if (sessionEnds) {
+                h.Session.OnNext(Harness.Info("Completed", ended: true));
+                expected = "This session has ended";
+            } else {
+                h.Lane.UserInputHandler = _ => Task.FromResult(HubCallOutcome.NotConnected);
+                await Assert.That(await h.Input.SendAsync("continue", [], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Unconfirmed);
+                expected = "delivery unconfirmed — check the chat before sending again";
+            }
+            await Assert.That(h.Input.Hint).IsEqualTo(expected);
+
+            reply.SetResult(HubCallOutcome.NotConnected);
+            await interrupt;
+            await Assert.That(h.Input.Hint).IsEqualTo(expected);
+            h.Input.Dispose();
+        });
+    }
+
+    /// A success says nothing about the agent, so it clears a stale interrupt failure and leaves
+    /// the send's own warning standing.
+    [Test]
+    public async Task A_successful_interrupt_clears_only_an_interrupt_hint() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(hasTerminal: true);
+            h.Ready();
+            h.Lane.SpecialKeyHandler = _ => Task.FromResult(HubCallOutcome.NotConnected);
+            await h.Input.InterruptAsync(CancellationToken.None);
+            h.Lane.SpecialKeyHandler = _ => Task.FromResult(HubCallOutcome.Ok);
+            await h.Input.InterruptAsync(CancellationToken.None);
+            await Assert.That(h.Input.Hint).IsEqualTo("Enter sends · Shift+Enter for a new line");
+
+            h.Lane.UserInputHandler = _ => Task.FromResult(HubCallOutcome.NotConnected);
+            await h.Input.SendAsync("continue", [], CancellationToken.None);
+            await h.Input.InterruptAsync(CancellationToken.None);
+            await Assert.That(h.Input.Hint).IsEqualTo("delivery unconfirmed — check the chat before sending again");
             h.Input.Dispose();
         });
     }
