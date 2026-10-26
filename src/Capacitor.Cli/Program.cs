@@ -959,17 +959,14 @@ switch (command) {
         if (args.Contains("--claude") && args.Contains("--plan-edit")) {
             return await Run<ClaudeHookCommand>().HandlePlanEdit(new StringReader(claudeHookBody!));
         }
-        // Task 12: global, session-agnostic drain pass run early in EVERY non-Codex hook
-        // invocation — centralizes the per-vendor AgentHookPoster.DrainSpoolsAsync calls Tasks 4-6
-        // added (removed from their Handle methods so this runs exactly once per invocation) and
-        // additionally covers Claude/Cursor, which never called it (they only drain their OWN
-        // route-agnostic FIFO backlog via HookSpool.DrainAllAsync). Codex is exempt — it runs its
-        // own drain in the BACKGROUND, after satisfying its synchronous stdout contract.
-        // Cross-process-throttled (~30s) and auth-gated inside DrainSpoolsAsync, so this adds no
-        // per-invocation network cost beyond a disk stat on the vast majority of firings.
-        // No acceptability conjunct here: DrainSpoolsAsync owns that decision, and it reaps both
-        // spools BEFORE returning. Gating the call would mean a config broken for weeks never reaps
-        // anything, and the per-session cap does not bound the number of stale files.
+        if (args.Contains("--claude") && baseUrl is not null)
+            claudeHookBody = ClaudeSessionStartClaim.Prepare(claudeHookBody!, config,
+                () => ProcessHelpers.GetCodingAgentPid("claude", allowFallback: false));
+
+        // The global drain reaps stale process claims as well as retained spool files. A Claude
+        // start must claim its live process first, so an old PID cannot end that resumed session.
+        // Codex drains in the background after its synchronous stdout response. Delivery is
+        // throttled and auth-gated inside the drain; retention still runs with unusable config.
         if (!args.Contains("--codex") && baseUrl is not null) {
             var poster = new AgentHookPoster(
                 config, profiles,
@@ -978,7 +975,7 @@ switch (command) {
             await poster.DrainSpoolsAsync(
                 new HookSpool(config, time),
                 new TranscriptSpool(config, time),
-                sessionId: null); // current session unknown here — reading stdin now would consume it
+                sessionId: null);
         }
         if (args.Contains("--claude")) {
             return await Run<ClaudeHookCommand>().Handle(new StringReader(claudeHookBody!));

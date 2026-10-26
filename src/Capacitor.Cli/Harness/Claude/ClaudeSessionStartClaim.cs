@@ -1,0 +1,29 @@
+using System.Text.Json.Nodes;
+using Capacitor.Cli.Core;
+
+namespace Capacitor.Cli.Harness.Claude;
+
+static class ClaudeSessionStartClaim {
+    /// <summary>Records the live process before global orphan reaping can end its resumed session.
+    /// Capture's own gates decide whether the watcher adds an origin for future end delivery.</summary>
+    public static string Prepare(string body, ConfigRoot config, Func<int?> agentPid) {
+        try {
+            if (JsonNode.Parse(body) is not JsonObject hook
+             || Text(hook, "hook_event_name") != "SessionStart"
+             || SessionId.Parse(Text(hook, "session_id")) is not { } session
+             || agentPid() is not { } pid)
+                return body;
+
+            // /clear reads this process's preceding session before the new claim replaces it.
+            var stamped = PreviousSession.Stamp(hook, config, () => pid);
+            AgentSessions.OnThisMachine(config).Claim(pid, session);
+
+            return stamped ? hook.ToJsonString() : body;
+        } catch {
+            return body;
+        }
+    }
+
+    static string? Text(JsonObject hook, string key) =>
+        hook[key] is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+}
