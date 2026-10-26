@@ -176,10 +176,31 @@ public class ExperimentalSettingsViewModelTests {
         await Assert.That(stale).IsNotNull();
 
         row.IsEnabled = true;
-        vm.Apply(stale!.Value.Settings, stale.Value.Epoch);
+        vm.Apply(stale!.Value);
 
         await Assert.That(row.IsEnabled).IsTrue();
         await WorkspaceFixtures.WaitUntilAsync(() => store.Load("work").IsEnabled(Id), what: "the save");
+    });
+
+    /// <summary>Reads run off the UI thread and can land in either order; a read taken before a newer one
+    /// that already applied must not put the older value back, since the fingerprint now matches the file
+    /// and no later snapshot would correct it.</summary>
+    [Test]
+    public Task A_read_that_lands_after_a_newer_one_is_dropped() => AvaloniaSession.RunOnUiAsync(async () => {
+        var store = new ExperimentalSettingsStore(Config.Root);
+        using var vm = new ExperimentalSettingsViewModel(store, "work", Connected());
+        await vm.Loaded;
+        var row = vm.Features.Single();
+        await store.SetAsync("work", Id, true, CancellationToken.None);
+        var older = vm.ReadIfChanged()!.Value;
+        await store.SetAsync("work", Id, false, CancellationToken.None);
+        var newer = vm.ReadIfChanged()!.Value;
+
+        vm.Apply(newer);
+        vm.Apply(older);
+
+        await Assert.That(row.IsEnabled).IsFalse();
+        await Assert.That(vm.ReadIfChanged()).IsNull();
     });
 
     [Test]

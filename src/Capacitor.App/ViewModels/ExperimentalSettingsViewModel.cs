@@ -23,6 +23,8 @@ public sealed class ExperimentalSettingsViewModel : ReactiveObject, IDisposable 
     readonly Lock _fingerprintLock = new();
     (bool Exists, DateTime Written, long Length)? _fingerprint;
     long _saveEpoch;
+    long _readSequence;
+    long _appliedSequence;
 
     public ExperimentalSettingsViewModel(ExperimentalSettingsStore store, string profile, IDaemonClientService service) {
         _store = store;
@@ -45,7 +47,7 @@ public sealed class ExperimentalSettingsViewModel : ReactiveObject, IDisposable 
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(next => {
                 _snapshot = next.Snapshot;
-                if (next.Read is { } read) Apply(read.Settings, read.Epoch);
+                if (next.Read is { } read) Apply(read);
                 Observe();
             }).DisposeWith(_subscriptions);
 
@@ -64,25 +66,32 @@ public sealed class ExperimentalSettingsViewModel : ReactiveObject, IDisposable 
     }
 
     /// The store as it is now, or null when its last-write time and length match the last read.
-    internal (ExperimentalSettingsRead Settings, long Epoch)? ReadIfChanged() => Read(onlyIfChanged: true);
+    internal (ExperimentalSettingsRead Settings, long Epoch, long Sequence)? ReadIfChanged() => Read(onlyIfChanged: true);
 
-    (ExperimentalSettingsRead Settings, long Epoch)? Read(bool onlyIfChanged) {
+    // The sequence is taken with the fingerprint, so it orders reads by the file state each one recorded.
+    (ExperimentalSettingsRead Settings, long Epoch, long Sequence)? Read(bool onlyIfChanged) {
         var epoch = Interlocked.Read(ref _saveEpoch);
         var fingerprint = Fingerprint();
+        long sequence;
         lock (_fingerprintLock) {
             if (onlyIfChanged && fingerprint == _fingerprint) return null;
             _fingerprint = fingerprint;
+            sequence = ++_readSequence;
         }
-        return (_store.Load(_profile), epoch);
+        return (_store.Load(_profile), epoch, sequence);
     }
 
     /// A read that a save began or ended after is stale, and a row being saved keeps the value the user
-    /// just chose; the next snapshot reads again.
-    internal void Apply(ExperimentalSettingsRead read, long epoch) {
+    /// just chose; the next snapshot reads again. A read older than one already applied is dropped: the
+    /// fingerprint already matches the newer file, so nothing would read it again.
+    internal void Apply((ExperimentalSettingsRead Settings, long Epoch, long Sequence) next) {
+        var (read, epoch, sequence) = next;
+        if (sequence <= _appliedSequence) return;
         if (epoch != Interlocked.Read(ref _saveEpoch)) {
             lock (_fingerprintLock) _fingerprint = null;
             return;
         }
+        _appliedSequence = sequence;
         foreach (var row in Features) {
             if (_saving.Contains(row.Id)) continue;
             row.Load(read.Readable && read.IsEnabled(row.Id), read.Readable);
@@ -92,8 +101,7 @@ public sealed class ExperimentalSettingsViewModel : ReactiveObject, IDisposable 
 
     // Reads off the UI thread; constructed and saved on it, so each continuation applies back on it.
     async Task LoadAsync() {
-        var read = (await Task.Run(() => Read(onlyIfChanged: false)))!.Value;
-        Apply(read.Settings, read.Epoch);
+        Apply((await Task.Run(() => Read(onlyIfChanged: false)))!.Value);
     }
 
     (bool, DateTime, long) Fingerprint() {
