@@ -191,12 +191,14 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
                 "get_work_item_topology" => await client.GetAsync(
                     ItemUrl(baseUrl, arguments, "work_item_id", "topology")),
 
-                // The corrections: the merged-away / detached item is the route, like the topology
-                // verbs; the survivor and the session ride in the body.
+                // The corrections: the item they act on is the route, like the topology verbs; the
+                // survivor and the session ride in the body.
                 "merge_work_item"        => await client.PostAsync(
                     ItemUrl(baseUrl, arguments, "work_item_id", "merge"), ToJsonContent(BuildMergeBody(arguments))),
                 "detach_work_item"       => await client.PostAsync(
                     ItemUrl(baseUrl, arguments, "work_item_id", "detach"), ToJsonContent(BuildDetachBody(arguments))),
+                "declare_work_incomplete" => await client.PostAsync(
+                    ItemUrl(baseUrl, arguments, "work_item_id", "incomplete"), ToJsonContent(BuildDeclareIncompleteBody(arguments))),
 
                 "list_work_item_evals"   => await client.GetAsync(ItemUrl(baseUrl, arguments, "work_item_id",
                     WorkItemEvalToolResults.ListSuffix(McpToolArguments.OptionalString(arguments, "cursor"))), HttpCompletionOption.ResponseHeadersRead, evalToken),
@@ -845,6 +847,14 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
     internal static JsonObject BuildDetachBody(JsonObject? args) =>
         new() { ["session_id"] = McpSessionId.Resolve(args) };
 
+    internal static JsonObject BuildDeclareIncompleteBody(JsonObject? args) {
+        var body = new JsonObject { ["session_id"] = AotJsonString(McpSessionId.Resolve(args)) };
+
+        if (McpToolArguments.OptionalString(args, "reason") is { } reason) body["reason"] = AotJsonString(reason);
+
+        return body;
+    }
+
     // Text bounds and the none-class rule stay the server's, so its 400 names the real reason.
     internal static JsonObject BuildDeclareLooseEndBody(JsonObject? args) {
         var body = new JsonObject { ["session_id"] = McpSessionId.Resolve(args), ["text"] = McpToolArguments.RequireString(args, "text") };
@@ -1105,6 +1115,18 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
                 ["work_item_id"] = new("string", "The work item to detach the session from."),
                 ["session_id"]   = new("string", "Session id to detach. Defaults to the session this server runs in when omitted.")
             }, ["work_item_id"]), McpToolAnnotations.Destructive),
+
+        new("declare_work_incomplete",
+            "Declare that this session's work on a work item is not finished, so a tracker closing the issue (an "
+          + "auto-close when a PR merges) does not mark the item done. Call it only when the user says so, or "
+          + "when the session itself shows the work the item names is still incomplete. A PR merged or an issue "
+          + "closed after the declaration settles the item again. The session must be attached to the item; "
+          + "repeating the declaration from the same session is a no-op.",
+            new("object", new() {
+                ["work_item_id"] = new("string", "The work item that is not finished."),
+                ["reason"]       = new("string", "What is still left to do, in one sentence. Optional, but give one when you can."),
+                ["session_id"]   = new("string", "Session id declaring. Defaults to the session this server runs in when omitted.")
+            }, ["work_item_id"]), McpToolAnnotations.Upsert),
 
         new("dismiss_next_work",
             "Record that the user turned down a next-work suggestion, so it stops being offered. Call it only "

@@ -96,7 +96,8 @@ public static class OpenCodeExtensionInstaller {
           // replace; close_loose_end treats a session it defaulted differently from one it was given.
           const CALLER_SESSION_TOOLS = new Set([
             "kcap-workitems_declare_work_item", "kcap-workitems_get_session_work_items",
-            "kcap-workitems_detach_work_item", "kcap-workitems_declare_loose_end",
+            "kcap-workitems_detach_work_item", "kcap-workitems_declare_work_incomplete",
+            "kcap-workitems_declare_loose_end",
             "kcap-workitems_claim_loose_end", "kcap-workitems_release_loose_end",
             "kcap-plans_declare_plan_document", "kcap-plans_set_plan_tasks",
             "kcap-plans_update_plan_task", "kcap-plans_get_plan",
