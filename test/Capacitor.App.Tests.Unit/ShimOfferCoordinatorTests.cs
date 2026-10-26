@@ -74,6 +74,7 @@ public class ShimOfferCoordinatorTests {
                 bool autoOfferSuppressed = false, Task<string?>? pendingLink = null) {
             Target      = noTarget ? null : Path.Combine(TempDir, "target-cli");
             Destination = Path.Combine(TempDir, "kcap");
+            Probe.KcapPathBehavior = _ => Task.FromResult<string?>(Destination);
             Installer   = new PathShimInstaller(Runner, Probe, Destination);
 
             var phaseClosed = immediatePhaseClosed ? Task.CompletedTask : PhaseClosedSource.Task;

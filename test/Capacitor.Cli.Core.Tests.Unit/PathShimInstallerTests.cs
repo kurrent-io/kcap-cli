@@ -591,6 +591,7 @@ public class PathShimInstallerTests {
 
     [Test]
     public async Task Disclosure_shows_the_profile_line_before_it_is_written() {
+        Skip.When(OperatingSystem.IsWindows(), "POSIX shell profile paths");
         using var tmp = new TempDir();
         var home = new UserHome(tmp.Path);
         var installer = new PathShimInstaller(new FakeProcessRunner(), new FakeLoginShellProbe(), home: home,
@@ -677,6 +678,30 @@ public class PathShimInstallerTests {
             await Assert.That(result.Detail).Contains(earlier);
             await Assert.That(File.Exists(earlier)).IsTrue();
         }
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Resolved_link_casing_uses_the_host_path_rules(bool throughProfile) {
+        Skip.When(OperatingSystem.IsWindows(), "macOS lstat semantics");
+        using var tmp = new TempDir();
+        var home = new UserHome(tmp.Path);
+        var localBin = tmp.CreateDir(".local", "bin").Path;
+        var link = Path.Combine(localBin, "kcap");
+        var target = tmp.CreateFile("target-cli");
+        var runner = new FakeProcessRunner();
+        runner.Enqueue(new ProcessResult(1, "", "User canceled. (-128)", false));
+        var probe = ResolvingTo(link.ToUpperInvariant(), throughProfile ? "/usr/bin:/bin" : localBin);
+        var installer = new PathShimInstaller(runner, probe, home: home,
+            profile: throughProfile ? new ShellProfile(home, "/bin/zsh") : null,
+            mayElevate: _ => Task.FromResult(false));
+        var result = await Install(installer, tmp.PathTo("admin-kcap"), target, CancellationToken.None);
+        var expected = OperatingSystem.IsMacOS() ? ShimOutcome.Installed
+            : throughProfile ? ShimOutcome.InstalledButNotOnPath : ShimOutcome.Cancelled;
+        await Assert.That(result.Outcome).IsEqualTo(expected);
+        if (OperatingSystem.IsMacOS())
+            await Assert.That(new FileInfo(link).LinkTarget).IsEqualTo(target);
     }
 
     static FakeLoginShellProbe ResolvingTo(string resolved, string terminalPath) => new() {

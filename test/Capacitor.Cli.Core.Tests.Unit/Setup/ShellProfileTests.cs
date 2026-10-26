@@ -4,6 +4,8 @@ using TUnit.Core.Enums;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Setup;
 
+// The installer edits POSIX login-shell profiles; Windows uses its user PATH instead.
+[ExcludeOn(OS.Windows)]
 public class ShellProfileTests {
     [TempDir] public required TempDir Tmp { get; init; }
 

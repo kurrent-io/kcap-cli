@@ -171,7 +171,7 @@ public sealed class PathShimInstaller(
     async Task<bool> ResolvesToAsync(string link, CancellationToken ct) {
         if (await probe.KcapOnPathAsync(ct, forceRefresh: true).ConfigureAwait(false) != true) return false;
         var resolved = await probe.KcapPathAsync(ct, forceRefresh: true).ConfigureAwait(false);
-        return resolved is not null && string.Equals(Path.GetFullPath(resolved), Path.GetFullPath(link), StringComparison.Ordinal);
+        return resolved is not null && PathComparison.Equal(Path.GetFullPath(resolved), Path.GetFullPath(link));
     }
 
     static void TryDelete(string link) {
@@ -193,7 +193,7 @@ public sealed class PathShimInstaller(
             if (resolved is null)
                 return new ShimResult(ShimOutcome.Failed,
                     $"kcap was linked at {destination}, but the login-shell probe could not re-verify which kcap command resolves.", null);
-            if (string.Equals(Path.GetFullPath(resolved), Path.GetFullPath(destination), StringComparison.Ordinal))
+            if (PathComparison.Equal(Path.GetFullPath(resolved), Path.GetFullPath(destination)))
                 return new ShimResult(ShimOutcome.Installed, null, null);
             return new ShimResult(ShimOutcome.InstalledButNotOnPath,
                 $"kcap was linked at {destination}, but another kcap at {resolved} takes precedence. Put {Path.GetDirectoryName(destination)} earlier on your shell's PATH to use this install.", null);
