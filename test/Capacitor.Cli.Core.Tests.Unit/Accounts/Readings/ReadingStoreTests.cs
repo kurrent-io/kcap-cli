@@ -116,6 +116,19 @@ public class ReadingStoreTests {
     }
 
     [Test]
+    [Arguments("""{"reading":{"generation":0,"windows":[],"blocked":{"blocked_at":null,"cleared_at":null,"constraints":[null]}},"sessions":[]}""")]
+    [Arguments("""{"reading":{"generation":0,"windows":[null]},"sessions":[]}""")]
+    [Arguments("""{"reading":{"generation":0,"windows":[]},"sessions":[null]}""")]
+    public async Task Reading_file_with_a_null_element_is_skipped_and_replaced(string json) {
+        var store = Registered(Store(), Codex("a"));
+        Tmp.CreateFile("accounts/readings/a.json", json);
+
+        await Assert.That(store.Readings.LoadAll().ContainsKey("a")).IsFalse();
+        await Assert.That(store.Readings.TryRecord("a", 0, null, Observe(0))).IsTrue();
+        await Assert.That(store.Readings.LoadAll()["a"].Reading.Windows.Single().UsedPercent).IsEqualTo(10.0);
+    }
+
+    [Test]
     public async Task Reading_file_without_metadataAt_binds_and_the_next_metadata_lands() {
         var store = Registered(Store(), Codex("a"));
         Tmp.CreateFile("accounts/readings/a.json",

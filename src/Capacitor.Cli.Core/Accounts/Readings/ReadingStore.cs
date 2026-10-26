@@ -148,12 +148,12 @@ public sealed class ReadingStore {
         }
     }
 
-    // Source-generated binding leaves a missing member null whatever its annotation says.
+    // Source-generated binding leaves a missing member, or a null array element, null whatever its annotation says.
     static bool Complete(ReadingFile file) =>
         file is { Reading.Windows: { } windows, Sessions: { } sessions }
      && windows.All(w => w?.LimitId is not null)
      && sessions.All(s => s?.SessionId is not null)
-     && file.Reading.Blocked is null or { Constraints: not null };
+     && (file.Reading.Blocked is not { } blocked || blocked.Constraints?.All(c => c is not null) == true);
 
     // Read beside a concurrent atomic replace: a share mode that denies writers would fail the rename on Windows.
     static string ReadShared(string path) {
