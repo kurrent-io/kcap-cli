@@ -3393,8 +3393,10 @@ public class ChatTabViewModelTests {
     });
 
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
     [NotInParallel("AvaloniaSession")]
-    public Task A_panel_in_another_transcript_does_not_receipt_an_earlier_command() => RunOnUiAsync(async () => {
+    public Task A_panel_in_another_transcript_does_not_receipt_an_earlier_command(bool arrivesWithSwitch) => RunOnUiAsync(async () => {
         var h = new Harness(TranscriptChat.For("claude"), input: new KeyRecordingInput());
         try {
             var first = Tmp.CreateFile("panel-first.jsonl", [AssistantLine]);
@@ -3404,7 +3406,7 @@ public class ChatTabViewModelTests {
             await Assert.That(h.Chat.HasQueuedMessages).IsTrue();
             var next = Tmp.CreateFile("panel-next.jsonl", [AssistantLine]);
             var agent = Dto(next) with { AwaitingInput = true };
-            await h.PushAsync(agent);
+            if (!arrivesWithSwitch) await h.PushAsync(agent);
             await h.PushAsync(agent with { TerminalDialog = new TerminalDialogDto("Status", "", [], -1, "Version: 2.1.310") });
             await Assert.That(h.Chat.HasQueuedMessages).IsTrue();
         } finally { await h.TeardownAsync(); }

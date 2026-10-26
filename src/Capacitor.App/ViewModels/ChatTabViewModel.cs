@@ -982,7 +982,6 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         VendorLabel = HostedHarnessCatalog.LabelFor(_options, info.Vendor);
         ModelLabel = HostedHarnessCatalog.ModelLabelFor(info.Vendor, info.Model ?? "");
         ApplyAccount(info);
-        ApplyTerminalMenu(info.UsageLimit, info.TerminalDialog);
         _status = info.Status;
         _interruption = info.Interruption;
         if (_ended != info.Ended) {
@@ -1006,6 +1005,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         }
         var switched = _openFeed is { } open && info.FeedKey is { } key && key != _feedKey;
         if (switched) SwitchFeed(info.FeedKey!, _openFeed!);
+        ApplyTerminalMenu(info.UsageLimit, info.TerminalDialog);
         RefreshActivityNote();
         if (!switched) RefreshQueue();
     }
