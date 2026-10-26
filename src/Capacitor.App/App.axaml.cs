@@ -1044,6 +1044,7 @@ public partial class App : Application {
                 profiles: profilesVm) {
                 Appearance = new AppearanceSettingsViewModel(_uiScale),
                 Privacy    = new PrivacySettingsViewModel(_telemetry, _config, _usageNotice),
+                Experimental = new ExperimentalSettingsViewModel(new ExperimentalSettingsStore(_config), settings.ProfileName, service),
             };
         } catch (Exception ex) {
             notifier.Notify($"Could not open settings: {ex.Message}");

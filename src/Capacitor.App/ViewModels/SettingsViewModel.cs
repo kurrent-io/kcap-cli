@@ -166,6 +166,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
 
     public AppearanceSettingsViewModel? Appearance { get; init; }
     public PrivacySettingsViewModel? Privacy { get; init; }
+    public ExperimentalSettingsViewModel? Experimental { get; init; }
 
     /// What the OS calls the app that holds its notification switches.
     internal static string SystemSettingsName { get; } = OperatingSystem.IsWindows() ? "Windows Settings" : "System Settings";
@@ -415,6 +416,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
         _subscriptions.Dispose();
         Appearance?.Dispose();
         Privacy?.Dispose();
+        Experimental?.Dispose();
         _lifetime.Dispose();
     }
 }
