@@ -242,12 +242,6 @@
                             <TextBlock Classes="kcapTitle" Text="Appearance" />
                             <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
                                        Text="Make kcap easier to read. Changes apply immediately and save on this computer." />
-                            <Border Classes="settingsContextChip" ToolTip.Tip="Shared by every profile on this computer">
-                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <views:AppIcon Kind="Laptop" Size="12" />
-                                    <TextBlock Text="All profiles on this computer" />
-                                </StackPanel>
-                            </Border>
                         </StackPanel>
 
                         <Border Classes="settingsCard">
@@ -294,12 +288,6 @@
                             <TextBlock Classes="kcapTitle" Text="Notifications" />
                             <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
                                        Text="Choose when kcap notifies you while it is in the background." />
-                            <Border Classes="settingsContextChip" ToolTip.Tip="Shared by every profile on this computer">
-                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <views:AppIcon Kind="Laptop" Size="12" />
-                                    <TextBlock Text="All profiles on this computer" />
-                                </StackPanel>
-                            </Border>
                         </StackPanel>
 
                         <Border x:Name="NotificationAccessNotice" Classes="settingsNotice"
@@ -413,12 +401,6 @@
                             <TextBlock Classes="kcapTitle" Text="Usage data" />
                             <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
                                        Text="Shared with the kcap command line on this computer." />
-                            <Border Classes="settingsContextChip" ToolTip.Tip="Shared by every profile on this computer">
-                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <views:AppIcon Kind="Laptop" Size="12" />
-                                    <TextBlock Text="All profiles on this computer" />
-                                </StackPanel>
-                            </Border>
                         </StackPanel>
 
                         <Border Classes="settingsCard">
@@ -458,12 +440,6 @@
                             <TextBlock Classes="kcapTitle" Text="About kcap" />
                             <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
                                        Text="What is installed on this computer, and how to keep it up to date." />
-                            <Border Classes="settingsContextChip" ToolTip.Tip="Shared by every profile on this computer">
-                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <views:AppIcon Kind="Laptop" Size="12" />
-                                    <TextBlock Text="All profiles on this computer" />
-                                </StackPanel>
-                            </Border>
                         </StackPanel>
 
                         <StackPanel Classes="settingsGroup">

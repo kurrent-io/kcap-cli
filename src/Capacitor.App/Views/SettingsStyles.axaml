@@ -184,7 +184,7 @@
         <Setter Property="FontWeight" Value="SemiBold" />
         <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
     </Style>
-    <!-- Every page names its scope: the profile it edits, or every profile on this computer. -->
+    <!-- A profile page names the profile it edits; the sidebar groups say the rest. -->
     <!-- A row's state as a badge. Attention pairs the amber with an icon, never colour alone. -->
     <Style Selector="Border.settingsStatus">
         <Setter Property="Padding" Value="7,2" />
