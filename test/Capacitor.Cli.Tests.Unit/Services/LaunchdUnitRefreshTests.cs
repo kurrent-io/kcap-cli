@@ -464,4 +464,158 @@ public class LaunchdUnitRefreshTests {
         await Assert.That(outcome).IsEqualTo(UnitRefresh.Failed);
         await Assert.That(error).Contains("still reports spawn type");
     }
+
+    /// <summary>The job's spawn type is current, so only the amendment can make it stale.</summary>
+    [Test]
+    public async Task An_amended_plist_reloads_a_current_job() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+
+        var path  = Seed(LaunchdUnit.Plist(Spec()));
+        var calls = new List<string[]>();
+
+        var outcome = Manager(calls, "daemon (3)").RefreshUnit(
+            "test", () => true, Plenty, out _, amend: plist => LaunchdUnit.WithEnvironmentValue(plist, "PATH", "/usr/bin:/opt/agents"));
+
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Reloaded);
+        await Assert.That(LaunchdUnit.EnvFromPlist(File.ReadAllText(path))["PATH"]).IsEqualTo("/usr/bin:/opt/agents");
+        await Assert.That(calls.Select(c => c[0]).ToArray()).IsEquivalentTo(["print", "bootout", "bootstrap", "print"]);
+    }
+
+    [Test]
+    public async Task An_amendment_that_changes_nothing_leaves_a_current_job_alone() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+
+        Seed(LaunchdUnit.Plist(Spec()));
+        var asked = false;
+
+        var outcome = Manager([], "daemon (3)").RefreshUnit("test", () => asked = true, Plenty, out _, amend: _ => null);
+
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Current);
+        await Assert.That(asked).IsFalse();
+    }
+
+    /// <summary>launchd keeps the copy it loaded, so a plist that already carried the amendment would make
+    /// the next run believe it applied.</summary>
+    [Test]
+    public async Task A_deferred_reload_leaves_the_amendment_unwritten() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+
+        var path = Seed(LaunchdUnit.Plist(Spec()));
+
+        var outcome = Manager([], "daemon (3)").RefreshUnit(
+            "test", () => false, Plenty, out _, amend: plist => LaunchdUnit.WithEnvironmentValue(plist, "PATH", "/opt/agents"));
+
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Deferred);
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(LaunchdUnit.Plist(Spec()));
+    }
+
+    /// <summary>The loaded job keeps its old environment when bootout fails, so the plist must too.</summary>
+    [Test]
+    public async Task A_bootout_that_leaves_the_job_loaded_drops_the_amendment() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+
+        var path = Seed(LaunchdUnit.Plist(Spec()));
+
+        var outcome = Manager([], "daemon (3)", running: true, bootoutExit: 5).RefreshUnit(
+            "test", () => true, Plenty, out _, amend: plist => LaunchdUnit.WithEnvironmentValue(plist, "PATH", "/opt/agents"));
+
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Failed);
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(LaunchdUnit.Plist(Spec()));
+    }
+
+    /// <summary>A write that failed after the stop would leave the daemon down, so the amendment is
+    /// written before the daemon is asked.</summary>
+    [Test]
+    public async Task A_failed_amendment_write_never_stops_the_daemon() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+
+        Seed(LaunchdUnit.Plist(Spec()));
+        var asked   = false;
+        var manager = new LaunchdServiceManager(Home, TimeProvider.System,
+            writeUnit: (_, content, _) => {
+                if (content.Contains("/opt/agents", StringComparison.Ordinal)) throw new IOException("disk full");
+            },
+            runBounded: (_, args, _) => args[0] == "print" ? (0, Print("daemon (3)"), "", false) : (0, "", "", false));
+
+        var outcome = manager.RefreshUnit(
+            "test", () => asked = true, Plenty, out var error, amend: plist => LaunchdUnit.WithEnvironmentValue(plist, "PATH", "/opt/agents"));
+
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Failed);
+        await Assert.That(error).Contains("disk full");
+        await Assert.That(asked).IsFalse();
+    }
+
+    /// <summary>A bootout can return before the old job is gone; a label still loaded then may be running
+    /// the old environment.</summary>
+    [Test]
+    public async Task A_label_still_loaded_after_bootstrap_drops_the_amendment() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+
+        var path    = Seed(LaunchdUnit.Plist(Spec()));
+        var manager = new LaunchdServiceManager(Home, TimeProvider.System,
+            writeUnit: (p, content, _) => File.WriteAllText(p, content),
+            runBounded: (_, args, _) => args[0] switch {
+                "print"     => (0, Print("daemon (3)"), "", false),
+                "bootstrap" => (5, "", "Bootstrap failed: 5: Input/output error", false),
+                _           => (0, "", "", false),
+            });
+
+        var outcome = manager.RefreshUnit(
+            "test", () => true, Plenty, out _, amend: plist => LaunchdUnit.WithEnvironmentValue(plist, "PATH", "/opt/agents"));
+
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Failed);
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(LaunchdUnit.Plist(Spec()));
+    }
+
+    [Test]
+    public async Task A_stop_that_throws_drops_the_amendment() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+
+        var path = Seed(LaunchdUnit.Plist(Spec()));
+
+        var outcome = Manager([], "daemon (3)").RefreshUnit(
+            "test", () => throw new InvalidOperationException("socket gone"), Plenty, out var error,
+            amend: plist => LaunchdUnit.WithEnvironmentValue(plist, "PATH", "/opt/agents"));
+
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Failed);
+        await Assert.That(error).Contains("socket gone");
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(LaunchdUnit.Plist(Spec()));
+    }
+
+    /// <summary>The bootout already unloaded the job, so a bootstrap that throws must not leave it down.</summary>
+    [Test]
+    public async Task A_bootstrap_that_throws_after_bootout_reloads_the_previous_job() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+
+        var path       = Seed(LaunchdUnit.Plist(Spec()));
+        var loaded     = true;
+        var bootstraps = 0;
+        var manager    = new LaunchdServiceManager(Home, TimeProvider.System,
+            writeUnit: (p, content, _) => File.WriteAllText(p, content),
+            runBounded: (_, args, _) => {
+                switch (args[0]) {
+                    case "print":
+                        return loaded ? (0, Print("daemon (3)"), "", false) : (113, "", "Could not find service", false);
+                    case "bootout":
+                        loaded = false;
+                        return (0, "", "", false);
+                    case "bootstrap" when ++bootstraps == 1:
+                        throw new System.ComponentModel.Win32Exception("launchctl could not start");
+                    case "bootstrap":
+                        loaded = true;
+                        return (0, "", "", false);
+                    default:
+                        return (0, "", "", false);
+                }
+            });
+
+        var outcome = manager.RefreshUnit(
+            "test", () => true, Plenty, out var error, amend: plist => LaunchdUnit.WithEnvironmentValue(plist, "PATH", "/opt/agents"));
+
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Failed);
+        await Assert.That(error).Contains("launchctl could not start");
+        await Assert.That(bootstraps).IsEqualTo(2);
+        await Assert.That(loaded).IsTrue();
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(LaunchdUnit.Plist(Spec()));
+    }
 }

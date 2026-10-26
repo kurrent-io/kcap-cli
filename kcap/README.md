@@ -54,10 +54,14 @@ Search, save, and update durable team memories — preferences, feedback, projec
 |------|-------------|
 | `search_memories` | Hybrid semantic + keyword search over memories visible to you |
 | `get_memory` | Fetch a memory's full content by id or slug |
-| `save_memory` | Save a new memory (`audience`, `slug`, `description`, `content`, `kind`); scoped to the cwd repo unless `project: <slug>` (a project's repos) or `global: true` (org-wide) |
-| `update_memory` | Update an existing memory's description/content/kind |
+| `save_memory` | Save a new memory (`audience`, `slug`, `description`, `content`, `kind`); scoped to the cwd repo unless `project: <slug>` (a project's repos) or `global: true` (org-wide); `form: "log"` saves a log, whose `content` is its header |
+| `update_memory` | Update an existing memory's description/content/kind, or a log's `header` |
 | `rescope_memory` | Change a memory's audience (e.g. promote user → team/org) or move its home to a project, repo or the org |
 | `archive_memory` | Soft-delete a memory |
+| `append_memory_entry` | Append an entry (`title`, `body`) to a log — a memory saved with `form: "log"` |
+| `settle_memory_entry` | Settle a log entry, with an optional one-line `resolution` |
+| `reopen_memory_entry` | Reopen a settled log entry |
+| `list_memory_entries` | Page a log's open or settled entries, newest first |
 
 Repo- and machine-aware: it resolves the cwd to a repo hash and the local persisted machine id at startup to scope saves and bias search results.
 

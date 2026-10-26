@@ -6,7 +6,7 @@
         x:DataType="vm:SettingsViewModel"
         Title="kcap — Settings"
         Icon="avares://kcap-desktop/Assets/kcap-icon.png"
-        Width="540" Height="580" CanResize="False" WindowStartupLocation="CenterOwner"
+        Width="600" Height="580" CanResize="False" WindowStartupLocation="CenterOwner"
         Background="{StaticResource KcapCanvasBrush}">
     <Grid Margin="28,20" RowDefinitions="*,Auto">
         <TabControl x:Name="SettingsTabs" Classes="kcapSettingsTabs" SelectedIndex="0">
@@ -105,6 +105,11 @@
                 <views:ProfilesSettingsView DataContext="{Binding Profiles}" />
             </TabItem>
 
+            <TabItem x:Name="AccountsTab" Classes="kcapSettingsTab" Header="Accounts"
+                     IsVisible="{Binding Accounts, Converter={x:Static ObjectConverters.IsNotNull}}">
+                <views:AccountsSettingsView DataContext="{Binding Accounts}" />
+            </TabItem>
+
             <TabItem x:Name="NotificationsTab" Classes="kcapSettingsTab" Header="Notifications">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,18,0,0">
                     <StackPanel Spacing="16">
@@ -181,6 +186,13 @@
                                    Foreground="{StaticResource KcapDangerBrush}"
                                    IsVisible="{Binding NotificationMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                     </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem x:Name="SearchTab" Classes="kcapSettingsTab" Header="Search"
+                     IsVisible="{Binding Search, Converter={x:Static ObjectConverters.IsNotNull}}">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,18,0,0">
+                    <views:SearchSettingsView DataContext="{Binding Search}" />
                 </ScrollViewer>
             </TabItem>
 

@@ -180,6 +180,10 @@ public sealed class AgentActionService {
     public void OpenInWebRemote(string agentId) =>
         OpenUrl(_remoteServerUrl, AgentPath(agentId), "Not signed in to a server");
 
+    /// A session's own page, for a row no agent stands behind. Never throws.
+    public void OpenSessionInWeb(string sessionId) =>
+        OpenUrl(_remoteServerUrl, $"/sessions/{Uri.EscapeDataString(sessionId)}", "Not signed in to a server");
+
     /// The work item's page, always on the app profile's own server: that is the server whose read
     /// named the id, and a daemon snapshot's server may be a different one. Never throws.
     public void OpenWorkItemInWeb(string workItemId) {

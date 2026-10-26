@@ -16,6 +16,9 @@ public sealed class UiAuthProgress(Action<Action> post) : IAuthProgress {
     public event Action<string, string, bool>? DeviceCodeReceived;
     public event Action?                 PollTicked;
 
+    /// A discovered workspace is still being created; sign-in waits for it rather than leaving it out.
+    public event Action<string>?         WorkspaceProvisioning;
+
     public void Notice(string message) => post(() => NoticeReceived?.Invoke(message));
 
     public void Error(string message) => post(() => ErrorReceived?.Invoke(message));
@@ -28,6 +31,17 @@ public sealed class UiAuthProgress(Action<Action> post) : IAuthProgress {
         post(() => DeviceCodeReceived?.Invoke(code, verificationUri, prefilled));
 
     public void PollTick() => post(() => PollTicked?.Invoke());
+
+    public void ProvisioningWait(string workspace) => post(() => WorkspaceProvisioning?.Invoke(workspace));
+
+    string? _failedWorkspace;
+
+    /// kcap.ai stopped creating a discovered workspace, or it is no longer this account's. Held rather than
+    /// posted, so the attempt's own result can never be handled before it.
+    public void ProvisioningFailed(string workspace) => Volatile.Write(ref _failedWorkspace, workspace);
+
+    /// The workspace the last attempt saw fail to provision, or null; reading clears it.
+    public string? TakeProvisioningFailure() => Interlocked.Exchange(ref _failedWorkspace, null);
 }
 
 /// <summary>

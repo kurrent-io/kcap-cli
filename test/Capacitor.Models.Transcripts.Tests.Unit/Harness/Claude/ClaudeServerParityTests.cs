@@ -1,4 +1,6 @@
+using System.Text.Json.Nodes;
 using Capacitor.Models.Transcripts.Harness.Claude;
+using Google.Protobuf;
 using Kurrent.Agent.Schema.Events;
 
 namespace Capacitor.Models.Transcripts.Tests.Unit.Harness.Claude;
@@ -37,8 +39,83 @@ public class ClaudeServerParityTests {
         await Assert.That(e[1].Usage).IsNull();
     }
 
+    /// <summary>Pins the agent schema's canonical shape for the Anthropic extras: every usage key without a canonical
+    /// slot rides <c>additional_counts</c> verbatim, nested objects and the service tier string included, while the
+    /// flat cache-write total stays where it is.</summary>
+    [Test]
+    public async Task Usage_carries_every_vendor_usage_key_verbatim_in_additional_counts() {
+        const string usage = """{"input_tokens":6,"output_tokens":274,"cache_read_input_tokens":19041,"cache_creation_input_tokens":27055,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":27055},"server_tool_use":{"web_search_requests":2,"web_fetch_requests":1},"service_tier":"priority"}""";
+        var e = E(Assistant(Uuid, usage));
+
+        await Assert.That(e[0].Usage!.AdditionalCounts).IsNotNull();
+        var counts   = JsonNode.Parse(JsonFormatter.Default.Format(e[0].Usage!.AdditionalCounts));
+        var expected = JsonNode.Parse("""{"cache_creation_input_tokens":27055,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":27055},"server_tool_use":{"web_search_requests":2,"web_fetch_requests":1},"service_tier":"priority"}""");
+        await Assert.That(JsonNode.DeepEquals(counts, expected)).IsTrue().Because(counts!.ToJsonString());
+        await Assert.That(e[0].CacheCreationTokens).IsEqualTo(27055L);
+    }
+
+    /// <summary>A vendor's own <c>total_tokens</c> and <c>reasoning_tokens</c> fill their canonical slots, as the agent
+    /// schema maps them, so neither is dropped with the other canonical keys; without a vendor total the slot is the
+    /// sum of the four counts.</summary>
+    [Test]
+    [Arguments("""{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":3,"cache_creation_input_tokens":2}""", 20L, null)]
+    [Arguments("""{"input_tokens":10,"output_tokens":5,"total_tokens":99}""", 99L, null)]
+    [Arguments("""{"input_tokens":10,"output_tokens":5,"reasoning_tokens":4}""", 15L, 4L)]
+    public async Task A_vendor_total_and_reasoning_count_fill_their_slots(string usageJson, long total, long? reasoning) {
+        var usage = E(Assistant(Uuid, usageJson))[0].Usage!;
+
+        await Assert.That(usage.TotalTokens).IsEqualTo(total);
+        await Assert.That(usage.HasReasoningTokens ? usage.ReasoningTokens : (long?)null).IsEqualTo(reasoning);
+        await Assert.That(usage.AdditionalCounts?.Fields.ContainsKey("total_tokens") ?? false).IsFalse();
+        await Assert.That(usage.AdditionalCounts?.Fields.ContainsKey("reasoning_tokens") ?? false).IsFalse();
+    }
+
+    /// <summary>A usage of canonical counts alone carries no extras.</summary>
+    [Test]
+    public async Task Usage_of_canonical_counts_alone_carries_no_additional_counts() =>
+        await Assert.That(E(Assistant(Uuid, U2))[0].Usage!.AdditionalCounts).IsNull();
+
+    /// <summary>A usage that reports only a vendor total, or only fields without a canonical slot, is still usage: it
+    /// is carried rather than dropped, and no total is invented for one that reported none.</summary>
+    [Test]
+    [Arguments("""{"total_tokens":42}""", 42L, null)]
+    [Arguments("""{"service_tier":"standard"}""", null, "service_tier")]
+    [Arguments("""{"reasoning_tokens":3}""", null, null)]
+    public async Task A_sparse_usage_is_kept(string usageJson, long? total, string? extra) {
+        var usage = E(Assistant(Uuid, usageJson))[0].Usage;
+
+        await Assert.That(usage).IsNotNull();
+        await Assert.That(usage!.HasTotalTokens ? usage.TotalTokens : (long?)null).IsEqualTo(total);
+        if (extra is not null) await Assert.That(usage.AdditionalCounts.Fields.ContainsKey(extra)).IsTrue();
+    }
+
+    /// <summary>Older Claude Code builds write a growing <c>output_tokens</c> across the blocks of one response, so a block
+    /// of the same message id whose usage grew still carries it: keeping only the first snapshot would undercount.</summary>
+    [Test]
+    public async Task A_grown_snapshot_of_the_same_response_still_carries_its_usage() {
+        static string Line(string uuid, int output) =>
+            $$"""{"type":"assistant","uuid":"{{uuid}}","message":{"id":"msg_1","model":"claude-x","content":[{"type":"text","text":"a"}],"usage":{"input_tokens":10,"output_tokens":""" + output + "}}}";
+        var ctx = Ctx();
+        E(Line(Uuid, 5), ctx);
+
+        await Assert.That(E(Line(Uuid2, 120), ctx)[0].Usage?.OutputTokens).IsEqualTo(120L);
+    }
+
+    /// <summary>A record repeating the previous record's usage, in any key order, is the same response and carries none;
+    /// one whose usage differs in any field, including one with no canonical slot, carries its own.</summary>
+    [Test]
+    [Arguments("""{"input_tokens":10,"output_tokens":5,"service_tier":"standard"}""", """{"service_tier":"standard","output_tokens":5,"input_tokens":10}""", false)]
+    [Arguments("""{"input_tokens":10,"output_tokens":5,"service_tier":"standard"}""", """{"input_tokens":10,"output_tokens":5,"service_tier":"priority"}""", true)]
+    [Arguments("""{"input_tokens":10,"output_tokens":5}""", """{"input_tokens":10,"output_tokens":5,"reasoning_tokens":3}""", true)]
+    public async Task Only_a_repeat_of_the_whole_usage_is_suppressed(string first, string second, bool secondCarriesUsage) {
+        var ctx = Ctx();
+        E(Assistant(Uuid, first), ctx);
+
+        await Assert.That(E(Assistant(Uuid2, second), ctx)[0].Usage is not null).IsEqualTo(secondCarriesUsage);
+    }
+
     /// <summary>Claude Code writes each block of one response as its own record with the response's usage
-    /// repeated; only a change of tuple, or any record that is not an assistant one, re-arms it.</summary>
+    /// repeated; only a change of usage, or any record that is not an assistant one, re-arms it.</summary>
     [Test]
     public async Task The_usage_memory_suppresses_a_repeat_and_resets_on_any_other_record() {
         var ctx = Ctx();

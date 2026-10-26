@@ -7,6 +7,7 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Remote.Models;
@@ -26,11 +27,13 @@ public sealed record RepositoryOption(string RepoPath, string Vendor, bool Selec
 /// verbatim for a remote machine; the local entry's come from the existing repo flow. Version is
 /// the remote daemon's own advertised build, which is what the attachment gate reads; null for the
 /// local entry, whose capability comes from the attach handshake instead. VendorModels is the
-/// machine's own model catalog per vendor; null when its daemon advertises none.
+/// machine's own model catalog per vendor; null when its daemon advertises none. VendorModelsByAccount
+/// is the catalog per registered account id.
 public sealed record MachineOption(
     string DaemonName, bool IsLocal, bool Connected, string? Platform,
     string[] RepoPaths, string[]? SupportedVendors, bool Selected, string? Version = null,
-    IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>? VendorModels = null);
+    IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>? VendorModels = null,
+    IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>? VendorModelsByAccount = null);
 
 /// Whether a launch can reach a daemon right now, merged from the local attach state and the
 /// daemon's own upstream connection word — the same two inputs the footer's status line reads.
@@ -98,10 +101,11 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal const string LocalServerRefusedNotice = "The local server refused this app's connection. Restart kcap.";
     internal const string LocalServerLostNotice    = "Lost the connection to the local server. kcap keeps trying to reconnect.";
 
-    /// The daemon detects harnesses once at startup, so installing one takes a daemon restart.
+    /// A service-run daemon restarts itself for a harness installed on its PATH; setup fixes a PATH that
+    /// misses it, and a daemon started by hand needs a restart.
     internal static string NoHarnessesNotice(string? remoteMachine) => remoteMachine is null
-        ? "No coding agents were found on this machine. Install Claude Code, Codex or another supported agent, then restart the daemon."
-        : $"No coding agents were found on {remoteMachine}. Install one there, then restart its daemon.";
+        ? "No coding agents were found on this machine. Install Claude Code, Codex or another supported agent; if it does not appear, run setup again or restart the daemon."
+        : $"No coding agents were found on {remoteMachine}. Install one there; if it does not appear, run setup there again or restart its daemon.";
 
     internal static string HarnessUnavailableMessage(string label) => $"{label} isn't available on this machine. Choose another agent.";
 
@@ -114,7 +118,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     readonly ILaunchClient _launch;
     readonly Func<Task<string[]>> _knownRepos;
     readonly Func<int>? _navigationGeneration;
-    readonly Action<string, int>? _openSessionIfCurrent;
+    readonly Action<string, AgentOrigin, int>? _openSessionIfCurrent;
     readonly Action<string>? _launchFailed;
     readonly CompositeDisposable _disposables = new();
 
@@ -150,8 +154,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         set => this.RaiseAndSetIfChanged(ref _selectedModel, value);
     }
 
-    /// The selected machine's own model catalog merged over the server's (see MergeCatalogs); the
-    /// agent chip resolves a selected model's label against it.
+    /// The selected machine's own model catalog merged over the server's (see MergeCatalogs), with
+    /// the selected account's own list for its vendor where the machine has one; the agent chip
+    /// resolves a selected model's label against it.
     public IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>> EffectiveModelCatalog => _effectiveModelCatalog.Value;
 
     /// The model choices to offer for a vendor: the effective catalog's entry, else the curated
@@ -261,9 +266,13 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     string? _intakeNotice;
 
     string? _startError;
+    /// Any write withdraws Use default; only an account refusal offers it again.
     public string? StartError {
         get => _startError;
-        private set => this.RaiseAndSetIfChanged(ref _startError, value);
+        private set {
+            this.RaiseAndSetIfChanged(ref _startError, value);
+            StartErrorOffersDefault = false;
+        }
     }
 
     /// A 401 outcome is the only writer besides its own reset paths. A subject (not a reactive
@@ -328,6 +337,64 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     public string StartButtonTip => _startButtonTip.Value;
 
     public ReactiveCommand<Unit, Unit> SignInCommand { get; }
+
+    readonly AccountChooser _accountChooser;
+    readonly Func<Task>? _retryListing;
+    (string RepoPath, string Vendor, string Machine, bool Remote)? _accountTarget;
+    bool _applyingAccountInputs;
+    IReadOnlyDictionary<string, string>? _accountMemory;
+    Task _accountMemoryWrites = Task.CompletedTask;
+    // Live mirrors of the account inputs, read by StartAsync against its captured draft.
+    DaemonListing _currentListing = new(null, 0, false);
+    IReadOnlyList<DaemonAccountsDto> _currentDaemonAccounts = [];
+    AccountsSnapshotDto? _currentLocalAccounts;
+    readonly BehaviorSubject<bool> _accountPending = new(false);
+    readonly BehaviorSubject<string?> _accountTip = new(null);
+    // The account pipeline's copy of _lastViewerId. Unresolved reads as Unknown and is read again once
+    // it resolves; resolved to null is a server without sign-in.
+    readonly BehaviorSubject<(bool Resolved, string? Id)> _viewerIds = new((false, null));
+    readonly BehaviorSubject<(string Vendor, string AccountId)?> _accountCatalogKey = new(null);
+
+    bool _accountSection;
+    /// The Agent panel's Account section: the rows, or the pending line while the choice resolves.
+    public bool AccountSection {
+        get => _accountSection;
+        private set => this.RaiseAndSetIfChanged(ref _accountSection, value);
+    }
+
+    IReadOnlyList<AccountChoice> _accountRows = [];
+    public IReadOnlyList<AccountChoice> AccountRows {
+        get => _accountRows;
+        private set => this.RaiseAndSetIfChanged(ref _accountRows, value);
+    }
+
+    string? _accountPendingText;
+    public string? AccountPendingText {
+        get => _accountPendingText;
+        private set => this.RaiseAndSetIfChanged(ref _accountPendingText, value);
+    }
+
+    bool _accountRetryVisible;
+    public bool AccountRetryVisible {
+        get => _accountRetryVisible;
+        private set => this.RaiseAndSetIfChanged(ref _accountRetryVisible, value);
+    }
+
+    string? _selectedAccountLabel;
+    /// The chip's account part; null while the default is chosen.
+    public string? SelectedAccountLabel {
+        get => _selectedAccountLabel;
+        private set => this.RaiseAndSetIfChanged(ref _selectedAccountLabel, value);
+    }
+
+    bool _startErrorOffersDefault;
+    public bool StartErrorOffersDefault {
+        get => _startErrorOffersDefault;
+        private set => this.RaiseAndSetIfChanged(ref _startErrorOffersDefault, value);
+    }
+
+    public ReactiveCommand<Unit, Unit> RetryAccountsCommand { get; }
+    public ReactiveCommand<Unit, Unit> UseDefaultAccountCommand { get; }
 
     readonly ObservableAsPropertyHelper<IReadOnlyList<HarnessOption>> _harnesses;
     public IReadOnlyList<HarnessOption> Harnesses => _harnesses.Value;
@@ -402,10 +469,11 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     readonly IAgentDirectory? _directory;
 
     /// One accepted launch awaiting settlement. UploadedAt is null for a text-only launch; both
-    /// stamps come from the same clock, so one TimeProvider governs every expiry.
+    /// stamps come from the same clock, so one TimeProvider governs every expiry. Generation is
+    /// the navigation generation captured before the launch call.
     sealed record PendingLaunch(
         DateTimeOffset At, AgentOrigin Lane, bool HadAttachments, DateTimeOffset? UploadedAt,
-        string RepoPath, string Machine);
+        string RepoPath, int Generation, string Machine);
 
     /// The only copy of a sent launch's bytes, held until the daemon settles that launch or the
     /// window closes. The two counters are what the composer looked like AFTER the launch emptied
@@ -444,9 +512,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// lands after the user navigated away open nothing.
     /// </param>
     /// <param name="openSessionIfCurrent">
-    /// The launch auto-open (MainWindowViewModel.OpenSessionIfCurrent), carrying that captured
-    /// generation. Never invoked for a launch that targeted a remote machine — that workspace is
-    /// backed by the local daemon socket, which can never find the remote agent.
+    /// The launch auto-open (MainWindowViewModel.OpenSessionIfCurrent), carrying the lane and that
+    /// captured generation. A remote launch has no placeholder row, so it opens only once its
+    /// directory row arrives — the remote workspace cannot open an id no lane holds.
     /// </param>
     /// <param name="requestSignIn">Opens the re-auth sign-in surface (App owns the window). Null
     /// leaves the Sign in button inert — a HomeViewModel with no windows to open.</param>
@@ -464,19 +532,29 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// <param name="directory">The merged local+remote rows (IAgentDirectory.Rows). A row for a
     /// tracked id is success confirmation and stops tracking it. Null ⇒ only a LaunchFailed or the
     /// pending entry's own 10-minute timeout ever stops tracking.</param>
+    /// <param name="listing">The server's daemon listing (IRemoteAgentsService.Listing), which says
+    /// whether each daemon, this machine's included, honours an explicit account. Null ⇒ no account
+    /// is offered or sent.</param>
+    /// <param name="daemonAccounts">Every listed daemon's accounts (IRemoteAgentsService.DaemonAccounts).</param>
+    /// <param name="localAccounts">This machine's daemon's own snapshot (IAccountsService.Snapshot).</param>
+    /// <param name="retryListing">Fetches the listing and every daemon's accounts again
+    /// (IRemoteAgentsService.RefreshDaemonsAsync).</param>
     /// <param name="launchFailed">A tracked launch failed (MainWindowViewModel.CloseFailedLaunch):
     /// its auto-opened workspace would otherwise cover the StartError this view just set.</param>
     public HomeViewModel(
             IDaemonClientService daemon, IAppStateStore state, ILaunchClient launch,
             Func<Task<string[]>> knownRepos, TimeProvider time, CancellationToken shutdown = default,
             Func<int>? navigationGeneration = null,
-            Action<string, int>? openSessionIfCurrent = null, Action? requestSignIn = null,
+            Action<string, AgentOrigin, int>? openSessionIfCurrent = null, Action? requestSignIn = null,
             IObservable<IReadOnlyList<DaemonInfo>>? daemons = null,
             Func<CancellationToken, Task<string?>>? viewerId = null,
             IObservable<ServerLaneStatus>? laneStatus = null, string? localMachineId = null,
             IObservable<LaunchFailure>? launchFailures = null, IAgentDirectory? directory = null,
             IObservable<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>? modelCatalog = null,
-            IAttachmentUploader? uploader = null, string? appServerUrl = null, Action<string>? launchFailed = null) {
+            IAttachmentUploader? uploader = null, string? appServerUrl = null,
+            IObservable<DaemonListing>? listing = null, IObservable<IReadOnlyList<DaemonAccountsDto>>? daemonAccounts = null,
+            IObservable<AccountsSnapshotDto?>? localAccounts = null, Func<Task>? retryListing = null,
+            Action<string>? launchFailed = null) {
         _launchFailed = launchFailed;
         _daemon = daemon;
         _state = state;
@@ -528,14 +606,20 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         // registry no longer resolves is unknown (null), never its last list. Any change re-renders
         // the agent chip, and the next flyout open reads the new rows (RebuildRows runs per open).
         var localCatalog = daemon.Snapshots
-            .Select(s => VendorModelMaps.FromStatus(s.Daemon.VendorModels))
-            .StartWith((IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>?) null);
-        localCatalog.Subscribe(c => _currentLocalCatalog = c).DisposeWith(_disposables);
+            .Select(s => (Models: VendorModelMaps.FromStatus(s.Daemon.VendorModels),
+                ByAccount: VendorModelMaps.FromStatus(s.Daemon.VendorModelsByAccount)))
+            .StartWith((Models: null, ByAccount: null));
+        localCatalog.Subscribe(c => _currentLocalCatalog = c.Models).DisposeWith(_disposables);
         var machineCatalog = localCatalog.CombineLatest(
             _daemons.StartWith((IReadOnlyList<DaemonInfo>) []), _machineSelectionChanges,
-            (local, list, sel) => sel.Remote ? FindMachine(list, sel.Name, _lastViewerId)?.VendorModels : local);
+            (local, list, sel) => {
+                if (!sel.Remote) return local;
+                var remote = FindMachine(list, sel.Name, _lastViewerId);
+                return (Models: remote?.VendorModels, ByAccount: remote?.VendorModelsByAccount);
+            });
         _effectiveModelCatalog = machineCatalog
-            .CombineLatest(modelCatalog ?? Observable.Return(ServerVendorModelCatalog.Empty), MergeCatalogs)
+            .CombineLatest(modelCatalog ?? Observable.Return(ServerVendorModelCatalog.Empty), _accountCatalogKey.DistinctUntilChanged(),
+                (machine, server, account) => WithAccountCatalog(MergeCatalogs(machine.Models, server), machine.ByAccount, account))
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .ToProperty(this, x => x.EffectiveModelCatalog, ServerVendorModelCatalog.Empty)
             .DisposeWith(_disposables);
@@ -563,6 +647,38 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .ToProperty(this, x => x.MachinePickerVisible, initialValue: false)
             .DisposeWith(_disposables);
+
+        // The account choice follows the target: support from the server's listing (this machine's
+        // daemon through its own row in it, never the socket), that host's snapshot, and memory.
+        _accountChooser = new AccountChooser(
+            (hostId, vendor, repoPath) => AccountMemory.Lookup(_accountMemory, hostId, vendor, repoPath), RememberAccount);
+        _accountChooser.Changed += PublishAccountChoice;
+        _retryListing = retryListing;
+        if (listing is not null) {
+            var remoteAccounts = daemonAccounts ?? Observable.Return<IReadOnlyList<DaemonAccountsDto>>([]);
+            var localSnapshots = localAccounts ?? Observable.Return<AccountsSnapshotDto?>(null);
+            listing.Subscribe(l => _currentListing = l).DisposeWith(_disposables);
+            remoteAccounts.Subscribe(a => _currentDaemonAccounts = a).DisposeWith(_disposables);
+            localSnapshots.Subscribe(s => _currentLocalAccounts = s).DisposeWith(_disposables);
+            _machineSelectionChanges.DistinctUntilChanged()
+                .CombineLatest(
+                    _selectedRepoPathChanges.DistinctUntilChanged(PathComparer), this.WhenAnyValue(x => x.SelectedVendor),
+                    listing.StartWith(new DaemonListing(null, 0, false)),
+                    remoteAccounts.StartWith((IReadOnlyList<DaemonAccountsDto>) []),
+                    localSnapshots.StartWith((AccountsSnapshotDto?) null),
+                    _viewerIds.DistinctUntilChanged(),
+                    (sel, repoPath, vendor, answer, remote, local, viewer) => (sel, repoPath, vendor, answer, remote, local, viewer))
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(i => ApplyAccountInputs(i.sel, i.repoPath, i.vendor, i.answer, i.remote, i.local, i.viewer))
+                .DisposeWith(_disposables);
+            Observable.FromAsync(() => _state.LoadAsync())
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(state => {
+                    _accountMemory = state.AccountByRepo;
+                    _accountChooser.SetMemoryLoaded(true);
+                })
+                .DisposeWith(_disposables);
+        }
 
         // The word is seeded with "" (no snapshot yet): AvailabilityFor only reads it once the
         // attach state is Connected, by which point DaemonClientService's snapshot-before-Connected
@@ -650,7 +766,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
                 stagedCount.CombineLatest(canAttach, (count, attach) => count == 0 || attach),
                 _uploadingChanges,
                 noHarnesses,
-                (ready, attachable, uploading, none) => ready && attachable && !uploading && !none);
+                _accountPending.DistinctUntilChanged(),
+                (ready, attachable, uploading, none, pending) => ready && attachable && !uploading && !none && !pending);
 
         // Explicit ObserveOn: ReactiveCommand does NOT reschedule the supplied canExecute, and a
         // Status event arrives on the daemon client's pump thread (MainWindowViewModel's canStart
@@ -736,11 +853,13 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .DisposeWith(_disposables);
 
         _startButtonTip = _selectedRepoPathChanges
-            .CombineLatest(notices, TipFor)
-            .ToProperty(this, x => x.StartButtonTip, TipFor(SelectedRepoPath, ConnectingNotice))
+            .CombineLatest(notices, _accountTip, TipFor)
+            .ToProperty(this, x => x.StartButtonTip, TipFor(SelectedRepoPath, ConnectingNotice, null))
             .DisposeWith(_disposables);
 
         SignInCommand = ReactiveCommand.Create(() => { _requestSignIn?.Invoke(); });
+        RetryAccountsCommand = ReactiveCommand.CreateFromTask(() => _retryListing?.Invoke() ?? Task.CompletedTask);
+        UseDefaultAccountCommand = ReactiveCommand.Create(UseDefaultAccount);
 
         (launchFailures ?? Observable.Empty<LaunchFailure>())
             .Do(RecordRecentFailure)
@@ -923,10 +1042,11 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             _                                                           => notice,
         };
 
-    /// Repo gate first (IsEnabled), then the connection/sign-in notice StartCommand also gates on.
-    internal static string TipFor(string? repoPath, string? connectionNotice) =>
+    /// Repo gate first (IsEnabled), then the connection/sign-in notice StartCommand also gates on,
+    /// then an account still resolving.
+    internal static string TipFor(string? repoPath, string? connectionNotice, string? accountNotice) =>
         string.IsNullOrEmpty(repoPath) ? "Select a repository to start"
-        : connectionNotice ?? "Start";
+        : connectionNotice ?? accountNotice ?? "Start";
 
     // Constructor-scoped (like TrayViewModel/ActivityViewModel), not WhenActivated — the OAPH and
     // the Agents subscription above run for this object's whole lifetime, not a window's.
@@ -1003,6 +1123,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         if (RemoteMachineSelected) {
             var remoteSelected = SelectedRepoPath;
             return (_selectedRemoteMachine?.RepoPaths ?? [])
+                .OrderBy(RepoLabel.Leaf, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(p => p, StringComparer.Ordinal)
                 .Select(p => new RepositoryOption(p, DefaultVendor, PathComparer.Equals(p, remoteSelected)))
                 .ToList();
         }
@@ -1073,7 +1195,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             options.Add(new MachineOption(
                 d.Name, IsLocal: false, d.Connected, d.Platform, d.RepoPaths ?? [], d.SupportedVendors,
                 Selected: RemoteMachineSelected && string.Equals(d.Name, SelectedMachine, StringComparison.Ordinal),
-                Version: d.Version, VendorModels: VendorModelMaps.FromRegistry(d.VendorModels)));
+                Version: d.Version, VendorModels: VendorModelMaps.FromRegistry(d.VendorModels),
+                VendorModelsByAccount: VendorModelMaps.FromRegistry(d.VendorModelsByAccount)));
 
         return options;
     }
@@ -1108,7 +1231,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         if (match is null) return; // not one of the viewer's own daemons — never guess ownership
 
         var machine = new MachineOption(match.Name, false, match.Connected, match.Platform,
-            match.RepoPaths ?? [], match.SupportedVendors, true, match.Version, VendorModelMaps.FromRegistry(match.VendorModels));
+            match.RepoPaths ?? [], match.SupportedVendors, true, match.Version, VendorModelMaps.FromRegistry(match.VendorModels),
+            VendorModelMaps.FromRegistry(match.VendorModelsByAccount));
 
         SetMachineSelection(daemonName, remote: true);
         _selectedRemoteMachine = machine;
@@ -1153,6 +1277,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     async Task<IReadOnlyList<DaemonInfo>> OwnDaemonsAsync(IReadOnlyList<DaemonInfo> all) {
         var viewer = await _viewerId(_shutdown);
         _lastViewerId = viewer;
+        _viewerIds.OnNext((true, viewer));
         if (viewer is null) return [];
         return all.Where(d => d.OwnerUserId == viewer && !IsLocalTwin(d)).ToList();
     }
@@ -1165,13 +1290,46 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// to a different owner, the match fails and the selection stops being launchable, rather than
     /// trusting a filter that only ran once, at selection time. A null viewerId (never resolved,
     /// or resolved to signed-out) means no remote daemon is ever treated as owned.
-    static MachineOption? FindMachine(IReadOnlyList<DaemonInfo> daemons, string name, string? viewerId) {
+    static MachineOption? FindMachine(IReadOnlyList<DaemonInfo> daemons, string name, string? viewerId) =>
+        FindDaemon(daemons, name, viewerId) is { } d
+            ? new MachineOption(d.Name, false, d.Connected, d.Platform, d.RepoPaths ?? [], d.SupportedVendors, true, d.Version,
+                VendorModelMaps.FromRegistry(d.VendorModels), VendorModelMaps.FromRegistry(d.VendorModelsByAccount))
+            : null;
+
+    static DaemonInfo? FindDaemon(IReadOnlyList<DaemonInfo> daemons, string name, string? viewerId) {
         if (viewerId is null) return null;
         foreach (var d in daemons)
             if (string.Equals(d.Name, name, StringComparison.Ordinal) && d.OwnerUserId == viewerId)
-                return new MachineOption(d.Name, false, d.Connected, d.Platform, d.RepoPaths ?? [], d.SupportedVendors, true, d.Version,
-                    VendorModelMaps.FromRegistry(d.VendorModels));
+                return d;
         return null;
+    }
+
+    /// Unknown until this connection's listing has answered for the daemon: a listing that answered
+    /// without it is still Unknown, never Unsupported. The local daemon is its twin row whatever owner
+    /// that row carries, since the viewer's listing includes a daemon still registered under a
+    /// claimed legacy id. Without a twin (a daemon that predates machine ids lists none) it is
+    /// matched by name and owner, or, on a server without sign-in, as the one row carrying its name.
+    AccountSupport SupportFor(DaemonListing listing, string machine, string? viewerId, bool remote) {
+        if (listing.Daemons is not { } daemons) return AccountSupport.Unknown;
+
+        var daemon = remote ? FindDaemon(daemons, machine, viewerId)
+            : OnlyRow(daemons, IsLocalTwin) ?? (viewerId is null
+                ? OnlyRow(daemons, d => string.Equals(d.Name, machine, StringComparison.Ordinal))
+                : FindDaemon(daemons, machine, viewerId));
+        return daemon is null ? AccountSupport.Unknown
+            : daemon.SupportsAccountLaunches ? AccountSupport.Supported
+            : AccountSupport.Unsupported;
+    }
+
+    /// Two matching rows cannot be told apart, so they match nothing.
+    static DaemonInfo? OnlyRow(IReadOnlyList<DaemonInfo> daemons, Func<DaemonInfo, bool> matches) {
+        DaemonInfo? match = null;
+        foreach (var d in daemons) {
+            if (!matches(d)) continue;
+            if (match is not null) return null;
+            match = d;
+        }
+        return match;
     }
 
     /// A remote launch is Ready only with the app's OWN server lane connected AND the selected
@@ -1244,18 +1402,129 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// The one place a vendor change lands, so the model-reset invariant (ids are
     /// vendor-specific) can never be forgotten by a new call site.
     void SetVendor(string vendor) {
-        if (vendor != SelectedVendor) SelectedModel = "";
+        if (vendor != SelectedVendor) {
+            SelectedModel = "";
+            // An account refusal names the previous vendor's account, and its Use default would reset this one.
+            if (StartErrorOffersDefault) StartError = null;
+        }
         SelectedVendor = vendor;
     }
 
+    /// EnterTarget runs only on a real change of repository, vendor or machine, since a repeated
+    /// call would drop the person's pick; nothing is published until support and snapshot follow.
+    void ApplyAccountInputs(
+            (string Name, bool Remote) sel, string repoPath, string vendor, DaemonListing listing,
+            IReadOnlyList<DaemonAccountsDto> remoteAccounts, AccountsSnapshotDto? localAccounts, (bool Resolved, string? Id) viewer) {
+        var machine = AccountMachine(sel.Name, sel.Remote);
+        _applyingAccountInputs = true;
+        try {
+            if (_accountTarget is not { } last || !PathComparer.Equals(last.RepoPath, repoPath)
+             || last.Vendor != vendor || last.Machine != machine || last.Remote != sel.Remote) {
+                _accountTarget = (repoPath, vendor, machine, sel.Remote);
+                _accountChooser.EnterTarget(repoPath, vendor);
+            }
+            var support = viewer.Resolved ? SupportFor(listing, machine, viewer.Id, sel.Remote) : AccountSupport.Unknown;
+            var snapshot = AccountsSnapshotFor(sel.Remote, machine, remoteAccounts, localAccounts);
+            // A remote host's accounts arrive only by the server's fetch, so a missing row is retried like the listing.
+            var retryable = listing.FetchFailed || (sel.Remote && support == AccountSupport.Supported && snapshot is null);
+            _accountChooser.SetSupport(support, retryable);
+            _accountChooser.SetSnapshot(snapshot);
+        } finally {
+            _applyingAccountInputs = false;
+        }
+        PublishAccountChoice();
+    }
+
+    string AccountMachine(string name, bool remote) => remote ? name : _daemon.DaemonName;
+
+    static AccountsSnapshotDto? AccountsSnapshotFor(
+            bool remote, string machine, IReadOnlyList<DaemonAccountsDto> remoteAccounts, AccountsSnapshotDto? localAccounts) =>
+        remote ? remoteAccounts.FirstOrDefault(d => d.DaemonName == machine)?.ToSnapshot() : localAccounts;
+
+    void PublishAccountChoice() {
+        if (_applyingAccountInputs) return;
+        var chooser = _accountChooser;
+        AccountSection = chooser.ShowsSection;
+        AccountRows = chooser.Rows;
+        AccountPendingText = chooser.PendingText;
+        AccountRetryVisible = chooser.OffersRetry;
+        SelectedAccountLabel = chooser.SelectedLabel;
+        _accountPending.OnNext(chooser.State == AccountSelectionState.Pending);
+        _accountTip.OnNext(chooser.PendingText);
+        // Invalid keeps the key too: a reconnect that briefly unsettles support must not reset a model
+        // only the account lists.
+        _accountCatalogKey.OnNext(chooser.State is AccountSelectionState.ExplicitValid or AccountSelectionState.ExplicitInvalid
+            && _accountTarget is { } target ? (target.Vendor, chooser.SelectedAccountId!) : null);
+    }
+
+    /// Written off the UI thread in call order: the chooser also forgets an entry from inside its recompute.
+    void RememberAccount(string hostId, string vendor, string repoPath, string? accountId) {
+        _accountMemory = AccountMemory.With(_accountMemory, hostId, vendor, repoPath, accountId);
+        var previous = _accountMemoryWrites;
+        _accountMemoryWrites = Task.Run(async () => {
+            await previous;
+            await _state.UpdateAsync(s => s with {
+                AccountByRepo = AccountMemory.With(s.AccountByRepo, hostId, vendor, repoPath, accountId),
+            });
+        });
+    }
+
+    /// The Default-badged row follows the daemon's default rather than pinning its account. Any
+    /// pick answers an account refusal. The task completes once the choice is persisted.
+    public Task PickAccountAsync(string? accountId) {
+        var defaultRow = _accountChooser.Rows.Any(c => c.Row.IsDefault && c.Row.Id == accountId);
+        _accountChooser.Pick(defaultRow ? null : accountId);
+        if (StartErrorOffersDefault) StartError = null;
+        return _accountMemoryWrites;
+    }
+
+    void UseDefaultAccount() {
+        _accountChooser.UseDefault();
+        StartError = null;
+    }
+
+    void RefuseAccount(string reason) {
+        StartError = $"{reason}. Use the default account or pick another.";
+        StartErrorOffersDefault = true;
+    }
+
+    /// Read against the draft's target and the latest listing and snapshot, never the chooser,
+    /// which follows the live selection.
+    string? AccountErrorFor(LaunchDraft draft, string? label) {
+        if (draft.AccountId is not { } id) return null;
+
+        var machine = AccountMachine(draft.Machine, draft.Remote);
+        var snapshot = AccountsSnapshotFor(draft.Remote, machine, _currentDaemonAccounts, _currentLocalAccounts);
+        var listed = snapshot is not null && Services.AccountRows.For(snapshot, draft.Vendor).Any(r => r.Id == id);
+        return listed && SupportFor(_currentListing, machine, _lastViewerId, draft.Remote) == AccountSupport.Supported
+            ? null
+            : AccountChooser.UnavailableReason(label ?? id);
+    }
+
+    /// The selected account's own list replaces its vendor's entry where the machine has one for it.
+    static IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>> WithAccountCatalog(
+            IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>> merged,
+            IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>? byAccount, (string Vendor, string AccountId)? account) {
+        if (account is not { } chosen || byAccount is null || !byAccount.TryGetValue(chosen.AccountId, out var models)) return merged;
+        return new Dictionary<string, IReadOnlyList<ModelChoice>>(merged, StringComparer.OrdinalIgnoreCase) { [chosen.Vendor] = models };
+    }
+
     async Task StartAsync() {
+        // A pending account captures no draft: sending one would launch under a default nobody chose.
+        if (!_accountChooser.IsResolved) {
+            if (_accountChooser.State == AccountSelectionState.ExplicitInvalid) RefuseAccount(_accountChooser.InvalidReason!);
+            return;
+        }
+
         // Captured before anything can await: an upload takes time the user can spend re-pointing
         // the launcher, and the files must reach the machine the composer was aimed at.
         var draft = new LaunchDraft(
             SelectedMachine, RemoteMachineSelected, SelectedRepoPath, SelectedVendor, Goal, _goalEdits,
             SelectedModel, SelectedEffort, PermissionModeFor(SelectedVendor, SelectedPermissionMode),
             CodexPostureFor(SelectedVendor, SelectedCodexSandbox, SelectedCodexApproval),
-            Tray.Snapshot(), Tray.Generation);
+            Tray.Snapshot(), Tray.Generation,
+            _accountChooser.State == AccountSelectionState.ExplicitValid ? _accountChooser.SelectedAccountId : null);
+        var accountLabel = _accountChooser.SelectedLabel;
 
         if (draft.Files.Count > 0 && !CanAttachFor(draft)) {
             StartError = AttachHintFor(_signedIn, false);
@@ -1316,9 +1585,15 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             }
         }
 
+        // After the upload, or a remote ownership check, the account may have gone from under the draft.
+        if (AccountErrorFor(draft, accountLabel) is { } accountError) {
+            RefuseAccount(accountError);
+            return;
+        }
+
         var request = new LaunchRequest(
             draft.Machine, draft.RepoPath, draft.Vendor, draft.Goal, draft.Model, draft.Effort,
-            draft.PermissionMode, attachmentIds, draft.CodexPosture);
+            draft.PermissionMode, attachmentIds, draft.CodexPosture, draft.AccountId);
         // Captured BEFORE the call, never after: the whole point is to notice a navigation that
         // changed WHILE the launch was in flight.
         var generation = _navigationGeneration?.Invoke() ?? 0;
@@ -1361,18 +1636,22 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             lock (_launchTrackingLock)
                 _retainedDraft = new RetainedDraft(
                     agentId, draft, uploadedAt!.Value, clearedGoal, _goalEdits, clearedTray, Tray.Generation);
+        var lane = draft.Remote ? AgentOrigin.Remote : AgentOrigin.Local;
         var tracked = RecordPendingLaunch(
-            agentId, draft.Remote ? AgentOrigin.Remote : AgentOrigin.Local, draft.Files.Count > 0,
-            uploadedAt, draft.RepoPath, draft.Machine);
-        // A remote launch's workspace is backed by the local daemon socket, which can never find
-        // an agent that isn't there — auto-open and the placeholder row only ever apply to a
-        // local target.
-        if (tracked && !draft.Remote)
+            agentId, lane, draft.Files.Count > 0, uploadedAt, draft.RepoPath, generation, draft.Machine);
+        // The placeholder is a local-lane row. A remote launch opens from ConfirmPendingRows when
+        // its row arrives, or here when that row beat the registration.
+        if (draft.Remote) {
+            if (!tracked && RowId(agentId, AgentOrigin.Remote) is { } rowId)
+                _openSessionIfCurrent?.Invoke(rowId, AgentOrigin.Remote, generation);
+            return;
+        }
+        if (tracked)
             _directory?.AddPlaceholder(agentId, draft.Vendor, draft.RepoPath, AgentRow.TitleFromPrompt(draft.Goal), draft.Model);
         // Untracked with no row is a failure that beat the call's own return: opening would cover
         // the launcher that has just worded it.
-        if (!draft.Remote && (tracked || RowExists(agentId, AgentOrigin.Local)))
-            _openSessionIfCurrent?.Invoke(agentId, generation);
+        if (tracked || RowExists(agentId, AgentOrigin.Local))
+            _openSessionIfCurrent?.Invoke(agentId, AgentOrigin.Local, generation);
     }
 
     async Task<bool> OwnsConnectedAsync(string machine) =>
@@ -1382,7 +1661,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// False when a row or a buffered failure has already settled the launch.
     bool RecordPendingLaunch(
             string agentId, AgentOrigin lane, bool hadAttachments, DateTimeOffset? uploadedAt,
-            string repoPath, string machine) {
+            string repoPath, int generation, string machine) {
         // A row for this id confirms success, and it can appear on either side of the registration
         // below: the launch may have succeeded before this method ran at all, or the directory's
         // Add may land while it runs — at which point ConfirmPendingRows finds nothing pending yet
@@ -1397,7 +1676,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         string? bufferedReason = null;
         lock (_launchTrackingLock) {
             _pendingLaunches[agentId] = new PendingLaunch(
-                _time.GetUtcNow(), lane, hadAttachments, uploadedAt, repoPath, machine);
+                _time.GetUtcNow(), lane, hadAttachments, uploadedAt, repoPath, generation, machine);
             if (_recentFailures.TryGetValue(agentId, out var recent)) {
                 if (_time.GetUtcNow().UtcDateTime - recent.At <= RecentFailureTtl) {
                     bufferedReason = recent.Reason;
@@ -1442,9 +1721,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     // Directory keys preserve the row's incoming id spelling (e.g. a dashed Guid never becomes
     // "local:{N-form}"), so a lookup by the "N"-normalized pending id would miss it — scan and
     // compare under NormalizeAgentId instead, the same comparison ConfirmPendingRows uses.
-    bool RowExists(string agentId, AgentOrigin lane) =>
-        _directory is { } directory
-        && directory.Rows.Items.Any(r => r.Origin == lane && NormalizeAgentId(r.Id) == agentId);
+    bool RowExists(string agentId, AgentOrigin lane) => RowId(agentId, lane) is not null;
+
+    string? RowId(string agentId, AgentOrigin lane) =>
+        _directory?.Rows.Items.FirstOrDefault(r => r.Origin == lane && NormalizeAgentId(r.Id) == agentId)?.Id;
 
     void RecordRecentFailure(LaunchFailure failure) {
         if (NormalizeAgentId(failure.AgentId) is not { } agentId) return;
@@ -1522,7 +1802,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// A row for a tracked id is success confirmation: drop the pending entry and any buffered
     /// failure so a later, stale LaunchFailed for the same id cannot override it. Same
     /// NormalizeAgentId comparison as ApplyFailureIfPending, for the same id-shape reason.
+    /// A remote launch's row is also its auto-open: the remote workspace needs that row to exist.
     void ConfirmPendingRows(IChangeSet<AgentRow, string> changes) {
+        List<(string AgentId, int Generation)>? remoteOpens = null;
         lock (_launchTrackingLock) {
             // A pending row is the launch's own stand-in, so only a published one on the launch's
             // own lane settles it.
@@ -1532,8 +1814,16 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
                     _pendingLaunches.Remove(agentId);
                     _recentFailures.Remove(agentId);
                     if (_retainedDraft?.AgentId == agentId) _retainedDraft = null;
+                    if (pending.Lane == AgentOrigin.Remote && !IsExpired(pending))
+                        (remoteOpens ??= []).Add((change.Current.Id, pending.Generation));
                 }
         }
+        // Rows publish off the UI thread, and opening swaps the window's workspace.
+        if (remoteOpens is not null && _openSessionIfCurrent is { } open)
+            RxSchedulers.MainThreadScheduler.Schedule(() => {
+                if (_disposed) return;
+                foreach (var (agentId, generation) in remoteOpens) open(agentId, AgentOrigin.Remote, generation);
+            });
     }
 
     /// Shown when an older daemon still refuses an empty standalone snapshot. Current daemons

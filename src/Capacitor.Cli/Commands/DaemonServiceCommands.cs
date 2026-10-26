@@ -1,6 +1,7 @@
 using System.Net.Sockets;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Install;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Services;
@@ -70,6 +71,83 @@ sealed class DaemonServiceCommands(
         }
 
         return await verbs.EvaluateFlowEnsureAsync(profiles.Resolution.ProfileName, previousName);
+    }
+
+    /// <summary>
+    /// Gives the flow's service unit the search path this process sees when a harness CLI is found on it
+    /// but not on the unit's, so the daemon finds what setup just found. Null when nothing needed it or the
+    /// platform has no service manager this can rewrite.
+    /// </summary>
+    internal static async Task<PathRefresh?> FlowRefreshPathAsync(
+            ConfigRoot root, ProfileContext profiles, UserHome home, TimeProvider time, HarnessRegistry harnesses) {
+        DaemonServiceCommands verbs;
+
+        try {
+            verbs = ForFlow(root, profiles, home, time);
+        } catch (PlatformNotSupportedException) {
+            return null;
+        }
+
+        return await verbs.RefreshStalePathAsync(harnesses);
+    }
+
+    /// <summary>Held from reading the unit's PATH to the last write, so a concurrent install's unit is never
+    /// merged into or restored over.</summary>
+    async Task<PathRefresh?> RefreshStalePathAsync(HarnessRegistry harnesses) {
+        using var txn = await ServiceTxnLock.TryAcquireAsync(store, id, ForcedLockWait, time);
+        if (txn is null) return new(UnitRefresh.Contended);
+
+        if (manager.UnitEnvironment(id) is not { } env) return null;
+
+        var path = ServicePath.Refreshed(env.GetValueOrDefault("PATH"), Environment.GetEnvironmentVariable("PATH"), harnesses);
+
+        return path is null ? null : await RefreshPathAsync(path);
+    }
+
+    /// <summary>launchd reads a plist only when the job loads, so the rewrite takes a reload that keeps the
+    /// daemon's agents for it to resume; systemd reads the unit at the next start, which the daemon is asked
+    /// for once idle.</summary>
+    async Task<PathRefresh> RefreshPathAsync(string path) {
+        switch (manager) {
+            case LaunchdServiceManager launchd: {
+                var started = time.GetTimestamp();
+                try {
+                    var outcome = launchd.RefreshUnit(
+                        id, () => Proceeds(StopForReload(id, "now", whenIdle: true)), () => RefreshDeadline - time.GetElapsedTime(started),
+                        out var error, amend: plist => LaunchdUnit.WithEnvironmentValue(plist, "PATH", path));
+                    return new(outcome, error);
+                } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) {
+                    return new(UnitRefresh.Failed, ex.Message);
+                }
+            }
+            case SystemdServiceManager systemd:
+                try {
+                    if (systemd.SetEnvironment(id, "PATH", path) is not { } previous) return new(UnitRefresh.Current);
+                    switch (await RequestRestartAsync("when-idle")) {
+                        case "restarting": return new(UnitRefresh.Reloaded);
+                        case "queued":     return new(UnitRefresh.NotLoaded);
+                    }
+                    if (manager.Query(id).State != ServiceState.Running) return new(UnitRefresh.NotLoaded);
+
+                    // A running daemon that took no restart keeps the old PATH; the unit must say so too, or
+                    // the next run reads the rewrite as applied.
+                    systemd.RestoreUnit(id, previous);
+                    return new(UnitRefresh.Deferred);
+                } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) {
+                    return new(UnitRefresh.Failed, ex.Message);
+                }
+            default:
+                return new(UnitRefresh.UnitUnsupported);
+        }
+    }
+
+    async Task<string?> RequestRestartAsync(string mode) {
+        try {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5), time);
+            return await DaemonRestartClient.RequestAsync(store, id, mode, cts.Token) is { Type: FrameType.RestartAck } reply ? reply.Text : null;
+        } catch (Exception ex) when (ex is SocketException or IOException or OperationCanceledException) {
+            return null;
+        }
     }
 
     Task<FlowEnsure> EvaluateFlowEnsureAsync(string? profileName, string? previousName) =>
@@ -528,7 +606,7 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
-        if (!ended) DaemonCommands.MarkLedgerInterrupted(store, id, time);
+        if (!ended) DaemonCommands.MarkLedgerInterrupted(store, id, time, Console.Error);
 
         await Console.Out.WriteLineAsync($"Service '{id}' uninstalled ({manager.Describe()}).");
         return 0;
@@ -565,7 +643,7 @@ sealed class DaemonServiceCommands(
                         await Console.Error.WriteLineAsync($"Could not uninstall service '{unit}': {error}");
                         failed = true;
                     } else {
-                        if (!ended) DaemonCommands.MarkLedgerInterrupted(store, unit, time);
+                        if (!ended) DaemonCommands.MarkLedgerInterrupted(store, unit, time, Console.Error);
                         await Console.Out.WriteLineAsync($"Service '{unit}' uninstalled ({manager.Describe()}).");
                     }
                 }
@@ -672,7 +750,7 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
-        if (!exited) DaemonCommands.MarkLedgerInterrupted(store, id, time, DaemonCommands.KeepsSavedResumes(request, outcome));
+        if (!exited) DaemonCommands.MarkLedgerInterrupted(store, id, time, Console.Error, DaemonCommands.KeepsSavedResumes(request, outcome));
 
         await Console.Out.WriteLineAsync($"Service '{id}' stopped (still installed).");
         return 0;

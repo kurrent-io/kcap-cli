@@ -170,6 +170,22 @@ public class AgentOrchestratorContinueTests : IDisposable {
         await Assert.That(consentLog).Contains("\"source\":\"continue\"");
     }
 
+    /// <summary>The successor names the agent it continues on its registration and on every re-announcement, so the
+    /// server can follow that agent's wake-ups to it even after the server restarts.</summary>
+    [Test]
+    public async Task The_successor_announces_the_agent_it_continues_and_keeps_announcing_it() {
+        var f = Build();
+        await using var _ = f.Orch;
+        var entry = Entry(f);
+
+        await f.Orch.ContinueEntryAsync(entry, "native_resume_unsupported", CancellationToken.None);
+        var successor = f.Factory.Starts.Single().Ctx.AgentId;
+        await f.Orch.ReRegisterAgentsAsync();
+
+        await Assert.That(f.Server.AgentRegisteredContinues.Where(r => r.AgentId == successor).Select(r => r.ContinuesAgentId))
+            .IsEquivalentTo(new string?[] { OldAgent, OldAgent });
+    }
+
     /// <summary>The summary is server-held text, so the prompt fences it off as data.</summary>
     [Test]
     public async Task The_previous_sessions_summary_sits_inside_a_data_block() {

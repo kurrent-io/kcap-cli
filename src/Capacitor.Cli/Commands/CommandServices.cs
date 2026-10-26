@@ -55,6 +55,8 @@ public static class CommandServices {
             sp.GetRequiredService<UserHome>(), sp.GetRequiredService<BinaryProbe>()));
         services.AddSingleton(sp => LegacySkillsRoots.FromEnvironment(sp.GetRequiredService<UserHome>()));
         services.AddSingleton(sp => AccountStore.Beside(sp.GetRequiredService<DaemonStore>()));
+        // Transient, so each command reads the console as it stands when it is built.
+        services.AddTransient(_ => StandardStreams.FromProcess());
         services.AddSingleton(sp => PluginEnvironment.FromProcess(
                 sp.GetRequiredService<ProfileContext>().Snapshot,
                 sp.GetRequiredService<UserHome>(),

@@ -8,5 +8,11 @@ public enum WorkspaceAnswer {
     Gone,
 
     /// <summary>No answer, or one that says nothing about whether the workspace exists.</summary>
-    NoAnswer
+    NoAnswer,
+
+    /// <summary>
+    /// Still being created and not live yet. Left out like <see cref="Gone"/>, but discovery then takes no
+    /// other workspace without asking: the one the user is waiting for may be this one.
+    /// </summary>
+    Pending
 }

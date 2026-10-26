@@ -94,7 +94,7 @@ if (InteractiveLifetime.IsInteractiveCommand(command) && detachedImport is null)
 // ResolveForRepo can shell out to `git remote -v` and emit warnings, and
 // the update-check task hits the npm registry — both pure noise inside a
 // nested headless invocation.
-if (Environment.GetEnvironmentVariable("KCAP_SKIP") is "1"
+if (Environment.GetEnvironmentVariable(HostedAgent.SkipVar) is "1"
  && command == "hook"
  && (args.Contains("--claude") || args.Contains("--cursor") || args.Contains("--copilot") || args.Contains("--gemini") || args.Contains("--kiro") || args.Contains("--pi") || args.Contains("--opencode") || args.Contains("--antigravity") || args.Contains("--mistral-vibe") || args.Contains("--grok") || args.Contains("--muse"))) {
     return 0;

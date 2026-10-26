@@ -202,6 +202,7 @@ static class WizardFixtures {
                         Detected.ToDictionary(id => id, _ => new DetectedAgent(true, false)));
                 };
             },
+            BuiltinOffer: _ => Task.FromResult<LocalEmbeddingModelManifest?>(null),
             CliPath: CliPath,
             ShimApplicable: ShimApplicable,
             ShimTarget: ShimTarget,
@@ -778,7 +779,7 @@ public class WizardStartupTests {
         var root = new LocalRoot(Config.PathTo("local"));
         root.EnsureCreated();
         Config.CreateFile("local/journal.json", "{not json");
-        LocalEmbeddingFile.Write(root, new LocalEmbeddingSetting("mxbai-embed-large"));
+        LocalEmbeddingFile.Write(root, LocalEmbeddingSetting.Ollama("mxbai-embed-large"));
         harness.LocalRoot = root;
         harness.Cli.SetupLocalBehavior = LocalSetupScript.Prints(1, LocalSetupScript.Failed("registry_unreadable", "The journal cannot be read."));
         using var shutdown = new CancellationTokenSource();
@@ -1028,6 +1029,50 @@ public class WizardStartupTests {
         });
     }
 
+    /// Before a server is connected a closed window quits rather than opening an empty app; once one
+    /// is, it hands over. A finish that leaves the window up never quits.
+    [Test]
+    [Arguments(false, true, true)]
+    [Arguments(false, false, false)]
+    [Arguments(true, true, false)]
+    public async Task A_closed_window_quits_only_before_a_server_is_connected(bool connected, bool windowClosed, bool quits) {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+
+        var quit = await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(harness.Options() with { AlreadyAuthenticated = connected });
+            await graph.ViewModel.PendingEnterForTesting;
+            AppUnderTest.WizardWindowClosing(graph.ViewModel, graph.Install, userClose: true);
+
+            return AppUnderTest.QuitsAfterWizardClose(graph.ViewModel, windowClosed);
+        });
+
+        await Assert.That(quit).IsEqualTo(quits);
+    }
+
+    /// A close on Install once the server is up is connected, so the main window opens.
+    [Test]
+    public async Task A_closed_window_after_a_local_install_hands_over() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        var root = LocalSetupScript.PendingSetup(Config);
+        harness.LocalRoot = root;
+        harness.Cli.SetupLocalBehavior = (onLine, _, _) => {
+            LocalStateFiles.ClearJournal(root);
+            onLine(new StreamedLine(ProcessStreamKind.Stdout, LocalSetupScript.Committed));
+            return Task.FromResult(new StreamingResult(0, false, []));
+        };
+
+        var quit = await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(harness.Options());
+            await graph.ViewModel.PendingEnterForTesting;
+            await WizardFixtures.WaitUntilAsync(() => graph.Install.Outcome is not null, what: "the install to settle");
+            AppUnderTest.WizardWindowClosing(graph.ViewModel, graph.Install, userClose: true);
+
+            return AppUnderTest.QuitsAfterWizardClose(graph.ViewModel, windowClosed: true);
+        });
+
+        await Assert.That(quit).IsFalse();
+    }
+
     // ── the wizard graph: composition invariants ──────────────────────────────
 
     [Test]
@@ -1218,7 +1263,7 @@ public class WizardStartupTests {
             await done.OnEnterAsync(CancellationToken.None);
 
             await Assert.That(done.Capture).IsEmpty();
-            await Assert.That(done.WorkspaceVisible).IsFalse();
+            await Assert.That(done.OpenInBrowserVisible).IsFalse();
             await Assert.That(done.ShowsFigures).IsFalse();
 
             return true;
@@ -1376,87 +1421,32 @@ public class WizardStartupTests {
         return (wizard, surface);
     }
 
+    /// The daemon's outcome lines land in the Done page's service card, behind See details, and the
+    /// shell's footer carries none of them.
     [Test]
-    public async Task The_wizard_window_renders_the_surfaces_status_line() {
-        var rendered = await AvaloniaSession.DispatchAsync(() => {
-            var (wizard, surface) = NewShell();
-            var window = new MainWindow { Onboarding = wizard };
+    public async Task A_daemon_outcome_line_lands_in_the_done_pages_service_card() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+
+        var (details, footerTexts) = await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(harness.Options());
+            var done = graph.Steps.OfType<DoneStepViewModel>().Single();
+            await done.OnEnterAsync(CancellationToken.None);
+
+            harness.Surface.Attention(AppUnderTest.WizardAttentionCopyFor("verify_viability")!);
+
+            var window = new MainWindow { Onboarding = graph.ViewModel };
             window.Show();
             Dispatcher.UIThread.RunJobs();
-
-            surface.Status("a status line from the consumer");
-            Dispatcher.UIThread.RunJobs();
-
-            var text = window.GetVisualDescendants().OfType<TextBlock>()
-                .FirstOrDefault(t => t.Name == "LifecycleStatusText")?.Text;
-
+            var footer = window.GetVisualDescendants().OfType<Border>().First(b => b.Name == "StepFooter")
+                .GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToList();
             window.Close();
             Dispatcher.UIThread.RunJobs();
 
-            return text;
+            return (done.ServiceDetails, footer);
         });
 
-        await Assert.That(rendered).IsEqualTo("a status line from the consumer");
-    }
-
-    [Test]
-    public async Task The_wizard_window_renders_the_surfaces_attention_line() {
-        var rendered = await AvaloniaSession.DispatchAsync(() => {
-            var (wizard, surface) = NewShell();
-            var window = new MainWindow { Onboarding = wizard };
-            window.Show();
-            Dispatcher.UIThread.RunJobs();
-
-            surface.Attention("a daemon mutation needs attention (some_token)");
-            Dispatcher.UIThread.RunJobs();
-
-            var block = window.GetVisualDescendants().OfType<TextBlock>()
-                .FirstOrDefault(t => t.Name == "LifecycleAttentionText");
-
-            window.Close();
-            Dispatcher.UIThread.RunJobs();
-
-            return (Text: block?.Text, IsVisible: block?.IsVisible ?? false);
-        });
-
-        await Assert.That(rendered.Text).IsEqualTo("a daemon mutation needs attention (some_token)");
-        // The line shows only on Done, so it stays hidden on the first step.
-        await Assert.That(rendered.IsVisible).IsFalse();
-    }
-
-    [Test]
-    public async Task The_attention_line_shows_on_the_Done_step_and_hides_after_back() {
-        var (onDone, afterBack) = await AvaloniaSession.DispatchAsync(async () => {
-            var surface = new WizardLifecycleSurface((_, _) => Task.FromResult(false), action => action());
-            var wizard = new OnboardingViewModel(
-                [new FakeWizardStep(WizardStepId.Import), new FakeWizardStep(WizardStepId.Done)],
-                surface: surface);
-            var window = new MainWindow { Onboarding = wizard };
-            window.Show();
-            Dispatcher.UIThread.RunJobs();
-            await wizard.PendingEnterForTesting;
-
-            await wizard.NextCommand.Execute().ToTask();
-            Dispatcher.UIThread.RunJobs();
-
-            surface.Attention(AppUnderTest.WizardAttentionCopyFor("verify_viability")!);
-            Dispatcher.UIThread.RunJobs();
-
-            bool Visible() => window.GetVisualDescendants().OfType<TextBlock>()
-                .First(t => t.Name == "LifecycleAttentionText").IsVisible;
-            var shown = Visible();
-
-            await wizard.BackCommand.Execute().ToTask();
-            Dispatcher.UIThread.RunJobs();
-            var hidden = Visible();
-
-            window.Close();
-            Dispatcher.UIThread.RunJobs();
-            return (shown, hidden);
-        });
-
-        await Assert.That(onDone).IsTrue();
-        await Assert.That(afterBack).IsFalse();
+        await Assert.That(details).Contains(AppUnderTest.WizardAttentionCopyFor("verify_viability")!);
+        await Assert.That(footerTexts).DoesNotContain(AppUnderTest.WizardAttentionCopyFor("verify_viability")!);
     }
 
     [Test]

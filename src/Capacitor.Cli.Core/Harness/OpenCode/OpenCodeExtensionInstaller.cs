@@ -67,9 +67,9 @@ public static class OpenCodeExtensionInstaller {
 
           // Team-memory index, keyed by TOP-LEVEL session id. The value is whatever
           // `kcap hook --opencode --event session-start` printed on stdout: the fragment, or "" when
-          // there is none. kcap owns every decision behind it (auth, scope, the once-per-session
-          // durable lease, byte budget) — this plugin never talks to the server and never renders
-          // anything.
+          // there is none. kcap owns every decision behind it (auth, scope, byte budget) — this plugin
+          // never talks to the server and never renders anything. A new process starts empty, and kcap
+          // serves the fragment again on that process's first start.
           const memory = new Map<string, string>()
           // In-flight CLASSIFY+START per session id, published synchronously by ensureStarted so a
           // chat.system.transform racing it has something to await rather than concluding there is
@@ -79,7 +79,7 @@ public static class OpenCodeExtensionInstaller {
           const MEMORY_MAX_SESSIONS = 64      // bounded: never an unbounded process-global map
           // Matches runKcap's own 10s ceiling. Only ever paid on a session's FIRST request, and only
           // while the start is genuinely still running — a shorter bound would silently give up on a
-          // slow-but-healthy fetch and lose the one injection that session's lease paid for.
+          // slow-but-healthy fetch and leave the session without its index until the next start.
           const MEMORY_WAIT_MS = 10000
           // Cold-start attempts per session from the TRANSFORM path, and why it is bounded: a session
           // whose classification keeps failing never reaches start(), so `started` never records it and
@@ -96,7 +96,8 @@ public static class OpenCodeExtensionInstaller {
           // replace; close_loose_end treats a session it defaulted differently from one it was given.
           const CALLER_SESSION_TOOLS = new Set([
             "kcap-workitems_declare_work_item", "kcap-workitems_get_session_work_items",
-            "kcap-workitems_detach_work_item", "kcap-workitems_declare_loose_end",
+            "kcap-workitems_detach_work_item", "kcap-workitems_declare_work_incomplete",
+            "kcap-workitems_declare_loose_end",
             "kcap-workitems_claim_loose_end", "kcap-workitems_release_loose_end",
             "kcap-plans_declare_plan_document", "kcap-plans_set_plan_tasks",
             "kcap-plans_update_plan_task", "kcap-plans_get_plan",
@@ -195,9 +196,8 @@ public static class OpenCodeExtensionInstaller {
             started.add(sid)
             try { mkdirSync(dir, { recursive: true }); appendFileSync(file(sid), "") } catch {}
             // --memory-contract declares that THIS plugin captures and delivers the command's stdout.
-            // A binary that understands it only then fetches the index and spends the session's
-            // once-only injection lease; an older plugin, which discards stdout, sends no flag and the
-            // binary spends nothing on output nobody will deliver.
+            // A binary that understands it only then fetches the index; an older plugin, which
+            // discards stdout, sends no flag and the binary fetches nothing nobody will deliver.
             const args = ["hook", "--opencode", "--event", "session-start", "--session", sid,
                           "--file", file(sid), "--memory-contract", "1"]
             const cwd = info?.directory ?? directory
@@ -435,7 +435,7 @@ public static class OpenCodeExtensionInstaller {
                 if (fragment === undefined) {
                   // The classify+start for a brand-new session runs CONCURRENTLY with its first
                   // request, so without this wait the very first turn — often the only turn — would
-                  // miss the fragment its once-per-session lease has already been spent on.
+                  // miss the fragment its start is already fetching.
                   const pending = pendingStart.get(sid)
                   if (pending) {
                     await Promise.race([

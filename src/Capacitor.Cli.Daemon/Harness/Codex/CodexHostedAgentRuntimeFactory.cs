@@ -1,4 +1,6 @@
+using System.Collections.Frozen;
 using System.Diagnostics;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.Daemon.Acp;
@@ -41,7 +43,7 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
         _loggerFactory = loggerFactory;
         _logger        = loggerFactory.CreateLogger<CodexHostedAgentRuntimeFactory>();
         _spawnFactory  = spawnFactory
-            ?? ((cli, args, seed, cwd, env, cfg, lf) => DefaultSpawnFactory(cli, args, seed, cwd, env, cfg, lf, time));
+            ?? ((cli, args, seed, cwd, env, removeEnv, cfg, lf) => DefaultSpawnFactory(cli, args, seed, cwd, env, removeEnv, cfg, lf, time));
         _connection    = connection;
         _policyJudge   = policyJudge;
     }
@@ -73,20 +75,34 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     public IReviewerModelResolver? ReviewerModelResolver               => _pty.ReviewerModelResolver;
     public bool             SupportsModelSelection                      => _pty.SupportsModelSelection;
 
-    public Task<IReadOnlyList<VendorModelOption>?> ProbeModelsAsync(CancellationToken ct) {
-        var dir = CodexModelCatalogProbe.DirectoryFor(_config.Store.StateDirectory(_config.Name));
+    public Task<IReadOnlyList<VendorModelOption>?> ProbeModelsAsync(CancellationToken ct) => ProbeModelsAsync(null, ct);
 
-        return CodexModelCatalogProbe.RunAsync(
+    /// <summary>A null directory probes under the daemon's own environment; an account's probe gets that
+    /// account's <c>CODEX_HOME</c>, removed for the built-in directory, as its launches do.</summary>
+    public Task<IReadOnlyList<VendorModelOption>?> ProbeModelsAsync(string? configDirectory, CancellationToken ct) =>
+        CodexModelCatalogProbe.RunAsync(
             () => {
+                var stateDir = _config.Store.StateDirectory(_config.Name);
+                var env      = new Dictionary<string, string>();
+                var (dir, remove) = configDirectory is null
+                    ? (CodexModelCatalogProbe.DirectoryFor(stateDir), FrozenSet<string>.Empty)
+                    : (CodexModelCatalogProbe.DirectoryFor(stateDir, DirectoryKey.Of(configDirectory)),
+                       VendorHomeEnv.Apply(env, Vendor, configDirectory, _config.Home));
                 Directory.CreateDirectory(dir);
-                return _spawnFactory(_pty.CliPath, [], null, dir, new Dictionary<string, string>(), _config, _loggerFactory);
+                return _spawnFactory(_pty.CliPath, [], null, dir, env, remove, _config, _loggerFactory);
             },
             string.IsNullOrEmpty(_config.Version) ? "0.0.0" : _config.Version, _time, _logger, ct);
-    }
 
     /// <summary>Codex rewrites its cached catalog when it refetches it, and its auth file when the
     /// account changes; either can change the models this account may launch.</summary>
     public IReadOnlyList<string> CatalogFingerprintPaths => [_launcher.Paths.ModelsCache, _launcher.Paths.AuthJson];
+
+    public IReadOnlyList<string> CatalogFingerprintPathsFor(string? configDirectory) {
+        if (configDirectory is null) return CatalogFingerprintPaths;
+
+        var paths = AccountLayouts.Codex(_config.Home, configDirectory);
+        return [paths.ModelsCache, paths.AuthJson];
+    }
 
     // A default-kind launch is the only Codex shape that accepts a follow-up while running, so it is
     // the only one whose fetch happens alongside a live, write-contained process: the store keeps
@@ -123,6 +139,10 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
 
     public bool SupportsRestartResume(string? runtimeTransport) => true;
 
+    /// <summary>Only a session recorded on the terminal transport resumes there; any other may reach the app-server.</summary>
+    public bool ResumesIdleWithoutPrompt(string? runtimeTransport) =>
+        runtimeTransport == CodexTransportDecision.Pty && _pty.ResumesIdleWithoutPrompt(runtimeTransport);
+
     public Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
         var route = Route(ctx);
         if (route.Refusal is { } refusal)
@@ -154,7 +174,10 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
         // backstops server-side. ONE decision drives all four (marker, emission, deferral, forwarder) so
         // they can never desync.
         const bool envelopeSourced = true;
-        var env = BuildEnv(ctx, envelopeSourced);
+        var env       = BuildEnv(ctx, envelopeSourced);
+        var removeEnv = ctx.Account is { } account
+            ? VendorHomeEnv.Apply(env, Vendor, account, _config.Home)
+            : FrozenSet<string>.Empty;
 
         var launch = new CodexAppServerLaunch(
             Cwd:           ctx.Worktree.Path,
@@ -171,7 +194,7 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
             ResumeSessionId: ctx.ResumeSessionId);
 
         CodexAppServerSpawn spawn = (seed, spawnCt) =>
-            _spawnFactory(_launcher.CliPath, appServerArgs, seed, ctx.Worktree.Path, env, _config, _loggerFactory);
+            _spawnFactory(_launcher.CliPath, appServerArgs, seed, ctx.Worktree.Path, env, removeEnv, _config, _loggerFactory);
 
         ctx.Journal?.Open(ctx.Worktree.Path, ctx.Model);
 
@@ -214,13 +237,12 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
         Review:         ctx.Review,
         // App-server review flows carry no PR-review MCP launch (ctx.IsReview is false); the
         // flow-result + allowlist servers are spliced by BuildAppServerLaunchArgs from IsReviewFlow.
-        ReviewLaunch:   null) {
+        ReviewLaunch:   null,
+        Account:        ctx.Account) {
         McpAllowlist = ctx.McpAllowlist,
         Work         = ctx.Work,
         CodexPosture = ctx.CodexPosture,
     };
-
-    internal const string HostedAppServerMarkerEnv = "KCAP_HOSTED_APPSERVER";
 
     internal static Dictionary<string, string> BuildEnv(RuntimeStartContext ctx, bool emitEnvelopeTranscript) {
         var env = new Dictionary<string, string> {
@@ -232,20 +254,22 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
         if (!string.IsNullOrEmpty(ctx.DaemonEpoch))     env["KCAP_DAEMON_EPOCH"]      = ctx.DaemonEpoch;
         if (!string.IsNullOrEmpty(ctx.ServerUrl))       env[ProfileOverrides.UrlVar]  = ctx.ServerUrl;
         if (!string.IsNullOrEmpty(ctx.DaemonBridgeUrl)) env[HostedAgent.BridgeUrlVar] = ctx.DaemonBridgeUrl;
-        // guard-1: only an envelope-sourced session carries this marker; the codex hook + watcher read it
-        // and stand down so the rollout is not double-ingested alongside the envelopes.
-        if (emitEnvelopeTranscript) env[HostedAppServerMarkerEnv] = "1";
+        // Only an envelope-sourced session carries this marker, so its rollout is not ingested a second
+        // time beside the envelopes.
+        if (emitEnvelopeTranscript) env[HostedAgent.HostedAppServerVar] = "1";
         return env;
     }
 
     // Materialize the child's environment over the daemon's own, where nothing inherited may speak for
     // this launch: an inherited envelope marker would make a non-emitting child's hook watcher stand
     // down and lose ingestion, and an inherited session or lookup agent names another session.
-    internal static void ApplyChildEnv(IDictionary<string, string?> childEnv, IReadOnlyDictionary<string, string> overlay) {
-        childEnv.Remove(HostedAppServerMarkerEnv);
+    internal static void ApplyChildEnv(
+            IDictionary<string, string?> childEnv, IReadOnlyDictionary<string, string> overlay, IReadOnlyCollection<string> remove) {
+        childEnv.Remove(HostedAgent.HostedAppServerVar);
         childEnv.Remove(HostedAgent.FlowRoleVar);
         childEnv.Remove(HostedAgent.DaemonAgentIdVar);
         InheritedHarnessSessions.Remove(childEnv);
+        foreach (var key in remove) childEnv.Remove(key);
         foreach (var (k, v) in overlay) childEnv[k] = v;
     }
 
@@ -253,8 +277,8 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     /// shared <see cref="AcpChildProcess"/> (stderr drain + terminate) and the JSON-RPC transport.</summary>
     static Task<(CodexAppServerConnection, IAcpProcess)> DefaultSpawnFactory(
             string cliPath, IReadOnlyList<string> appServerArgs, string? hookStateSeed, string cwd,
-            IReadOnlyDictionary<string, string> env, DaemonConfig config, ILoggerFactory loggerFactory,
-            TimeProvider time) {
+            IReadOnlyDictionary<string, string> env, IReadOnlyCollection<string> removeEnv, DaemonConfig config,
+            ILoggerFactory loggerFactory, TimeProvider time) {
         var argv = new List<string> { "app-server" };
         argv.AddRange(appServerArgs);
         if (!string.IsNullOrEmpty(hookStateSeed)) {
@@ -269,7 +293,7 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
             UseShellExecute        = false,
             WorkingDirectory       = cwd,
         };
-        ApplyChildEnv(psi.Environment, env);
+        ApplyChildEnv(psi.Environment, env, removeEnv);
         WindowsLaunchCommand.Apply(psi, BinaryProbe.FromEnvironment());
 
         var process = Process.Start(psi)
@@ -288,4 +312,5 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
 /// production spawns a real process; a test substitutes an in-process fake peer.</summary>
 internal delegate Task<(CodexAppServerConnection Connection, IAcpProcess Process)> CodexAppServerSpawnFactory(
     string cliPath, IReadOnlyList<string> appServerArgs, string? hookStateSeed, string cwd,
-    IReadOnlyDictionary<string, string> env, DaemonConfig config, ILoggerFactory loggerFactory);
+    IReadOnlyDictionary<string, string> env, IReadOnlyCollection<string> removeEnv, DaemonConfig config,
+    ILoggerFactory loggerFactory);

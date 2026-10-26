@@ -89,7 +89,7 @@ internal static class AgentOrchestratorHarness {
         // test that still needs that vendor's launcher registered for the local-spawn path.
         var runtimeFactories = new Dictionary<string, IHostedAgentRuntimeFactory>();
         foreach (var l in launchers.Values)
-            runtimeFactories[l.Vendor] = new PtyHostedAgentRuntimeFactory(l, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
+            runtimeFactories[l.Vendor] = new PtyHostedAgentRuntimeFactory(l, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System, config.Home);
         foreach (var f in extraRuntimeFactories ?? [])
             runtimeFactories[f.Vendor] = f;
 

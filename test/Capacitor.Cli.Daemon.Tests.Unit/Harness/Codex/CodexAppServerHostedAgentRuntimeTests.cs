@@ -363,6 +363,34 @@ public class CodexAppServerHostedAgentRuntimeTests {
     }
 
     [Test]
+    public async Task A_dispatched_inputs_recorded_user_message_carries_its_dispatch_and_earlier_same_text_inputs_none() {
+        var fake = new FakeCodexAppServer { HoldTurnOpen = true, EchoUserMessages = true, HoldUserMessages = true };
+        var (runtime, _, _) = Build(_ => fake, Launch(prompt: "same"), emitEnvelopes: true);
+        await runtime.StartAsync(CancellationToken.None).WaitAsync(HangGuard);
+        Guid first = Guid.NewGuid(), second = Guid.NewGuid();
+
+        await runtime.SendDispatchedInputAsync("same", first, waitForWrite: false).WaitAsync(HangGuard);
+        await runtime.SendUserInputAsync("again").WaitAsync(HangGuard);
+        await runtime.SendDispatchedInputAsync("again", second, waitForWrite: false).WaitAsync(HangGuard);
+        await fake.ReleaseUserMessagesAsync();
+
+        var users = new List<AcpEventEnvelope>();
+        using var cts = new CancellationTokenSource(HangGuard);
+        while (users.Count < 4) {
+            var env = await runtime.Envelopes.ReadAsync(cts.Token);
+            if (env.Kind == AcpEventKind.UserMessage) users.Add(env);
+        }
+
+        await Assert.That(users.Select(u => (u.Text, u.DispatchId))).IsEquivalentTo(
+            new (string?, Guid?)[] { ("same", null), ("same", first), ("again", null), ("again", second) },
+            TUnit.Assertions.Enums.CollectionOrdering.Matching);
+
+        await fake.CompleteHeldTurnAsync();
+        await runtime.WaitForTurnIdleAsync(CancellationToken.None).WaitAsync(HangGuard);
+        await runtime.DisposeAsync();
+    }
+
+    [Test]
     public async Task Initial_prompt_fires_the_first_turn_during_start() {
         var fake = new FakeCodexAppServer();
         var (runtime, _, _) = Build(_ => fake, Launch(prompt: "kick off the review"));

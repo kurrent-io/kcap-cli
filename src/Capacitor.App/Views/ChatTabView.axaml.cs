@@ -608,11 +608,6 @@ public partial class ChatTabView : UserControl {
     /// TextBox's own newline. ↑/↓ recall sent prompts only from the first/last line, so inside a
     /// multi-line recall they stay the TextBox's own caret moves until the caret reaches an edge.
     void OnComposerKeyDown(object? sender, KeyEventArgs e) {
-        if (e.Key == Key.Escape && e.KeyModifiers == KeyModifiers.None) {
-            e.Handled = true;
-            TryInterrupt();
-            return;
-        }
         if (e.Key is Key.Up or Key.Down && e.KeyModifiers == KeyModifiers.None) {
             if (DataContext is not ChatTabViewModel tab || ComposerInput.SelectionStart != ComposerInput.SelectionEnd) return;
             var (line, lines) = ComposerCaretLine();
@@ -631,11 +626,15 @@ public partial class ChatTabView : UserControl {
     protected override void OnKeyDown(KeyEventArgs e) {
         base.OnKeyDown(e);
         if (e.Handled || e.Key != Key.Escape || e.KeyModifiers != KeyModifiers.None || OriginatesFromPendingCard(e)) return;
-        if (TryInterrupt()) e.Handled = true;
+        // A composer Escape stops here even with nothing to interrupt, so an ancestor's Escape
+        // binding never fires while the user is typing.
+        if (TryInterrupt() || e.Source is Visual source && (source == ComposerInput || ComposerInput.IsVisualAncestorOf(source)))
+            e.Handled = true;
     }
 
     bool TryInterrupt() {
-        if (DataContext is not ChatTabViewModel chat || !((ICommand)chat.InterruptCommand).CanExecute(null)) return false;
+        if (DataContext is not ChatTabViewModel chat || !chat.CanInterruptWithEscape
+            || !((ICommand)chat.InterruptCommand).CanExecute(null)) return false;
         chat.InterruptCommand.Execute().Subscribe();
         return true;
     }

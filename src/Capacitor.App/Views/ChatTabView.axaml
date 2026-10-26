@@ -114,11 +114,46 @@
                     <Border HorizontalAlignment="Right" MaxWidth="520" Margin="0,8,0,12" Padding="14,11" CornerRadius="10"
                             Background="{StaticResource KcapSurfaceRaisedBrush}">
                         <StackPanel Spacing="6">
-                            <TextBlock Classes="toolKindChip" HorizontalAlignment="Left"
-                                       Text="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).UserTitle}" />
-                            <views:MarkdownView Text="{Binding Text}"
+                            <TextBlock Classes="toolKindChip" HorizontalAlignment="Left">
+                                <TextBlock.Text>
+                                    <MultiBinding Converter="{x:Static views:FirstTextConverter.Instance}">
+                                        <Binding Path="Sender.Title" />
+                                        <Binding Path="$parent[ItemsControl].((vm:ChatTabViewModel)DataContext).UserTitle" />
+                                    </MultiBinding>
+                                </TextBlock.Text>
+                            </TextBlock>
+                            <views:MarkdownView Text="{Binding Text}" Flavor="Prompt" IsVisible="{Binding HasText}"
                                                 OpenLink="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).OpenLinkCommand}"
                                                 RunCode="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).RunCodeCommand}" />
+                            <ItemsControl ItemsSource="{Binding Attachments}" IsVisible="{Binding HasAttachments}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel Orientation="Horizontal" />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:UserAttachment">
+                                        <Panel Margin="0,2,8,2">
+                                            <views:ToolImagePreview x:Name="AttachmentPreview" Classes="kcapGhost" Path="{Binding PreviewPath}" ExpandsOnClick="False"
+                                                                    ToolTip.Tip="{Binding FileName}"
+                                                                    AutomationProperties.Name="{Binding FileName}"
+                                                                    Command="{Binding $parent[views:ChatTabView].((vm:ChatTabViewModel)DataContext).OpenAttachmentCommand}"
+                                                                    CommandParameter="{Binding}" />
+                                            <Border IsVisible="{Binding #AttachmentPreview.Unavailable}" Padding="8,4" CornerRadius="8"
+                                                    Background="{StaticResource KcapSurfaceBrush}"
+                                                    BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1">
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <views:AppIcon Kind="Paperclip" Size="14" VerticalAlignment="Center"
+                                                                   Foreground="{StaticResource KcapMutedBrush}" />
+                                                    <TextBlock Text="{Binding FileName}" FontSize="12" MaxWidth="240"
+                                                               TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                                                               Foreground="{StaticResource KcapTextBrush}" />
+                                                </StackPanel>
+                                            </Border>
+                                        </Panel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
                         </StackPanel>
                     </Border>
                 </DataTemplate>
@@ -160,8 +195,14 @@
                                 Background="{StaticResource KcapSurfaceRaisedBrush}"
                                 IsVisible="{Binding HasCommand}">
                             <StackPanel Spacing="6">
-                                <TextBlock Classes="toolKindChip" HorizontalAlignment="Left"
-                                           Text="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).UserTitle}" />
+                                <TextBlock Classes="toolKindChip" HorizontalAlignment="Left">
+                                    <TextBlock.Text>
+                                        <MultiBinding Converter="{x:Static views:FirstTextConverter.Instance}">
+                                            <Binding Path="Sender.Title" />
+                                            <Binding Path="$parent[ItemsControl].((vm:ChatTabViewModel)DataContext).UserTitle" />
+                                        </MultiBinding>
+                                    </TextBlock.Text>
+                                </TextBlock>
                                 <SelectableTextBlock Classes="toolLine" Text="{Binding Command}" />
                             </StackPanel>
                         </Border>
@@ -328,7 +369,7 @@
         <Border x:Name="ComposerBand" Grid.Row="1" Padding="22,15,22,16"
                 Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                 BorderThickness="0,1,0,0">
-            <Grid RowDefinitions="Auto,Auto,Auto,Auto">
+            <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto">
                 <!-- Runs that outlive the turn. Warning marks work in flight here as it does on a running
                      tool, not attention. -->
                 <Border x:Name="SubagentsBanner" Grid.Row="0" Margin="0,0,0,8" Padding="13,10"
@@ -473,7 +514,7 @@
                             </Button>
                             <TextBlock Grid.Column="1" Text="{Binding ComposerHint}" FontSize="12.5" Foreground="{StaticResource KcapFaintBrush}"
                                        VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                            <Button x:Name="InterruptButton" Grid.Column="2" Classes="kcapChip" Content="Interrupt (Esc)"
+                            <Button x:Name="InterruptButton" Grid.Column="2" Classes="kcapChip" Content="{Binding InterruptLabel}"
                                     Command="{Binding InterruptCommand}" IsVisible="{Binding ShowsInterrupt}"
                                     ToolTip.Tip="Interrupt the current turn without ending the session" Margin="12,0,0,0"
                                     BorderThickness="1" Height="24" Padding="10,0" VerticalContentAlignment="Center"
@@ -484,6 +525,17 @@
                                     IsVisible="{Binding ShowsComposer}" />
                         </Grid>
                     </StackPanel>
+                </Border>
+
+                <Border x:Name="AccountStrip" Grid.Row="4" Margin="0,6,0,0" IsVisible="{Binding ShowsAccountStrip}">
+                    <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="8">
+                        <ContentControl VerticalAlignment="Center"
+                                        Content="{Binding AccountVendor, Converter={x:Static views:VendorGlyphConverter.Instance}, ConverterParameter=12}" />
+                        <TextBlock Grid.Column="1" Text="{Binding AccountLabel}" FontSize="12" VerticalAlignment="Center"
+                                   Foreground="{StaticResource KcapTextBrush}" />
+                        <TextBlock Grid.Column="2" Text="{Binding AccountDirectory}" FontSize="11.5" VerticalAlignment="Center"
+                                   Foreground="{StaticResource KcapMutedBrush}" TextTrimming="CharacterEllipsis" />
+                    </Grid>
                 </Border>
             </Grid>
         </Border>

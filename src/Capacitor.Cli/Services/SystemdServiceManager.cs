@@ -92,6 +92,41 @@ sealed class SystemdServiceManager(
         return true;
     }
 
+    /// <summary>Sets one variable in the unit and reloads systemd's copy; the daemon reads it on its next
+    /// start. Returns the unit as it was, for <see cref="RestoreUnit"/>; null when the unit is absent or
+    /// already carries the value. A line it cannot rewrite safely throws, and a refused reload puts the
+    /// previous unit back before throwing.</summary>
+    public string? SetEnvironment(string serviceId, string key, string value) {
+        var path = SystemdUnit.UnitPath(home, serviceId);
+        if (!File.Exists(path)) return null;
+
+        var previous = File.ReadAllText(path);
+        if (SystemdUnit.EnvFromUnit(previous).TryGetValue(key, out var current) && current == value) return null;
+        if (SystemdUnit.WithEnvironmentValue(previous, key, value) is not { } rewritten)
+            throw new InvalidOperationException($"its {key} line is not one kcap wrote, so it was left unchanged");
+
+        _writeUnit(path, rewritten, null);
+        try {
+            Reload();
+        } catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception
+                                          or IOException or UnauthorizedAccessException) {
+            _writeUnit(path, previous, null);
+            try {
+                Systemctl(SystemdUnit.DaemonReloadArgs());
+            } catch (Exception again) when (again is System.ComponentModel.Win32Exception or IOException) {
+                // The reload that failed is the one to report.
+            }
+            throw;
+        }
+
+        return previous;
+    }
+
+    public void RestoreUnit(string serviceId, string unitText) {
+        _writeUnit(SystemdUnit.UnitPath(home, serviceId), unitText, null);
+        Reload();
+    }
+
     void Reload() {
         if (Systemctl(SystemdUnit.DaemonReloadArgs()) is { } error) throw new InvalidOperationException(error);
     }

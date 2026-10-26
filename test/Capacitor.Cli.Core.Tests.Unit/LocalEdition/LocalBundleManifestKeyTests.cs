@@ -47,6 +47,18 @@ public class LocalBundleManifestKeyTests {
         await Assert.That(LocalBundleManifestKey.Verify(key, Encoding.UTF8.GetBytes(VectorManifest), "not base64!")).IsFalse();
     }
 
+    /// <summary>Base64 that decodes to bytes no DER parser accepts reads as a rejected signature, not a crypto error.</summary>
+    [Test]
+    [Arguments("MAA=")]
+    [Arguments("AAECAwQ=")]
+    [Arguments("MEQCIFapJTlqZBprAKl0I5YVrZEGgHBzXDwAe5aU9p2NIxCq")]
+    [Arguments("MEUCIQ==")]
+    public async Task Rejects_a_signature_that_is_not_DER(string signature) {
+        using var key = LocalBundleManifestKey.FromPem(VectorPublicKey);
+
+        await Assert.That(LocalBundleManifestKey.Verify(key, Encoding.UTF8.GetBytes(VectorManifest), signature)).IsFalse();
+    }
+
     [Test]
     public async Task Key_id_matches_the_manifest_builder() {
         using var key = LocalBundleManifestKey.FromPem(VectorPublicKey);

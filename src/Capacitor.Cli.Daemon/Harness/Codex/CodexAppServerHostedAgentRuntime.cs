@@ -108,6 +108,7 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
     // §2.4 envelope transcript: the mapper translates every app-server notification into
     // canonical/ephemeral envelopes, drained through the bounded forward buffer (IAcpTranscriptSource).
     readonly CodexNotificationMapper _mapper;
+    readonly CodexSubmittedInputs    _submitted;
     readonly CodexForwardBuffer      _forwardBuffer;
 
     CodexAppServerConnection? _connection;
@@ -181,6 +182,7 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
             // the source-claim window enqueues and waits; BeginFirstTurnAsync unseals it.
             sealedAtStart: deferFirstTurn);
         _mapper = new CodexNotificationMapper(() => _resolvedModel, logger);
+        _submitted = new CodexSubmittedInputs(timeProvider);
         _forwardBuffer = new CodexForwardBuffer(
             ForwardBufferCapacity,
             forwardStallTimeout ?? TimeSpan.FromSeconds(DefaultForwardStallSeconds),
@@ -288,9 +290,9 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
                 // complete until BeginFirstTurnAsync unseals). Use CancellationToken.None as the per-input
                 // token because StartAsync's `linked` is disposed on return, long before the deferred
                 // send; the dispatcher's own runtime token (_cts.Token) still aborts it on teardown.
-                _firstTurnDispatch = _dispatcher.EnqueueAsync(_launch.InitialPrompt, CancellationToken.None);
+                _firstTurnDispatch = Submit(_launch.InitialPrompt, dispatchId: null, CancellationToken.None);
             } else {
-                await _dispatcher.EnqueueAsync(_launch.InitialPrompt, linked.Token).ConfigureAwait(false);
+                await Submit(_launch.InitialPrompt, dispatchId: null, linked.Token).ConfigureAwait(false);
             }
         }
 
@@ -503,9 +505,27 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
         await RequestAsync("turn/steer", steerParams, ct).ConfigureAwait(false);
     }
 
-    public Task SendUserInputAsync(string text) => _dispatcher.EnqueueAsync(text);
+    public Task SendUserInputAsync(string text) => Submit(text, dispatchId: null);
 
-    public Task SendUserInputAndWaitForWriteAsync(string text) => _dispatcher.EnqueueAsync(text);
+    public Task SendUserInputAndWaitForWriteAsync(string text) => Submit(text, dispatchId: null);
+
+    public Task SendDispatchedInputAsync(string text, Guid dispatchId, bool waitForWrite) => Submit(text, dispatchId);
+
+    // Every input is recorded, dispatched or not: Codex's item for an earlier typed input must not claim a later
+    // dispatch with the same text.
+    Task Submit(string text, Guid? dispatchId, CancellationToken ct = default) {
+        var sent = _submitted.Add(text, dispatchId);
+        Task written;
+        try {
+            written = _dispatcher.EnqueueAsync(text, ct);
+        } catch {
+            _submitted.Remove(sent);
+            throw;
+        }
+        _ = written.ContinueWith(_ => _submitted.Remove(sent), CancellationToken.None,
+            TaskContinuationOptions.NotOnRanToCompletion | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        return written;
+    }
 
     public async Task WaitForTurnIdleAsync(CancellationToken ct) {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _cts.Token);
@@ -552,7 +572,8 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
         if (_policy is { } policy) ObservePolicyFacts(policy, n.Method, n.Params);
 
         if (_emitEnvelopeTranscript)
-            foreach (var env in _mapper.Map(n.Method, n.Params)) {
+            foreach (var mapped in _mapper.Map(n.Method, n.Params)) {
+                var env = _submitted.Stamp(mapped);
                 _policy?.Turns.Observe(env);
                 _forwardBuffer.Emit(env);
             }

@@ -104,6 +104,21 @@ public class AppStateStoreTests {
     }
 
     [Test]
+    public async Task Account_memory_round_trips_through_the_file() {
+        using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+        var store = new AppStateStore(path);
+
+        await store.UpdateAsync(s => s with {
+            AccountByRepo = AccountMemory.With(s.AccountByRepo, "host1", "claude", "/home/a/kcap-cli", "a1"),
+        });
+
+        var reloaded = await new AppStateStore(path).LoadAsync();
+
+        await Assert.That(AccountMemory.Lookup(reloaded.AccountByRepo, "host1", "claude", "/home/a/kcap-cli")).IsEqualTo("a1");
+        await Assert.That(AccountMemory.Lookup(reloaded.AccountByRepo, "host1", "codex", "/home/a/kcap-cli")).IsNull();
+    }
+
+    [Test]
     public async Task Window_placement_is_remembered() {
         using var tmp = TempDir.WithPathTo("app-state.json", out var path);
         var store = new AppStateStore(path);

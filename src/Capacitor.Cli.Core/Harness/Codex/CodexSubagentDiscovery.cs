@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -253,13 +254,79 @@ public static class CodexSubagentDiscovery {
         return "subagent";
     }
 
+    /// <summary>
+    /// The parent's <c>spawn_agent</c> call ids, keyed by the <c>agent_path</c> each spawned, which the call's output
+    /// names as its <c>task_name</c>. A spawn whose output is not written yet is absent
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> ReadSpawnCalls(string parentRolloutPath) {
+        var spawns = new HashSet<string>(StringComparer.Ordinal);
+        var paths  = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        try {
+            using var fs     = new FileStream(parentRolloutPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(fs);
+
+            while (reader.ReadLine() is { } line) {
+                if (!line.Contains("spawn_agent", StringComparison.Ordinal) && !line.Contains("task_name", StringComparison.Ordinal)) continue;
+
+                try {
+                    using var doc = JsonDocument.Parse(line);
+
+                    if (doc.RootElement.Obj("payload") is not { } payload || payload.Str("call_id") is not { } callId) continue;
+
+                    switch (payload.Str("type")) {
+                        case "function_call" when payload.Str("name") == "spawn_agent":
+                            spawns.Add(callId);
+                            break;
+                        case "function_call_output" when spawns.Contains(callId) && TaskNameOf(payload) is { } agentPath:
+                            paths.TryAdd(agentPath, callId);
+                            break;
+                    }
+                } catch (JsonException) {
+                    // a line still being written
+                }
+            }
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            return FrozenDictionary<string, string>.Empty;
+        }
+
+        return paths.Count == 0 ? FrozenDictionary<string, string>.Empty : paths;
+    }
+
+    /// <summary>The call that spawned the agent at <paramref name="agentPath"/>, or else the one that spawned its
+    /// nearest spawned ancestor: a grandchild is imported onto the root, where only its ancestor's call is</summary>
+    public static string? SpawnCallFor(IReadOnlyDictionary<string, string> spawnCalls, string? agentPath) {
+        for (var path = agentPath; path is { Length: > 0 }; path = path[..Math.Max(path.LastIndexOf('/'), 0)]) {
+            if (spawnCalls.TryGetValue(path, out var callId)) return callId;
+        }
+
+        return null;
+    }
+
+    static string? TaskNameOf(JsonElement output) {
+        if (output.Str("output") is { } body) {
+            try {
+                using var doc = JsonDocument.Parse(body);
+
+                return doc.RootElement.Str("task_name");
+            } catch (JsonException) {
+                return null;
+            }
+        }
+
+        return output.Obj("output")?.Str("task_name");
+    }
+
     // ── Hook payloads (the vendor-agnostic /hooks/subagent-start|stop wire shape) ──
 
     /// <summary><c>/hooks/subagent-start</c> body. cwd is "" — the child inherits the parent
     /// session's cwd; the server's HookBase merely requires the (non-null) field
-    /// (same posture as Gemini/OpenCode subagents).</summary>
-    public static JsonObject BuildStartPayload(string parentSessionId, string agentId, string agentType, string subagentTranscriptPath) =>
-        new() {
+    /// (same posture as Gemini/OpenCode subagents). <paramref name="spawnCallId"/> places the agent on the turn of
+    /// the parent's call that spawned it, wherever the start lands on the parent's stream</summary>
+    public static JsonObject BuildStartPayload(
+            string parentSessionId, string agentId, string agentType, string subagentTranscriptPath, string? spawnCallId = null
+        ) {
+        var payload = new JsonObject {
             ["hook_event_name"] = "subagent_start",
             ["session_id"]      = parentSessionId,
             ["agent_id"]        = agentId,
@@ -267,6 +334,11 @@ public static class CodexSubagentDiscovery {
             ["transcript_path"] = subagentTranscriptPath,
             ["cwd"]             = "",
         };
+
+        if (spawnCallId is not null) payload["spawn_call_id"] = spawnCallId;
+
+        return payload;
+    }
 
     /// <summary><c>/hooks/subagent-stop</c> body.</summary>
     public static JsonObject BuildStopPayload(string parentSessionId, string agentId, string agentType, string subagentTranscriptPath) =>

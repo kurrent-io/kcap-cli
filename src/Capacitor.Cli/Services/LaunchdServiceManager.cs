@@ -185,10 +185,12 @@ sealed partial class LaunchdServiceManager(
     /// does not waits for a later refresh, as it does when <paramref name="timeLeft"/> is under
     /// <see cref="ReloadBudget"/>. A job that is not stale counts as <see cref="UnitRefresh.Current"/>
     /// whatever its spawn type unless <paramref name="requirePositiveSpawnType"/> asks for a positive one.
+    /// A plist <paramref name="amend"/> rewrites always makes a loaded job stale, and is kept only by a reload.
     /// </summary>
     public UnitRefresh RefreshUnit(
             string serviceId, Func<bool> stopForReload, Func<TimeSpan> timeLeft, out string? error,
-            Func<string, string>? stabilize = null, bool requirePositiveSpawnType = false) {
+            Func<string, string>? stabilize = null, bool requirePositiveSpawnType = false,
+            Func<string, string?>? amend = null) {
         error = null;
         var path = LaunchdUnit.PlistPath(home, serviceId);
 
@@ -201,7 +203,7 @@ sealed partial class LaunchdServiceManager(
         if (!LaunchdUnit.DeclaresStandardProcessType(upgraded ?? original!)) return UnitRefresh.UnitUnsupported;
 
         try {
-            return RefreshValidatedUnit(serviceId, path, original!, upgraded, stopForReload, timeLeft, stabilize, requirePositiveSpawnType, out error);
+            return RefreshValidatedUnit(serviceId, path, original!, upgraded, stopForReload, timeLeft, stabilize, requirePositiveSpawnType, amend, out error);
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException
                                       or System.ComponentModel.Win32Exception) {
             error = ex.Message;
@@ -211,7 +213,8 @@ sealed partial class LaunchdServiceManager(
 
     UnitRefresh RefreshValidatedUnit(
             string serviceId, string path, string original, string? upgraded,
-            Func<bool> stopForReload, Func<TimeSpan> timeLeft, Func<string, string>? stabilize, bool requirePositiveSpawnType, out string? error) {
+            Func<bool> stopForReload, Func<TimeSpan> timeLeft, Func<string, string>? stabilize, bool requirePositiveSpawnType,
+            Func<string, string?>? amend, out string? error) {
         error = null;
         var (printExit, printOut, printErr, printTimedOut) = RunCtl(RefreshCtlTimeout, LaunchdUnit.PrintArgs(Uid(), serviceId));
         var probe = printTimedOut ? LabelProbe.Unknown : LaunchdUnit.ClassifyPrint(printExit, printOut, printErr);
@@ -221,40 +224,66 @@ sealed partial class LaunchdServiceManager(
         if (target is not null && LaunchdUnit.WithBinary(upgraded ?? original, target) is { } repointed)
             upgraded = repointed;
 
+        // Kept only once the job reloads or is not loaded: a loaded job keeps its old copy, and a later run
+        // comparing against the file would read the amendment as already applied.
+        var amended = amend?.Invoke(upgraded ?? original);
+        var beforeAmend = upgraded ?? original;
+
         // A loaded job still running a version directory keeps it after the plist moves on.
         var loadedProgram = LaunchdUnit.LoadedProgram(printOut);
         var pinned = loadedProgram is not null && stabilize is not null && stabilize(loadedProgram) != loadedProgram;
         var spawn  = probe == LabelProbe.Loaded ? LaunchdUnit.LoadedSpawnType(printOut) : null;
-        var stale  = probe == LabelProbe.Loaded && (SpawnTypes.IsBackgroundBand(spawn) || pinned);
+        var stale  = probe == LabelProbe.Loaded && (SpawnTypes.IsBackgroundBand(spawn) || pinned || amended is not null);
 
         // Rewriting the file is safe whatever launchd holds; only the reload depends on what it does.
         if (upgraded is not null) _writeUnit(path, upgraded, null);
         if (probe == LabelProbe.Unknown) return UnitRefresh.Unverified;
-        if (probe == LabelProbe.Absent) return UnitRefresh.NotLoaded;
+        if (probe == LabelProbe.Absent) {
+            if (amended is not null) _writeUnit(path, amended, null);
+            return UnitRefresh.NotLoaded;
+        }
         if (!stale) return !requirePositiveSpawnType || SpawnTypes.IsPositive(spawn) ? UnitRefresh.Current : UnitRefresh.Unverified;
         if (timeLeft() < ReloadBudget) return UnitRefresh.Deferred;
 
-        // A loaded job with no running daemon hosts nothing, and there is no socket to ask.
-        var running = LaunchdUnit.StatusFromPrint(printExit, printOut) == ServiceState.Running;
-        if (running && !stopForReload()) return UnitRefresh.Deferred;
+        // Before the stop: a write that fails once the daemon has exited would leave it down.
+        if (amended is not null) _writeUnit(path, amended, null);
 
-        var (bootoutExit, _, _, bootoutTimedOut) = RunCtl(RefreshCtlTimeout, LaunchdUnit.BootoutArgs(Uid(), serviceId));
-        if ((bootoutTimedOut || bootoutExit != 0) && Probe(serviceId).Label == LabelProbe.Loaded) {
-            error = "launchctl bootout did not unload the job, so it keeps running in the background band until the next update";
-            return UnitRefresh.Failed;
+        (string? Error, LabelProbe? After) reload;
+        try {
+            // A loaded job with no running daemon hosts nothing, and there is no socket to ask.
+            var running = LaunchdUnit.StatusFromPrint(printExit, printOut) == ServiceState.Running;
+            if (running && !stopForReload()) {
+                if (amended is not null) _writeUnit(path, beforeAmend, null);
+                return UnitRefresh.Deferred;
+            }
+
+            var (bootoutExit, _, _, bootoutTimedOut) = RunCtl(RefreshCtlTimeout, LaunchdUnit.BootoutArgs(Uid(), serviceId));
+            if ((bootoutTimedOut || bootoutExit != 0) && Probe(serviceId).Label == LabelProbe.Loaded) {
+                if (amended is not null) _writeUnit(path, beforeAmend, null);
+                error = "launchctl bootout did not unload the job, so it keeps running in the background band until the next update";
+                return UnitRefresh.Failed;
+            }
+
+            reload = Bootstrap(serviceId, path, acceptAnySpawnType: false);
+        } catch {
+            // Same rule as every other path short of a reload: the file must not claim what launchd never loaded.
+            if (amended is not null) _writeUnit(path, beforeAmend, null);
+            RecoverUnloadedJob(serviceId, path, upgraded is not null || amended is not null ? original : null);
+            throw;
         }
 
-        var reload = Bootstrap(serviceId, path, acceptAnySpawnType: false);
         if (reload.Error is null) return UnitRefresh.Reloaded;
 
         // The label loaded from the plist on disk but launchd still reports the wrong band: a second
         // bootstrap over a loaded label fails, and the file already declares Standard, so nothing is rolled back.
         if (reload.After == LabelProbe.Loaded) {
+            // The loaded label may be the old job still exiting, so the amendment cannot be taken as applied.
+            if (amended is not null) _writeUnit(path, beforeAmend, null);
             error = reload.Error;
             return UnitRefresh.Failed;
         }
 
-        if (upgraded is not null) _writeUnit(path, original, null);
+        if (upgraded is not null || amended is not null) _writeUnit(path, original, null);
         var rollback = Bootstrap(serviceId, path, acceptAnySpawnType: true);
         var (bootstrapError, rollbackError) = (reload.Error, rollback.Error);
 
@@ -267,6 +296,19 @@ sealed partial class LaunchdServiceManager(
         }
 
         return UnitRefresh.Failed;
+    }
+
+    /// <summary>A throw after the bootout would otherwise leave the daemon unloaded. Best effort, so the
+    /// caller's exception is the one reported.</summary>
+    void RecoverUnloadedJob(string serviceId, string path, string? restore) {
+        try {
+            if (Probe(serviceId).Label != LabelProbe.Absent) return;
+            if (restore is not null) _writeUnit(path, restore, null);
+            Bootstrap(serviceId, path, acceptAnySpawnType: true);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException
+                                      or System.ComponentModel.Win32Exception) {
+            // The original failure is rethrown by the caller.
+        }
     }
 
     (LabelProbe Label, string StdOut) Probe(string serviceId) {
