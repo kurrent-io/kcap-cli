@@ -13,12 +13,13 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Codex;
 /// </summary>
 public class CodexHostedAgentRuntimeFactoryTests {
     [TempHome] public required TempHome Home { get; init; }
+    [TempDir]  public required TempDir  Tmp  { get; init; }
 
     static readonly TimeSpan HangGuard = TimeSpan.FromSeconds(5);
 
     // ── Test doubles ─────────────────────────────────────────────────────────────────────────
-    sealed class RecordingPtyFactory : IHostedAgentRuntimeFactory {
-    public string CliPath => "unused-by-this-double";
+    sealed class RecordingPtyFactory(string cliPath = "unused-by-this-double") : IHostedAgentRuntimeFactory {
+        public string CliPath => cliPath;
         public int StartCalls;
         public string Vendor => "codex";
         public bool IsAvailable() => true;
@@ -70,8 +71,8 @@ public class CodexHostedAgentRuntimeFactoryTests {
         IsReview: false, IsReviewFlow: isReviewFlow, Review: null,
         Cols: 80, Rows: 24, ServerUrl: "https://t.example", DaemonBridgeUrl: null, CapacitorPath: "/opt/kcap");
 
-    static DaemonConfig ConfigWith(bool active, string? version = "0.146.0") {
-        var resolution = new CodexTransportResolution(1, active, version, active, null);
+    static DaemonConfig ConfigWith(bool switchOn, string? version = "0.146.0") {
+        var resolution = CodexTransportResolution.Resolve(1, switchOn, () => version);
         return new DaemonConfig {
             CodexResolution             = resolution,
             AcknowledgedCodexResolution = resolution,
@@ -81,25 +82,36 @@ public class CodexHostedAgentRuntimeFactoryTests {
 
     CodexHostedAgentRuntimeFactory Factory(
             RecordingPtyFactory pty, bool appServerActive, CodexAppServerSpawnFactory? spawn = null) =>
-        new(NewLauncher(), pty, ConfigWith(appServerActive), NullLoggerFactory.Instance, TimeProvider.System, spawn);
+        new(NewLauncher(), pty, ConfigWith(switchOn: appServerActive), NullLoggerFactory.Instance, TimeProvider.System, spawn);
+
+    /// <summary>A Codex at the factory's CLI path reporting <paramref name="version"/>, for a pinned launch
+    /// on a daemon whose switch is off and whose resolution therefore carries no version.</summary>
+    string CodexReporting(string version) =>
+        Tmp.CreateExecutable("codex", $"#!/bin/sh\necho 'codex-cli {version}'\n");
 
     // ── Routing decision ─────────────────────────────────────────────────────────────────────
     public enum Kind { Interactive, ReviewFlow, PrReview }
 
+    /// <summary>The installed Codex reports <c>version</c> both to the resolution, when the switch is on,
+    /// and at the factory's CLI path, which a pinned launch probes when the switch is off.</summary>
     [Test]
     [Arguments("pty",        "app-server", Kind.Interactive, true,  "0.146.0", false, false)]
     [Arguments("app-server", "pty",        Kind.Interactive, false, "0.146.0", true,  false)]
     [Arguments(null,         "app-server", Kind.ReviewFlow,  false, "0.146.0", true,  false)]
+    [Arguments(null,         "app-server", Kind.Interactive, false, "0.146.0", true,  false)]
+    [Arguments(null,         "app-server", Kind.Interactive, false, "0.145.9", false, true)]
     [Arguments(null,         "pty",        Kind.ReviewFlow,  true,  "0.146.0", false, false)]
     [Arguments(null,         "app-server", Kind.Interactive, true,  "0.145.9", false, true)]
     [Arguments(null,         null,         Kind.PrReview,    true,  "0.146.0", false, false)]
     [Arguments(null,         null,         Kind.ReviewFlow,  true,  "0.146.0", true,  false)]
+    [Arguments(null,         null,         Kind.Interactive, true,  "0.145.9", false, false)]
     [Arguments(null,         null,         Kind.Interactive, false, "0.146.0", false, false)]
     public async Task Route_follows_precedence(
-            string? requested, string? expected, Kind kind, bool acknowledgedActive, string version,
+            string? requested, string? expected, Kind kind, bool switchOn, string version,
             bool appServer, bool refused) {
+        Skip.Unless(!OperatingSystem.IsWindows(), "The stub Codex is a POSIX shell script.");
         var factory = new CodexHostedAgentRuntimeFactory(
-            NewLauncher(), new RecordingPtyFactory(), ConfigWith(acknowledgedActive, version),
+            NewLauncher(), new RecordingPtyFactory(CodexReporting(version)), ConfigWith(switchOn, version),
             NullLoggerFactory.Instance, TimeProvider.System);
         var ctx = Ctx(kind == Kind.ReviewFlow, Home.PathTo("routing")) with {
             IsReview                 = kind == Kind.PrReview,
@@ -120,7 +132,7 @@ public class CodexHostedAgentRuntimeFactoryTests {
     [Arguments(false)]
     [Arguments(true)]
     public async Task Field_absent_interactive_routing_matches_the_acknowledged_advertisement(bool active) {
-        var config  = ConfigWith(active);
+        var config  = ConfigWith(switchOn: active);
         var factory = new CodexHostedAgentRuntimeFactory(
             NewLauncher(), new RecordingPtyFactory(), config, NullLoggerFactory.Instance, TimeProvider.System);
 
@@ -140,8 +152,8 @@ public class CodexHostedAgentRuntimeFactoryTests {
     [Arguments(Kind.ReviewFlow,  false)]
     public async Task Field_absent_launch_follows_the_acknowledged_resolution_not_the_committed_one(Kind kind, bool acknowledgedActive) {
         var config = new DaemonConfig {
-            CodexResolution             = new CodexTransportResolution(2, !acknowledgedActive, "0.146.0", !acknowledgedActive, null),
-            AcknowledgedCodexResolution = new CodexTransportResolution(1, acknowledgedActive, "0.146.0", acknowledgedActive, null),
+            CodexResolution             = CodexTransportResolution.Resolve(2, !acknowledgedActive, () => "0.146.0"),
+            AcknowledgedCodexResolution = CodexTransportResolution.Resolve(1, acknowledgedActive, () => "0.146.0"),
             Version                     = "0.146.0",
         };
         var factory = new CodexHostedAgentRuntimeFactory(
@@ -157,7 +169,7 @@ public class CodexHostedAgentRuntimeFactoryTests {
         using var wt = new TempDir();
         var pty = new RecordingPtyFactory();
         var factory = new CodexHostedAgentRuntimeFactory(
-            NewLauncher(), pty, ConfigWith(active: false, version: "0.145.9"), NullLoggerFactory.Instance, TimeProvider.System);
+            NewLauncher(), pty, ConfigWith(switchOn: true, version: "0.145.9"), NullLoggerFactory.Instance, TimeProvider.System);
 
         await Assert.That(() => factory.StartAsync(
                 Ctx(isReviewFlow: true, wt.Path) with { ExpectedRuntimeTransport = "app-server" }, CancellationToken.None))
