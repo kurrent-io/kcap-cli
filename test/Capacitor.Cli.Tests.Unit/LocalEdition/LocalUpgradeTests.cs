@@ -1,5 +1,9 @@
 using System.Net;
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.LocalEdition;
@@ -9,7 +13,7 @@ using TUnit.Core.Enums;
 
 namespace Capacitor.Cli.Tests.Unit.LocalEdition;
 
-[ExcludeOn(OS.Windows)]
+[ExcludeOn(OS.Windows), UnsupportedOSPlatform("windows")]
 public class LocalUpgradeTests {
     const string Old = "1.2.3";
     const string New = "1.3.0";
@@ -62,8 +66,27 @@ public class LocalUpgradeTests {
         _log.Clear();
     }
 
-    Task<LocalInstallEvent> Upgrade(string version = New, CancellationToken ct = default) =>
-        new LocalUpgrade(Stack(), _events).RunAsync(() => Stager(version), version, ct);
+    Task<LocalInstallEvent> Upgrade(string version = New, CancellationToken ct = default, IProgress<LocalInstallEvent>? progress = null) =>
+        new LocalUpgrade(Stack(), progress ?? _events).RunAsync(() => Stager(version), version, ct);
+
+    static readonly string OldSet = new('d', 64);
+
+    static readonly Dictionary<string, byte[]> ModelFiles = new() {
+        ["model.onnx"] = Encoding.UTF8.GetBytes("onnx weights"),
+        ["vocab.txt"]  = Encoding.UTF8.GetBytes("vocabulary"),
+    };
+
+    string Models => Tmp.PathTo(["r", "models"]);
+
+    /// <summary><see cref="New"/>'s bundle names a built-in model set and serves <paramref name="files"/> under it.</summary>
+    FakeBundle PublishModelSet(Dictionary<string, byte[]>? files = null, JsonObject? entry = null) =>
+        _bundles[New] = new(Tmp.PathTo($"bundle-{New}.tar.gz"), New) { ModelFiles = files ?? ModelFiles, EmbeddingModel = entry };
+
+    void Recorded(LocalEmbeddingSetting setting) => LocalEmbeddingFile.Write(Root, setting);
+
+    bool HasModelSet(string set) => Directory.Exists(Path.Combine(Models, set));
+
+    static bool RequestedModels(FakeBundle bundle) => bundle.Requests.Any(r => r.StartsWith("/local/models/", StringComparison.Ordinal));
 
     async Task<LocalUpgradeFailure> Failure(string version = New) {
         try {
@@ -355,5 +378,272 @@ public class LocalUpgradeTests {
         await Assert.That(RegistryVersion()).IsEqualTo(New);
         await Assert.That(LocalBin.Current(Root)).IsEqualTo(New);
         await Assert.That(JournalAbsent()).IsTrue();
+    }
+
+    [Test]
+    public async Task A_recorded_builtin_setting_downloads_the_new_model_set_before_the_stop() {
+        Installed();
+        Recorded(LocalEmbeddingSetting.Builtin(OldSet));
+        var bundle = PublishModelSet();
+
+        var result = await Upgrade();
+
+        await Assert.That(result).IsTypeOf<LocalInstallEvent.Upgraded>();
+        await Assert.That(HasModelSet(bundle.ModelSet)).IsTrue();
+
+        var downloading = _events.Reports.FindIndex(e => e is LocalInstallEvent.EmbeddingBuiltinDownloading);
+        await Assert.That(downloading).IsGreaterThanOrEqualTo(0);
+        await Assert.That(downloading).IsLessThan(_events.Reports.FindIndex(e => e is LocalInstallEvent.Stopping));
+    }
+
+    /// <summary>A manifest whose only file the publication does not serve.</summary>
+    FakeBundle PublishUnservedModelSet() =>
+        PublishModelSet(files: [], entry: new JsonObject {
+            ["model_id"]  = "builtin-test",
+            ["contract"]  = 1,
+            ["model_set"] = new string('e', 64),
+            ["files"]     = new JsonArray(new JsonObject { ["name"] = "model.onnx", ["sha256"] = new string('a', 64), ["size"] = 12 }),
+        });
+
+    [Test]
+    public async Task Model_download_failure_does_not_fail_the_upgrade() {
+        Installed();
+        Recorded(LocalEmbeddingSetting.Builtin(OldSet));
+        var bundle = PublishUnservedModelSet();
+
+        var result = await Upgrade();
+
+        await Assert.That(result).IsTypeOf<LocalInstallEvent.Upgraded>();
+        await Assert.That(RegistryVersion()).IsEqualTo(New);
+        await Assert.That(_events.Reports.Any(e => e is LocalInstallEvent.EmbeddingsSkipped { Code: LocalEmbeddingSkipCode.ModelDownloadFailed })).IsTrue();
+        await Assert.That(HasModelSet(bundle.ModelSet)).IsFalse();
+    }
+
+    [Test]
+    public async Task Cancellation_during_model_download_cancels_the_upgrade_before_switching() {
+        Installed();
+        Recorded(LocalEmbeddingSetting.Builtin(OldSet));
+        PublishModelSet();
+        using var cts = new CancellationTokenSource();
+
+        var progress = new SyncProgress<LocalInstallEvent>(e => {
+            _events.Report(e);
+            if (e is LocalInstallEvent.EmbeddingBuiltinProgress) cts.Cancel();
+        });
+
+        LocalUpgradeFailure? failure = null;
+
+        try {
+            await Upgrade(ct: cts.Token, progress: progress);
+        } catch (LocalUpgradeFailure f) {
+            failure = f;
+        }
+
+        await Assert.That(failure).IsNotNull();
+        await Assert.That(failure!.Code).IsEqualTo(LocalInstallFailureCode.Cancelled);
+        await Assert.That(failure.Switched).IsFalse();
+        await Assert.That(_log).DoesNotContain("stop");
+        await Assert.That(RegistryVersion()).IsEqualTo(Old);
+        await Assert.That(LocalBin.Current(Root)).IsEqualTo(Old);
+        await Assert.That(Staged(New)).IsFalse();
+        await Assert.That(Directory.EnumerateFileSystemEntries(Models)).IsEmpty();
+        await Assert.That(JournalAbsent()).IsTrue();
+    }
+
+    [Test]
+    public async Task Cancellation_while_a_failed_download_is_reported_cancels_the_upgrade() {
+        Installed();
+        Recorded(LocalEmbeddingSetting.Builtin(OldSet));
+        PublishUnservedModelSet();
+        using var cts = new CancellationTokenSource();
+
+        var progress = new SyncProgress<LocalInstallEvent>(e => {
+            _events.Report(e);
+            if (e is LocalInstallEvent.EmbeddingsSkipped) cts.Cancel();
+        });
+
+        LocalUpgradeFailure? failure = null;
+
+        try {
+            await Upgrade(ct: cts.Token, progress: progress);
+        } catch (LocalUpgradeFailure f) {
+            failure = f;
+        }
+
+        await Assert.That(failure).IsNotNull();
+        await Assert.That(failure!.Code).IsEqualTo(LocalInstallFailureCode.Cancelled);
+        await Assert.That(failure.Switched).IsFalse();
+        await Assert.That(_log).DoesNotContain("stop");
+        await Assert.That(RegistryVersion()).IsEqualTo(Old);
+        await Assert.That(LocalBin.Current(Root)).IsEqualTo(Old);
+    }
+
+    [Test]
+    public async Task Old_model_sets_are_removed_after_commit() {
+        Installed();
+        Recorded(LocalEmbeddingSetting.Builtin(OldSet));
+        var bundle = PublishModelSet();
+        Tmp.CreateFile(["r", "models", OldSet, "model.onnx"]);
+        Tmp.CreateFile(["r", "models", "not-a-model-set", "keep"]);
+        Tmp.CreateFile(["r", "models", ".partial-0123456789abcdef", "model.onnx"]);
+        Tmp.CreateFile(["r", "models", ".stale-0123456789abcdef", "model.onnx"]);
+
+        await Upgrade();
+
+        await Assert.That(HasModelSet(OldSet)).IsFalse();
+        await Assert.That(HasModelSet(bundle.ModelSet)).IsTrue();
+        await Assert.That(HasModelSet(".partial-0123456789abcdef")).IsFalse();
+        await Assert.That(HasModelSet(".stale-0123456789abcdef")).IsFalse();
+        await Assert.That(HasModelSet("not-a-model-set")).IsTrue().Because("only model sets and download leftovers are removed");
+    }
+
+    /// <summary>The record names the set the new server serves, so the next setup finds nothing to change and leaves
+    /// the unit alone; it stays in the form an older kcap reads as a settled decline.</summary>
+    [Test]
+    public async Task An_upgrade_records_the_new_model_set_for_a_recorded_builtin_choice() {
+        Installed();
+        Recorded(LocalEmbeddingSetting.Builtin(OldSet));
+        var bundle = PublishModelSet();
+
+        await Upgrade();
+
+        await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Builtin(bundle.ModelSet));
+        await Assert.That(LocalServerUnit.ForInstallation(Root, Port).Serves(LocalEmbeddingSetting.Builtin(bundle.ModelSet))).IsTrue();
+
+        var wire = JsonNode.Parse(File.ReadAllText(LocalEmbeddingFile.PathFor(Root)))!.AsObject();
+        await Assert.That(wire["provider"]!.GetValue<string>()).IsEqualTo("none");
+        await Assert.That(wire.ContainsKey("pending")).IsFalse();
+    }
+
+    /// <summary>The record still names the old set, so its files stay: the next setup can serve it again.</summary>
+    [Test]
+    public async Task A_failed_model_download_leaves_the_recorded_model_set() {
+        Installed();
+        Recorded(LocalEmbeddingSetting.Builtin(OldSet));
+        PublishUnservedModelSet();
+        Tmp.CreateFile(["r", "models", OldSet, "model.onnx"]);
+
+        await Upgrade();
+
+        await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Builtin(OldSet));
+        await Assert.That(HasModelSet(OldSet)).IsTrue();
+    }
+
+    [Test]
+    public async Task A_record_that_cannot_be_rewritten_keeps_the_model_set_it_names() {
+        Skip.Unless(!Environment.IsPrivilegedProcess, "needs an unprivileged user: root ignores the read-only data directory");
+        Installed();
+        Recorded(LocalEmbeddingSetting.Builtin(OldSet));
+        var bundle = PublishModelSet();
+        Tmp.CreateFile(["r", "models", OldSet, "model.onnx"]);
+        var data = Path.GetDirectoryName(LocalEmbeddingFile.PathFor(Root))!;
+        var progress = new SyncProgress<LocalInstallEvent>(e => {
+            _events.Report(e);
+            if (e is LocalInstallEvent.Stopped) File.SetUnixFileMode(data, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        });
+
+        try {
+            await Assert.That(await Upgrade(progress: progress)).IsTypeOf<LocalInstallEvent.Upgraded>();
+        } finally {
+            File.SetUnixFileMode(data, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Builtin(OldSet));
+        await Assert.That(HasModelSet(OldSet)).IsTrue();
+        await Assert.That(HasModelSet(bundle.ModelSet)).IsTrue();
+    }
+
+    /// <summary>An upgrade rolled forward by the next lifecycle command settles model sets as a finished one does, from
+    /// the model set the new version's bundle carries.</summary>
+    [Test]
+    public async Task A_rolled_forward_upgrade_records_the_new_model_set_and_removes_the_old_ones() {
+        Installed();
+        Recorded(LocalEmbeddingSetting.Builtin(OldSet));
+        var bundle = PublishModelSetInArchive();
+        Tmp.CreateFile(["r", "models", OldSet, "model.onnx"]);
+        Tmp.CreateFile(["r", "models", ".partial-0123456789abcdef", "model.onnx"]);
+
+        using (CrashAt("upgrade:starting")) await Assert.ThrowsAsync<SimulatedCrash>(() => Upgrade());
+
+        await Assert.That(HasModelSet(OldSet)).IsTrue();
+
+        await new LocalStackControl(Stack(), _ => null).StartAsync(_events, _ => { }, CancellationToken.None);
+
+        await Assert.That(JournalAbsent()).IsTrue();
+        await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Builtin(bundle.ModelSet));
+        await Assert.That(HasModelSet(OldSet)).IsFalse();
+        await Assert.That(HasModelSet(".partial-0123456789abcdef")).IsFalse();
+        await Assert.That(HasModelSet(bundle.ModelSet)).IsTrue();
+    }
+
+    [Test]
+    public async Task A_rolled_forward_upgrade_whose_model_download_failed_keeps_the_recorded_model_set() {
+        Installed();
+        Recorded(LocalEmbeddingSetting.Builtin(OldSet));
+        PublishModelSetInArchive(served: false);
+        Tmp.CreateFile(["r", "models", OldSet, "model.onnx"]);
+
+        using (CrashAt("upgrade:starting")) await Assert.ThrowsAsync<SimulatedCrash>(() => Upgrade());
+        await new LocalStackControl(Stack(), _ => null).StartAsync(_events, _ => { }, CancellationToken.None);
+
+        await Assert.That(JournalAbsent()).IsTrue();
+        await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Builtin(OldSet));
+        await Assert.That(HasModelSet(OldSet)).IsTrue();
+    }
+
+    [Test]
+    public async Task A_rolled_forward_upgrade_leaves_another_recorded_choice_alone() {
+        Installed();
+        Recorded(LocalEmbeddingSetting.Ollama("nomic-embed-text"));
+        PublishModelSetInArchive();
+
+        using (CrashAt("upgrade:starting")) await Assert.ThrowsAsync<SimulatedCrash>(() => Upgrade());
+        await new LocalStackControl(Stack(), _ => null).StartAsync(_events, _ => { }, CancellationToken.None);
+
+        await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Ollama("nomic-embed-text"));
+    }
+
+    /// <summary>As <see cref="PublishModelSet"/>, with the entry also in the archive as the server's <c>embedding-model.json</c>;
+    /// unless <paramref name="served"/>, no file of the set is served.</summary>
+    FakeBundle PublishModelSetInArchive(bool served = true) {
+        var entry = new JsonObject {
+            ["model_id"]  = "builtin-test",
+            ["contract"]  = 1,
+            ["model_set"] = new string('e', 64),
+            ["files"]     = new JsonArray([.. ModelFiles.Select(f => (JsonNode)new JsonObject {
+                ["name"] = f.Key, ["sha256"] = Convert.ToHexStringLower(SHA256.HashData(f.Value)), ["size"] = f.Value.Length,
+            })]),
+        };
+
+        return _bundles[New] = new(Tmp.PathTo($"bundle-{New}.tar.gz"), New, "osx-arm64",
+            TestBundles.RegularFile("./kcap-server", "#!/bin/sh\n"), TestBundles.RegularFile("./embedding-model.json", entry.ToJsonString())) {
+            ModelFiles = served ? ModelFiles : [], EmbeddingModel = entry,
+        };
+    }
+
+    [Test]
+    public async Task A_bundle_without_a_model_set_reports_a_skip_and_keeps_the_old_one() {
+        Installed();
+        Recorded(LocalEmbeddingSetting.Builtin(OldSet));
+        Tmp.CreateFile(["r", "models", OldSet, "model.onnx"]);
+
+        var result = await Upgrade();
+
+        await Assert.That(result).IsTypeOf<LocalInstallEvent.Upgraded>();
+        await Assert.That(_events.Reports.Any(e => e is LocalInstallEvent.EmbeddingsSkipped { Code: LocalEmbeddingSkipCode.BuiltinUnavailable })).IsTrue();
+        await Assert.That(HasModelSet(OldSet)).IsTrue();
+    }
+
+    [Test]
+    public async Task An_upgrade_never_turns_another_recorded_choice_into_builtin() {
+        Installed();
+        Recorded(LocalEmbeddingSetting.Ollama("nomic-embed-text"));
+        var bundle = PublishModelSet();
+
+        await Upgrade();
+
+        await Assert.That(RequestedModels(bundle)).IsFalse();
+        await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Ollama("nomic-embed-text"));
+        await Assert.That(_events.Reports.Any(e => e is LocalInstallEvent.EmbeddingsSkipped)).IsFalse();
     }
 }

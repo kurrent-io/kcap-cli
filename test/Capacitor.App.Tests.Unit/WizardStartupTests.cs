@@ -202,6 +202,7 @@ static class WizardFixtures {
                         Detected.ToDictionary(id => id, _ => new DetectedAgent(true, false)));
                 };
             },
+            BuiltinOffer: _ => Task.FromResult<LocalEmbeddingModelManifest?>(null),
             CliPath: CliPath,
             ShimApplicable: ShimApplicable,
             ShimTarget: ShimTarget,
@@ -778,7 +779,7 @@ public class WizardStartupTests {
         var root = new LocalRoot(Config.PathTo("local"));
         root.EnsureCreated();
         Config.CreateFile("local/journal.json", "{not json");
-        LocalEmbeddingFile.Write(root, new LocalEmbeddingSetting("mxbai-embed-large"));
+        LocalEmbeddingFile.Write(root, LocalEmbeddingSetting.Ollama("mxbai-embed-large"));
         harness.LocalRoot = root;
         harness.Cli.SetupLocalBehavior = LocalSetupScript.Prints(1, LocalSetupScript.Failed("registry_unreadable", "The journal cannot be read."));
         using var shutdown = new CancellationTokenSource();

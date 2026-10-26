@@ -437,16 +437,11 @@ public class McpWorkItemsServerTests {
 
     [Test]
     public async Task No_tool_advertises_a_server_owned_source_or_declared_by_argument() {
-        // Named "advertises", not "accepts" (review correction): without additionalProperties:false a
-        // JSON Schema does not forbid a caller supplying these keys, so this test proves only that we
-        // never invite them. The guarantee that they are never FORWARDED is a property of the body
-        // builders, asserted separately below.
+        // The stdio loop refuses a key a tool does not declare, so not advertising these keeps them out of
+        // every call. That the body builders never forward them is asserted separately below.
         var tools = McpWorkItemsServer.BuildToolsList();
 
-        // Non-vacuity only: without this the loop body would never run if BuildToolsList returned
-        // empty and the test would pass having checked nothing. Deliberately NOT an exact count
-        // (review finding) — Tools_list_exposes_the_declare_and_breakdown_surface already pins the
-        // exact set, and duplicating it here would make an unrelated new tool fail this test too.
+        // Non-vacuity only, not an exact count: Tools_list_exposes_the_declare_and_breakdown_surface pins the set.
         await Assert.That(tools.Length).IsGreaterThan(0);
 
         foreach (var tool in tools) {

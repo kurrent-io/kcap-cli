@@ -151,6 +151,11 @@ class WatchState {
     public DateTimeOffset                                       LastSecondaryProbe { get; set; }
     public string?                                              NextSecondaryRoot  { get; set; }
 
+    // Claude session and subagent watchers: PRs the transcript shows the agent creating, kept
+    // until the server accepts them.
+    public List<CreatedPullRequest> PendingCreatedPullRequests { get; } = [];
+    public DateTimeOffset           NextCreatedPullRequestLink { get; set; }
+
     public bool               InitialTitleSent   { get; set; }
     public bool               TitleGenerated     { get; set; }
     public int                TitleAttempts      { get; set; }
@@ -1029,6 +1034,8 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(PlanArtifactsResponseDto))]
 [JsonSerializable(typeof(Plans.PlanLedgerDto))]
 [JsonSerializable(typeof(List<Plans.SessionPlanDto>))]
+[JsonSerializable(typeof(MessageSenders.MessageSendersRequest))]
+[JsonSerializable(typeof(MessageSenders.MessageSendersResponseDto))]
 [JsonSerializable(typeof(EvalContextResult))]
 [JsonSerializable(typeof(EvalQuestionDto))]
 [JsonSerializable(typeof(EvalQuestionDto[]))]
@@ -1153,6 +1160,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(StatusReportRequest))]
 [JsonSerializable(typeof(ResumingAgentClaim))]
 [JsonSerializable(typeof(ResumingAgentClaim[]))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Accounts.AccountsSnapshotDto))]
 // Surface 3 (new-harness detection): per-machine coding-agent inventory carried on the status report.
 [JsonSerializable(typeof(Capacitor.Cli.Core.Setup.HarnessInventory))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Setup.HarnessInventoryEntry))]
@@ -1542,7 +1550,17 @@ public readonly record struct AcpEventEnvelope(
         // user_message — the vendor turn it opens. Sent only when set, so a server that predates it sees the
         // shape it always has.
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        string? TurnId = null
+        string? TurnId = null,
+
+        // user_message — the server dispatch that delivered it, kept so a viewer of the journal can ask the
+        // server who sent it. Sent only when set; the server ignores it.
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        Guid? DispatchId = null,
+
+        // user_message read from a stored transcript: the id the server keeps the event under. Local to the
+        // desktop chat, never serialized.
+        [property: JsonIgnore]
+        Guid? SourceEventId = null
     );
 
 /// <summary>
@@ -1716,7 +1734,9 @@ public readonly record struct LaunchAgentCommand(
         // The agent's session start title. TitleDerived marks one cut from the prompt, which a
         // generated title replaces; otherwise it is the caller's and stays. Null from an older server.
         string?           Title        = null,
-        bool              TitleDerived = false
+        bool              TitleDerived = false,
+        // Registry id of the account to run under; null runs under the vendor's default directory.
+        string?           AccountId = null
     );
 
 /// <summary>Caller-selected Codex launch posture. Valid ONLY for interactive, daemon-owned-worktree
@@ -1853,7 +1873,10 @@ public readonly record struct LiveAgentInfo(
         ulong?         ActivitySeq  = null,
         ulong?         IdleForMs    = null,
         bool?          TurnInFlight = null,
-        string?        LaunchStage  = null
+        string?        LaunchStage  = null,
+        string?        AccountDirectory = null,
+        string?        AccountId        = null,
+        string?        AccountLabel     = null
     );
 
 /// <summary>Phase B (D4 §6.4(2a)): an agent whose death could NOT be confirmed (record-write
@@ -2134,8 +2157,8 @@ public readonly record struct SendInputCommand(
         string    AgentId,
         string    Text,
         string[]? AttachmentIds,
-        // Names this dispatch when the daemon has to refuse it. Null from a server that does not send
-        // one, in which case there is nothing to name and no refusal is reported.
+        // Names this dispatch when the daemon has to refuse it, and on the user message a runtime records
+        // for it. Null from a server that does not send one, in which case there is nothing to name.
         Guid?     DispatchId = null
     );
 
@@ -2250,7 +2273,13 @@ public readonly record struct DaemonConnect(
         long?                                       ActiveCountVersion = null,
         // The permission-preset tokens this daemon enforces, for every vendor in AcpPresetVendors.
         // Null from a daemon predating the field, which the server reads as explore and edit only.
-        string[]?                                   AcpPresets = null
+        string[]?                                   AcpPresets = null,
+        // Advertises a launch that names an account. False from a daemon predating it; the server
+        // then never sends an AccountId.
+        bool                                        SupportsAccountLaunches = false,
+        Capacitor.Cli.Core.Accounts.AccountsSnapshotDto? Accounts = null,
+        // Per-account launchable models, keyed by registry id.
+        Dictionary<string, VendorModelOption[]>?    VendorModelsByAccount = null
     );
 
 public sealed record UnattendedVendorCapability(
@@ -2312,7 +2341,10 @@ public readonly record struct AgentRegistered(
         string? Vendor = null,
         // The agent this one continues after a daemon restart could not resume it, from the resume ledger; the server
         // checks the claim where it uses it. Trailing name-bound field — an older server ignores it.
-        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ContinuesAgentId = null
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ContinuesAgentId = null,
+        string? AccountDirectory = null,
+        string? AccountId        = null,
+        string? AccountLabel     = null
     );
 
 public readonly record struct AgentStatusChanged(

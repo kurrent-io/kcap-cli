@@ -115,8 +115,8 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     public bool CloudLevels => !_discoveredLocal;
 
     public string LevelsNote => _discoveredLocal
-        ? "Import adds this history to kcap on this Mac. Skip doesn't import it."
-        : "Shared uses your recording privacy setting for new imports. Only me keeps imported history private. Skip doesn't import it.";
+        ? "Checked repositories import into kcap on this Mac"
+        : "Checked repositories import with your recording privacy setting. Only me keeps a repository's history private";
 
     /// "from ✓ Claude Code ✓ Codex": the harnesses this page reads from.
     public IReadOnlyList<string> FromLabels { get; private set; } = [];

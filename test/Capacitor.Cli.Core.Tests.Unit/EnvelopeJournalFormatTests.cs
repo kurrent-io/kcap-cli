@@ -3,7 +3,7 @@ namespace Capacitor.Cli.Core.Tests.Unit;
 public class EnvelopeJournalFormatTests {
     [Test]
     public async Task Round_trip_pins_the_bytes() {
-        var e = new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: "hi", TimestampIso: "2026-09-09T10:00:00.000Z");
+        var e = new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: "hi", TimestampIso: "2026-09-09T10:00:00.000Z", DispatchId: Guid.NewGuid());
         var line = EnvelopeJournalFormat.Write(e);
         await Assert.That(line).StartsWith("""{"contract_version":1,"seq":0,"kind":"user_message","text":"hi",""");
         await Assert.That(line).Contains("\"timestamp_iso\":\"2026-09-09T10:00:00.000Z\"");
