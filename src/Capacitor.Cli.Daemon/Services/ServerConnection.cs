@@ -787,8 +787,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         // Read once, under the register lock: the payload and the acknowledgement are this one value, and
         // a later send never carries an older advertisement than an earlier one.
         var advertised = _config.Advertisement;
-        attempt.Sending(advertised);
         var connect    = BuildDaemonConnect(platform, repoPaths, liveIds, liveAgents, advertised);
+        // Only a built payload carries the advertisement; a build that throws leaves the starting snapshot.
+        attempt.Sending(advertised);
 
         try {
             await InvokeDaemonConnectRawAsync(connect);

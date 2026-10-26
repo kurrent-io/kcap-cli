@@ -1,7 +1,7 @@
 namespace Capacitor.Cli.Daemon.Services;
 
-/// <summary>One registration's advertisement: what it is held against before the DaemonConnect payload
-/// is built, what that payload carries once it is, and whether the server accepted it.</summary>
+/// <summary>One registration's advertisement: what it is held against until a DaemonConnect payload is
+/// built, what that payload carries once it is, and whether the server accepted it.</summary>
 internal sealed class RegistrationAttempt(UnattendedAdvertisement attempted, Action<UnattendedAdvertisement> accepted) {
     public UnattendedAdvertisement Carried { get; private set; } = attempted;
 

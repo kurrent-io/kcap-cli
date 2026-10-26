@@ -190,6 +190,26 @@ public class ServerConnectionAdvertisementTests {
         await Assert.That(config.FailedCodexGeneration).IsEqualTo(newer.Generation);
     }
 
+    /// <summary>A payload that fails to build carried nothing, so a newer advertisement published during
+    /// setup is not marked failed; the failure belongs to the snapshot the registration started from.</summary>
+    [Test]
+    public async Task A_payload_that_fails_to_build_marks_the_starting_advertisement() {
+        var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1", ConfigRoot = Config.Root };
+        var starting = CodexTransportResolution.Resolve(1, switchOn: true, () => "0.146.0");
+        config.Advertise(new List<UnattendedVendorCapability>(), starting);
+        await using var conn = new RecordingConnection(config);
+        conn.GetLiveAgentIds = () => {
+            config.Advertise(new List<UnattendedVendorCapability>(), CodexTransportResolution.Resolve(2, switchOn: false, () => null));
+            return [];
+        };
+        conn.GetResumingAgents = () => throw new InvalidOperationException("resume ledger unreadable");
+
+        await Assert.That(conn.ReRegisterAsync).Throws<InvalidOperationException>();
+
+        await Assert.That(config.FailedCodexGeneration).IsEqualTo(starting.Generation);
+        await Assert.That(conn.Connects).IsEmpty();
+    }
+
     [Test]
     public async Task SendRawInputCommand_serializes_with_snake_case_names() {
         var json = System.Text.Json.JsonSerializer.Serialize(
