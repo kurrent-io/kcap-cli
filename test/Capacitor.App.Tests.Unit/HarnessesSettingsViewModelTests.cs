@@ -83,4 +83,82 @@ public class HarnessesSettingsViewModelTests {
         await Assert.That(vm.Rows[0].Message!).Contains("profile changed");
         await cli.DidNotReceive().PluginInstallAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>());
     });
+    [Test]
+    public Task Unselecting_a_connected_harness_removes_setup_and_refreshes_its_state() => AvaloniaSession.RunOnUiAsync(async () => {
+        var cli = Substitute.For<IKcapCli>();
+        var wired = true;
+        cli.PluginRemoveAsync("--codex", Arg.Any<CancellationToken>()).Returns(_ => {
+            wired = false;
+            return new ProcessResult(0, "", "", false);
+        });
+        using var vm = new HarnessesSettingsViewModel(Seed(), cli, _ => Task.FromResult<IReadOnlyDictionary<HarnessId, DetectedAgent>>(
+            new Dictionary<HarnessId, DetectedAgent> { [HarnessId.Codex] = new(true, true) }), isWired: _ => wired);
+        await vm.RescanAsync();
+        var row = vm.Rows[0];
+        await vm.ToggleConnectionAsync(row);
+        await Assert.That(row.IsConfigured).IsFalse();
+        await Assert.That(row.Message!).Contains("Disconnected");
+        await vm.ToggleConnectionAsync(row);
+        await cli.Received(1).PluginInstallAsync("--codex", Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>());
+    });
+
+    [Test]
+    [Arguments(1, false, "removal failed")]
+    [Arguments(0, true, "")]
+    [Arguments(0, false, "")]
+    public Task Removal_never_reports_success_while_still_wired_or_when_the_cli_fails(int exit, bool timedOut, string stderr) => AvaloniaSession.RunOnUiAsync(async () => {
+        var cli = Substitute.For<IKcapCli>();
+        cli.PluginRemoveAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(new ProcessResult(exit, "", stderr, timedOut));
+        using var vm = new HarnessesSettingsViewModel(Seed(), cli, _ => Task.FromResult<IReadOnlyDictionary<HarnessId, DetectedAgent>>(
+            new Dictionary<HarnessId, DetectedAgent> { [HarnessId.Claude] = new(true, true) }), isWired: _ => true);
+        await vm.RescanAsync();
+        var row = vm.Rows[0];
+        await vm.ToggleConnectionAsync(row);
+        await Assert.That(row.IsConfigured).IsTrue();
+        await Assert.That(row.Message!).DoesNotContain("Disconnected");
+        await Assert.That(row.Message).IsNotNullOrEmpty();
+    });
+
+    [Test]
+    public Task Disconnect_holds_the_busy_gate_and_refuses_a_repointed_profile() => AvaloniaSession.RunOnUiAsync(async () => {
+        var cli = Substitute.For<IKcapCli>();
+        var completion = new TaskCompletionSource<ProcessResult>();
+        cli.PluginRemoveAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(completion.Task);
+        using var vm = new HarnessesSettingsViewModel(Seed(), cli, _ => Task.FromResult<IReadOnlyDictionary<HarnessId, DetectedAgent>>(
+            new Dictionary<HarnessId, DetectedAgent> { [HarnessId.Codex] = new(true, true) }), isWired: _ => true);
+        await vm.RescanAsync();
+        var row = vm.Rows[0];
+        var removal = vm.ToggleConnectionAsync(row);
+        await Assert.That(vm.Busy).IsTrue();
+        await vm.ToggleConnectionAsync(row);
+        await vm.ConnectAsync(row);
+        await vm.RescanAsync();
+        completion.SetResult(new ProcessResult(0, "", "", false));
+        await removal;
+        await cli.Received(1).PluginRemoveAsync("--codex", Arg.Any<CancellationToken>());
+        ConfigMutator.Mutate(Config.Root, c => c with { Profiles = new(c.Profiles) {
+            ["work"] = c.Profiles["work"] with { ServerUrl = "https://replacement.example" }
+        } });
+        await vm.ToggleConnectionAsync(row);
+        await Assert.That(row.Message!).Contains("profile changed");
+        await cli.Received(1).PluginRemoveAsync("--codex", Arg.Any<CancellationToken>());
+    });
+
+    [Test]
+    public Task Disconnect_keeps_cleanup_warnings_visible_when_user_owned_tools_are_preserved() => AvaloniaSession.RunOnUiAsync(async () => {
+        var cli = Substitute.For<IKcapCli>();
+        var wired = true;
+        cli.PluginRemoveAsync("--codex", Arg.Any<CancellationToken>()).Returns(_ => {
+            wired = false;
+            return new ProcessResult(0, "", "Some MCP entries were preserved because they were edited. Review config.toml.", false);
+        });
+        using var vm = new HarnessesSettingsViewModel(Seed(), cli, _ => Task.FromResult<IReadOnlyDictionary<HarnessId, DetectedAgent>>(
+            new Dictionary<HarnessId, DetectedAgent> { [HarnessId.Codex] = new(true, true) }), isWired: _ => wired);
+        await vm.RescanAsync();
+        var row = vm.Rows[0];
+        await vm.ToggleConnectionAsync(row);
+        await Assert.That(row.IsConfigured).IsFalse();
+        await Assert.That(row.Message!).Contains("preserved");
+    });
+
 }

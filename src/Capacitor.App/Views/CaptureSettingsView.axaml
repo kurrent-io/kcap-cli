@@ -6,7 +6,10 @@
             <StackPanel Classes="settingsPage">
                 <StackPanel Spacing="10">
                     <TextBlock Classes="kcapTitle" Text="Capture &amp; privacy" />
-                    <TextBlock Classes="kcapSubtitle" Text="Choose what gets recorded and who can read new sessions." TextWrapping="Wrap" />
+                    <TextBlock Classes="kcapSubtitle" Text="Choose what gets recorded and who can read new sessions." TextWrapping="Wrap"
+                               IsVisible="{Binding VisibilityVisible}" />
+                    <TextBlock Classes="kcapSubtitle" Text="Choose what gets recorded. Sessions on your local server stay private." TextWrapping="Wrap"
+                               IsVisible="{Binding !VisibilityVisible}" />
                     <Border Classes="settingsContextChip">
                         <StackPanel Orientation="Horizontal" Spacing="8">
                             <TextBlock Text="Profile" FontSize="11" FontWeight="Medium" LetterSpacing="0.2"
@@ -42,7 +45,8 @@
                 <StackPanel Spacing="6">
                     <TextBlock Classes="settingsEyebrow" Text="Recording rules" />
                     <TextBlock Classes="kcapHint" TextWrapping="Wrap"
-                               Text="Leave the include lists empty to record everywhere. A session must match every include list that is set, and exclusions always win. Rules do not delete sessions already uploaded, and agents you launch explicitly still report theirs." />
+                               Text="Empty include lists allow recording everywhere. When both are set, a session must match a repository and a folder. Exclusions always win." />
+                    <TextBlock Classes="kcapHint" Text="Existing uploads stay on the server. Agents you launch explicitly still report their sessions." TextWrapping="Wrap" />
                 </StackPanel>
 
                 <Border Classes="settingsSection">
@@ -50,18 +54,18 @@
                         <StackPanel Spacing="6">
                             <TextBlock Classes="kcapLabel" Text="Repositories" />
                             <TextBlock Classes="kcapHint" TextWrapping="Wrap"
-                                       Text="One owner/repo per line. With an include list set, sessions outside a recognisable repository are skipped." />
+                                       Text="Enter one owner/repo per line. An include list also skips sessions without a recognised repository." />
                         </StackPanel>
                         <StackPanel Spacing="6">
-                            <TextBlock Classes="settingsFieldLabel" Text="Include" />
+                            <TextBlock Classes="settingsFieldLabel" Text="Only record these repositories" />
                             <TextBox x:Name="AllowedReposInput" Classes="kcapField" Text="{Binding AllowedRepos, Mode=TwoWay}"
-                                     AcceptsReturn="True" MinHeight="64" MaxHeight="160" TextWrapping="Wrap" PlaceholderText="All repositories"
+                                     AcceptsReturn="True" MinHeight="72" MaxHeight="160" TextWrapping="Wrap" PlaceholderText="e.g. kurrent-io/kcap-cli"
                                      AutomationProperties.Name="Include repositories" />
                         </StackPanel>
                         <StackPanel Spacing="6">
-                            <TextBlock Classes="settingsFieldLabel" Text="Exclude" />
+                            <TextBlock Classes="settingsFieldLabel" Text="Never record these repositories" />
                             <TextBox x:Name="ExcludedReposInput" Classes="kcapField" Text="{Binding ExcludedRepos, Mode=TwoWay}"
-                                     AcceptsReturn="True" MinHeight="64" MaxHeight="160" TextWrapping="Wrap" PlaceholderText="No exclusions"
+                                     AcceptsReturn="True" MinHeight="72" MaxHeight="160" TextWrapping="Wrap" PlaceholderText="No exclusions"
                                      AutomationProperties.Name="Exclude repositories" />
                         </StackPanel>
                     </StackPanel>
@@ -74,15 +78,15 @@
                                    Text="One absolute path or ~/folder per line. A folder rule covers its subfolders." />
                     </StackPanel>
                     <StackPanel Spacing="6">
-                        <TextBlock Classes="settingsFieldLabel" Text="Include" />
+                        <TextBlock Classes="settingsFieldLabel" Text="Only record these folders" />
                         <TextBox x:Name="AllowedPathsInput" Classes="kcapField" Text="{Binding AllowedPaths, Mode=TwoWay}"
-                                 AcceptsReturn="True" MinHeight="64" MaxHeight="160" TextWrapping="Wrap" PlaceholderText="All folders"
+                                 AcceptsReturn="True" MinHeight="72" MaxHeight="160" TextWrapping="Wrap" PlaceholderText="e.g. ~/work"
                                  AutomationProperties.Name="Include folders" />
                     </StackPanel>
                     <StackPanel Spacing="6">
-                        <TextBlock Classes="settingsFieldLabel" Text="Exclude" />
+                        <TextBlock Classes="settingsFieldLabel" Text="Never record these folders" />
                         <TextBox x:Name="ExcludedPathsInput" Classes="kcapField" Text="{Binding ExcludedPaths, Mode=TwoWay}"
-                                 AcceptsReturn="True" MinHeight="64" MaxHeight="160" TextWrapping="Wrap" PlaceholderText="No exclusions"
+                                 AcceptsReturn="True" MinHeight="72" MaxHeight="160" TextWrapping="Wrap" PlaceholderText="No exclusions"
                                  AutomationProperties.Name="Exclude folders" />
                     </StackPanel>
                 </StackPanel>

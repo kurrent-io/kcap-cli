@@ -1,5 +1,8 @@
 <Styles xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Styles.Resources>
+        <SolidColorBrush x:Key="SettingsControlBorderBrush" Color="#616B80" />
+    </Styles.Resources>
     <!-- Keep native tab selection and keyboard navigation, with a rail that can grow
          independently of the selected section. All chrome uses the app palette. -->
     <Style Selector="TabControl.settingsSidebar">
@@ -38,7 +41,7 @@
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderBrush" Value="Transparent" />
         <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="Padding" Value="10,8" />
+        <Setter Property="Padding" Value="10,9" />
         <Setter Property="FontSize" Value="13" />
         <Setter Property="FontWeight" Value="Medium" />
         <Setter Property="HorizontalAlignment" Value="Stretch" />
@@ -70,9 +73,9 @@
     <Style Selector="TabItem.settingsNav:focus-visible">
         <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
     </Style>
-    <Style Selector="StackPanel.settingsPage, UserControl.settingsPage">
-        <Setter Property="Margin" Value="32,28,32,32" />
-        <Setter Property="MaxWidth" Value="640" />
+    <Style Selector="StackPanel.settingsPage">
+        <Setter Property="Margin" Value="28,28,28,32" />
+        <Setter Property="MaxWidth" Value="680" />
         <Setter Property="HorizontalAlignment" Value="Left" />
     </Style>
     <Style Selector="StackPanel.settingsPage">
@@ -83,7 +86,7 @@
         <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
         <Setter Property="BorderThickness" Value="0,1,0,0" />
         <Setter Property="Background" Value="{StaticResource KcapCanvasBrush}" />
-        <Setter Property="Padding" Value="32,12" />
+        <Setter Property="Padding" Value="28,12" />
     </Style>
     <Style Selector="Border.settingsContextChip">
         <Setter Property="Padding" Value="10,5" />
@@ -105,7 +108,7 @@
         <Setter Property="Padding" Value="0,0,0,24" />
     </Style>
     <Style Selector="Grid.settingsRow">
-        <Setter Property="Margin" Value="0,18" />
+        <Setter Property="Margin" Value="0,16" />
     </Style>
     <Style Selector="Border.settingsDivider">
         <Setter Property="Height" Value="1" />
@@ -115,6 +118,58 @@
         <Setter Property="FontSize" Value="11" />
         <Setter Property="FontWeight" Value="SemiBold" />
         <Setter Property="LetterSpacing" Value="0.8" />
-        <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+    </Style>
+    <Style Selector="Border.settingsCard">
+        <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Padding" Value="20" />
+    </Style>
+    <Style Selector="TabControl.settingsSidebar TextBlock.kcapTitle">
+        <Setter Property="FontSize" Value="24" />
+        <Setter Property="LineHeight" Value="31" />
+        <Setter Property="LetterSpacing" Value="-0.5" />
+    </Style>
+    <Style Selector="TabControl.settingsSidebar TextBlock.kcapSubtitle">
+        <Setter Property="FontWeight" Value="Normal" />
+        <Setter Property="LetterSpacing" Value="0" />
+    </Style>
+    <Style Selector="TabControl.settingsSidebar TextBlock.kcapLabel">
+        <Setter Property="FontSize" Value="13.5" />
+    </Style>
+    <Style Selector="TabControl.settingsSidebar TextBlock.kcapHint">
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="LineHeight" Value="20" />
+        <Setter Property="LetterSpacing" Value="0" />
+    </Style>
+    <Style Selector="TabControl.settingsSidebar TextBox.kcapField">
+        <Setter Property="FontSize" Value="13.5" />
+    </Style>
+    <Style Selector="CheckBox.settingsHarnessCheck">
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="MinHeight" Value="28" />
+        <Setter Property="Padding" Value="12,0,0,0" />
+    </Style>
+    <Style Selector="TabControl.settingsSidebar TextBox.kcapField,
+                     TabControl.settingsSidebar ComboBox.kcapField,
+                     TabControl.settingsSidebar NumericUpDown.kcapField">
+        <Setter Property="BorderBrush" Value="{StaticResource SettingsControlBorderBrush}" />
+    </Style>
+    <Style Selector="TabControl.settingsSidebar TextBox.kcapField /template/ Border#PART_BorderElement,
+                     TabControl.settingsSidebar TextBox.kcapField:pointerover /template/ Border#PART_BorderElement,
+                     TabControl.settingsSidebar ComboBox.kcapField /template/ Border#Background,
+                     TabControl.settingsSidebar ComboBox.kcapField:pointerover /template/ Border#Background,
+                     TabControl.settingsSidebar ComboBox.kcapField:pressed /template/ Border#Background">
+        <Setter Property="BorderBrush" Value="{StaticResource SettingsControlBorderBrush}" />
+    </Style>
+    <Style Selector="TabControl.settingsSidebar TextBox.kcapField:focus /template/ Border#PART_BorderElement,
+                     TabControl.settingsSidebar ComboBox.kcapField:focus /template/ Border#Background">
+        <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
+    </Style>
+    <Style Selector="TabControl.settingsSidebar NumericUpDown.kcapField:focus-within">
+        <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
     </Style>
 </Styles>

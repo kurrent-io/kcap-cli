@@ -11,8 +11,8 @@ using ReactiveUI.Reactive;
 namespace Capacitor.App.ViewModels;
 
 /// <summary>
-/// How the local server searches: a word beside its version in the rail, which opens the Settings tab that
-/// changes it by running setup again. An upgrade and a search change cannot run together, so each holds the other off.
+/// How the local server searches, managed in Settings by running setup again.
+/// An upgrade and a search change cannot run together, so each holds the other off.
 /// </summary>
 public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
     public const string BusyText = "Another local setup, upgrade or uninstall is running on this Mac. Try again once it has finished.";
@@ -101,7 +101,7 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
 
     public LocalEmbeddingProgress Embeddings => _search.Progress.Embeddings;
 
-    /// The rail's word for it; null until the setting has been read.
+    /// The current search mode; null until the setting has been read.
     public string? StateText =>
         Running ? "setting up search"
         : !_loaded ? null
@@ -134,10 +134,10 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
 
     public ReactiveCommand<Unit, Unit> OpenSettingsCommand { get; }
 
-    /// The rail word opens the Settings tab when there is one to open.
+    /// Whether the Search tab can be opened in Settings.
     public bool ShowsSettingsLink => StateText is not null && _canOpenSettings;
 
-    /// Without a Settings window, the rail word opens the same controls in place.
+    /// Without a profile, the support menu offers the search controls directly.
     public bool ShowsInlineSettings => StateText is not null && !_canOpenSettings;
 
     bool CurrentByMeaning => _current is { Model: not null } or { Provider: LocalEmbeddingProvider.Builtin };

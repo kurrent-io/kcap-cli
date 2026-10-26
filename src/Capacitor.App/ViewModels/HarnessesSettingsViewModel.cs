@@ -28,6 +28,7 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
         var idle = this.WhenAnyValue(x => x.Busy).Select(b => !b);
         RescanCommand = ReactiveCommand.CreateFromTask(RescanAsync, idle);
         ConnectCommand = ReactiveCommand.CreateFromTask<HarnessSettingsRow>(ConnectAsync, idle);
+        ToggleConnectionCommand = ReactiveCommand.CreateFromTask<HarnessSettingsRow>(ToggleConnectionAsync, idle);
     }
 
     public IReadOnlyList<HarnessSettingsRow> Rows { get => _rows; private set => this.RaiseAndSetIfChanged(ref _rows, value); }
@@ -36,6 +37,7 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
     public string ProfileName => _store.ProfileName;
     public ReactiveCommand<Unit, Unit> RescanCommand { get; }
     public ReactiveCommand<HarnessSettingsRow, Unit> ConnectCommand { get; }
+    public ReactiveCommand<HarnessSettingsRow, Unit> ToggleConnectionCommand { get; }
 
     public async Task RescanAsync() {
         if (Busy) return;
@@ -54,29 +56,51 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
         } finally { Busy = false; }
     }
 
-    internal async Task ConnectAsync(HarnessSettingsRow row) {
+    internal Task ToggleConnectionAsync(HarnessSettingsRow row) => ConfigureAsync(row, remove: row.IsConfigured);
+
+    internal Task ConnectAsync(HarnessSettingsRow row) => ConfigureAsync(row, remove: false);
+
+    async Task ConfigureAsync(HarnessSettingsRow row, bool remove) {
         if (Busy || !Rows.Contains(row)) return;
         Busy = true;
-        row.Message = "Configuring…";
+        row.Message = remove ? "Disconnecting…" : "Connecting…";
         try {
             await Task.Run(_store.LoadProfile, _lifetime.Token);
-            var result = await _cli.PluginInstallAsync(row.Id.PluginInstallFlag, _lifetime.Token);
+            var result = remove
+                ? await _cli.PluginRemoveAsync(row.Id.PluginInstallFlag, _lifetime.Token)
+                : await _cli.PluginInstallAsync(row.Id.PluginInstallFlag, _lifetime.Token);
             bool? wired = _isWired is null ? null : await Task.Run(() => _isWired(row.Id), _lifetime.Token);
             row.SetWired(wired);
-            row.Message = result is { ExitCode: 0, TimedOut: false }
-                ? "Setup completed. Restart this harness to load the changes."
-                : result.TimedOut ? "Setup timed out. Try connecting again."
-                : string.IsNullOrWhiteSpace(result.Stderr) ? $"Setup failed (exit {result.ExitCode})." : result.Stderr.Trim();
+            if (result.TimedOut)
+                row.Message = "The change timed out. Rescan to check the connection before trying again.";
+            else if (result.ExitCode != 0)
+                row.Message = string.IsNullOrWhiteSpace(result.Stderr)
+                    ? $"Could not {(remove ? "disconnect" : "connect")} (exit {result.ExitCode}). Try again."
+                    : result.Stderr.Trim();
+            else if (wired is null)
+                row.Message = "The command finished, but the connection could not be verified. Rescan to check it.";
+            else if (wired.Value == remove)
+                row.Message = remove ? "Some recording setup remains. Try disconnecting again." : "Recording is not configured yet. Try connecting again.";
+            else
+                row.Message = remove
+                    ? "Disconnected. Restart this harness to unload kcap. Existing sessions are kept."
+                    : "Setup completed. Restart this harness to load the changes.";
+            if (result is { ExitCode: 0, TimedOut: false } && !string.IsNullOrWhiteSpace(result.Stderr))
+                row.Message += $"\n{result.Stderr.Trim()}";
         } catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) {
         } catch (Exception ex) {
-            row.Message = $"Could not configure this harness: {ex.Message}";
-        } finally { Busy = false; }
+            row.Message = $"Could not {(remove ? "disconnect" : "connect")} this harness: {ex.Message}";
+        } finally {
+            row.SetWired(row.Wired);
+            Busy = false;
+        }
     }
 
     public void Dispose() {
         _lifetime.Cancel();
         RescanCommand.Dispose();
         ConnectCommand.Dispose();
+        ToggleConnectionCommand.Dispose();
         _lifetime.Dispose();
     }
 }

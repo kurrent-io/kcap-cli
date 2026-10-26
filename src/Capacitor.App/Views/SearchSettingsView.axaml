@@ -5,15 +5,15 @@
              xmlns:services="clr-namespace:Capacitor.App.Services.LocalSetup"
              x:Class="Capacitor.App.Views.SearchSettingsView"
              x:DataType="vm:LocalSearchViewModel">
-    <StackPanel Spacing="16">
+    <StackPanel Spacing="24">
         <StackPanel Spacing="10">
-            <TextBlock Classes="kcapTitle" Text="Search" LineHeight="22" />
+            <TextBlock Classes="kcapTitle" Text="Search" />
             <TextBlock x:Name="SearchCurrentText" Classes="kcapSubtitle" TextWrapping="Wrap"
                        Text="{Binding CurrentText}" />
         </StackPanel>
 
         <Border Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
-                BorderThickness="1" CornerRadius="12" Padding="20">
+                BorderThickness="1" CornerRadius="8" Padding="20">
             <StackPanel Spacing="12">
                 <StackPanel Spacing="10" IsEnabled="{Binding !Running}">
                     <views:SearchChoiceView x:Name="SearchChoice" DataContext="{Binding Choice}" />

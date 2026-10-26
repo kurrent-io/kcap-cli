@@ -8,7 +8,7 @@
             <StackPanel Spacing="10">
                 <TextBlock x:Name="ProfilesTitleText" Classes="kcapTitle" Text="Profiles" />
                 <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
-                           Text="Each profile is a server and a sign-in. This app runs against one profile until it is relaunched." />
+                           Text="Each profile connects to a server with its own sign-in. Relaunch kcap to use a different profile." />
             </StackPanel>
 
             <ItemsControl x:Name="ProfileRows" ItemsSource="{Binding Rows}">

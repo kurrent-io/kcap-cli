@@ -20,13 +20,12 @@ public sealed class HarnessSettingsRow : ReactiveObject {
     public string ConnectionLabel => _wired switch {
         true => "Recording configured", false => "Recording not configured", null => "Recording configuration unknown",
     };
+    internal bool? Wired => _wired;
     public bool IsConfigured => _wired == true;
-    public string ActionLabel => _wired == true ? "Repair" : "Connect";
     internal void SetWired(bool? wired) {
         _wired = wired;
         this.RaisePropertyChanged(nameof(ConnectionLabel));
         this.RaisePropertyChanged(nameof(IsConfigured));
-        this.RaisePropertyChanged(nameof(ActionLabel));
     }
     public string? ConsentNote => Id == HarnessId.Codex ? HarnessRowViewModel.CodexConsentNote : null;
     public string? Message { get => _message; internal set => this.RaiseAndSetIfChanged(ref _message, value); }

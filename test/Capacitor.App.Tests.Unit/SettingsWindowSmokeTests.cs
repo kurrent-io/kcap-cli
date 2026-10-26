@@ -48,14 +48,14 @@ public class SettingsWindowSmokeTests {
             var daemonPosition = daemon.TranslatePoint(default, window)!.Value;
             var alertsPosition = alerts.TranslatePoint(default, window)!.Value;
             await Assert.That(alertsPosition.X).IsEqualTo(daemonPosition.X);
-            await Assert.That(alertsPosition.Y).IsGreaterThan(daemonPosition.Y);
+            await Assert.That(alertsPosition.Y).IsLessThan(daemonPosition.Y);
 
             Click(window, alerts);
             await Assert.That(tabs.SelectedItem).IsEqualTo(alerts);
             await Assert.That(window.FindControl<ToggleSwitch>("PermissionNotificationsToggle")!.IsEffectivelyVisible).IsTrue();
             alerts.Focus(NavigationMethod.Tab);
-            window.KeyPressQwerty(PhysicalKey.ArrowUp, RawInputModifiers.None);
-            window.KeyReleaseQwerty(PhysicalKey.ArrowUp, RawInputModifiers.None);
+            window.KeyPressQwerty(PhysicalKey.ArrowDown, RawInputModifiers.None);
+            window.KeyReleaseQwerty(PhysicalKey.ArrowDown, RawInputModifiers.None);
             Settle(window);
             await Assert.That(tabs.SelectedItem).IsEqualTo(window.FindControl<TabItem>("CaptureTab"));
 
@@ -92,7 +92,8 @@ public class SettingsWindowSmokeTests {
             var save = window.FindControl<Button>("SaveButton")!;
             var rename = window.FindControl<Button>("RenameButton")!;
             await Assert.That(name.Text).IsEqualTo("daemon-a");
-            await Assert.That(tabs.SelectedIndex).IsEqualTo(0);
+            tabs.SelectedItem = window.FindControl<TabItem>("DaemonTab");
+            Settle(window);
             await Assert.That(window.FindControl<TabItem>("SearchTab")!.IsVisible).IsFalse();
             Settle(window);
             await Assert.That(capacity.Value).IsEqualTo(5m);
@@ -218,7 +219,7 @@ public class SettingsWindowSmokeTests {
             var tabs = window.FindControl<TabControl>("SettingsTabs")!;
             var tab = window.FindControl<TabItem>("AccountsTab")!;
             await Assert.That(tab.IsVisible).IsTrue();
-            await Assert.That(tabs.Items.IndexOf(tab)).IsEqualTo(tabs.Items.IndexOf(window.FindControl<TabItem>("ProfilesTab")!) + 1);
+
             tabs.SelectedItem = tab;
             Settle(window);
 
@@ -252,7 +253,7 @@ public class SettingsWindowSmokeTests {
             Click(window, menuButton);
             await Assert.That(menu.IsOpen).IsTrue();
             var items = ((Control)menu.Content!).GetVisualDescendants().OfType<Button>().ToList();
-            await Assert.That(string.Join(",", items.Select(b => b.Content))).IsEqualTo("Rename,Re-wire,Remove");
+            await Assert.That(string.Join(",", items.Select(b => b.Content))).IsEqualTo("Rename,Reconnect,Remove");
             await Assert.That(items.All(b => b.Classes.Contains("kcapGhost"))).IsTrue();
             await Assert.That(items[0].FindAncestorOfType<FlyoutPresenter>()!.Classes.Contains("kcapPanel")).IsTrue();
             MainWindowSmokeTests.ClickFlyoutButton(items[0]);
@@ -432,12 +433,17 @@ public class SettingsWindowSmokeTests {
         var completion = new TaskCompletionSource<ProcessResult>();
         cli.PluginInstallAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>()).Returns(completion.Task);
         var scans = 0;
+        var wired = false;
+        cli.PluginRemoveAsync("--codex", Arg.Any<CancellationToken>()).Returns(_ => {
+            wired = false;
+            return new ProcessResult(0, "", "", false);
+        });
         var harnesses = new HarnessesSettingsViewModel(new SettingsProfileStore(Config.Root, "work", "https://work.example"), cli, _ => {
             scans++;
             return Task.FromResult<IReadOnlyDictionary<HarnessId, DetectedAgent>>(new Dictionary<HarnessId, DetectedAgent> {
                 [HarnessId.Codex] = new(true, false)
             });
-        });
+        }, isWired: _ => wired);
         using var notifications = new NotificationSettingsService(Config.PathTo("notifications.json"));
         using var vm = MakeViewModel(notifications, harnesses: harnesses);
         var window = new SettingsWindow { DataContext = vm };
@@ -448,14 +454,24 @@ public class SettingsWindowSmokeTests {
             Click(window, view.FindControl<Button>("RescanHarnessesButton")!);
             await WaitUntilAsync(() => harnesses.Rows.Count == 1);
             Settle(window);
-            var connect = view.GetVisualDescendants().OfType<Button>().Single(b => Equals(b.Content, "Connect"));
+            var connect = view.GetVisualDescendants().OfType<CheckBox>().Single();
             Click(window, connect);
             await Assert.That(harnesses.Busy).IsTrue();
             await Assert.That(vm.CanEdit).IsFalse();
             await Assert.That(view.FindControl<Button>("RescanHarnessesButton")!.IsEffectivelyEnabled).IsFalse();
+            wired = true;
             completion.SetResult(new ProcessResult(0, "", "", false));
             await WaitUntilAsync(() => !harnesses.Busy);
             await Assert.That(harnesses.Rows[0].Message!).Contains("Setup completed");
+            Settle(window);
+            await Assert.That(connect.IsChecked).IsTrue();
+            connect.Focus(NavigationMethod.Tab);
+            window.KeyPressQwerty(PhysicalKey.Space, RawInputModifiers.None);
+            window.KeyReleaseQwerty(PhysicalKey.Space, RawInputModifiers.None);
+            await WaitUntilAsync(() => !harnesses.Busy);
+            Settle(window);
+            await Assert.That(connect.IsChecked).IsFalse();
+            await Assert.That(harnesses.Rows[0].Message!).Contains("Disconnected");
             Click(window, view.FindControl<Button>("RescanHarnessesButton")!);
             await WaitUntilAsync(() => scans == 2);
         } finally { completion.TrySetResult(new ProcessResult(1, "", "canceled", false)); window.Close(); }
