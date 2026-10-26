@@ -115,6 +115,22 @@ public class ReadingStoreTests {
         await Assert.That(file.Sessions.Length).IsEqualTo(0);
     }
 
+    [Test]
+    public async Task Reading_file_without_metadataAt_binds_and_the_next_metadata_lands() {
+        var store = Registered(Store(), Codex("a"));
+        Tmp.CreateFile("accounts/readings/a.json",
+            """{"reading":{"generation":0,"windows":[],"plan":"pro","credits":null,"blocked":null},"sessions":[]}""");
+
+        var loaded = store.Readings.LoadAll()["a"].Reading;
+        await Assert.That(loaded.Plan).IsEqualTo("pro");
+        await Assert.That(loaded.MetadataAt).IsNull();
+
+        await Assert.That(store.Readings.TryRecord("a", 0, null,
+            f => f with { Reading = ReadingMerge.Apply(f.Reading, Obs(0, fresh: false, plan: "plus")) })).IsTrue();
+        await Assert.That(store.Readings.LoadAll()["a"].Reading.Plan).IsEqualTo("plus");
+        await Assert.That(store.Readings.LoadAll()["a"].Reading.MetadataAt).IsEqualTo(At(0));
+    }
+
     /// <summary>The generation-1 file is what a crash between the registry save and the reading delete
     /// leaves behind.</summary>
     [Test]

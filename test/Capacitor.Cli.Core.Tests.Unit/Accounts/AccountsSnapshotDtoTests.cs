@@ -53,12 +53,26 @@ public class AccountsSnapshotDtoTests {
     }
 
     [Test]
+    public async Task Snapshot_reading_without_metadataAt_binds_null() {
+        const string json = """
+            {"host_id":"host-1","revision":7,"accounts":[{"id":"a1b2","vendor":"codex","directory":"/Users/x/.codex-work","directory_key":"/users/x/.codex-work","label":"Work","recording_state":"recording",
+             "reading":{"generation":0,"windows":[],"plan":"pro","credits":null,"blocked":null}}],"defaults":[]}
+            """;
+
+        var reading = JsonSerializer.Deserialize(json, AccountsSnapshotJsonContext.Default.AccountsSnapshotDto)!.Accounts.Single().Reading!;
+
+        await Assert.That(reading.Plan).IsEqualTo("pro");
+        await Assert.That(reading.MetadataAt).IsNull();
+    }
+
+    [Test]
     public async Task New_snapshot_round_trips() {
         var at      = new DateTimeOffset(2026, 10, 26, 12, 0, 0, TimeSpan.Zero);
         var reading = new AccountReadingDto(3,
             [new UsageWindowDto("codex", 300, 42.5, at.AddHours(5), at), new UsageWindowDto("codex", 10080, 7, null, null)],
             "pro", new CreditsDto(true, false, "12.50"),
-            new BlockedMarkerDto(at, null, [new BlockConstraintDto("codex", 300, at.AddHours(5), at), new BlockConstraintDto(null, null, null, at)]));
+            new BlockedMarkerDto(at, null, [new BlockConstraintDto("codex", 300, at.AddHours(5), at), new BlockConstraintDto(null, null, null, at)]),
+            at);
         var view = Snapshot().Accounts[0] with {
             Email = "me@example.com", OrgId = "org-1", OrgName = "Acme", Plan = "pro", VendorAccountId = "acct-1", SignIn = "chatgpt",
             Generation = 3, RefreshedAt = at, RefreshError = "timeout", LimitsError = "unsupported", Reading = reading,

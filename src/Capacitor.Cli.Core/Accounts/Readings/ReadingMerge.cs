@@ -21,12 +21,16 @@ public static class ReadingMerge {
         else if (Clears(held, marker, observation))
             marker = marker with { ClearedAt = observation.ProducedAt };
 
+        var takeMetadata = (observation.Plan is not null || observation.Credits is not null)
+                        && Compare(observation.ProducedAt, held.MetadataAt) >= 0;
+
         return new(
             held.Generation,
             windows,
-            observation.Plan ?? held.Plan,
-            observation.Credits ?? held.Credits,
-            Normalize(marker.BlockedAt, marker.ClearedAt, marker.Constraints)
+            takeMetadata ? observation.Plan ?? held.Plan : held.Plan,
+            takeMetadata ? observation.Credits ?? held.Credits : held.Credits,
+            Normalize(marker.BlockedAt, marker.ClearedAt, marker.Constraints),
+            takeMetadata ? observation.ProducedAt : held.MetadataAt
         );
     }
 
@@ -43,12 +47,15 @@ public static class ReadingMerge {
                 [..a?.Constraints ?? [], ..b?.Constraints ?? []]
             );
 
+        var (winner, loser) = Compare(incoming.MetadataAt, held.MetadataAt) >= 0 ? (incoming, held) : (held, incoming);
+
         return new(
             held.Generation,
             MergeWindows(held.Windows, incoming.Windows),
-            incoming.Plan ?? held.Plan,
-            incoming.Credits ?? held.Credits,
-            blocked
+            winner.Plan ?? loser.Plan,
+            winner.Credits ?? loser.Credits,
+            blocked,
+            Max(held.MetadataAt, incoming.MetadataAt)
         );
     }
 
@@ -70,6 +77,7 @@ public static class ReadingMerge {
         a.Generation == b.Generation
      && a.Plan == b.Plan
      && Equals(a.Credits, b.Credits)
+     && a.MetadataAt == b.MetadataAt
      && a.Windows.SequenceEqual(b.Windows)
      && (a.Blocked, b.Blocked) switch {
             (null, null)     => true,
@@ -172,7 +180,7 @@ public static class ReadingMerge {
             }
         };
 
-    /// <summary>Null sorts first: a known reset is later than an unknown one.</summary>
+    /// <summary>Null sorts first: a known time is later than an unknown one.</summary>
     static int Compare(DateTimeOffset? a, DateTimeOffset? b) => (a, b) switch {
         (null, null)       => 0,
         (null, _)          => -1,

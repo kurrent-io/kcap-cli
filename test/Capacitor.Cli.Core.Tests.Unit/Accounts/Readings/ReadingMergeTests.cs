@@ -124,6 +124,78 @@ public class ReadingMergeTests {
     }
 
     [Test]
+    public async Task Older_observation_never_overwrites_newer_plan_or_credits() {
+        var credits = new CreditsDto(true, false, "12.50");
+        var reading = Apply(
+            Obs(20, fresh: true, plan: "plus", credits: credits),
+            Obs(10, fresh: false, plan: "pro", credits: new CreditsDto(false, false, null))
+        );
+
+        await Assert.That(reading.Plan).IsEqualTo("plus");
+        await Assert.That(reading.Credits).IsEqualTo(credits);
+        await Assert.That(reading.MetadataAt).IsEqualTo(At(20));
+    }
+
+    [Test]
+    public async Task Observation_without_metadata_keeps_metadataAt() {
+        var reading = Apply(
+            Obs(10, fresh: true, plan: "pro"),
+            Obs(20, fresh: true, [W("codex", 300, 10, At(300))])
+        );
+
+        await Assert.That(reading.MetadataAt).IsEqualTo(At(10));
+    }
+
+    [Test]
+    public async Task Equal_time_observation_takes_its_metadata() {
+        var reading = Apply(Obs(10, fresh: true, plan: "pro"), Obs(10, fresh: true, plan: "plus"));
+
+        await Assert.That(reading.Plan).IsEqualTo("plus");
+    }
+
+    [Test]
+    public async Task Merge_takes_the_later_metadata_in_either_order() {
+        var older = Apply(Obs(10, fresh: true, plan: "pro", credits: new CreditsDto(false, false, null)));
+        var newer = Apply(Obs(20, fresh: true, plan: "plus", credits: new CreditsDto(true, false, "1")));
+
+        foreach (var merged in new[] { ReadingMerge.Merge(older, newer), ReadingMerge.Merge(newer, older) }) {
+            await Assert.That(merged.Plan).IsEqualTo("plus");
+            await Assert.That(merged.Credits).IsEqualTo(new CreditsDto(true, false, "1"));
+            await Assert.That(merged.MetadataAt).IsEqualTo(At(20));
+        }
+    }
+
+    [Test]
+    public async Task Merge_falls_back_per_member_when_the_winner_lacks_one() {
+        var credits = new CreditsDto(true, false, "1");
+        var held    = ReadingMerge.Empty(1) with { Plan = "pro", Credits = credits };
+        var newer   = ReadingMerge.Empty(1) with { Plan = "plus", MetadataAt = At(20) };
+
+        var merged = ReadingMerge.Merge(held, newer);
+
+        await Assert.That(merged.Plan).IsEqualTo("plus");
+        await Assert.That(merged.Credits).IsEqualTo(credits);
+        await Assert.That(merged.MetadataAt).IsEqualTo(At(20));
+        await Assert.That(ReadingMerge.Merge(newer, held).Plan).IsEqualTo("plus");
+    }
+
+    [Test]
+    public async Task Merge_tie_goes_to_incoming() {
+        var held     = ReadingMerge.Empty(1) with { Plan = "pro", MetadataAt = At(10) };
+        var incoming = ReadingMerge.Empty(1) with { Plan = "plus", MetadataAt = At(10) };
+
+        await Assert.That(ReadingMerge.Merge(held, incoming).Plan).IsEqualTo("plus");
+        await Assert.That(ReadingMerge.Merge(ReadingMerge.Empty(1) with { Plan = "pro" }, ReadingMerge.Empty(1) with { Plan = "plus" }).Plan).IsEqualTo("plus");
+    }
+
+    [Test]
+    public async Task Equivalent_sees_a_metadataAt_change() {
+        var a = ReadingMerge.Empty(1) with { Plan = "pro", MetadataAt = At(10) };
+
+        await Assert.That(ReadingMerge.Equivalent(a, a with { MetadataAt = At(20) })).IsFalse();
+    }
+
+    [Test]
     public async Task Snapshot_merge_twice_is_idempotent_and_never_restamps() {
         var a = Apply(
             Obs(10, fresh: true, [W("claude", 300, 40, At(300)), W("claude", 10080, 20, At(5000))], plan: "max"),

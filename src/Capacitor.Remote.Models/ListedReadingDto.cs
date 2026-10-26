@@ -9,4 +9,6 @@ public sealed record ListedReadingDto {
     [JsonPropertyName("plan")]       public string? Plan { get; init; }
     [JsonPropertyName("credits")]    public ListedCreditsDto? Credits { get; init; }
     [JsonPropertyName("blocked")]    public ListedBlockedMarkerDto? Blocked { get; init; }
+    /// When plan and credits were observed; an older server omits it.
+    [JsonPropertyName("metadata_at")] public DateTimeOffset? MetadataAt { get; init; }
 }

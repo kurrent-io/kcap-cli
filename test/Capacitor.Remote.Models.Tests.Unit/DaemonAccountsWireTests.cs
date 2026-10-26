@@ -115,6 +115,7 @@ public class DaemonAccountsWireTests {
 
         var reading = account.Reading!;
         await Assert.That(reading.Generation).IsEqualTo(3L);
+        await Assert.That(reading.MetadataAt).IsNull();
         await Assert.That(reading.Plan).IsEqualTo("pro");
         await Assert.That(reading.Windows!.Single()).IsEqualTo(new ListedUsageWindowDto {
             LimitId = "codex", WindowMinutes = 300, UsedPercent = 42.5, ResetsAt = at.AddHours(5), ConfirmedAt = at,
@@ -125,6 +126,15 @@ public class DaemonAccountsWireTests {
         await Assert.That(reading.Blocked.Constraints!.Single()).IsEqualTo(new ListedBlockConstraintDto {
             LimitId = null, WindowMinutes = null, ResetsAt = null, SignaledAt = at,
         });
+    }
+
+    [Test]
+    public async Task ListedReading_binds_metadataAt() {
+        const string json = """{"generation":3,"plan":"pro","metadata_at":"2026-10-26T12:00:00+00:00"}""";
+
+        var reading = JsonSerializer.Deserialize(json, RemoteModelsJsonContext.Default.ListedReadingDto)!;
+
+        await Assert.That(reading.MetadataAt).IsEqualTo(new DateTimeOffset(2026, 10, 26, 12, 0, 0, TimeSpan.Zero));
     }
 
     [Test]
