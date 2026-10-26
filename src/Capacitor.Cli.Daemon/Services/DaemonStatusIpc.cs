@@ -76,11 +76,11 @@ internal sealed class DaemonStatusIpc(
             agents,
             orchestrator.SnapshotPendingForStatus(),
             orchestrator.BusyForStatus(),
-            ExperimentalForStatus());
+            ExperimentalForStatus(config));
         return JsonSerializer.Serialize(dto, StatusIpcJsonContext.Default.DaemonStatusDto);
     }
 
-    List<ExperimentalFeatureStatusDto> ExperimentalForStatus() {
+    internal static List<ExperimentalFeatureStatusDto> ExperimentalForStatus(DaemonConfig config) {
         var committed = config.CodexResolution;
         var acknowledged = config.AcknowledgedCodexResolution;
         var told = acknowledged.Generation >= committed.Generation;

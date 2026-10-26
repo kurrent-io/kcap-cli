@@ -612,6 +612,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                 } catch (Exception ex) {
                     var delay = ConnectRetryDelays[Math.Min(attempt, ConnectRetryDelays.Length - 1)];
                     LogConnectionAttemptFailed(ex, attempt + 1, delay.TotalSeconds);
+                    // A hub that never starts never reaches the registration that would record this.
+                    _config.CodexRegistrationFailed(_config.Advertisement.Codex);
                     // The failed attempt has returned the hub to Disconnected — pulse so a
                     // subscriber converges to "disconnected" during the backoff instead of a
                     // stale "connecting".

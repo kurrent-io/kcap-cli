@@ -1,3 +1,6 @@
+using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Daemon.Harness.Codex;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -17,8 +20,8 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 public class ConnectWithRetryTests {
     static readonly TimeSpan HangGuard = TimeSpan.FromSeconds(5);
 
-    sealed class RetryTestConnection(DaemonStatusNotifier? notifier = null) : ServerConnection(
-        new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1" },
+    sealed class RetryTestConnection(DaemonStatusNotifier? notifier = null, DaemonConfig? config = null) : ServerConnection(
+        config ?? new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1" },
         new FixedCredentialSource(),
         NullLoggerFactory.Instance,
         NullLogger<ServerConnection>.Instance,
@@ -93,6 +96,42 @@ public class ConnectWithRetryTests {
     }
 
     static TimeSpan[] FastDelays => [TimeSpan.FromMilliseconds(10)];
+
+    /// <summary>A daemon that boots while the server is down never reaches a registration, so the
+    /// connect loop itself must report the committed Codex resolution as not delivered; the first
+    /// successful connect then acknowledges it.</summary>
+    [Test]
+    public async Task A_hub_that_cannot_start_reports_the_codex_resolution_as_applied_locally() {
+        var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1" };
+        var codex  = CodexTransportResolution.Resolve(1, switchOn: true, () => "0.146.0");
+        config.CodexResolution = codex;
+        config.Advertise([], codex);
+        var conn = new RetryTestConnection(config: config) {
+            StartThrows        = new HttpRequestException("connection refused"),
+            ConnectRetryDelays = FastDelays,
+        };
+        DaemonStatusDto Status() =>
+            new(new DaemonInfoDto("test", "1", "http://127.0.0.1:1", "disconnected", 1, 0), [],
+                Experimental: DaemonStatusIpc.ExperimentalForStatus(config));
+
+        using (var cts = new CancellationTokenSource()) {
+            var loop = conn.ConnectWithRetryAsync(cts.Token);
+            while (conn.StartCalls == 0) await Task.Delay(5);
+            await cts.CancelAsync();
+            try { await loop.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        }
+
+        await Assert.That(Status().Experimental!.Single().RegistrationFailed == true).IsTrue();
+        await Assert.That(ExperimentalFeatureState.Classify(true, true, Status(), ExperimentalFeatures.CodexAppServer.Id).Kind)
+            .IsEqualTo(ExperimentalFeatureStateKind.AppliedLocally);
+
+        conn.StartThrows = null;
+        await conn.ConnectWithRetryAsync(CancellationToken.None).WaitAsync(HangGuard);
+
+        await Assert.That(Status().Experimental!.Single().RegistrationFailed == true).IsFalse();
+        await Assert.That(ExperimentalFeatureState.Classify(true, true, Status(), ExperimentalFeatures.CodexAppServer.Id).Kind)
+            .IsEqualTo(ExperimentalFeatureStateKind.Active);
+    }
 
     [Test]
     public async Task Live_registered_connection_is_left_alone() {
