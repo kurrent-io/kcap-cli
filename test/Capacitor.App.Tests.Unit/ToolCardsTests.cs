@@ -108,6 +108,12 @@ public class ToolCardsTests {
     }
 
     [Test]
+    public async Task An_agent_card_drops_a_link_the_app_would_not_open() {
+        var agent = ToolCards.Build(ToolCardKind.Agent, """{"prompt":"Fix it"}""", "agent_id: a1\nurl: javascript:alert(1)\n")!;
+        await Assert.That(agent.Url).IsNull();
+    }
+
+    [Test]
     public async Task An_agent_card_reads_the_link_from_a_whole_mcp_result_object() {
         const string result = """
             {"content":[{"type":"text","text":"status: requested\nagent_id: a1\nurl: https://kurrent.kcap.ai/agents/a1\n"}]}

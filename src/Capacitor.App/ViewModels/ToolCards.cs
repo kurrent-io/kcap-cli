@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Capacitor.App.Services;
 
 namespace Capacitor.App.ViewModels;
 
@@ -71,7 +72,7 @@ public static class ToolCards {
         var prompt = args.Str("prompt") ?? "";
         var firstLine = prompt.Split(['\r', '\n'], 2)[0].Trim();
         return new ToolCard(ToolCardKind.Agent, "Started hosted agent", TextElision.End(firstLine, NameCap), args.Str("vendor") ?? "",
-            ResultField(resultText, "url"), null);
+            ResultField(resultText, "url") is { } url && LinkPolicy.IsOpenable(url) ? url : null, null);
     }
 
     /// The text blocks of an MCP result object, which a Codex driver records whole; any other result as given.
