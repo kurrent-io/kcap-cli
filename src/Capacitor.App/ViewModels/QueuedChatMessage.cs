@@ -22,6 +22,9 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
     /// Own sends are numbered in the order they were handed to the channel. The file offset
     /// stays put until the transcript grows, so two sends can share a baseline.
     internal int SendOrder { get; set; }
+    internal bool SentIdle { get; set; }
+    internal bool IsSlashCommand =>
+        AttachmentIds.Count == 0 && Normalize(Text) is ['/', ..] command && !command.Contains('\n');
     int _generation = generation;
     long? _offset = offset;
     internal bool HasBaseline => _offset.HasValue;
@@ -100,6 +103,7 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
     internal void Rebase(int generation, long? offset) {
         _generation = generation;
         _offset = offset;
+        SentIdle = false;
         MarkUnconfirmed();
     }
 

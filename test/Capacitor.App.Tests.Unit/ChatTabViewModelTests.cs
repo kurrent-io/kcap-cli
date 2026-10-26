@@ -3332,7 +3332,7 @@ public class ChatTabViewModelTests {
     }
 
     /// Pins the fallback for a dialog whose choices could not be read: the card carries the
-    /// screen text and sends the user to the terminal, and no keys are offered.
+    /// screen text and sends the user to the terminal, and offers Escape to close it.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_terminal_dialog_without_readable_choices_points_at_the_terminal() {
@@ -3345,13 +3345,105 @@ public class ChatTabViewModelTests {
                 await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", TerminalDialog = dialog });
 
                 await Assert.That(h.Chat.HasTerminalMenu).IsTrue();
-                await Assert.That(h.Chat.TerminalMenuChoices).IsEmpty();
+                await Assert.That(h.Chat.TerminalMenuChoices.Single().Label).IsEqualTo("Close");
                 await Assert.That(h.Chat.TerminalMenuScreen).IsEqualTo(dialog.Screen);
                 await h.Chat.ShowTerminalCommand.Execute().ToTask();
                 await Assert.That(shown).IsTrue();
             } finally { await h.TeardownAsync(); }
         });
     }
+
+    [Test]
+    [Arguments("/status", true, true)]
+    [Arguments("/cost", true, true)]
+    [Arguments("/status", null, false)]
+    [Arguments("/status", false, false)]
+    [Arguments("hello", true, false)]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_panel_receipts_only_the_latest_idle_command(string text, bool? awaitingInput, bool retired) => RunOnUiAsync(async () => {
+        var input = new KeyRecordingInput();
+        var h = new Harness(TranscriptChat.For("claude"), input: input);
+        try {
+            var agent = Agent("a1", "claude", hasTerminal: true) with { Status = "Running", AwaitingInput = awaitingInput };
+            await h.PushAsync(agent);
+            h.Chat.ComposerText = text;
+            await h.Chat.SendCommand.Execute().ToTask();
+            await Assert.That(h.Chat.HasQueuedMessages).IsTrue();
+            await h.PushAsync(agent with { TerminalDialog = new TerminalDialogDto("Status", "", [], -1, "Version: 2.1.310") });
+            await Assert.That(h.Chat.HasQueuedMessages).IsEqualTo(!retired);
+        } finally { await h.TeardownAsync(); }
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_panel_receipt_can_arrive_before_transport_acceptance() => RunOnUiAsync(async () => {
+        var input = new ScriptedInput();
+        var h = new Harness(TranscriptChat.For("claude"), input: input);
+        try {
+            var agent = Agent("a1", "claude", hasTerminal: true) with { Status = "Running", AwaitingInput = true };
+            await h.PushAsync(agent);
+            h.Chat.ComposerText = "/status";
+            var send = h.Chat.SendCommand.Execute().ToTask();
+            await WaitUntilAsync(() => input.Pending is not null, what: "the send awaiting acceptance");
+            await h.PushAsync(agent with { TerminalDialog = new TerminalDialogDto("Status", "", [], -1, "Version: 2.1.310") });
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
+            await send;
+            await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+        } finally { await h.TeardownAsync(); }
+    });
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_panel_in_another_transcript_does_not_receipt_an_earlier_command(bool arrivesWithSwitch) => RunOnUiAsync(async () => {
+        var h = new Harness(TranscriptChat.For("claude"), input: new KeyRecordingInput());
+        try {
+            var first = Tmp.CreateFile("panel-first.jsonl", [AssistantLine]);
+            await h.PushAsync(Dto(first) with { AwaitingInput = true });
+            h.Chat.ComposerText = "/status";
+            await h.Chat.SendCommand.Execute().ToTask();
+            await Assert.That(h.Chat.HasQueuedMessages).IsTrue();
+            var next = Tmp.CreateFile("panel-next.jsonl", [AssistantLine]);
+            var agent = Dto(next) with { AwaitingInput = true };
+            if (!arrivesWithSwitch) await h.PushAsync(agent);
+            await h.PushAsync(agent with { TerminalDialog = new TerminalDialogDto("Status", "", [], -1, "Version: 2.1.310") });
+            await Assert.That(h.Chat.HasQueuedMessages).IsTrue();
+        } finally { await h.TeardownAsync(); }
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_panel_does_not_receipt_an_older_command_after_another_send() => RunOnUiAsync(async () => {
+        var h = new Harness(TranscriptChat.For("claude"), input: new KeyRecordingInput());
+        try {
+            var agent = Agent("a1", "claude", hasTerminal: true) with { Status = "Running", AwaitingInput = true };
+            await h.PushAsync(agent);
+            foreach (var text in new[] { "/status", "hello" }) {
+                h.Chat.ComposerText = text;
+                await h.Chat.SendCommand.Execute().ToTask();
+            }
+            await h.PushAsync(agent with { TerminalDialog = new TerminalDialogDto("Status", "", [], -1, "Version: 2.1.310") });
+            await Assert.That(h.Chat.QueuedMessages.Count).IsEqualTo(2);
+        } finally { await h.TeardownAsync(); }
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_screen_only_dialog_can_be_closed_once_with_escape() => RunOnUiAsync(async () => {
+        var input = new KeyRecordingInput();
+        var h = new Harness(TranscriptChat.For("claude"), input: input);
+        try {
+            await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with {
+                Status = "Running", TerminalDialog = new TerminalDialogDto("Status", "", [], -1, "Version: 2.1.310")
+            });
+            var close = h.Chat.TerminalMenuChoices.Single();
+            await Assert.That(close.Label).IsEqualTo("Close");
+            await close.Choose.Execute().ToTask();
+            await Assert.That(input.Writes).IsEquivalentTo(new[] { "\x1b" }, CollectionOrdering.Matching);
+            await Assert.That(await close.Choose.CanExecute.FirstAsync()).IsFalse();
+        } finally { await h.TeardownAsync(); }
+    });
 
     /// An empty chat can mean the agent is held at a prompt only its terminal shows, so it points
     /// there, unless the agent has no terminal or the dialog card already does.
