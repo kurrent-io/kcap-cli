@@ -12,112 +12,110 @@
     </UserControl.Styles>
     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
         <StackPanel Classes="settingsPage">
-            <StackPanel Spacing="10">
+            <StackPanel Classes="settingsHeader">
                 <TextBlock x:Name="AccountsTitleText" Classes="kcapTitle" Text="Accounts" />
                 <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
                            Text="Manage Claude and Codex accounts on this computer. Choose an account when you start a session." />
             </StackPanel>
 
-            <TextBlock x:Name="AccountsNoticeText" Classes="kcapHint" Text="{Binding ReadOnlyNotice}" TextWrapping="Wrap"
-                       IsVisible="{Binding ReadOnlyNotice, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+            <Border Classes="settingsNotice"
+                    IsVisible="{Binding ReadOnlyNotice, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                <TextBlock x:Name="AccountsNoticeText" Classes="kcapHint" Text="{Binding ReadOnlyNotice}" TextWrapping="Wrap"
+                           Foreground="{StaticResource KcapTextBrush}" />
+            </Border>
 
             <ItemsControl x:Name="AccountGroups" ItemsSource="{Binding Groups}">
                 <ItemsControl.ItemsPanel>
                     <ItemsPanelTemplate>
-                        <StackPanel Spacing="16" />
+                        <StackPanel Spacing="28" />
                     </ItemsPanelTemplate>
                 </ItemsControl.ItemsPanel>
                 <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="vm:AccountVendorGroup">
-                        <StackPanel Spacing="10">
-                            <TextBlock Classes="kcapLabel" Text="{Binding VendorLabel}" />
-                            <ItemsControl ItemsSource="{Binding Rows}">
-                                <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <StackPanel Spacing="12" />
-                                    </ItemsPanelTemplate>
-                                </ItemsControl.ItemsPanel>
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:AccountSettingsRow">
-                                        <Border Classes="profileRow accountRow settingsCard">
-                                            <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="18">
-                                                <StackPanel Spacing="6">
-                                                    <StackPanel Orientation="Horizontal" Spacing="8">
-                                                        <StackPanel.IsVisible>
-                                                            <MultiBinding Converter="{x:Static views:SameValueConverter.Different}">
-                                                                <Binding />
-                                                                <Binding Path="$parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).Renaming" />
-                                                            </MultiBinding>
-                                                        </StackPanel.IsVisible>
-                                                        <TextBlock Classes="kcapLabel accountLabel" Text="{Binding Label}" VerticalAlignment="Center" MaxWidth="260" TextWrapping="Wrap" />
-                                                        <Border Classes="accountDefault" IsVisible="{Binding IsDefault}"
-                                                                Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
-                                                                BorderThickness="1" CornerRadius="999" Padding="8,3" VerticalAlignment="Center">
-                                                            <TextBlock Text="Default" FontSize="11" FontWeight="SemiBold"
-                                                                       Foreground="{StaticResource KcapMutedBrush}" />
-                                                        </Border>
+                        <StackPanel Classes="settingsGroup">
+                            <TextBlock Classes="settingsGroupTitle" Text="{Binding VendorLabel}" />
+                            <Border Classes="settingsCard">
+                                <ItemsControl ItemsSource="{Binding Rows}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:AccountSettingsRow">
+                                            <Border Classes="profileRow accountRow settingsListRow">
+                                                <Grid Classes="settingsRow" ColumnDefinitions="*,Auto">
+                                                    <StackPanel Classes="settingsRowText">
+                                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                                            <StackPanel.IsVisible>
+                                                                <MultiBinding Converter="{x:Static views:SameValueConverter.Different}">
+                                                                    <Binding />
+                                                                    <Binding Path="$parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).Renaming" />
+                                                                </MultiBinding>
+                                                            </StackPanel.IsVisible>
+                                                            <TextBlock Classes="kcapLabel accountLabel" Text="{Binding Label}" VerticalAlignment="Center" MaxWidth="260" TextWrapping="Wrap" />
+                                                            <Border Classes="settingsPill accountDefault" IsVisible="{Binding IsDefault}"
+                                                                    ToolTip.Tip="Used when a session does not choose an account">
+                                                                <TextBlock Text="Default" />
+                                                            </Border>
+                                                        </StackPanel>
+                                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                                            <StackPanel.IsVisible>
+                                                                <MultiBinding Converter="{x:Static views:SameValueConverter.Same}">
+                                                                    <Binding />
+                                                                    <Binding Path="$parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).Renaming" />
+                                                                </MultiBinding>
+                                                            </StackPanel.IsVisible>
+                                                            <TextBox Classes="kcapField" Width="200" AutomationProperties.Name="Account label"
+                                                                     Text="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).RenameDraft, Mode=TwoWay}" />
+                                                            <Button Classes="kcapChip settingsCompact" Content="Save" VerticalAlignment="Center"
+                                                                    Command="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).CommitRenameCommand}" />
+                                                            <Button Classes="kcapGhost settingsCompact" Content="Cancel" VerticalAlignment="Center"
+                                                                    Command="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).CancelRenameCommand}" />
+                                                        </StackPanel>
+                                                        <TextBlock Classes="kcapHint" Text="{Binding Directory}" TextWrapping="Wrap" />
                                                     </StackPanel>
-                                                    <StackPanel Orientation="Horizontal" Spacing="8">
-                                                        <StackPanel.IsVisible>
-                                                            <MultiBinding Converter="{x:Static views:SameValueConverter.Same}">
-                                                                <Binding />
-                                                                <Binding Path="$parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).Renaming" />
-                                                            </MultiBinding>
-                                                        </StackPanel.IsVisible>
-                                                        <TextBox Classes="kcapField" Width="180" AutomationProperties.Name="Account label"
-                                                                 Text="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).RenameDraft, Mode=TwoWay}" />
-                                                        <Button Classes="kcapChip" Content="Save" VerticalAlignment="Center"
-                                                                Command="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).CommitRenameCommand}" />
-                                                        <Button Classes="kcapChip" Content="Cancel" VerticalAlignment="Center"
-                                                                Command="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).CancelRenameCommand}" />
+                                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                                                        <TextBlock Classes="kcapHint accountState" Classes.attention="{Binding StateIsAttention}"
+                                                                   Text="{Binding StateLabel}" ToolTip.Tip="{Binding StateHint}"
+                                                                   VerticalAlignment="Center" />
+                                                        <Button Classes="kcapChip settingsCompact accountAdd" Content="Add account" IsVisible="{Binding IsUnregisteredDefault}"
+                                                                AutomationProperties.Name="{Binding Label, StringFormat='Add {0} account'}"
+                                                                Command="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).AddDefaultCommand}"
+                                                                CommandParameter="{Binding}" />
+                                                        <Button Classes="kcapGhost kcapIcon accountMenu" IsVisible="{Binding !IsUnregisteredDefault}"
+                                                                IsEnabled="{Binding !$parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).IsBusy}"
+                                                                AutomationProperties.Name="{Binding Label, StringFormat='Actions for {0}'}"
+                                                                ToolTip.Tip="Rename, reconnect or remove">
+                                                            <views:AppIcon Kind="Ellipsis" Size="16" />
+                                                            <Button.Flyout>
+                                                                <Flyout Placement="BottomEdgeAlignedRight" VerticalOffset="6"
+                                                                        FlyoutPresenterClasses="kcapPanel" Opened="OnMenuOpened">
+                                                                    <StackPanel Spacing="2" Margin="6" MinWidth="160">
+                                                                        <Button Classes="kcapGhost" Content="Rename" Click="OnMenuItemClick" CommandParameter="{Binding}"
+                                                                                Command="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).BeginRenameCommand}"
+                                                                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                                                Padding="10,8" FontSize="13.5" />
+                                                                        <Button Classes="kcapGhost" Content="Reconnect" Click="OnMenuItemClick" CommandParameter="{Binding}"
+                                                                                Command="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).RewireCommand}"
+                                                                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                                                Padding="10,8" FontSize="13.5" />
+                                                                        <Button Classes="kcapGhost" Content="Remove" Click="OnMenuItemClick" CommandParameter="{Binding}"
+                                                                                Command="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).RemoveCommand}"
+                                                                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                                                Padding="10,8" FontSize="13.5" />
+                                                                    </StackPanel>
+                                                                </Flyout>
+                                                            </Button.Flyout>
+                                                        </Button>
                                                     </StackPanel>
-                                                    <TextBlock Classes="kcapHint" Text="{Binding Directory}" TextWrapping="Wrap" />
-                                                    <TextBlock Classes="kcapHint accountState" Classes.attention="{Binding StateIsAttention}"
-                                                               Text="{Binding StateLabel}" ToolTip.Tip="{Binding StateHint}" />
-                                                </StackPanel>
-                                                <Panel Grid.Column="1" VerticalAlignment="Top">
-                                                    <Button Classes="kcapGhost kcapIcon accountMenu" IsVisible="{Binding !IsUnregisteredDefault}"
-                                                            IsEnabled="{Binding !$parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).IsBusy}"
-                                                            AutomationProperties.Name="{Binding Label, StringFormat='Actions for {0}'}"
-                                                            ToolTip.Tip="Rename, reconnect or remove">
-                                                        <views:AppIcon Kind="Ellipsis" Size="16" />
-                                                        <Button.Flyout>
-                                                            <Flyout Placement="BottomEdgeAlignedRight" VerticalOffset="6"
-                                                                    FlyoutPresenterClasses="kcapPanel" Opened="OnMenuOpened">
-                                                                <StackPanel Spacing="2" Margin="6" MinWidth="160">
-                                                                    <Button Classes="kcapGhost" Content="Rename" Click="OnMenuItemClick" CommandParameter="{Binding}"
-                                                                            Command="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).BeginRenameCommand}"
-                                                                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                                                                            Padding="10,8" FontSize="13.5" />
-                                                                    <Button Classes="kcapGhost" Content="Reconnect" Click="OnMenuItemClick" CommandParameter="{Binding}"
-                                                                            Command="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).RewireCommand}"
-                                                                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                                                                            Padding="10,8" FontSize="13.5" />
-                                                                    <Button Classes="kcapGhost" Content="Remove" Click="OnMenuItemClick" CommandParameter="{Binding}"
-                                                                            Command="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).RemoveCommand}"
-                                                                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                                                                            Padding="10,8" FontSize="13.5" />
-                                                                </StackPanel>
-                                                            </Flyout>
-                                                        </Button.Flyout>
-                                                    </Button>
-                                                </Panel>
-                                                <Button Grid.Row="1" Classes="kcapChip accountAdd" Content="Add account" IsVisible="{Binding IsUnregisteredDefault}"
-                                                        HorizontalAlignment="Left" Margin="0,12,0,0"
-                                                        AutomationProperties.Name="{Binding Label, StringFormat='Add {0} account'}"
-                                                        Command="{Binding $parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).AddDefaultCommand}"
-                                                        CommandParameter="{Binding}" />
-                                            </Grid>
-                                        </Border>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </Border>
                         </StackPanel>
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>
             </ItemsControl>
 
-            <Button x:Name="AddAccountButton" Classes="kcapChip" Content="Add account" HorizontalAlignment="Left"
+            <Button x:Name="AddAccountButton" Classes="kcapChip" Content="Add account…" HorizontalAlignment="Left"
                     IsVisible="{Binding CanManage}" IsEnabled="{Binding !IsBusy}">
                 <Button.Flyout>
                     <Flyout Placement="BottomEdgeAlignedLeft" VerticalOffset="6" FlyoutPresenterClasses="kcapPanel"

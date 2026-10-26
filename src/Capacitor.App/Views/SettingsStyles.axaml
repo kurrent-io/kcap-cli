@@ -1,10 +1,12 @@
 <Styles xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <Styles.Resources>
+        <!-- Input outlines need 3:1 against the card; KcapBorderStrongBrush falls short of that. -->
         <SolidColorBrush x:Key="SettingsControlBorderBrush" Color="#616B80" />
     </Styles.Resources>
-    <!-- Keep native tab selection and keyboard navigation, with a rail that can grow
-         independently of the selected section. All chrome uses the app palette. -->
+
+    <!-- Every page uses one vocabulary: a page header, then groups of a section title over one card
+         whose rows are split by full-width dividers. A bare rule or a nested card breaks the rhythm. -->
     <Style Selector="TabControl.settingsSidebar">
         <Setter Property="ItemsPanel">
             <ItemsPanelTemplate>
@@ -13,21 +15,18 @@
         </Setter>
         <Setter Property="Template">
             <ControlTemplate>
-                <Grid ColumnDefinitions="200,*">
+                <Grid ColumnDefinitions="208,*">
+                    <!-- The window's buttons sit over the top of the sidebar, so the list starts below them. -->
                     <Border Background="{StaticResource KcapSurfaceBrush}"
                             BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,0,1,0">
-                        <Grid RowDefinitions="Auto,*" Margin="12,24,12,16">
-                            <TextBlock Classes="settingsEyebrow" Text="Settings" Margin="10,0,0,10" />
-                            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
-                                          HorizontalScrollBarVisibility="Disabled">
-                                <ItemsPresenter Name="PART_ItemsPresenter"
-                                                ItemsPanel="{TemplateBinding ItemsPanel}" />
-                            </ScrollViewer>
-                        </Grid>
+                        <ScrollViewer Margin="0,52,0,0" VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled">
+                            <ItemsPresenter Name="PART_ItemsPresenter" Margin="10,0,10,16"
+                                            ItemsPanel="{TemplateBinding ItemsPanel}" />
+                        </ScrollViewer>
                     </Border>
-                    <!-- No margin here: each page pads inside its own ScrollViewer, so the
-                         scrollbar sits at the window edge instead of over the content. -->
-                    <ContentPresenter Grid.Column="1" Name="PART_SelectedContentHost"
+                    <!-- Each page pads inside its own ScrollViewer, so the scrollbar sits at the window edge. -->
+                    <ContentPresenter Grid.Column="1" Name="PART_SelectedContentHost" Margin="0,40,0,0"
                                       HorizontalContentAlignment="Stretch"
                                       VerticalContentAlignment="Stretch"
                                       Content="{TemplateBinding SelectedContent}"
@@ -41,14 +40,15 @@
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderBrush" Value="Transparent" />
         <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="Padding" Value="10,9" />
+        <Setter Property="Padding" Value="10,0" />
+        <Setter Property="MinHeight" Value="32" />
         <Setter Property="FontSize" Value="13" />
         <Setter Property="FontWeight" Value="Medium" />
         <Setter Property="HorizontalAlignment" Value="Stretch" />
         <Setter Property="HorizontalContentAlignment" Value="Left" />
         <Setter Property="Template">
             <ControlTemplate>
-                <ContentPresenter Name="PART_ContentPresenter" CornerRadius="8"
+                <ContentPresenter Name="PART_ContentPresenter" CornerRadius="6"
                                   Background="{TemplateBinding Background}"
                                   Foreground="{TemplateBinding Foreground}"
                                   BorderBrush="{TemplateBinding BorderBrush}"
@@ -73,90 +73,207 @@
     <Style Selector="TabItem.settingsNav:focus-visible">
         <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
     </Style>
-    <Style Selector="StackPanel.settingsPage">
-        <Setter Property="Margin" Value="28,28,28,32" />
-        <Setter Property="MaxWidth" Value="680" />
-        <Setter Property="HorizontalAlignment" Value="Left" />
+    <Style Selector="TabItem.settingsNav.groupStart">
+        <Setter Property="Margin" Value="0,12,0,0" />
     </Style>
+
     <Style Selector="StackPanel.settingsPage">
-        <Setter Property="Spacing" Value="24" />
+        <Setter Property="Margin" Value="32,12,32,36" />
+        <!-- Stretch, not Left: a left-aligned page sizes to its widest child, so every page's cards
+             would end at a different edge. Past the cap the column centres. -->
+        <Setter Property="MaxWidth" Value="680" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="Spacing" Value="28" />
+    </Style>
+    <Style Selector="StackPanel.settingsHeader">
+        <Setter Property="Spacing" Value="6" />
     </Style>
     <!-- A save bar pinned under a page that has explicit Save, so the action is never scrolled away. -->
     <Style Selector="Border.settingsActionBar">
         <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
         <Setter Property="BorderThickness" Value="0,1,0,0" />
         <Setter Property="Background" Value="{StaticResource KcapCanvasBrush}" />
-        <Setter Property="Padding" Value="28,12" />
+        <Setter Property="Padding" Value="32,12" />
     </Style>
-    <Style Selector="Border.settingsContextChip">
-        <Setter Property="Padding" Value="10,5" />
-        <Setter Property="CornerRadius" Value="999" />
-        <Setter Property="HorizontalAlignment" Value="Left" />
-        <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
-        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
-        <Setter Property="BorderThickness" Value="1" />
+
+    <!-- Groups: a section title over one card. The title is the page's second level, so it is larger
+         than any label inside the card. -->
+    <Style Selector="StackPanel.settingsGroup">
+        <Setter Property="Spacing" Value="10" />
     </Style>
-    <Style Selector="TextBlock.settingsFieldLabel">
-        <Setter Property="FontSize" Value="12" />
-        <Setter Property="FontWeight" Value="Medium" />
-        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+    <Style Selector="StackPanel.settingsGroupHeader">
+        <Setter Property="Spacing" Value="3" />
     </Style>
-    <!-- Sections share the content's left edge; separators give structure without nested cards. -->
-    <Style Selector="Border.settingsSection">
-        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
-        <Setter Property="BorderThickness" Value="0,0,0,1" />
-        <Setter Property="Padding" Value="0,0,0,24" />
-    </Style>
-    <Style Selector="Grid.settingsRow">
-        <Setter Property="Margin" Value="0,16" />
-    </Style>
-    <Style Selector="Border.settingsDivider">
-        <Setter Property="Height" Value="1" />
-        <Setter Property="Background" Value="{StaticResource KcapBorderBrush}" />
-    </Style>
-    <Style Selector="TextBlock.settingsEyebrow">
-        <Setter Property="FontSize" Value="11" />
+    <Style Selector="TextBlock.settingsGroupTitle">
+        <Setter Property="FontSize" Value="15" />
         <Setter Property="FontWeight" Value="SemiBold" />
-        <Setter Property="LetterSpacing" Value="0.8" />
-        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        <Setter Property="LineHeight" Value="22" />
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
     </Style>
     <Style Selector="Border.settingsCard">
         <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
         <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="8" />
-        <Setter Property="Padding" Value="20" />
+        <Setter Property="ClipToBounds" Value="True" />
     </Style>
-    <Style Selector="TabControl.settingsSidebar TextBlock.kcapTitle">
-        <Setter Property="FontSize" Value="24" />
-        <Setter Property="LineHeight" Value="31" />
-        <Setter Property="LetterSpacing" Value="-0.5" />
+    <Style Selector="Border.settingsCardBody">
+        <Setter Property="Padding" Value="16" />
     </Style>
+    <Style Selector="Grid.settingsRow">
+        <Setter Property="Margin" Value="16,14" />
+        <Setter Property="ColumnSpacing" Value="16" />
+    </Style>
+    <Style Selector="StackPanel.settingsRowText">
+        <Setter Property="Spacing" Value="3" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Border.settingsDivider">
+        <Setter Property="Height" Value="1" />
+        <Setter Property="Background" Value="{StaticResource KcapBorderBrush}" />
+    </Style>
+    <!-- Rows generated by an ItemsControl draw their own top rule; the first sits on the card edge. -->
+    <Style Selector="Border.settingsListRow">
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        <Setter Property="BorderThickness" Value="0,1,0,0" />
+    </Style>
+    <Style Selector="ContentPresenter:nth-child(1) > Border.settingsListRow">
+        <Setter Property="BorderThickness" Value="0" />
+    </Style>
+    <Style Selector="TextBlock.settingsFieldLabel">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="FontWeight" Value="Medium" />
+        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+    </Style>
+    <Style Selector="TextBlock.settingsFootnote">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="LineHeight" Value="18" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
+    </Style>
+
+    <!-- Small identity marks (a profile, a default account). Never status colours. -->
+    <Style Selector="Border.settingsPill">
+        <Setter Property="Padding" Value="7,2" />
+        <Setter Property="CornerRadius" Value="999" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+    </Style>
+    <Style Selector="Border.settingsPill TextBlock">
+        <Setter Property="FontSize" Value="11" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+    </Style>
+    <Style Selector="Border.settingsContextChip">
+        <Setter Property="Padding" Value="9,4" />
+        <Setter Property="CornerRadius" Value="999" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
+        <Setter Property="Margin" Value="0,6,0,0" />
+        <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+    </Style>
+    <Style Selector="Border.settingsNotice">
+        <Setter Property="Background" Value="{StaticResource KcapWarningDimBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource KcapWarningBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Padding" Value="16,12" />
+    </Style>
+
+    <!-- A single choice drawn as radio rows inside a card, so every option and its consequence stays visible. -->
+    <Style Selector="ListBox.settingsChoices">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="SelectionMode" Value="Single" />
+        <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Disabled" />
+        <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+    </Style>
+    <Style Selector="ListBox.settingsChoices ListBoxItem">
+        <Setter Property="Padding" Value="16,12" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        <Setter Property="BorderThickness" Value="0,1,0,0" />
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        <Setter Property="Template">
+            <ControlTemplate TargetType="ListBoxItem">
+                <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                        BorderThickness="{TemplateBinding BorderThickness}">
+                    <Border Name="FocusRing" BorderThickness="0" BorderBrush="{StaticResource KcapInfoBrush}"
+                            Padding="{TemplateBinding Padding}">
+                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                            <Panel Width="16" Height="16" VerticalAlignment="Top" Margin="0,1,0,0">
+                                <Ellipse Name="Ring" Width="16" Height="16" StrokeThickness="1.5"
+                                         Stroke="{StaticResource SettingsControlBorderBrush}" Fill="Transparent" />
+                                <Ellipse Name="Dot" Width="8" Height="8" Fill="{StaticResource KcapInfoBrush}" IsVisible="False" />
+                            </Panel>
+                            <ContentPresenter Grid.Column="1" Name="OptionContent" Content="{TemplateBinding Content}"
+                                              ContentTemplate="{TemplateBinding ContentTemplate}"
+                                              Foreground="{TemplateBinding Foreground}" />
+                        </Grid>
+                    </Border>
+                </Border>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <Style Selector="ListBox.settingsChoices ListBoxItem:nth-child(1)">
+        <Setter Property="BorderThickness" Value="0" />
+    </Style>
+    <Style Selector="ListBox.settingsChoices ListBoxItem:pointerover">
+        <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+    </Style>
+    <Style Selector="ListBox.settingsChoices ListBoxItem:pointerover /template/ Ellipse#Ring">
+        <Setter Property="Stroke" Value="{StaticResource KcapMutedBrush}" />
+    </Style>
+    <Style Selector="ListBox.settingsChoices ListBoxItem:selected /template/ Ellipse#Ring">
+        <Setter Property="Stroke" Value="{StaticResource KcapInfoBrush}" />
+    </Style>
+    <Style Selector="ListBox.settingsChoices ListBoxItem:selected /template/ Ellipse#Dot">
+        <Setter Property="IsVisible" Value="True" />
+    </Style>
+    <Style Selector="ListBox.settingsChoices ListBoxItem:focus-visible /template/ Border#FocusRing">
+        <Setter Property="BorderThickness" Value="2" />
+    </Style>
+    <Style Selector="ListBox.settingsChoices ListBoxItem:disabled">
+        <Setter Property="Opacity" Value="0.5" />
+    </Style>
+
+    <!-- Type scale inside Settings: page title, group title, row label, hint. -->
     <Style Selector="TabControl.settingsSidebar TextBlock.kcapSubtitle">
         <Setter Property="FontWeight" Value="Normal" />
         <Setter Property="LetterSpacing" Value="0" />
     </Style>
     <Style Selector="TabControl.settingsSidebar TextBlock.kcapLabel">
         <Setter Property="FontSize" Value="13.5" />
+        <Setter Property="FontWeight" Value="Medium" />
     </Style>
     <Style Selector="TabControl.settingsSidebar TextBlock.kcapHint">
-        <Setter Property="FontSize" Value="13" />
-        <Setter Property="LineHeight" Value="20" />
+        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="LineHeight" Value="19" />
         <Setter Property="LetterSpacing" Value="0" />
     </Style>
-    <Style Selector="TabControl.settingsSidebar TextBox.kcapField">
-        <Setter Property="FontSize" Value="13.5" />
-    </Style>
+
     <Style Selector="CheckBox.settingsHarnessCheck">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-        <Setter Property="MinHeight" Value="28" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="MinHeight" Value="20" />
         <Setter Property="Padding" Value="12,0,0,0" />
     </Style>
+    <Style Selector="Button.settingsCompact">
+        <Setter Property="Padding" Value="10,5" />
+        <Setter Property="FontSize" Value="12.5" />
+    </Style>
+
+    <!-- Fields: one outline and one focus treatment for every input on these pages. -->
     <Style Selector="TabControl.settingsSidebar TextBox.kcapField,
                      TabControl.settingsSidebar ComboBox.kcapField,
                      TabControl.settingsSidebar NumericUpDown.kcapField">
         <Setter Property="BorderBrush" Value="{StaticResource SettingsControlBorderBrush}" />
+        <Setter Property="FontSize" Value="13" />
     </Style>
     <Style Selector="TabControl.settingsSidebar TextBox.kcapField /template/ Border#PART_BorderElement,
                      TabControl.settingsSidebar TextBox.kcapField:pointerover /template/ Border#PART_BorderElement,
@@ -171,5 +288,33 @@
     </Style>
     <Style Selector="TabControl.settingsSidebar NumericUpDown.kcapField:focus-within">
         <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
+    </Style>
+    <Style Selector="TabControl.settingsSidebar TextBox.settingsList">
+        <Setter Property="AcceptsReturn" Value="True" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="MinHeight" Value="64" />
+        <Setter Property="MaxHeight" Value="160" />
+        <Setter Property="FontFamily" Value="{StaticResource OnboardingMonoFont}" />
+        <Setter Property="FontSize" Value="12.5" />
+    </Style>
+
+    <!-- The search choices are shared with setup, whose radio rows use setup's palette. -->
+    <Style Selector="TabControl.settingsSidebar RadioButton.onboardingOption">
+        <Setter Property="CornerRadius" Value="6" />
+    </Style>
+    <Style Selector="TabControl.settingsSidebar RadioButton.onboardingOption:pointerover">
+        <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+    </Style>
+    <Style Selector="TabControl.settingsSidebar RadioButton.onboardingOption:checked">
+        <Setter Property="Background" Value="{StaticResource KcapSelectionBrush}" />
+    </Style>
+    <Style Selector="TabControl.settingsSidebar RadioButton.onboardingOption /template/ Ellipse#Ring">
+        <Setter Property="Stroke" Value="{StaticResource SettingsControlBorderBrush}" />
+    </Style>
+    <Style Selector="TabControl.settingsSidebar RadioButton.onboardingOption:checked /template/ Ellipse#Ring">
+        <Setter Property="Stroke" Value="{StaticResource KcapInfoBrush}" />
+    </Style>
+    <Style Selector="TabControl.settingsSidebar RadioButton.onboardingOption /template/ Ellipse#Dot">
+        <Setter Property="Fill" Value="{StaticResource KcapInfoBrush}" />
     </Style>
 </Styles>

@@ -7,11 +7,12 @@
         Title="kcap — Settings"
         Icon="avares://kcap-desktop/Assets/kcap-icon.png"
         Width="860" Height="640" MinWidth="760" MinHeight="520" CanResize="True" WindowStartupLocation="CenterOwner"
-        Background="{StaticResource KcapCanvasBrush}">
+        Background="{StaticResource KcapCanvasBrush}"
+        ExtendClientAreaToDecorationsHint="True">
     <Window.Styles>
         <StyleInclude Source="avares://kcap-desktop/Views/SettingsStyles.axaml" />
     </Window.Styles>
-    <Grid>
+    <Panel>
         <TabControl x:Name="SettingsTabs" Classes="settingsSidebar" TabStripPlacement="Left" SelectedIndex="0">
             <TabItem x:Name="AppearanceTab" Classes="settingsNav" AutomationProperties.Name="Appearance"
                      IsVisible="{Binding Appearance, Converter={x:Static ObjectConverters.IsNotNull}}">
@@ -21,39 +22,40 @@
                         <TextBlock Text="Appearance" VerticalAlignment="Center" />
                     </StackPanel>
                 </TabItem.Header>
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                     <StackPanel Classes="settingsPage">
-                        <StackPanel Spacing="10">
+                        <StackPanel Classes="settingsHeader">
                             <TextBlock Classes="kcapTitle" Text="Appearance" />
                             <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
                                        Text="Make kcap easier to read. Changes apply immediately and save on this computer." />
                         </StackPanel>
 
                         <Border Classes="settingsCard">
-                            <StackPanel Spacing="16">
-                                <StackPanel Spacing="5">
+                            <Grid Classes="settingsRow" ColumnDefinitions="*,Auto">
+                                <StackPanel Classes="settingsRowText">
                                     <TextBlock Classes="kcapLabel" Text="Text size" />
                                     <TextBlock x:Name="TextSizeHint" Classes="kcapHint" TextWrapping="Wrap"
                                                Text="{Binding Appearance.ShortcutHint, FallbackValue={x:Null}}" />
                                 </StackPanel>
-                                <StackPanel HorizontalAlignment="Left" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                                    <Button x:Name="TextSmallerButton" Classes="kcapChip"
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                    <Button x:Name="TextSmallerButton" Classes="kcapChip settingsCompact"
                                             Command="{Binding Appearance.SmallerCommand, FallbackValue={x:Null}}"
                                             AutomationProperties.Name="Smaller text" ToolTip.Tip="Smaller text">
                                         <views:AppIcon Kind="AArrowDown" Size="16" />
                                     </Button>
                                     <TextBlock x:Name="TextSizeText" Text="{Binding Appearance.ScaleLabel, FallbackValue={x:Null}}"
-                                               MinWidth="44" TextAlignment="Center" FontSize="13" FontWeight="SemiBold"
+                                               MinWidth="48" TextAlignment="Center" FontSize="13" FontWeight="SemiBold"
                                                Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
-                                    <Button x:Name="TextLargerButton" Classes="kcapChip"
+                                    <Button x:Name="TextLargerButton" Classes="kcapChip settingsCompact"
                                             Command="{Binding Appearance.LargerCommand, FallbackValue={x:Null}}"
                                             AutomationProperties.Name="Larger text" ToolTip.Tip="Larger text">
                                         <views:AppIcon Kind="AArrowUp" Size="16" />
                                     </Button>
-                                    <Button x:Name="TextResetButton" Classes="kcapGhost" Content="Reset"
+                                    <Button x:Name="TextResetButton" Classes="kcapGhost settingsCompact" Content="Reset"
+                                            Margin="4,0,0,0"
                                             Command="{Binding Appearance.ResetCommand, FallbackValue={x:Null}}" />
                                 </StackPanel>
-                            </StackPanel>
+                            </Grid>
                         </Border>
                     </StackPanel>
                 </ScrollViewer>
@@ -68,70 +70,72 @@
                 </TabItem.Header>
                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                     <StackPanel Classes="settingsPage">
-                        <StackPanel Spacing="10">
+                        <StackPanel Classes="settingsHeader">
                             <TextBlock Classes="kcapTitle" Text="Notifications" />
                             <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
                                        Text="Choose when kcap notifies you while it is in the background." />
                         </StackPanel>
 
-                        <Border x:Name="NotificationAccessNotice"
-                                Background="{StaticResource KcapWarningDimBrush}" BorderBrush="{StaticResource KcapWarningBrush}"
-                                BorderThickness="1" CornerRadius="12" Padding="20,14"
+                        <Border x:Name="NotificationAccessNotice" Classes="settingsNotice"
                                 IsVisible="{Binding NotificationAccessText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-                            <StackPanel Spacing="12">
-                                <TextBlock x:Name="NotificationAccessText" Classes="kcapHint" TextWrapping="Wrap"
+                            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+                                <views:AppIcon Kind="BellOff" Size="16" Foreground="{StaticResource KcapWarningBrush}"
+                                               VerticalAlignment="Center" />
+                                <TextBlock x:Name="NotificationAccessText" Grid.Column="1" Classes="kcapHint" TextWrapping="Wrap"
                                            Text="{Binding NotificationAccessText}"
-                                           Foreground="{StaticResource KcapWarningBrush}" VerticalAlignment="Center" />
-                                <Button x:Name="NotificationAccessButton" HorizontalAlignment="Left" Classes="kcapChip"
+                                           Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                                <Button x:Name="NotificationAccessButton" Grid.Column="2" Classes="kcapChip settingsCompact"
                                         Content="{Binding NotificationAccessAction}"
                                         Command="{Binding NotificationAccessCommand}" VerticalAlignment="Center" />
-                            </StackPanel>
+                            </Grid>
                         </Border>
 
-                        <StackPanel Spacing="10">
-                            <TextBlock Classes="settingsEyebrow" Text="Notify me about" />
-                            <StackPanel>
-                                <Grid Classes="settingsRow" ColumnDefinitions="Auto,*" ColumnSpacing="14">
-                                    <ToggleSwitch x:Name="PermissionNotificationsToggle" Classes="kcapSwitch"
-                                                  IsChecked="{Binding NotifyOnPermissions, Mode=TwoWay}"
-                                                  IsEnabled="{Binding CanManageNotifications}"
-                                                  AutomationProperties.Name="Permission request notifications"
-                                                  VerticalAlignment="Top" Margin="0,1,0,0" />
-                                    <StackPanel Grid.Column="1" Spacing="5">
-                                        <TextBlock Classes="kcapLabel" Text="Permission requests" />
-                                        <TextBlock Classes="kcapHint" TextWrapping="Wrap"
-                                                   Text="When an agent needs approval to use a tool or take an action." />
-                                    </StackPanel>
-                                </Grid>
-                                <Border Classes="settingsDivider" />
-                                <Grid Classes="settingsRow" ColumnDefinitions="Auto,*" ColumnSpacing="14">
-                                    <ToggleSwitch x:Name="QuestionNotificationsToggle" Classes="kcapSwitch"
-                                                  IsChecked="{Binding NotifyOnQuestions, Mode=TwoWay}"
-                                                  IsEnabled="{Binding CanManageNotifications}"
-                                                  AutomationProperties.Name="Question notifications"
-                                                  VerticalAlignment="Top" Margin="0,1,0,0" />
-                                    <StackPanel Grid.Column="1" Spacing="5">
-                                        <TextBlock Classes="kcapLabel" Text="Questions" />
-                                        <TextBlock Classes="kcapHint" TextWrapping="Wrap"
-                                                   Text="When an agent asks you for an answer." />
-                                    </StackPanel>
-                                </Grid>
-                                <Border Classes="settingsDivider" />
-                                <Grid Classes="settingsRow" ColumnDefinitions="Auto,*" ColumnSpacing="14">
-                                    <ToggleSwitch x:Name="IdleNotificationsToggle" Classes="kcapSwitch"
-                                                  IsChecked="{Binding NotifyOnIdle, Mode=TwoWay}"
-                                                  IsEnabled="{Binding CanManageNotifications}"
-                                                  AutomationProperties.Name="Waiting agent notifications"
-                                                  VerticalAlignment="Top" Margin="0,1,0,0" />
-                                    <StackPanel Grid.Column="1" Spacing="5">
-                                        <TextBlock Classes="kcapLabel" Text="Waiting for you" />
-                                        <TextBlock Classes="kcapHint" TextWrapping="Wrap"
-                                                   Text="When an agent finishes a turn and is waiting for you." />
-                                    </StackPanel>
-                                </Grid>
-                            </StackPanel>
-                            <TextBlock Classes="kcapHint" Text="Changes save automatically. Your operating system must allow notifications."
-                                       TextWrapping="Wrap" />
+                        <StackPanel Classes="settingsGroup">
+                            <TextBlock Classes="settingsGroupTitle" Text="Notify me about" />
+                            <Border Classes="settingsCard">
+                                <StackPanel>
+                                    <Grid Classes="settingsRow" ColumnDefinitions="*,Auto">
+                                        <StackPanel Classes="settingsRowText">
+                                            <TextBlock Classes="kcapLabel" Text="Permission requests" />
+                                            <TextBlock Classes="kcapHint" TextWrapping="Wrap"
+                                                       Text="When an agent needs approval to use a tool or take an action." />
+                                        </StackPanel>
+                                        <ToggleSwitch x:Name="PermissionNotificationsToggle" Grid.Column="1" Classes="kcapSwitch"
+                                                      IsChecked="{Binding NotifyOnPermissions, Mode=TwoWay}"
+                                                      IsEnabled="{Binding CanManageNotifications}"
+                                                      AutomationProperties.Name="Permission request notifications"
+                                                      VerticalAlignment="Center" />
+                                    </Grid>
+                                    <Border Classes="settingsDivider" />
+                                    <Grid Classes="settingsRow" ColumnDefinitions="*,Auto">
+                                        <StackPanel Classes="settingsRowText">
+                                            <TextBlock Classes="kcapLabel" Text="Questions" />
+                                            <TextBlock Classes="kcapHint" TextWrapping="Wrap"
+                                                       Text="When an agent asks you for an answer." />
+                                        </StackPanel>
+                                        <ToggleSwitch x:Name="QuestionNotificationsToggle" Grid.Column="1" Classes="kcapSwitch"
+                                                      IsChecked="{Binding NotifyOnQuestions, Mode=TwoWay}"
+                                                      IsEnabled="{Binding CanManageNotifications}"
+                                                      AutomationProperties.Name="Question notifications"
+                                                      VerticalAlignment="Center" />
+                                    </Grid>
+                                    <Border Classes="settingsDivider" />
+                                    <Grid Classes="settingsRow" ColumnDefinitions="*,Auto">
+                                        <StackPanel Classes="settingsRowText">
+                                            <TextBlock Classes="kcapLabel" Text="Waiting for you" />
+                                            <TextBlock Classes="kcapHint" TextWrapping="Wrap"
+                                                       Text="When an agent finishes a turn and is waiting for you." />
+                                        </StackPanel>
+                                        <ToggleSwitch x:Name="IdleNotificationsToggle" Grid.Column="1" Classes="kcapSwitch"
+                                                      IsChecked="{Binding NotifyOnIdle, Mode=TwoWay}"
+                                                      IsEnabled="{Binding CanManageNotifications}"
+                                                      AutomationProperties.Name="Waiting agent notifications"
+                                                      VerticalAlignment="Center" />
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+                            <TextBlock Classes="settingsFootnote"
+                                       Text="Changes save automatically. Your operating system must allow notifications from kcap." />
                         </StackPanel>
 
                         <TextBlock x:Name="NotificationMessageText" Classes="kcapHint"
@@ -157,7 +161,7 @@
                 </ScrollViewer>
             </TabItem>
 
-            <TabItem x:Name="CaptureTab" Classes="settingsNav" Margin="0,14,0,0" AutomationProperties.Name="Capture and privacy">
+            <TabItem x:Name="CaptureTab" Classes="settingsNav groupStart" AutomationProperties.Name="Capture and privacy">
                 <TabItem.Header>
                     <StackPanel Orientation="Horizontal" Spacing="10">
                         <views:AppIcon Kind="Shield" Size="16" />
@@ -193,7 +197,7 @@
                 <views:AccountsSettingsView DataContext="{Binding Accounts}" />
             </TabItem>
 
-            <TabItem x:Name="ProfilesTab" Classes="settingsNav" Margin="0,14,0,0" AutomationProperties.Name="Profiles"
+            <TabItem x:Name="ProfilesTab" Classes="settingsNav groupStart" AutomationProperties.Name="Profiles"
                      IsVisible="{Binding Profiles, Converter={x:Static ObjectConverters.IsNotNull}}">
                 <TabItem.Header>
                     <StackPanel Orientation="Horizontal" Spacing="10">
@@ -213,7 +217,7 @@
                 </TabItem.Header>
                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                     <StackPanel Classes="settingsPage">
-                        <StackPanel Spacing="10">
+                        <StackPanel Classes="settingsHeader">
                             <TextBlock x:Name="DaemonTitleText" Classes="kcapTitle" Text="Daemon" />
                             <TextBlock Classes="kcapSubtitle" Text="Manage the background service that runs agents and reviews on this computer."
                                        TextWrapping="Wrap" />
@@ -221,83 +225,81 @@
                                     ToolTip.Tip="{Binding StatusTip}">
                                 <StackPanel Orientation="Horizontal" Spacing="8">
                                     <TextBlock x:Name="StatusCaptionText" Text="Agents" FontSize="11" FontWeight="Medium"
-                                               LetterSpacing="0.2" Foreground="{StaticResource KcapMutedBrush}"
+                                               Foreground="{StaticResource KcapMutedBrush}"
                                                VerticalAlignment="Center" IsVisible="{Binding StatusShowsAgents}" />
                                     <TextBlock x:Name="StatusText" Text="{Binding StatusLabel}" FontSize="12" FontWeight="SemiBold"
-                                               LetterSpacing="0.2" Foreground="{StaticResource KcapTextBrush}"
+                                               Foreground="{StaticResource KcapTextBrush}"
                                                VerticalAlignment="Center" />
                                 </StackPanel>
                             </Border>
                         </StackPanel>
 
-                        <Border Classes="settingsSection">
-                            <StackPanel Spacing="12">
-                                <StackPanel Spacing="6">
-                                    <TextBlock Classes="kcapLabel" Text="Machine name" />
-                                    <TextBlock Classes="kcapHint" TextWrapping="Wrap"
-                                               Text="How this computer appears on your server." />
-                                </StackPanel>
-                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                                    <TextBox x:Name="NameInput" Classes="kcapField" Text="{Binding Name, Mode=TwoWay}"
-                                             IsEnabled="{Binding CanEdit}" AutomationProperties.Name="Machine name" />
-                                    <Button x:Name="RenameButton" Grid.Column="1" Classes="kcapChip" Content="Rename"
-                                            Command="{Binding RenameCommand}" VerticalAlignment="Center"
-                                            ToolTip.Tip="{Binding RenameHint}" ToolTip.ShowOnDisabled="True" />
-                                </Grid>
-                                <TextBlock Classes="kcapHint" Text="Renaming restarts the daemon and relaunches kcap."
-                                           TextWrapping="Wrap" Foreground="{StaticResource KcapFaintBrush}" />
-                                <TextBlock x:Name="NameErrorText" Classes="kcapHint" Text="{Binding NameError}"
-                                           TextWrapping="Wrap" Foreground="{StaticResource KcapDangerBrush}"
-                                           IsVisible="{Binding NameError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                            </StackPanel>
-                        </Border>
-
-                        <Border>
-                            <StackPanel Spacing="12">
-                                <StackPanel Spacing="6">
-                                    <TextBlock Classes="kcapLabel" Text="Agent capacity" />
-                                    <TextBlock Classes="kcapHint" TextWrapping="Wrap"
-                                               Text="Set the maximum number of agents that can run at once. Use 0 for unlimited. Running agents can finish if you lower the limit." />
-                                </StackPanel>
-                                <Grid ColumnDefinitions="160,Auto,*" ColumnSpacing="12">
-                                    <NumericUpDown x:Name="CapacityInput" Classes="kcapField"
-                                                   Value="{Binding Capacity, Mode=TwoWay}"
-                                                   Minimum="0" Maximum="2147483647" Increment="1" FormatString="0"
-                                                   IsEnabled="{Binding CanEdit}" AutomationProperties.Name="Agent capacity" />
-                                    <Button x:Name="SaveButton" Grid.Column="1" Classes="kcapChip" Content="Save capacity"
-                                            Command="{Binding SaveCommand}" VerticalAlignment="Center" />
-                                </Grid>
-                                <TextBlock x:Name="CapacityErrorText" Classes="kcapHint" Text="{Binding CapacityError}"
-                                           TextWrapping="Wrap" Foreground="{StaticResource KcapDangerBrush}"
-                                           IsVisible="{Binding CapacityError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                            </StackPanel>
-                        </Border>
-
-                        <Border Classes="settingsCard">
-                            <StackPanel Spacing="10">
-                                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="14">
-                                    <ToggleSwitch x:Name="AutoResumeToggle" Classes="kcapSwitch"
-                                                  IsChecked="{Binding AutoResume, Mode=TwoWay}"
-                                                  AutomationProperties.Name="Resume agents after a restart"
-                                                  VerticalAlignment="Top" />
-                                    <StackPanel Grid.Column="1" Spacing="5">
-                                        <TextBlock Classes="kcapLabel" Text="Resume agents after a restart" />
-                                        <TextBlock Classes="kcapHint" TextWrapping="Wrap"
-                                                   Text="Automatically resume agents stopped by a restart or update. When off, resume them with kcap agent resume." />
+                        <StackPanel Classes="settingsGroup">
+                            <Border Classes="settingsCard">
+                                <StackPanel>
+                                    <StackPanel Margin="16,14" Spacing="10">
+                                        <StackPanel Classes="settingsRowText">
+                                            <TextBlock Classes="kcapLabel" Text="Machine name" />
+                                            <TextBlock Classes="kcapHint" TextWrapping="Wrap"
+                                                       Text="How this computer appears on your server. Renaming restarts the daemon and relaunches kcap." />
+                                        </StackPanel>
+                                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                            <TextBox x:Name="NameInput" Classes="kcapField" Text="{Binding Name, Mode=TwoWay}"
+                                                     IsEnabled="{Binding CanEdit}" AutomationProperties.Name="Machine name" />
+                                            <Button x:Name="RenameButton" Grid.Column="1" Classes="kcapChip" Content="Rename"
+                                                    Command="{Binding RenameCommand}" VerticalAlignment="Center"
+                                                    ToolTip.Tip="{Binding RenameHint}" ToolTip.ShowOnDisabled="True" />
+                                        </Grid>
+                                        <TextBlock x:Name="NameErrorText" Classes="kcapHint" Text="{Binding NameError}"
+                                                   TextWrapping="Wrap" Foreground="{StaticResource KcapDangerBrush}"
+                                                   IsVisible="{Binding NameError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                                     </StackPanel>
-                                </Grid>
-                                <TextBlock x:Name="AutoResumeMessageText" Classes="kcapHint" Text="{Binding AutoResumeMessage}"
-                                           TextWrapping="Wrap"
-                                           IsVisible="{Binding AutoResumeMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                            </StackPanel>
-                        </Border>
-                        <TextBlock x:Name="MessageText" Classes="kcapHint" Text="{Binding Message}" TextWrapping="Wrap"
-                                   IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                    <Border Classes="settingsDivider" />
+                                    <Grid Classes="settingsRow" ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
+                                        <StackPanel Classes="settingsRowText">
+                                            <TextBlock Classes="kcapLabel" Text="Agent capacity" />
+                                            <TextBlock Classes="kcapHint" TextWrapping="Wrap"
+                                                       Text="The most agents that can run at once; 0 means unlimited. Lowering it lets running agents finish." />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                            <NumericUpDown x:Name="CapacityInput" Classes="kcapField" Width="84"
+                                                           Value="{Binding Capacity, Mode=TwoWay}"
+                                                           Minimum="0" Maximum="2147483647" Increment="1" FormatString="0"
+                                                           IsEnabled="{Binding CanEdit}" AutomationProperties.Name="Agent capacity" />
+                                            <Button x:Name="SaveButton" Classes="kcapChip" Content="Save"
+                                                    AutomationProperties.Name="Save capacity"
+                                                    Command="{Binding SaveCommand}" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                        <TextBlock x:Name="CapacityErrorText" Grid.Row="1" Grid.ColumnSpan="2" Margin="0,8,0,0"
+                                                   Classes="kcapHint" Text="{Binding CapacityError}"
+                                                   TextWrapping="Wrap" Foreground="{StaticResource KcapDangerBrush}"
+                                                   IsVisible="{Binding CapacityError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                    </Grid>
+                                    <Border Classes="settingsDivider" />
+                                    <Grid Classes="settingsRow" ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
+                                        <StackPanel Classes="settingsRowText">
+                                            <TextBlock Classes="kcapLabel" Text="Resume agents after a restart" />
+                                            <TextBlock Classes="kcapHint" TextWrapping="Wrap"
+                                                       Text="Resume agents stopped by a restart or update. When off, resume them with kcap agent resume." />
+                                        </StackPanel>
+                                        <ToggleSwitch x:Name="AutoResumeToggle" Grid.Column="1" Classes="kcapSwitch"
+                                                      IsChecked="{Binding AutoResume, Mode=TwoWay}"
+                                                      AutomationProperties.Name="Resume agents after a restart"
+                                                      VerticalAlignment="Center" />
+                                        <TextBlock x:Name="AutoResumeMessageText" Grid.Row="1" Grid.ColumnSpan="2" Margin="0,8,0,0"
+                                                   Classes="kcapHint" Text="{Binding AutoResumeMessage}" TextWrapping="Wrap"
+                                                   IsVisible="{Binding AutoResumeMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+                            <TextBlock x:Name="MessageText" Classes="kcapHint" Text="{Binding Message}" TextWrapping="Wrap"
+                                       IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        </StackPanel>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
 
-            <TabItem x:Name="PrivacyTab" Classes="settingsNav" Margin="0,14,0,0" AutomationProperties.Name="Usage data"
+            <TabItem x:Name="PrivacyTab" Classes="settingsNav groupStart" AutomationProperties.Name="Usage data"
                      IsVisible="{Binding Privacy, Converter={x:Static ObjectConverters.IsNotNull}}">
                 <TabItem.Header>
                     <StackPanel Orientation="Horizontal" Spacing="10">
@@ -305,21 +307,17 @@
                         <TextBlock Text="Usage data" VerticalAlignment="Center" />
                     </StackPanel>
                 </TabItem.Header>
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                     <StackPanel Classes="settingsPage">
-                        <StackPanel Spacing="10">
+                        <StackPanel Classes="settingsHeader">
                             <TextBlock Classes="kcapTitle" Text="Usage data" />
                             <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
                                        Text="Shared with the kcap command line on this computer." />
                         </StackPanel>
 
                         <Border Classes="settingsCard">
-                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="14">
-                                <ToggleSwitch x:Name="UsageDataSwitch" Classes="kcapSwitch" VerticalAlignment="Top"
-                                              AutomationProperties.Name="Send usage data"
-                                              IsEnabled="{Binding Privacy.CanChange, FallbackValue=False}"
-                                              IsChecked="{Binding Privacy.SendUsageData, FallbackValue=False}" />
-                                <StackPanel Grid.Column="1" Spacing="5">
+                            <Grid Classes="settingsRow" ColumnDefinitions="*,Auto">
+                                <StackPanel Classes="settingsRowText">
                                     <TextBlock Classes="kcapLabel" Text="Send usage data" />
                                     <TextBlock x:Name="UsageDataDescription" Classes="kcapHint" TextWrapping="Wrap"
                                                Text="{Binding Privacy.Description, FallbackValue={x:Null}}" />
@@ -330,6 +328,10 @@
                                                Text="{Binding Privacy.Hint, FallbackValue={x:Null}}"
                                                IsVisible="{Binding Privacy.Hint, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}" />
                                 </StackPanel>
+                                <ToggleSwitch x:Name="UsageDataSwitch" Grid.Column="1" Classes="kcapSwitch" VerticalAlignment="Center"
+                                              AutomationProperties.Name="Send usage data"
+                                              IsEnabled="{Binding Privacy.CanChange, FallbackValue=False}"
+                                              IsChecked="{Binding Privacy.SendUsageData, FallbackValue=False}" />
                             </Grid>
                         </Border>
                     </StackPanel>
@@ -344,50 +346,58 @@
                         <TextBlock Text="Experimental" VerticalAlignment="Center" />
                     </StackPanel>
                 </TabItem.Header>
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                     <StackPanel Classes="settingsPage">
-                        <StackPanel Spacing="10">
+                        <StackPanel Classes="settingsHeader">
                             <TextBlock Classes="kcapTitle" Text="Experimental" />
                             <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
                                        Text="Try features that are still in development. Changes save for this profile and also apply to the kcap command line." />
-                            <TextBlock x:Name="ExperimentalProblem" Classes="kcapHint" TextWrapping="Wrap"
-                                       Text="{Binding Experimental.Problem, FallbackValue={x:Null}}"
-                                       IsVisible="{Binding Experimental.Problem, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}" />
                         </StackPanel>
 
-                        <ItemsControl ItemsSource="{Binding Experimental.Features, FallbackValue={x:Null}}">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate><StackPanel Spacing="16" /></ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="vm:ExperimentalFeatureRowViewModel">
-                                    <Border Classes="settingsCard">
-                                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="14">
-                                            <ToggleSwitch Classes="kcapSwitch" VerticalAlignment="Top"
-                                                          AutomationProperties.Name="{Binding DisplayName}"
-                                                          IsEnabled="{Binding CanChange}"
-                                                          IsChecked="{Binding IsEnabled, Mode=TwoWay}" />
-                                            <StackPanel Grid.Column="1" Spacing="5">
-                                                <TextBlock Classes="kcapLabel" Text="{Binding DisplayName}" />
-                                                <TextBlock Classes="kcapHint" TextWrapping="Wrap" Text="{Binding Description}" />
-                                                <TextBlock Classes="kcapHint" TextWrapping="Wrap" Text="{Binding StatusText}"
-                                                           Classes.attention="{Binding StatusIsWarning}"
-                                                           IsVisible="{Binding StatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-                                                    <TextBlock.Styles>
-                                                        <Style Selector="TextBlock.attention">
-                                                            <Setter Property="Foreground" Value="{StaticResource KcapWarningBrush}" />
-                                                        </Style>
-                                                    </TextBlock.Styles>
-                                                </TextBlock>
-                                            </StackPanel>
-                                        </Grid>
-                                    </Border>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
+                        <Border Classes="settingsNotice"
+                                IsVisible="{Binding Experimental.Problem, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}">
+                            <TextBlock x:Name="ExperimentalProblem" Classes="kcapHint" TextWrapping="Wrap"
+                                       Foreground="{StaticResource KcapTextBrush}"
+                                       Text="{Binding Experimental.Problem, FallbackValue={x:Null}}" />
+                        </Border>
+
+                        <Border Classes="settingsCard">
+                            <ItemsControl ItemsSource="{Binding Experimental.Features, FallbackValue={x:Null}}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:ExperimentalFeatureRowViewModel">
+                                        <Border Classes="settingsListRow">
+                                            <Grid Classes="settingsRow" ColumnDefinitions="*,Auto">
+                                                <StackPanel Classes="settingsRowText">
+                                                    <TextBlock Classes="kcapLabel" Text="{Binding DisplayName}" />
+                                                    <TextBlock Classes="kcapHint" TextWrapping="Wrap" Text="{Binding Description}" />
+                                                    <TextBlock Classes="kcapHint" TextWrapping="Wrap" Text="{Binding StatusText}"
+                                                               Classes.attention="{Binding StatusIsWarning}"
+                                                               IsVisible="{Binding StatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                                        <TextBlock.Styles>
+                                                            <Style Selector="TextBlock.attention">
+                                                                <Setter Property="Foreground" Value="{StaticResource KcapWarningBrush}" />
+                                                            </Style>
+                                                        </TextBlock.Styles>
+                                                    </TextBlock>
+                                                </StackPanel>
+                                                <ToggleSwitch Grid.Column="1" Classes="kcapSwitch" VerticalAlignment="Center"
+                                                              AutomationProperties.Name="{Binding DisplayName}"
+                                                              IsEnabled="{Binding CanChange}"
+                                                              IsChecked="{Binding IsEnabled, Mode=TwoWay}" />
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </Border>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
         </TabControl>
-    </Grid>
+
+        <!-- The client area extends under the title bar; this strip stands in for it. Nothing
+             interactive is drawn this high on any page. -->
+        <Border Height="40" VerticalAlignment="Top" Background="Transparent"
+                PointerPressed="OnChromePointerPressed" />
+    </Panel>
 </Window>

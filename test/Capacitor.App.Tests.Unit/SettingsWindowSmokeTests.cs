@@ -406,7 +406,7 @@ public class SettingsWindowSmokeTests {
             window.Show();
             Click(window, window.FindControl<TabItem>("CaptureTab")!);
             var view = window.GetVisualDescendants().OfType<CaptureSettingsView>().Single();
-            var visibility = view.FindControl<ComboBox>("VisibilityInput")!;
+            var visibility = view.FindControl<ListBox>("VisibilityInput")!;
             visibility.SelectedValue = "private";
             var repos = view.FindControl<TextBox>("AllowedReposInput")!;
             repos.Text = "team/project";

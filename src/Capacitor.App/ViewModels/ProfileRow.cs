@@ -15,6 +15,9 @@ public sealed record ProfileRow(string Name, string? ServerUrl, bool IsActive, b
         _                                      => "Could not read sign-in status"
     };
 
+    /// The server line already says how to add one, so a missing server needs no second status line.
+    public bool ShowsStatus => Status is not ProfileCredentialStatus.NoServer;
+
     public string ServerLabel => ServerUrl is { Length: > 0 } url ? url : "Add a server with kcap profile add";
 
     public bool CanSignIn => Status is not (ProfileCredentialStatus.NoServer or ProfileCredentialStatus.NoSignInNeeded);

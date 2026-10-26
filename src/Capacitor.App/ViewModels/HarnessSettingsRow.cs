@@ -14,7 +14,7 @@ public sealed class HarnessSettingsRow : ReactiveObject {
         Label = identity.Label;
         Signal = detected.BinaryFound ? "Found on your terminal PATH" : "Harness configuration found";
     }
-    internal HarnessId Id { get; }
+    public HarnessId Id { get; }
     public string Label { get; }
     public string Signal { get; }
     public string ConnectionLabel => _wired switch {
