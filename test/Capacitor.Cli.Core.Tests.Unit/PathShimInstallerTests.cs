@@ -230,7 +230,10 @@ public class PathShimInstallerTests {
         var target = tmp.PathTo("target-cli");
         var runner = new FakeProcessRunner();
         runner.Enqueue(new ProcessResult(0, "", "", false));
-        var probe = new FakeLoginShellProbe { KcapOnPathBehavior = _ => Task.FromResult<bool?>(true) };
+        var probe = new FakeLoginShellProbe {
+            KcapOnPathBehavior = _ => Task.FromResult<bool?>(true),
+            KcapPathBehavior = _ => Task.FromResult<string?>(dest),
+        };
         var installer = new PathShimInstaller(runner, probe);
 
         var result = await Install(installer, dest, target, CancellationToken.None);
@@ -315,7 +318,10 @@ public class PathShimInstallerTests {
         File.WriteAllText(target, "cli");
         File.CreateSymbolicLink(dest, target);
         var runner = new FakeProcessRunner();
-        var probe = new FakeLoginShellProbe { KcapOnPathBehavior = _ => Task.FromResult<bool?>(true) };
+        var probe = new FakeLoginShellProbe {
+            KcapOnPathBehavior = _ => Task.FromResult<bool?>(true),
+            KcapPathBehavior = _ => Task.FromResult<string?>(dest),
+        };
         var installer = new PathShimInstaller(runner, probe);
 
         var result = await Install(installer, dest, target, CancellationToken.None);
@@ -339,7 +345,10 @@ public class PathShimInstallerTests {
         File.WriteAllText(target, "cli");
         File.CreateSymbolicLink(dest, target);
         var runner = new FakeProcessRunner();
-        var probe = new FakeLoginShellProbe { KcapOnPathBehavior = _ => Task.FromResult<bool?>(true) };
+        var probe = new FakeLoginShellProbe {
+            KcapOnPathBehavior = _ => Task.FromResult<bool?>(true),
+            KcapPathBehavior = _ => Task.FromResult<string?>(dest),
+        };
         var installer = new PathShimInstaller(runner, probe);
 
         var result = await Install(installer, dest, target, CancellationToken.None);
@@ -362,7 +371,8 @@ public class PathShimInstallerTests {
         runner.Enqueue(new ProcessResult(0, "", "", false));
         var probe = new FakeLoginShellProbe {
             KcapOnPathBehavior = _ => Task.FromResult<bool?>(false), // the stale, already-cached pre-install answer
-            KcapOnPathFreshBehavior = _ => Task.FromResult<bool?>(true), // the real post-install state
+            KcapOnPathFreshBehavior = _ => Task.FromResult<bool?>(true),
+            KcapPathFreshBehavior = _ => Task.FromResult<string?>(dest), // the real post-install state
         };
         var installer = new PathShimInstaller(runner, probe);
 
@@ -385,6 +395,7 @@ public class PathShimInstallerTests {
         var probe = new FakeLoginShellProbe {
             KcapOnPathBehavior = _ => Task.FromResult<bool?>(false),
             KcapOnPathFreshBehavior = _ => Task.FromResult<bool?>(true),
+            KcapPathFreshBehavior = _ => Task.FromResult<string?>(dest),
         };
         var installer = new PathShimInstaller(runner, probe);
 
@@ -503,7 +514,10 @@ public class PathShimInstallerTests {
         var home = new UserHome(tmp.Path);
         var target = tmp.CreateFile("target-cli");
         var runner = new FakeProcessRunner();
-        var probe = new FakeLoginShellProbe { KcapOnPathBehavior = _ => Task.FromResult<bool?>(true) };
+        var probe = new FakeLoginShellProbe {
+            KcapOnPathBehavior = _ => Task.FromResult<bool?>(true),
+            KcapPathBehavior = _ => Task.FromResult<string?>(tmp.PathTo(".local", "bin", "kcap")),
+        };
         var installer = new PathShimInstaller(runner, probe, home: home, profile: new ShellProfile(home, "/bin/zsh"),
             mayElevate: _ => Task.FromResult(false));
 
@@ -561,7 +575,10 @@ public class PathShimInstallerTests {
         var home = new UserHome(tmp.Path);
         var target = tmp.CreateFile("target-cli");
         var adminLink = tmp.CreateFile("admin-kcap", "someone else's");
-        var probe = new FakeLoginShellProbe { KcapOnPathBehavior = _ => Task.FromResult<bool?>(true) };
+        var probe = new FakeLoginShellProbe {
+            KcapOnPathBehavior = _ => Task.FromResult<bool?>(true),
+            KcapPathBehavior = _ => Task.FromResult<string?>(tmp.PathTo(".local", "bin", "kcap")),
+        };
         var installer = new PathShimInstaller(new FakeProcessRunner(), probe, home: home,
             profile: new ShellProfile(home, "/bin/zsh"), mayElevate: _ => Task.FromResult(false));
 
@@ -612,6 +629,7 @@ public class PathShimInstallerTests {
         File.CreateSymbolicLink(admin, target);
         var probe = new FakeLoginShellProbe {
             KcapOnPathBehavior = _ => Task.FromResult<bool?>(File.Exists(tmp.PathTo(".zprofile"))),
+            KcapPathBehavior = _ => Task.FromResult<string?>(tmp.PathTo(".local", "bin", "kcap")),
         };
         var installer = new PathShimInstaller(new FakeProcessRunner(), probe, home: home,
             profile: new ShellProfile(home, "/bin/zsh"), mayElevate: _ => Task.FromResult(false));
@@ -633,6 +651,32 @@ public class PathShimInstallerTests {
         var result = await Install(installer, tmp.PathTo("admin-kcap"), tmp.CreateFile("target-cli"), CancellationToken.None);
         await Assert.That(result.Outcome).IsEqualTo(ShimOutcome.Failed);
         await Assert.That(Directory.Exists(Path.Combine(home.Path, ".local"))).IsFalse();
+    }
+
+    [Test]
+    [Arguments("earlier", true, ShimOutcome.InstalledButNotOnPath)]
+    [Arguments(null, true, ShimOutcome.Failed)]
+    [Arguments("installed", true, ShimOutcome.Installed)]
+    [Arguments("installed", null, ShimOutcome.Failed)]
+    public async Task Profile_fallback_verifies_the_fresh_resolved_command(string? command, bool? onPath, ShimOutcome expected) {
+        Skip.When(OperatingSystem.IsWindows(), "macOS lstat semantics");
+        using var tmp = new TempDir();
+        var home = new UserHome(tmp.Path);
+        var link = tmp.PathTo(".local", "bin", "kcap");
+        var earlier = tmp.CreateFile("earlier-kcap");
+        var probe = new FakeLoginShellProbe {
+            KcapOnPathFreshBehavior = _ => Task.FromResult(onPath),
+            KcapPathBehavior = _ => Task.FromResult<string?>(link),
+            KcapPathFreshBehavior = _ => Task.FromResult(command is null ? null : command == "installed" ? link : earlier),
+        };
+        var installer = new PathShimInstaller(new FakeProcessRunner(), probe, home: home,
+            profile: new ShellProfile(home, "/bin/zsh"), mayElevate: _ => Task.FromResult(false));
+        var result = await Install(installer, tmp.PathTo("admin-kcap"), tmp.CreateFile("target-cli"), CancellationToken.None);
+        await Assert.That(result.Outcome).IsEqualTo(expected);
+        if (command == "earlier") {
+            await Assert.That(result.Detail).Contains(earlier);
+            await Assert.That(File.Exists(earlier)).IsTrue();
+        }
     }
 
     static FakeLoginShellProbe ResolvingTo(string resolved, string terminalPath) => new() {

@@ -180,7 +180,7 @@ public sealed class PathShimInstaller(
 
     /// Shared post-install/AlreadyInstalled mapping (spec §5: "never report success on the symlink
     /// alone"): re-run the login-shell PATH probe and only call it Installed when `kcap` actually
-    /// resolves — otherwise InstalledButNotOnPath with the same actionable Detail. Forces a FRESH
+    /// resolves to the installed link — otherwise InstalledButNotOnPath with the same actionable Detail. Forces a FRESH
     /// probe (never the pre-install cached answer, which the offer decision itself already
     /// consumed and is now stale — the install just changed the filesystem). An UNKNOWN re-probe
     /// (both attempts failed/timed out) is not the same as "not on PATH": asserting the PATH's
@@ -188,8 +188,17 @@ public sealed class PathShimInstaller(
     /// with a "could not re-verify" detail instead.
     async Task<ShimResult> ProbeOutcomeAsync(string destination, CancellationToken ct) {
         var onPath = await probe.KcapOnPathAsync(ct, forceRefresh: true).ConfigureAwait(false);
+        if (onPath == true) {
+            var resolved = await probe.KcapPathAsync(ct, forceRefresh: true).ConfigureAwait(false);
+            if (resolved is null)
+                return new ShimResult(ShimOutcome.Failed,
+                    $"kcap was linked at {destination}, but the login-shell probe could not re-verify which kcap command resolves.", null);
+            if (string.Equals(Path.GetFullPath(resolved), Path.GetFullPath(destination), StringComparison.Ordinal))
+                return new ShimResult(ShimOutcome.Installed, null, null);
+            return new ShimResult(ShimOutcome.InstalledButNotOnPath,
+                $"kcap was linked at {destination}, but another kcap at {resolved} takes precedence. Put {Path.GetDirectoryName(destination)} earlier on your shell's PATH to use this install.", null);
+        }
         return onPath switch {
-            true  => new ShimResult(ShimOutcome.Installed, null, null),
             false => new ShimResult(ShimOutcome.InstalledButNotOnPath,
                 $"kcap was linked at {destination}, but your login shell's PATH doesn't include {Path.GetDirectoryName(destination)}. Add: export PATH=\"{Path.GetDirectoryName(destination)}:$PATH\"",
                 null),
