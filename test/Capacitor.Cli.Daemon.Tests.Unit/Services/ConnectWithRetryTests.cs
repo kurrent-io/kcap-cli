@@ -41,6 +41,9 @@ public class ConnectWithRetryTests {
         /// succeeding — drives the "register failed after a successful start" path.</summary>
         public int FailRegisterRemaining { get; set; }
 
+        /// <summary>How many registrations the server accepts before agent re-registration then throws.</summary>
+        public int FailAgentRecoveryRemaining { get; set; }
+
         /// <summary>When set, every StartHubAsync call throws this instead of attempting the
         /// normal Disconnected-state contract — drives the initial-start-failure pulse test,
         /// which needs StartAsync to fail regardless of State.</summary>
@@ -77,24 +80,32 @@ public class ConnectWithRetryTests {
         internal override Task StopHubAsync(CancellationToken ct) =>
             StopHold?.Task ?? Task.CompletedTask;
 
-        internal override Task<UnattendedAdvertisement> RegisterDaemonAsync() {
+        internal override Task RegisterDaemonAsync(Action<UnattendedAdvertisement> connected) {
             RegisterCalls++;
             OnRegisterAttempt?.Invoke();
 
             // Mirror the real hub-invoke contract: DaemonConnect can only succeed on a
             // Connected transport ("cannot be called if the connection is not active").
             if (State != HubConnectionState.Connected)
-                return Task.FromException<UnattendedAdvertisement>(new InvalidOperationException("The 'InvokeCoreAsync' method cannot be called if the connection is not active"));
+                return Task.FromException(new InvalidOperationException("The 'InvokeCoreAsync' method cannot be called if the connection is not active"));
 
             if (FailRegisterRemaining > 0) {
                 FailRegisterRemaining--;
 
-                return Task.FromException<UnattendedAdvertisement>(new InvalidOperationException("simulated DaemonConnect failure"));
+                return Task.FromException(new InvalidOperationException("simulated DaemonConnect failure"));
+            }
+
+            connected(_config.Advertisement);
+
+            if (FailAgentRecoveryRemaining > 0) {
+                FailAgentRecoveryRemaining--;
+
+                return Task.FromException(new InvalidOperationException("simulated agent re-registration failure"));
             }
 
             Ready = true;
 
-            return Task.FromResult(_config.Advertisement);
+            return Task.CompletedTask;
         }
     }
 
@@ -159,6 +170,25 @@ public class ConnectWithRetryTests {
         try { await loop.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
 
         await Assert.That(config.FailedCodexGeneration).IsEqualTo(carried.Generation);
+    }
+
+    /// <summary>An attempt whose DaemonConnect the server accepted delivered its advertisement, even when
+    /// agent re-registration then fails and the loop retries.</summary>
+    [Test]
+    public async Task An_attempt_failing_after_the_server_accepted_it_is_not_marked_undelivered() {
+        var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1" };
+        var codex  = CodexTransportResolution.Resolve(1, switchOn: true, () => "0.146.0");
+        config.Advertise([], codex);
+        var conn = new RetryTestConnection(config: config) {
+            FailAgentRecoveryRemaining = 1,
+            ConnectRetryDelays         = FastDelays,
+        };
+
+        await conn.ConnectWithRetryAsync(CancellationToken.None).WaitAsync(HangGuard);
+
+        await Assert.That(conn.RegisterCalls).IsEqualTo(2);
+        await Assert.That(config.FailedCodexGeneration).IsEqualTo(0L);
+        await Assert.That(config.AcknowledgedCodexResolution).IsSameReferenceAs(codex);
     }
 
     [Test]

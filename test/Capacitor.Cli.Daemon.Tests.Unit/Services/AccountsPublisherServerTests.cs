@@ -146,14 +146,14 @@ public class AccountsPublisherServerTests {
         connection.GetAccountsSnapshot = () => publisher.Current;
         publisher.SendToServer         = connection.AccountsChangedAsync;
 
-        await connection.RegisterDaemonAsync();
+        await connection.RegisterDaemonAsync(_ => { });
         await Assert.That(connection.Sent).IsEmpty();
 
         connection.DuringConnect = async () => {
             Add(store, "spare");
             await publisher.RebuildAsync(CancellationToken.None);
         };
-        await connection.RegisterDaemonAsync();
+        await connection.RegisterDaemonAsync(_ => { });
 
         await Assert.That(connection.Connects.Select(c => c.Accounts!.Revision)).IsEquivalentTo([1L, 1L], CollectionOrdering.Matching);
         await Assert.That(connection.Sent.Select(s => s.Revision)).IsEquivalentTo([2L], CollectionOrdering.Matching);

@@ -61,11 +61,11 @@ sealed class CaptureServerConnection : ServerConnection {
 
     public Exception? RegisterDaemonThrow { get; set; }
 
-    internal override Task<UnattendedAdvertisement> RegisterDaemonAsync() {
+    internal override Task RegisterDaemonAsync(Action<UnattendedAdvertisement> connected) {
         Interlocked.Increment(ref _registerDaemonCalls);
-        return RegisterDaemonThrow is { } ex
-            ? Task.FromException<UnattendedAdvertisement>(ex)
-            : Task.FromResult(_config.Advertisement);
+        if (RegisterDaemonThrow is { } ex) return Task.FromException(ex);
+        connected(_config.Advertisement);
+        return Task.CompletedTask;
     }
 
     public override async Task LaunchFailedAsync(string agentId, string reason) {

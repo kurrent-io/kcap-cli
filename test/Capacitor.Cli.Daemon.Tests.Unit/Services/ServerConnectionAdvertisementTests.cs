@@ -153,6 +153,23 @@ public class ServerConnectionAdvertisementTests {
         await Assert.That(config.AcknowledgedCodexResolution).IsSameReferenceAs(newer);
     }
 
+    /// <summary>The server dispatches against an advertisement from the moment it accepts DaemonConnect;
+    /// agent recovery failing afterwards does not undo that.</summary>
+    [Test]
+    public async Task An_accepted_connect_is_acknowledged_even_when_agent_recovery_fails() {
+        var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1", ConfigRoot = Config.Root };
+        var codex  = CodexTransportResolution.Resolve(1, switchOn: true, () => "0.146.0");
+        config.Advertise(new List<UnattendedVendorCapability>(), codex);
+        await using var conn = new RecordingConnection(config) {
+            ReRegisterAgentsHook = () => throw new InvalidOperationException("agent recovery failed"),
+        };
+
+        await Assert.That(conn.ReRegisterAsync).Throws<InvalidOperationException>();
+
+        await Assert.That(config.AcknowledgedCodexResolution).IsSameReferenceAs(codex);
+        await Assert.That(config.FailedCodexGeneration).IsEqualTo(0L);
+    }
+
     [Test]
     public async Task SendRawInputCommand_serializes_with_snake_case_names() {
         var json = System.Text.Json.JsonSerializer.Serialize(

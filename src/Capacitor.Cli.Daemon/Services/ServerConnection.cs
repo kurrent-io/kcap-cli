@@ -580,7 +580,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             while (!ct.IsCancellationRequested) {
                 // What this attempt is marked as failing to deliver: a refresh during it commits a newer
                 // advertisement, which this attempt never carried.
-                var attempted = _config.Advertisement;
+                var attempted   = _config.Advertisement;
+                var registering = false;
                 try {
                     // Another path may have healed the connection while this call was queued on
                     // the lock or sleeping in backoff — SignalR's automatic reconnect
@@ -609,6 +610,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                     // A connected hub has accepted the bearer, whatever registration then makes of it.
                     if (HubState == HubConnectionState.Connected) CredentialHealth.ObserveConnected();
 
+                    registering = true;
                     await RegisterAndAcknowledgeAsync(attempted);
                     _connectedTimestamp = _time.GetTimestamp();
                     LogConnected(_config.Name);
@@ -629,7 +631,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                     var delay = ConnectRetryDelays[Math.Min(attempt, ConnectRetryDelays.Length - 1)];
                     LogConnectionAttemptFailed(ex, attempt + 1, delay.TotalSeconds);
                     // A hub that never starts never reaches the registration that would record this.
-                    _config.CodexRegistrationFailed(attempted.Codex);
+                    if (!registering) _config.CodexRegistrationFailed(attempted.Codex);
                     // The failed attempt has returned the hub to Disconnected — pulse so a
                     // subscriber converges to "disconnected" during the backoff instead of a
                     // stale "connecting".
@@ -682,11 +684,11 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// readiness on the heartbeat slot-displacement path (DaemonHeartbeatLoop.cs → ReRegisterAsync),
     /// where the transport stays up and no Reconnecting/Closed event fires.
     /// </summary>
-    /// <returns>The advertisement the registration sent.</returns>
-    internal virtual async Task<UnattendedAdvertisement> RegisterDaemonAsync() {
-        UnattendedAdvertisement? sent = null;
-        await _gate.RunRegistrationAsync(
-            daemonConnect: async () => sent = await DaemonConnectAsync(),
+    /// <param name="connected">Called with the advertisement the server accepted, as soon as it accepts
+    /// it: the server dispatches against it from then on, whatever agent recovery does next.</param>
+    internal virtual Task RegisterDaemonAsync(Action<UnattendedAdvertisement> connected) =>
+        _gate.RunRegistrationAsync(
+            daemonConnect: () => DaemonConnectAsync(connected),
             reRegisterAgents: ReRegisterAgentsAndAcpBindingsAsync,
             // Runs AFTER MarkRegistered, i.e. with IsReady == true, so a re-delivery here actually reaches
             // the server — inside reRegisterAgents it would be silently dropped by the CommandAckAsync
@@ -705,8 +707,6 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                 await SendAccountsChangedSinceConnectAsync();
             }
         );
-        return sent!;
-    }
 
     /// <summary>
     /// Composes the existing per-agent re-registration hook with the ACP reconnect re-bind — AFTER
@@ -727,10 +727,10 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// newer bookkeeping is recorded last, leaving the server with state nothing will repair.</summary>
     readonly SemaphoreSlim _registerLock = new(1, 1);
 
-    async Task<UnattendedAdvertisement> DaemonConnectAsync() {
+    async Task DaemonConnectAsync(Action<UnattendedAdvertisement> connected) {
         await _registerLock.WaitAsync().ConfigureAwait(false);
         try {
-            return await DaemonConnectCoreAsync().ConfigureAwait(false);
+            await DaemonConnectCoreAsync(connected).ConfigureAwait(false);
         } finally {
             _registerLock.Release();
         }
@@ -778,7 +778,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             Accounts: GetAccountsSnapshot?.Invoke());
     }
 
-    async Task<UnattendedAdvertisement> DaemonConnectCoreAsync() {
+    async Task DaemonConnectCoreAsync(Action<UnattendedAdvertisement> connected) {
         var platform  = $"{RuntimeInformation.OSDescription} {RuntimeInformation.OSArchitecture}";
         var repoStore = FingerprintRepoStore();
         var repoPaths = await MergeRepoPathsAsync();
@@ -793,7 +793,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             await InvokeDaemonConnectRawAsync(connect);
             _advertisedRepoStore = repoStore;
             _connectAccounts     = connect.Accounts;
-            return advertised;
+            connected(advertised);
         } catch (Exception ex) when (IsNameInUse(ex)) {
             // server refused our (owner, name) slot because another
             // live daemon owns it. Surface to DaemonRunner before re-throwing
@@ -909,18 +909,20 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// </summary>
     public Task ReRegisterAsync() => RegisterAndAcknowledgeAsync(_config.Advertisement);
 
-    /// <summary>Every registration path ends here, acknowledging exactly the advertisement the
-    /// registration sent.</summary>
+    /// <summary>Every registration path ends here, acknowledging exactly the advertisement the server
+    /// accepted. Only a registration that fails before the server accepts it counts as not delivered.</summary>
     /// <param name="attempted">What a failure is recorded against: the send may not have read anything yet.</param>
     async Task RegisterAndAcknowledgeAsync(UnattendedAdvertisement attempted) {
-        UnattendedAdvertisement sent;
+        var accepted = false;
         try {
-            sent = await RegisterDaemonAsync();
+            await RegisterDaemonAsync(sent => {
+                accepted = true;
+                if (_config.AcknowledgeCodex(sent.Codex)) _statusNotifier.Pulse();
+            });
         } catch (Exception ex) when (ex is not OperationCanceledException) {
-            if (_config.CodexRegistrationFailed(attempted.Codex)) _statusNotifier.Pulse();
+            if (!accepted && _config.CodexRegistrationFailed(attempted.Codex)) _statusNotifier.Pulse();
             throw;
         }
-        if (_config.AcknowledgeCodex(sent.Codex)) _statusNotifier.Pulse();
     }
 
     public async Task<bool> CredentialChangedAsync(CancellationToken ct) =>
