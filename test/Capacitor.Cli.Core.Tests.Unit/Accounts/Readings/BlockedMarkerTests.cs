@@ -297,4 +297,24 @@ public class BlockedMarkerTests {
         var cleared = ReadingMerge.Apply(partial, Obs(30, fresh: true, both));
         await Assert.That(ReadingMerge.IsBlocked(cleared, At(31))).IsFalse();
     }
+
+    [Test]
+    public async Task Held_window_reset_before_the_observation_does_not_block_a_clear() {
+        var blocked = Apply(Obs(10, fresh: true, [W("codex", 300, 20, At(300)), W("codex_other", 300, 30, At(50))], [Anything]));
+
+        var cleared = ReadingMerge.Apply(blocked, Obs(60, fresh: true, [W("codex", 300, 20, At(300))]));
+
+        await Assert.That(cleared.Blocked!.ClearedAt).IsEqualTo(At(60));
+        await Assert.That(ReadingMerge.IsBlocked(cleared, At(61))).IsFalse();
+    }
+
+    [Test]
+    public async Task Held_window_without_a_reset_still_blocks_a_clear() {
+        var blocked = Apply(Obs(10, fresh: true, [W("codex", 300, 20, At(300)), W("codex_other", 300, 30, null)], [Anything]));
+
+        var reading = ReadingMerge.Apply(blocked, Obs(60, fresh: true, [W("codex", 300, 20, At(300))]));
+
+        await Assert.That(reading.Blocked!.ClearedAt).IsNull();
+        await Assert.That(ReadingMerge.IsBlocked(reading, At(61))).IsTrue();
+    }
 }

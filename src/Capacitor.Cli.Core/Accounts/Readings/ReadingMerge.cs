@@ -138,7 +138,9 @@ public static class ReadingMerge {
             && at > (marker.BlockedAt ?? DateTimeOffset.MinValue)
             && at > (marker.ClearedAt ?? DateTimeOffset.MinValue)
             && observation.Windows.All(w => w.UsedPercent < Exhausted)
-            && held.Windows.All(h => observation.Windows.Any(w => SameKey(w, h)));
+            && held.Windows
+                   .Where(h => h.ResetsAt is not { } reset || reset > at)
+                   .All(h => observation.Windows.Any(w => SameKey(w, h)));
     }
 
     static BlockedMarkerDto? Normalize(DateTimeOffset? blockedAt, DateTimeOffset? clearedAt, IEnumerable<BlockConstraintDto> constraints) {
