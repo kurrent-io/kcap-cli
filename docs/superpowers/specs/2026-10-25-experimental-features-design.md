@@ -88,6 +88,7 @@ One additive field on the launch command (`LaunchAgentCommand`), `ExpectedRuntim
 
 - **Interactive:** the server fills it from the transport it records in the launch intent
 - **Reviewers:** the server fills it from the reviewer launch expectation it already derives from the selected daemon's advertised policy (`RuntimeTransports.FromLauncherPolicy`). The launch command carries no other usable policy for Codex: `ReviewerCertification.RequiredLauncherPolicyVersion` is optional and its daemon-side check only knows Claude's policy, so the router cannot infer a reviewer's transport today. Because the field is part of the staged command body, a reviewer launch replayed after recovery, however long after a flip, still names the transport it was staged with
+- **Every other Codex launch the server sends:** the server records a reviewer expectation only on the foreground sequenced path, so the legacy and direct reviewer paths, PR reviews and recovery relaunches validate against whatever `CapacitorHub` falls back to (the live entry, else PTY). On every Codex launch the server sets the field to exactly the transport its registration check will expect for that launch, so the daemon and the check can never disagree. One rule, one source: a helper beside `InteractiveLaunchIntentRecorder.ExpectedTransport` that the send sites and the validation share
 
 Rules for the field:
 
