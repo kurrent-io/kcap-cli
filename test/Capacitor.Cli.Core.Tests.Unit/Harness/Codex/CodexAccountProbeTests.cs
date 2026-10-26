@@ -122,6 +122,17 @@ public class CodexAccountProbeTests {
     }
 
     [Test]
+    public async Task Vendor_error_text_is_capped() {
+        Skip.When(OperatingSystem.IsWindows(), "the stub codex is a POSIX shell script");
+        var message = new string('x', 1000);
+        var probe   = Probe(limits: $$$"""{"jsonrpc":"2.0","id":3,"error":{"code":-32603,"message":"{{{message}}}"}}""");
+
+        var result = await probe.ProbeAsync(Account(), CancellationToken.None);
+
+        await Assert.That(result.LimitsError).IsEqualTo($"account/rateLimits/read: {new string('x', 200)} (-32603)");
+    }
+
+    [Test]
     public async Task Account_id_falls_back_to_the_usage_read_without_workspace_routing() {
         Skip.When(OperatingSystem.IsWindows(), "the stub codex is a POSIX shell script");
         var probe = Probe(account: """{"jsonrpc":"2.0","id":2,"result":{"account":{"type":"chatgpt","email":null,"planType":"pro"},"requiresOpenaiAuth":true}}""");

@@ -11,6 +11,9 @@ namespace Capacitor.Cli.Core.Harness.Codex;
 public sealed class CodexAccountProbe(HarnessRegistry harnesses, UserHome home, TimeProvider time) : IAccountProbe {
     const int MethodNotFound = -32601;
 
+    // Vendor text lands in the published refresh and limits errors.
+    const int PreviewChars = 200;
+
     static readonly TimeSpan ExitGrace = TimeSpan.FromSeconds(2);
 
     internal TimeSpan Deadline { get; init; } = TimeSpan.FromSeconds(10);
@@ -89,7 +92,7 @@ public sealed class CodexAccountProbe(HarnessRegistry harnesses, UserHome home, 
             if (!identityDone) identityError = timeout;
             if (!limitsDone) limitsError = timeout;
         } catch (Exception ex) when (ex is RpcError or IOException or ObjectDisposedException) {
-            var failure = ex is RpcError ? $"codex app-server initialize: {ex.Message}" : $"codex app-server stopped: {lastStderr ?? ex.Message}";
+            var failure = ex is RpcError ? $"codex app-server initialize: {ex.Message}" : $"codex app-server stopped: {Preview(lastStderr ?? ex.Message)}";
             if (!identityDone) identityError = failure;
             if (!limitsDone) limitsError = failure;
         } finally {
@@ -138,6 +141,11 @@ public sealed class CodexAccountProbe(HarnessRegistry harnesses, UserHome home, 
 
     static ProbeResult Failed(string error) => new(null, null, error, null, error);
 
+    static string Preview(string text) {
+        var trimmed = text.Trim();
+        return trimmed.Length > PreviewChars ? trimmed[..PreviewChars] : trimmed;
+    }
+
     sealed class RpcError(string message) : Exception(message);
 
     /// <summary>Newline-delimited JSON-RPC, one request in flight at a time. A request from the server is
@@ -178,7 +186,7 @@ public sealed class CodexAccountProbe(HarnessRegistry harnesses, UserHome home, 
                 if (frame.Num("id") != id) continue;
 
                 if (frame.Obj("error") is { } error)
-                    throw new RpcError(error.Str("message") is { } message ? $"{message} ({error.Num("code")})" : $"error {error.Num("code")}");
+                    throw new RpcError(error.Str("message") is { } message ? $"{Preview(message)} ({error.Num("code")})" : $"error {error.Num("code")}");
 
                 return frame.Prop("result") ?? default;
             }
