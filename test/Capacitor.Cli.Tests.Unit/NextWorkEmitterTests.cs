@@ -52,20 +52,41 @@ public class NextWorkEmitterTests {
     public async Task The_guidance_names_deferral_and_completion() {
         await Assert.That(NextWorkEmitter.Guidance).Contains("Finish a listed item before starting new work.");
         await Assert.That(NextWorkEmitter.Guidance).Contains("declare it at that moment with declare_loose_end (one call per item, never \"none\")");
-        await Assert.That(NextWorkEmitter.Guidance).Contains(NextWorkEmitter.CompletionInstruction);
-        await Assert.That(NextWorkEmitter.Guidance).EndsWith(NextWorkEmitter.StartAgentOffer);
+        await Assert.That(NextWorkEmitter.Guidance).EndsWith(NextWorkEmitter.CompletionInstruction);
     }
 
-    /// <summary>The offer is conditional on the tool, since a harness without the flows MCP or a server
-    /// without agent start cannot honour it, and it never licenses a start the user did not ask for.</summary>
+    /// <summary>The offer follows the guidance only when the ack says this server can start agents; an
+    /// absent, false or malformed flag leaves the guidance as it was, rows or not.</summary>
     [Test]
-    public async Task The_guidance_offers_a_separate_hosted_agent_only_where_start_agent_exists() {
+    [Arguments("true", true)]
+    [Arguments("false", false)]
+    [Arguments("\"yes\"", false)]
+    [Arguments(null, false)]
+    public async Task The_start_agent_offer_follows_the_guidance_only_when_the_ack_allows_it(string? flag, bool offered) {
+        var withRows = JsonNode.Parse(Ack)!;
+        var noRows   = JsonNode.Parse("""{"next_work":{"rows":[],"as_of":"t","arms_not_current":[]}}""")!;
+        if (flag is not null) {
+            withRows["next_work"]!["agent_start"] = JsonNode.Parse(flag);
+            noRows["next_work"]!["agent_start"]   = JsonNode.Parse(flag);
+        }
+
+        var fragment = NextWorkEmitter.BuildFragment(withRows, disabled: false)!;
+        var fallback = NextWorkEmitter.BuildFragmentOrInstruction(noRows, disabled: false)!;
+
+        var guidanceLine = fragment.Split('\n').Single(l => l.StartsWith(NextWorkEmitter.Guidance, StringComparison.Ordinal));
+        await Assert.That(guidanceLine).IsEqualTo(offered ? $"{NextWorkEmitter.Guidance} {NextWorkEmitter.StartAgentOffer}" : NextWorkEmitter.Guidance);
+        await Assert.That(fallback).IsEqualTo(offered ? $"{NextWorkEmitter.InstructionOnly} {NextWorkEmitter.StartAgentOffer}" : NextWorkEmitter.InstructionOnly);
+    }
+
+    /// <summary>The offer never licenses a start the user did not ask for, and is honoured only by a
+    /// harness that has the tool.</summary>
+    [Test]
+    public async Task The_start_agent_offer_waits_for_the_user_and_the_tool() {
         var text = NextWorkEmitter.StartAgentOffer;
 
-        await Assert.That(text).Contains("If start_agent is among your tools");
-        await Assert.That(text).Contains("handed to a separate hosted agent");
+        await Assert.That(text).StartsWith("If start_agent is among your tools");
         await Assert.That(text).Contains("Start one only when the user asks");
-        await Assert.That(text).Contains("target_key");
+        await Assert.That(text).Contains("target_key from get_next_work as work_item");
     }
 
     /// <summary>The unit is the piece of work, not the request: the instruction names the terminal states,

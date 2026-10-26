@@ -142,10 +142,7 @@ Present next work **once per piece of work** the user framed, when that piece re
 terminal state: a PR merged, an issue closed, a question answered with nothing pending,
 or the user saying they are done with it or parking it. Then declare any remaining loose
 ends with `declare_loose_end` (one call per item, never "none"), call `get_next_work` and
-tell the user, in a few lines, what to consider working on next and why. If `start_agent`
-is among your tools, end by saying the user can have any listed item handed to a separate
-hosted agent. Start one only when they ask, following `start-agents`, with the item's
-`target_key` as `work_item`.
+tell the user, in a few lines, what to consider working on next and why.
 
 Never present after a step inside work that is still open, and never right after
 declaring loose ends you expect to continue yourself in this session. If `get_next_work`

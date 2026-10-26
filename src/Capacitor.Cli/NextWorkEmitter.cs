@@ -58,9 +58,10 @@ static partial class NextWorkEmitter {
     internal const string Guidance =
         "Finish a listed item before starting new work. When you decide to defer something in this " +
         "session, declare it at that moment with declare_loose_end (one call per item, never \"none\"). " +
-        CompletionInstruction + " " + StartAgentOffer;
+        CompletionInstruction;
 
-    // Kept out of CompletionInstruction: the workitems MCP instructions it leads sit at Claude Code's cap.
+    /// <summary>Appended to <see cref="Guidance"/> only when the ack's <c>agent_start</c> says this server
+    /// can start agents: the feature is off by default, and start_agent is listed regardless.</summary>
     internal const string StartAgentOffer =
         "If start_agent is among your tools, end that presentation by saying the user can have any listed " +
         "item handed to a separate hosted agent. Start one only when the user asks, following the " +
@@ -87,7 +88,7 @@ static partial class NextWorkEmitter {
     /// <summary><see cref="BuildFragment"/>, falling back to <see cref="InstructionOnly"/> when the ack has
     /// no rows to show. Null only when disabled.</summary>
     public static string? BuildFragmentOrInstruction(JsonNode? responseNode, bool disabled) =>
-        disabled ? null : BuildFragment(responseNode, disabled: false) ?? InstructionOnly;
+        disabled ? null : BuildFragment(responseNode, disabled: false) ?? WithOffer(InstructionOnly, responseNode);
 
     public static string? BuildFragment(JsonNode? responseNode, bool disabled) {
         if (disabled) return null;
@@ -123,7 +124,7 @@ static partial class NextWorkEmitter {
         Line(sb, DataOpen);
         foreach (var l in lines) Line(sb, l);
         Line(sb, DataClose);
-        Line(sb, Guidance);
+        Line(sb, WithOffer(Guidance, responseNode));
 
         var freshness = FreshnessLine(
             asOf: null,
@@ -184,6 +185,14 @@ static partial class NextWorkEmitter {
             : null;
 
     static void Line(StringBuilder sb, string text) => sb.Append(text).Append('\n');
+
+    static string WithOffer(string guidance, JsonNode? responseNode) {
+        bool agentStart;
+        try { agentStart = responseNode?["next_work"]?["agent_start"]?.GetValue<bool>() ?? false; }
+        catch { agentStart = false; }
+
+        return agentStart ? $"{guidance} {StartAgentOffer}" : guidance;
+    }
 
     static string? ReadString(JsonObject obj, string key) {
         try { return obj[key]?.GetValue<string>(); }
