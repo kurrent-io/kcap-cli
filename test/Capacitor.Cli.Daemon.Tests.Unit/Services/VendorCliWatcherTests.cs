@@ -329,9 +329,24 @@ public class VendorCliWatcherTests {
             var refreshes = new List<string>();
             watcher.Refresh = refreshes.Add;
             home.CreateFile([".codex-spare", "auth.json"], "{}");
+            static string Show(IEnumerable<(string Vendor, string CliPath, IReadOnlyList<string> CatalogPaths)> set) =>
+                string.Join("; ", set.Select(w => $"{w.Vendor} [{w.CliPath}] {{{string.Join(", ", w.CatalogPaths)}}}"));
+            var flag = typeof(VendorCliWatcher).GetField("_rebuildRequested", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+            var before = $"flag before tick: {flag.GetValue(watcher)}\nwatched before tick: {Show(watcher.Watched)}\n";
             watcher.Tick();
+            var diagnostic = before
+              + $"flag after tick: {flag.GetValue(watcher)}\n"
+              + $"watched after tick: {Show(watcher.Watched)}\n"
+              + $"rebuilt now: {Show(VendorCliWatcher.WatchSet(config!, factories, publisher.Current))}\n"
+              + $"accounts: {string.Join("; ", publisher.Current?.Accounts.Select(a => $"{a.Id} {a.Vendor} {a.Directory}") ?? ["<null>"])}\n"
+              + $"supported: {string.Join(", ", config!.SupportedVendors ?? [])}\n"
+              + $"refreshes: {string.Join(" | ", refreshes)}";
 
-            await Assert.That(watcher.Watched.SelectMany(w => w.CatalogPaths)).Contains(home.PathTo(".codex-spare", "auth.json"));
+            try {
+                await Assert.That(watcher.Watched.SelectMany(w => w.CatalogPaths)).Contains(home.PathTo(".codex-spare", "auth.json"));
+            } catch (Exception ex) {
+                throw new InvalidOperationException($"{ex.Message}\n--- diagnostic ---\n{diagnostic}\nwatched at assert: {Show(watcher.Watched)}", ex);
+            }
             await Assert.That(refreshes.Count).IsEqualTo(1);
             await Assert.That(refreshes[0]).Contains(spare.Id);
 
