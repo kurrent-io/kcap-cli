@@ -98,6 +98,7 @@ public static class CommandServices {
         services.AddTransient<AgentCommand>();
         services.AddTransient<CleanupCommand>();
         services.AddTransient<ConfigCommand>();
+        services.AddTransient<ExperimentalCommand>();
         services.AddTransient<CurateCommand>();
         services.AddTransient<MemoriesCommand>();
         services.AddTransient<ArtefactCommand>();

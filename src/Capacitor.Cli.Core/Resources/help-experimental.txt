@@ -1,0 +1,15 @@
+kcap experimental — Opt in to experimental features
+
+Usage: kcap experimental [subcommand]
+
+Subcommands:
+  list                    Show each feature, whether it is on, and whether the daemon has applied it (default)
+  enable <feature>        Turn a feature on for the active profile
+  disable <feature>       Turn a feature off for the active profile
+
+Features:
+  codex-app-server        Run Codex reviewers and interactive Codex agents over codex app-server instead
+                          of the terminal. Needs Codex 0.146.0 or later
+
+A change reaches the running daemon without a restart; kcap waits a few seconds for it to confirm.
+Agents already running keep the transport they started with.
