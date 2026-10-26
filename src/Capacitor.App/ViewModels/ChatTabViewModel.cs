@@ -1020,6 +1020,14 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
              || string.Equals(info.Vendor, HarnessId.Codex.VendorId, StringComparison.OrdinalIgnoreCase));
     }
 
+    /// A panel command such as /status writes nothing to the transcript, so the panel opening
+    /// right after it at an idle prompt is the only receipt it leaves. Any later send, or one
+    /// made mid-turn, could be what the dialog answers instead.
+    void RetireCommandThatOpened() {
+        var latest = Tracked.FirstOrDefault(q => !q.IsForeign && q.SendOrder == _nextSendOrder);
+        if (latest is { Acknowledged: false, SentIdle: true, IsSlashCommand: true }) Acknowledge(latest);
+    }
+
     /// A hook-driven card already asks the same question as the dialog it raised, so the screen's
     /// copy stays out of the way while one is pending.
     void ApplyTerminalMenu(UsageLimitNoticeDto? limit, TerminalDialogDto? dialog) {
@@ -1032,6 +1040,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             ? Equals(_usageLimit, limit)
             : dialog is not null && _terminalDialog is { } previous
                 && previous.Heading == dialog.Heading && previous.Options.SequenceEqual(dialog.Options);
+        if (dialog is not null && _terminalDialog is null) RetireCommandThatOpened();
         _usageLimit = limit;
         _terminalDialog = dialog;
         _terminalDialogShown = shown;
@@ -1057,6 +1066,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                     .Select((label, i) => (label, TerminalInputEncoder.ChooseMenuOption(dialog.Selected, i))).ToList();
             } else {
                 TerminalMenuScreen = dialog.Screen;
+                choices = [("Close", new byte[] { 0x1b })];
             }
         }
         HasTerminalMenu = question || dialog is not null;
@@ -1246,6 +1256,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         var chipIds = files.Select(f => f.Id).ToList();
         var queued = new QueuedChatMessage(snapshot, ownsDraft ? edits : -1, _inputGeneration, CurrentOffset, chipIds) {
             SendOrder = ++_nextSendOrder,
+            SentIdle = AgentIsIdle && _awaitingInput == true && !HasTerminalMenu,
         };
         if (!queued.HasBaseline) Interlocked.Increment(ref _baselineVersion);
         _lastSent = queued;
