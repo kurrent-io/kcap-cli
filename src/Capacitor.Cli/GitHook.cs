@@ -55,6 +55,9 @@ static class GitHook {
     }
 
     internal static async Task RecordAsync(GitHookInvocation invocation, AgentSessions sessions, ConfigRoot config, TimeProvider time) {
+        // The hook's clock, not git's: git's dates are whole seconds and the caller can set them.
+        var committedAt = time.GetUtcNow();
+
         if (sessions.Above(invocation.Pid) is not { } session) return;
 
         var run = RepositoryDetection.DefaultRunner(time);
@@ -78,8 +81,7 @@ static class GitHook {
             Owner       = repo?.Owner,
             RepoName    = repo?.RepoName,
             Branch      = repo?.Branch is { Length: > 0 } branch ? branch : null,
-            // The hook's clock, not git's: git's dates are whole seconds and the caller can set them.
-            CommittedAt = time.GetUtcNow(),
+            CommittedAt = committedAt,
             Message     = SecretRedactor.RedactValue(message, keyIsSecret: false) ?? message,
         });
     }

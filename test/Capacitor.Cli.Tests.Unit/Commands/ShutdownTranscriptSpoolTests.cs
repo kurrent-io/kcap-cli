@@ -176,7 +176,10 @@ public class ShutdownTranscriptSpoolTests {
             () => false, CancellationToken.None);
 
         await Assert.That(result).IsEqualTo(TranscriptSpool.AppendResult.MarkedNeedsImport);
-        await Assert.That(replay.Select(b => b["lines"]!.AsArray().Count)).IsEquivalentTo(new[] { TranscriptBatchBuffer.MaxLines, 0 });
+        await Assert.That(replay.Count).IsEqualTo(2);
+        await Assert.That(replay[0]["lines"]!.AsArray().Count).IsEqualTo(TranscriptBatchBuffer.MaxLines);
+        await Assert.That(replay[0]["more_follows"]!.GetValue<bool>()).IsTrue();
+        await Assert.That(replay[^1]["lines"]!.AsArray().Count).IsEqualTo(0);
         await Assert.That(replay[^1]["observed_commits"]![0]!["sha"]!.GetValue<string>()).IsEqualTo("aaa");
         await Assert.That(replay[^1].AsObject().ContainsKey("more_follows")).IsFalse();
     }
