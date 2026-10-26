@@ -13,7 +13,7 @@ public class AccountRefresherTests {
     const string Work  = "c0dec001-work";
     const string Spare = "c0dec002-spare";
 
-    static readonly TimeSpan Timeout  = TimeSpan.FromSeconds(5);
+    static readonly TimeSpan HangGuard = TimeSpan.FromSeconds(60);
     static readonly TimeSpan Cooldown = TimeSpan.FromMinutes(10);
     static readonly TimeSpan Minute   = TimeSpan.FromMinutes(1);
 
@@ -21,7 +21,12 @@ public class AccountRefresherTests {
 
     readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 10, 26, 12, 0, 0, TimeSpan.Zero));
 
-    AccountStore Store => field ??= new AccountStore(Home.PathTo("accounts"));
+    AccountStore Store => field ??= Widened(new AccountStore(Home.PathTo("accounts")));
+
+    static AccountStore Widened(AccountStore store) {
+        store.Readings.ProducerBudget = HangGuard;
+        return store;
+    }
 
     void Register(string id) {
         var entry = new VendorAccount(id, HarnessId.Codex, AccountDirectory.Normalize(Home.CreateDir(id)), id, DateTimeOffset.UnixEpoch);
@@ -35,12 +40,14 @@ public class AccountRefresherTests {
         public bool                  Reached { get; init; }
         public Func<string, bool>?   Throws  { get; init; }
         public TaskCompletionSource? Gate    { get; set; }
+        public TaskCompletionSource  Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public int this[string id] => _calls.GetValueOrDefault(id);
         public int Total           => _calls.Values.Sum();
 
         public async Task<ProbeResult> ProbeAsync(VendorAccount account, CancellationToken ct) {
             _calls.AddOrUpdate(account.Id, 1, (_, n) => n + 1);
+            Entered.TrySetResult();
             if (Gate is { } gate) await gate.Task.WaitAsync(ct);
             if (Throws?.Invoke(account.Id) == true) throw new InvalidOperationException("probe exploded");
 
@@ -61,19 +68,17 @@ public class AccountRefresherTests {
             Home, _time, NullLogger<AccountsPublisher>.Instance) { RequestRefresh = requested };
 
     /// <summary>A rollout or a menu scrape in another process, writing a block the way producers do.</summary>
-    void ProducerBlocks(string id, DateTimeOffset at) =>
-        Store.Readings.TryRecord(id, 0, "session-1", f => f with { Reading = ReadingMerge.Apply(f.Reading, ReachedAt(at)) });
-
-    static async Task WaitUntil(Func<bool> condition) {
-        var deadline = DateTime.UtcNow + Timeout;
-        while (!condition()) {
-            if (DateTime.UtcNow > deadline) throw new TimeoutException("condition not met");
-            await Task.Delay(10);
-        }
+    void ProducerBlocks(string id, DateTimeOffset at) {
+        if (!Store.Readings.TryRecord(id, 0, "session-1", f => f with { Reading = ReadingMerge.Apply(f.Reading, ReachedAt(at)) }))
+            throw new InvalidOperationException("the block was not recorded");
     }
 
-    // Long enough for a queued refresh to have started if one were queued.
-    static Task Settle() => Task.Delay(150);
+    static Task Until(AccountRefresher refresher, Func<bool> condition) =>
+        refresher.WaitForAsync(condition, CancellationToken.None).WaitAsync(HangGuard);
+
+    /// <summary>Fake time fires a due deferral inside <c>Advance</c>, so once this returns nothing more is coming
+    /// until time moves again.</summary>
+    static Task Idle(AccountRefresher refresher) => Until(refresher, () => refresher.IsIdle);
 
     [Test]
     public async Task Refresher_probes_every_account_at_start() {
@@ -84,7 +89,7 @@ public class AccountRefresherTests {
 
         await refresher.StartAsync(CancellationToken.None);
         try {
-            await WaitUntil(() => refresher.Finished == 2);
+            await Until(refresher, () => refresher.Finished == 2);
             await Assert.That(probe[Work]).IsEqualTo(1);
             await Assert.That(probe[Spare]).IsEqualTo(1);
             await Assert.That(Store.Load().Accounts.All(a => a.RefreshedAt == _time.GetUtcNow())).IsTrue();
@@ -102,12 +107,12 @@ public class AccountRefresherTests {
 
         await refresher.StartAsync(CancellationToken.None);
         try {
-            await WaitUntil(() => refresher.Finished == 2);
+            await Until(refresher, () => refresher.Finished == 2);
             await Assert.That(probe[Spare]).IsEqualTo(1);
 
             _time.Advance(Cooldown);
             refresher.Request(Work);
-            await WaitUntil(() => refresher.Finished == 3);
+            await Until(refresher, () => refresher.Finished == 3);
             await Assert.That(probe[Work]).IsEqualTo(2);
             await Assert.That(refresher.ExecuteTask!.IsFaulted).IsFalse();
         } finally {
@@ -122,7 +127,7 @@ public class AccountRefresherTests {
         using var refresher = Refresher(new CountingProbe(_time));
 
         await refresher.StartAsync(CancellationToken.None);
-        await Settle();
+        await Idle(refresher);
 
         await Assert.That(refresher.ExecuteTask!.IsFaulted).IsFalse();
         await refresher.StopAsync(CancellationToken.None);
@@ -136,19 +141,19 @@ public class AccountRefresherTests {
 
         await refresher.StartAsync(CancellationToken.None);
         try {
-            await WaitUntil(() => probe[Work] == 1);
+            await probe.Entered.Task.WaitAsync(HangGuard);
             refresher.Request(Work);
             refresher.Request(Work);
             probe.Gate.TrySetResult();
-            await WaitUntil(() => refresher.Finished == 1);
+            await Until(refresher, () => refresher.Finished == 1);
 
             refresher.Request(Work);
             refresher.Request(Work);
             _time.Advance(Cooldown);
-            await WaitUntil(() => refresher.Finished == 2);
+            await Until(refresher, () => refresher.Finished == 2);
 
             for (var i = 0; i < 3; i++) _time.Advance(Cooldown);
-            await Settle();
+            await Idle(refresher);
             await Assert.That(probe[Work]).IsEqualTo(2);
         } finally {
             await refresher.StopAsync(CancellationToken.None);
@@ -205,13 +210,15 @@ public class AccountRefresherTests {
         await refresherA.StartAsync(CancellationToken.None);
         await refresherB.StartAsync(CancellationToken.None);
         try {
-            await WaitUntil(() => refresherA.Finished == 1 && refresherB.Finished == 1);
+            await Until(refresherA, () => refresherA.Finished == 1);
+            await Until(refresherB, () => refresherB.Finished == 1);
 
             for (var i = 0; i < 4; i++) {
                 await publisherA.RebuildAsync(CancellationToken.None);
                 await publisherB.RebuildAsync(CancellationToken.None);
                 _time.Advance(Cooldown);
-                await Settle();
+                await Idle(refresherA);
+                await Idle(refresherB);
             }
 
             await Assert.That(publisherA.Current!.Accounts.Single().Reading!.Blocked!.BlockedAt).IsNotNull();
@@ -233,18 +240,18 @@ public class AccountRefresherTests {
         await publisher.StartAsync(CancellationToken.None);
         await refresher.StartAsync(CancellationToken.None);
         try {
-            await WaitUntil(() => refresher.Finished == 1);
+            await Until(refresher, () => refresher.Finished == 1);
 
             _time.Advance(Minute);
             ProducerBlocks(Work, _time.GetUtcNow());
             await publisher.RebuildAsync(CancellationToken.None);
 
             _time.Advance(8 * Minute);
-            await Settle();
+            await Idle(refresher);
             await Assert.That(probe[Work]).IsEqualTo(1);
 
             _time.Advance(Minute);
-            await WaitUntil(() => refresher.Finished == 2);
+            await Until(refresher, () => refresher.Finished == 2);
             await Assert.That(probe[Work]).IsEqualTo(2);
         } finally {
             await refresher.StopAsync(CancellationToken.None);

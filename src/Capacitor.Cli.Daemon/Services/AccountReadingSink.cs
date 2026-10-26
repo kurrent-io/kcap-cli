@@ -22,6 +22,9 @@ internal sealed partial class AccountReadingSink : IDisposable {
 
     long? _lastWarnedAt;
 
+    // Seam: tells a test each observation has been written (true) or skipped.
+    internal Action<ReadingObservation, bool>? Processed { get; set; }
+
     public AccountReadingSink(AccountStore? store, TimeProvider time, ILogger<AccountReadingSink> logger) {
         _store  = store;
         _time   = time;
@@ -48,6 +51,7 @@ internal sealed partial class AccountReadingSink : IDisposable {
             }
 
             if (!recorded) WarnSkipped(account.AccountId!);
+            Processed?.Invoke(observation, recorded);
         }
     }
 

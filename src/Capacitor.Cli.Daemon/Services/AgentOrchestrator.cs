@@ -3644,13 +3644,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         screen.Resize(agent.CurrentCols, agent.CurrentRows);
         var (usageLimit, dialog) = screen.Observe(data);
         if (Equals(agent.UsageLimit, usageLimit) && Equals(agent.TerminalDialog, dialog)) return;
+        var limitReached = agent.UsageLimit is null && usageLimit is not null;
+        agent.UsageLimit     = usageLimit;
+        agent.TerminalDialog = dialog;
         // The menu names no window: the signal constrains every exhausted window, or stands as unknown when none is.
-        if (agent.UsageLimit is null && usageLimit is not null)
+        if (limitReached)
             _readings?.Post(agent.Account, new ReadingObservation(
                 _time.GetUtcNow(), Fresh: false, [], null, null, [new LimitSignal(null, null)],
                 LimitReachedReported: false, LimitStateKnown: false));
-        agent.UsageLimit     = usageLimit;
-        agent.TerminalDialog = dialog;
         _statusNotifier.Pulse();
     }
 

@@ -12,8 +12,6 @@ public sealed class ReadingStore {
     const UnixFileMode OwnerOnlyFile = UnixFileMode.UserRead | UnixFileMode.UserWrite;
     const UnixFileMode OwnerOnlyDir  = OwnerOnlyFile | UnixFileMode.UserExecute;
 
-    static readonly TimeSpan ProducerBudget = TimeSpan.FromMilliseconds(50);
-
     readonly string                  _lockPath;
     readonly Func<AccountRegistry?>  _registry;
     readonly Action                  _ensureParent;
@@ -29,6 +27,9 @@ public sealed class ReadingStore {
 
     // Seam: a test runs a removal here, after the membership check and before the write.
     internal Action? AfterMembershipCheck { get; set; }
+
+    // Seam: a test that is not about contention widens it, so a loaded machine cannot skip its write.
+    internal TimeSpan ProducerBudget { get; set; } = TimeSpan.FromMilliseconds(50);
 
     /// <summary>Null when the lock is contended past <paramref name="budget"/> or cannot be opened.</summary>
     public IDisposable? TryLock(TimeSpan budget) {

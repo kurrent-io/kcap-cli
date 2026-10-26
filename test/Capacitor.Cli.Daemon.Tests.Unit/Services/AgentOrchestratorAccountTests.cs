@@ -2,7 +2,6 @@ using System.Globalization;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
-using Capacitor.Cli.Core.Accounts.Readings;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
@@ -440,7 +439,11 @@ public class AgentOrchestratorAccountTests {
         Register(WorkId, HarnessId.Claude, Tmp.CreateDir(".claude-work"), "Work");
         using var repo = GitRepo.CreateWithCommit();
         var pty = new ScriptedPtyProcess();
-        using var sink = new AccountReadingSink(Store, TimeProvider.System, NullLogger<AccountReadingSink>.Instance);
+        Store.Readings.ProducerBudget = TimeSpan.FromSeconds(60);
+        var recorded = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var sink = new AccountReadingSink(Store, TimeProvider.System, NullLogger<AccountReadingSink>.Instance) {
+            Processed = (_, written) => recorded.TrySetResult(written),
+        };
         await using var orch = Build(new CaptureServerConnection(), new SpyPtyProcessFactory(pty), Spy(), repo, sink);
 
         await orch.HandleLaunchAgentForTest(Launch("acct-limit", repo, WorkId));
@@ -450,13 +453,9 @@ public class AgentOrchestratorAccountTests {
             "1. Stop and wait for limit to reset\n" +
             "2. Wait here, then continue automatically shortly\n");
 
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
-        ReadingFile? file;
-        while ((file = Store.Readings.LoadAll().GetValueOrDefault(WorkId)) is not { Reading.Blocked.BlockedAt: not null }) {
-            if (DateTime.UtcNow > deadline) throw new TimeoutException("the limit menu recorded no block");
-            await Task.Delay(10);
-        }
-
+        await Assert.That(await recorded.Task.WaitAsync(TimeSpan.FromSeconds(60))).IsTrue();
+        var file = Store.Readings.LoadAll()[WorkId];
+        await Assert.That(file.Reading.Blocked?.BlockedAt).IsNotNull();
         await Assert.That(orch.GetAgentForTest("acct-limit")!.UsageLimit).IsNotNull();
         await Assert.That(file.Reading.Blocked!.Constraints.Select(c => c.ResetsAt)).IsEquivalentTo(new DateTimeOffset?[] { null });
         await Assert.That(Store.Readings.LoadAll().Keys).IsEquivalentTo([WorkId]);

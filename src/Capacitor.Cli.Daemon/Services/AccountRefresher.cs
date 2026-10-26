@@ -22,10 +22,28 @@ internal sealed partial class AccountRefresher(
     readonly Dictionary<string, DateTimeOffset> _lastFinished = new(StringComparer.Ordinal);
     string?                                     _running;
     bool                                        _stopped;
+    bool                                        _started;
     long                                        _finished;
+
+    readonly DaemonStatusNotifier _progress = new();
 
     /// <summary>Refreshes completed, failed ones included.</summary>
     internal long Finished => Interlocked.Read(ref _finished);
+
+    /// <summary>The startup requests are in and nothing is queued or running; a deferred refresh waits on time.</summary>
+    internal bool IsIdle {
+        get { lock (_lock) return _started && _queued.Count == 0 && _running is null; }
+    }
+
+    /// <summary>Test seam: completes once <paramref name="condition"/> holds, re-checked after every queue,
+    /// start and finish.</summary>
+    internal async Task WaitForAsync(Func<bool> condition, CancellationToken ct) {
+        while (true) {
+            var seen = _progress.Version;
+            if (condition()) return;
+            await _progress.WaitBeyondAsync(seen, ct).ConfigureAwait(false);
+        }
+    }
 
     /// <summary>Never blocks and never throws: it is called under the publisher's rebuild gate.</summary>
     public void Request(string accountId) {
@@ -58,12 +76,16 @@ internal sealed partial class AccountRefresher(
             LogRegistryUnreadable(logger, ex);
         }
 
+        lock (_lock) _started = true;
+        _progress.Pulse();
+
         try {
             await foreach (var id in _work.Reader.ReadAllAsync(stoppingToken)) {
                 lock (_lock) {
                     _queued.Remove(id);
                     _running = id;
                 }
+                _progress.Pulse();
 
                 try {
                     await RefreshAsync(store, id, stoppingToken);
@@ -72,9 +94,9 @@ internal sealed partial class AccountRefresher(
                         _running          = null;
                         _lastFinished[id] = time.GetUtcNow();
                         if (_deferred.TryGetValue(id, out var timer) && timer is null) Defer(id, Cooldown);
+                        Interlocked.Increment(ref _finished);
                     }
-
-                    Interlocked.Increment(ref _finished);
+                    _progress.Pulse();
                 }
             }
         } catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { /* shutdown */ }
@@ -110,7 +132,10 @@ internal sealed partial class AccountRefresher(
     }
 
     void EnqueueHeld(string accountId) {
-        if (_queued.Add(accountId)) _work.Writer.TryWrite(accountId);
+        if (!_queued.Add(accountId)) return;
+
+        _work.Writer.TryWrite(accountId);
+        _progress.Pulse();
     }
 
     public override void Dispose() {

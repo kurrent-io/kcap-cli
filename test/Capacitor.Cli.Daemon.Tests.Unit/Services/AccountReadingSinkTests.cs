@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Accounts.Readings;
@@ -7,23 +8,41 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
+/// <summary>Each test awaits the consumer's own report on the observation it posted, and widens the producer
+/// lock budget, so a loaded machine slows these tests down without skipping the write they wait for.</summary>
 public class AccountReadingSinkTests {
     const string Work  = "c0dec001-work";
     const string Spare = "c0dec002-spare";
 
-    static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
+    static readonly TimeSpan HangGuard = TimeSpan.FromSeconds(60);
     static readonly DateTimeOffset At = new(2026, 10, 26, 12, 0, 0, TimeSpan.Zero);
 
     [TempDir] public required TempDir Tmp { get; init; }
 
-    AccountStore Store => field ??= new AccountStore(Tmp.PathTo("accounts"));
+    readonly ConcurrentDictionary<ReadingObservation, TaskCompletionSource<bool>> _outcomes = new(ReferenceEqualityComparer.Instance);
+
+    AccountStore Store => field ??= Widened(new AccountStore(Tmp.PathTo("accounts")));
+
+    static AccountStore Widened(AccountStore store) {
+        store.Readings.ProducerBudget = HangGuard;
+        return store;
+    }
 
     void Register(string id, long generation = 0) {
         var entry = new VendorAccount(id, HarnessId.Codex, AccountDirectory.Normalize(Tmp.CreateDir(id)), id, DateTimeOffset.UnixEpoch, Generation: generation);
         Store.Mutate(r => (r with { Accounts = [.. r.Accounts, entry] }, 0));
     }
 
-    AccountReadingSink Sink() => new(Store, TimeProvider.System, NullLogger<AccountReadingSink>.Instance);
+    AccountReadingSink Sink() =>
+        new(Store, TimeProvider.System, NullLogger<AccountReadingSink>.Instance) {
+            Processed = (observation, recorded) => Outcome(observation).TrySetResult(recorded),
+        };
+
+    TaskCompletionSource<bool> Outcome(ReadingObservation observation) =>
+        _outcomes.GetOrAdd(observation, _ => new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously));
+
+    /// <summary>Whether the consumer wrote <paramref name="observation"/>, once it has dealt with it.</summary>
+    Task<bool> Processed(ReadingObservation observation) => Outcome(observation).Task.WaitAsync(HangGuard);
 
     static ResolvedAccount Account(string? id, long generation = 0) => new("/unused", id, id ?? "default", generation);
 
@@ -32,27 +51,19 @@ public class AccountReadingSinkTests {
 
     ReadingFile? Read(string id) => Store.Readings.LoadAll().GetValueOrDefault(id);
 
-    async Task<ReadingFile> WaitFor(string id, Func<ReadingFile, bool> condition, TimeSpan? timeout = null) {
-        var deadline = DateTime.UtcNow + (timeout ?? Timeout);
-        while (true) {
-            if (Read(id) is { } file && condition(file)) return file;
-            if (DateTime.UtcNow > deadline) throw new TimeoutException($"no matching reading for {id}");
-            await Task.Delay(10);
-        }
-    }
-
-    /// <summary>The registered post behind the unregistered one proves the consumer reached it.</summary>
+    /// <summary>The registered post behind the unregistered ones proves the consumer reached them.</summary>
     [Test]
     public async Task Posts_for_an_unregistered_default_record_nothing() {
         Register(Work);
         using var sink = Sink();
+        var work = Window(10);
 
         sink.Post(Account(null), Window(90));
         sink.Post(null, Window(91));
-        sink.Post(Account(Work), Window(10));
+        sink.Post(Account(Work), work);
 
-        var file = await WaitFor(Work, _ => true);
-        await Assert.That(file.Reading.Windows.Single().UsedPercent).IsEqualTo(10.0);
+        await Assert.That(await Processed(work)).IsTrue();
+        await Assert.That(Read(Work)!.Reading.Windows.Single().UsedPercent).IsEqualTo(10.0);
         await Assert.That(Store.Readings.LoadAll().Keys).IsEquivalentTo([Work]);
     }
 
@@ -74,8 +85,10 @@ public class AccountReadingSinkTests {
         await Assert.That(clock.Elapsed).IsLessThan(TimeSpan.FromSeconds(1));
 
         // The consumer works through a full queue of atomic replaces first.
-        sink.Post(Account(Work), Window(100));
-        await WaitFor(Work, f => f.Reading.Windows.Any(w => w.UsedPercent >= 100), TimeSpan.FromSeconds(30));
+        var last = Window(100);
+        sink.Post(Account(Work), last);
+        await Assert.That(await Processed(last)).IsTrue();
+        await Assert.That(Read(Work)!.Reading.Windows.Any(w => w.UsedPercent >= 100)).IsTrue();
     }
 
     [Test]
@@ -83,15 +96,20 @@ public class AccountReadingSinkTests {
         Register(Work, generation: 1);
         Register(Spare);
         using var sink = Sink();
+        var retired = Window(80);
+        var spare   = Window(5);
 
-        sink.Post(Account(Work, generation: 0), Window(80));
-        sink.Post(Account(Spare), Window(5));
+        sink.Post(Account(Work, generation: 0), retired);
+        sink.Post(Account(Spare), spare);
 
-        await WaitFor(Spare, _ => true);
+        await Assert.That(await Processed(retired)).IsFalse();
+        await Assert.That(await Processed(spare)).IsTrue();
         await Assert.That(Read(Work)).IsNull();
 
-        sink.Post(Account(Work, generation: 1), Window(20));
-        var file = await WaitFor(Work, _ => true);
+        var current = Window(20);
+        sink.Post(Account(Work, generation: 1), current);
+        await Assert.That(await Processed(current)).IsTrue();
+        var file = Read(Work)!;
         await Assert.That(file.Reading.Generation).IsEqualTo(1L);
         await Assert.That(file.Reading.Windows.Single().UsedPercent).IsEqualTo(20.0);
     }
