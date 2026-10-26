@@ -185,6 +185,44 @@
         <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
     </Style>
     <!-- Every page names its scope: the profile it edits, or every profile on this computer. -->
+    <!-- A row's state as a badge. Attention pairs the amber with an icon, never colour alone. -->
+    <Style Selector="Border.settingsStatus">
+        <Setter Property="Padding" Value="7,2" />
+        <Setter Property="CornerRadius" Value="999" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Border.settingsStatus.attention">
+        <Setter Property="Background" Value="{StaticResource KcapWarningDimBrush}" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+    </Style>
+    <Style Selector="Border.settingsStatus views|AppIcon">
+        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Border.settingsStatus.attention views|AppIcon">
+        <Setter Property="Foreground" Value="{StaticResource KcapWarningBrush}" />
+    </Style>
+    <Style Selector="Border.settingsStatus TextBlock">
+        <Setter Property="FontSize" Value="11.5" />
+        <Setter Property="FontWeight" Value="Medium" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+    </Style>
+    <Style Selector="Border.settingsStatus TextBlock.attention">
+        <Setter Property="Foreground" Value="{StaticResource KcapWarningBrush}" />
+    </Style>
+    <!-- What to do next for a row, inset so it reads as one step apart from the row's identity. -->
+    <Style Selector="Border.settingsCallout">
+        <Setter Property="Background" Value="{StaticResource KcapCanvasBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Padding" Value="12,10" />
+        <Setter Property="Margin" Value="0,8,0,0" />
+    </Style>
     <Style Selector="Border.settingsContextChip">
         <Setter Property="Padding" Value="8,4,10,4" />
         <Setter Property="CornerRadius" Value="999" />

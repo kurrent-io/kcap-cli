@@ -25,7 +25,6 @@ public static class RecordingStateLabels {
         token == Installed && IsCodex(vendor)
             ? "Start Codex once with this account and approve kcap's hooks when it asks."
             : token == Broken ? "kcap's hooks in this folder are missing or changed. Reconnect from the menu."
-            : token == NotWired ? "kcap is not recording sessions from this folder yet."
             : null;
 
     /// The command that does what the hint asks, when there is one to run.
