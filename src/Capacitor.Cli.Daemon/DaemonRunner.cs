@@ -219,11 +219,9 @@ public static partial class DaemonRunner {
             });
         config.CodexResolution = startupCodex;
 
-        // The per-vendor reviewer switches. These are OPT-OUT now: unset means enabled, matching
-        // Claude/Codex/Cursor/Copilot, which have never been gated. See ParseConsentFlag for the full
-        // argument and its three precisions — in short, the reviewer vendor is a caller-chosen
-        // parameter, so wherever an ungated vendor is also advertised, gating these four did not widen
-        // the capability class a requester could reach, and only taxed the honest path.
+        // The per-vendor reviewer switches are opt-out: unset means enabled, matching the vendors that
+        // are never gated. The reviewer vendor is a caller-chosen parameter, so where an ungated vendor
+        // is advertised, gating these would not narrow what a requester can reach (see ParseConsentFlag).
         // Iterates the SHARED registry, not a local list. A vendor listed here but missing from
         // GatedReviewers.All would be absent from every service unit (ServiceEnvironment derives the
         // allowlist from the same rows), leaving a reviewer that cannot be turned off on the supported

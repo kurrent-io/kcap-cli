@@ -1674,10 +1674,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         return AgentLiveness.Dead;
     }
 
-    /// <summary>Phase B (D4 §6.4(2a)): the kill-quarantine snapshot for the status report.</summary>
+    /// <summary>The kill-quarantine snapshot for the status report.</summary>
     internal IReadOnlyList<QuarantinedAgentInfo> QuarantineSnapshot() => _quarantine?.Snapshot() ?? [];
 
-    /// <summary>Phase B (D4 §6.4(2a)): the daemon's admission gate — EVERY live registry entry
+    /// <summary>The daemon's admission gate — EVERY live registry entry
     /// (not just Starting/Running — a Completed/Failed agent still mid-teardown holds its slot until
     /// CleanupAgentAsync's count-preserving remove) PLUS unconfirmed-death quarantined ones. Using the
     /// full <c>_agents.Count</c> (rather than <see cref="ActiveCount"/>, whose Starting/Running meaning is
