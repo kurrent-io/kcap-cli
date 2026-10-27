@@ -688,6 +688,31 @@ public class DaemonLifecycleControllerTests {
     }
 
     [Test]
+    public async Task An_older_read_finishing_late_never_withdraws_a_newer_offer() {
+        await using var h = new Harness();
+        var calls = 0;
+        var slowOld = new TaskCompletionSource<ServiceSnapshot?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.Cli.StatusBehavior = _ => ++calls == 2
+            ? slowOld.Task
+            : Task.FromResult<ServiceSnapshot?>(
+                Snap(unitPresent: true, state: "running", jobPid: 7, daemonPid: 7, txnMarker: true));
+        h.Start();
+        h.PushConnected();
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count == 1, what: "the first stale-marker attention");
+
+        h.PushConnecting();
+        h.PushConnected();
+        await WaitUntilAsync(() => calls == 2, what: "the passive read to start");
+
+        await h.Controller.RepairStaleMarkerAsync(CancellationToken.None);
+        slowOld.SetResult(Snap(unitPresent: true, state: "running", jobPid: 7, daemonPid: 7));
+        await Task.Delay(50);
+
+        await Assert.That(h.Surface.Withdrawn).IsEmpty();
+        await Assert.That(h.RepairOffer()).IsNotNull();
+    }
+
+    [Test]
     public async Task Repair_declined_changes_nothing_and_keeps_the_offer() {
         await using var h = new Harness();
         h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(

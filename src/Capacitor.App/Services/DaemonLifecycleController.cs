@@ -104,7 +104,11 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     DaemonActivity? _latestActivity;
     readonly BehaviorSubject<string?> _identityReport = new(null);
     readonly BehaviorSubject<string?> _staleMarkerOffer = new(null);
-    string? _staleMarkerShown; // under _lock: the exact line Attention received, so Withdraw can match it
+    // Serializes the marker offer and its withdrawal, which status reads inside and outside _gate both drive.
+    readonly Lock _markerLock = new();
+    long _markerSeq;              // under _markerLock: start stamp of the newest read that spoke about the marker
+    ServiceSnapshot? _markerSnap; // under _markerLock: that read's snapshot; an offer from any other is stale
+    string? _staleMarkerShown;    // under _markerLock: the exact line Attention received, so Withdraw can match it
 
     /// The attached daemon's latest reported activity; null until a snapshot arrives and whenever the attach drops.
     public DaemonActivity? LatestActivity => Volatile.Read(ref _latestActivity);
@@ -305,9 +309,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
     void NoteSnapshot(ServiceSnapshot? snap, long readStart) {
         if (snap is null) return;
-        // Every read, not only Reconcile's: later attaches read passively, and a marker `status` or
-        // `ensure` settled would otherwise keep its Repair offer up.
-        if (!snap.TxnMarker) WithdrawStaleMarker();
+        NoteMarker(snap, readStart);
         var changedBackground = false;
         var clear = false;
         lock (_lock) {
@@ -691,12 +693,27 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         ? null
         : $"{activeAgents} running agent{(activeAgents == 1 ? "" : "s")} on this daemon may be interrupted.";
 
-    void WithdrawStaleMarker() {
-        string? shown;
-        lock (_lock) (shown, _staleMarkerShown) = (_staleMarkerShown, null);
-        if (shown is null) return;
-        _staleMarkerOffer.OnNext(null);
-        _surface.Withdraw(shown);
+    /// Every read, not only Reconcile's: later attaches read passively, and a marker `status` or
+    /// `ensure` settled would otherwise keep its Repair offer up. Reads overlap, so the newest start wins.
+    void NoteMarker(ServiceSnapshot snap, long readStart) {
+        lock (_markerLock) {
+            if (readStart < _markerSeq) return;
+            (_markerSeq, _markerSnap) = (readStart, snap);
+            if (snap.TxnMarker || _staleMarkerShown is not { } shown) return;
+            _staleMarkerShown = null;
+            _staleMarkerOffer.OnNext(null);
+            _surface.Withdraw(shown);
+        }
+    }
+
+    void OfferStaleMarker(ServiceSnapshot snap) {
+        lock (_markerLock) {
+            if (!ReferenceEquals(snap, _markerSnap)) return;
+            var message = StaleMarkerMessage(_client.DaemonName, snap);
+            _staleMarkerShown = message;
+            _staleMarkerOffer.OnNext(message);
+            _surface.Attention(message);
+        }
     }
 
     /// The banner's Repair button: a confirmed reinstall, whose transaction recovers the leftover
@@ -769,14 +786,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
                 _surface.Attention("The service reports its job running, but no attached-daemon evidence backs it.");
         }
 
-        if (snap.TxnMarker && !snap.TxnActive) {
-            var message = StaleMarkerMessage(_client.DaemonName, snap);
-            lock (_lock) _staleMarkerShown = message;
-            _staleMarkerOffer.OnNext(message);
-            _surface.Attention(message);
-        } else if (!snap.TxnMarker) {
-            WithdrawStaleMarker();
-        }
+        if (snap.TxnMarker && !snap.TxnActive) OfferStaleMarker(snap);
 
         if (snap.TxnActive && allowTxnActiveRequery)
             _ = RunTxnActiveRequeryAsync();
