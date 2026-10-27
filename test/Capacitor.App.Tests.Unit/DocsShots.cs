@@ -18,6 +18,8 @@ sealed class DocsShotAttribute(string name) : Attribute {
 /// Renders the desktop app's docs figures when KCAP_SHOTS_OUT names an existing directory; skipped otherwise.
 [NotInParallel("AvaloniaSession")]
 public sealed class DocsShots {
+    [TempConfigRoot] public required TempConfigRoot Config { get; init; }
+
     const int MaxPumps = 200;
 
     static string OutDir {
@@ -102,6 +104,11 @@ public sealed class DocsShots {
         await CaptureAsync("desktop-help-menu",
             async () => (await DocsShotScenes.MainWindowAsync(openFeedback: _ => { }, requestSetup: () => { }, openSession: false)).Window,
             "RailHelpDocsButton", afterShow: OpenHelpFlyoutInsideTheWindow);
+    }
+
+    [Test, DocsShot("desktop-settings")]
+    public async Task The_settings_window_shows_the_profile_and_daemon() {
+        await CaptureAsync("desktop-settings", () => Task.FromResult<Window>(DocsShotScenes.Settings(Config)), "SettingsTabs");
     }
 
     static void OpenHelpFlyoutInsideTheWindow(Window window) {

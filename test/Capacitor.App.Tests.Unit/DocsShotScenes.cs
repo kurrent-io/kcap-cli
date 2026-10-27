@@ -2,8 +2,11 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Avalonia.Threading;
 using Capacitor.App.Services;
+using Capacitor.App.Services.Mutation;
 using Capacitor.App.ViewModels;
+using Capacitor.App.Views;
 using Capacitor.Cli.Core.Commands;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests;
 using Capacitor.Cli.Core.WorkItems;
@@ -149,6 +152,21 @@ static class DocsShotScenes {
         }
 
         return (vm, window, permissions);
+    }
+
+    /// The settings window over the Northwind profile, not yet shown; closing it disposes its view model.
+    public static SettingsWindow Settings(TempConfigRoot config) {
+        ConfigMutator.Mutate(config.Root, c => c with { Profiles = new() {
+            ["northwind"] = new Profile { ServerUrl = ServerUrl, Daemon = new DaemonSettings { Name = "maya-mbp", MaxAgents = 5 } }
+        } });
+        var service = new FakeDaemonClientService();
+        Northwind(service);
+        service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["settings/1"]));
+        var vm = new SettingsViewModel(new SettingsProfileStore(config.Root, "northwind", ServerUrl),
+            service, new ScriptedLocalControlOps(), (_, _) => Task.FromResult(false),
+            (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded()),
+            (_, _) => Task.FromResult(false), _ => Task.FromResult(false), true, Task.CompletedTask, (_, _) => Task.FromResult(true));
+        return new SettingsWindow { DataContext = vm };
     }
 
     sealed class NoLaunch : ILaunchClient {
