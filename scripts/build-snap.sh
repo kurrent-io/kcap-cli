@@ -5,7 +5,7 @@
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 version="${1:-0.0.0-local}"
-[[ "$version" =~ ^[0-9A-Za-z.+~-]{1,32}$ ]] || { echo "invalid snap version: $version" >&2; exit 1; }
+[[ "$version" =~ ^[0-9A-Za-z.+-]{1,32}$ ]] || { echo "invalid snap version: $version" >&2; exit 1; }
 
 # x64 only, like the Linux desktop release: snapcraft.yaml packs amd64 alone.
 case "$(uname -m)" in
