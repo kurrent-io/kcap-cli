@@ -14,7 +14,8 @@ public interface IRemoteAgentsService {
     IObservableCache<AgentInstanceDto, string> Agents { get; }
     /// Replay-1, seeded with an empty list.
     IObservable<IReadOnlyList<DaemonInfo>> Daemons { get; }
-    /// Replay-1, seeded unanswered at generation 0.
+    /// Replay-1, seeded unanswered at generation 0. Published after DrawableDaemonAccounts has taken
+    /// the listing in, so an observer of a listing never reads a drawable gated on the one before.
     IObservable<DaemonListing> Listing { get; }
     /// Replay-1, seeded with an empty list.
     IObservable<IReadOnlyList<DaemonAccountsDto>> DaemonAccounts { get; }
@@ -143,9 +144,9 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
                     _lastSubject = s.Subject;
                 }
                 _listingGeneration++;
-                _listing.OnNext(new(null, _listingGeneration, false));
                 _lastLaneEpoch = s.Epoch;
                 PublishDrawable();
+                _listing.OnNext(new(null, _listingGeneration, false));
             }
         });
 
@@ -252,15 +253,14 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
                 if (listingGeneration == _listingGeneration) {
                     if (result is not null) {
                         _listingRetry.Reset();
-                        _listing.OnNext(new(result, listingGeneration, false));
                         newIncarnation = TrackIncarnations(result);
                         _listingAnswered = true;
                     } else {
-                        _listing.OnNext(new(null, listingGeneration, true));
                         _listingAnswered = false;
                         if (!_daemonsRerun) ScheduleRetry(_listingRetry, RefreshListingAsync);
                     }
                     PublishDrawable();
+                    _listing.OnNext(new(result, listingGeneration, result is null));
                 }
                 rerun = _daemonsRerun;
                 if (rerun) _daemonsRerun = false;

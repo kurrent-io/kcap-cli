@@ -793,6 +793,24 @@ public class RemoteAgentsServiceTests {
         await Assert.That(rig.Retained()).IsEquivalentTo(["work-mac", "home-mac"], CollectionOrdering.Any);
     }
 
+    /// RelistAsync's wait is only a completion signal because a listing goes out after the drawable it gates.
+    [Test]
+    public async Task An_observer_of_a_listing_reads_the_drawable_it_gates() {
+        using var rig = new GateRig("work-mac");
+        rig.Connect();
+        await Eventually(() => rig.Drawable().Length == 1);
+        string[]? drawableAtListing = null;
+        using var probe = rig.Service.Listing.Subscribe(l => {
+            if (l.Daemons is []) Volatile.Write(ref drawableAtListing, rig.Drawable());
+        });
+
+        rig.Listing = [];
+        rig.Lane.DaemonsChangedSubject.OnNext(System.Reactive.Unit.Default);
+
+        await Eventually(() => Volatile.Read(ref drawableAtListing) is not null);
+        await Assert.That(Volatile.Read(ref drawableAtListing)!).IsEmpty();
+    }
+
     [Test]
     public async Task Reconnect_closes_the_gate_until_a_fresh_accounts_fetch() {
         var accountsGate = new TaskCompletionSource<IReadOnlyList<DaemonAccountsDto>?>(TaskCreationOptions.RunContinuationsAsynchronously);
