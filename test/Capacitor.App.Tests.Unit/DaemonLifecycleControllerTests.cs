@@ -713,6 +713,24 @@ public class DaemonLifecycleControllerTests {
     }
 
     [Test]
+    public async Task A_marker_first_seen_on_a_passive_read_is_offered() {
+        await using var h = new Harness();
+        var markerLeft = false;
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(
+            Snap(unitPresent: true, state: "running", jobPid: 7, daemonPid: 7, txnMarker: markerLeft));
+        h.Start();
+        h.PushConnected();
+        await WaitUntilAsync(() => h.Cli.StatusCallCount == 1, what: "the reconciliation read");
+
+        markerLeft = true;
+        h.PushConnecting();
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count == 1, what: "the stale-marker attention");
+        await Assert.That(h.RepairOffer()).IsEqualTo(h.Surface.AttentionMessages[0]);
+    }
+
+    [Test]
     public async Task Repair_declined_changes_nothing_and_keeps_the_offer() {
         await using var h = new Harness();
         h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(
