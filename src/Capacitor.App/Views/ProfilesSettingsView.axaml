@@ -31,9 +31,9 @@
                                                                  Foreground="{StaticResource KcapMutedBrush}"
                                                                  IsVisible="{Binding HasServer}" />
                                             <WrapPanel IsVisible="{Binding !HasServer}">
-                                                <TextBlock Classes="kcapHint" Text="No server yet. Add one with" VerticalAlignment="Center"
+                                                <TextBlock Classes="kcapHint" Text="No server. Create a profile with one:" VerticalAlignment="Center"
                                                            Margin="0,0,6,0" />
-                                                <views:CommandChip Text="kcap profile add &lt;name&gt; --server-url &lt;url&gt;" Margin="0,2" />
+                                                <views:CommandChip Text="kcap profile add &lt;new-name&gt; --server-url &lt;url&gt;" Margin="0,2" />
                                             </WrapPanel>
                                             <TextBlock Classes="kcapHint profileStatus" Classes.attention="{Binding StatusNeedsAttention}"
                                                        Text="{Binding StatusLabel}" IsVisible="{Binding ShowsStatus}" />
