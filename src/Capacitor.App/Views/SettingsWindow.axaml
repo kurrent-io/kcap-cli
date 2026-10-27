@@ -14,14 +14,15 @@
     </Window.Styles>
     <Panel>
         <LayoutTransformControl x:Name="ScaleHost">
-        <TabControl x:Name="SettingsTabs" Classes="settingsSidebar" TabStripPlacement="Left" SelectedIndex="0">
+        <TabControl x:Name="SettingsTabs" Classes="settingsSidebar" TabStripPlacement="Left" SelectedIndex="2">
             <TabControl.Tag>
                 <StackPanel Spacing="6">
                     <TextBlock Text="Profile" Margin="10,4,10,0" FontSize="11.5" FontWeight="SemiBold" LetterSpacing="0.2"
                                Foreground="{StaticResource KcapFaintBrush}" />
-                    <Button x:Name="ProfileCard" Classes="kcapChip settingsProfileCard" Click="OnProfileCardClick"
-                            AutomationProperties.Name="{Binding ProfileName, StringFormat='Profile {0}. Manage profiles'}"
-                            ToolTip.Tip="The settings listed below apply to this profile">
+                    <Button x:Name="ProfileCard" Classes="kcapChip settingsProfileCard" Classes.selected="{Binding #ProfilesTab.IsSelected}" Click="OnProfileCardClick"
+                            IsEnabled="{Binding Profiles, Converter={x:Static ObjectConverters.IsNotNull}}"
+                            AutomationProperties.Name="{Binding ProfileCardHint}"
+                            ToolTip.Tip="{Binding ProfileCardHint}" ToolTip.ShowOnDisabled="True">
                         <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
                             <Border Classes="settingsGlyphTile" Width="30" Height="30">
                                 <views:AppIcon Kind="UserRound" Size="16" HorizontalAlignment="Center" VerticalAlignment="Center" />
@@ -31,6 +32,8 @@
                                            Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
                                 <TextBlock Text="{Binding ServerLabel}" FontSize="11.5"
                                            Foreground="{StaticResource KcapMutedBrush}" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Classes="profileManageLabel" Text="{Binding ProfileCardLabel}" FontSize="11.5" Margin="0,5,0,0"
+                                           TextWrapping="Wrap" />
                             </StackPanel>
                             <views:AppIcon Grid.Column="2" Kind="ChevronRight" Size="14" VerticalAlignment="Center"
                                            Foreground="{StaticResource KcapFaintBrush}"
@@ -39,6 +42,11 @@
                     </Button>
                 </StackPanel>
             </TabControl.Tag>
+            <TabItem x:Name="ProfilesTab" IsVisible="False">
+                <views:ProfilesSettingsView DataContext="{Binding Profiles}" />
+            </TabItem>
+            <TabItem Classes="settingsNavHeader" Header="This profile" />
+
             <TabItem x:Name="CaptureTab" Classes="settingsNav" AutomationProperties.Name="Privacy">
                 <TabItem.Header>
                     <StackPanel Orientation="Horizontal" Spacing="10">
@@ -516,18 +524,6 @@
                 </ScrollViewer>
             </TabItem>
 
-            <TabItem Classes="settingsNavHeader" Header="Profiles" IsVisible="{Binding Profiles, Converter={x:Static ObjectConverters.IsNotNull}}" />
-
-            <TabItem x:Name="ProfilesTab" Classes="settingsNav" AutomationProperties.Name="Profiles"
-                     IsVisible="{Binding Profiles, Converter={x:Static ObjectConverters.IsNotNull}}">
-                <TabItem.Header>
-                    <StackPanel Orientation="Horizontal" Spacing="10">
-                        <views:AppIcon Kind="Users" Size="16" />
-                        <TextBlock Text="All profiles" VerticalAlignment="Center" />
-                    </StackPanel>
-                </TabItem.Header>
-                <views:ProfilesSettingsView DataContext="{Binding Profiles}" />
-            </TabItem>
         </TabControl>
         </LayoutTransformControl>
 
