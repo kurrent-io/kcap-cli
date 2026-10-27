@@ -2285,10 +2285,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // CreateActivityClock() gives a real launch, with a controllable time source.
             AgentActivityClock? activityClock = null,
             WorktreeInfo? worktree = null, WorkLocation work = WorkLocation.OwnedWorktree,
+            string vendor = "codex",
             string? borrowedSnapshotSource = null) {
         var agent = new AgentInstance(
-            id, prompt, model, null, "/repo", "codex",
-            new PtyHostedAgentRuntime("codex", pty ?? NoopPtyProcess.Instance, _time),
+            id, prompt, model, null, "/repo", vendor,
+            new PtyHostedAgentRuntime(vendor, pty ?? NoopPtyProcess.Instance, _time),
             worktree ?? new WorktreeInfo("/repo", "b", "/repo"),
             new CancellationTokenSource()) {
             Kind = kind, FlowRunId = flowRunId, FlowRole = flowRole, IsPrivate = isPrivate,
@@ -3684,6 +3685,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         agent.Runtime.NoteTerminalDialog(dialog is not null);
         if (Equals(agent.UsageLimit, usageLimit) && Equals(agent.TerminalDialog, dialog)) return;
         var limitReached = agent.UsageLimit is null && usageLimit is not null;
+        var dialogChanged = !Equals(agent.TerminalDialog, dialog);
         agent.UsageLimit     = usageLimit;
         agent.TerminalDialog = dialog;
         // The menu names no window: the signal constrains every exhausted window, or stands as unknown when none is.
@@ -3692,6 +3694,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 _time.GetUtcNow(), Fresh: false, [], null, null, [new LimitSignal(null, null)],
                 LimitReachedReported: false, LimitStateKnown: false));
         _statusNotifier.Pulse();
+        if (dialogChanged && !agent.IsServerSilent) _ = _server.ReportAgentTerminalDialogAsync(agent.Id, dialog);
     }
 
     /// <summary>
@@ -5822,6 +5825,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                             LogReportCommandsFailed(ex, agent.Id);
                         }
                     }
+
+                    // The server holds the open dialog in memory only, like the command list.
+                    if (agent.TerminalDialog is { } dialog) await _server.ReportAgentTerminalDialogAsync(agent.Id, dialog);
 
                     // No replay from here: the agent's cloud sink was asked to resync above, and
                     // it sends a reset ahead of the ring on the same ordered lane as live output.

@@ -1198,6 +1198,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(AgentRegistered))]
 [JsonSerializable(typeof(AgentRegisteredResponse))]
 [JsonSerializable(typeof(AgentStatusChanged))]
+[JsonSerializable(typeof(ReportAgentTerminalDialogArgs))]
 [JsonSerializable(typeof(AgentUnregistered))]
 [JsonSerializable(typeof(LaunchFailed))]
 [JsonSerializable(typeof(TerminalOutput))]
@@ -2381,6 +2382,13 @@ public record HostedAgentCommand(string Name, string? Description, string? Argum
 public readonly record struct ReportAgentCommandsArgs(
         string                            AgentId,
         IReadOnlyList<HostedAgentCommand> Commands
+    );
+
+/// <summary>The dialog a hosted agent's terminal shows, or null once it has closed. A later report
+/// replaces the earlier one. JSON mirror of the server's <c>ReportAgentTerminalDialogArgs</c>.</summary>
+public readonly record struct ReportAgentTerminalDialogArgs(
+        string                       AgentId,
+        LocalIpc.TerminalDialogDto?  Dialog
     );
 
 /// <param name="StopReason">The code of the daemon's own termination verdict, when it ended the agent.
