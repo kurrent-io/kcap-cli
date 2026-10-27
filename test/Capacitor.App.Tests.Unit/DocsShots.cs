@@ -5,6 +5,7 @@ using Avalonia.Headless;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.App.Views;
 
 namespace Capacitor.App.Tests.Unit;
@@ -113,12 +114,12 @@ public sealed class DocsShots {
 
     [Test, DocsShot("desktop-wizard-edition")]
     public async Task The_setup_wizard_offers_the_cloud_and_local_editions() {
-        await CaptureAsync("desktop-wizard-edition", async () => await DocsShotScenes.WizardEditionAsync(), "CloudEditionButton");
+        await CaptureAsync("desktop-wizard-edition", async () => await DocsShotScenes.WizardAsync(Config, WizardStepId.Edition), "CloudEditionButton");
     }
 
     [Test, DocsShot("desktop-wizard-sign-in")]
     public async Task The_setup_wizard_asks_to_sign_in_with_a_work_account() {
-        await CaptureAsync("desktop-wizard-sign-in", async () => await DocsShotScenes.WizardSignInAsync(Config), "WorkAccountButton");
+        await CaptureAsync("desktop-wizard-sign-in", async () => await DocsShotScenes.WizardAsync(Config, WizardStepId.SignIn), "WorkAccountButton");
     }
 
     static void OpenHelpFlyoutInsideTheWindow(Window window) {
