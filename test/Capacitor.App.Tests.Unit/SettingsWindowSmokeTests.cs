@@ -510,7 +510,7 @@ public class SettingsWindowSmokeTests {
             Settle(window);
             await Assert.That(checkbox.IsChecked).IsTrue();
             await Assert.That(checkbox.IsEffectivelyEnabled).IsTrue();
-            await Assert.That(harnesses.Rows[0].Message).IsEqualTo("Could not remove hooks");
+            await Assert.That(harnesses.Rows[0].Details).IsEqualTo("Could not remove hooks");
         } finally { window.Close(); }
     });
 

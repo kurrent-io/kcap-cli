@@ -34,7 +34,8 @@ public class HarnessesSettingsViewModelTests {
         cli.PluginInstallAsync("--codex", Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
             .Returns(new ProcessResult(1, "", "installation failed", false), new ProcessResult(0, "", "", false));
         await vm.ConnectAsync(row);
-        await Assert.That(row.Message).IsEqualTo("installation failed");
+        await Assert.That(row.Message!).DoesNotContain("installation failed");
+        await Assert.That(row.Details).IsEqualTo("installation failed");
         wired = true;
         await vm.ConnectAsync(row);
         await Assert.That(row.Message!).Contains("Setup completed");
@@ -158,7 +159,9 @@ public class HarnessesSettingsViewModelTests {
         var row = vm.Rows[0];
         await vm.ToggleConnectionAsync(row);
         await Assert.That(row.IsConfigured).IsFalse();
-        await Assert.That(row.Message!).Contains("preserved");
+        await Assert.That(row.ErrorTitle).IsEqualTo("Finished with warnings");
+        await Assert.That(row.IsWarning).IsTrue();
+        await Assert.That(row.Details!).Contains("preserved");
     });
 
 

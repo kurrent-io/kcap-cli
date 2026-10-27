@@ -84,14 +84,32 @@
                                                         </MultiBinding>
                                                     </TextBlock.IsVisible>
                                                 </TextBlock>
-                                                <Border Classes="settingsError"
+                                                <Border Classes="settingsError" Classes.warning="{Binding IsWarning}"
                                                         IsVisible="{Binding ErrorTitle, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
                                                     <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
-                                                        <views:AppIcon Kind="CircleAlert" Size="14" Foreground="{StaticResource KcapDangerBrush}"
-                                                                       VerticalAlignment="Top" Margin="0,2,0,0" />
+                                                        <Panel VerticalAlignment="Top" Margin="0,2,0,0">
+                                                            <views:AppIcon Kind="CircleAlert" Size="14" Foreground="{StaticResource KcapDangerBrush}"
+                                                                           IsVisible="{Binding !IsWarning}" />
+                                                            <views:AppIcon Kind="TriangleAlert" Size="14" Foreground="{StaticResource KcapWarningBrush}"
+                                                                           IsVisible="{Binding IsWarning}" />
+                                                        </Panel>
                                                         <StackPanel Grid.Column="1" Spacing="2">
                                                             <TextBlock Classes="settingsErrorTitle" Text="{Binding ErrorTitle}" />
                                                             <SelectableTextBlock Classes="settingsErrorDetail" Text="{Binding Message}" />
+                                                            <StackPanel Spacing="6" Margin="0,4,0,0"
+                                                                        IsVisible="{Binding Details, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                                                <ToggleButton x:Name="DetailsToggle" Classes="settingsDetailsToggle"
+                                                                              AutomationProperties.Name="{Binding Label, StringFormat='Show details for {0}'}">
+                                                                    <StackPanel Orientation="Horizontal" Spacing="4">
+                                                                        <views:AppIcon Kind="ChevronRight" Size="12" IsVisible="{Binding !#DetailsToggle.IsChecked}" />
+                                                                        <views:AppIcon Kind="ChevronDown" Size="12" IsVisible="{Binding #DetailsToggle.IsChecked}" />
+                                                                        <TextBlock Text="Show details" IsVisible="{Binding !#DetailsToggle.IsChecked}" />
+                                                                        <TextBlock Text="Hide details" IsVisible="{Binding #DetailsToggle.IsChecked}" />
+                                                                    </StackPanel>
+                                                                </ToggleButton>
+                                                                <SelectableTextBlock Classes="settingsErrorDetail settingsErrorOutput" Text="{Binding Details}"
+                                                                                     IsVisible="{Binding #DetailsToggle.IsChecked}" />
+                                                            </StackPanel>
                                                         </StackPanel>
                                                     </Grid>
                                                 </Border>

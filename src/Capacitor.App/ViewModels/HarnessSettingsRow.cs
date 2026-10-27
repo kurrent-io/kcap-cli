@@ -10,6 +10,8 @@ namespace Capacitor.App.ViewModels;
 public sealed class HarnessSettingsRow : ReactiveObject {
     string? _message;
     string? _errorTitle;
+    string? _details;
+    bool _isWarning;
     bool? _wired;
     bool _tools;
     bool _setupUnverified;
@@ -105,8 +107,15 @@ public sealed class HarnessSettingsRow : ReactiveObject {
     /// Set when Message reports a failure, which then reads as that failure's detail.
     public string? ErrorTitle { get => _errorTitle; private set => this.RaiseAndSetIfChanged(ref _errorTitle, value); }
 
-    internal void Report(string? message, string? errorTitle = null) {
+    /// The command line's own output, kept behind Show details: it names files and errors a reader rarely needs.
+    public string? Details { get => _details; private set => this.RaiseAndSetIfChanged(ref _details, value); }
+    /// The callout reports a change that finished with warnings rather than one that failed.
+    public bool IsWarning { get => _isWarning; private set => this.RaiseAndSetIfChanged(ref _isWarning, value); }
+
+    internal void Report(string? message, string? errorTitle = null, string? details = null, bool warning = false) {
         Message = message;
         ErrorTitle = errorTitle;
+        Details = string.IsNullOrWhiteSpace(details) ? null : details.Trim();
+        IsWarning = warning;
     }
 }

@@ -130,7 +130,8 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
             else if (result.ExitCode != 0)
                 row.Report(string.IsNullOrWhiteSpace(result.Stderr)
                     ? $"The kcap command line exited with code {result.ExitCode}. Try again."
-                    : result.Stderr.Trim(), failed);
+                    : $"kcap couldn't change some of {row.Label}'s files. The details name each one; fix them, then try again.",
+                    failed, result.Stderr);
             else if (wired is null)
                 row.Report("The command finished, but the connection could not be verified. Rescan to check it.", "Could not verify the change");
             else if (wired.Value != record)
@@ -142,7 +143,7 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
                 await RememberSetupAsync(row, unverified: false, tools: tools);
             }
             if (result is { ExitCode: 0, TimedOut: false } && !string.IsNullOrWhiteSpace(result.Stderr))
-                row.Report($"{row.Message}\n{result.Stderr.Trim()}", row.ErrorTitle);
+                row.Report(row.Message, row.ErrorTitle ?? "Finished with warnings", result.Stderr, warning: row.ErrorTitle is null);
         } catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) {
             if (mutationStarted) row.SetWired(null);
         } catch (Exception ex) {
