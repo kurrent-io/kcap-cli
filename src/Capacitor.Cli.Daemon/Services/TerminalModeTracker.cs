@@ -1,8 +1,12 @@
 namespace Capacitor.Cli.Daemon.Services;
 
-/// Tracks DEC mouse modes across PTY chunks, ignoring escape sequences inside terminal strings.
-internal sealed class TerminalMouseModeTracker {
+/// Tracks DEC mouse and bracketed-paste modes across PTY chunks, ignoring escape sequences inside
+/// terminal strings.
+internal sealed class TerminalModeTracker {
     enum State { Ground, Escape, Csi, String, StringEscape }
+
+    const int MouseModes     = 1 | 2 | 4 | 8;
+    const int BracketedPaste = 16;
 
     readonly byte[] _csi = new byte[64];
     State _state;
@@ -10,7 +14,9 @@ internal sealed class TerminalMouseModeTracker {
     bool _osc;
     int _modes;
 
-    public bool IsActive => Volatile.Read(ref _modes) != 0;
+    public bool IsMouseReporting => (Volatile.Read(ref _modes) & MouseModes) != 0;
+
+    public bool IsBracketedPasteEnabled => (Volatile.Read(ref _modes) & BracketedPaste) != 0;
 
     public void Feed(ReadOnlySpan<byte> bytes) {
         foreach (var b in bytes) {
@@ -59,7 +65,7 @@ internal sealed class TerminalMouseModeTracker {
     }
 
     static void UpdateMode(ref int modes, int value, bool enabled) {
-        var bit = value switch { 9 => 1, 1000 => 2, 1002 => 4, 1003 => 8, _ => 0 };
+        var bit = value switch { 9 => 1, 1000 => 2, 1002 => 4, 1003 => 8, 2004 => BracketedPaste, _ => 0 };
         modes = enabled ? modes | bit : modes & ~bit;
     }
 }

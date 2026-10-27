@@ -49,23 +49,23 @@ internal sealed partial class PtyHostedAgentRuntime(
     internal static readonly TimeSpan GracefulStopLaneWait = TimeSpan.FromSeconds(1);
 
     /// <summary>
-    /// How long startup output must have been silent before the launch prompt is pasted: a TUI still
-    /// drawing its banner or startup spinner is not reading its composer yet. Codex's spinner redraws
-    /// every 100 ms, so the window has to outlast that gap.
+    /// How long output must have been silent, once the TUI has enabled bracketed paste, before the
+    /// launch prompt is pasted: a TUI still drawing its banner or startup spinner is not reading its
+    /// composer yet. Codex's spinner redraws every 100 ms, so the window has to outlast that gap.
     /// </summary>
     internal static readonly TimeSpan LaunchPromptQuietWindow = TimeSpan.FromMilliseconds(500);
 
     /// <summary>Upper bound on that wait: a TUI that never settles still gets its prompt.</summary>
     internal static readonly TimeSpan LaunchPromptMaxWait = TimeSpan.FromSeconds(10);
 
-    /// <summary>The PTY offers no exit event, so the wait for first output is sliced and the exit
-    /// flag re-read between slices.</summary>
+    /// <summary>The PTY offers no exit event, so the wait for the TUI to become ready is sliced and
+    /// the exit flag re-read between slices.</summary>
     static readonly TimeSpan LaunchPromptExitPoll = TimeSpan.FromMilliseconds(250);
 
-    readonly TerminalMouseModeTracker _mouseMode = new();
+    readonly TerminalModeTracker _modes = new();
     readonly ILogger _logger = logger ?? NullLogger.Instance;
     readonly SemaphoreSlim           _lane        = new(1, 1);
-    readonly TaskCompletionSource    _firstOutput = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    readonly TaskCompletionSource    _pasteReady  = new(TaskCreationOptions.RunContinuationsAsynchronously);
     readonly CancellationTokenSource _disposal    = new();
     readonly Lock                    _dialogGate  = new();
     long                             _lastOutputAt;
@@ -85,9 +85,9 @@ internal sealed partial class PtyHostedAgentRuntime(
 
     public async IAsyncEnumerable<byte[]> ReadOutputAsync([EnumeratorCancellation] CancellationToken ct = default) {
         await foreach (var chunk in pty.ReadOutputAsync(ct).ConfigureAwait(false)) {
-            _mouseMode.Feed(chunk);
+            _modes.Feed(chunk);
             Volatile.Write(ref _lastOutputAt, time.GetTimestamp());
-            _firstOutput.TrySetResult();
+            if (_modes.IsBracketedPasteEnabled) _pasteReady.TrySetResult();
 
             yield return chunk;
         }
@@ -110,12 +110,18 @@ internal sealed partial class PtyHostedAgentRuntime(
 
     /// <summary>
     /// Makes <paramref name="prompt"/> the agent's first message without putting it on the command
-    /// line: pastes it once startup output has been quiet for <see cref="LaunchPromptQuietWindow"/>
-    /// or <see cref="LaunchPromptMaxWait"/> has passed. A text follow-up sent meanwhile lands after
-    /// it; raw and special keys do not wait, so a viewer can answer a startup dialog themselves.
-    /// A dialog on screen is not a settled startup and has no time limit: its default option would
-    /// take the submit Enter and leave the prompt unsent in the composer.
+    /// line: pastes it once the TUI has enabled bracketed paste and output has then been quiet for
+    /// <see cref="LaunchPromptQuietWindow"/>, or <see cref="LaunchPromptMaxWait"/> has passed. A text
+    /// follow-up sent meanwhile lands after it; raw and special keys do not wait, so a viewer can
+    /// answer a startup dialog themselves. A dialog on screen is not a settled startup and has no
+    /// time limit: its default option would take the submit Enter and leave the prompt unsent in the
+    /// composer.
     /// </summary>
+    /// <remarks>
+    /// Output alone is no sign of readiness: ConPTY writes its own preamble before the agent starts,
+    /// and a paste sent while the agent is still booting reaches its composer but the submitting CR
+    /// is lost, leaving the prompt unsent.
+    /// </remarks>
     internal void DeliverLaunchPrompt(string prompt) {
         if (LaunchPromptDelivery is not null) throw new InvalidOperationException("The launch prompt is already queued.");
 
@@ -185,9 +191,9 @@ internal sealed partial class PtyHostedAgentRuntime(
             var remaining = LaunchPromptMaxWait - time.GetElapsedTime(started);
             if (remaining <= TimeSpan.Zero) return false;
 
-            if (!_firstOutput.Task.IsCompleted) {
+            if (!_pasteReady.Task.IsCompleted) {
                 try {
-                    await _firstOutput.Task.WaitAsync(remaining < LaunchPromptExitPoll ? remaining : LaunchPromptExitPoll, time, ct);
+                    await _pasteReady.Task.WaitAsync(remaining < LaunchPromptExitPoll ? remaining : LaunchPromptExitPoll, time, ct);
                 } catch (TimeoutException) { }
 
                 continue;
@@ -250,7 +256,7 @@ internal sealed partial class PtyHostedAgentRuntime(
         await _lane.WaitAsync();
 
         try {
-            if (isWheel && (!_mouseMode.IsActive || pty.HasExited)) {
+            if (isWheel && (!_modes.IsMouseReporting || pty.HasExited)) {
                 LogWheelDropped(_logger);
                 return;
             }

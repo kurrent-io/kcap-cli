@@ -191,6 +191,8 @@ public class PtyHostedAgentRuntimeTests {
         await Assert.That(pty.StringWrites[1]).IsEqualTo("\r");
     }
 
+    const string ReadyBanner = "\x1b[?2004hbanner";
+
     static Task PumpAsync(PtyHostedAgentRuntime runtime) =>
         Task.Run(async () => { await foreach (var _ in runtime.ReadOutputAsync()) { } });
 
@@ -227,7 +229,7 @@ public class PtyHostedAgentRuntimeTests {
         runtime.DeliverLaunchPrompt("build it");
         var followUp = runtime.SendUserInputAsync("and test it");
         _ = PumpAsync(runtime);
-        pty.Emit("banner");
+        pty.Emit(ReadyBanner);
 
         await followUp.WaitAsync(TimeSpan.FromSeconds(10));
 
@@ -245,6 +247,7 @@ public class PtyHostedAgentRuntimeTests {
 
         runtime.DeliverLaunchPrompt("build it");
         _ = PumpAsync(runtime);
+        pty.Emit(ReadyBanner);
         pty.Emit("spinner");
         await Task.Delay(100);
 
@@ -257,6 +260,35 @@ public class PtyHostedAgentRuntimeTests {
 
         await Assert.That(pty.Writes).IsEmpty();
 
+        await StepAsync(time, PtyHostedAgentRuntime.LaunchPromptQuietWindow, () => pty.Writes.Count >= 1);
+
+        await Assert.That(pty.Writes[0]).IsEqualTo("\x1b[200~build it\x1b[201~");
+        pty.Exit();
+    }
+
+    /// <summary>ConPTY's preamble arrives, then goes quiet while the agent is still booting. Pasting
+    /// in that silence leaves the prompt in the composer with its submitting CR lost, so the paste
+    /// waits for the agent to enable bracketed paste.</summary>
+    [Test]
+    public async Task Launch_prompt_waits_for_the_tui_to_enable_bracketed_paste() {
+        var time    = new FakeTimeProvider();
+        var pty     = new RecordingScriptedPtyProcess();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, time, approvalsDisabled: false);
+
+        runtime.DeliverLaunchPrompt("build it");
+        _ = PumpAsync(runtime);
+        pty.Emit("\x1b[?9001h\x1b[?1004h");
+        pty.Emit("\x1b[?25l\x1b[2J\x1b[m\x1b[H\x1b]0;claude\x07\x1b[?25h");
+        await Task.Delay(100);
+
+        for (var quiet = TimeSpan.Zero; quiet < PtyHostedAgentRuntime.LaunchPromptQuietWindow * 4; quiet += TimeSpan.FromMilliseconds(250)) {
+            time.Advance(TimeSpan.FromMilliseconds(250));
+            await Task.Delay(10);
+        }
+        await Task.Delay(100);
+        await Assert.That(pty.Writes).IsEmpty();
+
+        pty.Emit(ReadyBanner);
         await StepAsync(time, PtyHostedAgentRuntime.LaunchPromptQuietWindow, () => pty.Writes.Count >= 1);
 
         await Assert.That(pty.Writes[0]).IsEqualTo("\x1b[200~build it\x1b[201~");
@@ -548,7 +580,7 @@ public class PtyHostedAgentRuntimeTests {
 
         runtime.DeliverLaunchPrompt("one\x1b[201~\rtwo");
         _ = PumpAsync(runtime);
-        pty.Emit("banner");
+        pty.Emit(ReadyBanner);
         var outcome = await runtime.LaunchPromptDelivery!.WaitAsync(TimeSpan.FromSeconds(10));
 
         await Assert.That(outcome).IsEqualTo(LaunchPromptOutcome.Delivered);
