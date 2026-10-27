@@ -104,6 +104,10 @@ static class DocsShotScenes {
             }],
             TitleFor = _ => RetryTitle,
         };
+        var homeState = TempDir.WithPathTo("app-state.json", out var homeStatePath);
+        var home = new HomeViewModel(service, new AppStateStore(homeStatePath), new NoLaunch(),
+            () => Task.FromResult<string[]>([PaymentsRepo, StorefrontRepo]), clock);
+        var web = new WebWorkspaceViewModel(ServerUrl, new RecordingOpener(), _ => { }, CancellationToken.None);
         MainWindowViewModel? vm = null;
         var directory = new AgentDirectory(
             service, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null),
@@ -117,11 +121,14 @@ static class DocsShotScenes {
                 id, service, actions, attach.Factory, () => new FakeTerminalSurface(),
                 clock, new RecordingOpener(), permissions, workContext,
                 new ScriptedLocalControlOps(), new NoAttachmentUploader(), pullRequests: linkedPullRequests),
-            rail: rail, tenantName: "northwind", openFeedback: openFeedback, requestSetup: requestSetup);
+            rail: rail, home: home, tenantName: "northwind", openFeedback: openFeedback, requestSetup: requestSetup) { Web = web };
         var window = new Views.MainWindow { DataContext = vm };
         TempDir? transcript = null;
         window.Closed += (_, _) => {
             rail.Dispose();
+            home.Dispose();
+            web.Dispose();
+            homeState.Dispose();
             pullRequests.Dispose();
             transcript?.Dispose();
         };
@@ -142,5 +149,10 @@ static class DocsShotScenes {
         }
 
         return (vm, window, permissions);
+    }
+
+    sealed class NoLaunch : ILaunchClient {
+        public Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct) =>
+            Task.FromResult(new LaunchOutcome(false, null, null));
     }
 }
