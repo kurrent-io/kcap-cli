@@ -73,10 +73,13 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
         MachineName = machineName;
 
         if (pathFix is not null)
+        {
             pathFix.WhenAnyValue(x => x.Fixed).Subscribe(_ => {
                 this.RaisePropertyChanged(nameof(PathHazard));
                 this.RaisePropertyChanged(nameof(PathResolved));
             });
+            pathFix.WhenAnyValue(x => x.Plan).Subscribe(_ => this.RaisePropertyChanged(nameof(PathNote)));
+        }
     }
 
     const string PrivacyRequiredMessage = "Choose who can read new sessions before continuing.";
@@ -109,6 +112,10 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
     public bool PathHazard => PathFix is { Fixed: false };
 
     public bool PathResolved => PathFix is { Fixed: true };
+
+    public IReadOnlyList<DisclosureSpan> PathNote =>
+        [new("Turning harnesses on also adds "), new("kcap", Code: true), new(" to your terminal so their hooks can run it. "),
+         .. PathFix?.Plan ?? []];
 
     public bool CliAvailable => _cli.CliPath is not null;
 

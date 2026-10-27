@@ -109,7 +109,7 @@
                                                       ToolTip.Tip="{Binding Label, StringFormat='Give {0} kcap tools'}"
                                                       AutomationProperties.Name="{Binding Label, StringFormat='Give {0} kcap tools'}" />
                                             <TextBlock Grid.Row="0" Grid.Column="3" Text="BUNDLED" HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                       FontFamily="{StaticResource OnboardingMonoFont}" FontSize="9" LetterSpacing="0.6"
+                                                       FontSize="9.5" FontWeight="SemiBold" LetterSpacing="0.6"
                                                        Foreground="{StaticResource OnboardingDimBrush}" IsVisible="{Binding ToolsBundled}" />
                                         </Grid>
                                         <TextBlock Classes="onboardingDetail" Text="{Binding ConsentNote}" Margin="0,0,152,0"
@@ -141,17 +141,14 @@
                 </Border>
 
                 <!-- Turning a harness on also puts the bundled CLI on the login shell. -->
-                <TextBlock Classes="onboardingNote" IsVisible="{Binding PathHazard}">
-                    <Run Text="Turning harnesses on also adds " /><Run Text="kcap" FontFamily="{StaticResource OnboardingMonoFont}" /><Run Text=" to your terminal, so their hooks can run it. " /><Run Text="{Binding PathFix.Disclosure}" />
-                </TextBlock>
-                <Border Classes="onboardingResolved" IsVisible="{Binding PathResolved}">
-                    <StackPanel Orientation="Horizontal" Spacing="9">
-                        <icons:AppIcon Kind="Check" Size="14" VerticalAlignment="Center" Foreground="{StaticResource KcapSuccessBrush}" />
-                        <TextBlock Classes="onboardingDetail" Foreground="{StaticResource OnboardingMutedBrush}">
-                            <Run Text="Your login shell on " /><Run Text="{Binding MachineName}" FontFamily="{StaticResource OnboardingMonoFont}" /><Run Text=" can now find " /><Run Text="kcap" FontFamily="{StaticResource OnboardingMonoFont}" /><Run Text=". Capture will record." />
-                        </TextBlock>
-                    </StackPanel>
-                </Border>
+                <TextBlock x:Name="PathNoteText" Classes="onboardingNote" IsVisible="{Binding PathHazard}"
+                           views:OnboardingSpans.Spans="{Binding PathNote}" />
+                <StackPanel Orientation="Horizontal" Spacing="9" IsVisible="{Binding PathResolved}">
+                    <icons:AppIcon Kind="Check" Size="14" VerticalAlignment="Center" Foreground="{StaticResource KcapSuccessBrush}" />
+                    <TextBlock Classes="onboardingDetail" Foreground="{StaticResource OnboardingMutedBrush}">
+                        <Run Text="Your login shell on " /><Run Text="{Binding MachineName}" FontFamily="{StaticResource OnboardingMonoFont}" /><Run Text=" can now find " /><Run Text="kcap" FontFamily="{StaticResource OnboardingMonoFont}" /><Run Text=". Capture will record." />
+                    </TextBlock>
+                </StackPanel>
 
                 <TextBlock Classes="onboardingError" Text="{Binding Message}"
                            IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />

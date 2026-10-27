@@ -171,6 +171,8 @@ public sealed class ShellProfile(UserHome home, string? shell) {
     // An unset shell is the macOS default.
     string ShellName() => string.IsNullOrEmpty(shell) ? "zsh" : Path.GetFileName(shell);
 
-    string Tilde(string path) =>
+    string Tilde(string path) => Tilde(home, path);
+
+    internal static string Tilde(UserHome home, string path) =>
         path.StartsWith(home.Path + Path.DirectorySeparatorChar, StringComparison.Ordinal) ? "~" + path[home.Path.Length..] : path;
 }
