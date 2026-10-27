@@ -4,8 +4,6 @@ using Avalonia.Headless;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
-using Capacitor.App.ViewModels;
-using Capacitor.App.Views;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -29,13 +27,13 @@ public sealed class DocsShots {
         }
     }
 
-    static async Task CaptureAsync(string name, Func<Window> build, string sentinelControlName) {
+    static async Task CaptureAsync(string name, Func<Task<Window>> build, string sentinelControlName) {
         var path = Path.Combine(OutDir, $"{name}-dark.png");
-        await AvaloniaSession.DispatchAsync(() => {
-            var window = build();
-            window.Show();
-            window.SetRenderScaling(2);
+        await AvaloniaSession.DispatchAsync(async () => {
+            var window = await build();
             try {
+                window.Show();
+                window.SetRenderScaling(2);
                 for (var i = 0; i < MaxPumps && !Ready(window, sentinelControlName); i++) {
                     Dispatcher.UIThread.RunJobs();
                     AvaloniaHeadlessPlatform.ForceRenderTimerTick();
@@ -43,11 +41,15 @@ public sealed class DocsShots {
                 }
                 if (!Ready(window, sentinelControlName))
                     throw new TimeoutException($"{name}: '{sentinelControlName}' never became ready");
-                window.CaptureRenderedFrame()!.Save(path, new PngBitmapEncoderOptions());
+                var frame = window.CaptureRenderedFrame()
+                    ?? throw new InvalidOperationException($"{name}: the window rendered no frame to capture");
+                frame.Save(path, new PngBitmapEncoderOptions());
             } finally {
                 window.Close();
                 Dispatcher.UIThread.RunJobs();
+                (window.DataContext as IDisposable)?.Dispose();
             }
+            return true;
         });
     }
 
@@ -77,11 +79,8 @@ public sealed class DocsShots {
         await Assert.That(named.Distinct().Count()).IsEqualTo(named.Length);
     }
 
-    [Test]
-    [DocsShot("desktop-main")]
-    public async Task Main_window() {
-        await CaptureAsync("desktop-main",
-            () => new MainWindow { DataContext = new MainWindowViewModel(new FakeDaemonClientService(), CancellationToken.None, TestActivity.New(), TimeProvider.System) },
-            "SessionRail");
+    [Test, DocsShot("desktop-main")]
+    public async Task Main_window_with_rail_and_a_working_chat_tab() {
+        await CaptureAsync("desktop-main", async () => (await DocsShotScenes.MainWindowAsync()).Window, "ToolRowLabel");
     }
 }
