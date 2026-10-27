@@ -174,6 +174,7 @@ public partial class App : Application {
     ConsentService? _consent;
     PermissionService? _permissions;
     AccountsService? _accounts;
+    IObservable<DateTimeOffset>? _usageClock;
     NotificationSettingsService? _notificationSettings;
     IDesktopNotificationSink? _notificationSink;
     IDesktopNotificationAccess? _notificationAccess;
@@ -414,6 +415,7 @@ public partial class App : Application {
             _commands = null;
             _permissions = null;
             _accounts = null;
+            _usageClock = null;
             _sessionAccess = null;
             _pullRequestTones = null;
             _pause = null;
@@ -876,6 +878,7 @@ public partial class App : Application {
         var drafts = new ComposerDrafts();
         var transcripts = new LocalTranscripts();
         var readings = new AccountReadings(accounts.Snapshot, remoteAgents.DrawableDaemonAccounts, UsageClock.Create(_time));
+        _usageClock = readings.Clock;
         WorkspaceViewModel BuildWorkspace(string agentId) => new(
             agentId, service, actions, attachFactory, () => new XtermTerminalSurface(80, 24, PtyDumpPath), _time, workspaceOpener, permissions,
             workContext, ops, uploader,
@@ -1118,7 +1121,7 @@ public partial class App : Application {
                     ? new AccountsSettingsViewModel(accounts, lane.RunAsync, service.DaemonName, settings.ProfileName,
                         discover: () => AccountDiscovery.Find(
                             _userHome, AccountStore.Beside(_daemonStore).TryLoad() ?? new AccountRegistry(), Environment.GetEnvironmentVariable),
-                        pickDirectory: PickAccountDirectoryAsync, daemonStatus: service.Status, appLifetime: _shutdown.Token)
+                        pickDirectory: PickAccountDirectoryAsync, daemonStatus: service.Status, usageClock: _usageClock, appLifetime: _shutdown.Token)
                     : null,
                 Appearance = new AppearanceSettingsViewModel(_uiScale),
                 Privacy    = new PrivacySettingsViewModel(_telemetry, _config, _usageNotice),

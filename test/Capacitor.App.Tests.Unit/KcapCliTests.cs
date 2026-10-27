@@ -536,6 +536,7 @@ public class KcapCliTests {
             ["accounts", "rename", "abcd1234", "Work account", "--json"]);
         yield return () => (MutationVerb.AccountRewire, new AccountArgs(null, null, "abcd1234", null), ["accounts", "rewire", "abcd1234", "--json"]);
         yield return () => (MutationVerb.AccountRewire, new AccountArgs(null, null, null, null), ["accounts", "rewire", "--json"]);
+        yield return () => (MutationVerb.AccountRefresh, new AccountArgs(null, null, "abcd1234", null), ["accounts", "refresh", "abcd1234", "--json"]);
     }
 
     [Test]

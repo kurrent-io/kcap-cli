@@ -51,8 +51,13 @@ public static class AccountUsage {
         : null;
 
     /// The earliest future reset among the main limit's windows.
-    public static DateTimeOffset? NextReset(AccountViewDto account, DateTimeOffset now) =>
-        account.Reading is { } reading ? EarliestReset(reading.Windows.Where(w => w.LimitId == MainLimitId(account.Vendor)), now) : null;
+    public static DateTimeOffset? NextReset(AccountViewDto account, DateTimeOffset now) => NextResetWindow(account, now)?.ResetsAt;
+
+    /// The main-limit window that resets first, or null when none has a future reset.
+    public static UsageWindowDto? NextResetWindow(AccountViewDto account, DateTimeOffset now) =>
+        account.Reading is { } reading
+            ? reading.Windows.Where(w => w.LimitId == MainLimitId(account.Vendor) && w.ResetsAt > now).MinBy(w => w.ResetsAt)
+            : null;
 
     static AccountUsageView Line(string text) => new([], text, null, null, null, null, false);
 

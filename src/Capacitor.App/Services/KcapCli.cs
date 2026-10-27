@@ -268,6 +268,7 @@ public sealed class KcapCli : IKcapCli {
             MutationVerb.AccountRemove => ["accounts", "remove", Required(args.AccountId), "--json"],
             MutationVerb.AccountRename => ["accounts", "rename", Required(args.AccountId), Required(args.Label), "--json"],
             MutationVerb.AccountRewire => args.AccountId is { } id ? ["accounts", "rewire", id, "--json"] : ["accounts", "rewire", "--json"],
+            MutationVerb.AccountRefresh => ["accounts", "refresh", Required(args.AccountId), "--json"],
             _                          => throw new ArgumentOutOfRangeException(nameof(verb), verb, "not an account verb"),
         };
         if (CliPath is not { } cliPath) return await NoCliResult().ConfigureAwait(false);
