@@ -348,21 +348,6 @@
                 </ScrollViewer>
             </TabItem>
 
-            <TabItem x:Name="SearchTab" Classes="settingsNav" AutomationProperties.Name="Search"
-                     IsVisible="{Binding Search, Converter={x:Static ObjectConverters.IsNotNull}}">
-                <TabItem.Header>
-                    <StackPanel Orientation="Horizontal" Spacing="10">
-                        <views:AppIcon Kind="Search" Size="16" />
-                        <TextBlock Text="Search" VerticalAlignment="Center" />
-                    </StackPanel>
-                </TabItem.Header>
-                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                    <views:SettingsPage Classes="settingsPage">
-                        <views:SearchSettingsView DataContext="{Binding Search}" />
-                    </views:SettingsPage>
-                </ScrollViewer>
-            </TabItem>
-
             <TabItem x:Name="HarnessesTab" Classes="settingsNav" AutomationProperties.Name="Harnesses"
                      IsVisible="{Binding Harnesses, Converter={x:Static ObjectConverters.IsNotNull}}">
                 <TabItem.Header>
@@ -385,6 +370,21 @@
                     </StackPanel>
                 </TabItem.Header>
                 <views:AccountsSettingsView DataContext="{Binding Accounts}" />
+            </TabItem>
+
+            <TabItem x:Name="SearchTab" Classes="settingsNav" AutomationProperties.Name="Search"
+                     IsVisible="{Binding Search, Converter={x:Static ObjectConverters.IsNotNull}}">
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <views:AppIcon Kind="Search" Size="16" />
+                        <TextBlock Text="Search" VerticalAlignment="Center" />
+                    </StackPanel>
+                </TabItem.Header>
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <views:SettingsPage Classes="settingsPage">
+                        <views:SearchSettingsView DataContext="{Binding Search}" />
+                    </views:SettingsPage>
+                </ScrollViewer>
             </TabItem>
 
             <TabItem x:Name="PrivacyTab" Classes="settingsNav" AutomationProperties.Name="Usage data"
