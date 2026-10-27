@@ -37,6 +37,8 @@ public sealed partial class LinuxAppRemoval : IAppRemoval {
 
     public string FinishByHand => "Move the kcap AppImage to the Trash";
 
+    public string Trashed => "Moved the kcap AppImage to the Trash";
+
     /// A link in a folder only root can write stays: the CLI's own uninstall has already printed the command
     /// that removes it.
     public Task<IReadOnlyList<string>> RemoveLinksAsync(CancellationToken ct) {

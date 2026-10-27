@@ -161,6 +161,15 @@ public class UninstallRunViewModelTests {
         await Assert.That(vm.State).IsEqualTo(UninstallRunState.Finished);
         await Assert.That(string.Join(",", calls)).IsEqualTo("links,support,trash");
         await Assert.That(vm.IsFinished).IsTrue();
+        await Assert.That(vm.Receipt.Select(i => i.Text)).IsEquivalentTo([
+            "Disconnected kcap from your coding agents",
+            "Removed kcap’s background services",
+            "Removed your kcap settings and sign-in",
+            "Removed the kcap command the app installed",
+            "Moved the kcap app to the Trash",
+        ], TUnit.Assertions.Enums.CollectionOrdering.Matching);
+        await Assert.That(vm.Receipt.All(i => i.Done)).IsTrue();
+        await Assert.That(vm.DetailsLabel).IsEqualTo("Show what was removed");
         await Assert.That(await vm.RetryCommand.CanExecute.FirstAsync()).IsFalse();
         await Assert.That(await vm.CloseCommand.CanExecute.FirstAsync()).IsTrue();
 
@@ -198,6 +207,30 @@ public class UninstallRunViewModelTests {
 
         await Assert.That(vm.State).IsEqualTo(UninstallRunState.Finished);
         await Assert.That(string.Join(",", calls)).IsEqualTo("links,support,trash");
+        await Assert.That(vm.Receipt[^1].Done).IsFalse();
+    }
+
+    [Test]
+    public async Task Receipt_names_the_deleted_local_server_only_when_it_was_purged() {
+        var (kept, _, _, _) = Build(purgeLocal: false);
+        var (purged, _, _, _) = Build(purgeLocal: true);
+
+        await kept.RunAsync();
+        await purged.RunAsync();
+
+        await Assert.That(kept.Receipt.Any(i => i.Text.Contains("local server"))).IsFalse();
+        await Assert.That(purged.Receipt.Any(i => i.Text.Contains("local server"))).IsTrue();
+    }
+
+    [Test]
+    public async Task Failure_leaves_the_receipt_empty() {
+        var (vm, cli, _, _) = Build();
+        cli.UninstallBehavior = _ => Task.FromResult(Exit(1));
+
+        await vm.RunAsync();
+
+        await Assert.That(vm.Receipt).IsEmpty();
+        await Assert.That(vm.DetailsLabel).IsEqualTo("Hide details");
     }
 
     [Test]

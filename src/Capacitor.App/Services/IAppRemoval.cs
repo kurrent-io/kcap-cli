@@ -15,4 +15,7 @@ public interface IAppRemoval {
 
     /// What the user does when the app could not remove itself.
     string FinishByHand => "Drag kcap to the Trash";
+
+    /// How a finished uninstall reports the app's own removal.
+    string Trashed => "Moved the kcap app to the Trash";
 }
