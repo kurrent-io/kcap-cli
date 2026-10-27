@@ -117,7 +117,7 @@ The **Accounts** tab in Settings lists this machine's Claude and Codex config di
 
 Updates arrive through the app: it checks a few times a day, downloads in the background and asks before restarting ("Check for Updates…" in the menu bar checks now). A bundled `kcap update` reports this and does nothing else. The bundled CLI follows the app's channel; the npm package stays the headless/CI channel.
 
-Help → Report a Bug… / Send Feedback… (or the help button in the session rail's footer) sends a report to Kurrent support; replies arrive by email.
+Help → Report a Bug… / Send Feedback… (or the help button in the session rail's footer) sends a report to Kurrent support; replies arrive by email. On the local server, which has no support intake, it opens a prefilled email to team@kcap.ai in your mail app instead and copies the report to your clipboard.
 
 **Uninstall kcap…** in the application menu removes what [`kcap uninstall`](#uninstalling) removes, plus the app, the `kcap` links it made and the PATH line it added to your shell profile. It first lists what will go, and warns when the local server is installed (or a change to it was interrupted), because its recorded sessions are deleted with it; sessions already sent to a cloud server stay there. One progress window stays open through cleanup and confirms completion after the app is moved to the Trash. **Show details** reveals the removal history; **Done** closes the window when finished. Restart coding agents that were open during uninstall so they stop using previously loaded kcap hooks. On Linux the item is in the help menu at the foot of the session rail, beside Settings: it also removes the daemon's systemd user unit and the CLI the AppImage copied to `~/.local/share/kcap/desktop`, then moves the AppImage to your Trash.
 
@@ -2803,6 +2803,10 @@ kcap feedback --feedback                               # send feedback; prompts 
 > (scripts, CI); on an interactive terminal without it, the command prompts for a
 > multi-line message ended by an empty line. On success, it prints:
 > `✓ Sent to Kurrent support as {email} — replies will reach you by email.`
+> Against the local server, which has no support intake, it opens a prefilled email to
+> team@kcap.ai in your mail app and copies the full report to your clipboard; a report too
+> long for a mail link is cut short in the draft. With no mail app or clipboard, it prints the
+> report to email by hand.
 
 > `kcap update` is the one-step upgrade for npm-global installs: it checks the
 > registry, runs `npm install -g @kurrent/kcap@<tag>`, then refreshes your

@@ -22,8 +22,9 @@ public sealed class CapacitorServer(string? url, ConfigRoot config, ProfileConte
     public LocalRoot?     LocalRoot { get; } = localRoot;
 
     /// <summary>Why <see cref="Url"/> is a removed local installation, or may be one; null otherwise.</summary>
-    public string? Refusal { get; } = LocalDestination.Refusal(url,
-        localRoot is not null ? LocalEndpoints.Read(localRoot).Classify(url) : profiles.Resolution.Endpoint);
+    public string? Refusal { get; } = LocalDestination.Refusal(url, Classify(url, profiles, localRoot));
+
+    public bool IsLocal { get; } = Classify(url, profiles, localRoot) is LocalEndpointClass.Local;
 
     /// <summary>
     /// Whether <see cref="Url"/> can be sent to at all. Evaluated once here rather than per request:
@@ -36,4 +37,7 @@ public sealed class CapacitorServer(string? url, ConfigRoot config, ProfileConte
     public string UnusableHint => Refusal ?? HttpClientExtensions.SchemeMissingHint;
 
     readonly bool _postable = HookHttp.IsPostable(url);
+
+    static LocalEndpointClass Classify(string? url, ProfileContext profiles, LocalRoot? localRoot) =>
+        localRoot is not null ? LocalEndpoints.Read(localRoot).Classify(url) : profiles.Resolution.Endpoint;
 }

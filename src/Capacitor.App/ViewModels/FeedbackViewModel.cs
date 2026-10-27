@@ -12,11 +12,15 @@ namespace Capacitor.App.ViewModels;
 /// composed message, id — into a snapshot; an unchanged retry re-sends that snapshot, and any edit
 /// releases it and mints a new id, so a retry can never quietly carry an older text or a newer
 /// trailer under an id the server may already have accepted.
+///
+/// <para>With <c>mail</c> set (a local installation, which has no support intake) Send opens an email
+/// draft instead of posting.</para>
 /// </summary>
 public sealed class FeedbackViewModel : ReactiveObject, IDisposable {
     const string ClientMarker = "Desktop ";
 
     readonly IFeedbackApi _api;
+    readonly Func<FeedbackSubmission, FeedbackMailOutcome>? _mail;
     readonly string _os;
     readonly Action? _signIn;
     readonly CancellationTokenSource _lifetime;
@@ -31,13 +35,16 @@ public sealed class FeedbackViewModel : ReactiveObject, IDisposable {
     bool _isBusy;
     bool _isSent;
     string? _reporterEmail;
+    string? _sentMessage;
     string? _outcome;
     bool _signInOffered;
     bool _disposed;
 
     public FeedbackViewModel(IFeedbackApi api, FeedbackCategory initial, IObservable<string> trailer,
-            string osDescription, Action? signIn, CancellationToken appLifetime = default) {
+            string osDescription, Action? signIn, CancellationToken appLifetime = default,
+            Func<FeedbackSubmission, FeedbackMailOutcome>? mail = null) {
         _api      = api;
+        _mail     = mail;
         _os       = osDescription;
         _signIn   = signIn;
         _category = initial;
@@ -80,6 +87,12 @@ public sealed class FeedbackViewModel : ReactiveObject, IDisposable {
 
     public string Hint => BuildHint();
 
+    public string Subtitle => _mail is null
+        ? "Goes to Kurrent support. Replies arrive by email."
+        : $"Opens an email to {FeedbackMail.Address} in your mail app. Replies arrive by email.";
+
+    public string SendLabel => _mail is null ? "Send" : "Open email";
+
     public bool CanSend =>
         !IsBusy && !IsSent && _message.Trim().Length > 0 &&
         FeedbackMessageComposer.Remaining(_message, EffectiveTrailer) >= 0;
@@ -103,6 +116,7 @@ public sealed class FeedbackViewModel : ReactiveObject, IDisposable {
     }
 
     public string? ReporterEmail { get => _reporterEmail; private set => this.RaiseAndSetIfChanged(ref _reporterEmail, value); }
+    public string? SentMessage { get => _sentMessage; private set => this.RaiseAndSetIfChanged(ref _sentMessage, value); }
     public string? Outcome { get => _outcome; private set => this.RaiseAndSetIfChanged(ref _outcome, value); }
     public bool SignInOffered { get => _signInOffered; private set => this.RaiseAndSetIfChanged(ref _signInOffered, value); }
     public ReactiveCommand<Unit, Unit> SendCommand { get; }
@@ -148,6 +162,7 @@ public sealed class FeedbackViewModel : ReactiveObject, IDisposable {
         _id = Guid.NewGuid();
         IsSent = false;
         ReporterEmail = null;
+        SentMessage = null;
         Outcome = null;
         SignInOffered = false;
         _category = category; this.RaisePropertyChanged(nameof(Category));
@@ -168,14 +183,18 @@ public sealed class FeedbackViewModel : ReactiveObject, IDisposable {
         Outcome = null;
         SignInOffered = false;
         try {
+            if (_mail is { } mail) {
+                // The clipboard helper waits on a child process.
+                var mailed = await Task.Run(() => mail(submission), _lifetime.Token);
+                if (MailRefusal(mailed) is { } refusal) Outcome = refusal;
+                else MarkSent(MailSent(mailed));
+                return;
+            }
+
             var result = await _api.SubmitAsync(submission, _lifetime.Token);
             if (result is FeedbackResult.Sent(var email)) {
                 ReporterEmail = email;
-                IsSent = true;
-                _bound = null;
-                _boundTrailer = null;
-                _id = Guid.NewGuid();
-                RaiseDerived();
+                MarkSent($"Sent. Replies go to {email}.");
             } else {
                 Outcome = FeedbackResultMessages.ForRefusal(result);
             }
@@ -190,6 +209,28 @@ public sealed class FeedbackViewModel : ReactiveObject, IDisposable {
             IsBusy = false;
         }
     }
+
+    void MarkSent(string message) {
+        SentMessage = message;
+        IsSent = true;
+        _bound = null;
+        _boundTrailer = null;
+        _id = Guid.NewGuid();
+        RaiseDerived();
+    }
+
+    static string? MailRefusal(FeedbackMailOutcome mailed) => (mailed.Opened, mailed.Copied) switch {
+        (true, _)      => null,
+        (false, true)  => $"Couldn't open a mail app. The report is on your clipboard: paste it into an email to {FeedbackMail.Address}.",
+        (false, false) => $"Couldn't open a mail app or copy the report. Copy your message and email it to {FeedbackMail.Address}.",
+    };
+
+    static string MailSent(FeedbackMailOutcome mailed) => (mailed.Draft.CutShort, mailed.Copied) switch {
+        (false, false) => "Draft opened in your mail app. Send it from there.",
+        (false, true)  => "Draft opened in your mail app. Send it from there; a copy is on your clipboard.",
+        (true, true)   => "Draft opened, cut short to fit a mail link. The full report is on your clipboard: paste it over the draft's text before sending.",
+        (true, false)  => "Draft opened, cut short to fit a mail link. Add the rest of your message before sending.",
+    };
 
     public void Dispose() {
         if (_disposed) return;
