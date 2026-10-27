@@ -122,6 +122,8 @@ sealed class PollingServiceVerify(
             return (RetireRefusal("unit_unknown"), true, null);
         }
 
+        // Its state says nothing when the supervisor did not answer, so it can be neither fenced nor called stopped.
+        if (old.Probe == LabelProbe.Unknown) return (RetireRefusal("unit_unknown"), true, null);
         if (old.Probe != LabelProbe.Loaded && !old.UnitPresent) return (null, false, null);
 
         IReadOnlyDictionary<string, string>? retiredEnv;

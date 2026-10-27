@@ -25,6 +25,7 @@ public class PollingServiceVerifyTests {
         public int? OldJobPid = OldDaemonPid;
         public bool OldUninstallFails;
         public bool Unanswered;
+        public bool OldUnanswered;
         public IReadOnlyDictionary<string, string>? OldEnv;
         public Exception? OldEnvFailure;
         public readonly List<string> Calls = [];
@@ -39,7 +40,7 @@ public class PollingServiceVerifyTests {
 
         public ServiceQuery Query(string serviceId) => serviceId == Id
             ? new(Unanswered ? LabelProbe.Unknown : Registered ? LabelProbe.Loaded : LabelProbe.Absent, UnitPresent, State, null, Running ? JobPid : null)
-            : new(OldRegistered ? LabelProbe.Loaded : LabelProbe.Absent, OldRegistered,
+            : new(OldUnanswered ? LabelProbe.Unknown : OldRegistered ? LabelProbe.Loaded : LabelProbe.Absent, OldRegistered,
                 !OldRegistered ? ServiceState.NotInstalled : OldRunning ? ServiceState.Running : ServiceState.Installed,
                 null, OldRunning ? OldJobPid : null);
 
@@ -402,6 +403,19 @@ public class PollingServiceVerifyTests {
         var exit = await Verify(manager).StartVerifiedAsync(Id);
 
         await Assert.That(exit).IsEqualTo(VerifyExit.Contended);
+        await Assert.That(manager.Calls).IsEmpty();
+    }
+
+    /// <summary>The old unit's daemon may be running unseen, so the rename refuses before fencing, installing
+    /// or uninstalling anything rather than retire it unfenced.</summary>
+    [Test]
+    public async Task A_rename_refuses_to_retire_a_unit_whose_state_is_unknown_and_touches_nothing() {
+        var manager = new FakeManager { OldRegistered = true, OldUnanswered = true };
+
+        var exit = await Verify(manager, retired: Retired("work"))
+            .InstallVerifiedAsync(Spec(), replace: true, expectedVersion: null, retireServiceId: "old-name");
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.RetireRefused);
         await Assert.That(manager.Calls).IsEmpty();
     }
 }
