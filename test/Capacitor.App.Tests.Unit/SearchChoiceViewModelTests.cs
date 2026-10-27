@@ -165,7 +165,7 @@ public class SearchChoiceViewModelTests {
             var opener = new RecordingOpener();
             var vm = new SearchChoiceViewModel(_ => Task.FromResult(false), () => installed, opener);
             await vm.CheckOllamaCommand.Execute().ToTask();
-            await Assert.That(vm.OllamaStatus).IsEqualTo("Ollama isn't installed.");
+            await Assert.That(vm.OllamaStatus).IsEqualTo("Ollama is not installed.");
             await Assert.That(vm.OllamaLinkVisible).IsTrue();
             await vm.OpenOllamaSiteCommand.Execute().ToTask();
             await Assert.That(opener.Opened).IsEquivalentTo([SearchChoiceViewModel.OllamaDownloadUrl]);

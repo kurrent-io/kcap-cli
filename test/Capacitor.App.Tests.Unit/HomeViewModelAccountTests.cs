@@ -114,6 +114,7 @@ public class HomeViewModelAccountTests {
                 listing: listings.Listing, daemonAccounts: listings.DaemonAccounts, localAccounts: LocalAccounts,
                 retryListing: () => OnRetry(),
                 readings: new AccountReadings(LocalAccounts, Remote.DrawableDaemonAccounts, Clock));
+            await Vm.AccountMemoryLoadedForTesting;
             return Vm;
         }
 

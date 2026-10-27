@@ -4,7 +4,7 @@ public static class ExperimentalFeatures {
     public static ExperimentalFeature CodexAppServer { get; } = new(
         "codex-app-server",
         "Codex app-server",
-        "Run Codex reviewers and interactive Codex agents over codex app-server instead of the terminal. Needs Codex 0.146.0 or later",
+        "Run Codex reviewers and interactive Codex agents over codex app-server instead of the terminal. Needs Codex 0.146.0 or later.",
         AppliesLive: true);
 
     public static IReadOnlyList<ExperimentalFeature> All { get; } = [CodexAppServer];

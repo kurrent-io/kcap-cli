@@ -78,6 +78,8 @@ public interface IKcapCli {
     /// flagless Claude default.
     Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct, IReadOnlyList<string>? options = null);
 
+    Task<ProcessResult> PluginRemoveAsync(string? vendorFlag, CancellationToken ct);
+
     /// <c>accounts add|remove|rename|rewire … --json</c>, which prints one AccountActionResultDto line.
     /// No server overlay: the account verbs touch nothing on the server.
     Task<ProcessResult> AccountsAsync(MutationVerb verb, AccountArgs args, CancellationToken ct);
@@ -259,6 +261,13 @@ public sealed class KcapCli : IKcapCli {
         if (options is not null) args.AddRange(options);
 
         return await Run(cliPath, args.ToArray(),
+            new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: MutationTimeout), ct).ConfigureAwait(false);
+    }
+
+    public async Task<ProcessResult> PluginRemoveAsync(string? vendorFlag, CancellationToken ct) {
+        if (CliPath is not { } cliPath) return await NoCliResult().ConfigureAwait(false);
+        string[] args = vendorFlag is null ? ["plugin", "remove"] : ["plugin", "remove", vendorFlag];
+        return await Run(cliPath, args,
             new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: MutationTimeout), ct).ConfigureAwait(false);
     }
 

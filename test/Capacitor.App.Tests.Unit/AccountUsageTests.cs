@@ -254,9 +254,9 @@ public class AccountUsageTests {
     public async Task Needs_fix_reasons() {
         var reading = Reading([W("claude", 300, 10)]);
         await Assert.That(AccountUsage.NeedsFix(Account(reading, signIn: SignInStates.SignedOut))).IsEqualTo("Needs sign-in");
-        await Assert.That(AccountUsage.NeedsFix(Account(reading, "codex", "installed"))).IsEqualTo("Needs trust");
-        await Assert.That(AccountUsage.NeedsFix(Account(reading, state: "broken"))).IsEqualTo("Broken");
-        await Assert.That(AccountUsage.NeedsFix(Account(reading, state: "not_wired"))).IsEqualTo("Not wired");
+        await Assert.That(AccountUsage.NeedsFix(Account(reading, "codex", "installed"))).IsEqualTo("Needs approval in Codex");
+        await Assert.That(AccountUsage.NeedsFix(Account(reading, state: "broken"))).IsEqualTo("Needs repair");
+        await Assert.That(AccountUsage.NeedsFix(Account(reading, state: "not_wired"))).IsEqualTo("Not set up");
         await Assert.That(AccountUsage.NeedsFix(Account(reading))).IsNull();
     }
 

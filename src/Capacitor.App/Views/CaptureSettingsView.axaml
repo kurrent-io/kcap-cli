@@ -1,0 +1,129 @@
+<UserControl xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
+             xmlns:views="clr-namespace:Capacitor.App.Views" xmlns:onboarding="clr-namespace:Capacitor.App.ViewModels.Onboarding"
+             x:Class="Capacitor.App.Views.CaptureSettingsView" x:DataType="vm:CaptureSettingsViewModel">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" IsEnabled="{Binding !Busy}">
+        <views:SettingsPage Classes="settingsPage">
+            <StackPanel Classes="settingsHeader">
+                <TextBlock Classes="kcapTitle" Text="Privacy" />
+                <TextBlock Classes="kcapSubtitle" Text="Choose what gets recorded and who can read new sessions." TextWrapping="Wrap"
+                           IsVisible="{Binding VisibilityVisible}" />
+                <TextBlock Classes="kcapSubtitle" Text="Choose what gets recorded. Sessions on your local server stay private." TextWrapping="Wrap"
+                           IsVisible="{Binding !VisibilityVisible}" />
+                <Border Classes="settingsContextChip" ToolTip.Tip="These settings apply only to this profile">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <views:AppIcon Kind="UserRound" Size="12" />
+                        <TextBlock Text="Profile" />
+                        <TextBlock Classes="scopeName" Text="{Binding ProfileName}" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <StackPanel Classes="settingsGroup" IsVisible="{Binding VisibilityVisible}">
+                <StackPanel Classes="settingsGroupHeader">
+                    <TextBlock Classes="settingsGroupTitle" Text="Who can read new sessions" />
+                    <TextBlock Classes="kcapHint" TextWrapping="Wrap"
+                               Text="Sessions already on the server keep their visibility." />
+                </StackPanel>
+                <Border Classes="settingsError warning" IsVisible="{Binding !VisibilityEditable}">
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+                        <views:AppIcon Kind="TriangleAlert" Size="14" Foreground="{StaticResource KcapWarningBrush}"
+                                       VerticalAlignment="Top" Margin="0,2,0,0" />
+                        <TextBlock Grid.Column="1" Classes="settingsErrorTitle" FontWeight="Normal"
+                                   Text="Your server's sharing options could not be loaded. This choice stays as it is for now. Recording rules still save." />
+                    </Grid>
+                </Border>
+                <Border Classes="settingsCard">
+                    <ListBox x:Name="VisibilityInput" Classes="settingsChoices" ItemsSource="{Binding VisibilityOptions}"
+                             SelectedValueBinding="{Binding Value}" SelectedValue="{Binding Visibility, Mode=TwoWay}"
+                             AutomationProperties.Name="Default session visibility">
+                        <ListBox.IsEnabled>
+                            <MultiBinding Converter="{x:Static BoolConverters.And}">
+                                <Binding Path="VisibilityEditable" />
+                                <Binding Path="!Loading" />
+                            </MultiBinding>
+                        </ListBox.IsEnabled>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate x:DataType="onboarding:VisibilityOption">
+                                <StackPanel Spacing="2">
+                                    <TextBlock Classes="kcapLabel" Text="{Binding Label}" TextWrapping="Wrap" />
+                                    <TextBlock Classes="kcapHint" Text="{Binding Detail}" TextWrapping="Wrap" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Border>
+            </StackPanel>
+
+            <StackPanel Classes="settingsGroup">
+                <StackPanel Classes="settingsGroupHeader">
+                    <TextBlock Classes="settingsGroupTitle" Text="Recording rules" />
+                    <TextBlock Classes="kcapHint" TextWrapping="Wrap"
+                               Text="Leave a list empty to record everywhere. Exclusions always win." />
+                </StackPanel>
+                <Border Classes="settingsCard">
+                    <StackPanel>
+                        <StackPanel Margin="16,14,16,16" Spacing="12">
+                            <StackPanel Classes="settingsRowText">
+                                <TextBlock Classes="kcapLabel" Text="Repositories" />
+                                <TextBlock Classes="kcapHint" TextWrapping="Wrap"
+                                           Text="One owner/repo per line. An include list also skips sessions outside a recognised repository." />
+                            </StackPanel>
+                            <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+                                <StackPanel Spacing="6">
+                                    <TextBlock Classes="settingsFieldLabel" Text="Only record" />
+                                    <TextBox x:Name="AllowedReposInput" Classes="kcapField settingsList" Text="{Binding AllowedRepos, Mode=TwoWay}"
+                                             PlaceholderText="kurrent-io/kcap-cli"
+                                             AutomationProperties.Name="Include repositories" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Spacing="6">
+                                    <TextBlock Classes="settingsFieldLabel" Text="Never record" />
+                                    <TextBox x:Name="ExcludedReposInput" Classes="kcapField settingsList" Text="{Binding ExcludedRepos, Mode=TwoWay}"
+                                             PlaceholderText="No exclusions"
+                                             AutomationProperties.Name="Exclude repositories" />
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                        <Border Classes="settingsDivider" />
+                        <StackPanel Margin="16,14,16,16" Spacing="12">
+                            <StackPanel Classes="settingsRowText">
+                                <TextBlock Classes="kcapLabel" Text="Folders" />
+                                <TextBlock Classes="kcapHint" TextWrapping="Wrap"
+                                           Text="One absolute path or ~/folder per line. A folder covers its subfolders." />
+                            </StackPanel>
+                            <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+                                <StackPanel Spacing="6">
+                                    <TextBlock Classes="settingsFieldLabel" Text="Only record" />
+                                    <TextBox x:Name="AllowedPathsInput" Classes="kcapField settingsList" Text="{Binding AllowedPaths, Mode=TwoWay}"
+                                             PlaceholderText="~/work"
+                                             AutomationProperties.Name="Include folders" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Spacing="6">
+                                    <TextBlock Classes="settingsFieldLabel" Text="Never record" />
+                                    <TextBox x:Name="ExcludedPathsInput" Classes="kcapField settingsList" Text="{Binding ExcludedPaths, Mode=TwoWay}"
+                                             PlaceholderText="No exclusions"
+                                             AutomationProperties.Name="Exclude folders" />
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+                <TextBlock Classes="settingsFootnote"
+                           Text="With both include lists set, a session must match a repository and a folder. Sessions already uploaded stay on the server. Agents you launch yourself still report their sessions." />
+                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="16">
+                    <Button x:Name="SaveCaptureButton" Classes="kcapPrimary" Content="Save"
+                            Command="{Binding SaveCommand}" />
+                    <Grid Grid.Column="1" ColumnDefinitions="Auto,*" VerticalAlignment="Center">
+                        <!-- Only the outcome is green; what the save left alone stays a plain hint. -->
+                        <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,0,6,0" IsVisible="{Binding Saved}">
+                            <views:AppIcon Kind="CircleCheck" Size="14" Foreground="{StaticResource KcapSuccessBrush}" VerticalAlignment="Center" />
+                            <TextBlock Classes="kcapHint" Text="Saved." Foreground="{StaticResource KcapSuccessBrush}" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <TextBlock x:Name="CaptureMessageText" Grid.Column="1" Classes="kcapHint" Text="{Binding Message}"
+                                   TextWrapping="Wrap" VerticalAlignment="Center" />
+                    </Grid>
+                </Grid>
+            </StackPanel>
+        </views:SettingsPage>
+    </ScrollViewer>
+</UserControl>

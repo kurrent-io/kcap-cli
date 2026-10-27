@@ -1792,9 +1792,9 @@ public class MainWindowSmokeTests {
         await Assert.That(sharesLine).IsTrue();
     }
 
-    /// Name, then the agent count, then the version. The dot shares the count's parent, so a
-    /// wrap cannot leave it on the line above. Both leave when the attach drops; the snapshot
-    /// stays, so the name and version remain with nothing between them.
+    /// Name, then the agent count; the version shows only while an update waits (Settings › About
+    /// carries it otherwise). The dot shares the count's parent, so a wrap cannot leave it on the
+    /// line above, and leaves with the count when the attach drops.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Rail_daemon_row_separators_leave_with_the_fragment_they_precede() {
@@ -1840,10 +1840,10 @@ public class MainWindowSmokeTests {
         });
 
         await Assert.That(connected).IsEquivalentTo(
-            new[] { "daemon-a", "\u00b7", "1 of 5 agents", "kcap 1.2.3" }, CollectionOrdering.Matching);
+            new[] { "daemon-a", "\u00b7", "1 of 5 agents" }, CollectionOrdering.Matching);
         await Assert.That(dotSharesCountParent).IsTrue();
         await Assert.That(detached).IsEquivalentTo(
-            new[] { "daemon-a", "kcap 1.2.3" }, CollectionOrdering.Matching);
+            new[] { "daemon-a" }, CollectionOrdering.Matching);
     }
 
     /// A queued daemon update is the version's own status: warning paint on the semver, the

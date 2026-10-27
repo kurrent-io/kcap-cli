@@ -736,6 +736,8 @@ public sealed class TerminalTabViewModel : ReactiveObject {
     /// interruption it publishes is read past again, since a retry's rows can land while it is in flight.
     async Task RecheckSettledAsync(int generation, TerminalSessionState settled) {
         while (true) {
+            // Both callers and every pass arrive from a dispatcher operation, which completes on the
+            // UI thread, so ConfigureAwait(false) upstream leaves this read there without the hop.
             var entry = await Task.Run(ReadLedger).ConfigureAwait(false);
             var interrupted = entry is { State: ResumeState.Interrupted } && settled.Phase != TerminalSessionPhase.Interrupted;
             if (!interrupted && !NamesAnotherRuntime(settled, entry)) return;
