@@ -5,7 +5,6 @@
              xmlns:accounts="clr-namespace:Capacitor.Cli.Core.Accounts;assembly=Capacitor.Cli.Core"
              x:Class="Capacitor.App.Views.AccountsSettingsView"
              x:DataType="vm:AccountsSettingsViewModel">
-    <Panel>
     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
         <views:SettingsPage Classes="settingsPage">
             <StackPanel Classes="settingsHeader">
@@ -31,6 +30,7 @@
                         <StackPanel Classes="settingsGroup">
                             <TextBlock Classes="settingsGroupTitle" Text="{Binding VendorLabel}" />
                             <Border Classes="settingsCard">
+                                <StackPanel>
                                 <ItemsControl ItemsSource="{Binding Rows}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate x:DataType="vm:AccountSettingsRow">
@@ -123,6 +123,24 @@
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
+                                <!-- The last action's problem, in the card of the tool it was about, as Harnesses shows a row's. -->
+                                <Border Classes="settingsError" Classes.warning="{Binding Notice.IsWarning, FallbackValue=False}" Margin="16,0,16,16"
+                                        IsVisible="{Binding Notice, Converter={x:Static ObjectConverters.IsNotNull}}">
+                                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+                                        <Panel VerticalAlignment="Top" Margin="0,2,0,0">
+                                            <views:AppIcon Kind="CircleAlert" Size="14" Foreground="{StaticResource KcapDangerBrush}"
+                                                           IsVisible="{Binding !Notice.IsWarning, FallbackValue=False}" />
+                                            <views:AppIcon Kind="TriangleAlert" Size="14" Foreground="{StaticResource KcapWarningBrush}"
+                                                           IsVisible="{Binding Notice.IsWarning, FallbackValue=False}" />
+                                        </Panel>
+                                        <StackPanel Grid.Column="1" Spacing="2">
+                                            <TextBlock Classes="settingsErrorTitle" Text="{Binding Notice.Title, FallbackValue={x:Null}}" />
+                                            <SelectableTextBlock Classes="settingsErrorDetail" Text="{Binding Notice.Detail, FallbackValue={x:Null}}"
+                                                                 IsVisible="{Binding Notice.Detail, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}" />
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                                </StackPanel>
                             </Border>
                         </StackPanel>
                     </DataTemplate>
@@ -176,26 +194,4 @@
 
         </views:SettingsPage>
     </ScrollViewer>
-
-        <Border x:Name="AccountsNoticeBanner" Classes="settingsError settingsToast" Classes.warning="{Binding Notice.IsWarning, FallbackValue=False}"
-                IsVisible="{Binding Notice, Converter={x:Static ObjectConverters.IsNotNull}}">
-            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
-                <Panel VerticalAlignment="Top" Margin="0,2,0,0">
-                    <views:AppIcon Kind="CircleAlert" Size="14" Foreground="{StaticResource KcapDangerBrush}"
-                                   IsVisible="{Binding !Notice.IsWarning, FallbackValue=False}" />
-                    <views:AppIcon Kind="TriangleAlert" Size="14" Foreground="{StaticResource KcapWarningBrush}"
-                                   IsVisible="{Binding Notice.IsWarning, FallbackValue=False}" />
-                </Panel>
-                <StackPanel Grid.Column="1" Spacing="2">
-                    <TextBlock x:Name="AccountsNoticeTitle" Classes="settingsErrorTitle" Text="{Binding Notice.Title, FallbackValue={x:Null}}" />
-                    <SelectableTextBlock Classes="settingsErrorDetail" Text="{Binding Notice.Detail, FallbackValue={x:Null}}"
-                                         IsVisible="{Binding Notice.Detail, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}" />
-                </StackPanel>
-                <Button Grid.Column="2" Classes="kcapGhost kcapIcon" Padding="4" MinHeight="0" VerticalAlignment="Top"
-                        Click="OnDismissNotice" AutomationProperties.Name="Dismiss" ToolTip.Tip="Dismiss">
-                    <views:AppIcon Kind="X" Size="12" />
-                </Button>
-            </Grid>
-        </Border>
-    </Panel>
 </UserControl>

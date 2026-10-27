@@ -222,10 +222,14 @@ public class AccountsSettingsViewModelTests {
         rig.Outcome = _ => Task.FromResult<MutationOutcome>(new MutationOutcome.Failed(1, "plugin: hooks.json is read-only", RecoverySurface.Attention));
         await vm.RewireCommand.Execute(work).ToTask();
         await Assert.That(vm.Notice).IsEqualTo(new AccountsNotice("Could not re-wire work", "plugin: hooks.json is read-only"));
+        await Assert.That(vm.Groups.Single(g => g.Vendor == "claude").Notice).IsEqualTo(vm.Notice);
+        await Assert.That(vm.Groups.Single(g => g.Vendor == "codex").Notice).IsNull();
 
         rig.Outcome = _ => Task.FromResult<MutationOutcome>(new MutationOutcome.Unconfirmed("snapshot_not_seen"));
         await vm.AddDefaultCommand.Execute(rig.Row(".codex")).ToTask();
         await Assert.That(vm.Notice).IsEqualTo(new AccountsNotice("Adding .codex could not be confirmed", "The list shows the current state.", IsWarning: true));
+        await Assert.That(vm.Groups.Single(g => g.Vendor == "claude").Notice).IsNull();
+        await Assert.That(vm.Groups.Single(g => g.Vendor == "codex").Notice).IsEqualTo(vm.Notice);
 
         rig.Outcome = _ => Task.FromResult<MutationOutcome>(new MutationOutcome.Refused("cli_below_floor", RecoverySurface.Attention));
         await vm.AddDefaultCommand.Execute(rig.Row(".codex")).ToTask();

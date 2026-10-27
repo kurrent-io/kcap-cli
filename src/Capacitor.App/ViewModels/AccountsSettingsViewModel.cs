@@ -30,6 +30,7 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
     IReadOnlyList<AccountVendorGroup> _groups = [];
     IReadOnlyList<AccountCandidate> _candidates = [];
     AccountsNotice? _notice;
+    string? _noticeVendor;
     bool _isBusy;
     AccountSettingsRow? _renaming;
     string _renameDraft = "";
@@ -94,10 +95,19 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
 
     public AccountsNotice? Notice {
         get => _notice;
-        private set => this.RaiseAndSetIfChanged(ref _notice, value);
+        private set {
+            this.RaiseAndSetIfChanged(ref _notice, value);
+            Groups = WithNotice(Groups);
+        }
     }
 
-    public void DismissNotice() => Notice = null;
+    void Report(string? vendor, AccountsNotice? notice) {
+        _noticeVendor = vendor;
+        Notice = notice;
+    }
+
+    IReadOnlyList<AccountVendorGroup> WithNotice(IReadOnlyList<AccountVendorGroup> groups) =>
+        [.. groups.Select(g => g with { Notice = g.Vendor == _noticeVendor ? _notice : null })];
 
     public bool IsBusy {
         get => _isBusy;
@@ -178,24 +188,24 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
     };
 
     Task AddCandidateAsync(AccountCandidate candidate) =>
-        RunAsync(MutationVerb.AccountAdd, AccountRows.LastSegment(candidate.Directory),
+        RunAsync(candidate.Vendor.VendorId, MutationVerb.AccountAdd, AccountRows.LastSegment(candidate.Directory),
             new AccountArgs(candidate.Vendor.VendorId, candidate.Directory, null, null));
 
     Task AddDefaultAsync(AccountSettingsRow row) =>
         row.IsUnregisteredDefault
-            ? RunAsync(MutationVerb.AccountAdd, row.Label, new AccountArgs(row.Vendor, row.Directory, null, null))
+            ? RunAsync(row.Vendor, MutationVerb.AccountAdd, row.Label, new AccountArgs(row.Vendor, row.Directory, null, null))
             : Task.CompletedTask;
 
     Task RewireAsync(AccountSettingsRow row) =>
-        row.Id is { } id ? RunAsync(MutationVerb.AccountRewire, row.Label, new AccountArgs(null, null, id, null)) : Task.CompletedTask;
+        row.Id is { } id ? RunAsync(row.Vendor, MutationVerb.AccountRewire, row.Label, new AccountArgs(null, null, id, null)) : Task.CompletedTask;
 
     Task RemoveAsync(AccountSettingsRow row) =>
-        row.Id is { } id ? RunAsync(MutationVerb.AccountRemove, row.Label, new AccountArgs(null, null, id, null)) : Task.CompletedTask;
+        row.Id is { } id ? RunAsync(row.Vendor, MutationVerb.AccountRemove, row.Label, new AccountArgs(null, null, id, null)) : Task.CompletedTask;
 
     async Task AddFromPickerAsync(string vendor) {
         if (!CanAct) return;
         IsBusy = true;
-        Notice = null;
+        Report(vendor, null);
         try {
             string? directory;
             try {
@@ -203,11 +213,11 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
             } catch (OperationCanceledException) when (_token.IsCancellationRequested) {
                 return;
             } catch (Exception ex) {
-                Notice = new("Could not open the folder picker", ex.Message);
+                Report(vendor, new("Could not open the folder picker", ex.Message));
                 return;
             }
             if (directory is not { Length: > 0 }) return;
-            await SendAsync(MutationVerb.AccountAdd, AccountRows.LastSegment(directory), new AccountArgs(vendor, directory, null, null));
+            await SendAsync(vendor, MutationVerb.AccountAdd, AccountRows.LastSegment(directory), new AccountArgs(vendor, directory, null, null));
         } finally { IsBusy = false; }
     }
 
@@ -221,28 +231,28 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
         if (!CanAct || Renaming is not { Id: { } id } row || !RenameChanges(row, RenameDraft)) return;
         var label = RenameDraft.Trim();
         Renaming = null;
-        await RunAsync(MutationVerb.AccountRename, $"{row.Label} to {label}", new AccountArgs(null, null, id, label));
+        await RunAsync(row.Vendor, MutationVerb.AccountRename, $"{row.Label} to {label}", new AccountArgs(null, null, id, label));
     }
 
     static bool RenameChanges(AccountSettingsRow? row, string? draft) =>
         row is not null && !string.IsNullOrWhiteSpace(draft) && !string.Equals(draft.Trim(), row.Label, StringComparison.Ordinal);
 
-    async Task RunAsync(MutationVerb verb, string label, AccountArgs args) {
+    async Task RunAsync(string vendor, MutationVerb verb, string label, AccountArgs args) {
         if (!CanAct) return;
         IsBusy = true;
-        Notice = null;
+        Report(vendor, null);
         try {
-            await SendAsync(verb, label, args);
+            await SendAsync(vendor, verb, label, args);
         } finally { IsBusy = false; }
     }
 
-    async Task SendAsync(MutationVerb verb, string label, AccountArgs args) {
+    async Task SendAsync(string vendor, MutationVerb verb, string label, AccountArgs args) {
         var request = MutationRequestFactory.ForAccount(verb, args, _daemonName, _profileName);
         try {
-            Notice = OutcomeNotice(verb, label, await _runMutation(request, _token));
+            Report(vendor, OutcomeNotice(verb, label, await _runMutation(request, _token)));
         } catch (OperationCanceledException) when (_token.IsCancellationRequested) {
         } catch (Exception ex) {
-            Notice = new($"Could not {Words(verb).Infinitive} {label}", ex.Message);
+            Report(vendor, new($"Could not {Words(verb).Infinitive} {label}", ex.Message));
         }
     }
 
@@ -259,7 +269,7 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
     void ApplyGroups(IReadOnlyList<AccountVendorGroup> groups) {
         var same = groups.Count == Groups.Count && groups.Zip(Groups).All(pair =>
             pair.First.Vendor == pair.Second.Vendor && pair.First.Rows.SequenceEqual(pair.Second.Rows));
-        if (!same) Groups = groups;
+        if (!same) Groups = WithNotice(groups);
         if (Renaming is { } renaming)
             Renaming = Groups.SelectMany(g => g.Rows).FirstOrDefault(r => r.Id is not null && r.Id == renaming.Id);
     }
