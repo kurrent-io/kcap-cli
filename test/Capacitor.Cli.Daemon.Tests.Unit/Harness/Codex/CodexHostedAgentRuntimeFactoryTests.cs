@@ -373,7 +373,7 @@ public class CodexHostedAgentRuntimeFactoryTests {
             Task.FromResult<(CodexAppServerConnection, IAcpProcess)>((fake.ConnectClient(), new FakeAcpProcess()));
         var factory = Factory(new RecordingPtyFactory(), appServerActive: true, seam, readings: sink);
 
-        var start = await factory.StartAsync(Ctx(isReviewFlow: true, wt.Path) with { Account = account }, CancellationToken.None).WaitAsync(HangGuard);
+        var start = await factory.StartAsync(Ctx(isReviewFlow: false, wt.Path) with { Account = account }, CancellationToken.None).WaitAsync(HangGuard);
         try {
             await fake.SendNotificationAsync("account/rateLimits/updated", new JsonObject {
                 ["rateLimits"] = new JsonObject {
