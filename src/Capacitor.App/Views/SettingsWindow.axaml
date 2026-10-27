@@ -111,7 +111,7 @@
                                         <StackPanel Classes="settingsRowText">
                                             <TextBlock Classes="kcapLabel" Text="Agent capacity" />
                                             <TextBlock Classes="kcapHint" TextWrapping="Wrap"
-                                                       Text="The most agents that can run at once; 0 means unlimited. Lowering it lets running agents finish." />
+                                                       Text="The most agents that can run at once. 0 means no limit. Lowering it lets running agents finish." />
                                         </StackPanel>
                                         <StackPanel Orientation="Horizontal" Spacing="8">
                                             <NumericUpDown x:Name="CapacityInput" Classes="kcapField" Width="96"
@@ -131,7 +131,7 @@
                                         <StackPanel Classes="settingsRowText">
                                             <TextBlock Classes="kcapLabel" Text="Resume agents after a restart" />
                                             <TextBlock Classes="kcapHint" TextWrapping="Wrap"
-                                                       Text="Bring back agents stopped by a restart or update. When off, they stay stopped, and each one's status shows how to resume it." />
+                                                       Text="Bring back agents stopped by a restart or update. When off, they stay stopped. Each one's status shows how to resume it." />
                                         </StackPanel>
                                         <ToggleSwitch x:Name="AutoResumeToggle" Grid.Column="1" Classes="kcapSwitch"
                                                       IsChecked="{Binding AutoResume, Mode=TwoWay}"
@@ -163,7 +163,7 @@
                         <StackPanel Classes="settingsHeader">
                             <TextBlock Classes="kcapTitle" Text="Experimental" />
                             <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
-                                       Text="Try features that are still in development. Changes save for this profile and also apply to the kcap command line." />
+                                       Text="Try features that are still in development. Changes save for this profile. They also apply to the kcap command line." />
                             <Border Classes="settingsContextChip" ToolTip.Tip="These settings apply only to this profile">
                                 <StackPanel Orientation="Horizontal" Spacing="6">
                                     <views:AppIcon Kind="UserRound" Size="12" />
@@ -484,7 +484,7 @@
                                         IsVisible="{Binding About.UpdateVisible, FallbackValue=False}" />
                                 <Button x:Name="AboutCopyButton" Classes="kcapChip settingsCompact" Click="OnCopyVersionInfo"
                                         AutomationProperties.Name="Copy version info"
-                                        ToolTip.Tip="Copy these versions and your OS, for a bug report">
+                                        ToolTip.Tip="Copy these versions and your OS for a bug report">
                                     <StackPanel Orientation="Horizontal" Spacing="6">
                                         <views:AppIcon x:Name="AboutCopyIcon" Kind="Copy" Size="14" />
                                         <TextBlock x:Name="AboutCopyText" Text="Copy version info" VerticalAlignment="Center" />

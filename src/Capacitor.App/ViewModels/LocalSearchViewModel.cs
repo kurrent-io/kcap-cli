@@ -111,7 +111,7 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
         : (_current switch {
             { Model: { } model }                         => $"Searches by meaning with {model}.",
             { Provider: LocalEmbeddingProvider.Builtin } => "Searches by meaning with the built-in model.",
-            _                                            => "Searches by keyword, unless an embedding provider is set in the server's own settings.",
+            _                                            => "Searches by keyword unless the server's own settings choose a model.",
         })
         + (_current is { Pending: true } ? " The change is not applied yet." : "");
 

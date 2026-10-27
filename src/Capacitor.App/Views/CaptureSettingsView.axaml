@@ -30,7 +30,7 @@
                         <views:AppIcon Kind="TriangleAlert" Size="14" Foreground="{StaticResource KcapWarningBrush}"
                                        VerticalAlignment="Top" Margin="0,2,0,0" />
                         <TextBlock Grid.Column="1" Classes="settingsErrorTitle" FontWeight="Normal"
-                                   Text="Your server's sharing options could not be loaded, so this stays as it is for now. Your recording rules still save." />
+                                   Text="Your server's sharing options could not be loaded. This choice stays as it is for now. Recording rules still save." />
                     </Grid>
                 </Border>
                 <Border Classes="settingsCard">
@@ -109,7 +109,7 @@
                     </StackPanel>
                 </Border>
                 <TextBlock Classes="settingsFootnote"
-                           Text="With both include lists set, a session must match a repository and a folder. Existing uploads stay on the server, and agents you launch explicitly still report their sessions." />
+                           Text="With both include lists set, a session must match a repository and a folder. Sessions already uploaded stay on the server. Agents you launch yourself still report their sessions." />
                 <Grid ColumnDefinitions="Auto,*" ColumnSpacing="16">
                     <Button x:Name="SaveCaptureButton" Classes="kcapPrimary" Content="Save"
                             Command="{Binding SaveCommand}" />

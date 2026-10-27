@@ -7,7 +7,7 @@
             <StackPanel Classes="settingsHeader">
                 <TextBlock Classes="kcapTitle" Text="Harnesses" />
                 <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
-                           Text="Choose which coding tools kcap records, and which get kcap's tools. This is set once for the computer and applies to every profile." />
+                           Text="Choose which coding tools kcap records and which get kcap's tools. This applies to every profile on this computer." />
             </StackPanel>
 
             <StackPanel Classes="settingsGroup">

@@ -24,7 +24,7 @@ public sealed class HarnessSettingsRow : ReactiveObject {
         Label = identity.Label;
         Signal = detected.BinaryFound ? "Installed on this computer" : "Its settings folder is on this computer";
         ConsentNote = Id == HarnessId.Codex
-            ? "Also allows Codex's sandbox to reach the server hosts from every configured kcap profile, so its skills can connect. Disconnecting Codex keeps this network access."
+            ? "Also lets Codex's sandbox reach the servers of every kcap profile, so its skills can connect. Disconnecting Codex keeps this access."
             : null;
     }
 
@@ -54,12 +54,12 @@ public sealed class HarnessSettingsRow : ReactiveObject {
     public bool? ToolsSelection => SetupUnverified ? null : Tools;
 
     public string? ConnectionLabel => SetupUnverified ? "Setup unverified" : _wired switch {
-        true => "Recording", null => "Couldn't check", _ => ToolsOnly ? "Tools only" : null,
+        true => "Recording", null => "Could not check", _ => ToolsOnly ? "Tools only" : null,
     };
     public string? ConnectionTip => SetupUnverified
-        ? "The last setup change could not be verified. Agent tools may be missing; try the change again."
+        ? "The last change could not be verified. Agent tools may be missing. Try the change again."
         : _wired switch {
-        true => "kcap records this tool's sessions; each one goes to the profile its repository resolves to",
+        true => "kcap records this tool's sessions. Each one goes to the profile set for its repository",
         null => "kcap could not read this tool's settings to tell whether it records",
         _ => ToolsOnly ? "The agent has kcap's tools, but its sessions are not recorded" : null,
     };
@@ -67,12 +67,12 @@ public sealed class HarnessSettingsRow : ReactiveObject {
     public string RecordLabel => ToolsBundled ? "Session recording and agent tools" : "Session recording";
     public string RecordName => $"Session recording for {Label}";
     public string RecordTip => ToolsBundled
-        ? $"kcap records {Label}'s sessions and gives it kcap's agent tools; {Label} installs the two together. The tools let the agent search your recorded sessions and use kcap from its chat."
+        ? $"kcap records {Label}'s sessions and gives it kcap's agent tools. {Label} installs the two together. The tools let the agent search your recorded sessions and use kcap from its chat."
         : $"kcap records each {Label} session through hooks in its settings.";
     public string ToolsName => $"Agent tools for {Label}";
 
     public const string ToolsTip =
-        "kcap's MCP servers and skills: they let the agent search your recorded sessions and use kcap from its chat.";
+        "kcap's MCP servers and skills. They let the agent search your recorded sessions and use kcap from its chat.";
 
     internal void SetWired(bool? wired) {
         _wired = wired;

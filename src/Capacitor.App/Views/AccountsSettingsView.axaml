@@ -11,7 +11,7 @@
             <StackPanel Classes="settingsHeader">
                 <TextBlock x:Name="AccountsTitleText" Classes="kcapTitle" Text="Accounts" />
                 <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
-                           Text="Keep separate Claude Code or Codex sign-ins, such as work and personal. Each account is its own settings folder; kcap records sessions from every account here, and you pick one when you start a session." />
+                           Text="Keep separate Claude Code or Codex sign-ins, such as work and personal. Each account is its own settings folder. kcap records sessions from every account here. You pick one when you start a session." />
             </StackPanel>
 
             <Border Classes="settingsNotice"

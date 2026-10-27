@@ -95,8 +95,8 @@ public sealed class ExperimentalFeatureRowViewModel : ReactiveObject {
             ExperimentalFeatureStateKind.Applying => "Applying…",
             // Unprompted, an unregistered daemon is the Daemon page's news; a switch left off changes nothing.
             ExperimentalFeatureStateKind.AppliedLocally => _changedHere ? AppliedLocallyText : _enabled ? WaitingForServerText : "",
-            ExperimentalFeatureStateKind.Unknown => "The daemon runs an older version of kcap. Update kcap from About; the daemon restarts on its own",
-            ExperimentalFeatureStateKind.DaemonNotRunning when _enabled => "Saved; applies when the daemon starts",
+            ExperimentalFeatureStateKind.Unknown => "The daemon runs an older version of kcap. Update kcap from About. The daemon then restarts on its own.",
+            ExperimentalFeatureStateKind.DaemonNotRunning when _enabled => "Saved. Applies when the daemon starts.",
             _ => "",
         };
         StatusIsWarning = kind is ExperimentalFeatureStateKind.OnNotActive or ExperimentalFeatureStateKind.Unknown;

@@ -237,7 +237,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     public string? NameError => string.IsNullOrWhiteSpace(Name) || DaemonStore.Sanitize(Name) != Name
         ? "Use lowercase letters, numbers, dots, hyphens or underscores, with no surrounding spaces or repeated hyphens." : null;
     public string? CapacityError => Capacity is not { } value || value < 0 || value > int.MaxValue || decimal.Truncate(value) != value
-        ? "Enter a whole number (0 = unlimited)." : null;
+        ? "Enter a whole number. 0 means no limit." : null;
     public string? RenameHint => !_canRenameOnPlatform ? "Renaming is available on macOS and Windows."
         : _needsAppRestart ? "Restart this app to manage the renamed daemon."
         : _nameOverridden ? "The name is set by KCAP_DAEMON_NAME. Remove that environment override and restart the app before renaming."
@@ -310,7 +310,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
             }
             if (!await _confirm(new LifecyclePrompt(LifecyclePrompt.KindRename, null, null, false,
                     $"Rename {_runningName} to {name}? The daemon will restart and this app will relaunch. " +
-                    "Only the saved capacity is used; save any capacity change first."), _lifetime.Token)) return;
+                    "Only the saved capacity is used. Save any capacity change first."), _lifetime.Token)) return;
             if (!_startupSettled.IsCompletedSuccessfully || !Idle) {
                 Message = "Wait until startup has finished and the daemon is idle before renaming.";
                 return;
@@ -322,7 +322,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
                 return;
             }
             if (!await _canRetire(request!, _lifetime.Token)) {
-                Message = "Update kcap from About before renaming; this version could not confirm it can retire the old service. The saved name is unchanged.";
+                Message = "Update kcap from About before renaming. This version could not confirm it can retire the old service. The saved name is unchanged.";
                 return;
             }
             if (!_startupSettled.IsCompletedSuccessfully || !Idle) {
@@ -339,7 +339,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
             }
             if (outcome is MutationOutcome.Failed { Reason: "cli_unsupported" }) {
                 await _settings.RestoreNameAsync(name, previous, _lifetime.Token);
-                Message = "This version of kcap cannot rename the daemon. Update kcap from About and try again; the saved name was restored unless another edit changed it.";
+                Message = "This version of kcap cannot rename the daemon. Update kcap from About and try again. The saved name was restored unless another edit changed it.";
                 return;
             }
             _needsAppRestart = true;

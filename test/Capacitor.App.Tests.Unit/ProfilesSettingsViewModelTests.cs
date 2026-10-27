@@ -120,7 +120,7 @@ public class ProfilesSettingsViewModelTests {
 
         await vm.RemoveCommand.Execute(row).ToTask();
 
-        await Assert.That(vm.Message).IsEqualTo("This profile changed; the list was refreshed.");
+        await Assert.That(vm.Message).IsEqualTo("This profile changed. The list was refreshed.");
         await Assert.That(vm.Rows.Single(r => r.Name == "other").ServerUrl).IsEqualTo("https://repointed.example");
     });
 

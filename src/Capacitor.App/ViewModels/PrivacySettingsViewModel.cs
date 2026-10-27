@@ -9,7 +9,7 @@ namespace Capacitor.App.ViewModels;
 /// it, and the tab says which.
 public sealed class PrivacySettingsViewModel : ReactiveObject, IDisposable {
     internal const string TakesEffectOnRelaunch = "Usage data starts again the next time the app opens.";
-    internal const string CouldNotSave          = "Couldn't save this choice.";
+    internal const string CouldNotSave          = "Could not save this choice.";
 
     readonly CliTelemetry    _telemetry;
     readonly ConfigRoot      _config;
@@ -27,7 +27,7 @@ public sealed class PrivacySettingsViewModel : ReactiveObject, IDisposable {
         var decision = TelemetrySettings.Resolve(TelemetryState.TryRead(config) is { } saved ? saved.Enabled : false);
         _send      = decision.Enabled;
         Overridden = decision.Reason is "KCAP_TELEMETRY" or "DO_NOT_TRACK"
-            ? $"{decision.Reason} is set in the app's environment, which decides this instead."
+            ? $"{decision.Reason} is set where kcap was started, so it decides this. Unset it and relaunch kcap to choose here."
             : null;
     }
 

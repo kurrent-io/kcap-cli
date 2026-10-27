@@ -89,7 +89,7 @@ public class ExperimentalSettingsViewModelTests {
         await Assert.That(row.StatusText).IsEqualTo("");
 
         service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
-        await Until(() => row.StatusText == "The daemon runs an older version of kcap. Update kcap from About; the daemon restarts on its own", "a pre-feature daemon");
+        await Until(() => row.StatusText == "The daemon runs an older version of kcap. Update kcap from About. The daemon then restarts on its own.", "a pre-feature daemon");
         await Assert.That(row.StatusIsWarning).IsTrue();
 
         service.SnapshotsSubject.OnNext(Reporting(resolved: false, active: false));
@@ -113,7 +113,7 @@ public class ExperimentalSettingsViewModelTests {
         await Assert.That(row.StatusIsWarning).IsTrue();
 
         service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, null, null));
-        await Assert.That(row.StatusText).IsEqualTo("Saved; applies when the daemon starts");
+        await Assert.That(row.StatusText).IsEqualTo("Saved. Applies when the daemon starts.");
         await Assert.That(row.StatusIsWarning).IsFalse();
     });
 

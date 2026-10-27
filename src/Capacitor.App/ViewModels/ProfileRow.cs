@@ -36,7 +36,7 @@ public sealed record ProfileRow(string Name, string? ServerUrl, bool IsActive, b
     public string? UsageTip => (IsActive, IsBound) switch {
         (true, true)  => "The kcap command line and this app both use this profile",
         (true, false) => "The kcap command line uses this profile. Relaunch kcap to use it here too",
-        (false, true) => "This app uses this profile; the command line has since switched to another",
+        (false, true) => "This app uses this profile. The command line has since switched to another",
         _             => null,
     };
 

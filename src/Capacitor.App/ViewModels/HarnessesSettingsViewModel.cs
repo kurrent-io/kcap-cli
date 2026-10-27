@@ -64,7 +64,7 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
     public async Task RescanAsync() {
         if (Busy || Scanning) return;
         Scanning = true;
-        Message = "Looking for harnesses…";
+        Message = "Looking for coding tools…";
         try {
             var state = _toolsMemory is null ? null : await _toolsMemory.LoadAsync();
             var remembered = state?.HarnessToolsByVendor;
@@ -82,7 +82,7 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
             Message = null;
         } catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) {
         } catch (Exception ex) {
-            Message = $"Could not detect harnesses: {ex.Message}";
+            Message = $"Could not look for coding tools: {ex.Message}";
         } finally { Scanning = false; }
     }
 
@@ -134,7 +134,7 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
             else if (result.ExitCode != 0)
                 row.Report(string.IsNullOrWhiteSpace(result.Stderr)
                     ? $"kcap's command line stopped with an error (code {result.ExitCode}). Try again."
-                    : $"kcap couldn't change some of {row.Label}'s files. The details name each one; fix them, then try again.",
+                    : $"kcap could not change some of {row.Label}'s files. The details name each one. Fix them, then try again.",
                     failed, result.Stderr);
             else if (wired is null)
                 row.Report("The command finished, but the connection could not be verified. Rescan to check it.", "Could not verify the change");
@@ -142,8 +142,8 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
                 row.Report(record ? "Recording is not configured yet. Try connecting again." : "Some recording setup remains. Try disconnecting again.", failed);
             else {
                 row.Report(off
-                    ? "Disconnected. Restart this harness to unload kcap. Existing sessions are kept."
-                    : "Setup completed. Restart this harness to load the changes.");
+                    ? $"Disconnected. Restart {row.Label} to unload kcap. Existing sessions are kept."
+                    : $"Setup completed. Restart {row.Label} to load the changes.");
                 await RememberSetupAsync(row, unverified: false, tools: tools);
             }
             if (result is { ExitCode: 0, TimedOut: false } && !string.IsNullOrWhiteSpace(result.Stderr))
