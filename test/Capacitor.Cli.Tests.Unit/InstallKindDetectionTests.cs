@@ -49,7 +49,7 @@ public class InstallKindDetectionTests {
         await Assert.That(InstallProvenance.ReinstallCommand(InstallKind.Script, windows: true)).Contains("install.ps1 | iex");
         await Assert.That(InstallProvenance.ReinstallCommand(InstallKind.Npm, windows: false)).IsEqualTo("npm install -g @kurrent/kcap");
         await Assert.That(InstallProvenance.ReinstallCommand(InstallKind.Snap, windows: false, snapName: "kurrent-capacitor"))
-            .IsEqualTo("sudo snap remove kurrent-capacitor && sudo snap install kurrent-capacitor --classic");
+            .IsEqualTo("export PATH=\"/snap/bin:$PATH\" (snap commands live there), or reinstall: sudo snap remove kurrent-capacitor && sudo snap install kurrent-capacitor --classic");
     }
 
     /// <summary>A snap is known by its mount path alone; nothing under it is probed.</summary>

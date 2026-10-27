@@ -20,7 +20,10 @@ public static class InstallProvenance {
     internal static string ReinstallCommand(InstallKind kind, bool windows, string? snapName = null) => kind switch {
         InstallKind.Script when windows      => "irm https://www.kurrent.io/install.ps1 | iex",
         InstallKind.Script                   => "curl -fsSL https://www.kurrent.io/install | bash",
-        InstallKind.Snap when snapName is { } name => $"sudo snap remove {name} && sudo snap install {name} --classic",
+        // Callers mostly show this when `kcap` is not on PATH, which for a snap means /snap/bin is missing from
+        // it; a damaged snap's missing plugin still needs the reinstall.
+        InstallKind.Snap when snapName is { } name =>
+            $"export PATH=\"/snap/bin:$PATH\" (snap commands live there), or reinstall: sudo snap remove {name} && sudo snap install {name} --classic",
         _                                    => "npm install -g @kurrent/kcap",
     };
 
