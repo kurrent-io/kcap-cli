@@ -14,7 +14,7 @@
                 <StackPanel Classes="settingsGroupHeader">
                     <TextBlock Classes="settingsGroupTitle" Text="Coding tools" />
                     <TextBlock Classes="kcapHint" TextWrapping="Wrap"
-                               Text="Each recorded session goes to the profile for its repository (set with kcap use or a .kcap.json file), or to your active profile. Turning something off removes only what kcap added. Restart a tool after a change." />
+                               Text="Each recorded session goes to the profile set for its repository, or to your active profile. Turning something off removes only what kcap added. Restart a tool after a change." />
                 </StackPanel>
 
                 <Border Classes="settingsCard" IsVisible="{Binding !!Rows.Count}">
