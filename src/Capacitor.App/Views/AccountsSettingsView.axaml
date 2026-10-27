@@ -49,7 +49,7 @@
                                                                     ToolTip.Tip="The tool's standard folder, used when a session does not pick an account">
                                                                 <TextBlock Text="Default" />
                                                             </Border>
-                                                            <Border Classes="settingsStatus" Classes.attention="{Binding StateIsAttention}"
+                                                            <Border Classes="settingsStatus" Classes.attention="{Binding StateIsAttention}" Classes.success="{Binding StateIsHealthy}"
                                                                     ToolTip.Tip="{Binding StateHint}">
                                                                 <StackPanel Orientation="Horizontal" Spacing="5">
                                                                     <views:AppIcon Kind="TriangleAlert" Size="12" IsVisible="{Binding StateIsAttention}" />

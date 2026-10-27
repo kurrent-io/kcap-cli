@@ -18,6 +18,8 @@ public static class RecordingStateLabels {
         : token == NotWired ? "Not set up"
         : token;
 
+    public static bool IsRecording(string token) => token == Recording;
+
     public static bool IsAttention(string vendor, string token) =>
         token == Broken || token == NotWired || (token == Installed && IsCodex(vendor));
 

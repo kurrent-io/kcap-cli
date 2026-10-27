@@ -187,7 +187,7 @@
     <!-- A profile page names the profile it edits; the sidebar groups say the rest. -->
     <!-- A row's state as a badge. Attention pairs the amber with an icon, never colour alone. -->
     <Style Selector="Border.settingsStatus">
-        <Setter Property="Padding" Value="7,2" />
+        <Setter Property="Padding" Value="7,1" />
         <Setter Property="CornerRadius" Value="999" />
         <Setter Property="VerticalAlignment" Value="Center" />
         <Setter Property="BorderThickness" Value="1" />
@@ -211,8 +211,20 @@
         <Setter Property="VerticalAlignment" Value="Center" />
         <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
     </Style>
-    <Style Selector="Border.settingsStatus TextBlock.attention">
+    <Style Selector="Border.settingsStatus TextBlock.attention,
+                     Border.settingsStatus.attention TextBlock">
         <Setter Property="Foreground" Value="{StaticResource KcapWarningBrush}" />
+    </Style>
+    <!-- A settled, healthy outcome: the one place a settings badge takes the success colour. -->
+    <Style Selector="Border.settingsStatus.success">
+        <Setter Property="Background" Value="{StaticResource KcapSuccessDimBrush}" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+    </Style>
+    <Style Selector="Border.settingsStatus.success views|AppIcon">
+        <Setter Property="Foreground" Value="{StaticResource KcapSuccessBrush}" />
+    </Style>
+    <Style Selector="Border.settingsStatus.success TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource KcapSuccessBrush}" />
     </Style>
     <!-- What to do next for a row, inset so it reads as one step apart from the row's identity. -->
     <Style Selector="Border.settingsCallout">

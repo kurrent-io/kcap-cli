@@ -250,7 +250,7 @@ public class SettingsWindowSmokeTests {
             await Assert.That(trust.Foreground).IsSameReferenceAs(window.FindResource("KcapWarningBrush"));
             await Assert.That(ToolTip.GetTip(trust)).IsEqualTo("Start Codex once with this account and approve kcap's hooks when it asks.");
             await Assert.That(State(RowOf("home")).Text).IsEqualTo("Recording");
-            await Assert.That(State(RowOf("home")).Foreground).IsSameReferenceAs(window.FindResource("KcapMutedBrush"));
+            await Assert.That(State(RowOf("home")).Foreground).IsSameReferenceAs(window.FindResource("KcapSuccessBrush"));
             await Assert.That(Visible(RowOf(".codex"), "accountMenu")).IsNull();
             await Assert.That(Visible(RowOf("home"), "accountAdd")).IsNull();
 
