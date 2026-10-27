@@ -138,7 +138,7 @@ public class RemoteSessionViewModelTests {
                 await Assert.That(rig.Retained()).IsEquivalentTo(["work-mac"]);
                 await Assert.That(vm.Chat.ShowsAccountDirectory).IsTrue();
 
-                rig.Listing = [RemoteAgentsServiceTests.Host("work-mac", connectedAt: DateTime.UtcNow)];
+                rig.Listing = [RemoteAgentsServiceTests.Host("work-mac", connectedAt: RemoteAgentsServiceTests.FirstConnect.AddMinutes(5))];
                 await rig.RelistAsync();
                 await WaitUntilAsync(() => vm.Chat.ShowsAccountUsage, what: "the bars to return");
             } finally { await vm.TeardownAsync(); }

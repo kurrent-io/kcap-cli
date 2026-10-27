@@ -647,7 +647,7 @@ public class RemoteAgentsServiceTests {
         await Assert.That(seen[^1]).IsFalse();
     }
 
-    static readonly DateTime FirstConnect = new(2026, 10, 27, 9, 0, 0, DateTimeKind.Utc);
+    internal static readonly DateTime FirstConnect = new(2026, 10, 27, 9, 0, 0, DateTimeKind.Utc);
 
     internal static DaemonInfo Host(string name, string machine = "m1", DateTime? connectedAt = null) =>
         new() { Name = name, OwnerUserId = "u1", MachineId = machine, ConnectedAt = connectedAt ?? FirstConnect, Connected = true };

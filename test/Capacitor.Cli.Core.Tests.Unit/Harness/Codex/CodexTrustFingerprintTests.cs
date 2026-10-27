@@ -10,9 +10,8 @@ public class CodexTrustFingerprintTests {
     string Fingerprint(string? hooks, string? config) {
         Home.CreateDir(".codex");
         foreach (var (name, text) in new[] { ("hooks.json", hooks), ("config.toml", config) }) {
-            var path = Home.PathTo(".codex", name);
-            if (text is null) File.Delete(path);
-            else File.WriteAllText(path, text);
+            if (text is null) File.Delete(Home.PathTo(".codex", name));
+            else Home.CreateFile([".codex", name], text);
         }
         return CodexTrustFingerprint.Of(Paths)!;
     }

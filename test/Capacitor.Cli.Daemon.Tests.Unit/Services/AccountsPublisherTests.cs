@@ -435,7 +435,7 @@ public class AccountsPublisherTests {
             var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             publisher.Changed += _ => changed.TrySetResult();
 
-            File.WriteAllText(AccountLayouts.Codex(Home, account.Directory).ConfigToml, "a = 1\n");
+            Home.CreateFile(Path.GetRelativePath(Home.Path, AccountLayouts.Codex(Home, account.Directory).ConfigToml), "a = 1\n");
             time.Advance(Poll);
 
             await changed.Task.WaitAsync(Timeout);
@@ -502,8 +502,7 @@ public class AccountsPublisherTests {
         await publisher.StartAsync(CancellationToken.None);
         try {
             var settings = AccountLayouts.Claude(Home, publisher.Current!.Accounts.Single().Directory).UserSettings;
-            Directory.CreateDirectory(Path.GetDirectoryName(settings)!);
-            File.WriteAllText(settings, "{}");
+            Home.CreateFile(Path.GetRelativePath(Home.Path, settings), "{}");
             time.Advance(Poll);
             time.Advance(Poll);
             await Assert.That(Volatile.Read(ref requested)).IsEqualTo(0);
