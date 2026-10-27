@@ -1,55 +1,82 @@
 <rxui:ReactiveWindow xmlns="https://github.com/avaloniaui"
                      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                     xmlns:views="clr-namespace:Capacitor.App.Views"
                      xmlns:rxui="clr-namespace:ReactiveUI.Avalonia;assembly=ReactiveUI.Avalonia"
                      xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
                      x:Class="Capacitor.App.Views.UninstallWindow"
                      x:TypeArguments="vm:UninstallRunViewModel"
                      x:DataType="vm:UninstallRunViewModel"
-                     Title="Uninstalling kcap"
+                     Title="{Binding Heading}"
                      Icon="avares://kcap-desktop/Assets/kcap-icon.png"
-                     Width="520" Height="420"
-                     CanResize="False" WindowStartupLocation="CenterScreen"
+                     Width="480" SizeToContent="Height" MaxHeight="560"
+                     CanResize="False" Topmost="{Binding IsBusy}" WindowStartupLocation="CenterScreen"
                      Background="{StaticResource KcapCanvasBrush}"
                      ExtendClientAreaToDecorationsHint="True">
     <Panel>
         <Border Height="32" VerticalAlignment="Top" Background="Transparent"
                 PointerPressed="OnChromePointerPressed" />
 
-        <StackPanel x:Name="HandoffContent" IsVisible="False" Margin="36,44,36,28" Spacing="18">
-            <TextBlock Text="Uninstalling kcap…" FontSize="19" FontWeight="SemiBold" LineHeight="26"
-                       LetterSpacing="-0.2" Foreground="{StaticResource KcapTextBrush}" />
-            <TextBlock Text="Closing kcap before removing its background services and app."
-                       TextWrapping="Wrap" Foreground="{StaticResource KcapMutedBrush}" />
-            <ProgressBar IsIndeterminate="True" Height="4" />
-        </StackPanel>
+        <Grid Margin="36,44,36,28" RowDefinitions="Auto,*,Auto">
+            <ProgressBar x:Name="Progress" Grid.Row="0" Height="4" Margin="0,0,0,20" Minimum="0" Maximum="100"
+                         IsVisible="{Binding !IsFinished}"
+                         IsIndeterminate="{Binding IsBusy}" Value="{Binding ProgressValue}"
+                         Foreground="{StaticResource KcapPurpleBrush}" />
 
-        <Grid x:Name="RunContent" Margin="36,44,36,28" RowDefinitions="Auto,*,Auto">
-            <TextBlock Grid.Row="0" Text="{Binding Heading}"
-                       FontSize="19" FontWeight="SemiBold" LineHeight="26" LetterSpacing="-0.2"
-                       Foreground="{StaticResource KcapTextBrush}" />
+            <ScrollViewer Grid.Row="1">
+                <StackPanel>
+                    <Panel Width="64" Height="64" HorizontalAlignment="Left">
+                        <Image Source="avares://kcap-desktop/Assets/kcap-icon.png"
+                               RenderOptions.BitmapInterpolationMode="HighQuality" />
+                        <Border CornerRadius="12" BorderThickness="1" BorderBrush="{StaticResource KcapBorderBrush}" />
+                    </Panel>
 
-            <Border Grid.Row="1" Margin="0,16,0,0" Padding="12,9" CornerRadius="8" BorderThickness="1"
-                    Background="{StaticResource KcapSurfaceBrush}"
-                    BorderBrush="{StaticResource KcapBorderBrush}">
-                <ScrollViewer x:Name="LinesScroll">
-                    <ItemsControl ItemsSource="{Binding Lines}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="x:String">
-                                <SelectableTextBlock Text="{Binding}" TextWrapping="Wrap"
-                                                     FontSize="12" LineHeight="18"
-                                                     FontFamily="{StaticResource OnboardingMonoFont}"
-                                                     Foreground="{StaticResource KcapMutedBrush}" />
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </ScrollViewer>
-            </Border>
+                    <TextBlock Margin="0,20,0,0" Text="{Binding Heading}"
+                               HorizontalAlignment="Left" TextAlignment="Left"
+                               FontSize="19" FontWeight="SemiBold" LineHeight="26" LetterSpacing="-0.2"
+                               Foreground="{StaticResource KcapTextBrush}" />
+                    <TextBlock Margin="0,14,0,0" Width="400" Text="{Binding Description}"
+                               HorizontalAlignment="Left" TextAlignment="Left" TextWrapping="Wrap"
+                               FontSize="13.5" LineHeight="21" Foreground="{StaticResource KcapMutedBrush}" />
+                    <TextBlock x:Name="RestartAdvice" Margin="0,14,0,0" Width="400" IsVisible="{Binding IsFinished}"
+                               Text="Restart any coding agents that were open during uninstall to clear their loaded kcap hooks."
+                               HorizontalAlignment="Left" TextAlignment="Left" TextWrapping="Wrap"
+                               FontSize="13.5" LineHeight="21" Foreground="{StaticResource KcapMutedBrush}" />
 
-            <StackPanel Grid.Row="2" Margin="0,22,0,0" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
-                <Button Content="Retry" Classes="kcapChip" Command="{Binding RetryCommand}"
-                        IsVisible="{Binding CanRetry}" />
-                <Button Content="Close" Classes="kcapChip" Command="{Binding CloseCommand}" />
-            </StackPanel>
+                    <Border x:Name="HistoryPanel" Margin="0,16,0,0" Padding="12,9" CornerRadius="8" BorderThickness="1"
+                            IsVisible="{Binding DetailsExpanded}"
+                            Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}">
+                        <ScrollViewer x:Name="LinesScroll" MaxHeight="180">
+                            <ItemsControl ItemsSource="{Binding Lines}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="x:String">
+                                        <SelectableTextBlock Text="{Binding}" TextWrapping="Wrap"
+                                                             FontSize="12" LineHeight="18"
+                                                             FontFamily="{StaticResource OnboardingMonoFont}"
+                                                             Foreground="{StaticResource KcapMutedBrush}" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <Grid Grid.Row="2" Margin="0,22,0,0" ColumnDefinitions="*,Auto">
+                <Button x:Name="DetailsButton" Grid.Column="0" Classes="kcapChip" HorizontalAlignment="Left"
+                        Command="{Binding ToggleDetailsCommand}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="{Binding DetailsLabel}" />
+                        <views:AppIcon Kind="ChevronDown" Size="12" VerticalAlignment="Center" IsVisible="{Binding !DetailsExpanded}" />
+                        <views:AppIcon Kind="ChevronUp" Size="12" VerticalAlignment="Center" IsVisible="{Binding DetailsExpanded}" />
+                    </StackPanel>
+                </Button>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                    <Button Content="Retry" Classes="kcapPrimary" Command="{Binding RetryCommand}" IsVisible="{Binding CanRetry}" />
+                    <Button x:Name="CloseButton" Content="{Binding CloseButtonText}" Command="{Binding CloseCommand}"
+                            Classes.kcapPrimary="{Binding IsFinished}" Classes.kcapChip="{Binding !IsFinished}"
+                            IsVisible="{Binding !IsBusy}" IsDefault="{Binding IsFinished}" IsCancel="{Binding IsFinished}" />
+                </StackPanel>
+            </Grid>
         </Grid>
     </Panel>
 </rxui:ReactiveWindow>

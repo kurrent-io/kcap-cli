@@ -110,6 +110,7 @@ public class UninstallCommandTests {
 
         var exit = await NewCommand(fixture, workdir: AppContext.BaseDirectory).HandleAsync(["uninstall", "--yes"]);
         await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(fixture.Out.ToString()).Contains("Restart any coding agents that were open during uninstall");
 
         // Claude: kcap entries gone, user entries preserved, marker removed.
         var claudeRoot = JsonNode.Parse(await File.ReadAllTextAsync(claudeSettings))!.AsObject();

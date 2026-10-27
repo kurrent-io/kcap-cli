@@ -427,6 +427,7 @@ sealed class UninstallCommand(
             }
 
             await console.Out.WriteLineAsync("kcap uninstalled.");
+            await console.Out.WriteLineAsync("Restart any coding agents that were open during uninstall to clear their loaded kcap hooks.");
 
             return 0;
         }

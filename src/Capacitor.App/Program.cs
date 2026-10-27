@@ -17,6 +17,10 @@ internal static class Program
     /// Read before the app is constructed, which is where its first config-root write would happen.
     internal static UninstallMode? Uninstall { get; private set; }
 
+    static AppCrashLog? _crashLog;
+
+    internal static void StopCrashLoggingForUninstall() => _crashLog = null;
+
     [STAThread]
     public static void Main(string[] args) {
         // Velopack's install/update hooks exit from inside Run(); anything before it would re-run
@@ -34,11 +38,10 @@ internal static class Program
         Uninstall = UninstallMode.Parse(args);
 
         // The uninstall deletes the config directory, which a crash log would recreate.
-        AppCrashLog? crashLog = null;
         if (Uninstall is null) {
-            var log = crashLog = new AppCrashLog(ConfigRoot.FromEnvironment(), TimeProvider.System);
+            _crashLog = new AppCrashLog(ConfigRoot.FromEnvironment(), TimeProvider.System);
             AppDomain.CurrentDomain.UnhandledException += (_, e) => {
-                if (e.ExceptionObject is Exception ex) log.Record("unhandled", ex);
+                if (e.ExceptionObject is Exception ex) _crashLog?.Record("unhandled", ex);
             };
         }
 
@@ -53,7 +56,7 @@ internal static class Program
         try {
             BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
         } catch (Exception ex) {
-            crashLog?.Record("ui-thread", ex);
+            _crashLog?.Record("ui-thread", ex);
             throw;
         }
     }
