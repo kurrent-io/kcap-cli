@@ -47,12 +47,19 @@ disagree and all of it is unit-testable without a view. Its rules:
   windows.
 - **Reading age:** "updated 3m ago" from the latest `ConfirmedAt` across windows; a reading with windows
   but no `ConfirmedAt` reads "freshness unknown".
-- **No reading:** a null `Reading`, or one with no windows at all, is "no reading yet". Never zero,
-  never ready.
-- **No primary windows:** a reading whose windows are all per-model (Codex can report only those), or
-  one carrying only metadata or a blocked marker, is not "no reading yet". Every surface shows "usage
-  unknown" in place of the bars, followed by "+N per model" when there are per-model windows. A
-  Limit hit pill known from the marker still shows, with no reset invented. Such a reading is not ready.
+- **Usage line, by precedence.** The first case that matches decides what replaces or carries the bars.
+  The Limit hit pill comes from the blocked rule below and is independent of the line. None of these
+  states is ready.
+
+  | Reading | Usage line | Pill |
+  |---|---|---|
+  | null | "no reading yet" | none |
+  | no windows and not blocked (empty, or metadata only) | "no reading yet" | none |
+  | no windows and blocked (a limit hit before any window) | "usage unknown" | Limit hit |
+  | windows, none of them primary (per-model only) | "usage unknown · +N per model" | Limit hit if blocked |
+  | at least one primary window | the bars, then "+N per model" when there are others | Limit hit if blocked |
+
+  Bars never read as zero.
 - **Blocked** (user decision): only a live constraint on the main limit id, or one with no limit id,
   blocks the account. A live constraint on a per-model limit id does not block; it shows beside the
   per-model count ("+2 per model · 1 hit") and does not affect Ready. "Live" keeps
@@ -122,13 +129,23 @@ while membership refreshes separately on `DaemonsChanged`. So a server that only
 connected daemons does not make the app's copy connected-only. The gate is applied where readings are
 drawn, not by dropping the retained copy:
 
-- **A remote host's reading is drawable** only while all three hold: the server lane is Connected; the
-  daemon is in the current `DaemonListing` (non-null, fetched after the latest connect); and its
-  `DaemonAccountsDto` was fetched after that same connect. `RemoteAgentsService` already counts
-  connects for the listing reset; tag the published accounts with the connect they were fetched under so
-  the gate can compare them. Lane loss, a listing without the daemon, a reconnect before a fresh accounts
-  fetch, and a failed accounts fetch after the daemon left the listing all make it not drawable at once.
-  None of them waits for the next fetch.
+- **A remote host's reading is drawable** only while all of these hold:
+  - the server lane is Connected;
+  - the daemon is in the current `DaemonListing` (non-null, fetched after the latest connect);
+  - its `DaemonAccountsDto` was fetched successfully **after the daemon's current incarnation was first
+    seen**.
+
+  A daemon's incarnation is its listing entry's identity: its owner and name (names are unique only per owner) together with `ConnectedAt` and
+  `MachineId` from `DaemonInfo`. Each of these starts a new incarnation and closes that daemon's gate:
+  a server reconnect, the daemon leaving the listing, and a listing entry whose `ConnectedAt` or
+  `MachineId` changed (a restart, or another host taking the name). The gate reopens only on an accounts
+  fetch that both started and succeeded after that transition. Concretely: per daemon name,
+  `RemoteAgentsService` records the incarnation and a sequence number of the last successful accounts
+  fetch, and the gate compares them. The retained accounts themselves stay as they are, so the
+  launcher's account choice keeps working. Lane loss, a listing without the daemon, a reconnect before
+  a fresh accounts fetch, a leave and rejoin within one server connection, and a host replacing another
+  under the same name with a failed refetch all make the reading not drawable at once, without waiting
+  for the next fetch.
 - **The local host's reading is drawable** only while the local daemon is attached and the accounts
   subscription has delivered a snapshot since that attach. `AccountsService` already clears its snapshot
   on detach. Pin that in a test.
@@ -140,7 +157,9 @@ drawn, not by dropping the retained copy:
   no "no reading yet", which would claim something unknown.
 - Tests drive the transitions through the services' real caches, not an account list that already
   omits the host: lane loss with accounts retained, daemon leaving the listing with accounts retained,
-  reconnect before the accounts refetch, and a failed accounts fetch after the daemon left. Each
+  reconnect before the accounts refetch, a failed accounts fetch after the daemon left, a leave and
+  rejoin within one server connection with a failed refetch, and another host taking the daemon's name
+  (changed `MachineId`) with a failed refetch. Each
   transition is tested for both the launcher rows and the composer strip.
 
 ## 5. Codex accounts can read Recording
