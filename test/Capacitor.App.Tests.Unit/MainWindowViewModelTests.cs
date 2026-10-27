@@ -906,8 +906,10 @@ public class MainWindowViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
             var gate = new NavigationGate();
+            using var directory = new FakeAgentDirectory();
+            using var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System);
             MainWindowViewModel Build() => new(
-                service, CancellationToken.None, TestActivity.New(), TimeProvider.System, navigation: gate);
+                service, CancellationToken.None, TestActivity.New(), TimeProvider.System, navigation: gate, rail: rail);
 
             var first = Build();
             var second = Build();
@@ -920,6 +922,10 @@ public class MainWindowViewModelTests {
 
             first.LatchShutdown();
             await Assert.That(gate.ShutdownLatched).IsTrue();
+            var shutdownGeneration = gate.Generation;
+            rail.Dispose();
+            second.CloseWorkspace(); // Late close without this window's local shutdown latch.
+            await Assert.That(gate.Generation).IsEqualTo(shutdownGeneration);
         });
     }
 

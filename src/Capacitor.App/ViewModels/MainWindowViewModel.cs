@@ -722,7 +722,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// open must retire an in-flight launch's captured generation. Shutdown already released the
     /// workspace; its final window-close notification must not touch disposed dependencies.
     public void CloseWorkspace() {
-        if (_shutdownLatched) return;
+        if (_shutdownLatched || _navigation.ShutdownLatched) return;
         SwapTo(null);
     }
 
