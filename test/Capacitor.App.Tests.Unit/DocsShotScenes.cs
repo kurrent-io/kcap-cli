@@ -43,7 +43,7 @@ static class DocsShotScenes {
     ];
 
     public static void Northwind(FakeDaemonClientService service) {
-        service.SnapshotsSubject.OnNext(Snap(daemon: "maya-mbp", version: "1.4.0", serverUrl: ServerUrl, connection: "connected", active: 3, max: 5));
+        service.SnapshotsSubject.OnNext(Snap(daemon: "maya-mbp", version: "1.4.0", serverUrl: ServerUrl, connection: "connected", active: 2, max: 5));
         service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
         var now = Now.UtcDateTime;
         service.Agents.AddOrUpdate(new AgentStatusDto(
@@ -90,18 +90,34 @@ static class DocsShotScenes {
     };
 
     /// The main window over the Northwind tenant, not yet shown. With `openSession` the payments
-    /// session is open and its transcript read; the transcript's directory lives until the window closes.
-    /// With `localServerDown` the server is the local edition's and its lane is retrying, so the launcher
-    /// offers to start it.
-    public static async Task<(MainWindowViewModel Vm, Views.MainWindow Window, FakePermissionService Permissions)> MainWindowAsync(
-            IReadOnlySet<string>? pendingIds = null, Action<FeedbackCategory>? openFeedback = null,
-            Action? requestSetup = null, bool openSession = true, bool localServerDown = false) {
+    /// session is open and its transcript read. With `localServerDown` the server is the local
+    /// edition's and its lane is retrying, so the launcher offers to start it.
+    public static async Task<DocsShotScene> MainWindowAsync(
+            IReadOnlySet<string>? pendingIds = null, IReadOnlyList<PendingPermissionRequest>? permissionRequests = null,
+            Action<FeedbackCategory>? openFeedback = null, Action? requestSetup = null,
+            bool openSession = true, bool localServerDown = false) {
+        var scene = new DocsShotScene();
+        try {
+            await BuildMainWindowAsync(scene, pendingIds, permissionRequests, openFeedback, requestSetup, openSession, localServerDown);
+            return scene;
+        } catch {
+            await scene.DisposeAsync();
+            throw;
+        }
+    }
+
+    static async Task BuildMainWindowAsync(DocsShotScene scene, IReadOnlySet<string>? pendingIds,
+            IReadOnlyList<PendingPermissionRequest>? permissionRequests, Action<FeedbackCategory>? openFeedback,
+            Action? requestSetup, bool openSession, bool localServerDown) {
+        var transcript = openSession ? scene.Own(new TempDir()) : null;
+        var homeState = scene.Own(TempDir.WithPathTo("app-state.json", out var homeStatePath));
         var service = new FakeDaemonClientService();
         Northwind(service);
         var permissions = new FakePermissionService();
+        foreach (var request in permissionRequests ?? []) permissions.Add(request);
         var actions = new AgentActionService(new ScriptedLocalControlOps(), new AppNotifier(), new RecordingOpener(),
             service.SnapshotsSubject, CancellationToken.None, NeverConfirm.Confirm);
-        var pullRequests = PullRequests();
+        var pullRequests = scene.Own(PullRequests());
         var attach = new FakeTerminalAttachClientFactory();
         var workContext = new FakeWorkContextSource { Default = PaymentsWorkContext() };
         var clock = new FakeTimeProvider(Now);
@@ -112,53 +128,47 @@ static class DocsShotScenes {
             }],
             TitleFor = _ => RetryTitle,
         };
-        var homeState = TempDir.WithPathTo("app-state.json", out var homeStatePath);
-        var home = new HomeViewModel(service, new AppStateStore(homeStatePath), new NoLaunch(),
-            () => Task.FromResult<string[]>([PaymentsRepo, StorefrontRepo]), clock);
+        var home = scene.Own(new HomeViewModel(service, new AppStateStore(homeStatePath), new NoLaunch(),
+            () => Task.FromResult<string[]>([PaymentsRepo, StorefrontRepo]), clock));
         BehaviorSubject<ServerLaneStatus>? lane = null;
-        LocalServerRecoveryViewModel? localServer = null;
         if (localServerDown) {
-            service.SnapshotsSubject.OnNext(Snap(daemon: "maya-mbp", version: "1.4.0", serverUrl: ServerUrl, connection: "disconnected", active: 3, max: 5));
-            lane = new BehaviorSubject<ServerLaneStatus>(new(ServerLaneState.Retrying, "Connection refused"));
-            localServer = new LocalServerRecoveryViewModel(lane, isLocalServer: true,
-                _ => Task.FromResult(new ProcessResult(0, "", "", false)), () => Task.CompletedTask, CancellationToken.None);
+            service.SnapshotsSubject.OnNext(Snap(daemon: "maya-mbp", version: "1.4.0", serverUrl: ServerUrl, connection: "disconnected", active: 2, max: 5));
+            lane = scene.Own(new BehaviorSubject<ServerLaneStatus>(new(ServerLaneState.Retrying, "Connection refused")));
+            var localServer = scene.Own(new LocalServerRecoveryViewModel(lane, isLocalServer: true,
+                _ => Task.FromResult(new ProcessResult(0, "", "", false)), () => Task.CompletedTask, CancellationToken.None));
             home.AttachLocalServerRecovery(localServer);
         }
-        var web = new WebWorkspaceViewModel(ServerUrl, new RecordingOpener(), _ => { }, CancellationToken.None);
+        var web = scene.Own(new WebWorkspaceViewModel(ServerUrl, new RecordingOpener(), _ => { }, CancellationToken.None));
         MainWindowViewModel? vm = null;
         var directory = new AgentDirectory(
             service, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null),
             path => path, null, ServerUrl, clock);
-        var rail = new SessionRailViewModel(
+        var rail = scene.Own(new SessionRailViewModel(
             directory, id => vm!.OpenSession(id), _ => { }, clock,
             agentsWithPending: pendingIds is null ? null : Observable.Return(pendingIds),
-            pullRequests: pullRequests, openPullRequest: (id, origin, subject) => vm!.OpenSessionPullRequest(id, origin, subject));
+            pullRequests: pullRequests, openPullRequest: (id, origin, subject) => vm!.OpenSessionPullRequest(id, origin, subject)));
+        var workspaceTeardowns = new List<Task>();
         vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+            trackWorkspaceTeardown: teardown => workspaceTeardowns.Add(teardown()),
             workspaceFactory: id => new WorkspaceViewModel(
                 id, service, actions, attach.Factory, () => new FakeTerminalSurface(),
                 clock, new RecordingOpener(), permissions, workContext,
                 new ScriptedLocalControlOps(), new NoAttachmentUploader(), pullRequests: linkedPullRequests),
             rail: rail, home: home, tenantName: localServerDown ? "local" : "northwind", laneStatus: lane,
             openFeedback: openFeedback, requestSetup: requestSetup) { Web = web };
-        var window = new Views.MainWindow { DataContext = vm };
-        TempDir? transcript = null;
-        window.Closed += (_, _) => {
-            rail.Dispose();
-            home.Dispose();
-            localServer?.Dispose();
-            lane?.Dispose();
-            web.Dispose();
-            homeState.Dispose();
-            pullRequests.Dispose();
-            transcript?.Dispose();
-        };
+        scene.Present(new Views.MainWindow { DataContext = vm });
+        scene.Defer(async () => {
+            vm.CloseWorkspace();
+            Dispatcher.UIThread.RunJobs();
+            await Task.WhenAll(workspaceTeardowns);
+        });
 
-        if (openSession) {
-            transcript = TempDir.WithPathTo("transcript.jsonl", out var path);
-            await File.WriteAllLinesAsync(path, Transcript);
+        if (transcript is not null) {
+            var transcriptPath = transcript.PathTo("transcript.jsonl");
+            await File.WriteAllLinesAsync(transcriptPath, Transcript);
             vm.OpenSession("a1");
             Dispatcher.UIThread.RunJobs();
-            service.Agents.AddOrUpdate(service.Agents.Lookup("a1").Value with { TranscriptPath = path });
+            service.Agents.AddOrUpdate(service.Agents.Lookup("a1").Value with { TranscriptPath = transcriptPath });
             Dispatcher.UIThread.RunJobs();
             var workspace = (WorkspaceViewModel)vm.CurrentWorkspace!;
             await (workspace.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
@@ -167,35 +177,47 @@ static class DocsShotScenes {
             await attach.Created[^1].TriggerAttached([]);
             Dispatcher.UIThread.RunJobs();
         }
-
-        return (vm, window, permissions);
     }
 
-    /// The settings window over the Northwind profile, not yet shown; closing it disposes its view model.
-    public static SettingsWindow Settings(TempConfigRoot config) {
-        ConfigMutator.Mutate(config.Root, c => c with { Profiles = new() {
-            ["northwind"] = new Profile { ServerUrl = ServerUrl, Daemon = new DaemonSettings { Name = "maya-mbp", MaxAgents = 5 } }
-        } });
-        var service = new FakeDaemonClientService();
-        Northwind(service);
-        service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["settings/1"]));
-        var vm = new SettingsViewModel(new SettingsProfileStore(config.Root, "northwind", ServerUrl),
-            service, new ScriptedLocalControlOps(), (_, _) => Task.FromResult(false),
-            (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded()),
-            (_, _) => Task.FromResult(false), _ => Task.FromResult(false), true, Task.CompletedTask, (_, _) => Task.FromResult(true));
-        return new SettingsWindow { DataContext = vm };
+    /// The settings window over the Northwind profile, not yet shown, tall enough that the whole
+    /// Daemon tab shows without scrolling.
+    public static async Task<DocsShotScene> SettingsAsync(TempConfigRoot config) {
+        var scene = new DocsShotScene();
+        try {
+            ConfigMutator.Mutate(config.Root, c => c with { Profiles = new() {
+                ["northwind"] = new Profile { ServerUrl = ServerUrl, Daemon = new DaemonSettings { Name = "maya-mbp", MaxAgents = 5 } }
+            } });
+            var service = new FakeDaemonClientService();
+            Northwind(service);
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["settings/1"]));
+            var vm = scene.Own(new SettingsViewModel(new SettingsProfileStore(config.Root, "northwind", ServerUrl),
+                service, new ScriptedLocalControlOps(), (_, _) => Task.FromResult(false),
+                (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded()),
+                (_, _) => Task.FromResult(false), _ => Task.FromResult(false), true, Task.CompletedTask, (_, _) => Task.FromResult(true)));
+            scene.Present(new SettingsWindow { DataContext = vm, Height = SettingsHeight });
+            return scene;
+        } catch {
+            await scene.DisposeAsync();
+            throw;
+        }
     }
 
-    /// The setup wizard from the real wizard graph, opened on `startAt` before anything has been chosen;
-    /// the graph's fixtures live until the window closes.
-    public static async Task<Views.MainWindow> WizardAsync(TempConfigRoot config, WizardStepId startAt) {
-        var harness = new WizardFixtures.GraphHarness(config.Root);
-        var graph = WizardComposition.BuildGraph(harness.Options());
-        var vm = new OnboardingViewModel(graph.Steps, startAt: startAt);
-        await vm.PendingEnterForTesting;
-        var window = new Views.MainWindow { Onboarding = vm, Width = 760, Height = 760 };
-        window.Closed += (_, _) => harness.Dispose();
-        return window;
+    const double SettingsHeight = 760;
+
+    /// The setup wizard from the real wizard graph, opened on `startAt` before anything has been chosen.
+    public static async Task<DocsShotScene> WizardAsync(TempConfigRoot config, WizardStepId startAt) {
+        var scene = new DocsShotScene();
+        try {
+            var harness = scene.Own(new WizardFixtures.GraphHarness(config.Root));
+            var graph = WizardComposition.BuildGraph(harness.Options());
+            var vm = new OnboardingViewModel(graph.Steps, startAt: startAt);
+            await vm.PendingEnterForTesting;
+            scene.Present(new Views.MainWindow { Onboarding = vm, Width = 760, Height = 760 });
+            return scene;
+        } catch {
+            await scene.DisposeAsync();
+            throw;
+        }
     }
 
     sealed class NoLaunch : ILaunchClient {
