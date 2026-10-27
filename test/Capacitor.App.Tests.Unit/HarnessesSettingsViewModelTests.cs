@@ -161,6 +161,7 @@ public class HarnessesSettingsViewModelTests {
         await Assert.That(row.IsConfigured).IsFalse();
         await Assert.That(row.ErrorTitle).IsEqualTo("Finished with warnings");
         await Assert.That(row.IsWarning).IsTrue();
+        await Assert.That(row.Message).IsEqualTo(HarnessesSettingsViewModel.PartlyRemoved);
         await Assert.That(row.Details!).Contains("preserved");
     });
 
@@ -307,6 +308,7 @@ public class HarnessesSettingsViewModelTests {
 
         await Assert.That(row.Tools).IsFalse();
         await Assert.That(row.ErrorTitle).IsEqualTo("Finished with warnings");
+        await Assert.That(row.Message).IsEqualTo(HarnessesSettingsViewModel.PartlyInstalled);
         await Assert.That(row.Details!).Contains("preserved");
     });
 }

@@ -86,6 +86,9 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
         } finally { Scanning = false; }
     }
 
+    internal const string PartlyInstalled = "Setup completed, but some parts were not installed. Check the details, then try again.";
+    internal const string PartlyRemoved = "Disconnected, but some parts were left in place. Check the details.";
+
     internal Task ToggleConnectionAsync(HarnessSettingsRow row) => ConfigureAsync(row, record: !row.IsConfigured, tools: row.Tools);
 
     internal Task ToggleToolsAsync(HarnessSettingsRow row) => ConfigureAsync(row, record: row.IsConfigured, tools: !row.Tools);
@@ -146,8 +149,10 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
                     : $"Setup completed. Restart {row.Label} to load the changes.");
                 await RememberSetupAsync(row, unverified: false, tools: tools);
             }
+            // The command line keeps restart reminders on stdout, so anything on stderr is a part that did not land.
             if (result is { ExitCode: 0, TimedOut: false } && !string.IsNullOrWhiteSpace(result.Stderr))
-                row.Report(row.Message, row.ErrorTitle ?? "Finished with warnings", result.Stderr, warning: row.ErrorTitle is null);
+                row.Report(row.ErrorTitle is null ? (off ? PartlyRemoved : PartlyInstalled) : row.Message,
+                    row.ErrorTitle ?? "Finished with warnings", result.Stderr, warning: row.ErrorTitle is null);
         } catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) {
             if (mutationStarted) row.SetWired(null);
         } catch (Exception ex) {
