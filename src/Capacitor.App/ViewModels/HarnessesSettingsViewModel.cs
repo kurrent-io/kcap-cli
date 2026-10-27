@@ -88,6 +88,15 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
 
     internal const string PartlyInstalled = "Setup completed, but some parts were not installed. Check the details, then try again.";
     internal const string PartlyRemoved = "Disconnected, but some parts were left in place. Check the details.";
+    internal const string PartlyKept = "Setup completed, but some parts were left in place. Check the details.";
+    internal const string PartlyKeptAndInstalled =
+        "Setup completed, but some parts were left in place and some were not installed. Check the details, then try again.";
+
+    static string WarningsMessage(bool off, bool removalWarned, bool installWarned) =>
+        off ? PartlyRemoved
+        : removalWarned && installWarned ? PartlyKeptAndInstalled
+        : removalWarned ? PartlyKept
+        : PartlyInstalled;
 
     internal Task ToggleConnectionAsync(HarnessSettingsRow row) => ConfigureAsync(row, record: !row.IsConfigured, tools: row.Tools);
 
@@ -116,18 +125,23 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
             await RememberSetupAsync(row, unverified: true);
             var flag = row.Id.PluginInstallFlag;
             ProcessResult result;
+            // Removal warnings mean something stayed; install warnings mean something did not land.
+            var removed = "";
+            var installed = "";
             if (off) {
                 result = await _cli.PluginRemoveAsync(flag, _lifetime.Token);
+                removed = result.Stderr.Trim();
             } else {
                 // Install only ever adds, so anything the new answer drops comes out first.
                 var drops = !repair && ((row.IsConfigured && !record) || (row.OffersTools && row.Tools && !tools));
                 result = drops ? await _cli.PluginRemoveAsync(flag, _lifetime.Token) : new ProcessResult(0, "", "", false);
                 if (result is { ExitCode: 0, TimedOut: false }) {
-                    // A removal's warnings (configuration it preserved) still apply once the install succeeds.
-                    var removal = result.Stderr.Trim();
+                    removed = result.Stderr.Trim();
                     result = await _cli.PluginInstallAsync(flag, _lifetime.Token,
                         HarnessInstallOptions.For(row.Id, record, row.OffersTools ? tools : true));
-                    if (removal.Length > 0) result = result with { Stderr = $"{removal}\n{result.Stderr.Trim()}".TrimEnd() };
+                    installed = result.Stderr.Trim();
+                    // A removal's warnings (configuration it preserved) still apply once the install succeeds.
+                    if (removed.Length > 0) result = result with { Stderr = $"{removed}\n{installed}".TrimEnd() };
                 }
             }
             bool? wired = _isWired is null ? null : await Task.Run(() => _isWired(row.Id), _lifetime.Token);
@@ -151,7 +165,7 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
             }
             // The command line keeps restart reminders on stdout, so anything on stderr is a part that did not land.
             if (result is { ExitCode: 0, TimedOut: false } && !string.IsNullOrWhiteSpace(result.Stderr))
-                row.Report(row.ErrorTitle is null ? (off ? PartlyRemoved : PartlyInstalled) : row.Message,
+                row.Report(row.ErrorTitle is null ? WarningsMessage(off, removed.Length > 0, installed.Length > 0) : row.Message,
                     row.ErrorTitle ?? "Finished with warnings", result.Stderr, warning: row.ErrorTitle is null);
         } catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) {
             if (mutationStarted) row.SetWired(null);
