@@ -528,7 +528,7 @@ public partial class LauncherPaneView : UserControl {
                     };
                     var fill = new Border {
                         Background = tone, CornerRadius = new CornerRadius(2),
-                        Width = 46 * Math.Clamp(bar.Percent ?? 0, 0, 100) / 100.0,
+                        Width = bar.Percent is { } percent ? 46 * Math.Clamp(percent, 0, 100) / 100.0 : 46,
                         HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left,
                     };
                     var track = new Border {

@@ -12,7 +12,6 @@ using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core.Accounts;
-using Capacitor.Cli.Core.Accounts.Readings;
 using Capacitor.Remote.Models;
 using TUnit.Assertions.Enums;
 
@@ -802,7 +801,7 @@ public class LauncherPaneViewSmokeTests {
                 Daemon, new AppStateStore(statePath), Launch, () => Task.FromResult(Array.Empty<string>()), TimeProvider.System,
                 viewerId: _ => Task.FromResult<string?>("u1"),
                 laneStatus: Observable.Return(new ServerLaneStatus(ServerLaneState.Connected)),
-                listing: Remote.Listing, daemonAccounts: Remote.DaemonAccounts, localAccounts: Snapshots,
+                daemons: Remote.Daemons, listing: Remote.Listing, daemonAccounts: Remote.DaemonAccounts, localAccounts: Snapshots,
                 readings: readings ? new AccountReadings(Snapshots, Remote.DrawableDaemonAccounts, Observable.Return(UsageNow)) : null);
         }
 
@@ -948,7 +947,35 @@ public class LauncherPaneViewSmokeTests {
     public async Task An_open_panel_draws_bars_and_drops_them_when_the_host_goes_away() {
         await AvaloniaSession.RunOnUiAsync(async () => {
             using var rig = new AccountRig(Tmp.PathTo("app-state.json"), readings: true);
-            await rig.ResolveAsync();
+            var box = new DaemonInfo {
+                Name = "box", OwnerUserId = "u1", Connected = true, SupportsAccountLaunches = true,
+                SupportedVendors = ["claude", "codex"], RepoPaths = ["/repos/kcap-cli"],
+            };
+            rig.Remote.DaemonsSubject.OnNext([box]);
+            rig.AnswerListing();
+            rig.Remote.ListingSubject.OnNext(new DaemonListing([rig.Remote.ListingSubject.Value.Daemons![0], box], 1, false));
+            await rig.Vm.SelectRepositoryAsync("/repos/kcap-cli");
+            await rig.Vm.SelectMachineAsync("box", isLocal: false);
+
+            static ListedAccountDto Listed(string id, ListedUsageWindowDto? window) => new() {
+                Id = id, Vendor = "claude", Directory = "/u/." + id, DirectoryKey = "/u/." + id, Label = id, RecordingState = "recording",
+                Reading = window is null ? null : new ListedReadingDto { Windows = [window] },
+            };
+            var live = new ListedUsageWindowDto {
+                LimitId = "claude", WindowMinutes = 300, UsedPercent = 42, ResetsAt = UsageNow.AddHours(2), ConfirmedAt = UsageNow,
+            };
+            var expired = new ListedUsageWindowDto {
+                LimitId = "claude", WindowMinutes = 10080, UsedPercent = 30, ResetsAt = UsageNow.AddHours(-1), ConfirmedAt = UsageNow.AddHours(-3),
+            };
+            var row = new DaemonAccountsDto {
+                DaemonName = "box", HostId = "h2", Revision = 1,
+                Accounts = [Listed("d1", live), Listed("d2", expired)],
+                Defaults = [new() { Vendor = "claude", Directory = "/u/.claude", DirectoryKey = "/u/.claude" }],
+            };
+            rig.Remote.DaemonAccountsSubject.OnNext([row]);
+            rig.Remote.DrawableDaemonAccountsSubject.OnNext([row]);
+            await UntilAsync(() => rig.Vm.AccountPendingText is null && rig.Vm.AccountSection, "the remote choice resolving");
+
             var view = new LauncherPaneView { DataContext = rig.Vm };
             var window = new Window { Content = view, Width = 900, Height = 700 };
             window.Show();
@@ -957,17 +984,19 @@ public class LauncherPaneViewSmokeTests {
             Settle(window);
             static bool Shows(Flyout menu, string text) =>
                 ((Control)menu.Content!).GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == text);
-            await Assert.That(Shows(agent, "no reading yet")).IsTrue();
 
-            var reading = new AccountReadingDto(
-                0, [new UsageWindowDto("claude", 300, 42, UsageNow.AddHours(2), UsageNow)], null, null, null);
-            rig.Snapshots.OnNext(AccountsSnapshot(2, HomeAccount with { Reading = reading }, WorkAccount));
-            await UntilAsync(() => Shows(agent, "42%"), "the bar drawn", window);
+            await Assert.That(Shows(agent, "42%")).IsTrue();
             await Assert.That(Shows(agent, "5h")).IsTrue();
 
-            rig.Snapshots.OnNext(null);
+            var expiredFill = NamedRow(agent, "d2")!.GetVisualDescendants().OfType<Border>()
+                .Single(b => b.Width == 46 && b.Child is Border).Child as Border;
+            await Assert.That(expiredFill!.Width).IsEqualTo(46);
+            await Assert.That(expiredFill.Background).IsSameReferenceAs(view.FindResource("KcapBorderStrongBrush"));
+
+            rig.Remote.DrawableDaemonAccountsSubject.OnNext([]);
             await UntilAsync(() => !Shows(agent, "42%"), "the bar dropped", window);
             await Assert.That(agent.IsOpen).IsTrue();
+            await Assert.That(NamedRow(agent, "d1")).IsNotNull();
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
