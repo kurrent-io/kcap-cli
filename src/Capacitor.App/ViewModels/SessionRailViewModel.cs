@@ -24,6 +24,7 @@ namespace Capacitor.App.ViewModels;
 /// pipeline, so every inner Connect() below already fires on the UI thread.
 public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     public const string CapNote = "Search or narrow the scope for older sessions";
+    public const string ScopeLockedTip = "Local version only stores your sessions. Upgrade to work with your team.";
 
     readonly CompositeDisposable _disposables = new();
     readonly IAgentDirectory _directory;
@@ -61,6 +62,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     public RailScope Scope {
         get => _scope;
         set {
+            if (IsScopeLocked) value = RailScope.Mine;
             if (_scope == value) return;
             this.RaiseAndSetIfChanged(ref _scope, value);
             this.RaisePropertyChanged(nameof(IsMine));
@@ -72,6 +74,10 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
 
     public bool IsMine => _scope == RailScope.Mine;
     public bool IsTeam => _scope == RailScope.Team;
+    /// The local edition holds only the owner's sessions, so Team has nothing to show.
+    public bool IsScopeLocked { get; }
+    public bool CanChangeScope => !IsScopeLocked;
+    public string? ScopeTip => IsScopeLocked ? ScopeLockedTip : null;
 
     RailState _state;
     public RailState State {
@@ -186,13 +192,15 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             IServerSessionsService? sessions = null,
             RailPreferences? preferences = null,
             Action<RailPreferences>? persistPreferences = null,
+            bool scopeLocked = false,
             Func<string, Task<RailPreferences>>? bindUserPreferences = null) {
         _directory = directory;
         _sessions = sessions;
         _persist = persistPreferences;
         _time = time;
         var initial = preferences ?? RailPreferences.Default;
-        _scope = initial.Scope;
+        IsScopeLocked = scopeLocked;
+        _scope = scopeLocked ? RailScope.Mine : initial.Scope;
         _state = initial.State;
         _grouping = initial.Grouping;
         _sort = initial.Sort;
