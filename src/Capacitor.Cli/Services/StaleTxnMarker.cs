@@ -9,12 +9,14 @@ internal static class StaleTxnMarker {
     /// <summary>
     /// True when the interrupted transaction provably took effect: the job is running, the validated
     /// daemon is that job, and the unit on disk is the one the marker recorded writing. A unit that
-    /// differs from the recorded fingerprint was touched by someone else and stays surfaced.
+    /// differs from the recorded fingerprint was touched by someone else and stays surfaced. Only a
+    /// start writes no unit; an install or replace without a fingerprint stopped before writing one,
+    /// so the job running is still the old one.
     /// </summary>
     public static bool TookEffect(
             TxnMarker marker, ServiceQuery query, int? daemonPid, LaunchdUnit.PlistRead plist, string? onDisk) {
         if (query.State != ServiceState.Running || query.JobPid is null || daemonPid != query.JobPid) return false;
-        if (marker.PlistFingerprint is null) return true;
+        if (marker.PlistFingerprint is null) return marker.Operation == "start";
 
         return plist == LaunchdUnit.PlistRead.Ok
             && onDisk is not null

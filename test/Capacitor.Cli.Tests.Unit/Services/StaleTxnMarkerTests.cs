@@ -5,8 +5,8 @@ namespace Capacitor.Cli.Tests.Unit.Services;
 public class StaleTxnMarkerTests {
     const string Plist = "<plist>unit</plist>";
 
-    static TxnMarker Marker(string? fingerprint) =>
-        new(1, "replace", "bootstrapped", "absent|nounit||pid=", "no-unit", fingerprint);
+    static TxnMarker Marker(string? fingerprint, string operation = "replace") =>
+        new(1, operation, "bootstrapped", "absent|nounit||pid=", "no-unit", fingerprint);
 
     static ServiceQuery Running(int? jobPid) => new(LabelProbe.Loaded, true, ServiceState.Running, "/u/kcap-daemon", jobPid);
 
@@ -18,9 +18,15 @@ public class StaleTxnMarkerTests {
     }
 
     [Test]
-    public async Task A_marker_that_never_wrote_a_unit_took_effect_once_the_service_runs() {
-        var took = StaleTxnMarker.TookEffect(Marker(null), Running(42), 42, LaunchdUnit.PlistRead.Absent, null);
+    public async Task A_start_took_effect_once_the_service_runs() {
+        var took = StaleTxnMarker.TookEffect(Marker(null, "start"), Running(42), 42, LaunchdUnit.PlistRead.Ok, Plist);
         await Assert.That(took).IsTrue();
+    }
+
+    [Test]
+    public async Task A_replace_that_stopped_before_writing_its_unit_stays_surfaced() {
+        var took = StaleTxnMarker.TookEffect(Marker(null), Running(42), 42, LaunchdUnit.PlistRead.Ok, Plist);
+        await Assert.That(took).IsFalse();
     }
 
     [Test]
@@ -39,14 +45,14 @@ public class StaleTxnMarkerTests {
 
     [Test]
     public async Task A_daemon_that_is_not_the_job_stays_surfaced() {
-        var took = StaleTxnMarker.TookEffect(Marker(null), Running(42), 43, LaunchdUnit.PlistRead.Absent, null);
+        var took = StaleTxnMarker.TookEffect(Marker(null, "start"), Running(42), 43, LaunchdUnit.PlistRead.Absent, null);
         await Assert.That(took).IsFalse();
     }
 
     [Test]
     public async Task A_service_that_is_not_running_stays_surfaced() {
         var stopped = new ServiceQuery(LabelProbe.Absent, true, ServiceState.NotInstalled, "/u/kcap-daemon", null);
-        var took = StaleTxnMarker.TookEffect(Marker(null), stopped, null, LaunchdUnit.PlistRead.Absent, null);
+        var took = StaleTxnMarker.TookEffect(Marker(null, "start"), stopped, null, LaunchdUnit.PlistRead.Absent, null);
         await Assert.That(took).IsFalse();
     }
 }
