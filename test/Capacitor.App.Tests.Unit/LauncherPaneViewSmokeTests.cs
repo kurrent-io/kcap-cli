@@ -12,6 +12,7 @@ using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Accounts.Readings;
 using Capacitor.Remote.Models;
 using TUnit.Assertions.Enums;
 
@@ -780,6 +781,8 @@ public class LauncherPaneViewSmokeTests {
     static readonly AccountViewDto HomeAccount = new("a1", "claude", "/u/.claude", "/u/.claude", "home", "recording");
     static readonly AccountViewDto WorkAccount = new("a2", "claude", "/u/.claude-work", "/u/.claude-work", "work", "broken");
 
+    static readonly DateTimeOffset UsageNow = new(2026, 10, 27, 12, 0, 0, TimeSpan.Zero);
+
     static AccountsSnapshotDto AccountsSnapshot(long revision, params AccountViewDto[] accounts) =>
         new("h1", revision, accounts, [new("claude", "/u/.claude", "/u/.claude")]);
 
@@ -792,14 +795,15 @@ public class LauncherPaneViewSmokeTests {
         public RecordingLaunchClient Launch { get; } = new();
         public HomeViewModel Vm { get; }
 
-        public AccountRig(string statePath) {
+        public AccountRig(string statePath, bool readings = false) {
             Daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
             Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
             Vm = new HomeViewModel(
                 Daemon, new AppStateStore(statePath), Launch, () => Task.FromResult(Array.Empty<string>()), TimeProvider.System,
                 viewerId: _ => Task.FromResult<string?>("u1"),
                 laneStatus: Observable.Return(new ServerLaneStatus(ServerLaneState.Connected)),
-                listing: Remote.Listing, daemonAccounts: Remote.DaemonAccounts, localAccounts: Snapshots);
+                listing: Remote.Listing, daemonAccounts: Remote.DaemonAccounts, localAccounts: Snapshots,
+                readings: readings ? new AccountReadings(Snapshots, Remote.DrawableDaemonAccounts, Observable.Return(UsageNow)) : null);
         }
 
         public void AnswerListing() =>
@@ -934,6 +938,37 @@ public class LauncherPaneViewSmokeTests {
             await Assert.That(NamedRow(agent, "work")).IsNotNull();
 
             agent.Hide();
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_open_panel_draws_bars_and_drops_them_when_the_host_goes_away() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var rig = new AccountRig(Tmp.PathTo("app-state.json"), readings: true);
+            await rig.ResolveAsync();
+            var view = new LauncherPaneView { DataContext = rig.Vm };
+            var window = new Window { Content = view, Width = 900, Height = 700 };
+            window.Show();
+            Settle(window);
+            var (agent, _) = OpenMenu(window, view, "AgentChip");
+            Settle(window);
+            static bool Shows(Flyout menu, string text) =>
+                ((Control)menu.Content!).GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == text);
+            await Assert.That(Shows(agent, "no reading yet")).IsTrue();
+
+            var reading = new AccountReadingDto(
+                0, [new UsageWindowDto("claude", 300, 42, UsageNow.AddHours(2), UsageNow)], null, null, null);
+            rig.Snapshots.OnNext(AccountsSnapshot(2, HomeAccount with { Reading = reading }, WorkAccount));
+            await UntilAsync(() => Shows(agent, "42%"), "the bar drawn", window);
+            await Assert.That(Shows(agent, "5h")).IsTrue();
+
+            rig.Snapshots.OnNext(null);
+            await UntilAsync(() => !Shows(agent, "42%"), "the bar dropped", window);
+            await Assert.That(agent.IsOpen).IsTrue();
+
             window.Close();
             Dispatcher.UIThread.RunJobs();
         });

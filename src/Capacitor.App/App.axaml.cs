@@ -27,6 +27,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Commands;
+using Capacitor.Remote.Models;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.LocalEdition;
@@ -1681,6 +1682,11 @@ public partial class App : Application {
             service, remoteAgents ?? new NoRemoteAgents(), lane ?? new NoServerLane(), new RepoIdentityResolver(),
             GitRepository.ResolveMainRepoRoot, localMachineId, appServerUrl: null, time);
 
+        var readings = new AccountReadings(
+            localAccounts ?? Observable.Return<AccountsSnapshotDto?>(null),
+            remoteAgents?.DrawableDaemonAccounts ?? Observable.Return<IReadOnlyList<DaemonAccountsDto>>([]),
+            UsageClock.Create(time));
+
         MainWindowViewModel? vm = null;
         var home = new HomeViewModel(
             service, appState,
@@ -1692,7 +1698,7 @@ public partial class App : Application {
             localMachineId: localMachineId, launchFailures: lane?.LaunchFailures, directory: resolvedDirectory,
             modelCatalog: modelCatalog, uploader: uploader, appServerUrl: appServerUrl,
             listing: remoteAgents?.Listing, daemonAccounts: remoteAgents?.DaemonAccounts, localAccounts: localAccounts,
-            retryListing: remoteAgents is null ? null : remoteAgents.RefreshDaemonsAsync,
+            retryListing: remoteAgents is null ? null : remoteAgents.RefreshDaemonsAsync, readings: readings,
             launchFailed: agentId => vm?.CloseFailedLaunch(agentId)) { LocalStack = localStack, UsageNotice = usageNotice };
         if (localServer is not null) home.AttachLocalServerRecovery(localServer);
         // Same knot as home above, over the SAME `service` instance — its callbacks close over
