@@ -128,4 +128,18 @@ public class SystemdServiceManagerTests {
         await Assert.That(query.Probe).IsEqualTo(LabelProbe.Unknown);
         await Assert.That(query.BinaryPath).IsEqualTo("/opt/kcap/kcap-daemon");
     }
+
+    [Test]
+    public async Task Query_of_a_disabled_unit_on_disk_is_loaded_and_installed() {
+        var path = SystemdUnit.UnitPath(Home, "test");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "ExecStart=/opt/kcap/kcap-daemon --name test\n");
+        var manager = new SystemdServiceManager(Home, runProcess: (_, args) =>
+            args.Contains("is-active") ? (3, "inactive\n", "") : args.Contains("is-enabled") ? (1, "disabled\n", "") : (0, "", ""));
+
+        var query = manager.Query("test");
+
+        await Assert.That(query.Probe).IsEqualTo(LabelProbe.Loaded);
+        await Assert.That(query.State).IsEqualTo(ServiceState.Installed);
+    }
 }

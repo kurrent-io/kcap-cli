@@ -55,8 +55,8 @@ sealed class SystemdServiceManager(
         // (an SSH login without lingering, a container): reading that as Absent would free a live unit.
         if (string.IsNullOrWhiteSpace(active)) return new ServiceQuery(LabelProbe.Unknown, unitPresent, ServiceState.NotInstalled, bin, null);
 
-        var (enabledExit, _, _) = _runProcess("systemctl", SystemdUnit.IsEnabledArgs(serviceId));
-        var state = SystemdUnit.StatusFrom(active, enabledExit);
+        var (enabledExit, enabledOut, _) = _runProcess("systemctl", SystemdUnit.IsEnabledArgs(serviceId));
+        var state = SystemdUnit.StatusFrom(active, enabledExit, enabledOut, unitPresent);
         var probe = state != ServiceState.NotInstalled ? LabelProbe.Loaded : LabelProbe.Absent;
         var jobPid = state == ServiceState.Running
             ? SystemdUnit.MainPid(_runProcess("systemctl", SystemdUnit.MainPidArgs(serviceId)).StdOut)
