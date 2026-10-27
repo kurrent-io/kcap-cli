@@ -122,14 +122,6 @@
     <Style Selector="StackPanel.settingsHeader">
         <Setter Property="Spacing" Value="6" />
     </Style>
-    <!-- A save bar pinned under a page that has explicit Save, so the action is never scrolled away. -->
-    <Style Selector="Border.settingsActionBar">
-        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
-        <Setter Property="BorderThickness" Value="0,1,0,0" />
-        <Setter Property="Background" Value="{StaticResource KcapCanvasBrush}" />
-        <Setter Property="Padding" Value="32,12" />
-    </Style>
-
     <!-- Groups: a section title over one card. The title is the page's second level, so it is larger
          than any label inside the card. -->
     <Style Selector="StackPanel.settingsGroup">
