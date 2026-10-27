@@ -11,7 +11,7 @@ namespace Capacitor.App.ViewModels;
 public sealed class SearchChoiceViewModel : ReactiveObject {
     public const string Explainer = "Choose how to find information saved in kcap.";
     public static readonly string BuiltinDetail = BuiltinDetailFor("about 320 MB");
-    public const string BuiltinUnavailable = "The built-in model could not be confirmed for the version of kcap local this Mac runs.";
+    public const string BuiltinUnavailable = "Not available: kcap couldn't find a built-in model for this version.";
     public const string BuiltinLookingUp = "Checking whether the version of kcap local this Mac runs has a built-in model…";
     public const string MeaningDetail = "Finds related information even when you use different words. Uses an AI model that runs in Ollama on this Mac.";
     public const string KeywordDetail = "Finds information using matching words. No AI model needed. You can change this later in Settings, under Search.";

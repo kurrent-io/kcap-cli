@@ -18,7 +18,7 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
     public const string BusyText = "Another local setup, upgrade or uninstall is running on this Mac. Try again once it has finished.";
 
     static readonly string[] Derived = [
-        nameof(Running), nameof(StateText), nameof(CurrentText), nameof(CanApply), nameof(ApplyLabel), nameof(Embeddings),
+        nameof(Running), nameof(StateText), nameof(CurrentText), nameof(CanApply), nameof(Embeddings),
         nameof(FailureText), nameof(ShowsSettingsLink), nameof(ShowsInlineSettings),
     ];
 
@@ -118,13 +118,6 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
     public bool CanApply =>
         _loaded && !Running && !_upgrade.Running && Choice.Valid && !Choice.AwaitingOffer
      && (Differs(Choice.Choice) || _current is null or { Pending: true });
-
-    public string ApplyLabel => Choice.Choice switch {
-        { ByMeaning: false }                         => "Use keyword search",
-        _ when !CurrentByMeaning                     => "Turn on search by meaning",
-        { Provider: LocalEmbeddingProvider.Builtin } => "Use the built-in model",
-        _                                            => "Use this model",
-    };
 
     public string? FailureText => !Running && _search.Outcome is LocalInstallOutcome.Failed failed
         ? failed.Affordance == LocalInstallAffordance.Busy ? BusyText : TerminalAdvice.Strip(failed.Message) ?? "Setup did not finish."
