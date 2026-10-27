@@ -66,6 +66,9 @@ public static class AccountRefresh {
             LimitsError       = current.Vendor is HarnessId.Codex ? result.LimitsError : null,
         };
 
+        if (result.HookTrust is { } trust)
+            next = next with { HookTrust = trust.Trust, HookTrustFingerprint = trust.Fingerprint };
+
         if (result.IdentityError is not null)
             return (next, new(current.Generation, current.Generation, current.Generation == started.Generation));
 
