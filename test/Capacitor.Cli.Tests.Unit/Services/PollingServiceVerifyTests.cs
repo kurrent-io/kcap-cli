@@ -156,7 +156,7 @@ public class PollingServiceVerifyTests {
 
         await Assert.That(exit).IsEqualTo(VerifyExit.Ok);
         await Assert.That(ended).IsEquivalentTo([Id]);
-        await Assert.That(manager.Calls).IsEquivalentTo(["end-manual", "install"]);
+        await Assert.That(manager.Calls).IsEquivalentTo(["end-manual", "install"], TUnit.Assertions.Enums.CollectionOrdering.Matching);
     }
 
     [Test]

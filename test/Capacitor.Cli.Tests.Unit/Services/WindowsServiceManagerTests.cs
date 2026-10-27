@@ -16,7 +16,7 @@ public class WindowsServiceManagerTests {
     WindowsServiceManager Manager() => new(Config.Root, _pipe, _store, _tasks,
         stopDaemon: id => {
             _tasks.Calls.Add($"stop {id}");
-            return true;
+            return !_tasks.DaemonStopFails;
         },
         writeFile: (path, content, _) => _written[path] = content);
 
@@ -43,7 +43,20 @@ public class WindowsServiceManagerTests {
     public async Task Install_without_start_stops_after_enrolling() {
         Manager().Install(Spec(), startNow: false, out _);
 
-        await Assert.That(_pipe.Verbs).IsEquivalentTo(["enroll", "stop"]);
+        await Assert.That(_pipe.Verbs).IsEquivalentTo(["enroll", "stop"], CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task Install_without_start_says_so_when_the_daemon_it_could_not_stop_still_runs() {
+        _pipe.Answer = verb => verb == "stop"
+            ? new ServicePipeResponse(false, "busy")
+            : new ServicePipeResponse(true, Status: new ServicePipeStatus("running", Pid: 4242));
+
+        var ok = Manager().Install(Spec(), startNow: false, out var error);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(error).Contains("its daemon is running");
+        await Assert.That(_store.Current).IsNotNull();
     }
 
     /// The daemon is stopped before the task goes: retiring the task alone kills it, agents and all
@@ -65,11 +78,27 @@ public class WindowsServiceManagerTests {
         await Assert.That(_tasks.Calls).IsEmpty();
     }
 
+    /// Retiring the task now would be the kill the graceful stop exists to avoid
+    [Test]
+    public async Task A_task_whose_daemon_does_not_stop_gracefully_is_left_running_it() {
+        _tasks.Installed.Add("laptop");
+        _tasks.DaemonStopFails = true;
+
+        var ok = Manager().Install(Spec(), startNow: true, out var error);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(error).Contains("did not stop gracefully");
+        await Assert.That(_tasks.Calls).IsEquivalentTo(["stop laptop"]);
+        await Assert.That(_tasks.Installed).Contains("laptop");
+        await Assert.That(_pipe.Verbs).IsEmpty();
+    }
+
     [Test]
     public async Task A_refused_enroll_restores_the_previous_enrollment_and_the_task() {
         var previous = new ServiceEnrollment("old", Daemon, null, null, null);
         _store.Current = previous;
         _tasks.Installed.Add("laptop");
+        _tasks.Running.Add("laptop");
         _pipe.Answer = _ => new ServicePipeResponse(false, "the daemon path does not exist");
 
         var ok = Manager().Install(Spec(), startNow: true, out var error);
@@ -77,7 +106,30 @@ public class WindowsServiceManagerTests {
         await Assert.That(ok).IsFalse();
         await Assert.That(error).IsEqualTo("the daemon path does not exist");
         await Assert.That(_store.Current).IsEqualTo(previous);
-        await Assert.That(_tasks.Calls).IsEquivalentTo(["stop laptop", "uninstall laptop", "install laptop"]);
+        await Assert.That(_tasks.Calls).IsEquivalentTo(["stop laptop", "uninstall laptop", "install laptop"], CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task A_task_restored_after_a_refused_enroll_starts_only_if_it_was_running() {
+        _tasks.Installed.Add("laptop");
+        _pipe.Answer = _ => new ServicePipeResponse(false, "refused");
+
+        Manager().Install(Spec(), startNow: true, out _);
+
+        await Assert.That(_tasks.Calls).IsEquivalentTo(["stop laptop", "uninstall laptop", "install laptop stopped"], CollectionOrdering.Matching);
+    }
+
+    /// The restored enrollment names the same file, so leaving the refused install's contents in it would hand
+    /// them to the daemon at its next launch
+    [Test]
+    public async Task A_refused_reinstall_gives_the_environment_file_its_contents_back() {
+        var file = Config.CreateFile("daemon-service-laptop.env.json", """{"KCAP_PROFILE":"old"}""");
+        _store.Current = new ServiceEnrollment("laptop", Daemon, "old", null, file);
+        _pipe.Answer = _ => new ServicePipeResponse(false, "refused");
+
+        Manager().Install(Spec(), startNow: true, out _);
+
+        await Assert.That(_written[file]).IsEqualTo("""{"KCAP_PROFILE":"old"}""");
     }
 
     /// A retire can fail after it has ended the task's daemon, as one the user may not delete does; the task is
@@ -85,13 +137,14 @@ public class WindowsServiceManagerTests {
     [Test]
     public async Task A_task_that_will_not_go_is_started_again_and_nothing_is_enrolled() {
         _tasks.Installed.Add("laptop");
+        _tasks.Running.Add("laptop");
         _tasks.RefuseUninstall = true;
 
         var ok = Manager().Install(Spec(), startNow: true, out var error);
 
         await Assert.That(ok).IsFalse();
         await Assert.That(error).Contains("task is busy");
-        await Assert.That(_tasks.Calls).IsEquivalentTo(["stop laptop", "uninstall laptop", "start laptop"]);
+        await Assert.That(_tasks.Calls).IsEquivalentTo(["stop laptop", "uninstall laptop", "start laptop"], CollectionOrdering.Matching);
         await Assert.That(_store.Current).IsNull();
         await Assert.That(_pipe.Verbs).IsEmpty();
     }

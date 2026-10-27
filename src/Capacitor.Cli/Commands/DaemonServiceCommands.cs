@@ -50,10 +50,22 @@ sealed class DaemonServiceCommands(
         var serviceId = DaemonStore.Sanitize(DaemonNameResolver.Resolve(rest, profiles.DaemonName));
         var verbs = new DaemonServiceCommands(store, root, profiles, manager, serviceId, home, time);
 
-        // An update of the service binary: the daemon is already enrolled, so the elevated step was the whole job.
-        if (system && action == "install" && manager is WindowsServiceManager && manager.Query(serviceId) is { Probe: LabelProbe.Loaded, UnitPresent: true }) {
+        // An update of the service binary: when the daemon is already enrolled as asked, the elevated step was the
+        // whole job. A changed profile or agent cap goes through the install below, which re-enrolls.
+        if (system && action == "install" && manager is WindowsServiceManager windows && EnrolledAsAsked(windows)) {
             await Console.Out.WriteLineAsync($"kcap-service is current; '{serviceId}' is already enrolled with it.");
             return 0;
+        }
+
+        bool EnrolledAsAsked(WindowsServiceManager windows) {
+            try {
+                return windows.Query(serviceId) is { Probe: LabelProbe.Loaded, UnitPresent: true }
+                    && windows.EnrolledAs(serviceId,
+                        DaemonCommands.ExtractFlagValue(rest, "--profile") ?? profiles.Resolution.ProfileName,
+                        DaemonCommands.ExtractFlagValue(rest, "--max-agents"));
+            } catch (ArgumentException) {
+                return false;
+            }
         }
 
         return action switch {

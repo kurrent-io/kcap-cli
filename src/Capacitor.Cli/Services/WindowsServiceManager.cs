@@ -42,6 +42,13 @@ sealed class WindowsServiceManager(
 
     public IReadOnlyList<string> ListInstalled() => enrollments.Read() is { } e ? [e.Name] : [];
 
+    /// <summary>Whether the enrollment under <paramref name="serviceId"/> already pins this profile and agent cap,
+    /// as an install with these values would write them</summary>
+    internal bool EnrolledAs(string serviceId, string? profile, string? maxAgents) =>
+        Enrolled(serviceId) is { } e
+        && string.Equals(e.Profile, string.IsNullOrEmpty(profile) ? null : profile, StringComparison.Ordinal)
+        && e.MaxAgents == MaxAgents(maxAgents is null ? [] : ["--max-agents", maxAgents]);
+
     public ServiceStatus Status(string serviceId) {
         var query = Query(serviceId);
         if (query.Probe == LabelProbe.Unknown) throw new InvalidOperationException("kcap-service is not answering on its pipe");
@@ -72,21 +79,27 @@ sealed class WindowsServiceManager(
     public bool Install(ServiceSpec spec, bool startNow, out string? error) {
         var previous = enrollments.Read();
         var task = tasks?.TryListInstalled()?.Contains(spec.ServiceId) == true;
+        var taskRan = task && TaskRunning(spec.ServiceId);
 
         // Retiring the task alone ends its daemon with schtasks /End, a kill that also ends its agents. Stopped
-        // first, it exits 0, which ends the task's loop, and the service's daemon resumes the kept agents.
-        if (task) _stopDaemon(spec.ServiceId);
+        // first, it exits 0, which ends the task's loop, and the service's daemon resumes the kept agents. One
+        // that does not stop is left to its task, since retiring it would be that kill.
+        if (task && !_stopDaemon(spec.ServiceId)) {
+            error = $"the daemon '{spec.ServiceId}' did not stop gracefully, so its Scheduled Task was left running it";
+            return false;
+        }
 
         // The task's daemon holds the name; the service's launch would only be refused while it runs. A retire
         // can fail after it has already ended that daemon (a task the user may not delete), so the task is
         // started again rather than left registered with nothing running.
         if (task && !tasks!.Uninstall(spec.ServiceId, out var taskError)) {
             error = $"could not retire the Scheduled Task for '{spec.ServiceId}': {taskError}";
-            if (!tasks.Start(spec.ServiceId, out var startError)) error += $"; starting it again also failed: {startError}";
+            if (taskRan && !tasks.Start(spec.ServiceId, out var startError)) error += $"; starting it again also failed: {startError}";
             return false;
         }
 
         var file = GenerateFiles(spec)[0];
+        var previousEnvironment = ReadExisting(file.Path);
         _write(file.Path, file.Content);
         enrollments.Write(new ServiceEnrollment(
             spec.ServiceId, spec.DaemonBinaryPath,
@@ -98,28 +111,55 @@ sealed class WindowsServiceManager(
             error = enrolled?.Error ?? "kcap-service did not answer";
             if (previous is null) enrollments.Delete();
             else enrollments.Write(previous);
-            if (task && !tasks!.Install(spec, startNow, out var restoreError))
+            // A same-name enrollment points at this same file, so it gets its own contents back too
+            if (previousEnvironment is not null) _write(file.Path, previousEnvironment);
+            else File.Delete(file.Path);
+            if (task && !tasks!.Install(spec, taskRan, out var restoreError))
                 error += $"; restoring the Scheduled Task also failed: {restoreError}";
             return false;
         }
 
         if (!startNow && pipe.Send("stop", Slow) is not { Ok: true }) {
-            error = "kcap-service enrolled the daemon but did not stop it";
-            return false;
+            // Enrolled either way; what is left to say is whether its daemon runs
+            var running = pipe.Send("status", Quick)?.Status is not { Running: false };
+            error = running
+                ? $"kcap-service enrolled '{spec.ServiceId}' and its daemon is running: stopping it failed. Stop it with `kcap daemon service stop --name {spec.ServiceId}`"
+                : null;
+            return !running;
         }
 
         error = null;
         return true;
     }
 
-    static bool StopKeepingAgents(string name) {
+    bool TaskRunning(string serviceId) {
         try {
-            return DaemonShutdownClient.StopAndWaitAsync(
-                DaemonStore.FromEnvironment(), name, new ShutdownRequestDto("keep", "final"), DaemonCommands.StopExitWait,
-                TimeProvider.System, CancellationToken.None).GetAwaiter().GetResult();
-        } catch (Exception ex) when (ex is SocketException or IOException) {
-            return false;
+            return tasks!.Query(serviceId).State == ServiceState.Running;
+        } catch (InvalidOperationException) {
+            return true;
         }
+    }
+
+    static string? ReadExisting(string path) {
+        try {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream);
+            return reader.ReadToEnd();
+        } catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) {
+            return null;
+        }
+    }
+
+    /// <summary>True once no daemon runs under the name: it stopped keeping its agents, or none was running</summary>
+    static bool StopKeepingAgents(string name) {
+        var store = DaemonStore.FromEnvironment();
+        try {
+            var outcome = DaemonShutdownClient.StopAsync(
+                store, name, new ShutdownRequestDto("keep", "final"), DaemonCommands.StopExitWait,
+                TimeProvider.System, CancellationToken.None).GetAwaiter().GetResult();
+            if (outcome == ShutdownOutcome.Exited) return true;
+        } catch (Exception ex) when (ex is SocketException or IOException) { }
+        return DaemonPidProbe.ValidatedPid(store, name) is null;
     }
 
     public void WriteAndBootstrap(ServiceSpec spec) {
