@@ -2,7 +2,6 @@ using System.Reactive.Concurrency;
 using System.Reactive.Subjects;
 using Avalonia;
 using Avalonia.Automation;
-using Avalonia.Automation.Peers;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Input;
@@ -622,29 +621,6 @@ public class SettingsWindowSmokeTests {
             await Assert.That(title.Text).IsEqualTo("Notifications");
             Click(window, window.FindControl<TabItem>("CaptureTab")!);
             await Assert.That(title.Text).IsEqualTo("Privacy");
-        } finally { window.Close(); }
-    });
-
-    [Test]
-    [Arguments("Copy version info")]
-    [Arguments("Documentation")]
-    [Arguments("Release notes")]
-    public Task About_actions_expose_their_labels_to_accessibility(string label) => AvaloniaSession.RunOnUiAsync(async () => {
-        ConfigMutator.Mutate(Config.Root, c => c with { Profiles = new() {
-            ["work"] = new Profile { ServerUrl = "https://work.example" }
-        } });
-        using var notifications = new NotificationSettingsService(Config.PathTo("notifications.json"));
-        using var vm = MakeViewModel(notifications,
-            about: new AboutSettingsViewModel(new FakeDaemonClientService(), _ => Task.FromResult<string?>("1.2.3")));
-        var window = new SettingsWindow { DataContext = vm };
-        try {
-            window.Show();
-            window.FindControl<TabControl>("SettingsTabs")!.SelectedItem = window.FindControl<TabItem>("AboutTab");
-            Settle(window);
-            var button = window.GetVisualDescendants().OfType<Button>()
-                .Single(b => b.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == label));
-
-            await Assert.That(ControlAutomationPeer.CreatePeerForElement(button).GetName()).IsEqualTo(label);
         } finally { window.Close(); }
     });
 

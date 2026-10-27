@@ -93,14 +93,15 @@ public class AccountRowsTests {
     }
 
     [Test]
-    [Arguments("codex", "installed", "Needs approval in Codex", true)]
-    [Arguments("claude", "installed", "Ready", false)]
-    [Arguments("claude", "broken", "Needs repair", true)]
-    [Arguments("claude", "not_wired", "Not set up", true)]
-    [Arguments("claude", "recording", "Recording", false)]
-    public async Task Labels_follow_the_token_and_vendor(string vendor, string token, string label, bool attention) {
+    [Arguments("codex", "installed", "Needs approval in Codex", true, false)]
+    [Arguments("claude", "installed", "Ready", false, true)]
+    [Arguments("claude", "broken", "Needs repair", true, false)]
+    [Arguments("claude", "not_wired", "Not set up", true, false)]
+    [Arguments("claude", "recording", "Recording", false, true)]
+    public async Task Labels_follow_the_token_and_vendor(string vendor, string token, string label, bool attention, bool healthy) {
         await Assert.That(RecordingStateLabels.Label(vendor, token)).IsEqualTo(label);
         await Assert.That(RecordingStateLabels.IsAttention(vendor, token)).IsEqualTo(attention);
+        await Assert.That(RecordingStateLabels.IsHealthy(vendor, token)).IsEqualTo(healthy);
     }
 
     [Test]
@@ -155,13 +156,4 @@ public class AccountRowsTests {
     [Arguments(@"C:\Users\o'neil\.codex", true, @"$env:CODEX_HOME = 'C:\Users\o''neil\.codex'; codex")]
     public async Task The_approval_command_quotes_the_folder_for_the_shell(string directory, bool windows, string expected) =>
         await Assert.That(RecordingStateLabels.Command("codex", "installed", directory, windows)).IsEqualTo(expected);
-
-    [Test]
-    [Arguments("claude", "recording", true)]
-    [Arguments("claude", "installed", true)]
-    [Arguments("codex", "installed", false)]
-    [Arguments("claude", "not_wired", false)]
-    [Arguments("claude", "broken", false)]
-    public async Task Only_states_that_ask_nothing_of_the_user_read_as_healthy(string vendor, string token, bool healthy) =>
-        await Assert.That(RecordingStateLabels.IsHealthy(vendor, token)).IsEqualTo(healthy);
 }
