@@ -35,7 +35,7 @@ public static class AccountUsage {
         var age     = AgeText(reading, now);
 
         if (primary.Length == 0)
-            return new([], $"{Unknown} · {perModel}", perModel, pill, null, age, false);
+            return new([], $"{Unknown} · {perModel}", null, pill, null, age, false);
 
         var bars = primary.Select(w => Bar(w, blocked, now, zone)).ToArray();
 
@@ -46,7 +46,7 @@ public static class AccountUsage {
 
     /// Why the account cannot record or sign in, or null when it needs nothing.
     public static string? NeedsFix(AccountViewDto account) =>
-        account.SignIn == SignInStates.SignedOut                              ? "Needs sign-in"
+        account.SignIn == SignInStates.SignedOut                                   ? "Needs sign-in"
         : RecordingStateLabels.IsAttention(account.Vendor, account.RecordingState) ? RecordingStateLabels.Label(account.Vendor, account.RecordingState)
         : null;
 
@@ -56,8 +56,12 @@ public static class AccountUsage {
 
     static AccountUsageView Line(string text) => new([], text, null, null, null, null, false);
 
-    static string MainLimitId(string vendor) =>
-        string.Equals(vendor, "codex", StringComparison.OrdinalIgnoreCase) ? CodexRateLimits.DefaultLimitId : ClaudeStatusLineReading.LimitId;
+    /// Null for a vendor whose readings are not modelled: none of its windows is account-wide.
+    static string? MainLimitId(string vendor) => vendor.ToLowerInvariant() switch {
+        "claude" => ClaudeStatusLineReading.LimitId,
+        "codex"  => CodexRateLimits.DefaultLimitId,
+        _        => null
+    };
 
     static IReadOnlyList<BlockConstraintDto> LiveMainConstraints(AccountViewDto account, DateTimeOffset now) {
         if (account.Reading is not { } reading) return [];
@@ -66,7 +70,7 @@ public static class AccountUsage {
         return ReadingMerge.LiveConstraints(reading, now).Where(c => c.LimitId is null || c.LimitId == main).ToArray();
     }
 
-    static int ModelHits(AccountReadingDto reading, string main, DateTimeOffset now) =>
+    static int ModelHits(AccountReadingDto reading, string? main, DateTimeOffset now) =>
         ReadingMerge.LiveConstraints(reading, now).Where(c => c.LimitId is not null && c.LimitId != main).Select(c => c.LimitId).Distinct().Count();
 
     static string? BlockedText(IReadOnlyList<BlockConstraintDto> blocked, DateTimeOffset now, TimeZoneInfo zone) =>

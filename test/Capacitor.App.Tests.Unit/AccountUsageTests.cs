@@ -61,8 +61,30 @@ public class AccountUsageTests {
     public async Task Per_model_only_is_usage_unknown_with_the_count() {
         var view = Project(Reading([W("sonnet", 10080, 20), W("opus", 10080, 30)]));
         await Assert.That(view.LineText).IsEqualTo("usage unknown · +2 per model");
+        await Assert.That(view.PerModelText).IsNull();
         await Assert.That(view.Bars.Count).IsEqualTo(0);
         await Assert.That(view.Ready).IsFalse();
+    }
+
+    [Test]
+    public async Task Per_model_only_with_a_hit_reads_the_hit_in_the_line() {
+        var view = Project(Reading([W("sonnet", 10080, 100)], Hit(Constraint("sonnet", 10080, Now.AddDays(2)))));
+        await Assert.That(view.LineText).IsEqualTo("usage unknown · +1 per model · 1 hit");
+        await Assert.That(view.BlockedText).IsNull();
+    }
+
+    [Test]
+    public async Task Per_model_only_with_a_live_main_constraint_is_blocked() {
+        var view = Project(Reading([W("sonnet", 10080, 20)], Hit(Constraint(null, null, null))));
+        await Assert.That(view.LineText).IsEqualTo("usage unknown · +1 per model");
+        await Assert.That(view.BlockedText).IsEqualTo("Limit hit");
+    }
+
+    [Test]
+    public async Task Unmodelled_vendor_has_no_main_limit() {
+        var view = Project(Reading([W("claude", 300, 10)]), "gemini");
+        await Assert.That(view.Bars.Count).IsEqualTo(0);
+        await Assert.That(view.LineText).IsEqualTo("usage unknown · +1 per model");
     }
 
     [Test]
