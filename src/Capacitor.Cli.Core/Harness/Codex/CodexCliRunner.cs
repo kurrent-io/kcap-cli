@@ -285,13 +285,11 @@ static class CodexCliRunner {
     static async Task<ClaudeCliUsage?> UsageAfterKillAsync(Process process, Task stdoutTask, CodexExecEvents events, TimeProvider time) {
         try {
             await stdoutTask.WaitAsync(TimeSpan.FromSeconds(5), time);
-
-            return events.Usage;
         } catch {
             CloseOutput(process);
-
-            return null;
         }
+
+        return events.Usage;
     }
 
     /// <summary>Ends reads a descendant would otherwise keep pending: the process does not dispose its own readers.</summary>
