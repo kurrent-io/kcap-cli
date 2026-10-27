@@ -289,4 +289,24 @@ public class HarnessesSettingsViewModelTests {
             Arg.Is<IReadOnlyList<string>?>(o => o != null && o.SequenceEqual(new[] { "--tools-only" })));
         await Assert.That(vm.Rows[0].ToolsOnly).IsTrue();
     });
+
+    [Test]
+    public Task A_removal_warning_survives_the_reinstall_that_follows_it() => AvaloniaSession.RunOnUiAsync(async () => {
+        var cli = Substitute.For<IKcapCli>();
+        cli.PluginRemoveAsync("--cursor", Arg.Any<CancellationToken>())
+            .Returns(new ProcessResult(0, "", "Some MCP entries were preserved because they were edited.", false));
+        cli.PluginInstallAsync("--cursor", Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
+            .Returns(new ProcessResult(0, "", "", false));
+        using var vm = new HarnessesSettingsViewModel(Seed(), cli, _ => Task.FromResult<IReadOnlyDictionary<HarnessId, DetectedAgent>>(
+            new Dictionary<HarnessId, DetectedAgent> { [HarnessId.Cursor] = new(true, true) }), isWired: _ => true);
+        await vm.RescanAsync();
+        var row = vm.Rows[0];
+        row.SetTools(true);
+
+        await vm.ToggleToolsAsync(row);
+
+        await Assert.That(row.Tools).IsFalse();
+        await Assert.That(row.ErrorTitle).IsEqualTo("Finished with warnings");
+        await Assert.That(row.Details!).Contains("preserved");
+    });
 }

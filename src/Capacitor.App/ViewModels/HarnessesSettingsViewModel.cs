@@ -119,9 +119,13 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
                 // Install only ever adds, so anything the new answer drops comes out first.
                 var drops = !repair && ((row.IsConfigured && !record) || (row.OffersTools && row.Tools && !tools));
                 result = drops ? await _cli.PluginRemoveAsync(flag, _lifetime.Token) : new ProcessResult(0, "", "", false);
-                if (result is { ExitCode: 0, TimedOut: false })
+                if (result is { ExitCode: 0, TimedOut: false }) {
+                    // A removal's warnings (configuration it preserved) still apply once the install succeeds.
+                    var removal = result.Stderr.Trim();
                     result = await _cli.PluginInstallAsync(flag, _lifetime.Token,
                         HarnessInstallOptions.For(row.Id, record, row.OffersTools ? tools : true));
+                    if (removal.Length > 0) result = result with { Stderr = $"{removal}\n{result.Stderr.Trim()}".TrimEnd() };
+                }
             }
             bool? wired = _isWired is null ? null : await Task.Run(() => _isWired(row.Id), _lifetime.Token);
             row.SetWired(wired);
