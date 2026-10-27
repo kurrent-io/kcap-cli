@@ -40,6 +40,64 @@ public class UninstallRunViewModelTests {
     }
 
     [Test]
+    public async Task Preparation_finishes_before_cleanup_and_is_not_repeated_on_retry() {
+        var calls = new List<string>();
+        var prepared = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cli = new FakeKcapCli { UninstallBehavior = _ => { calls.Add("cli"); return Task.FromResult(Exit(1)); } };
+        var vm = new UninstallRunViewModel(cli, new FakeRemoval(calls), false, () => calls.Add("quit"), action => action(),
+            async () => { calls.Add("prepare"); await prepared.Task; calls.Add("prepared"); });
+
+        var operation = vm.RunAsync();
+        await Assert.That(vm.State).IsEqualTo(UninstallRunState.Preparing);
+        await Assert.That(vm.IsBusy).IsTrue();
+        await Assert.That(calls).IsEquivalentTo(["prepare"]);
+        await Assert.That(await vm.CloseCommand.CanExecute.FirstAsync()).IsFalse();
+        prepared.SetResult();
+        await operation;
+        await Assert.That(calls).IsEquivalentTo(["prepare", "prepared", "cli"], TUnit.Assertions.Enums.CollectionOrdering.Matching);
+
+        cli.UninstallBehavior = _ => { calls.Add("cli"); return Task.FromResult(Exit(0)); };
+        await vm.RetryCommand.Execute();
+        await Assert.That(calls).IsEquivalentTo(["prepare", "prepared", "cli", "cli", "links", "support", "trash"], TUnit.Assertions.Enums.CollectionOrdering.Matching);
+        await Assert.That(vm.IsFinished).IsTrue();
+    }
+
+    [Test]
+    public async Task Failed_preparation_keeps_the_app_and_never_starts_cleanup() {
+        var calls = new List<string>();
+        var cli = new FakeKcapCli();
+        var vm = new UninstallRunViewModel(cli, new FakeRemoval(calls), false, () => { }, action => action(),
+            () => Task.FromException(new InvalidOperationException("A local operation could not settle.")));
+
+        await vm.RunAsync();
+
+        await Assert.That(vm.State).IsEqualTo(UninstallRunState.Failed);
+        await Assert.That(calls).IsEmpty();
+        await Assert.That(cli.UninstallPurgeFlags).IsEmpty();
+        await Assert.That(vm.DetailsExpanded).IsTrue();
+        await Assert.That(await vm.CloseCommand.CanExecute.FirstAsync()).IsTrue();
+        await Assert.That(await vm.RetryCommand.CanExecute.FirstAsync()).IsFalse();
+    }
+
+    [Test]
+    public async Task A_failed_ui_disposal_drains_remaining_services_but_prevents_cleanup() {
+        var calls = new List<string>();
+        var cli = new FakeKcapCli();
+        var vm = new UninstallRunViewModel(cli, new FakeRemoval(calls), false, () => { }, action => action(),
+            () => App.DisposeUiForUninstallAsync(
+                [System.Reactive.Disposables.Disposable.Create(() => throw new InvalidOperationException("dispose failed")),
+                 System.Reactive.Disposables.Disposable.Create(() => calls.Add("remaining-ui"))],
+                () => { calls.Add("services"); return ValueTask.CompletedTask; }));
+
+        await vm.RunAsync();
+
+        await Assert.That(calls).IsEquivalentTo(["remaining-ui", "services"], TUnit.Assertions.Enums.CollectionOrdering.Matching);
+        await Assert.That(vm.State).IsEqualTo(UninstallRunState.Failed);
+        await Assert.That(cli.UninstallPurgeFlags).IsEmpty();
+        await Assert.That(await vm.RetryCommand.CanExecute.FirstAsync()).IsFalse();
+    }
+
+    [Test]
     public async Task Cli_failure_never_touches_the_bundle() {
         var (vm, cli, _, calls) = Build();
         cli.UninstallBehavior = onLine => {
@@ -78,7 +136,8 @@ public class UninstallRunViewModelTests {
 
         await Assert.That(cli.UninstallPurgeFlags.Count).IsEqualTo(2);
         await Assert.That(vm.State).IsEqualTo(UninstallRunState.Finished);
-        await Assert.That(calls).Contains("quit");
+        await Assert.That(calls).DoesNotContain("quit");
+        await Assert.That(await vm.CloseCommand.CanExecute.FirstAsync()).IsTrue();
     }
 
     [Test]
@@ -94,12 +153,19 @@ public class UninstallRunViewModelTests {
     }
 
     [Test]
-    public async Task Success_removes_links_then_trashes_then_quits() {
+    public async Task Success_removes_links_then_trashes_and_waits_for_done() {
         var (vm, _, _, calls) = Build();
 
         await vm.RunAsync();
 
         await Assert.That(vm.State).IsEqualTo(UninstallRunState.Finished);
+        await Assert.That(string.Join(",", calls)).IsEqualTo("links,support,trash");
+        await Assert.That(vm.IsFinished).IsTrue();
+        await Assert.That(await vm.RetryCommand.CanExecute.FirstAsync()).IsFalse();
+        await Assert.That(await vm.CloseCommand.CanExecute.FirstAsync()).IsTrue();
+
+        await vm.CloseCommand.Execute();
+
         await Assert.That(string.Join(",", calls)).IsEqualTo("links,support,trash,quit");
     }
 
@@ -131,19 +197,7 @@ public class UninstallRunViewModelTests {
         await vm.RunAsync();
 
         await Assert.That(vm.State).IsEqualTo(UninstallRunState.Finished);
-        await Assert.That(string.Join(",", calls)).IsEqualTo("links,support,trash,quit");
-    }
-
-    [Test]
-    public async Task Unexpected_failure_never_stays_running() {
-        var removal = new FakeRemoval([]);
-        var cli     = new FakeKcapCli { UninstallBehavior = _ => Task.FromResult(Exit(0)) };
-        var vm      = new UninstallRunViewModel(cli, removal, false, () => throw new InvalidOperationException("boom"), action => action());
-
-        await vm.RunAsync();
-
-        await Assert.That(vm.State).IsEqualTo(UninstallRunState.Failed);
-        await Assert.That(await vm.CloseCommand.CanExecute.FirstAsync()).IsTrue();
+        await Assert.That(string.Join(",", calls)).IsEqualTo("links,support,trash");
     }
 
     [Test]

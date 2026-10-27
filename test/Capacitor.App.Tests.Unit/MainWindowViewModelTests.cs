@@ -881,6 +881,27 @@ public class MainWindowViewModelTests {
     /// second — which only holds while both read ONE generation.
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task Shutdown_latch_can_repeat_after_the_session_rail_is_disposed() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var directory = new FakeAgentDirectory();
+            using var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System);
+            var vm = NewVm(new FakeDaemonClientService(), rail: rail);
+            rail.SelectedSessionKey = "local:session";
+
+            // First shutdown request, UI teardown, then the confirmed shutdown request.
+            vm.LatchShutdown();
+            await Assert.That(rail.SelectedSessionKey).IsNull();
+            rail.Dispose();
+            vm.LatchShutdown();
+            // MainWindowCoordinator also releases the workspace from the final Closed event.
+            vm.CloseWorkspace();
+
+            await Assert.That(vm.CurrentWorkspace).IsNull();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task The_navigation_gate_is_shared_across_the_windows_built_over_it() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();

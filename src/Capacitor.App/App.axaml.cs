@@ -251,7 +251,7 @@ public partial class App : Application {
     bool _shutdownStarted;
     bool _shutdownConfirmed;
     bool _setupRestarting;
-    bool _uninstallRelaunching;
+    bool _uninstalling;
     // 0 = normal shutdown. Set to 1 on a startup failure so the DEFERRED shutdown path (Cmd+Q /
     // platform shutdown while the error window is showing — OnShutdownRequested ->
     // DisposeAndShutdownAsync) still reports failure, instead of TryShutdown()'s platform
@@ -287,6 +287,11 @@ public partial class App : Application {
                 () => _shutdownStarted ? null : MainWindowAction(_coordinator), AppKitDock.SetVisible);
             desktop.Exit += (_, _) => { windowLifecycle.Dispose(); Program.Host.Dispose(); };
             Program.Host.SingleInstance.ShowRequested += () => Dispatcher.UIThread.Post(() => {
+                if (_uninstallRun is not null && desktop.MainWindow is { } uninstallWindow) {
+                    if (uninstallWindow.WindowState == WindowState.Minimized) uninstallWindow.WindowState = WindowState.Normal;
+                    uninstallWindow.Activate();
+                    return;
+                }
                 if (_shutdownStarted) return;
                 if (MainWindowAction(_coordinator) is { } showMain) {
                     showMain();
@@ -420,39 +425,59 @@ public partial class App : Application {
         }
     }
 
-    // The installed bundle's CLI and removal only: no lane, daemon client, lifecycle controller,
-    // updater, wizard or tray, so nothing restarts or recreates what is being removed.
-    void RunUninstallMode(IClassicDesktopStyleApplicationLifetime desktop, UninstallMode uninstall) {
+    // A standalone launch and the app menu share the same window and removal pipeline.
+    // The menu supplies preparation so normal app services stop before cleanup starts.
+    void RunUninstallMode(IClassicDesktopStyleApplicationLifetime desktop, UninstallMode uninstall) =>
+        StartUninstall(desktop, uninstall, prepareApp: false);
+
+    bool StartUninstall(IClassicDesktopStyleApplicationLifetime desktop, UninstallMode uninstall, bool prepareApp) {
+        var previous = prepareApp ? desktop.Windows.ToArray() : [];
         var runner = new ProcessRunner(_time);
-        var probe  = TerminalPathProbe.Create(runner, Environment.GetEnvironmentVariable);
-        var cli    = NewWizardCli(_config, _serverEnv, _localRoot, runner, ResolvePinnedCli().Path, probe);
-        // Shutdown closes the window, whose Closed handler quits again.
+        var probe = TerminalPathProbe.Create(runner, Environment.GetEnvironmentVariable);
+        var cli = NewWizardCli(_config, _serverEnv, _localRoot, runner, ResolvePinnedCli().Path, probe);
         var quitting = false;
         void Quit(int exitCode) {
             if (quitting) return;
             quitting = true;
             desktop.Shutdown(exitCode);
         }
+        Func<Task>? prepare = prepareApp ? () => PrepareAppForUninstallAsync(previous) : null;
         var run = OperatingSystem.IsMacOS()
-            ? uninstall.BuildRun(Environment.ProcessPath, root => new MacAppRemoval(runner, _userHome, root), cli, () => Quit(0))
+            ? uninstall.BuildRun(Environment.ProcessPath, root => new MacAppRemoval(runner, _userHome, root), cli, () => Quit(0), prepare: prepare)
             : OperatingSystem.IsLinux()
                 ? uninstall.BuildAppImageRun(AppImageInstall.Detect(Environment.GetEnvironmentVariable),
-                    install => new LinuxAppRemoval(runner, _userHome, install, Environment.GetEnvironmentVariable, _time), cli, () => Quit(0))
+                    install => new LinuxAppRemoval(runner, _userHome, install, Environment.GetEnvironmentVariable, _time), cli, () => Quit(0), prepare: prepare)
                 : null;
         if (run is null) {
             Console.Error.WriteLine("kcap: uninstalling from the app needs the installed kcap.app or the kcap AppImage.");
-            // Posted: the lifetime's main loop has not started yet.
-            Dispatcher.UIThread.Post(() => Quit(1));
-            return;
+            if (!prepareApp) Dispatcher.UIThread.Post(() => Quit(1));
+            return false;
         }
 
+        var window = UninstallWindow.ShowProgress(previous, run);
         _uninstallRun = run;
-        var window = new UninstallWindow { DataContext = run, WindowStartupLocation = WindowStartupLocation.CenterScreen };
         window.Closed += (_, _) => Quit(0);
         desktop.MainWindow = window;
-        window.Show();
-        window.Activate();
         _ = run.RunAsync();
+        return true;
+    }
+
+    async Task PrepareAppForUninstallAsync(IReadOnlyList<Window> previous) {
+        _shutdownStarted = true;
+        if (_coordinator is not null) _coordinator.QuitInProgress = true;
+        LatchNavigation();
+        _appMenu.SetSettingsAction(null);
+        _appMenu.SetSetupAction(null);
+        _appMenu.SetUninstallAction(null);
+        _shutdown.Cancel();
+        await DisposeAppAsync(shutdown: false);
+        // Close normal windows while their persisted state still exists. Their shutdown latch
+        // makes late close notifications inert after the shared services have been disposed.
+        foreach (var window in previous) window.Close();
+        if (_serverHttp is { } serverHttp) { _serverHttp = null; await serverHttp.DisposeAsync(); }
+        await _foreignHttp.DisposeAsync();
+        // No crash handler may recreate the config directory after the CLI removes it.
+        Program.StopCrashLoggingForUninstall();
     }
 
     // macOS only: elsewhere there is no bundle. Returns true when a window was shown and startup
@@ -962,12 +987,12 @@ public partial class App : Application {
         _appMenu.SetSetupAction(() => _ = RestartForSetupAsync(desktop));
         if (OperatingSystem.IsMacOS() && InstallLocation.BundleRoot(Environment.ProcessPath) is { } bundleRoot) {
             var facts = UninstallFactsFor(bundleRoot, service.DaemonName, profiles?.Resolution.ServerUrl, lifecycle, lifecycleProbe);
-            _appMenu.SetUninstallAction(() => _ = RelaunchForUninstallAsync(desktop, facts));
+            _appMenu.SetUninstallAction(() => _ = UninstallFromAppAsync(desktop, facts));
         } else if (OperatingSystem.IsLinux() && AppImageInstall.Detect(Environment.GetEnvironmentVariable) is not null) {
             // The links and the CLI copy live under the staged root, so a kcap that resolves there is this app's.
             var facts = UninstallFactsFor(AppImageInstall.StagedRoot(Environment.GetEnvironmentVariable, _userHome),
                 service.DaemonName, profiles?.Resolution.ServerUrl, lifecycle, lifecycleProbe);
-            _appMenu.SetUninstallAction(() => _ = RelaunchForUninstallAsync(desktop, facts));
+            _appMenu.SetUninstallAction(() => _ = UninstallFromAppAsync(desktop, facts));
         }
 
         // LAST, deliberately: anything above throwing lands in the catch with no
@@ -986,7 +1011,7 @@ public partial class App : Application {
     internal void ConfigureSettingsMenu(Action? openSettings) => _appMenu.SetSettingsAction(openSettings);
 
     async Task RestartForSetupAsync(IClassicDesktopStyleApplicationLifetime desktop) {
-        if (_setupRestarting || _uninstallRelaunching || _shutdownStarted) return;
+        if (_setupRestarting || _uninstalling || _shutdownStarted) return;
         _setupRestarting = true;
         try {
             if (!await ShowLifecyclePromptDialogAsync(_coordinator?.Window,
@@ -1023,33 +1048,23 @@ public partial class App : Application {
             ? ShellProfile.Removable(_userHome, new KcapLinkRemover(KcapLinkFolders.For(_userHome), Path.Combine(bundleRoot, "Contents", "MacOS", "kcap")).Find())
             : []);
 
-    // The relaunched copy runs the uninstall: this process must be gone before the bundle is.
-    async Task RelaunchForUninstallAsync(IClassicDesktopStyleApplicationLifetime desktop, UninstallFactsSource source) {
-        if (_uninstallRelaunching || _setupRestarting || _shutdownStarted) return;
-        _uninstallRelaunching = true;
-        // Left set only once the relaunch is registered: it also stops an ordinary quit applying a pending update.
-        var relaunchRegistered = false;
+    // The same window owns preparation, removal, and the final acknowledgement.
+    async Task UninstallFromAppAsync(IClassicDesktopStyleApplicationLifetime desktop, UninstallFactsSource source) {
+        if (_uninstalling || _setupRestarting || _shutdownStarted) return;
+        _uninstalling = true;
+        var started = false;
         try {
             var request = UninstallConfirmation.Build(await source.GatherAsync(_shutdown.Token));
             if (!await ShowLifecyclePromptDialogAsync(_coordinator?.Window, request.Prompt, _shutdown.Token)) return;
-            if (!Program.Host.CanRelaunchNow) {
-                _coordinator?.Window?.Notifier?.Notify("kcap cannot restart from where it was started. Run kcap uninstall in a terminal instead.");
-                return;
-            }
-            var start = Program.Host.NewCopy([.. request.RelaunchArgs]);
-            UninstallWindow.ShowHandoff(desktop.Windows);
-            desktop.Exit += (_, _) => {
-                try { Process.Start(start); }
-                catch (Exception ex) { Console.Error.WriteLine($"kcap: could not start the uninstall: {ex.Message}"); }
-            };
-            relaunchRegistered = true;
-            desktop.TryShutdown();
+            started = StartUninstall(desktop, new UninstallMode(request.PurgeLocal), prepareApp: true);
+            if (!started)
+                _coordinator?.Window?.Notifier?.Notify("Uninstall needs the installed kcap app. Run kcap uninstall in a terminal instead.");
         } catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) {
         } catch (Exception ex) {
             Console.Error.WriteLine($"kcap: could not start the uninstall: {ex.Message}");
             _coordinator?.Window?.Notifier?.Notify("Could not start the uninstall. Please try again.");
         } finally {
-            if (!relaunchRegistered) _uninstallRelaunching = false;
+            if (!started) _uninstalling = false;
         }
     }
 
@@ -2311,7 +2326,7 @@ public partial class App : Application {
     void OnShutdownRequested(object? sender, ShutdownRequestedEventArgs e) {
         // Nothing to tear down in this mode; a quit mid-run would leave kcap half removed.
         if (_uninstallRun is { } uninstall) {
-            e.Cancel = uninstall.State == UninstallRunState.Running;
+            e.Cancel = uninstall.IsBusy;
             return;
         }
         // Navigation's twin of BeginShutdownPass rule 1, and for the same reason: applied on EVERY
@@ -2364,15 +2379,15 @@ public partial class App : Application {
         _navigation.Latch();
     }
 
-    internal async Task DisposeAndShutdownAsync() {
+    internal Task DisposeAndShutdownAsync() => DisposeAppAsync(shutdown: true);
+
+    async Task DisposeAppAsync(bool shutdown) {
         // FIRST, before quiesce (which can wait a full minute) and before any disposal: a live
         // workspace holds a terminal attach on the daemon socket, and the clamp it implies must be
         // released for every other viewer as early as possible. Bounded at 5s and never throws.
         //
-        // Deliberately NOT ConfigureAwait(false), unlike its neighbours: this is the one await here
-        // that routinely suspends (a live workspace's teardown), and its continuation belongs back on
-        // the UI thread this was invoked from. That is all it buys — the quiesce below still resumes
-        // wherever ConfigureAwait(false) leaves it whenever IT suspends.
+        // Keep the UI context for the dialog closes below. Later quiesce awaits may resume on a
+        // worker thread; the final UI disposal explicitly returns to the dispatcher.
         await _workspaceTeardown.DrainAsync();
 
         // Still on the UI thread (required by Close), and before the quiesce below: the dialog's
@@ -2395,19 +2410,25 @@ public partial class App : Application {
                 .ConfigureAwait(false);
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop) {
-            // Prompt coordinator BEFORE the consent service: the window and its
-            // ViewModel are gone before the service they resolve against, so no click can reach a
-            // disposed one. A resolve already in flight was cancelled by _shutdown at the top of
-            // OnShutdownRequested and settles on the ViewModel's silent-abort path.
-            await DisposeUiThenConfirmShutdownAsync(
-                [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
+            // Quiesce may resume on a worker thread. UI disposal and the lifetime's final pass
+            // both belong on the dispatcher; uninstall keeps that same window and process alive.
+            await Dispatcher.UIThread.InvokeAsync(async () => {
+                IDisposable?[] ui = [
+                    _tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
                     _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _accounts, _sessionAccess,
-                    _pullRequestTones, _launchApprovals, _webWorkspace, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending],
-                DisposeLifecycleAndServiceAsync, () => _shutdownConfirmed = true, desktop, _exitCode,
-                applyOnExit: () => { if (!_setupRestarting && !_uninstallRelaunching) _updates?.ApplyPendingOnExit(); });
+                    _pullRequestTones, _launchApprovals, _webWorkspace, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending,
+                ];
+                if (shutdown) {
+                    await DisposeUiThenConfirmShutdownAsync(ui,
+                        DisposeLifecycleAndServiceAsync, () => _shutdownConfirmed = true, desktop, _exitCode,
+                        applyOnExit: () => { if (!_setupRestarting && !_uninstalling) _updates?.ApplyPendingOnExit(); });
+                } else {
+                    await DisposeUiForUninstallAsync(ui, DisposeLifecycleAndServiceAsync);
+                }
+            });
         } else {
             await DisposeLifecycleAndServiceAsync();
-            _shutdownConfirmed = true;
+            if (shutdown) _shutdownConfirmed = true;
         }
     }
 
@@ -2424,6 +2445,7 @@ public partial class App : Application {
                 await _lifecycle.DisposeAsync().ConfigureAwait(false);
             } catch (Exception ex) {
                 Console.Error.WriteLine($"kcap app failed to dispose the daemon lifecycle controller during shutdown: {ex}");
+                if (_uninstallRun is not null) throw;
             }
         }
         if (_service is not null) await _service.DisposeAsync().ConfigureAwait(false);
@@ -2432,6 +2454,7 @@ public partial class App : Application {
                 await _lane.DisposeAsync().ConfigureAwait(false);
             } catch (Exception ex) {
                 Console.Error.WriteLine($"kcap app failed to dispose the daemon mutation lane during shutdown: {ex}");
+                if (_uninstallRun is not null) throw;
             }
         }
     }
@@ -2496,18 +2519,29 @@ public partial class App : Application {
         return DisposeAndConfirmShutdownAsync(disposeAsync, markConfirmed, desktop, exitCode, applyOnExit);
     }
 
+    // In-place uninstall cannot rely on process exit to stop a service whose disposal failed.
+    // Drain the rest, then refuse destructive cleanup when any UI service failed to close.
+    internal static async Task DisposeUiForUninstallAsync(IReadOnlyList<IDisposable?> uiDisposables, Func<ValueTask> disposeAsync) {
+        var uiDisposed = DisposeAll(uiDisposables, "uninstall");
+        await disposeAsync();
+        if (!uiDisposed) throw new InvalidOperationException("Some app services could not close. Close kcap and try uninstall again.");
+    }
+
     // Per-entry guard for the same reason DisposeAndConfirmShutdownAsync wraps its disposeAsync: a
     // throw here must never skip the remaining disposables, markConfirmed or TryShutdown —
     // _shutdownConfirmed would stay false while _shutdownStarted stayed true, cancelling every
     // later quit forever. Null entries are the "that step never ran" case.
-    static void DisposeAll(IReadOnlyList<IDisposable?> disposables, string phase) {
+    static bool DisposeAll(IReadOnlyList<IDisposable?> disposables, string phase) {
+        var succeeded = true;
         foreach (var disposable in disposables) {
             try {
                 disposable?.Dispose();
             } catch (Exception ex) {
                 Console.Error.WriteLine($"kcap app failed to dispose a UI service during {phase}: {ex}");
+                succeeded = false;
             }
         }
+        return succeeded;
     }
 
     // Split out of DisposeAndShutdownAsync so a test can drive the full deferred-shutdown pass —
