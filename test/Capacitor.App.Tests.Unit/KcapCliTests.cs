@@ -528,6 +528,21 @@ public class KcapCliTests {
         await Assert.That(runner.SeenOptions!.EnvOverlay!.ContainsKey(KcapCli.ExpectServerUrlVar)).IsFalse();
     }
 
+    [Test]
+    [Arguments(null)]
+    [Arguments("--codex")]
+    [Arguments("--opencode")]
+    public async Task Plugin_remove_targets_the_harness_and_keeps_the_profile_and_terminal_environment(string? flag) {
+        var runner = new FakeProcessRunner();
+        await MakeCli(runner, terminalPath: "/opt/homebrew/bin:/usr/bin:/bin").PluginRemoveAsync(flag, CancellationToken.None);
+        string[] expected = flag is null ? ["plugin", "remove"] : ["plugin", "remove", flag];
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(expected, CollectionOrdering.Matching);
+        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(60));
+        await Assert.That(runner.SeenOptions.EnvOverlay!["KCAP_PROFILE"]).IsEqualTo("work");
+        await Assert.That(runner.SeenOptions.EnvOverlay[KcapCli.SpawnNoTelemetryVar]).IsEqualTo("1");
+        await Assert.That(runner.SeenOptions.EnvOverlay["PATH"]).IsEqualTo("/opt/homebrew/bin:/usr/bin:/bin");
+    }
+
     public static IEnumerable<Func<(MutationVerb Verb, AccountArgs Args, string[] Expected)>> AccountVerbArgv() {
         yield return () => (MutationVerb.AccountAdd, new AccountArgs("codex", "/Users/me/.codex-work", null, null),
             ["accounts", "add", "codex", "/Users/me/.codex-work", "--json"]);

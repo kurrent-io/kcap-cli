@@ -29,7 +29,8 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
     bool _canManage;
     IReadOnlyList<AccountVendorGroup> _groups = [];
     IReadOnlyList<AccountCandidate> _candidates = [];
-    string? _message;
+    AccountsNotice? _notice;
+    string? _noticeVendor;
     bool _isBusy;
     AccountSettingsRow? _renaming;
     string _renameDraft = "";
@@ -79,7 +80,10 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
 
     public IReadOnlyList<AccountVendorGroup> Groups {
         get => _groups;
-        private set => this.RaiseAndSetIfChanged(ref _groups, value);
+        private set {
+            this.RaiseAndSetIfChanged(ref _groups, value);
+            this.RaisePropertyChanged(nameof(UnplacedNotice));
+        }
     }
 
     public bool CanManage {
@@ -92,10 +96,24 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
         : _snapshot is null ? "Accounts are listed once the daemon is connected"
         : null;
 
-    public string? Message {
-        get => _message;
-        private set => this.RaiseAndSetIfChanged(ref _message, value);
+    public AccountsNotice? Notice {
+        get => _notice;
+        private set {
+            this.RaiseAndSetIfChanged(ref _notice, value);
+            Groups = WithNotice(Groups);
+        }
     }
+
+    /// A notice whose tool card is not on the page, such as after the daemon dropped mid-action.
+    public AccountsNotice? UnplacedNotice => Groups.Any(g => g.Notice is not null) ? null : _notice;
+
+    void Report(string? vendor, AccountsNotice? notice) {
+        _noticeVendor = vendor;
+        Notice = notice;
+    }
+
+    IReadOnlyList<AccountVendorGroup> WithNotice(IReadOnlyList<AccountVendorGroup> groups) =>
+        [.. groups.Select(g => g with { Notice = g.Vendor == _noticeVendor ? _notice : null })];
 
     public bool IsBusy {
         get => _isBusy;
@@ -135,31 +153,34 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
         var read = ++_candidateReads;
         try {
             var found = await Task.Run(_discover, _token);
-            if (read == _candidateReads && !_token.IsCancellationRequested) Candidates = found;
+            // An account already on the page is managed from its row; offering it again reads as a second account.
+            // One folder can hold two vendors' configuration, and each is its own account.
+            var listed = Groups.SelectMany(g => g.Rows).Select(r => (r.Vendor, r.Directory)).ToHashSet();
+            if (read == _candidateReads && !_token.IsCancellationRequested)
+                Candidates = [.. found.Where(c => !listed.Contains((c.Vendor.VendorId, c.Directory)))];
         } catch (OperationCanceledException) when (_token.IsCancellationRequested) {
         } catch (Exception ex) {
             Console.Error.WriteLine($"kcap: could not look for account directories: {ex.Message}");
         }
     }
 
-    internal static string OutcomeMessage(MutationVerb verb, string label, MutationOutcome outcome) {
-        var (done, infinitive, doing) = Words(verb);
+    internal static AccountsNotice? OutcomeNotice(MutationVerb verb, string label, MutationOutcome outcome) {
+        var (_, infinitive, doing) = Words(verb);
+        var failed = $"Could not {infinitive} {label}";
         return outcome switch {
-            MutationOutcome.Succeeded                   => $"{done} {label}",
-            MutationOutcome.Failed { Reason: { } why }  => $"Could not {infinitive} {label}: {why}",
-            MutationOutcome.Failed failed               => $"Could not {infinitive} {label} (exit code {failed.ExitCode})",
-            MutationOutcome.Refused { Reason: var why } => RefusalRemedy(why) is { } remedy
-                ? $"Could not {infinitive} {label}. {remedy}"
-                : $"Could not {infinitive} {label}: {why}",
+            MutationOutcome.Succeeded                   => null,
+            MutationOutcome.Failed { Reason: { } why }  => new(failed, why),
+            MutationOutcome.Failed exit                 => new(failed, $"kcap's command line stopped with an error (code {exit.ExitCode})."),
+            MutationOutcome.Refused { Reason: var why } => new(failed, RefusalRemedy(why) is { } remedy ? $"{remedy}." : why),
             // Unconfirmed, and every case the lane never produces for an account verb: none reads as done.
-            _                                           => $"{doing} {label} could not be confirmed; the list shows the current state",
+            _                                           => new($"{doing} {label} could not be confirmed", "The list shows the current state.", IsWarning: true),
         };
     }
 
     // The lane's checks before it runs the CLI.
     static string? RefusalRemedy(string reason) => reason switch {
         "cli_below_floor" or "cli_version_unknown" or "cli_override_missing" => UpdateKcap,
-        "cli_not_found"                                                        => "Install the kcap command line to manage accounts",
+        "cli_not_found"                                                        => "Reinstall kcap to manage accounts",
         "daemon_renamed_restart_app"                                           => "Restart the app to manage accounts",
         _                                                                      => null,
     };
@@ -173,24 +194,24 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
     };
 
     Task AddCandidateAsync(AccountCandidate candidate) =>
-        RunAsync(MutationVerb.AccountAdd, AccountRows.LastSegment(candidate.Directory),
+        RunAsync(candidate.Vendor.VendorId, MutationVerb.AccountAdd, AccountRows.LastSegment(candidate.Directory),
             new AccountArgs(candidate.Vendor.VendorId, candidate.Directory, null, null));
 
     Task AddDefaultAsync(AccountSettingsRow row) =>
         row.IsUnregisteredDefault
-            ? RunAsync(MutationVerb.AccountAdd, row.Label, new AccountArgs(row.Vendor, row.Directory, null, null))
+            ? RunAsync(row.Vendor, MutationVerb.AccountAdd, row.Label, new AccountArgs(row.Vendor, row.Directory, null, null))
             : Task.CompletedTask;
 
     Task RewireAsync(AccountSettingsRow row) =>
-        row.Id is { } id ? RunAsync(MutationVerb.AccountRewire, row.Label, new AccountArgs(null, null, id, null)) : Task.CompletedTask;
+        row.Id is { } id ? RunAsync(row.Vendor, MutationVerb.AccountRewire, row.Label, new AccountArgs(null, null, id, null)) : Task.CompletedTask;
 
     Task RemoveAsync(AccountSettingsRow row) =>
-        row.Id is { } id ? RunAsync(MutationVerb.AccountRemove, row.Label, new AccountArgs(null, null, id, null)) : Task.CompletedTask;
+        row.Id is { } id ? RunAsync(row.Vendor, MutationVerb.AccountRemove, row.Label, new AccountArgs(null, null, id, null)) : Task.CompletedTask;
 
     async Task AddFromPickerAsync(string vendor) {
         if (!CanAct) return;
         IsBusy = true;
-        Message = null;
+        Report(vendor, null);
         try {
             string? directory;
             try {
@@ -198,11 +219,11 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
             } catch (OperationCanceledException) when (_token.IsCancellationRequested) {
                 return;
             } catch (Exception ex) {
-                Message = $"Could not open the folder picker: {ex.Message}";
+                Report(vendor, new("Could not open the folder picker", ex.Message));
                 return;
             }
             if (directory is not { Length: > 0 }) return;
-            await SendAsync(MutationVerb.AccountAdd, AccountRows.LastSegment(directory), new AccountArgs(vendor, directory, null, null));
+            await SendAsync(vendor, MutationVerb.AccountAdd, AccountRows.LastSegment(directory), new AccountArgs(vendor, directory, null, null));
         } finally { IsBusy = false; }
     }
 
@@ -216,28 +237,28 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
         if (!CanAct || Renaming is not { Id: { } id } row || !RenameChanges(row, RenameDraft)) return;
         var label = RenameDraft.Trim();
         Renaming = null;
-        await RunAsync(MutationVerb.AccountRename, $"{row.Label} to {label}", new AccountArgs(null, null, id, label));
+        await RunAsync(row.Vendor, MutationVerb.AccountRename, $"{row.Label} to {label}", new AccountArgs(null, null, id, label));
     }
 
     static bool RenameChanges(AccountSettingsRow? row, string? draft) =>
         row is not null && !string.IsNullOrWhiteSpace(draft) && !string.Equals(draft.Trim(), row.Label, StringComparison.Ordinal);
 
-    async Task RunAsync(MutationVerb verb, string label, AccountArgs args) {
+    async Task RunAsync(string vendor, MutationVerb verb, string label, AccountArgs args) {
         if (!CanAct) return;
         IsBusy = true;
-        Message = null;
+        Report(vendor, null);
         try {
-            await SendAsync(verb, label, args);
+            await SendAsync(vendor, verb, label, args);
         } finally { IsBusy = false; }
     }
 
-    async Task SendAsync(MutationVerb verb, string label, AccountArgs args) {
+    async Task SendAsync(string vendor, MutationVerb verb, string label, AccountArgs args) {
         var request = MutationRequestFactory.ForAccount(verb, args, _daemonName, _profileName);
         try {
-            Message = OutcomeMessage(verb, label, await _runMutation(request, _token));
+            Report(vendor, OutcomeNotice(verb, label, await _runMutation(request, _token)));
         } catch (OperationCanceledException) when (_token.IsCancellationRequested) {
         } catch (Exception ex) {
-            Message = $"Could not {Words(verb).Infinitive} {label}: {ex.Message}";
+            Report(vendor, new($"Could not {Words(verb).Infinitive} {label}", ex.Message));
         }
     }
 
@@ -254,7 +275,7 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
     void ApplyGroups(IReadOnlyList<AccountVendorGroup> groups) {
         var same = groups.Count == Groups.Count && groups.Zip(Groups).All(pair =>
             pair.First.Vendor == pair.Second.Vendor && pair.First.Rows.SequenceEqual(pair.Second.Rows));
-        if (!same) Groups = groups;
+        if (!same) Groups = WithNotice(groups);
         if (Renaming is { } renaming)
             Renaming = Groups.SelectMany(g => g.Rows).FirstOrDefault(r => r.Id is not null && r.Id == renaming.Id);
     }

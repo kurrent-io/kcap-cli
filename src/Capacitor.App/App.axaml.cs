@@ -35,6 +35,7 @@ using Capacitor.Cli.Core.PullRequests.Readers;
 using Capacitor.Cli.Core.PullRequests.Readers.GitHubCli;
 using Capacitor.Cli.Core.Resume;
 using Capacitor.Cli.Core.Setup;
+using Capacitor.Cli.Core.Harness;
 using Microsoft.Extensions.DependencyInjection;
 using Capacitor.App.Platform.Linux;
 using Capacitor.App.Platform.Mac;
@@ -1077,6 +1078,56 @@ public partial class App : Application {
         "kcap will restart to reopen setup. Your running sessions will keep going, and your settings and sign-in will stay intact."
         + (importRunning ? " Your history import will stop. Sessions already imported are kept; you can retry from setup." : ""));
 
+    (KcapCli Cli, ILoginShellProbe Probe, ProcessRunner Runner) SettingsCli(SettingsProfileStore settings, string daemonName) {
+        var runner = new ProcessRunner(_time);
+        var probe = TerminalPathProbe.Create(runner, Environment.GetEnvironmentVariable);
+        var cli = new KcapCli(runner,
+            CliResolver.ResolvePath(Environment.GetEnvironmentVariable, File.Exists, Program.Host.CliDirectory),
+            daemonName, settings.ProfileName, probe.TerminalPathAsync,
+            canonicalServer: ServerIdentity.Canonicalize(settings.ServerUrl));
+        return (cli, probe, runner);
+    }
+
+    HarnessesSettingsViewModel CreateHarnessesSettings(SettingsProfileStore settings, string daemonName) {
+        var (cli, probe, runner) = SettingsCli(settings, daemonName);
+        var harnesses = HarnessRegistry.FromEnvironment(_userHome);
+        var shimInstaller = CliPathInstallers.Create(runner, probe, _userHome);
+        var shimTarget = ShimTargetFor(cli.CliPath, Program.Host.CliOutlivesApp);
+        return new HarnessesSettingsViewModel(settings, cli,
+            HarnessesStepViewModel.BuildDetectionFeed(probe, _userHome), _shutdown.Token,
+            id => harnesses[id].Signals.IsWired,
+            toolsMemory: _appState,
+            ensureTerminalCommand: shimInstaller is null ? null : async ct => {
+                // An inconclusive probe never offers an install, as in setup.
+                if (await probe.KcapOnPathAsync(ct) != false) return null;
+                // A CLI that leaves with the app (a mounted image) has nothing lasting to link.
+                if (shimTarget is null)
+                    return "kcap is not on your terminal PATH, and this copy cannot be linked there because it is removed when the app quits. Install kcap, then connect again.";
+                var fix = new PathFixViewModel(shimInstaller, _appState, shimTarget);
+                // A stop with nothing to say is still not an install, so the hooks must not go in.
+                return await fix.InstallAsync(ct) ? null : fix.Message ?? "kcap could not be added to your terminal PATH. Try again.";
+            });
+    }
+
+    async Task<VisibilityOptionsRead?> ReadSettingsVisibilityOptionsAsync(SettingsProfileStore settings, CancellationToken ct) {
+        using var timeout = new CancellationTokenSource(WizardVisibilityOptionsTimeout, _time);
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
+        try {
+            await Task.Run(settings.LoadProfile, bounded.Token).ConfigureAwait(false);
+            if (_serverHttp?.GetRequiredService<ICapacitorHttpClient>() is not { } http) return null;
+            var (client, status, _, _) = await http.ForWaitAsync(bounded.Token).ConfigureAwait(false);
+            using (client) {
+                if (status is not (AuthStatus.Ok or AuthStatus.NoAuthRequired)) return null;
+                var read = await ServerVisibilityOptions.ReadAsync(client, settings.ServerUrl, bounded.Token).ConfigureAwait(false);
+                if (read.Problem is { } problem) Console.Error.WriteLine($"kcap: settings visibility options read failed: {problem}");
+                return read;
+            }
+        } catch (Exception ex) when (!ct.IsCancellationRequested) {
+            Console.Error.WriteLine($"kcap: settings visibility options read failed: {ex.Message}");
+            return null;
+        }
+    }
+
     void OpenSettings(IClassicDesktopStyleApplicationLifetime desktop, SettingsProfileStore settings,
             IDaemonClientService service, ILocalControlOps ops, DaemonMutationLane lane, IAppNotifier notifier, Task startupSettled,
             bool showSearch = false) {
@@ -1110,7 +1161,10 @@ public partial class App : Application {
                 nameOverridden: Environment.GetEnvironmentVariable("KCAP_DAEMON_NAME") is { Length: > 0 },
                 needsAppRestart: lane.IsRetired(service.DaemonName), appLifetime: _shutdown.Token,
                 notificationSettings: _notificationSettings, notificationAccess: _notificationAccess,
-                profiles: profilesVm) {
+                profiles: profilesVm, harnesses: CreateHarnessesSettings(settings, service.DaemonName),
+                capture: new CaptureSettingsViewModel(settings, _shutdown.Token,
+                    isLocal: IsLocalServer(settings.ServerUrl, _localRoot),
+                    visibilityOptions: ct => ReadSettingsVisibilityOptionsAsync(settings, ct))) {
                 Accounts = _accounts is { } accounts
                     ? new AccountsSettingsViewModel(accounts, lane.RunAsync, service.DaemonName, settings.ProfileName,
                         discover: () => AccountDiscovery.Find(
@@ -1121,21 +1175,26 @@ public partial class App : Application {
                 Privacy    = new PrivacySettingsViewModel(_telemetry, _config, _usageNotice),
                 Search     = _localStack?.Search,
                 Experimental = new ExperimentalSettingsViewModel(new ExperimentalSettingsStore(_config), settings.ProfileName, service),
+                About = new AboutSettingsViewModel(service, SettingsCli(settings, service.DaemonName).Cli.VersionAsync, _localStack,
+                    _updates?.MenuItem, _updates is { } updates ? updates.RunMenuActionAsync : null, appLifetime: _shutdown.Token),
             };
         } catch (Exception ex) {
             notifier.Notify($"Could not open settings: {ex.Message}");
             return;
         }
 
-        var window = new SettingsWindow { DataContext = vm };
+        var window = new SettingsWindow { DataContext = vm, ContentScale = _uiScale };
         _settingsWindow = window;
-        window.Closing += (_, e) => { if (vm.IsBusy && !_shutdownStarted) e.Cancel = true; };
+        window.Closing += (_, e) => { if (vm.HasActiveOperation && !_shutdownStarted) e.Cancel = true; };
         window.Closed += (_, _) => { _settingsWindow = null; vm.Dispose(); };
         // The list is re-read whenever the window regains focus, so a `kcap use` or `kcap profile
         // add` made in a terminal shows up on return without a file watcher.
         window.Activated += (_, _) => _ = profilesVm.RefreshAsync();
         _ = profilesVm.RefreshAsync();
+        _ = vm.About?.LoadAsync();
         if (showSearch) window.ShowSearch();
+        _ = vm.Harnesses!.RescanAsync();
+        _ = vm.Capture.RefreshVisibilityOptionsAsync();
         window.Show();
         window.Activate();
     }

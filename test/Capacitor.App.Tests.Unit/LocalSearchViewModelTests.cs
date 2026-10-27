@@ -173,7 +173,6 @@ public class LocalSearchViewModelTests {
             h.Vm.Choice.UseKeyword = true;
 
             await Assert.That(h.Vm.CanApply).IsTrue();
-            await Assert.That(h.Vm.ApplyLabel).IsEqualTo("Use keyword search");
         });
     }
 
@@ -197,7 +196,6 @@ public class LocalSearchViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var h = new Harness(LocalEmbeddingSetting.Declined);
             h.Vm.Choice.UseOllama = true;
-            await Assert.That(h.Vm.ApplyLabel).IsEqualTo("Turn on search by meaning");
 
             h.Setting = LocalEmbeddingSetting.Ollama("mxbai-embed-large");
             await h.ApplyAsync(0,

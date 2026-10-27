@@ -54,8 +54,13 @@ public sealed class ProfilesSettingsViewModel : ReactiveObject {
 
     public IReadOnlyList<ProfileRow> Rows {
         get => _rows;
-        private set => this.RaiseAndSetIfChanged(ref _rows, value);
+        private set {
+            this.RaiseAndSetIfChanged(ref _rows, value);
+            this.RaisePropertyChanged(nameof(ListedRows));
+        }
     }
+
+    public IReadOnlyList<ProfileRow> ListedRows => [.. _rows.Where(r => !r.IsPlaceholder)];
 
     public string? Message {
         get => _message;
@@ -151,7 +156,7 @@ public sealed class ProfilesSettingsViewModel : ReactiveObject {
                 ProfileRemovalOutcome.IsActive             => $"Profile {current.Name} is the active profile and cannot be removed.",
                 ProfileRemovalOutcome.IsDefault            => "The default profile cannot be removed.",
                 ProfileRemovalOutcome.NotFound             => $"Profile {current.Name} no longer exists.",
-                _                                          => "The profile configuration could not be read; nothing was removed."
+                _                                          => "The profile configuration could not be read. Nothing was removed."
             };
             await RefreshAsync();
         } catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) {
@@ -171,7 +176,7 @@ public sealed class ProfilesSettingsViewModel : ReactiveObject {
                 || ServerIdentity.SameServer(current.ServerUrl, row.ServerUrl));
         if (current is not null && sameServer) return current;
 
-        Message = "This profile changed; the list was refreshed.";
+        Message = "This profile changed. The list was refreshed.";
         return null;
     }
 }

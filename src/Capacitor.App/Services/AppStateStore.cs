@@ -28,7 +28,12 @@ public sealed record AppState(
     // When setup last sent the user to kcap.ai's sign-up; cleared once a sign-in commits.
     DateTimeOffset? WebSignUpOpenedAt = null,
     // "host/vendor:repo" -> account id, written by AccountMemory.
-    IReadOnlyDictionary<string, string>? AccountByRepo = null);
+    IReadOnlyDictionary<string, string>? AccountByRepo = null,
+    // Vendor id -> whether kcap's tools were last installed for it from Settings. Nothing on disk
+    // says so, unlike hooks, so this is the only record of that answer.
+    IReadOnlyDictionary<string, bool>? HarnessToolsByVendor = null,
+    // A setup attempt is unverified until its command and recording check both succeed.
+    IReadOnlyList<string>? UnverifiedHarnessSetups = null);
 
 public interface IAppStateStore {
     Task<AppState> LoadAsync();

@@ -93,14 +93,15 @@ public class AccountRowsTests {
     }
 
     [Test]
-    [Arguments("codex", "installed", "Needs trust", true)]
-    [Arguments("claude", "installed", "Wired", false)]
-    [Arguments("claude", "broken", "Broken", true)]
-    [Arguments("claude", "not_wired", "Not wired", true)]
-    [Arguments("claude", "recording", "Recording", false)]
-    public async Task Labels_follow_the_token_and_vendor(string vendor, string token, string label, bool attention) {
+    [Arguments("codex", "installed", "Needs approval in Codex", true, false)]
+    [Arguments("claude", "installed", "Ready", false, true)]
+    [Arguments("claude", "broken", "Needs repair", true, false)]
+    [Arguments("claude", "not_wired", "Not set up", true, false)]
+    [Arguments("claude", "recording", "Recording", false, true)]
+    public async Task Labels_follow_the_token_and_vendor(string vendor, string token, string label, bool attention, bool healthy) {
         await Assert.That(RecordingStateLabels.Label(vendor, token)).IsEqualTo(label);
         await Assert.That(RecordingStateLabels.IsAttention(vendor, token)).IsEqualTo(attention);
+        await Assert.That(RecordingStateLabels.IsHealthy(vendor, token)).IsEqualTo(healthy);
     }
 
     [Test]
@@ -110,11 +111,15 @@ public class AccountRowsTests {
     }
 
     [Test]
-    public async Task Only_a_codex_install_that_awaits_trust_carries_a_hint() {
+    public async Task Only_a_state_whose_fix_is_not_on_the_row_carries_a_hint() {
         await Assert.That(RecordingStateLabels.Hint("codex", "installed", "/u/.codex-work"))
-            .IsEqualTo("Trust the kcap hooks the next time you start Codex with CODEX_HOME=/u/.codex-work");
+            .IsEqualTo("Start Codex once with this account and approve kcap's hooks when it asks.");
+        await Assert.That(RecordingStateLabels.Command("codex", "installed", "/u/.codex-work", windows: false)).IsEqualTo("CODEX_HOME=/u/.codex-work codex");
+        await Assert.That(RecordingStateLabels.Command("codex", "recording", "/u/.codex-work", windows: false)).IsNull();
         await Assert.That(RecordingStateLabels.Hint("claude", "installed", "/u/.claude")).IsNull();
         await Assert.That(RecordingStateLabels.Hint("codex", "recording", "/u/.codex")).IsNull();
+        await Assert.That(RecordingStateLabels.Hint("claude", "broken", "/u/.claude")).IsNotNull();
+        await Assert.That(RecordingStateLabels.Hint("claude", "not_wired", "/u/.claude")).IsNull();
     }
 
     [Test]
@@ -140,4 +145,15 @@ public class AccountRowsTests {
         await Assert.That(bare.Accounts.Length).IsEqualTo(0);
         await Assert.That(bare.Defaults.Length).IsEqualTo(0);
     }
+
+    /// The copied command runs as written in the user's shell, whatever the folder is called.
+    [Test]
+    [Arguments("/u/.codex-work", false, "CODEX_HOME=/u/.codex-work codex")]
+    [Arguments("/u/my codex", false, "CODEX_HOME='/u/my codex' codex")]
+    [Arguments("/u/$(rm -rf ~)", false, "CODEX_HOME='/u/$(rm -rf ~)' codex")]
+    [Arguments("/u/it's", false, "CODEX_HOME='/u/it'\\''s' codex")]
+    [Arguments(@"C:\Users\me\.codex", true, @"$env:CODEX_HOME = 'C:\Users\me\.codex'; codex")]
+    [Arguments(@"C:\Users\o'neil\.codex", true, @"$env:CODEX_HOME = 'C:\Users\o''neil\.codex'; codex")]
+    public async Task The_approval_command_quotes_the_folder_for_the_shell(string directory, bool windows, string expected) =>
+        await Assert.That(RecordingStateLabels.Command("codex", "installed", directory, windows)).IsEqualTo(expected);
 }
