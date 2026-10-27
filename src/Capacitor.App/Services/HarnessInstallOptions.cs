@@ -14,7 +14,10 @@ public static class HarnessInstallOptions {
         : !record && tools  ? ["--tools-only"]
         :                     [];
 
-    // Cursor and Kiro carry no instructions block of their own.
+    // The skip flags each vendor's install takes; one it does not take is ignored, not refused, so a
+    // wrong name would leave that part installed without a word.
     static IEnumerable<string> ToolParts(HarnessId id) =>
-        id == HarnessId.Cursor || id == HarnessId.Kiro ? ["mcp", "skills"] : ["mcp", "skills", "instructions"];
+        id == HarnessId.Grok ? ["skills"]
+        : id == HarnessId.Cursor || id == HarnessId.Kiro || id == HarnessId.MistralVibe || id == HarnessId.Muse ? ["mcp", "skills"]
+        : ["mcp", "skills", "instructions"];
 }
