@@ -242,7 +242,7 @@ sealed class DaemonServiceCommands(
     /// a later run when the daemon does not accept the stop; a systemd daemon picks the new path up on its next start.
     /// </summary>
     internal async Task<int> Refresh(bool force = false, Func<string, string>? stabilize = null) {
-        stabilize ??= ScriptInstallLayout.Stabilize;
+        stabilize ??= InstallPaths.Stabilize;
 
         if (force && manager is not LaunchdServiceManager) {
             await Console.Error.WriteLineAsync("refresh_outcome=unsupported");
@@ -636,6 +636,10 @@ sealed class DaemonServiceCommands(
                 } else if (!Owned(unit)) {
                     // An install holding the lock may have repointed the unit at another copy of kcap.
                     continue;
+                } else if (manager.Query(unit).Probe == LabelProbe.Unknown) {
+                    // Ending the daemon first would leave it stopped beside a unit the supervisor cannot remove.
+                    await Console.Error.WriteLineAsync($"Could not uninstall service '{unit}': {manager.Describe()} did not report its state; its daemon was left running.");
+                    failed = true;
                 } else {
                     var ended = await ServiceRemoval.EndAgentsAsync(store, unit, time);
 

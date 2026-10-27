@@ -31,7 +31,11 @@ sealed class RecordingServiceManager(Dictionary<string, string?> binaries) : ISe
             : new(ServiceState.Installed, binaries[serviceId]);
     }
 
-    public ServiceQuery Query(string serviceId) => new(LabelProbe.Loaded, true, ServiceState.Installed, binaries[serviceId], null);
+    /// <summary>Units whose supervisor does not answer: their query reads Unknown.</summary>
+    public HashSet<string> Unanswered { get; } = [];
+
+    public ServiceQuery Query(string serviceId) =>
+        new(Unanswered.Contains(serviceId) ? LabelProbe.Unknown : LabelProbe.Loaded, true, ServiceState.Installed, binaries[serviceId], null);
     public bool Install(ServiceSpec spec, bool startNow, out string? error) { error = null; return true; }
     public void WriteAndBootstrap(ServiceSpec spec) { }
 

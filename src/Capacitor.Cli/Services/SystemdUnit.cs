@@ -66,9 +66,15 @@ static class SystemdUnit {
     /// <summary>Reads <see cref="NeedDaemonReloadArgs"/> output: <c>yes</c> when systemd's copy of the unit is stale.</summary>
     public static bool NeedsDaemonReload(string output) => output.Trim().Equals("yes", StringComparison.OrdinalIgnoreCase);
 
-    public static ServiceState StatusFrom(string activeOut, int enabledExit) {
+    /// <summary>
+    /// <paramref name="enabledOut"/> is <c>is-enabled</c>'s output. A unit someone disabled exits non-zero yet is
+    /// still installed when its file is ours (<paramref name="unitPresent"/>): <c>ensure</c> and the desktop app
+    /// start a present unit, and a verified start must not then call it missing.
+    /// </summary>
+    public static ServiceState StatusFrom(string activeOut, int enabledExit, string enabledOut = "", bool unitPresent = false) {
         if (activeOut.Trim().Equals("active", StringComparison.OrdinalIgnoreCase)) return ServiceState.Running;
-        return enabledExit == 0 ? ServiceState.Installed : ServiceState.NotInstalled;
+        if (enabledExit == 0) return ServiceState.Installed;
+        return unitPresent && enabledOut.Trim() == "disabled" ? ServiceState.Installed : ServiceState.NotInstalled;
     }
 
     /// <summary>
