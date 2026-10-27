@@ -858,9 +858,13 @@ public partial class App : Application {
         // A resolved server and nothing more — deliberately wider than Settings, which also needs a
         // profile name for its store.
         var feedbackApi = sessionHttp is null ? null : _serverHttp!.GetRequiredService<IFeedbackApi>();
+        // A local installation has no support intake, so its reports go out as email drafts.
+        Func<FeedbackSubmission, FeedbackMailOutcome>? feedbackMail = isLocalServer
+            ? s => FeedbackMail.Send(s, SystemBrowser.Instance, Capacitor.Cli.Core.Auth.Clipboard.TryCopy)
+            : null;
         Action<FeedbackCategory>? openFeedback = feedbackApi is null
             ? null
-            : category => OpenFeedback(feedbackApi, feedbackTrailer, requestSignIn, category);
+            : category => OpenFeedback(feedbackApi, feedbackTrailer, requestSignIn, category, feedbackMail);
         _menuBar?.SetFeedbackAction(openFeedback);
 
         var commands = new BackgroundCommandActivity((key, report, ended, handoff) =>
@@ -1223,7 +1227,8 @@ public partial class App : Application {
                 MainWindowViewModel.StripBuildMetadata(s.Daemon.Version), cliVersion()))
             .StartWith(FeedbackTrailer.Build(appVersion, service.DaemonName, null, cliVersion())));
 
-    internal void OpenFeedback(IFeedbackApi api, IObservable<string> trailer, Action? signIn, FeedbackCategory category) {
+    internal void OpenFeedback(IFeedbackApi api, IObservable<string> trailer, Action? signIn, FeedbackCategory category,
+            Func<FeedbackSubmission, FeedbackMailOutcome>? mail = null) {
         if (_shutdownStarted) return;
         if (_feedbackWindow is { } open) {
             if (open.WindowState == WindowState.Minimized) open.WindowState = WindowState.Normal;
@@ -1233,7 +1238,7 @@ public partial class App : Application {
         }
 
         var vm = new FeedbackViewModel(api, category, trailer, RuntimeInformation.OSDescription,
-            signIn: signIn, appLifetime: _shutdown.Token);
+            signIn: signIn, appLifetime: _shutdown.Token, mail: mail);
 
         var window = new FeedbackWindow { DataContext = vm };
         _feedbackWindow = window;
