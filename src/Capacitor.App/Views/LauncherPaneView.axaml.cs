@@ -725,7 +725,7 @@ public partial class LauncherPaneView : UserControl {
             var next = AccountsToDraw();
             var same = drawnAccounts is { } drawn && next is { } now
                 ? drawn.Pending == now.Pending && drawn.Retry == now.Retry && drawn.Rows.SequenceEqual(now.Rows)
-                    && HomeViewModel.UsageEquals(drawnUsage, vm.AccountUsageById)
+                    && HomeViewModel.DrawnUsageEquals(drawnUsage, vm.AccountUsageById)
                 : drawnAccounts is null && next is null;
             if (!same) RebuildRows();
         }

@@ -26,6 +26,13 @@ public sealed record AccountUsageView(
      && AgeText == other.AgeText
      && Ready == other.Ready;
 
+    public bool DrawnEquals(AccountUsageView other) =>
+        Bars.SequenceEqual(other.Bars)
+     && LineText == other.LineText
+     && PerModelText == other.PerModelText
+     && BlockedText == other.BlockedText
+     && NextResetText == other.NextResetText;
+
     public override int GetHashCode() {
         var hash = new HashCode();
         foreach (var bar in Bars) hash.Add(bar);

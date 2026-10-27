@@ -880,6 +880,28 @@ public class HomeViewModelAccountTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task A_snapshot_with_a_duplicate_account_id_keeps_the_first() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var rig = new Rig(Tmp.PathTo("app-state.json"));
+            var vm = await rig.LocalAsync(Snapshot("h1", 1, WithReading(Home), Home with { Label = "dup", Reading = null }));
+
+            await Assert.That(vm.AccountUsageById.Keys).IsEquivalentTo(new[] { "a1" });
+            await Assert.That(vm.AccountUsageById["a1"].Bars.Single().PercentText).IsEqualTo("42%");
+        });
+    }
+
+    [Test]
+    public async Task The_launcher_comparison_ignores_age_and_readiness() {
+        var a = new AccountUsageView([], "line", null, null, null, "updated 1m ago", false);
+
+        await Assert.That(HomeViewModel.DrawnUsageEquals(new Dictionary<string, AccountUsageView> { ["a1"] = a },
+            new Dictionary<string, AccountUsageView> { ["a1"] = a with { AgeText = "updated 2m ago", Ready = true } })).IsTrue();
+        await Assert.That(HomeViewModel.DrawnUsageEquals(new Dictionary<string, AccountUsageView> { ["a1"] = a },
+            new Dictionary<string, AccountUsageView> { ["a1"] = a with { BlockedText = "Limit hit" } })).IsFalse();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task A_tick_that_changes_no_text_publishes_nothing() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var rig = new Rig(Tmp.PathTo("app-state.json"));

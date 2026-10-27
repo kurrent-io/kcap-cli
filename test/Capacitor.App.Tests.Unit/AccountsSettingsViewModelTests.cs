@@ -280,6 +280,14 @@ public class AccountsSettingsViewModelTests {
     });
 
     [Test]
+    public Task A_snapshot_with_a_duplicate_account_id_keeps_the_first() => AvaloniaSession.RunOnUiAsync(async () => {
+        var snapshot = UsageSnapshot();
+        using var rig = new Rig(snapshot with { Accounts = [.. snapshot.Accounts!, snapshot.Accounts![0] with { Label = "dup", Email = "dup@x.io" }] });
+
+        await Assert.That(rig.Row("work").Email).IsEqualTo("w@x.io");
+    });
+
+    [Test]
     public Task A_tick_updates_usage_without_rebuilding_groups() => AvaloniaSession.RunOnUiAsync(async () => {
         using var rig = new Rig(UsageSnapshot());
         var groups = rig.Vm.Groups;

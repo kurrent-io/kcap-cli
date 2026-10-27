@@ -277,7 +277,7 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
     IReadOnlyList<AccountVendorGroup> GroupsFor(AccountsSnapshotDto? snapshot) {
         if (snapshot is null) return [];
 
-        var accounts = (snapshot.Accounts ?? []).ToDictionary(a => a.Id, StringComparer.Ordinal);
+        var accounts = (snapshot.Accounts ?? []).DistinctBy(a => a.Id).ToDictionary(a => a.Id, StringComparer.Ordinal);
         foreach (var gone in _slots.Keys.Where(id => !accounts.ContainsKey(id)).ToArray()) _slots.Remove(gone);
 
         AccountUsageSlot SlotFor(string id) => _slots.TryGetValue(id, out var slot) ? slot : _slots[id] = new AccountUsageSlot();
