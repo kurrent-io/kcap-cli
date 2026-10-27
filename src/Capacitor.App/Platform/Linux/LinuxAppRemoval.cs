@@ -50,7 +50,9 @@ public sealed partial class LinuxAppRemoval : IAppRemoval {
 
     public bool DeleteSupportFiles() {
         try {
-            if (Directory.Exists(_stagedRoot)) Directory.Delete(_stagedRoot, recursive: true);
+            Directory.Delete(_stagedRoot, recursive: true);
+            return true;
+        } catch (DirectoryNotFoundException) {
             return true;
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             Console.Error.WriteLine($"kcap: could not remove {_stagedRoot}: {ex.Message}");

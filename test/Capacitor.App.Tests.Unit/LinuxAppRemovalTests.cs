@@ -85,6 +85,27 @@ public class LinuxAppRemovalTests {
         await Assert.That(File.Exists(Tmp.PathTo("data", "kcap", "local", "registry.json"))).IsTrue();
     }
 
+    /// An unreadable parent makes `Directory.Exists` read the staged CLI as absent, so only the delete can tell.
+    [Test]
+    public async Task A_staged_cli_behind_an_unreadable_folder_is_reported_as_left() {
+        if (OperatingSystem.IsWindows()) return;
+        Tmp.CreateFile("data/kcap/desktop/bin/kcap", "cli");
+        var parent = Tmp.PathTo("data", "kcap");
+        var mode = File.GetUnixFileMode(parent);
+        try {
+            File.SetUnixFileMode(parent, UnixFileMode.None);
+
+            await Assert.That(Removal().DeleteSupportFiles()).IsFalse();
+        } finally {
+            File.SetUnixFileMode(parent, mode);
+        }
+        await Assert.That(File.Exists(Tmp.PathTo("data", "kcap", "desktop", "bin", "kcap"))).IsTrue();
+    }
+
+    [Test]
+    public async Task A_missing_staged_cli_counts_as_removed() =>
+        await Assert.That(Removal().DeleteSupportFiles()).IsTrue();
+
     [Test]
     public async Task The_image_goes_to_the_home_trash_with_its_info_and_a_second_one_takes_a_free_name() {
         var first = Tmp.CreateFile("apps/kcap-x86_64.AppImage", "one");
