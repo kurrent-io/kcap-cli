@@ -1104,7 +1104,8 @@ public partial class App : Application {
                 if (shimTarget is null)
                     return "kcap is not on your terminal PATH, and this copy cannot be linked there because it is removed when the app quits. Install kcap, then connect again.";
                 var fix = new PathFixViewModel(shimInstaller, _appState, shimTarget);
-                return await fix.InstallAsync(ct) ? null : fix.Message;
+                // A stop with nothing to say is still not an install, so the hooks must not go in.
+                return await fix.InstallAsync(ct) ? null : fix.Message ?? "kcap could not be added to your terminal PATH. Try again.";
             });
     }
 
