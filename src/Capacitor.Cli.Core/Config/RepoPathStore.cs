@@ -17,8 +17,8 @@ public sealed class RepoPathStore(ConfigRoot config, TimeProvider time) {
             ? StringComparison.Ordinal
             : StringComparison.OrdinalIgnoreCase;
 
-    static string NormalizePath(string path) =>
-        Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    // A root keeps its separator: trimmed to "" it reads back as a corrupt store.
+    static string NormalizePath(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
 
     /// <summary>The saved repositories; empty when there is no file, or when it cannot be read or parsed.
     /// Writers never act on that empty answer — see <see cref="ReadForWrite"/>.</summary>

@@ -104,8 +104,6 @@ public class RepoPathStoreTests {
         await Assert.That(entries.Length).IsEqualTo(3);
     }
 
-    // ── RecordAsync ──────────────────────────────────────────────────────────
-
     static readonly DateTimeOffset Earlier = new(2026, 3, 1, 0, 0, 0, TimeSpan.Zero);
     static readonly DateTimeOffset Later   = new(2026, 3, 2, 0, 0, 0, TimeSpan.Zero);
 
@@ -131,6 +129,16 @@ public class RepoPathStoreTests {
 
         await Assert.That(changed).IsFalse();
         await Assert.That((await Repos.LoadAsync())[0].LastUsed).IsEqualTo(added);
+    }
+
+    [Test]
+    public async Task Record_FilesystemRoot_KeepsItsSeparator() {
+        var root = Path.GetPathRoot(Config.Directory)!;
+
+        await Repos.RecordAsync([new RepoEntry { Path = root, LastUsed = Earlier }]);
+
+        var entries = await Repos.LoadAsync();
+        await Assert.That(entries.Select(e => e.Path)).IsEquivalentTo([root]);
     }
 
     [Test]

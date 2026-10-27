@@ -1969,7 +1969,7 @@ class ImportCommand(
             }
         }
 
-        await RecordImportedRepositoriesAsync(classifications, importedSessionIds, selectedIds, sessionCwds, display);
+        await RecordImportedRepositoriesAsync(classifications, selectedIds, sessionCwds, display);
 
         // --- An explicit visibility for everything this run touched ---
         //
@@ -2142,18 +2142,18 @@ class ImportCommand(
         return 0;
     }
 
-    /// <summary>A session the server already holds counts too: a re-run of import, or setup after a
-    /// lost <c>repos.json</c>, must still fill the launcher's repository list.</summary>
+    /// <summary>Every in-scope session of this run counts, whatever its outcome: one the server already
+    /// holds lets a re-run fill the list, and a failed finalization may still have left its content on
+    /// the server.</summary>
     async Task RecordImportedRepositoriesAsync(
             IReadOnlyList<SessionClassification> classifications,
-            IEnumerable<string>                  importedSessionIds,
             HashSet<string>?                     selectedIds,
             IReadOnlyDictionary<string, string>  sessionCwds,
             ImportDisplay                        display
         ) {
-        var imported = importedSessionIds.ToHashSet(StringComparer.Ordinal);
-        var captured = classifications.Where(c => imported.Contains(c.SessionId)
-                                               || c.Status == ClassificationStatus.AlreadyLoaded
+        var captured = classifications.Where(c => c.Status is ClassificationStatus.New
+                                                      or ClassificationStatus.Partial
+                                                      or ClassificationStatus.AlreadyLoaded
                                                && (selectedIds is null || selectedIds.Contains(c.SessionId)));
 
         try {
