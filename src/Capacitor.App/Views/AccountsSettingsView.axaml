@@ -101,13 +101,13 @@
                                                             <TextBlock Text="{Binding Plan}" FontSize="11" FontWeight="SemiBold"
                                                                        Foreground="{StaticResource KcapMutedBrush}" />
                                                         </Border>
-                                                        <TextBlock Classes="kcapHint" Text="{Binding Email}" VerticalAlignment="Center"
-                                                                   IsVisible="{Binding Email, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                                                         <Border Classes="accountBlocked" IsVisible="{Binding Usage.View.BlockedText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
                                                                 Background="{StaticResource KcapDangerDimBrush}" CornerRadius="999" Padding="8,3" VerticalAlignment="Center">
                                                             <TextBlock Text="{Binding Usage.View.BlockedText}" FontSize="11" FontWeight="SemiBold"
                                                                        Foreground="{StaticResource KcapDangerBrush}" />
                                                         </Border>
+                                                        <TextBlock Classes="kcapHint" Text="{Binding Email}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                                                   IsVisible="{Binding Email, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                                                     </StackPanel>
                                                     <StackPanel Orientation="Horizontal" Spacing="8">
                                                         <StackPanel.IsVisible>
@@ -154,11 +154,11 @@
                                                                             </DataTemplate>
                                                                         </ItemsControl.ItemTemplate>
                                                                     </ItemsControl>
-                                                                    <TextBlock Classes="kcapHint" Text="{Binding LineText}"
+                                                                    <TextBlock Classes="kcapHint" Text="{Binding LineText}" TextWrapping="Wrap"
                                                                                IsVisible="{Binding LineText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                                                    <TextBlock Classes="kcapHint" Text="{Binding PerModelText}"
+                                                                    <TextBlock Classes="kcapHint" Text="{Binding PerModelText}" TextWrapping="Wrap"
                                                                                IsVisible="{Binding PerModelText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                                                    <TextBlock Classes="kcapHint" Text="{Binding AgeText}"
+                                                                    <TextBlock Classes="kcapHint" Text="{Binding AgeText}" TextWrapping="Wrap"
                                                                                IsVisible="{Binding AgeText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                                                                 </StackPanel>
                                                             </DataTemplate>
@@ -172,7 +172,7 @@
                                                     <Button Classes="kcapGhost kcapIcon accountMenu" IsVisible="{Binding !IsUnregisteredDefault}"
                                                             IsEnabled="{Binding !$parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).IsBusy}"
                                                             AutomationProperties.Name="{Binding Label, StringFormat='Actions for {0}'}"
-                                                            ToolTip.Tip="Rename, re-wire or remove">
+                                                            ToolTip.Tip="Refresh, rename, re-wire or remove">
                                                         <views:AppIcon Kind="Ellipsis" Size="16" />
                                                         <Button.Flyout>
                                                             <Flyout Placement="BottomEdgeAlignedRight" VerticalOffset="6"

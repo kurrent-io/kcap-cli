@@ -39,7 +39,7 @@ public static class AccountUsage {
 
         var bars = primary.Select(w => Bar(w, blocked, now, zone)).ToArray();
 
-        return new(bars, null, perModel, pill, NextResetText(primary, now, zone), age, IsReady(account, primary, blocked, now));
+        return new(bars, null, perModel, pill, NextResetText(account, now, zone), age, IsReady(account, primary, blocked, now));
     }
 
     public static bool IsBlocked(AccountViewDto account, DateTimeOffset now) => LiveMainConstraints(account, now).Count > 0;
@@ -104,11 +104,8 @@ public static class AccountUsage {
                       && w.ConfirmedAt is { } confirmed && now - confirmed <= ReadyFreshness
                       && Rounded(w) < ReadyBelowPercent);
 
-    static string? NextResetText(UsageWindowDto[] primary, DateTimeOffset now, TimeZoneInfo zone) =>
-        EarliestReset(primary, now) is { } at ? UsageText.Reset(at, now, zone) : null;
-
-    static DateTimeOffset? EarliestReset(IEnumerable<UsageWindowDto> windows, DateTimeOffset now) =>
-        windows.Select(w => w.ResetsAt).Where(r => r > now).Min();
+    static string? NextResetText(AccountViewDto account, DateTimeOffset now, TimeZoneInfo zone) =>
+        NextReset(account, now) is { } at ? UsageText.Reset(at, now, zone) : null;
 
     static string AgeText(AccountReadingDto reading, DateTimeOffset now) =>
         reading.Windows.Max(w => w.ConfirmedAt) is { } at ? "updated " + RelativeTime.Format(at, now) : "freshness unknown";
