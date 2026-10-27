@@ -405,4 +405,40 @@ public class AccountWiringTests {
         await Assert.That(AccountWiring.FailureSummary(steps)).IsEqualTo("network: Failed, mcp: Malformed");
         await Assert.That(AccountWiring.FailureSummary([new WiringStep("hooks", true, "x")])).IsEqualTo("");
     }
+
+    VendorAccount WiredCodex(string? trust, bool fingerprintCurrent = true) {
+        var account = Account(HarnessId.Codex, ".codex");
+        Wire(account);
+        var fingerprint = CodexTrustFingerprint.Of(AccountLayouts.Codex(Home, account.Directory));
+        return account with { HookTrust = trust, HookTrustFingerprint = trust is null ? null : fingerprintCurrent ? fingerprint : "stale" };
+    }
+
+    [Test]
+    public async Task Codex_trusted_for_the_current_files_is_recording() =>
+        await Assert.That(AccountWiring.State(WiredCodex(HookTrustStates.Trusted), Home)).IsEqualTo(RecordingState.Recording);
+
+    [Test]
+    public async Task Codex_trusted_for_other_files_stays_installed() {
+        var account = WiredCodex(HookTrustStates.Trusted);
+        File.AppendAllText(Home.PathTo(".codex", "config.toml"), "\n# edited\n");
+
+        await Assert.That(AccountWiring.State(account, Home)).IsEqualTo(RecordingState.Installed);
+    }
+
+    [Test]
+    public async Task Codex_untrusted_stays_installed() =>
+        await Assert.That(AccountWiring.State(WiredCodex(HookTrustStates.Untrusted), Home)).IsEqualTo(RecordingState.Installed);
+
+    [Test]
+    public async Task Codex_without_trust_fields_stays_installed() =>
+        await Assert.That(AccountWiring.State(WiredCodex(null), Home)).IsEqualTo(RecordingState.Installed);
+
+    [Test]
+    public async Task Codex_not_wired_ignores_a_stored_trust() {
+        var account = Account(HarnessId.Codex, ".codex") with { HookTrust = HookTrustStates.Trusted };
+        Home.CreateFile(".codex/hooks.json", "{}");
+        account = account with { HookTrustFingerprint = CodexTrustFingerprint.Of(AccountLayouts.Codex(Home, account.Directory)) };
+
+        await Assert.That(AccountWiring.State(account, Home)).IsEqualTo(RecordingState.NotWired);
+    }
 }

@@ -235,6 +235,20 @@ public class AccountStoreTests {
     }
 
     [Test]
+    public async Task A_registry_without_trust_fields_loads_them_null() {
+        Tmp.CreateFile("accounts/accounts.json", """
+            { "version": 1, "revision": 2, "accounts": [
+                { "id": "ok", "vendor": "Codex", "directory": "/h/.codex-work", "label": "work", "added_at": "2026-01-01T00:00:00Z" }
+            ] }
+            """);
+
+        var account = Store().Load().Accounts.Single();
+
+        await Assert.That(account.HookTrust).IsNull();
+        await Assert.That(account.HookTrustFingerprint).IsNull();
+    }
+
+    [Test]
     public async Task New_fields_round_trip_with_snake_case_names() {
         var store = Store();
         var added = Claude("/h/.claude") with {
