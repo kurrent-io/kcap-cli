@@ -813,13 +813,23 @@ public sealed class FakeAcpAgent : IAsyncDisposable {
     /// <c>AcpSessionUpdate.Reduce()</c> extraction targets for <c>ToolResultText</c>: the ACP-spec
     /// <c>ToolCallContent</c> text-block shape, falling back to <c>rawOutput</c> verbatim).
     /// </summary>
-    public static JsonElement BuildToolCallStatusUpdate(string toolCallId, string status, string? resultText = null, string? rawOutputJson = null) {
+    public static JsonElement BuildToolCallStatusUpdate(
+        string toolCallId,
+        string status,
+        string? resultText = null,
+        string? rawInputJson = null,
+        string? rawOutputJson = null) {
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream)) {
             writer.WriteStartObject();
             writer.WriteString("sessionUpdate", "tool_call_update");
             writer.WriteString("toolCallId", toolCallId);
             writer.WriteString("status", status);
+            if (rawInputJson is not null) {
+                writer.WritePropertyName("rawInput");
+                using var input = JsonDocument.Parse(rawInputJson);
+                input.RootElement.WriteTo(writer);
+            }
             if (resultText is not null) {
                 writer.WriteStartArray("content");
                 writer.WriteStartObject();
