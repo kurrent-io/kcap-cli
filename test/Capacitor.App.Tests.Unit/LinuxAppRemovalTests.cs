@@ -86,14 +86,15 @@ public class LinuxAppRemovalTests {
     }
 
     /// An unreadable parent makes `Directory.Exists` read the staged CLI as absent, so only the delete can tell.
-    [Test]
+    /// A runner that bypasses permissions (root, CAP_DAC_OVERRIDE) can delete it anyway, so the test skips there.
+    [Test, ExcludeOn(OS.Windows), UnsupportedOSPlatform("windows")]
     public async Task A_staged_cli_behind_an_unreadable_folder_is_reported_as_left() {
-        if (OperatingSystem.IsWindows()) return;
         Tmp.CreateFile("data/kcap/desktop/bin/kcap", "cli");
         var parent = Tmp.PathTo("data", "kcap");
         var mode = File.GetUnixFileMode(parent);
         try {
             File.SetUnixFileMode(parent, UnixFileMode.None);
+            Skip.When(Directory.Exists(Staged), "this runner bypasses folder permissions");
 
             await Assert.That(Removal().DeleteSupportFiles()).IsFalse();
         } finally {
