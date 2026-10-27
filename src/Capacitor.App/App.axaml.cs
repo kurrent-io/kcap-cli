@@ -2100,7 +2100,7 @@ public partial class App : Application {
         MutationVerb.StartVerified => "verified start",
         MutationVerb.DetachedStart => "daemon start",
         MutationVerb.Reload        => "reload",
-        MutationVerb.InstallWindowsService => "install the Windows service",
+        MutationVerb.InstallWindowsService => "move to the Windows service",
         _                          => verb.ToString(),
     };
 

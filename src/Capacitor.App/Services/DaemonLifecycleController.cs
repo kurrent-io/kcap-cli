@@ -1041,7 +1041,13 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             install ? LifecyclePrompt.KindWindowsService : LifecyclePrompt.KindWindowsServiceUpdate, null, CliVersion, false,
             install ? WindowsServiceDisclosure(_latestActiveAgents, resumes) : WindowsServiceUpdateDisclosure);
         if (!await _surface.ConfirmAsync(prompt, ct).ConfigureAwait(false)) {
-            if (install) await _rememberWindowsServiceDeclined().ConfigureAwait(false);
+            // A prompt closed by the app shutting down was not answered
+            if (install && !ct.IsCancellationRequested) await _rememberWindowsServiceDeclined().ConfigureAwait(false);
+            return;
+        }
+        // Work started while the prompt was open is not what it agreed to end
+        if (install && _latestBusy && !resumes) {
+            lock (_lock) _windowsServiceOffered = false;
             return;
         }
         if (install) await MoveToWindowsServiceAsync(ct).ConfigureAwait(false);

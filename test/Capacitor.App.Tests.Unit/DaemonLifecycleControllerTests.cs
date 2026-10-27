@@ -1920,6 +1920,44 @@ public class DaemonLifecycleControllerTests {
     }
 
     [Test]
+    public async Task A_prompt_closed_by_the_app_shutting_down_is_not_remembered_as_a_decline() {
+        var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(TaskSupervised());
+        h.Surface.ConfirmBehavior = async (_, ct) => {
+            try {
+                await Task.Delay(Timeout.Infinite, ct);
+            } catch (OperationCanceledException) { }
+            return false;
+        };
+        h.Start();
+        h.PushConnected();
+        await WaitUntilAsync(() => h.Surface.Prompts.Count == 1, what: "the Windows service offer");
+
+        await h.DisposeAsync();
+
+        await Assert.That(h.DeclinesRemembered).IsEqualTo(0);
+    }
+
+    /// The prompt agreed to end no agents; one started while it was open would be ended by the move
+    [Test]
+    public async Task A_daemon_that_got_busy_while_the_prompt_was_open_is_not_moved() {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(TaskSupervised());
+        h.Surface.ConfirmBehavior = (_, _) => {
+            h.PushSnapshot(activeAgents: 1);
+            return Task.FromResult(true);
+        };
+        h.Start();
+
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Surface.Prompts.Count == 1, what: "the Windows service offer");
+        await h.Controller.PhaseClosed;
+        await Task.Delay(50);
+        await Assert.That(h.Lane.Requests).IsEmpty();
+    }
+
+    [Test]
     public async Task An_older_installed_service_is_offered_an_update_and_a_decline_is_not_remembered() {
         await using var h = new Harness();
         h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(
