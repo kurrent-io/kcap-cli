@@ -133,7 +133,7 @@
                     </Button>
                 </WrapPanel>
                 <TextBlock Classes="settingsFootnote"
-                           Text="To record less for one profile, use its repository and folder rules in Capture &amp; privacy." />
+                           Text="To record less for one profile, use its repository and folder rules in Privacy." />
             </StackPanel>
             <TextBlock Classes="kcapHint" Text="{Binding Message}" TextWrapping="Wrap"
                        IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />

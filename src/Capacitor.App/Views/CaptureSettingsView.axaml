@@ -6,7 +6,7 @@
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <views:SettingsPage Classes="settingsPage">
                 <StackPanel Classes="settingsHeader">
-                    <TextBlock Classes="kcapTitle" Text="Capture &amp; privacy" />
+                    <TextBlock Classes="kcapTitle" Text="Privacy" />
                     <TextBlock Classes="kcapSubtitle" Text="Choose what gets recorded and who can read new sessions." TextWrapping="Wrap"
                                IsVisible="{Binding VisibilityVisible}" />
                     <TextBlock Classes="kcapSubtitle" Text="Choose what gets recorded. Sessions on your local server stay private." TextWrapping="Wrap"

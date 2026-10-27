@@ -609,7 +609,7 @@ public class SettingsWindowSmokeTests {
             page.Offset = new Vector(0, 300);
             Settle(window);
             var title = window.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "PART_CompactTitle");
-            await Assert.That(title.Text).IsEqualTo("Capture & privacy");
+            await Assert.That(title.Text).IsEqualTo("Privacy");
             var pageOffset = page.Offset;
 
             field.Offset = new Vector(0, 40);
@@ -617,11 +617,11 @@ public class SettingsWindowSmokeTests {
 
             await Assert.That(field.Offset.Y).IsGreaterThan(0d);
             await Assert.That(page.Offset).IsEqualTo(pageOffset);
-            await Assert.That(title.Text).IsEqualTo("Capture & privacy");
+            await Assert.That(title.Text).IsEqualTo("Privacy");
             Click(window, window.FindControl<TabItem>("NotificationsTab")!);
             await Assert.That(title.Text).IsEqualTo("Notifications");
             Click(window, window.FindControl<TabItem>("CaptureTab")!);
-            await Assert.That(title.Text).IsEqualTo("Capture & privacy");
+            await Assert.That(title.Text).IsEqualTo("Privacy");
         } finally { window.Close(); }
     });
 

@@ -39,11 +39,11 @@
                     </Button>
                 </StackPanel>
             </TabControl.Tag>
-            <TabItem x:Name="CaptureTab" Classes="settingsNav" AutomationProperties.Name="Capture and privacy">
+            <TabItem x:Name="CaptureTab" Classes="settingsNav" AutomationProperties.Name="Privacy">
                 <TabItem.Header>
                     <StackPanel Orientation="Horizontal" Spacing="10">
                         <views:AppIcon Kind="Shield" Size="16" />
-                        <TextBlock Text="Capture &amp; privacy" VerticalAlignment="Center" />
+                        <TextBlock Text="Privacy" VerticalAlignment="Center" />
                     </StackPanel>
                 </TabItem.Header>
                 <Border IsEnabled="{Binding !IsBusy}">
