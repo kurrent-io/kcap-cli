@@ -116,11 +116,20 @@
         </ScrollViewer>
 
         <Border Grid.Row="1" Classes="settingsActionBar">
+            <Border.Styles>
+                <Style Selector="TextBlock.kcapHint.saved">
+                    <Setter Property="Foreground" Value="{StaticResource KcapSuccessBrush}" />
+                </Style>
+            </Border.Styles>
             <Grid ColumnDefinitions="Auto,*" ColumnSpacing="16" MaxWidth="680" HorizontalAlignment="Left">
                 <Button x:Name="SaveCaptureButton" Classes="kcapPrimary" Content="Save changes"
                         Command="{Binding SaveCommand}" />
-                <TextBlock x:Name="CaptureMessageText" Grid.Column="1" Classes="kcapHint" Text="{Binding Message}"
-                           TextWrapping="Wrap" VerticalAlignment="Center" />
+                <Grid Grid.Column="1" ColumnDefinitions="Auto,*" ColumnSpacing="6" VerticalAlignment="Center">
+                    <views:AppIcon Kind="CircleCheck" Size="14" Foreground="{StaticResource KcapSuccessBrush}"
+                                   VerticalAlignment="Center" IsVisible="{Binding Saved}" />
+                    <TextBlock x:Name="CaptureMessageText" Grid.Column="1" Classes="kcapHint" Classes.saved="{Binding Saved}" Text="{Binding Message}"
+                               TextWrapping="Wrap" VerticalAlignment="Center" />
+                </Grid>
             </Grid>
         </Border>
     </Grid>

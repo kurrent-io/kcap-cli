@@ -426,7 +426,7 @@ public class SettingsWindowSmokeTests {
             save.BringIntoView();
             Settle(window);
             Click(window, save);
-            await WaitUntilAsync(() => !vm.Capture.Busy && vm.Capture.Message?.Contains("saved") == true);
+            await WaitUntilAsync(() => !vm.Capture.Busy && vm.Capture.Saved);
             var saved = new SettingsProfileStore(Config.Root, "work", "https://work.example").LoadProfile();
             await Assert.That(saved.DefaultVisibility).IsEqualTo("private");
             await Assert.That(saved.AllowedRepos).IsEquivalentTo(new[] { "team/project" });

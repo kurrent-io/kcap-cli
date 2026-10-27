@@ -20,6 +20,7 @@ public sealed class CaptureSettingsViewModel : ReactiveObject, IDisposable {
     string _excludedPaths;
     string? _message;
     bool _busy;
+    bool _saved;
     bool _loading;
     bool _visibilityEditable = true;
 
@@ -47,7 +48,15 @@ public sealed class CaptureSettingsViewModel : ReactiveObject, IDisposable {
     public string ExcludedRepos { get => _excludedRepos; set => this.RaiseAndSetIfChanged(ref _excludedRepos, value); }
     public string AllowedPaths { get => _allowedPaths; set => this.RaiseAndSetIfChanged(ref _allowedPaths, value); }
     public string ExcludedPaths { get => _excludedPaths; set => this.RaiseAndSetIfChanged(ref _excludedPaths, value); }
-    public string? Message { get => _message; private set => this.RaiseAndSetIfChanged(ref _message, value); }
+    public string? Message {
+        get => _message;
+        private set {
+            this.RaiseAndSetIfChanged(ref _message, value);
+            Saved = false;
+        }
+    }
+    /// The message confirms a save rather than reporting a problem.
+    public bool Saved { get => _saved; private set => this.RaiseAndSetIfChanged(ref _saved, value); }
     /// A save in progress: the one Capture operation closing Settings must wait for.
     public bool Busy { get => _busy; private set => this.RaiseAndSetIfChanged(ref _busy, value); }
     /// Reading the server's sharing options: read-only, so closing may abandon it.
@@ -107,7 +116,8 @@ public sealed class CaptureSettingsViewModel : ReactiveObject, IDisposable {
                 DefaultVisibility = visibility, AllowedRepos = allowedRepos, ExcludedRepos = excludedRepos,
                 AllowedPaths = allowedPaths, ExcludedPaths = excludedPaths,
             }, _lifetime.Token, keepVisibility: VisibilityVisible && !VisibilityEditable);
-            Message = "Capture settings saved. Sessions already on the server are unchanged.";
+            Message = "Saved. Sessions already on the server are unchanged.";
+            Saved = true;
         } catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) {
         } catch (Exception ex) {
             Message = $"Could not save capture settings: {ex.Message}";

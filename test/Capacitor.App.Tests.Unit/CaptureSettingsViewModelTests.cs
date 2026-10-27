@@ -31,6 +31,7 @@ public class CaptureSettingsViewModelTests {
             ["work"] = c.Profiles["work"] with { DisableMemoryIndex = true, Daemon = new DaemonSettings { MaxAgents = 9 } }
         } });
         await vm.SaveAsync();
+        await Assert.That(vm.Saved).IsTrue();
         var saved = store.LoadProfile();
         await Assert.That(saved.DefaultVisibility).IsEqualTo("project");
         await Assert.That(saved.AllowedRepos).IsEquivalentTo(new[] { "team/repo", "team/second" });
@@ -53,6 +54,7 @@ public class CaptureSettingsViewModelTests {
         await Assert.That(store.LoadProfile().DefaultVisibility).IsEqualTo("private");
         await Assert.That(store.LoadProfile().AllowedRepos).IsEmpty();
         await Assert.That(vm.Message).IsNotNull();
+        await Assert.That(vm.Saved).IsFalse();
     });
 
     [Test]
