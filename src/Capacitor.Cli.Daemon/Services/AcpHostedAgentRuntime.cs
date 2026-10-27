@@ -280,8 +280,8 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
 
     // Pending tool calls announced before their input was known (OpenCode sends one while the model streams the
     // arguments, its input empty or only the working directory). Each waits for an update that supplies the input, and
-    // is released, in order, ahead of whatever transcript content comes next.
-    readonly List<(AcpSessionUpdate Call, string? AgentId)> _heldCalls = [];
+    // is released, in order, once every call before it is ready, or ahead of whatever transcript content comes next.
+    readonly List<(AcpSessionUpdate Call, string? AgentId, bool Ready)> _heldCalls = [];
 
     Task    _turnWorkerTask    = Task.CompletedTask;
     string? _sessionId;
@@ -1910,28 +1910,32 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 // output, so it moves the activity clock and the silence watch as an emitted one would.
                 case AcpUpdateKind.ToolCall when update is { ToolStatus: "pending", ToolCallId.Length: > 0 } && AwaitsInput(update.ToolInputJson):
                     FlushRunTextLocked();
-                    _heldCalls.Add((update, agentId));
+                    _heldCalls.Add((update, agentId, false));
                     ActivityClock?.Advance();
                     Interlocked.Increment(ref _turnOutputEnvelopes);
                     break;
 
-                // Releases the held calls up to this one, leaving later ones waiting for their own input. An update
-                // with neither input nor a result keeps the call waiting.
+                // A placeholder input does not make the call ready. Its result must follow it, so a result releases
+                // it and every call before it, ready or not.
                 case AcpUpdateKind.ToolCallUpdate when HeldIndex(update.ToolCallId, agentId) is >= 0 and var held:
-                    var result = AcpEventTranslator.Translate(update, seq: 0, NowIso(), logger: _logger, debugFrames: _debugFrames);
-                    if (update.ToolInputJson is null && result is null) break;
-                    if (update.ToolInputJson is { } supplied)
-                        _heldCalls[held] = (_heldCalls[held].Call with { ToolInputJson = supplied }, agentId);
-                    ReleaseHeldCallsLocked(held + 1);
-                    if (result is { } r)
-                        EmitEnvelope(For(r, agentId));
+                    if (update.ToolInputJson is { } supplied && !AwaitsInput(supplied))
+                        _heldCalls[held] = (_heldCalls[held].Call with { ToolInputJson = supplied }, agentId, true);
+                    if (AcpEventTranslator.Translate(update, seq: 0, NowIso(), logger: _logger, debugFrames: _debugFrames) is { } result) {
+                        ReleaseHeldCallsLocked(held + 1);
+                        EmitEnvelope(For(result, agentId));
+                    } else {
+                        ReleaseHeldCallsLocked(_heldCalls.FindIndex(h => !h.Ready) is >= 0 and var waiting ? waiting : _heldCalls.Count);
+                    }
                     break;
 
+                // An update with nothing for the transcript leaves held calls waiting.
                 default:
-                    FlushOpenRunLocked(); // kind-transition — the open run (if any) ends here
-                    var envelope = AcpEventTranslator.Translate(update, seq: 0, NowIso(), logger: _logger, debugFrames: _debugFrames);
-                    if (envelope is { } e)
-                        EmitEnvelope(For(e, agentId));
+                    if (AcpEventTranslator.Translate(update, seq: 0, NowIso(), logger: _logger, debugFrames: _debugFrames) is not { } envelope) {
+                        FlushRunTextLocked(); // kind-transition — the open run (if any) ends here
+                        break;
+                    }
+                    FlushOpenRunLocked();
+                    EmitEnvelope(For(envelope, agentId));
                     break;
             }
         }
@@ -1991,7 +1995,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
 
     void ReleaseHeldCallsLocked(int count = int.MaxValue) {
         count = Math.Min(count, _heldCalls.Count);
-        foreach (var (call, agentId) in _heldCalls.Take(count))
+        foreach (var (call, agentId, _) in _heldCalls.Take(count))
             if (AcpEventTranslator.Translate(call, seq: 0, NowIso(), logger: _logger, debugFrames: _debugFrames) is { } e)
                 EmitEnvelope(For(e, agentId));
         _heldCalls.RemoveRange(0, count);
