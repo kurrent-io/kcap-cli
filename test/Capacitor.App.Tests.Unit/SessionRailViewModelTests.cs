@@ -333,6 +333,23 @@ public class SessionRailViewModelTests {
         });
     }
 
+    /// The window's close and the app's quit both clear the selection after the app has disposed
+    /// the rail; that must not throw.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Selection_changes_after_dispose_are_ignored() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var (directory, sessions, _, _, rail) = BuildWithControls();
+            using (directory) using (sessions) {
+                rail.SelectedSessionKey = "server:s1";
+                rail.Dispose();
+                rail.SelectedSessionKey = null;
+                rail.SelectedSessionKey = "local:a1";
+                await Assert.That(sessions.Kept).IsEqualTo("s1");
+            }
+        });
+    }
+
     /// A local checkout and a remote agent on the same GitHub repo land in one repo group — the
     /// remote session carries the machine badge, the local one doesn't.
     [Test]
