@@ -347,6 +347,19 @@ public class FeedbackViewModelTests {
     }
 
     [Test]
+    public async Task With_mail_a_cut_short_draft_with_no_clipboard_keeps_the_form_holding_the_full_text() {
+        var mailed = new List<FeedbackSubmission>();
+        using var vm = MailVm(new ScriptedFeedbackApi(), mailed, opened: true, cutShort: true, copied: false);
+        vm.Message = "It broke.";
+
+        await vm.SendCommand.Execute().ToTask();
+
+        await Assert.That(vm.IsSent).IsFalse();
+        await Assert.That(vm.Message).IsEqualTo("It broke.");
+        await Assert.That(vm.Outcome).Contains("cut short");
+    }
+
+    [Test]
     public async Task With_mail_no_mail_app_keeps_the_form_and_names_the_address() {
         var mailed = new List<FeedbackSubmission>();
         using var vm = MailVm(new ScriptedFeedbackApi(), mailed, opened: false, cutShort: false, copied: false);

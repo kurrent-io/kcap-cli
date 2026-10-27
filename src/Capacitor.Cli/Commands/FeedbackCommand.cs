@@ -95,7 +95,7 @@ public sealed class FeedbackCommand(IFeedbackApi feedbackApi, Func<FeedbackSubmi
             await Console.Out.WriteLineAsync(FeedbackMail.Body(submission));
         }
 
-        return opened ? 0 : 1;
+        return opened || copied ? 0 : 1;
     }
 
     /// <summary>Test-friendly core: caller owns the <see cref="IFeedbackApi"/>. <paramref name="message"/>

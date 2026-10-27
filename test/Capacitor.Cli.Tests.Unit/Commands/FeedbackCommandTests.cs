@@ -388,11 +388,11 @@ public class FeedbackCommandTests : IDisposable {
     }
 
     [Test, NotInParallel]
-    public async Task No_mail_app_fails_and_points_at_the_clipboard_when_it_holds_the_report() {
+    public async Task No_mail_app_succeeds_and_points_at_the_clipboard_when_it_holds_the_report() {
         var (exitCode, stdout, stderr) = await RunAsync(() =>
             FeedbackCommand.HandleMail(Mail(opened: false, cutShort: false, copied: true), FeedbackCategory.Bug, "It broke."));
 
-        await Assert.That(exitCode).IsEqualTo(1);
+        await Assert.That(exitCode).IsEqualTo(0);
         await Assert.That(stderr).Contains("on your clipboard");
         await Assert.That(stdout.Trim()).IsEmpty();
     }

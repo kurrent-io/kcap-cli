@@ -23,10 +23,11 @@ public static class FeedbackMail {
         return new FeedbackMailOutcome(draft, launcher.TryOpen(draft.Url), copied);
     }
 
+    /// <summary>A desktop message already ends in its client trailer, so only the OS is added to it.</summary>
     public static string Body(FeedbackSubmission submission) {
-        var source = submission.Source == FeedbackSource.Desktop ? "desktop" : "cli";
+        var client = submission.Source == FeedbackSource.Desktop ? "" : $"kcap cli {CapacitorVersion.CurrentDisplay()} · ";
 
-        return $"{submission.Message.Trim()}\n\n---\nkcap {source} {CapacitorVersion.CurrentDisplay()} · {RuntimeInformation.OSDescription}";
+        return $"{submission.Message.Trim()}\n\n---\n{client}{RuntimeInformation.OSDescription}";
     }
 
     public static FeedbackMailDraft Draft(FeedbackCategory category, string body, bool copied) {

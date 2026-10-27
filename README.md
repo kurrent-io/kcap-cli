@@ -2806,7 +2806,7 @@ kcap feedback --feedback                               # send feedback; prompts 
 > Against the local server, which has no support intake, it opens a prefilled email to
 > team@kcap.ai in your mail app and copies the full report to your clipboard; a report too
 > long for a mail link is cut short in the draft. With no mail app or clipboard, it prints the
-> report to email by hand.
+> report to email by hand and exits 1.
 
 > `kcap update` is the one-step upgrade for npm-global installs: it checks the
 > registry, runs `npm install -g @kurrent/kcap@<tag>`, then refreshes your

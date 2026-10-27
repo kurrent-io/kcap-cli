@@ -69,4 +69,9 @@ public class FeedbackMailTests {
     [Test]
     public async Task The_body_carries_the_client_after_the_message() =>
         await Assert.That(FeedbackMail.Body(Submission("  It broke.  "))).StartsWith("It broke.\n\n---\nkcap cli ");
+
+    [Test]
+    public async Task A_desktop_body_adds_only_the_os_to_its_own_trailer() =>
+        await Assert.That(FeedbackMail.Body(new FeedbackSubmission(FeedbackCategory.Bug, "It broke.\n\nSent from kcap Desktop 1.0", Guid.NewGuid(), FeedbackSource.Desktop)))
+            .IsEqualTo($"It broke.\n\nSent from kcap Desktop 1.0\n\n---\n{System.Runtime.InteropServices.RuntimeInformation.OSDescription}");
 }
