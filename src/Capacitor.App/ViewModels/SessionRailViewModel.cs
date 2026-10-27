@@ -50,6 +50,9 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     public string? SelectedSessionKey {
         get => _selectedSessionKey;
         set {
+            // The window's close and the app's quit clear the selection after the app has
+            // disposed the rail.
+            if (_disposables.IsDisposed) return;
             this.RaiseAndSetIfChanged(ref _selectedSessionKey, value);
             _selectedSessionKeyChanges.OnNext(value);
             _stateFilter.OnNext(StateFilter());
