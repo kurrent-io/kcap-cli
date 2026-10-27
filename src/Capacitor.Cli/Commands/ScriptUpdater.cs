@@ -4,6 +4,7 @@ using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json.Nodes;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Install;
 
@@ -230,38 +231,15 @@ public sealed partial class ScriptUpdater(KcapReleaseClient releases) {
         string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(a)), Path.TrimEndingDirectorySeparator(Path.GetFullPath(b)),
             OperatingSystem.IsLinux() ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>
-    /// On Unix a new relative link renamed over <c>current</c>, which rename(2) does atomically: there is
-    /// no moment without one. Windows has no atomic replace for a junction, so it is removed and recreated,
-    /// as the install script does, and the previous junction is put back when the new one cannot be made.
-    /// </summary>
+    /// <summary>On Unix a new relative link renamed over <c>current</c>, which rename(2) does atomically: there is
+    /// no moment without one. On Windows a junction, replaced as the install script does.</summary>
     static void DefaultSwitch(ScriptInstallLayout layout, string versionDir) {
         if (OperatingSystem.IsWindows()) {
-            var previous = ActiveVersionDir(layout);
-            if (Directory.Exists(layout.Current) || File.Exists(layout.Current)) Directory.Delete(layout.Current);
-
-            try {
-                CreateJunction(layout.Current, versionDir);
-            } catch (Exception ex) when (previous is not null && ex is IOException or System.ComponentModel.Win32Exception) {
-                try { CreateJunction(layout.Current, previous); } catch { /* the original error is the one to report */ }
-                throw;
-            }
-
+            WindowsJunction.Replace(layout.Current, versionDir);
             return;
         }
 
         SwitchLink(layout.Current, Path.GetRelativePath(layout.Root, versionDir));
-    }
-
-    static void CreateJunction(string link, string target) {
-        using var mklink = Process.Start(new ProcessStartInfo("cmd.exe") {
-            ArgumentList = { "/d", "/c", "mklink", "/J", link, target },
-            UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true,
-        })!;
-        var err = mklink.StandardError.ReadToEnd();
-        mklink.StandardOutput.ReadToEnd();
-        mklink.WaitForExit();
-        if (mklink.ExitCode != 0) throw new IOException($"mklink /J failed: {err.Trim()}");
     }
 
     /// <summary>Atomically points the symlink at <paramref name="link"/> to <paramref name="target"/>.</summary>
