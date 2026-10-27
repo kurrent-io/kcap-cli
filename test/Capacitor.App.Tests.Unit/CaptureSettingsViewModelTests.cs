@@ -167,4 +167,20 @@ public class CaptureSettingsViewModelTests {
         await vm.SaveAsync();
         await Assert.That(store.LoadProfile().AllowedPaths).IsEquivalentTo(new[] { "~/work", native });
     });
+
+    /// With the options unreadable the page never writes an audience, so a change made elsewhere
+    /// since it opened survives a save of the recording rules.
+    [Test]
+    public Task An_unreadable_offer_leaves_an_audience_changed_elsewhere() => AvaloniaSession.RunOnUiAsync(async () => {
+        var store = Seed();
+        await store.SaveCaptureAsync(new Profile { DefaultVisibility = "public" }, CancellationToken.None);
+        using var vm = new CaptureSettingsViewModel(store,
+            visibilityOptions: _ => Task.FromResult<VisibilityOptionsRead?>(null));
+        await vm.RefreshVisibilityOptionsAsync();
+        await store.SaveCaptureAsync(new Profile { DefaultVisibility = "private" }, CancellationToken.None);
+        vm.AllowedRepos = "team/repo";
+        await vm.SaveAsync();
+        await Assert.That(store.LoadProfile().DefaultVisibility).IsEqualTo("private");
+        await Assert.That(store.LoadProfile().AllowedRepos).IsEquivalentTo(new[] { "team/repo" });
+    });
 }

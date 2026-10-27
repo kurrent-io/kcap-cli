@@ -5,6 +5,10 @@
              xmlns:services="clr-namespace:Capacitor.App.Services.LocalSetup"
              x:Class="Capacitor.App.Views.SearchSettingsView"
              x:DataType="vm:LocalSearchViewModel">
+    <!-- Also hosted by the rail's Help flyout, outside the Settings window that carries these styles. -->
+    <UserControl.Styles>
+        <StyleInclude Source="avares://kcap-desktop/Views/SettingsStyles.axaml" />
+    </UserControl.Styles>
     <StackPanel Spacing="28">
         <StackPanel Classes="settingsHeader">
             <TextBlock Classes="kcapTitle" Text="Search" />

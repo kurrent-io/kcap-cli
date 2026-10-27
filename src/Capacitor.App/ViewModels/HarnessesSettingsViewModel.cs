@@ -110,7 +110,7 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
                     ? "Disconnected. Restart this harness to unload kcap. Existing sessions are kept."
                     : "Setup completed. Restart this harness to load the changes.");
             if (result is { ExitCode: 0, TimedOut: false } && !string.IsNullOrWhiteSpace(result.Stderr))
-                row.Report($"{row.Message}\n{result.Stderr.Trim()}");
+                row.Report($"{row.Message}\n{result.Stderr.Trim()}", row.ErrorTitle);
         } catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) {
         } catch (Exception ex) {
             // A missing or unlaunchable CLI surfaces as the OS's spawn error, which names a path but not the fix.

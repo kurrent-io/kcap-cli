@@ -19,13 +19,14 @@ public sealed class SettingsProfileStore(ConfigRoot config, string profileName, 
         return Profile(current);
     }
 
-    public Task SaveCaptureAsync(Profile values, CancellationToken ct) =>
+    /// <param name="keepVisibility">Leaves the audience on disk as it is now, whatever this page last read.</param>
+    public Task SaveCaptureAsync(Profile values, CancellationToken ct, bool keepVisibility = false) =>
         ConfigMutator.MutateAsync(config, current => {
             var profile = Profile(current);
             return current with {
                 Profiles = new Dictionary<string, Profile>(current.Profiles) {
                     [profileName] = profile with {
-                        DefaultVisibility = values.DefaultVisibility,
+                        DefaultVisibility = keepVisibility ? profile.DefaultVisibility : values.DefaultVisibility,
                         AllowedRepos = values.AllowedRepos,
                         ExcludedRepos = values.ExcludedRepos,
                         AllowedPaths = values.AllowedPaths,

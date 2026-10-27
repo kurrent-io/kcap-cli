@@ -104,7 +104,7 @@ public sealed class CaptureSettingsViewModel : ReactiveObject, IDisposable {
             await _store.SaveCaptureAsync(new Profile {
                 DefaultVisibility = visibility, AllowedRepos = allowedRepos, ExcludedRepos = excludedRepos,
                 AllowedPaths = allowedPaths, ExcludedPaths = excludedPaths,
-            }, _lifetime.Token);
+            }, _lifetime.Token, keepVisibility: VisibilityVisible && !VisibilityEditable);
             Message = "Capture settings saved. Sessions already on the server are unchanged.";
         } catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) {
         } catch (Exception ex) {

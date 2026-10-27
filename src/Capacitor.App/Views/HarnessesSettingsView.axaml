@@ -30,7 +30,7 @@
                                 <Border Classes="settingsListRow">
                                     <Grid Classes="settingsRow" ColumnDefinitions="Auto,Auto,*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="12">
                                         <CheckBox Classes="settingsHarnessCheck" IsChecked="{Binding IsConfigured, Mode=OneWay}"
-                                                  AutomationProperties.Name="{Binding Label, StringFormat='Connect {0} to kcap'}"
+                                                  AutomationProperties.Name="{Binding ToggleActionName}"
                                                   AutomationProperties.HelpText="{Binding ConnectionLabel}" ToolTip.Tip="{Binding Signal}"
                                                   Command="{Binding $parent[ItemsControl].((vm:HarnessesSettingsViewModel)DataContext).ToggleConnectionCommand}"
                                                   CommandParameter="{Binding}" />

@@ -144,4 +144,15 @@ public class AccountRowsTests {
         await Assert.That(bare.Accounts.Length).IsEqualTo(0);
         await Assert.That(bare.Defaults.Length).IsEqualTo(0);
     }
+
+    /// The copied command runs as written in the user's shell, whatever the folder is called.
+    [Test]
+    [Arguments("/u/.codex-work", false, "CODEX_HOME=/u/.codex-work codex")]
+    [Arguments("/u/my codex", false, "CODEX_HOME='/u/my codex' codex")]
+    [Arguments("/u/$(rm -rf ~)", false, "CODEX_HOME='/u/$(rm -rf ~)' codex")]
+    [Arguments("/u/it's", false, "CODEX_HOME='/u/it'\\''s' codex")]
+    [Arguments(@"C:\Users\me\.codex", true, @"$env:CODEX_HOME = 'C:\Users\me\.codex'; codex")]
+    [Arguments(@"C:\Users\o'neil\.codex", true, @"$env:CODEX_HOME = 'C:\Users\o''neil\.codex'; codex")]
+    public async Task The_approval_command_quotes_the_folder_for_the_shell(string directory, bool windows, string expected) =>
+        await Assert.That(RecordingStateLabels.Command("codex", "installed", directory, windows)).IsEqualTo(expected);
 }

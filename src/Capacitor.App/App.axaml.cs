@@ -1096,9 +1096,12 @@ public partial class App : Application {
         return new HarnessesSettingsViewModel(settings, cli,
             HarnessesStepViewModel.BuildDetectionFeed(probe, _userHome), _shutdown.Token,
             id => harnesses[id].Signals.IsWired,
-            ensureTerminalCommand: shimInstaller is null || shimTarget is null ? null : async ct => {
+            ensureTerminalCommand: shimInstaller is null ? null : async ct => {
                 // An inconclusive probe never offers an install, as in setup.
                 if (await probe.KcapOnPathAsync(ct) != false) return null;
+                // A CLI that leaves with the app (a mounted image) has nothing lasting to link.
+                if (shimTarget is null)
+                    return "kcap is not on your terminal PATH, and this copy cannot be linked there because it is removed when the app quits. Install kcap, then connect again.";
                 var fix = new PathFixViewModel(shimInstaller, _appState, shimTarget);
                 return await fix.InstallAsync(ct) ? null : fix.Message;
             });

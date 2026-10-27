@@ -23,10 +23,13 @@ public sealed class HarnessSettingsRow : ReactiveObject {
     };
     internal bool? Wired => _wired;
     public bool IsConfigured => _wired == true;
+    /// What activating the checkbox does now, for a screen reader.
+    public string ToggleActionName => IsConfigured ? $"Disconnect {Label} from kcap" : $"Connect {Label} to kcap";
     internal void SetWired(bool? wired) {
         _wired = wired;
         this.RaisePropertyChanged(nameof(ConnectionLabel));
         this.RaisePropertyChanged(nameof(IsConfigured));
+        this.RaisePropertyChanged(nameof(ToggleActionName));
     }
     public string? ConsentNote => Id == HarnessId.Codex ? HarnessRowViewModel.CodexConsentNote : null;
     public string? Message { get => _message; private set => this.RaiseAndSetIfChanged(ref _message, value); }
