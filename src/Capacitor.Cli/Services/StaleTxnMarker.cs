@@ -10,17 +10,25 @@ internal static class StaleTxnMarker {
     /// True when the interrupted transaction provably took effect: the job is running, the validated
     /// daemon is that job, and the unit on disk is the one the marker recorded writing. A unit that
     /// differs from the recorded fingerprint was touched by someone else and stays surfaced. Only a
-    /// start writes no unit; an install or replace without a fingerprint stopped before writing one,
-    /// so the job running is still the old one.
+    /// start writes no unit, and it took effect only once a job other than the one it recorded beforehand
+    /// is running; an install or replace without a fingerprint stopped before writing its unit, so the
+    /// job running is still the old one.
     /// </summary>
     public static bool TookEffect(
             TxnMarker marker, ServiceQuery query, int? daemonPid, LaunchdUnit.PlistRead plist, string? onDisk) {
         if (query.State != ServiceState.Running || query.JobPid is null || daemonPid != query.JobPid) return false;
-        if (marker.PlistFingerprint is null) return marker.Operation == "start";
+        if (marker.PlistFingerprint is null)
+            return marker.Operation == "start" && PreJobPid(marker.PreState) != query.JobPid;
 
         return plist == LaunchdUnit.PlistRead.Ok
             && onDisk is not null
             && ServiceTxnMarker.Fingerprint(onDisk) == marker.PlistFingerprint;
+    }
+
+    /// <summary>The job pid a marker's pre-state recorded (<c>…|pid=N</c>); null when none was running.</summary>
+    internal static int? PreJobPid(string preState) {
+        var at = preState.LastIndexOf("|pid=", StringComparison.Ordinal);
+        return at >= 0 && int.TryParse(preState.AsSpan(at + 5), out var pid) ? pid : null;
     }
 
     /// <summary>
