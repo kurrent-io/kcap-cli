@@ -118,9 +118,14 @@
                  Fill="{StaticResource OnboardingBloomBrush}" IsHitTestVisible="False" />
 
         <Grid RowDefinitions="44,*">
-        <!-- The title bar: close, minimize and zoom sit over its left end, and its empty space drags the
-             window. The page scrolls beneath it, never under the buttons; the rule shows once it has. -->
-        <Border x:Name="TitleBar" Background="Transparent" PointerPressed="OnChromePointerPressed">
+        <!-- The compact step title takes over as the large heading scrolls out of view.
+             Symmetric insets keep it centered and clear of the window controls. -->
+        <Border x:Name="TitleBar" Background="{StaticResource OnboardingCanvasBrush}" PointerPressed="OnChromePointerPressed">
+            <Panel>
+            <TextBlock x:Name="CompactStepTitle" Text="{Binding Current.Title}" Margin="96,0"
+                       FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource OnboardingTextBrush}"
+                       TextAlignment="Center" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                       Opacity="0" IsHitTestVisible="False" />
             <Border x:Name="TitleBarRule" Height="1" VerticalAlignment="Bottom" Opacity="0" IsHitTestVisible="False"
                     Background="{StaticResource OnboardingDividerBrush}">
                 <Border.Transitions>
@@ -129,6 +134,7 @@
                     </Transitions>
                 </Border.Transitions>
             </Border>
+            </Panel>
         </Border>
 
         <!-- The footer scrolls with the page, so its actions sit below everything the step says; on a short
