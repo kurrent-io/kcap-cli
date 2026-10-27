@@ -131,7 +131,7 @@
                                         <StackPanel Classes="settingsRowText">
                                             <TextBlock Classes="kcapLabel" Text="Resume agents after a restart" />
                                             <TextBlock Classes="kcapHint" TextWrapping="Wrap"
-                                                       Text="Resume agents stopped by a restart or update. When off, resume them with kcap agent resume." />
+                                                       Text="Bring back agents stopped by a restart or update. When off, they stay stopped, and each one's status shows how to resume it." />
                                         </StackPanel>
                                         <ToggleSwitch x:Name="AutoResumeToggle" Grid.Column="1" Classes="kcapSwitch"
                                                       IsChecked="{Binding AutoResume, Mode=TwoWay}"

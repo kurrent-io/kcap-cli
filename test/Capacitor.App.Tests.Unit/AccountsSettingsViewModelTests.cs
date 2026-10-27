@@ -237,7 +237,7 @@ public class AccountsSettingsViewModelTests {
     public async Task Outcome_notices_name_the_action_and_never_read_an_unconfirmed_outcome_as_done() {
         await Assert.That(AccountsSettingsViewModel.OutcomeNotice(MutationVerb.AccountAdd, "work", new MutationOutcome.Succeeded())).IsNull();
         await Assert.That(AccountsSettingsViewModel.OutcomeNotice(MutationVerb.AccountRemove, "work", new MutationOutcome.Failed(2, null, RecoverySurface.Attention)))
-            .IsEqualTo(new AccountsNotice("Could not remove work", "The kcap command line exited with code 2."));
+            .IsEqualTo(new AccountsNotice("Could not remove work", "kcap's command line stopped with an error (code 2)."));
         await Assert.That(AccountsSettingsViewModel.OutcomeNotice(MutationVerb.AccountRemove, "work", new MutationOutcome.UnconfirmedNoAttach()))
             .IsEqualTo(new AccountsNotice("Removing work could not be confirmed", "The list shows the current state.", IsWarning: true));
     }
@@ -246,7 +246,7 @@ public class AccountsSettingsViewModelTests {
     [Arguments("cli_below_floor", "Update kcap on this machine to manage accounts.")]
     [Arguments("cli_version_unknown", "Update kcap on this machine to manage accounts.")]
     [Arguments("cli_override_missing", "Update kcap on this machine to manage accounts.")]
-    [Arguments("cli_not_found", "Install the kcap command line to manage accounts.")]
+    [Arguments("cli_not_found", "Reinstall kcap to manage accounts.")]
     [Arguments("daemon_renamed_restart_app", "Restart the app to manage accounts.")]
     [Arguments("some_new_refusal", "some_new_refusal")]
     public async Task A_refusal_reads_as_what_to_do_and_an_unknown_one_keeps_its_reason(string reason, string expected) =>

@@ -322,7 +322,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
                 return;
             }
             if (!await _canRetire(request!, _lifetime.Token)) {
-                Message = "Update the kcap command-line tool before renaming; it could not confirm support for retiring the old service. The saved name is unchanged.";
+                Message = "Update kcap from About before renaming; this version could not confirm it can retire the old service. The saved name is unchanged.";
                 return;
             }
             if (!_startupSettled.IsCompletedSuccessfully || !Idle) {
@@ -339,7 +339,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
             }
             if (outcome is MutationOutcome.Failed { Reason: "cli_unsupported" }) {
                 await _settings.RestoreNameAsync(name, previous, _lifetime.Token);
-                Message = "The CLI no longer supports renaming. Update kcap and try again; the saved name was restored unless another edit changed it.";
+                Message = "This version of kcap cannot rename the daemon. Update kcap from About and try again; the saved name was restored unless another edit changed it.";
                 return;
             }
             _needsAppRestart = true;

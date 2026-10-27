@@ -14,7 +14,7 @@ public static class RenameRefusal {
         "target_occupied"   => $"A service named {newName} is already installed on this machine, possibly stopped. Choose another name; nothing was changed.",
         "target_unknown"    => $"Could not tell whether a service named {newName} is installed. Nothing was changed; try again.",
         "agents_active"     => "An agent or evaluation started on this daemon before it could be renamed. Wait for it to finish, then try again; nothing was changed.",
-        "fence_unsupported" => "The running daemon is older than this rename needs. Restart the daemon, then try again; nothing was changed.",
+        "fence_unsupported" => "The daemon runs an older version of kcap that cannot be renamed. Update kcap from About; the daemon restarts on its own, then try again. Nothing was changed.",
         _                   => "Could not reach the running daemon to pause new work for the rename. Nothing was changed; try again in a couple of minutes.",
     };
 }

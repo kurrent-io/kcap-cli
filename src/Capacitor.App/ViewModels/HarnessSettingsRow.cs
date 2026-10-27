@@ -22,7 +22,7 @@ public sealed class HarnessSettingsRow : ReactiveObject {
         _setupUnverified = setupUnverified;
         Id = identity.Id;
         Label = identity.Label;
-        Signal = detected.BinaryFound ? "Found on your terminal PATH" : "Harness configuration found";
+        Signal = detected.BinaryFound ? "Installed on this computer" : "Its settings folder is on this computer";
         ConsentNote = Id == HarnessId.Codex
             ? "Also allows Codex's sandbox to reach the server hosts from every configured kcap profile, so its skills can connect. Disconnecting Codex keeps this network access."
             : null;

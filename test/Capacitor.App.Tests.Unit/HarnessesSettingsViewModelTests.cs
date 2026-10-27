@@ -28,7 +28,7 @@ public class HarnessesSettingsViewModelTests {
         await vm.RescanAsync();
         await Assert.That(vm.Rows.Count).IsEqualTo(1);
         var row = vm.Rows[0];
-        await Assert.That(row.Signal).Contains("PATH");
+        await Assert.That(row.Signal).IsEqualTo("Installed on this computer");
         await Assert.That(row.ConnectionLabel).IsNull();
         await Assert.That(row.ConsentNote).IsNotNull();
         cli.PluginInstallAsync("--codex", Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
@@ -43,7 +43,7 @@ public class HarnessesSettingsViewModelTests {
         detected[HarnessId.Cursor] = new(false, true);
         await vm.RescanAsync();
         await Assert.That(vm.Rows.Count).IsEqualTo(2);
-        await Assert.That(vm.Rows.Single(r => r.Id == HarnessId.Cursor).Signal).Contains("configuration");
+        await Assert.That(vm.Rows.Single(r => r.Id == HarnessId.Cursor).Signal).Contains("settings folder");
     });
 
     [Test]

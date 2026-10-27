@@ -90,7 +90,7 @@ public sealed class ExperimentalFeatureRowViewModel : ReactiveObject {
             ExperimentalFeatureStateKind.OnNotActive => $"On, not active: {reason}",
             ExperimentalFeatureStateKind.Applying => "Applying…",
             ExperimentalFeatureStateKind.AppliedLocally => AppliedLocallyText,
-            ExperimentalFeatureStateKind.Unknown => "This daemon is too old to apply it. Update kcap and restart the daemon",
+            ExperimentalFeatureStateKind.Unknown => "The daemon runs an older version of kcap. Update kcap from About; the daemon restarts on its own",
             ExperimentalFeatureStateKind.DaemonNotRunning when _enabled => "Saved; applies when the daemon starts",
             _ => "",
         };

@@ -154,7 +154,7 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
         return outcome switch {
             MutationOutcome.Succeeded                   => null,
             MutationOutcome.Failed { Reason: { } why }  => new(failed, why),
-            MutationOutcome.Failed exit                 => new(failed, $"The kcap command line exited with code {exit.ExitCode}."),
+            MutationOutcome.Failed exit                 => new(failed, $"kcap's command line stopped with an error (code {exit.ExitCode})."),
             MutationOutcome.Refused { Reason: var why } => new(failed, RefusalRemedy(why) is { } remedy ? $"{remedy}." : why),
             // Unconfirmed, and every case the lane never produces for an account verb: none reads as done.
             _                                           => new($"{doing} {label} could not be confirmed", "The list shows the current state.", IsWarning: true),
@@ -164,7 +164,7 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
     // The lane's checks before it runs the CLI.
     static string? RefusalRemedy(string reason) => reason switch {
         "cli_below_floor" or "cli_version_unknown" or "cli_override_missing" => UpdateKcap,
-        "cli_not_found"                                                        => "Install the kcap command line to manage accounts",
+        "cli_not_found"                                                        => "Reinstall kcap to manage accounts",
         "daemon_renamed_restart_app"                                           => "Restart the app to manage accounts",
         _                                                                      => null,
     };

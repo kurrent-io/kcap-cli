@@ -129,7 +129,7 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
                 row.Report("The change timed out. Rescan to check the connection before trying again.", failed);
             else if (result.ExitCode != 0)
                 row.Report(string.IsNullOrWhiteSpace(result.Stderr)
-                    ? $"The kcap command line exited with code {result.ExitCode}. Try again."
+                    ? $"kcap's command line stopped with an error (code {result.ExitCode}). Try again."
                     : $"kcap couldn't change some of {row.Label}'s files. The details name each one; fix them, then try again.",
                     failed, result.Stderr);
             else if (wired is null)
