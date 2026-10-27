@@ -9,7 +9,6 @@ using Capacitor.Cli.Core.PullRequests;
 using Capacitor.Cli.Core.WorkItems;
 using DynamicData;
 using Microsoft.Extensions.Time.Testing;
-using static Capacitor.App.Tests.Unit.ChatTabViewSmokeTests;
 using static Capacitor.App.Tests.Unit.FakeDaemonClientService;
 
 namespace Capacitor.App.Tests.Unit;
@@ -26,11 +25,21 @@ static class DocsShotScenes {
     const string ServerUrl = "https://northwind.kcap.ai";
     const string PaymentsRepo = "/Users/maya/dev/northwind/payments-api";
     const string StorefrontRepo = "/Users/maya/dev/northwind/storefront";
+    const string RetryTitle = "Retry transient gateway failures";
+
+    static readonly DateTimeOffset Now = new(2026, 10, 26, 14, 0, 0, TimeSpan.Zero);
+
+    static readonly string[] Transcript = [
+        """{"type":"user","message":{"role":"user","content":"The payments gateway drops requests on a 503. Add a retry with backoff."}}""",
+        """{"type":"assistant","message":{"content":[{"type":"text","text":"I will wrap the gateway client in a retry policy: three attempts with exponential backoff, transient failures only. Then I will run the tests."}]}}""",
+        """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"dotnet test test/Payments.Gateway.Tests"}}]}}""",
+        """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"Passed! 48 tests, 0 failed"}]}}""",
+    ];
 
     public static void Northwind(FakeDaemonClientService service) {
         service.SnapshotsSubject.OnNext(Snap(daemon: "maya-mbp", version: "1.4.0", serverUrl: ServerUrl, connection: "connected", active: 3, max: 5));
         service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
-        var now = DateTime.UtcNow;
+        var now = Now.UtcDateTime;
         service.Agents.AddOrUpdate(new AgentStatusDto(
             "a1", "agent", "claude", PaymentsRepo, "Running",
             null, null, "maya", now.AddMinutes(-12), null, "Maya Chen", HasTerminal: true,
@@ -48,7 +57,7 @@ static class DocsShotScenes {
 
     public static BehaviorSubject<IReadOnlyDictionary<string, RailPullRequestSummary>> PullRequests() =>
         new(new Dictionary<string, RailPullRequestSummary> {
-            ["s1"] = new([new(Subject("payments-api", 42), "Retry transient gateway failures", "Open")]),
+            ["s1"] = new([new(Subject("payments-api", 42), RetryTitle, "Open")]),
             ["s2"] = new([new(Subject("storefront", 118), "Round totals at the line level", "Merged")]),
         });
 
@@ -57,12 +66,12 @@ static class DocsShotScenes {
         var row = new SessionWorkItemAssignmentDto { WorkItemId = "w1", Label = "PAY-142", Source = "mcp", Confidence = 1, IsPrimary = true };
         var item = new WorkItemDto {
             WorkItemId = "w1",
-            Title = "Retry transient gateway failures",
+            Title = RetryTitle,
             Key = new WorkItemKeyDto { ShortKey = "PAY-142", Provider = "linear", Kind = "issue", Value = "PAY-142" },
             State = new WorkItemStateDto { Kind = "in_flight" },
             Links = [new WorkItemLinkDto {
                 Kind = "issue", Provider = "linear", Value = "PAY-142", ShortKey = "PAY-142",
-                Url = "https://linear.app/northwind/issue/PAY-142", Title = "Retry transient gateway failures", LinkClass = "link", IsSeed = true,
+                Url = "https://linear.app/northwind/issue/PAY-142", Title = RetryTitle, LinkClass = "link", IsSeed = true,
             }],
             Contributors = [new WorkItemContributorDto { UserId = "maya", DisplayName = "Maya Chen" }],
             SessionCount = 1,
@@ -87,19 +96,27 @@ static class DocsShotScenes {
         var pullRequests = PullRequests();
         var attach = new FakeTerminalAttachClientFactory();
         var workContext = new FakeWorkContextSource { Default = PaymentsWorkContext() };
+        var clock = new FakeTimeProvider(Now);
+        var linkedPullRequests = new FakePullRequestSource(clock) {
+            Links = [new PullRequestLinkDto {
+                Provider = "github", Host = "github.com", RepoHash = "northwind-payments-api", Owner = "northwind", RepoName = "payments-api",
+                Number = 42, Url = "https://github.com/northwind/payments-api/pull/42", Title = RetryTitle, HeadRef = "feat/gateway-retry",
+            }],
+            TitleFor = _ => RetryTitle,
+        };
         MainWindowViewModel? vm = null;
         var directory = new AgentDirectory(
             service, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null),
-            path => path, null, ServerUrl, TimeProvider.System);
+            path => path, null, ServerUrl, clock);
         var rail = new SessionRailViewModel(
-            directory, id => vm!.OpenSession(id), _ => { }, TimeProvider.System,
+            directory, id => vm!.OpenSession(id), _ => { }, clock,
             agentsWithPending: pendingIds is null ? null : Observable.Return(pendingIds),
             pullRequests: pullRequests, openPullRequest: (id, origin, subject) => vm!.OpenSessionPullRequest(id, origin, subject));
         vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
             workspaceFactory: id => new WorkspaceViewModel(
                 id, service, actions, attach.Factory, () => new FakeTerminalSurface(),
-                new FakeTimeProvider(), new RecordingOpener(), permissions, workContext,
-                new ScriptedLocalControlOps(), new NoAttachmentUploader()),
+                clock, new RecordingOpener(), permissions, workContext,
+                new ScriptedLocalControlOps(), new NoAttachmentUploader(), pullRequests: linkedPullRequests),
             rail: rail, tenantName: "northwind", openFeedback: openFeedback, requestSetup: requestSetup);
         var window = new Views.MainWindow { DataContext = vm };
         TempDir? transcript = null;
@@ -111,13 +128,7 @@ static class DocsShotScenes {
 
         if (openSession) {
             transcript = TempDir.WithPathTo("transcript.jsonl", out var path);
-            await File.WriteAllLinesAsync(path, [
-                UserLine.Replace("hello", "The payments gateway drops requests on a 503. Add a retry with backoff."),
-                AssistantLinkLine.Replace("See [docs](https://example.com/docs) now.",
-                    "I will wrap the gateway client in a retry policy: three attempts with exponential backoff, transient failures only. Then I will run the tests."),
-                ToolCallLine.Replace("ls -la", "dotnet test test/Payments.Gateway.Tests"),
-                ToolResultLine.Replace("\"ok\"", "\"Passed! 48 tests, 0 failed\""),
-            ]);
+            await File.WriteAllLinesAsync(path, Transcript);
             vm.OpenSession("a1");
             Dispatcher.UIThread.RunJobs();
             service.Agents.AddOrUpdate(service.Agents.Lookup("a1").Value with { TranscriptPath = path });
