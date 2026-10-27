@@ -153,12 +153,12 @@ static class CodexCliRunner {
             log($"Codex process timed out ({timeout.TotalSeconds:0}s), killing");
             KillQuietly(process);
 
-            return new(null, ClaudeCliFailure.Timeout, await UsageAfterKillAsync(stdoutTask, events, time));
+            return new(null, ClaudeCliFailure.Timeout, await UsageAfterKillAsync(process, stdoutTask, events, time));
         } catch (Exception ex) {
             log($"Failed to stream prompt to codex stdin: {ex.Message}");
             KillQuietly(process);
 
-            return new(null, ClaudeCliFailure.ProcessFailure, await UsageAfterKillAsync(stdoutTask, events, time));
+            return new(null, ClaudeCliFailure.ProcessFailure, await UsageAfterKillAsync(process, stdoutTask, events, time));
         }
 
         try {
@@ -168,6 +168,7 @@ static class CodexCliRunner {
         } catch (OperationCanceledException) {
             // A descendant that outlived codex holds the pipe; codex itself has written all it will.
             log("Codex exited but its output stayed open to the deadline; using what was read");
+            CloseOutput(process);
         }
 
         var stderr = stderrTask.IsCompletedSuccessfully ? stderrTask.Result : "";
@@ -273,20 +274,30 @@ static class CodexCliRunner {
     }
 
     static async Task ReadEventsAsync(StreamReader stdout, CodexExecEvents events) {
-        while (await stdout.ReadLineAsync() is { } line) {
-            events.Accept(line);
-        }
+        try {
+            while (await stdout.ReadLineAsync() is { } line) {
+                events.Accept(line);
+            }
+        } catch (Exception e) when (e is ObjectDisposedException or IOException) { }
     }
 
     /// <summary>A grandchild that inherited stdout can hold the pipe open past the kill, so the read is bounded.</summary>
-    static async Task<ClaudeCliUsage?> UsageAfterKillAsync(Task stdoutTask, CodexExecEvents events, TimeProvider time) {
+    static async Task<ClaudeCliUsage?> UsageAfterKillAsync(Process process, Task stdoutTask, CodexExecEvents events, TimeProvider time) {
         try {
             await stdoutTask.WaitAsync(TimeSpan.FromSeconds(5), time);
 
             return events.Usage;
         } catch {
+            CloseOutput(process);
+
             return null;
         }
+    }
+
+    /// <summary>Ends reads a descendant would otherwise keep pending: the process does not dispose its own readers.</summary>
+    static void CloseOutput(Process process) {
+        try { process.StandardOutput.Dispose(); } catch { /* best effort */ }
+        try { process.StandardError.Dispose(); } catch { /* best effort */ }
     }
 
     /// <summary>The process can exit between the kill's liveness check and its signal.</summary>
