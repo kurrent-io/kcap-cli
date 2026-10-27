@@ -18,7 +18,9 @@ public static class RecordingStateLabels {
         : token == NotWired ? "Not set up"
         : token;
 
-    public static bool IsRecording(string token) => token == Recording;
+    /// Nothing for the user to do: recording, or hooks in place waiting for the first session.
+    public static bool IsHealthy(string vendor, string token) =>
+        token == Recording || (token == Installed && !IsCodex(vendor));
 
     public static bool IsAttention(string vendor, string token) =>
         token == Broken || token == NotWired || (token == Installed && IsCodex(vendor));

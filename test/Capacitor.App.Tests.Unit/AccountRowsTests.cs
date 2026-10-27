@@ -113,8 +113,8 @@ public class AccountRowsTests {
     public async Task Only_a_state_whose_fix_is_not_on_the_row_carries_a_hint() {
         await Assert.That(RecordingStateLabels.Hint("codex", "installed", "/u/.codex-work"))
             .IsEqualTo("Start Codex once with this account and approve kcap's hooks when it asks.");
-        await Assert.That(RecordingStateLabels.Command("codex", "installed", "/u/.codex-work")).IsEqualTo("CODEX_HOME=/u/.codex-work codex");
-        await Assert.That(RecordingStateLabels.Command("codex", "recording", "/u/.codex-work")).IsNull();
+        await Assert.That(RecordingStateLabels.Command("codex", "installed", "/u/.codex-work", windows: false)).IsEqualTo("CODEX_HOME=/u/.codex-work codex");
+        await Assert.That(RecordingStateLabels.Command("codex", "recording", "/u/.codex-work", windows: false)).IsNull();
         await Assert.That(RecordingStateLabels.Hint("claude", "installed", "/u/.claude")).IsNull();
         await Assert.That(RecordingStateLabels.Hint("codex", "recording", "/u/.codex")).IsNull();
         await Assert.That(RecordingStateLabels.Hint("claude", "broken", "/u/.claude")).IsNotNull();
@@ -155,4 +155,13 @@ public class AccountRowsTests {
     [Arguments(@"C:\Users\o'neil\.codex", true, @"$env:CODEX_HOME = 'C:\Users\o''neil\.codex'; codex")]
     public async Task The_approval_command_quotes_the_folder_for_the_shell(string directory, bool windows, string expected) =>
         await Assert.That(RecordingStateLabels.Command("codex", "installed", directory, windows)).IsEqualTo(expected);
+
+    [Test]
+    [Arguments("claude", "recording", true)]
+    [Arguments("claude", "installed", true)]
+    [Arguments("codex", "installed", false)]
+    [Arguments("claude", "not_wired", false)]
+    [Arguments("claude", "broken", false)]
+    public async Task Only_states_that_ask_nothing_of_the_user_read_as_healthy(string vendor, string token, bool healthy) =>
+        await Assert.That(RecordingStateLabels.IsHealthy(vendor, token)).IsEqualTo(healthy);
 }

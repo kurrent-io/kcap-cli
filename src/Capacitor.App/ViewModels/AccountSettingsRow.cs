@@ -7,7 +7,7 @@ namespace Capacitor.App.ViewModels;
 public sealed record AccountSettingsRow(string? Id, string Vendor, string Directory, string Label, string RecordingState, bool IsDefault) {
     public string StateLabel => RecordingStateLabels.Label(Vendor, RecordingState);
     public bool StateIsAttention => RecordingStateLabels.IsAttention(Vendor, RecordingState);
-    public bool StateIsHealthy => RecordingStateLabels.IsRecording(RecordingState);
+    public bool StateIsHealthy => RecordingStateLabels.IsHealthy(Vendor, RecordingState);
     public string? StateHint => RecordingStateLabels.Hint(Vendor, RecordingState, Directory);
     public string? StateCommand => RecordingStateLabels.Command(Vendor, RecordingState, Directory);
     public bool IsUnregisteredDefault => Id is null;
