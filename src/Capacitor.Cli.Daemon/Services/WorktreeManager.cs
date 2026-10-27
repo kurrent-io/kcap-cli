@@ -241,6 +241,18 @@ public partial class WorktreeManager(
             Directory.CreateDirectory(worktreeRoot);
 
             var noHooks = NoBranchHooks();
+
+            async Task<WorktreeInfo> AddAtCommitAsync(string commit, string source) {
+                await WithWorktreeMetadataGate(repoPath, time, () =>
+                    RunGit(repoPath, GitTimeout, time, noHooks,
+                        "worktree", "add", "--no-checkout", "-B", branch, worktreePath, commit));
+                LogWorktreeBase(worktreePath, baseRef!, source);
+                var added = new WorktreeInfo(worktreePath, branch, repoPath);
+                await StripOrRollBackAsync(added);
+
+                return added;
+            }
+
             if (!string.IsNullOrEmpty(baseRef)) {
                 // An agent's branch exists only on its own machine, where origin cannot supply it. Looked up first, so
                 // a branch whose name is all hex is not read as a sha.
@@ -256,15 +268,18 @@ public partial class WorktreeManager(
                 }
 
                 // A commit that exists only locally (a fork's unpushed head) has nothing to fetch.
-                if (await ResolveLocalCommitAsync(repoPath, baseRef) is { } commit) {
-                    await WithWorktreeMetadataGate(repoPath, time, () =>
-                        RunGit(repoPath, GitTimeout, time, noHooks,
-                            "worktree", "add", "--no-checkout", "-B", branch, worktreePath, commit));
-                    LogWorktreeBase(worktreePath, baseRef, "local commit");
-                    var local = new WorktreeInfo(worktreePath, branch, repoPath);
-                    await StripOrRollBackAsync(local);
+                if (await ResolveLocalCommitAsync(repoPath, baseRef) is { } commit)
+                    return await AddAtCommitAsync(commit, "local commit");
 
-                    return local;
+                // Origin serves only whole shas, so an abbreviation made on another machine is looked for among
+                // origin's branches. A fetch that fails, such as on a remote-tracking ref a concurrent launch holds
+                // locked, leaves the lookup after it to decide; one that times out fails the launch.
+                if (IsAbbreviatedSha(baseRef)) {
+                    await RunGitCaptureResult(repoPath, FetchTimeout, time, false,
+                        [new("maintenance.auto", "false"), new("gc.auto", "0"), .. NoSubmoduleRecursion()],
+                        "fetch", "--no-write-fetch-head", "origin");
+                    if (await ResolveLocalCommitAsync(repoPath, baseRef) is { } pushed)
+                        return await AddAtCommitAsync(pushed, "origin branches");
                 }
 
                 // Fetch into a per-worktree ref instead of the shared FETCH_HEAD
@@ -1827,19 +1842,24 @@ public partial class WorktreeManager(
         } catch { return false; }
     }
 
-    /// <summary>The full sha of a commit this repository holds, named whole or by the abbreviation git printed
-    /// for it. An abbreviation two local objects share resolves to nothing, and so does a tag or remote ref of the
-    /// same name, which rev-parse would otherwise prefer.</summary>
+    /// <summary>The full sha of a commit this repository holds, named whole (a tag object's sha names its commit) or
+    /// by the abbreviation git printed for it. An abbreviation two local commits share resolves to nothing, and so
+    /// does one that a tag or remote ref is also named, which rev-parse would otherwise prefer.</summary>
     async Task<string?> ResolveLocalCommitAsync(string repoPath, string sha) {
-        if (sha.Length is < 7 or > 64 || !sha.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f')) return null;
+        if (sha.Length is < 7 or > 64 || !IsHex(sha)) return null;
 
         var result = await RunGitCaptureResult(repoPath, GitTimeout, time, true, [],
             "rev-parse", "--verify", "--quiet", $"{sha}^{{commit}}");
 
-        return result.ExitCode == 0 && result.Stdout.Trim() is { Length: 40 or 64 } full && full.StartsWith(sha, StringComparison.Ordinal)
+        return result.ExitCode == 0 && result.Stdout.Trim() is { Length: 40 or 64 } full
+            && (full.StartsWith(sha, StringComparison.Ordinal) || !IsAbbreviatedSha(sha))
             ? full
             : null;
     }
+
+    static bool IsAbbreviatedSha(string value) => value.Length is >= 7 and < 40 && IsHex(value);
+
+    static bool IsHex(string value) => value.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
 
     /// <summary>A base ref arrives over the hub. <c>check-ref-format --branch</c> also expands
     /// <c>@{-N}</c> to another branch, so only a name it echoes back unchanged is accepted.</summary>

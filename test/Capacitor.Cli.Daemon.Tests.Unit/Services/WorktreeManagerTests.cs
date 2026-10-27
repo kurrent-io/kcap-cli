@@ -181,6 +181,28 @@ public class WorktreeManagerTests {
         }
     }
 
+    /// <summary>An abbreviation made on another machine and pushed is found among origin's branches, which a fetch
+    /// of the abbreviation itself cannot do.</summary>
+    [Test]
+    public async Task CreateAsync_with_an_abbreviation_pushed_to_origin_starts_from_that_commit() {
+        using var repo = MakeUpstreamWithSideRef("refs/pull/11/head", out _);
+
+        // Committed after the clone, so the clone's object store cannot have it.
+        repo.Upstream.CreateFile("pushed.txt", "pushed");
+        repo.Upstream.CommitAll("pushed commit");
+        var pushed = repo.Upstream.Head;
+
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var worktree = await manager.CreateAsync(repo.Clone, name: "pushed-short-sha", baseRef: pushed[..7]);
+
+        try {
+            await Assert.That(GitRepo.At(worktree.Path).Head).IsEqualTo(pushed);
+            await Assert.That(worktree.FetchedRef).IsNull();
+        } finally {
+            await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
+        }
+    }
+
     [Test]
     public async Task CreateAsync_with_a_ref_name_keeps_the_fetch_path() {
         using var repo = MakeUpstreamWithSideRef("refs/pull/8/head", out _);
