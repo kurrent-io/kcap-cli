@@ -102,4 +102,16 @@ public class SystemdServiceManagerTests {
         await Assert.That(() => manager.SetEnvironment("test", "PATH", "/usr/bin:/opt/agents")).Throws<System.ComponentModel.Win32Exception>();
         await Assert.That(File.ReadAllText(path)).IsEqualTo(unit);
     }
+
+    /// <summary>Without a user bus systemctl answers nothing, and the unit must read as unknown rather than
+    /// absent, or a verify would install over a daemon that may be running.</summary>
+    [Test]
+    public async Task Query_without_a_reachable_systemd_is_unknown() {
+        var manager = new SystemdServiceManager(Home, runProcess: (_, _) => (1, "", "Failed to connect to bus: No medium found"));
+
+        var query = manager.Query("test");
+
+        await Assert.That(query.Probe).IsEqualTo(LabelProbe.Unknown);
+        await Assert.That(query.JobPid).IsNull();
+    }
 }
