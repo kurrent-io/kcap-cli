@@ -29,13 +29,13 @@
                                         </Border>
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" MinHeight="32">
                                             <TextBlock Classes="kcapLabel" Text="{Binding Label}" VerticalAlignment="Center" />
-                                            <Border Classes="settingsStatus" Classes.success="{Binding IsConfigured}"
-                                                    Classes.attention="{Binding ConnectionUnknown}"
+                                            <Border Classes="settingsStatus" Classes.success="{Binding ShowRecordingStatus}"
+                                                    Classes.attention="{Binding NeedsAttention}"
                                                     ToolTip.Tip="{Binding ConnectionTip}" IsVisible="{Binding HasStatus}">
                                                 <StackPanel Orientation="Horizontal" Spacing="5">
-                                                    <views:AppIcon Kind="CircleCheck" Size="12" IsVisible="{Binding IsConfigured}" />
+                                                    <views:AppIcon Kind="CircleCheck" Size="12" IsVisible="{Binding ShowRecordingStatus}" />
                                                     <views:AppIcon Kind="Wrench" Size="12" IsVisible="{Binding ToolsOnly}" />
-                                                    <views:AppIcon Kind="TriangleAlert" Size="12" IsVisible="{Binding ConnectionUnknown}" />
+                                                    <views:AppIcon Kind="TriangleAlert" Size="12" IsVisible="{Binding NeedsAttention}" />
                                                     <TextBlock Text="{Binding ConnectionLabel}" />
                                                 </StackPanel>
                                             </Border>
@@ -58,7 +58,7 @@
                                                     <TextBlock Classes="kcapHint" Text="{Binding RecordLabel}" Foreground="{StaticResource KcapTextBrush}" />
                                                 </CheckBox>
                                                 <CheckBox Classes="settingsHarnessCheck" IsVisible="{Binding OffersTools}"
-                                                          IsChecked="{Binding Tools, Mode=OneWay}"
+                                                          IsThreeState="True" IsChecked="{Binding ToolsSelection, Mode=OneWay}"
                                                           AutomationProperties.Name="{Binding ToolsName}"
                                                           ToolTip.Tip="{x:Static vm:HarnessSettingsRow.ToolsTip}"
                                                           Command="{Binding $parent[ItemsControl].((vm:HarnessesSettingsViewModel)DataContext).ToggleToolsCommand}"

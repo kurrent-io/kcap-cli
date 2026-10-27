@@ -68,11 +68,13 @@ public sealed class CaptureSettingsViewModel : ReactiveObject, IDisposable {
                 return;
             }
             VisibilityEditable = true;
+            var visibility = Visibility;
             VisibilityOptions = answered.Offer is { } offer
                 ? [.. offer.Options.Select(o => new VisibilityOption(o.Key!, o.Label!, o.Detail ?? ""))]
                 : HarnessesStepViewModel.AllVisibilityOptions;
             this.RaisePropertyChanged(nameof(VisibilityOptions));
-            if (VisibilityOptions.All(o => o.Value != Visibility)) Visibility = null;
+            // Replacing the items clears the view's two-way selection before it can select the new item.
+            Visibility = VisibilityOptions.Any(o => o.Value == visibility) ? visibility : null;
         } catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) {
         } catch (Exception ex) {
             VisibilityEditable = false;

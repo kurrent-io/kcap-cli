@@ -16,7 +16,6 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
     readonly Func<CancellationToken, Task<IReadOnlyDictionary<HarnessId, DetectedAgent>>> _detect;
     readonly Func<CancellationToken, Task<string?>>? _ensureTerminalCommand;
     readonly IAppStateStore? _toolsMemory;
-    readonly string? _server;
     readonly CancellationTokenSource _lifetime;
     IReadOnlyList<HarnessSettingsRow> _rows = [];
     bool _busy;
@@ -33,7 +32,6 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
         _detect = detect;
         _ensureTerminalCommand = ensureTerminalCommand;
         _toolsMemory = toolsMemory;
-        _server = Uri.TryCreate(store.ServerUrl, UriKind.Absolute, out var url) ? url.Authority : null;
         _lifetime = CancellationTokenSource.CreateLinkedTokenSource(appLifetime);
         var idle = this.WhenAnyValue(x => x.Busy, x => x.Scanning, (busy, scanning) => !busy && !scanning);
         RescanCommand = ReactiveCommand.CreateFromTask(RescanAsync, idle);
@@ -68,7 +66,8 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
         Scanning = true;
         Message = "Looking for harnesses…";
         try {
-            var remembered = _toolsMemory is null ? null : (await _toolsMemory.LoadAsync()).HarnessToolsByVendor;
+            var state = _toolsMemory is null ? null : await _toolsMemory.LoadAsync();
+            var remembered = state?.HarnessToolsByVendor;
             Rows = await Task.Run(async () => {
                 var detected = await _detect(_lifetime.Token).ConfigureAwait(false);
                 return HarnessRegistry.Identities.Where(h => detected.TryGetValue(h.Id, out var d) && d.Detected)
@@ -76,7 +75,8 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
                         var wired = _isWired?.Invoke(h.Id);
                         // With no answer on record, assume the default install: tools went in with the hooks.
                         var tools = remembered?.TryGetValue(h.Id.VendorId, out var t) == true ? t : wired == true;
-                        return new HarnessSettingsRow(h, detected[h.Id], wired, tools, _server);
+                        return new HarnessSettingsRow(h, detected[h.Id], wired, tools,
+                            setupUnverified: state?.UnverifiedHarnessSetups?.Contains(h.Id.VendorId) == true);
                     }).ToArray();
             }, _lifetime.Token);
             Message = null;
@@ -101,6 +101,7 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
         var failed = off ? $"Could not disconnect {row.Label}"
             : record && !row.IsConfigured ? $"Could not connect {row.Label}"
             : $"Could not update {row.Label}";
+        var mutationStarted = false;
         try {
             await Task.Run(_store.LoadProfile, _lifetime.Token);
             // Hooks call the bare kcap command, so recording first puts kcap on the terminal PATH, as setup does.
@@ -108,6 +109,8 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
                 row.Report(problem, failed);
                 return;
             }
+            mutationStarted = true;
+            await RememberSetupAsync(row, unverified: true);
             var flag = row.Id.PluginInstallFlag;
             ProcessResult result;
             if (off) {
@@ -136,12 +139,17 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
                 row.Report(off
                     ? "Disconnected. Restart this harness to unload kcap. Existing sessions are kept."
                     : "Setup completed. Restart this harness to load the changes.");
-                await RememberToolsAsync(row, tools);
+                await RememberSetupAsync(row, unverified: false, tools: tools);
             }
             if (result is { ExitCode: 0, TimedOut: false } && !string.IsNullOrWhiteSpace(result.Stderr))
                 row.Report($"{row.Message}\n{result.Stderr.Trim()}", row.ErrorTitle);
         } catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) {
+            if (mutationStarted) row.SetWired(null);
         } catch (Exception ex) {
+            if (mutationStarted) {
+                try { row.SetWired(_isWired is null ? null : await Task.Run(() => _isWired(row.Id))); }
+                catch { row.SetWired(null); }
+            }
             // A missing or unlaunchable CLI surfaces as the OS's spawn error, which names a path but not the fix.
             row.Report(ex is Win32Exception
                 ? "kcap could not start its command line tool. Reinstall kcap, then try again."
@@ -152,13 +160,19 @@ public sealed class HarnessesSettingsViewModel : ReactiveObject, IDisposable {
         }
     }
 
-    async Task RememberToolsAsync(HarnessSettingsRow row, bool tools) {
-        row.SetTools(tools);
-        if (_toolsMemory is null || !row.OffersTools) return;
+    async Task RememberSetupAsync(HarnessSettingsRow row, bool unverified, bool? tools = null) {
+        row.SetSetupUnverified(unverified);
+        if (tools is { } installed) row.SetTools(installed);
+        if (_toolsMemory is null) return;
         await _toolsMemory.UpdateAsync(state => state with {
-            HarnessToolsByVendor = new Dictionary<string, bool>(state.HarnessToolsByVendor ?? new Dictionary<string, bool>()) {
-                [row.Id.VendorId] = tools,
-            },
+            UnverifiedHarnessSetups = unverified
+                ? [.. (state.UnverifiedHarnessSetups ?? []).Where(v => v != row.Id.VendorId), row.Id.VendorId]
+                : [.. (state.UnverifiedHarnessSetups ?? []).Where(v => v != row.Id.VendorId)],
+            HarnessToolsByVendor = tools is { } value && row.OffersTools
+                ? new Dictionary<string, bool>(state.HarnessToolsByVendor ?? new Dictionary<string, bool>()) {
+                    [row.Id.VendorId] = value,
+                }
+                : state.HarnessToolsByVendor,
         });
     }
 

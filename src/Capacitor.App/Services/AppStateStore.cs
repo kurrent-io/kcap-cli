@@ -31,7 +31,9 @@ public sealed record AppState(
     IReadOnlyDictionary<string, string>? AccountByRepo = null,
     // Vendor id -> whether kcap's tools were last installed for it from Settings. Nothing on disk
     // says so, unlike hooks, so this is the only record of that answer.
-    IReadOnlyDictionary<string, bool>? HarnessToolsByVendor = null);
+    IReadOnlyDictionary<string, bool>? HarnessToolsByVendor = null,
+    // A setup attempt is unverified until its command and recording check both succeed.
+    IReadOnlyList<string>? UnverifiedHarnessSetups = null);
 
 public interface IAppStateStore {
     Task<AppState> LoadAsync();

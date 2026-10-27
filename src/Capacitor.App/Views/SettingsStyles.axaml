@@ -200,7 +200,6 @@
         <Setter Property="FontWeight" Value="SemiBold" />
         <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
     </Style>
-    <!-- A profile page names the profile it edits; the sidebar groups say the rest. -->
     <!-- A row's state as a badge. Attention pairs the amber with an icon, never colour alone. -->
     <Style Selector="Border.settingsStatus">
         <Setter Property="Padding" Value="7,1" />
@@ -366,6 +365,17 @@
         <Setter Property="VerticalAlignment" Value="Center" />
         <Setter Property="MinWidth" Value="0" />
         <Setter Property="Padding" Value="8,0,0,0" />
+    </Style>
+    <Style Selector="CheckBox.settingsHarnessCheck:indeterminate /template/ Border#NormalRectangle,
+                     CheckBox.settingsHarnessCheck:indeterminate:pointerover /template/ Border#NormalRectangle,
+                     CheckBox.settingsHarnessCheck:indeterminate:pressed /template/ Border#NormalRectangle">
+        <Setter Property="Background" Value="{StaticResource KcapWarningDimBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource KcapWarningBrush}" />
+    </Style>
+    <Style Selector="CheckBox.settingsHarnessCheck:indeterminate /template/ Path#CheckGlyph,
+                     CheckBox.settingsHarnessCheck:indeterminate:pointerover /template/ Path#CheckGlyph,
+                     CheckBox.settingsHarnessCheck:indeterminate:pressed /template/ Path#CheckGlyph">
+        <Setter Property="Fill" Value="{StaticResource KcapWarningBrush}" />
     </Style>
     <!-- Vendor logos differ in shape and weight; a shared tile gives them one optical size. -->
     <Style Selector="Border.settingsGlyphTile">

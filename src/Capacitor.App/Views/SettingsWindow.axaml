@@ -483,6 +483,7 @@
                                         Command="{Binding About.UpdateCommand, FallbackValue={x:Null}}"
                                         IsVisible="{Binding About.UpdateVisible, FallbackValue=False}" />
                                 <Button x:Name="AboutCopyButton" Classes="kcapChip settingsCompact" Click="OnCopyVersionInfo"
+                                        AutomationProperties.Name="Copy version info"
                                         ToolTip.Tip="Copy these versions and your OS, for a bug report">
                                     <StackPanel Orientation="Horizontal" Spacing="6">
                                         <views:AppIcon x:Name="AboutCopyIcon" Kind="Copy" Size="14" />
@@ -495,13 +496,15 @@
                         <StackPanel Classes="settingsGroup">
                             <TextBlock Classes="settingsGroupTitle" Text="Help" />
                             <StackPanel Orientation="Horizontal" Spacing="8">
-                                <Button Classes="kcapChip settingsCompact" Command="{Binding About.OpenDocsCommand, FallbackValue={x:Null}}">
+                                <Button Classes="kcapChip settingsCompact" Command="{Binding About.OpenDocsCommand, FallbackValue={x:Null}}"
+                                        AutomationProperties.Name="Documentation">
                                     <StackPanel Orientation="Horizontal" Spacing="6">
                                         <TextBlock Text="Documentation" VerticalAlignment="Center" />
                                         <views:AppIcon Kind="ExternalLink" Size="14" />
                                     </StackPanel>
                                 </Button>
-                                <Button Classes="kcapChip settingsCompact" Command="{Binding About.OpenReleaseNotesCommand, FallbackValue={x:Null}}">
+                                <Button Classes="kcapChip settingsCompact" Command="{Binding About.OpenReleaseNotesCommand, FallbackValue={x:Null}}"
+                                        AutomationProperties.Name="Release notes">
                                     <StackPanel Orientation="Horizontal" Spacing="6">
                                         <TextBlock Text="Release notes" VerticalAlignment="Center" />
                                         <views:AppIcon Kind="ExternalLink" Size="14" />

@@ -12,15 +12,17 @@ public sealed class HarnessSettingsRow : ReactiveObject {
     string? _errorTitle;
     bool? _wired;
     bool _tools;
+    bool _setupUnverified;
 
-    internal HarnessSettingsRow(HarnessIdentity identity, DetectedAgent detected, bool? wired, bool tools, string? server = null) {
+    internal HarnessSettingsRow(HarnessIdentity identity, DetectedAgent detected, bool? wired, bool tools, bool setupUnverified = false) {
         _wired = wired;
         _tools = tools;
+        _setupUnverified = setupUnverified;
         Id = identity.Id;
         Label = identity.Label;
         Signal = detected.BinaryFound ? "Found on your terminal PATH" : "Harness configuration found";
         ConsentNote = Id == HarnessId.Codex
-            ? $"Also opens Codex's sandbox network to {(string.IsNullOrEmpty(server) ? "this app's server" : server)}, the server of the profile this app uses, so its skills can reach it."
+            ? "Also allows Codex's sandbox to reach the server hosts from every configured kcap profile, so its skills can connect. Disconnecting Codex keeps this network access."
             : null;
     }
 
@@ -38,17 +40,23 @@ public sealed class HarnessSettingsRow : ReactiveObject {
     internal bool? Wired => _wired;
     public bool IsConfigured => _wired == true;
     public bool ConnectionUnknown => _wired is null;
+    public bool SetupUnverified => _setupUnverified;
+    public bool NeedsAttention => ConnectionUnknown || SetupUnverified;
+    public bool ShowRecordingStatus => IsConfigured && !SetupUnverified;
     /// Tools installed for a tool kcap does not record.
-    public bool ToolsOnly => _wired == false && _tools && OffersTools;
-    public bool HasStatus => IsConfigured || ConnectionUnknown || ToolsOnly;
+    public bool ToolsOnly => !SetupUnverified && _wired == false && _tools && OffersTools;
+    public bool HasStatus => IsConfigured || NeedsAttention || ToolsOnly;
 
     /// Whether kcap's tools are installed, as far as Settings last set them.
     public bool Tools => ToolsBundled ? IsConfigured : _tools;
+    public bool? ToolsSelection => SetupUnverified ? null : Tools;
 
-    public string? ConnectionLabel => _wired switch {
+    public string? ConnectionLabel => SetupUnverified ? "Setup unverified" : _wired switch {
         true => "Recording", null => "Couldn't check", _ => ToolsOnly ? "Tools only" : null,
     };
-    public string? ConnectionTip => _wired switch {
+    public string? ConnectionTip => SetupUnverified
+        ? "The last setup change could not be verified. Agent tools may be missing; try the change again."
+        : _wired switch {
         true => "kcap records this tool's sessions; each one goes to the profile its repository resolves to",
         null => "kcap could not read this tool's settings to tell whether it records",
         _ => ToolsOnly ? "The agent has kcap's tools, but its sessions are not recorded" : null,
@@ -74,12 +82,21 @@ public sealed class HarnessSettingsRow : ReactiveObject {
         Raise();
     }
 
+    internal void SetSetupUnverified(bool unverified) {
+        _setupUnverified = unverified;
+        Raise();
+    }
+
     void Raise() {
         this.RaisePropertyChanged(nameof(IsConfigured));
         this.RaisePropertyChanged(nameof(ConnectionUnknown));
+        this.RaisePropertyChanged(nameof(SetupUnverified));
+        this.RaisePropertyChanged(nameof(NeedsAttention));
+        this.RaisePropertyChanged(nameof(ShowRecordingStatus));
         this.RaisePropertyChanged(nameof(ToolsOnly));
         this.RaisePropertyChanged(nameof(HasStatus));
         this.RaisePropertyChanged(nameof(Tools));
+        this.RaisePropertyChanged(nameof(ToolsSelection));
         this.RaisePropertyChanged(nameof(ConnectionLabel));
         this.RaisePropertyChanged(nameof(ConnectionTip));
     }

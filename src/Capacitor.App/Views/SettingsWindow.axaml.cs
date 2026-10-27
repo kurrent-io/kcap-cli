@@ -42,7 +42,10 @@ public partial class SettingsWindow : Window {
             ShowCompactTitle(0, null);
         };
         AddHandler(ScrollViewer.ScrollChangedEvent, OnPageScrolled, RoutingStrategies.Bubble);
-        SettingsTabs.SelectionChanged += (_, _) => Dispatcher.UIThread.Post(SyncCompactTitle, DispatcherPriority.Loaded);
+        SettingsTabs.SelectionChanged += (_, _) => {
+            _pageScroll = null;
+            Dispatcher.UIThread.Post(SyncCompactTitle, DispatcherPriority.Loaded);
+        };
         Closed += (_, _) => {
             _contentScaleSubscription?.Dispose();
             if (watchedScreens is not null) watchedScreens.Changed -= OnScreensChanged;
@@ -84,15 +87,19 @@ public partial class SettingsWindow : Window {
     const double TitleHandoff = 80;
     Border? _compactHeader;
     TextBlock? _compactTitle;
+    ScrollViewer? _pageScroll;
 
     void OnPageScrolled(object? sender, ScrollChangedEventArgs e) {
-        if (e.Source is ScrollViewer page && page.FindAncestorOfType<TabControl>() == SettingsTabs) ShowCompactTitle(page);
+        if (e.Source is ScrollViewer page && ReferenceEquals(page, _pageScroll ??= SelectedPageScroll())) ShowCompactTitle(page);
     }
 
+    ScrollViewer? SelectedPageScroll() =>
+        (SettingsTabs.SelectedContent as Visual)?.GetSelfAndVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
+
     void SyncCompactTitle() {
-        var page = (SettingsTabs.SelectedContent as Visual)?.GetSelfAndVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
-        if (page is null) ShowCompactTitle(0, null);
-        else ShowCompactTitle(page);
+        _pageScroll = SelectedPageScroll();
+        if (_pageScroll is null) ShowCompactTitle(0, null);
+        else ShowCompactTitle(_pageScroll);
     }
 
     void ShowCompactTitle(ScrollViewer page) {

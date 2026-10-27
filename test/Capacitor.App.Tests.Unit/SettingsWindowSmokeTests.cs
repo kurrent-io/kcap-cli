@@ -2,6 +2,7 @@ using System.Reactive.Concurrency;
 using System.Reactive.Subjects;
 using Avalonia;
 using Avalonia.Automation;
+using Avalonia.Automation.Peers;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Input;
@@ -513,7 +514,142 @@ public class SettingsWindowSmokeTests {
         } finally { window.Close(); }
     });
 
-    SettingsViewModel MakeViewModel(NotificationSettingsService notifications, IDesktopNotificationAccess? access = null, HarnessesSettingsViewModel? harnesses = null) {
+    [Test]
+    public Task Failed_harness_reinstall_shows_tools_as_unverified_in_the_view() => AvaloniaSession.RunOnUiAsync(async () => {
+        ConfigMutator.Mutate(Config.Root, c => c with { Profiles = new() {
+            ["work"] = new Profile { ServerUrl = "https://work.example" }
+        } });
+        var wired = true;
+        var cli = Substitute.For<IKcapCli>();
+        cli.PluginRemoveAsync("--cursor", Arg.Any<CancellationToken>()).Returns(_ => {
+            wired = false;
+            return new ProcessResult(0, "", "", false);
+        });
+        cli.PluginInstallAsync("--cursor", Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
+            .Returns(new ProcessResult(1, "", "reinstall failed", false));
+        var harnesses = new HarnessesSettingsViewModel(new SettingsProfileStore(Config.Root, "work", "https://work.example"), cli,
+            _ => Task.FromResult<IReadOnlyDictionary<HarnessId, DetectedAgent>>(new Dictionary<HarnessId, DetectedAgent> {
+                [HarnessId.Cursor] = new(false, true)
+            }), isWired: _ => wired);
+        await harnesses.RescanAsync();
+        using var notifications = new NotificationSettingsService(Config.PathTo("notifications.json"));
+        using var vm = MakeViewModel(notifications, harnesses: harnesses);
+        var window = new SettingsWindow { DataContext = vm };
+        try {
+            window.Show();
+            Click(window, window.FindControl<TabItem>("HarnessesTab")!);
+            var view = window.GetVisualDescendants().OfType<HarnessesSettingsView>().Single();
+            var tools = view.GetVisualDescendants().OfType<CheckBox>()
+                .Single(c => AutomationProperties.GetName(c) == "Agent tools for Cursor");
+            await Assert.That(tools.IsChecked).IsTrue();
+
+            Click(window, tools);
+            await WaitUntilAsync(() => !harnesses.Busy);
+            Settle(window);
+
+            await Assert.That(tools.IsChecked).IsNull();
+            await Assert.That(view.GetVisualDescendants().OfType<TextBlock>()
+                .Any(t => t.IsEffectivelyVisible && t.Text == "Setup unverified")).IsTrue();
+        } finally { window.Close(); }
+    });
+
+    [Test]
+    [Arguments("project", true)]
+    [Arguments("org_public", false)]
+    public Task Capture_options_refresh_preserves_only_a_supported_selected_audience(string savedVisibility, bool supported) => AvaloniaSession.RunOnUiAsync(async () => {
+        ConfigMutator.Mutate(Config.Root, c => c with { Profiles = new() {
+            ["work"] = new Profile { ServerUrl = "https://work.example", DefaultVisibility = savedVisibility }
+        } });
+        var store = new SettingsProfileStore(Config.Root, "work", "https://work.example");
+        var reply = new TaskCompletionSource<VisibilityOptionsRead?>();
+        var capture = new CaptureSettingsViewModel(store, visibilityOptions: _ => reply.Task);
+        using var notifications = new NotificationSettingsService(Config.PathTo("notifications.json"));
+        using var vm = MakeViewModel(notifications, capture: capture);
+        var window = new SettingsWindow { DataContext = vm };
+        try {
+            window.Show();
+            Settle(window);
+            var choices = window.GetVisualDescendants().OfType<CaptureSettingsView>().Single().FindControl<ListBox>("VisibilityInput")!;
+            await Assert.That(choices.SelectedValue).IsEqualTo(savedVisibility);
+            var refresh = capture.RefreshVisibilityOptionsAsync();
+            reply.SetResult(new(new() {
+                Options = [new() { Key = "private", Label = "Only me" }, new() { Key = "project", Label = "My projects" }],
+                DefaultVisibility = "private",
+            }, null));
+            await refresh;
+            Settle(window);
+
+            await Assert.That(capture.Visibility).IsEqualTo(supported ? "project" : null);
+            await Assert.That(choices.SelectedValue).IsEqualTo(supported ? "project" : null);
+            capture.AllowedRepos = "team/project";
+            await capture.SaveAsync();
+            await Assert.That(store.LoadProfile().DefaultVisibility).IsEqualTo(savedVisibility);
+            await Assert.That(store.LoadProfile().AllowedRepos).IsEquivalentTo(supported ? new[] { "team/project" } : []);
+        } finally { window.Close(); }
+    });
+
+    [Test]
+    public Task Scrolling_inside_a_rule_field_keeps_the_scrolled_page_title() => AvaloniaSession.RunOnUiAsync(async () => {
+        ConfigMutator.Mutate(Config.Root, c => c with { Profiles = new() {
+            ["work"] = new Profile {
+                ServerUrl = "https://work.example",
+                AllowedRepos = Enumerable.Range(0, 60).Select(i => $"team/repo{i}").ToArray(),
+            }
+        } });
+        using var notifications = new NotificationSettingsService(Config.PathTo("notifications.json"));
+        using var vm = MakeViewModel(notifications);
+        var window = new SettingsWindow { DataContext = vm, Width = 760, Height = 520 };
+        try {
+            window.Show();
+            Settle(window);
+            var view = window.GetVisualDescendants().OfType<CaptureSettingsView>().Single();
+            var page = view.GetVisualDescendants().OfType<ScrollViewer>().First();
+            var input = view.FindControl<TextBox>("AllowedReposInput")!;
+            var field = input.GetVisualDescendants().OfType<ScrollViewer>().Single();
+            page.Offset = new Vector(0, 300);
+            Settle(window);
+            var title = window.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "PART_CompactTitle");
+            await Assert.That(title.Text).IsEqualTo("Capture & privacy");
+            var pageOffset = page.Offset;
+
+            field.Offset = new Vector(0, 40);
+            Settle(window);
+
+            await Assert.That(field.Offset.Y).IsGreaterThan(0d);
+            await Assert.That(page.Offset).IsEqualTo(pageOffset);
+            await Assert.That(title.Text).IsEqualTo("Capture & privacy");
+            Click(window, window.FindControl<TabItem>("NotificationsTab")!);
+            await Assert.That(title.Text).IsEqualTo("Notifications");
+            Click(window, window.FindControl<TabItem>("CaptureTab")!);
+            await Assert.That(title.Text).IsEqualTo("Capture & privacy");
+        } finally { window.Close(); }
+    });
+
+    [Test]
+    [Arguments("Copy version info")]
+    [Arguments("Documentation")]
+    [Arguments("Release notes")]
+    public Task About_actions_expose_their_labels_to_accessibility(string label) => AvaloniaSession.RunOnUiAsync(async () => {
+        ConfigMutator.Mutate(Config.Root, c => c with { Profiles = new() {
+            ["work"] = new Profile { ServerUrl = "https://work.example" }
+        } });
+        using var notifications = new NotificationSettingsService(Config.PathTo("notifications.json"));
+        using var vm = MakeViewModel(notifications,
+            about: new AboutSettingsViewModel(new FakeDaemonClientService(), _ => Task.FromResult<string?>("1.2.3")));
+        var window = new SettingsWindow { DataContext = vm };
+        try {
+            window.Show();
+            window.FindControl<TabControl>("SettingsTabs")!.SelectedItem = window.FindControl<TabItem>("AboutTab");
+            Settle(window);
+            var button = window.GetVisualDescendants().OfType<Button>()
+                .Single(b => b.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == label));
+
+            await Assert.That(ControlAutomationPeer.CreatePeerForElement(button).GetName()).IsEqualTo(label);
+        } finally { window.Close(); }
+    });
+
+    SettingsViewModel MakeViewModel(NotificationSettingsService notifications, IDesktopNotificationAccess? access = null,
+            HarnessesSettingsViewModel? harnesses = null, CaptureSettingsViewModel? capture = null, AboutSettingsViewModel? about = null) {
         var service = new FakeDaemonClientService();
         service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["settings/1"]));
         service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
@@ -521,7 +657,7 @@ public class SettingsWindowSmokeTests {
             service, new ScriptedLocalControlOps(), (_, _) => Task.FromResult(false),
             (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded()),
             (_, _) => Task.FromResult(false), _ => Task.FromResult(false), true, Task.CompletedTask,
-            (_, _) => Task.FromResult(true), notificationSettings: notifications, notificationAccess: access, harnesses: harnesses);
+            (_, _) => Task.FromResult(true), notificationSettings: notifications, notificationAccess: access, harnesses: harnesses, capture: capture) { About = about };
     }
 
     static async Task WaitUntilAsync(Func<bool> ready) {

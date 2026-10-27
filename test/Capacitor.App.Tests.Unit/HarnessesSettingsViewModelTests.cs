@@ -224,6 +224,54 @@ public class HarnessesSettingsViewModelTests {
     });
 
     [Test]
+    [Arguments(1, false)]
+    [Arguments(0, true)]
+    [Arguments(-1, false)]
+    public Task Failed_reinstall_does_not_confirm_remembered_tools_after_rescan_or_reopen(int exitCode, bool timedOut) => AvaloniaSession.RunOnUiAsync(async () => {
+        var store = Seed();
+        var cli = Substitute.For<IKcapCli>();
+        var wired = true;
+        var retry = false;
+        cli.PluginRemoveAsync("--cursor", Arg.Any<CancellationToken>()).Returns(_ => {
+            wired = false;
+            return new ProcessResult(0, "", "", false);
+        });
+        cli.PluginInstallAsync("--cursor", Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>()).Returns(_ => {
+            if (!retry && exitCode == -1) throw new InvalidOperationException("reinstall could not start");
+            if (!retry) return new ProcessResult(exitCode, "", "reinstall failed", timedOut);
+            wired = true;
+            return new ProcessResult(0, "", "", false);
+        });
+        var memory = new AppStateStore(Config.PathTo("app-state.json"));
+        await memory.UpdateAsync(state => state with { HarnessToolsByVendor = new Dictionary<string, bool> { ["cursor"] = true } });
+        static Task<IReadOnlyDictionary<HarnessId, DetectedAgent>> Detect(CancellationToken _) =>
+            Task.FromResult<IReadOnlyDictionary<HarnessId, DetectedAgent>>(new Dictionary<HarnessId, DetectedAgent> { [HarnessId.Cursor] = new(false, true) });
+        using var vm = new HarnessesSettingsViewModel(store, cli, Detect, isWired: _ => wired, toolsMemory: memory);
+        await vm.RescanAsync();
+        var row = vm.Rows.Single();
+
+        await vm.ToggleToolsAsync(row);
+
+        await Assert.That(row.IsConfigured).IsFalse();
+        await Assert.That(row.ErrorTitle).IsNotNull();
+        await Assert.That(row.ToolsOnly).IsFalse();
+        await Assert.That(row.ConnectionLabel).IsEqualTo("Setup unverified");
+        await Assert.That((await memory.LoadAsync()).HarnessToolsByVendor!["cursor"]).IsTrue();
+        await vm.RescanAsync();
+        await Assert.That(vm.Rows.Single().ConnectionLabel).IsEqualTo("Setup unverified");
+        using var reopened = new HarnessesSettingsViewModel(store, cli, Detect, isWired: _ => wired, toolsMemory: memory);
+        await reopened.RescanAsync();
+        await Assert.That(reopened.Rows.Single().ToolsOnly).IsFalse();
+        await Assert.That(reopened.Rows.Single().ConnectionLabel).IsEqualTo("Setup unverified");
+
+        retry = true;
+        await reopened.ConnectAsync(reopened.Rows.Single());
+        await reopened.RescanAsync();
+        await Assert.That(reopened.Rows.Single().ConnectionLabel).IsEqualTo("Recording");
+        await Assert.That(reopened.Rows.Single().ErrorTitle).IsNull();
+    });
+
+    [Test]
     public Task Tools_for_an_unrecorded_tool_install_tools_only() => AvaloniaSession.RunOnUiAsync(async () => {
         var cli = Substitute.For<IKcapCli>();
         cli.PluginInstallAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
