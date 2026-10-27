@@ -30,12 +30,28 @@
                             </ScrollViewer>
                         </Grid>
                     </Border>
-                    <!-- Each page pads inside its own ScrollViewer, so the scrollbar sits at the window edge. -->
-                    <ContentPresenter Grid.Column="1" Name="PART_SelectedContentHost" Margin="0,40,0,0"
-                                      HorizontalContentAlignment="Stretch"
-                                      VerticalContentAlignment="Stretch"
-                                      Content="{TemplateBinding SelectedContent}"
-                                      ContentTemplate="{TemplateBinding SelectedContentTemplate}" />
+                    <Grid Grid.Column="1" RowDefinitions="40,*">
+                        <!-- The page title shrinks into this strip once its large title scrolls away. -->
+                        <Border Name="PART_CompactHeader" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,0,0,1"
+                                IsHitTestVisible="False">
+                            <TextBlock Name="PART_CompactTitle" Margin="32,0" VerticalAlignment="Center"
+                                       FontSize="13.5" FontWeight="SemiBold" Foreground="{StaticResource KcapTextBrush}"
+                                       TextTrimming="CharacterEllipsis" Opacity="0">
+                                <TextBlock.Transitions>
+                                    <Transitions>
+                                        <DoubleTransition Property="Opacity" Duration="0:0:0.18" Easing="CubicEaseOut" />
+                                        <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.18" Easing="CubicEaseOut" />
+                                    </Transitions>
+                                </TextBlock.Transitions>
+                            </TextBlock>
+                        </Border>
+                        <!-- Each page pads inside its own ScrollViewer, so the scrollbar sits at the window edge. -->
+                        <ContentPresenter Grid.Row="1" Name="PART_SelectedContentHost"
+                                          HorizontalContentAlignment="Stretch"
+                                          VerticalContentAlignment="Stretch"
+                                          Content="{TemplateBinding SelectedContent}"
+                                          ContentTemplate="{TemplateBinding SelectedContentTemplate}" />
+                    </Grid>
                 </Grid>
             </ControlTemplate>
         </Setter>
@@ -323,6 +339,14 @@
         <Setter Property="Opacity" Value="0.5" />
     </Style>
 
+    <!-- Wheel scrolling moves in steps; easing the large title's fade keeps it in step with the compact one. -->
+    <Style Selector="TabControl.settingsSidebar TextBlock.kcapTitle">
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.18" Easing="CubicEaseOut" />
+            </Transitions>
+        </Setter>
+    </Style>
     <!-- Type scale inside Settings: page title, group title, row label, hint. -->
     <Style Selector="TabControl.settingsSidebar TextBlock.kcapSubtitle">
         <Setter Property="FontWeight" Value="Normal" />

@@ -1,10 +1,12 @@
 using System.Reactive.Linq;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.VisualTree;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Input.Platform;
 using Avalonia.Media;
+using Avalonia.Media.Transformation;
 using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
@@ -34,6 +36,13 @@ public partial class SettingsWindow : Window {
             watchedScreens = screens;
             screens.Changed += OnScreensChanged;
         };
+        SettingsTabs.TemplateApplied += (_, e) => {
+            _compactHeader = e.NameScope.Find<Border>("PART_CompactHeader");
+            _compactTitle = e.NameScope.Find<TextBlock>("PART_CompactTitle");
+            ShowCompactTitle(0, null);
+        };
+        AddHandler(ScrollViewer.ScrollChangedEvent, OnPageScrolled, RoutingStrategies.Bubble);
+        SettingsTabs.SelectionChanged += (_, _) => Dispatcher.UIThread.Post(SyncCompactTitle, DispatcherPriority.Loaded);
         Closed += (_, _) => {
             _contentScaleSubscription?.Dispose();
             if (watchedScreens is not null) watchedScreens.Changed -= OnScreensChanged;
@@ -69,6 +78,38 @@ public partial class SettingsWindow : Window {
         var available = area is null ? (Size?)null : area.WorkingArea.Size.ToSize(area.Scaling);
         MinWidth = UiScale.Minimum(UnscaledMinWidth, _scale, available?.Width);
         MinHeight = UiScale.Minimum(UnscaledMinHeight, _scale, available?.Height);
+    }
+
+    // Scrolled this far, the large title has gone under the strip and only the compact one is left.
+    const double TitleHandoff = 80;
+    Border? _compactHeader;
+    TextBlock? _compactTitle;
+
+    void OnPageScrolled(object? sender, ScrollChangedEventArgs e) {
+        if (e.Source is ScrollViewer page && page.FindAncestorOfType<TabControl>() == SettingsTabs) ShowCompactTitle(page);
+    }
+
+    void SyncCompactTitle() {
+        var page = (SettingsTabs.SelectedContent as Visual)?.GetSelfAndVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
+        if (page is null) ShowCompactTitle(0, null);
+        else ShowCompactTitle(page);
+    }
+
+    void ShowCompactTitle(ScrollViewer page) {
+        var title = page.GetVisualDescendants().OfType<TextBlock>().FirstOrDefault(t => t.Classes.Contains("kcapTitle"));
+        var linear = Math.Clamp((page.Offset.Y - 8) / TitleHandoff, 0, 1);
+        // Smoothstep: the handoff eases in and out instead of starting and stopping at full speed.
+        var progress = linear * linear * (3 - 2 * linear);
+        if (title is not null) title.Opacity = 1 - progress;
+        ShowCompactTitle(progress, title?.Text);
+    }
+
+    void ShowCompactTitle(double progress, string? text) {
+        if (_compactTitle is null || _compactHeader is null) return;
+        _compactTitle.Text = text;
+        _compactTitle.Opacity = progress;
+        _compactTitle.RenderTransform = TransformOperations.Parse(FormattableString.Invariant($"translateY({(1 - progress) * 8}px)"));
+        _compactHeader.BorderBrush = progress > 0 ? (IBrush?)this.FindResource("KcapBorderBrush") : Brushes.Transparent;
     }
 
     void OnChromePointerPressed(object? sender, PointerPressedEventArgs e) => WindowChrome.BeginDrag(this, e);
