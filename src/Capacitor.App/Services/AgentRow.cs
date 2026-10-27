@@ -41,6 +41,8 @@ public sealed record AgentRow(
         bool IsTerminalSession = false,
         // The listing's access level for the viewer; below "full" the server grants no chat.
         string? AccessLevel = null,
+        // The PR links the listing carried for the session; null while no listing row carried the field.
+        RepoSessionPullRequests? ListedPullRequests = null,
         // The account the session runs under. Null from an older daemon and on a pending row.
         string? AccountDirectory = null,
         string? AccountId = null,
@@ -91,7 +93,8 @@ public sealed record AgentRow(
             OwnerUserId: dto.Owner?.UserId, OwnerName: dto.Owner?.DisplayName ?? dto.Owner?.Username,
             OwnerAvatarUrl: dto.Owner?.AvatarUrl,
             LastActivityAt: dto.LastActivityAt.UtcDateTime, EndedAt: dto.EndedAt?.UtcDateTime,
-            IsStale: dto.Stale, IsTerminalSession: active && !hostedPresentation, AccessLevel: dto.AccessLevel);
+            IsStale: dto.Stale, IsTerminalSession: active && !hostedPresentation, AccessLevel: dto.AccessLevel,
+            ListedPullRequests: dto.PullRequests);
     }
 
     static string CanonicalRemoteStatus(string status) => status.ToLowerInvariant() switch {

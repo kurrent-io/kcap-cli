@@ -232,6 +232,71 @@ public class PullRequestToneCacheTests {
         await Assert.That(source.Lists).IsEqualTo(2);
     }
 
+    static RepoSessionPullRequestDto ListedPr(int number, string? state) => new() {
+        RepoHash = "h", Owner = "Kurrent-IO", RepoName = "kcap-cli", Number = number,
+        Url = $"https://github.com/kurrent-io/kcap-cli/pull/{number}", Title = $"PR {number}", State = state };
+
+    /// A row whose listing carried its PRs is marked from the row, a teammate's included, and the
+    /// PR routes are not read for it at all.
+    [Test]
+    public async Task A_listed_row_is_marked_from_its_listing_without_a_read() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        directory.Rows.AddOrUpdate(ServerRow("theirs", "active") with {
+            OwnerIsViewer = false, ListedPullRequests = new([ListedPr(7, "draft"), ListedPr(8, "merged")]) });
+        directory.Rows.AddOrUpdate(Row("a1", "mine") with { ListedPullRequests = new([ListedPr(9, null)]) });
+
+        await WaitUntilAsync(() => cache.CurrentSummaries.Count == 2, "both rows marked");
+        var theirs = cache.CurrentSummaries["theirs"];
+        await Assert.That(theirs.MenuItems.Select(i => i.Lifecycle)).IsEquivalentTo(new[] { "Draft", "Merged" });
+        await Assert.That(theirs.MenuItems[0].Subject).IsEqualTo(new PullRequestSubjectDto {
+            Provider = "github", Host = "github.com", RepoHash = "h", Owner = "kurrent-io", RepoName = "kcap-cli", Number = 7 });
+        await Assert.That(cache.Current["theirs"]).IsEqualTo(PullRequestTone.Draft);
+        // No lifecycle recorded, as on a tenant without enrichment: a neutral mark, no tone.
+        await Assert.That(cache.CurrentSummaries["mine"].Status.Text).IsEqualTo("Unknown");
+        await Assert.That(cache.Current.ContainsKey("mine")).IsFalse();
+
+        time.Advance(TimeSpan.FromMinutes(15));
+        await Task.Delay(50);
+        await Assert.That(source.Lists).IsEqualTo(0);
+        await Assert.That(source.Overviews).IsEqualTo(0);
+    }
+
+    /// Withheld below full access, or listed with none: no mark, and no fall back to the PR routes.
+    [Test]
+    public async Task A_listed_row_without_visible_links_shows_no_mark_and_is_not_read() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        directory.Rows.AddOrUpdate(ServerRow("withheld", "active") with { ListedPullRequests = RepoSessionPullRequests.Withheld });
+        directory.Rows.AddOrUpdate(ServerRow("none", "ended") with { ListedPullRequests = new([]) });
+        directory.Rows.AddOrUpdate(ServerRow("older", "ended"));
+
+        await WaitUntilAsync(() => cache.CurrentSummaries.ContainsKey("older"), "row without the field read as before");
+        time.Advance(TimeSpan.FromMinutes(15));
+        await WaitUntilAsync(() => source.Lists == 2, "only the unlisted row read again");
+        await Assert.That(cache.CurrentSummaries.Keys).IsEquivalentTo(new[] { "older" });
+    }
+
+    /// A polled row whose listing starts carrying its PRs drops the read's mark for the listing's,
+    /// and a later change to the listing shows without a read.
+    [Test]
+    public async Task A_row_that_becomes_listed_takes_the_listings_mark() {
+        var (directory, source, _, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        directory.Rows.AddOrUpdate(ServerRow("s1", "active"));
+        await WaitUntilAsync(() => cache.CurrentSummaries.ContainsKey("s1"), "read summary");
+
+        directory.Rows.AddOrUpdate(ServerRow("s1", "active") with { ListedPullRequests = new([ListedPr(7, "open")]) });
+        await WaitUntilAsync(() => cache.CurrentSummaries["s1"].Subject?.Number == 7, "listing summary");
+        directory.Rows.AddOrUpdate(ServerRow("s1", "active") with { ListedPullRequests = new([ListedPr(7, "closed")]) });
+        await WaitUntilAsync(() => cache.CurrentSummaries["s1"].Lifecycle == "Closed", "listing change");
+        await Assert.That(cache.Current["s1"]).IsEqualTo(PullRequestTone.Closed);
+        await Assert.That(source.Lists).IsEqualTo(1);
+    }
+
     static (FakeAgentDirectory Directory, FakePullRequestSource Source, FakeTimeProvider Time, PullRequestToneCache Cache) Build() {
         var directory = new FakeAgentDirectory();
         var time = new FakeTimeProvider();

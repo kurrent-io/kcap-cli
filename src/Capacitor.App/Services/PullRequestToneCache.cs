@@ -1,16 +1,19 @@
 using System.Collections.Frozen;
+using System.Globalization;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core.PullRequests;
+using Capacitor.Remote.Models;
 using DynamicData;
 
 namespace Capacitor.App.Services;
 
-/// The PR tone of every listed session, keyed by session id, read on a slow cadence through the
-/// same links-then-overview path the open workspace uses. A session without a tone is absent
+/// The PR tone of every listed session, keyed by session id. A row whose listing carried its PR
+/// links is marked from the row and never read here; any other is read on a slow cadence through
+/// the same links-then-overview path the open workspace uses. A session without a tone is absent
 /// rather than mapped to None, so consumers can test membership.
 public sealed class PullRequestToneCache : IDisposable {
     static readonly TimeSpan DefaultRefreshEvery = TimeSpan.FromMinutes(2);
@@ -51,7 +54,10 @@ public sealed class PullRequestToneCache : IDisposable {
     readonly CompositeDisposable _subscriptions = new();
     readonly CancellationTokenSource _cancel = new();
     readonly ITimer _timer;
+    /// The sessions read here; a listed session is never among them.
     IReadOnlySet<string> _sessions = FrozenSet<string>.Empty;
+    /// Sessions marked from the PR links their listing row carried.
+    IReadOnlyDictionary<string, RepoSessionPullRequests> _listed = FrozenDictionary<string, RepoSessionPullRequests>.Empty;
     /// Sessions no daemon here hosts — ended, a terminal's, a teammate's: none is this app's to poll
     /// every two minutes, and under Team there can be hundreds.
     IReadOnlySet<string> _slowSessions = FrozenSet<string>.Empty;
@@ -65,11 +71,16 @@ public sealed class PullRequestToneCache : IDisposable {
         _refreshEvery = refreshEvery ?? DefaultRefreshEvery;
         _endedRefreshEvery = endedRefreshEvery ?? DefaultEndedRefreshEvery;
         directory.Rows.Connect().ToCollection()
-            .CombineLatest(directory.LocalDaemonOnAppServer, (rows, localOnAppServer) => rows
-                .Where(r => r.SessionId is { Length: > 0 } && Polled(r, localOnAppServer))
-                .ToList())
-            .Subscribe(rows => {
+            .CombineLatest(directory.LocalDaemonOnAppServer, (rows, localOnAppServer) => (
+                Listed: rows.Where(r => r is { SessionId.Length: > 0, ListedPullRequests: not null })
+                    .GroupBy(r => r.SessionId!, StringComparer.Ordinal)
+                    .ToFrozenDictionary(g => g.Key, g => g.First().ListedPullRequests!, StringComparer.Ordinal),
+                Polled: rows.Where(r => r.SessionId is { Length: > 0 } && Polled(r, localOnAppServer)).ToList()))
+            .Subscribe(next => {
+                var rows = next.Polled.Where(r => !next.Listed.ContainsKey(r.SessionId!)).ToList();
                 lock (_lock) {
+                    _listed = next.Listed;
+                    MarkListed();
                     _sessions = rows.Select(r => r.SessionId!).ToFrozenSet(StringComparer.Ordinal);
                     _slowSessions = rows.Where(r => r.Origin == AgentOrigin.Server).Select(r => r.SessionId!)
                         .Except(rows.Where(r => r.Origin != AgentOrigin.Server).Select(r => r.SessionId!))
@@ -160,7 +171,7 @@ public sealed class PullRequestToneCache : IDisposable {
             ct = _cancel.Token;
             var tonesChanged = false;
             var summariesChanged = false;
-            foreach (var session in _entries.Keys.Where(s => !_sessions.Contains(s)).ToList()) {
+            foreach (var session in _entries.Keys.Where(s => !_sessions.Contains(s) && !_listed.ContainsKey(s)).ToList()) {
                 var gone = _entries[session];
                 tonesChanged     |= gone.Tone is not null;
                 summariesChanged |= gone.Summary is not null;
@@ -187,6 +198,56 @@ public sealed class PullRequestToneCache : IDisposable {
         }
         foreach (var (session, version) in due) _ = ReadAsync(session, version, ct);
     }
+
+    /// Under the lock. The listing's record has no access window, so its mark stands until the row
+    /// changes; a read still in flight for a session that became listed publishes nothing.
+    void MarkListed() {
+        var changed = false;
+        foreach (var (session, listed) in _listed) {
+            var entry = EntryFor(session);
+            if (_inFlight.Contains(session)) entry.Version = ++_nextVersion;
+            var items = (listed.Items ?? [])
+                .Select(pr => (Subject: ListedSubject(pr), PullRequest: pr))
+                .Where(pr => PullRequestWire.ValidSubject(pr.Subject))
+                .DistinctBy(pr => pr.Subject).ToList();
+            var tone = PullRequestTones.Strongest(items.Select(pr => ListedTone(pr.PullRequest.State)));
+            RailPullRequestSummary? summary = items.Count == 0 ? null : new(items.Select(pr => new RailPullRequestMenuItem(
+                pr.Subject, pr.PullRequest.Title, LifecycleLabel(pr.PullRequest.State))).ToArray());
+            var nextTone = tone == PullRequestTone.None ? null : (PullRequestTone?)tone;
+            if (entry.Access is not null || entry.Tone != nextTone
+                || (entry.Summary is null ? summary is not null : summary is null || !SameSummary(entry.Summary, summary))) {
+                entry.Version = ++_nextVersion;
+                entry.Tone = nextTone;
+                entry.DropSummary();
+                entry.Summary = summary;
+                changed = true;
+            }
+        }
+        if (!changed) return;
+        Publish();
+        PublishSummaries();
+    }
+
+    /// The listing names no provider or host, so they come from the URL as the server derives them
+    /// for its PR routes: a subject the panel then opens is the one those routes know.
+    static PullRequestSubjectDto ListedSubject(RepoSessionPullRequestDto pr) {
+        var url = PullRequestWire.SafeLink(pr.Url) is { } safe ? new Uri(safe) : null;
+        var owner = pr.Owner.ToLowerInvariant();
+        var repo = pr.RepoName.ToLowerInvariant();
+        var path = $"/{owner}/{repo}/pull/{pr.Number.ToString(CultureInfo.InvariantCulture)}";
+        var github = url?.Host == "github.com" && string.Equals(url.AbsolutePath.TrimEnd('/'), path, StringComparison.OrdinalIgnoreCase);
+        return new() { Provider = github ? "github" : "unknown", Host = url?.IdnHost.ToLowerInvariant() ?? "unknown",
+            RepoHash = pr.RepoHash, Owner = owner, RepoName = repo, Number = pr.Number };
+    }
+
+    /// The listing carries no checks or mergeability, so an open PR reads as an overview without them does.
+    static PullRequestTone ListedTone(string? state) => state switch {
+        "merged" => PullRequestTone.Merged,
+        "closed" => PullRequestTone.Closed,
+        "draft" => PullRequestTone.Draft,
+        "open" => PullRequestTone.Ready,
+        _ => PullRequestTone.None,
+    };
 
     /// Signed out, a lost subject, a refused or invalid access window, or a reader that changed under the
     /// read: the session's PRs can no longer be shown, as opposed to a read that merely failed this time.
@@ -249,7 +310,7 @@ public sealed class PullRequestToneCache : IDisposable {
                 entry.Access  = null;
             } else if (revealed.All(r => r.Read.CanReveal(_time))) {
                 var summary = new RailPullRequestSummary(revealed.Select(r => new RailPullRequestMenuItem(
-                    PullRequestWire.Subject(r.Link), r.Read.Data!.Title ?? r.Link.Title, LifecycleLabel(r.Read.Data!))).ToArray());
+                    PullRequestWire.Subject(r.Link), r.Read.Data!.Title ?? r.Link.Title, LifecycleLabel(r.Read.Data!.Lifecycle, r.Read.Data!.IsDraft))).ToArray());
                 if (entry.Summary is not { } previous || !SameSummary(previous, summary)) entry.Summary = summary;
                 var remaining = revealed.Min(r => r.Read.RemainingSeconds(_time));
                 entry.Access = (_time.GetTimestamp(), remaining);
@@ -261,11 +322,11 @@ public sealed class PullRequestToneCache : IDisposable {
         }
     }
 
-    static string LifecycleLabel(PullRequestOverviewDto overview) => overview.Lifecycle switch {
+    static string LifecycleLabel(string? lifecycle, bool? isDraft = null) => lifecycle switch {
         "merged" => "Merged",
         "closed" => "Closed",
         "draft" => "Draft",
-        "open" when overview.IsDraft == true => "Draft",
+        "open" when isDraft == true => "Draft",
         "open" => "Open",
         _ => "Unknown",
     };
