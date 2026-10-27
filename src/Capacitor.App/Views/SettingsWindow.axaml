@@ -19,7 +19,8 @@
                 <StackPanel Spacing="6">
                     <TextBlock Text="Profile" Margin="10,4,10,0" FontSize="11.5" FontWeight="SemiBold" LetterSpacing="0.2"
                                Foreground="{StaticResource KcapFaintBrush}" />
-                    <Button x:Name="ProfileCard" Classes="kcapChip settingsProfileCard" Click="OnProfileCardClick"
+                    <Button x:Name="ProfileCard" Classes="kcapChip settingsProfileCard" Classes.selected="{Binding #ProfilesTab.IsSelected}" Click="OnProfileCardClick"
+                            IsEnabled="{Binding Profiles, Converter={x:Static ObjectConverters.IsNotNull}}"
                             AutomationProperties.Name="{Binding ProfileName, StringFormat='Profile {0}. Manage profiles'}"
                             ToolTip.Tip="Manage profiles">
                         <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
@@ -31,6 +32,8 @@
                                            Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
                                 <TextBlock Text="{Binding ServerLabel}" FontSize="11.5"
                                            Foreground="{StaticResource KcapMutedBrush}" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Classes="profileManageLabel" Text="Manage profiles" FontSize="11.5" Margin="0,5,0,0"
+                                           IsVisible="{Binding Profiles, Converter={x:Static ObjectConverters.IsNotNull}}" />
                             </StackPanel>
                             <views:AppIcon Grid.Column="2" Kind="ChevronRight" Size="14" VerticalAlignment="Center"
                                            Foreground="{StaticResource KcapFaintBrush}"
@@ -39,14 +42,7 @@
                     </Button>
                 </StackPanel>
             </TabControl.Tag>
-            <TabItem x:Name="ProfilesTab" Classes="settingsNav" AutomationProperties.Name="Manage profiles"
-                     IsVisible="{Binding Profiles, Converter={x:Static ObjectConverters.IsNotNull}}">
-                <TabItem.Header>
-                    <StackPanel Orientation="Horizontal" Spacing="10">
-                        <views:AppIcon Kind="Users" Size="16" />
-                        <TextBlock Text="Manage profiles" VerticalAlignment="Center" />
-                    </StackPanel>
-                </TabItem.Header>
+            <TabItem x:Name="ProfilesTab" IsVisible="False">
                 <views:ProfilesSettingsView DataContext="{Binding Profiles}" />
             </TabItem>
             <TabItem Classes="settingsNavHeader" Header="This profile" />

@@ -158,9 +158,16 @@ public class SettingsWindowSmokeTests {
             Dispatcher.UIThread.RunJobs();
             var tabs = window.FindControl<TabControl>("SettingsTabs")!;
             var tab  = window.FindControl<TabItem>("ProfilesTab")!;
-            tabs.SelectedItem = tab;
-            Dispatcher.UIThread.RunJobs();
+            var card = window.FindControl<Button>("ProfileCard")!;
             Settle(window);
+            Click(window, card);
+            await Assert.That(tabs.SelectedItem).IsEqualTo(tab);
+            var presenter = card.GetVisualDescendants().OfType<Avalonia.Controls.Presenters.ContentPresenter>()
+                .Single(p => p.Name == "PART_ContentPresenter");
+            await Assert.That(presenter.Background).IsEqualTo((Avalonia.Media.IBrush)window.FindResource("KcapSelectionBrush")!);
+            Click(window, window.FindControl<TabItem>("CaptureTab")!);
+            await Assert.That(presenter.Background).IsNotEqualTo((Avalonia.Media.IBrush)window.FindResource("KcapSelectionBrush")!);
+            Click(window, card);
 
             // A TabItem's own visual tree is its header only; the selected tab's content is hosted
             // by the TabControl's PART_SelectedContentHost, so the row content is found from tabs.

@@ -113,6 +113,19 @@
         <Setter Property="Padding" Value="10,9" />
     </Style>
 
+    <Style Selector="Button.settingsProfileCard TextBlock.profileManageLabel">
+        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+    </Style>
+    <Style Selector="Button.settingsProfileCard.selected /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.settingsProfileCard.selected:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.settingsProfileCard.selected:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource KcapSelectionBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
+    </Style>
+    <Style Selector="Button.settingsProfileCard.selected TextBlock.profileManageLabel">
+        <Setter Property="Foreground" Value="{StaticResource KcapInfoBrush}" />
+    </Style>
+
     <Style Selector="views|SettingsPage.settingsPage">
         <Setter Property="Margin" Value="32,12,32,36" />
         <Setter Property="MaxWidth" Value="680" />
