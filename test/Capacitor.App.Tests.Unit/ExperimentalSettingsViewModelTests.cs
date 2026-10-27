@@ -78,9 +78,13 @@ public class ExperimentalSettingsViewModelTests {
             service.SnapshotsSubject.OnNext(Reporting(resolved: !on, active: !on, acknowledged: false, failed: true));
             await Until(() => row.StatusText == ExperimentalFeatureRowViewModel.AppliedLocallyText, "a flipped switch");
 
-            row.Load(on, canChange: true);
-            service.SnapshotsSubject.OnNext(Reporting(resolved: on, active: on, acknowledged: false, failed: true));
-            await Until(() => row.StatusText == expected, "a value read back from the store");
+            // The CLI sets it back; each snapshot rereads the store, as the page does while it is open.
+            await Until(() => store.Load("work").IsEnabled(Id) == !on, "the flip saved");
+            await store.SetAsync("work", Id, on, CancellationToken.None);
+            await Until(() => {
+                service.SnapshotsSubject.OnNext(Reporting(resolved: on, active: on, acknowledged: false, failed: true));
+                return row.IsEnabled == on && row.StatusText == expected;
+            }, "a value set elsewhere");
         });
 
     [Test]
