@@ -67,8 +67,8 @@
 
                 <!-- The table: one row per detected harness, record and tools in fixed cells. -->
                 <StackPanel IsVisible="{Binding ShowsTable}">
-                    <Border Classes="onboardingRowRule" Padding="0,0,0,8">
-                        <Grid ColumnDefinitions="*,68,68">
+                    <Border Classes="onboardingRowRule" Padding="2,0,2,8">
+                        <Grid ColumnDefinitions="*,68,68" ColumnSpacing="8">
                             <TextBlock Classes="onboardingMicro">
                                 <Run Text="FOUND ON " /><Run Text="{Binding MachineName}" Foreground="{StaticResource OnboardingTextBrush}" />
                             </TextBlock>
@@ -83,7 +83,7 @@
                                     <StackPanel Spacing="6">
                                         <!-- The box shares the name's row. The line under the name must not pull it down. -->
                                         <Grid ColumnDefinitions="*,Auto,68,68" RowDefinitions="Auto,Auto" ColumnSpacing="8">
-                                            <TextBlock Grid.Row="0" x:Name="HarnessLabelText" Classes="onboardingLabel" VerticalAlignment="Center"
+                                            <TextBlock Grid.Row="0" x:Name="HarnessLabelText" Classes="onboardingLabel" VerticalAlignment="Center" LineHeight="24"
                                                        Text="{Binding Label}" />
                                             <TextBlock Grid.Row="1" Grid.Column="0" Classes="onboardingSignal" Margin="0,2,0,0"
                                                        Text="{Binding SignalLine}" />
@@ -96,20 +96,20 @@
                                                 <Button x:Name="HarnessRetryButton" Classes="onboardingSecondary onboardingCompact" Content="Retry"
                                                         Command="{Binding RetryCommand}" IsVisible="{Binding Failed}" />
                                             </StackPanel>
-                                            <CheckBox Grid.Row="0" Grid.Column="2" x:Name="RecordCheckBox" Classes="onboardingCheck"
+                                            <CheckBox Grid.Row="0" Grid.Column="2" x:Name="RecordCheckBox" Classes="onboardingCheck onboardingTableCheck"
                                                       HorizontalAlignment="Center" VerticalAlignment="Center"
                                                       IsEnabled="{Binding $parent[UserControl].((vm:HarnessesStepViewModel)DataContext).ChoicesEditable}"
                                                       IsChecked="{Binding Record, Mode=TwoWay}"
                                                       ToolTip.Tip="{Binding Label, StringFormat='Record {0} sessions'}"
                                                       AutomationProperties.Name="{Binding Label, StringFormat='Record {0} sessions'}" />
-                                            <CheckBox Grid.Row="0" Grid.Column="3" x:Name="ToolsCheckBox" Classes="onboardingCheck"
+                                            <CheckBox Grid.Row="0" Grid.Column="3" x:Name="ToolsCheckBox" Classes="onboardingCheck onboardingTableCheck"
                                                       HorizontalAlignment="Center" VerticalAlignment="Center"
                                                       IsEnabled="{Binding $parent[UserControl].((vm:HarnessesStepViewModel)DataContext).ChoicesEditable}"
                                                       IsChecked="{Binding Tools, Mode=TwoWay}" IsVisible="{Binding !ToolsBundled}"
                                                       ToolTip.Tip="{Binding Label, StringFormat='Give {0} kcap tools'}"
                                                       AutomationProperties.Name="{Binding Label, StringFormat='Give {0} kcap tools'}" />
                                             <TextBlock Grid.Row="0" Grid.Column="3" Text="BUNDLED" HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                       FontSize="9.5" FontWeight="SemiBold" LetterSpacing="0.6"
+                                                       FontSize="9.5" LineHeight="24" FontWeight="SemiBold" LetterSpacing="0.6"
                                                        Foreground="{StaticResource OnboardingDimBrush}" IsVisible="{Binding ToolsBundled}" />
                                         </Grid>
                                         <TextBlock Classes="onboardingDetail" Text="{Binding ConsentNote}" Margin="0,0,152,0"
