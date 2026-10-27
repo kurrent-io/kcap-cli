@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
 using Avalonia;
 using Avalonia.Automation;
@@ -10,6 +11,8 @@ using Avalonia.VisualTree;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
+using Capacitor.Cli.Core.Accounts;
+using Capacitor.Remote.Models;
 using TUnit.Assertions.Enums;
 
 namespace Capacitor.App.Tests.Unit;
@@ -74,7 +77,7 @@ public class LauncherPaneViewSmokeTests {
                 var beforeText = subtitle.Text;
                 var beforeVisible = subtitle.IsVisible;
 
-                await vm.SelectRepositoryAsync("/repos/Kurrent-Capacitor-New-Machine");
+                await vm.SelectRepositoryAsync("/repos/kcap-New-Machine");
                 Dispatcher.UIThread.RunJobs();
 
                 var afterText = subtitle.Text;
@@ -91,7 +94,7 @@ public class LauncherPaneViewSmokeTests {
         await Assert.That(subtitleVisibleBefore).IsFalse();
         await Assert.That(subtitleBefore ?? "").IsEqualTo("");
         await Assert.That(subtitleVisibleAfter).IsTrue();
-        await Assert.That(subtitleAfter).IsEqualTo("Kurrent-Capacitor-New-Machine");
+        await Assert.That(subtitleAfter).IsEqualTo("kcap-New-Machine");
     }
 
     [Test]
@@ -256,6 +259,12 @@ public class LauncherPaneViewSmokeTests {
         await Assert.That(forCodex).IsTrue();
         await Assert.That(labels.Item1).IsEqualTo("Sandbox · Workspace write");
         await Assert.That(labels.Item2).IsEqualTo("Approvals · On request");
+    }
+
+    [Test]
+    public async Task A_picker_row_names_its_selection() {
+        await Assert.That(LauncherPaneView.ChoiceName("High", selected: true)).IsEqualTo("High, selected");
+        await Assert.That(LauncherPaneView.ChoiceName("High", selected: false)).IsEqualTo("High");
     }
 
     /// The button carries a glyph, not text, so assistive technology reads the automation name.
@@ -690,6 +699,412 @@ public class LauncherPaneViewSmokeTests {
             window.Close();
             Dispatcher.UIThread.RunJobs();
             vm.Dispose();
+        });
+    }
+
+    static (Flyout Menu, List<AppIcon> Checks) OpenMenu(Window window, LauncherPaneView view, string chipName) {
+        Click(window, Find<Button>(window, chipName)!);
+        var menu = view.OpenMenuForTesting!;
+        var checks = ((Control)menu.Content!).GetVisualDescendants().OfType<AppIcon>()
+            .Where(i => i.Kind == Lucide.Avalonia.LucideIconKind.Check).ToList();
+        return (menu, checks);
+    }
+
+    /// Pins one selection marker across the chip menus: a single visible check on the current
+    /// choice, and the menu aligned to its chip's left edge rather than centred past the composer.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Chip_menus_mark_the_choice_with_one_check_and_open_from_the_chip_left_edge() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var (vm, _, _, tmp) = Build();
+            using var _tmp = tmp;
+            var view = new LauncherPaneView { DataContext = vm };
+            var window = new Window { Content = view, Width = 900, Height = 700 };
+            window.Show();
+            vm.SelectedEffort = "high";
+
+            var (effort, effortChecks) = OpenMenu(window, view, "EffortChip");
+            await Assert.That(effort.Placement).IsEqualTo(PlacementMode.BottomEdgeAlignedLeft);
+            await Assert.That(effortChecks.Count(c => c.IsVisible)).IsEqualTo(1);
+            var checkedRow = effortChecks.Single(c => c.IsVisible).FindAncestorOfType<Button>()!;
+            await Assert.That(checkedRow.GetVisualDescendants().OfType<TextBlock>().First().Text)
+                .IsEqualTo(HostedHarnessCatalog.EffortLabelFor("high"));
+            effort.Hide();
+            Settle(window);
+
+            var (agent, agentChecks) = OpenMenu(window, view, "AgentChip");
+            await Assert.That(agent.Placement).IsEqualTo(PlacementMode.BottomEdgeAlignedLeft);
+            await Assert.That(agentChecks.Count(c => c.IsVisible)).IsEqualTo(1);
+            agent.Hide();
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            vm.Dispose();
+        });
+    }
+
+    /// Pins that a harness the daemon does not advertise says why on hover; a disabled control
+    /// shows no tooltip unless it opts in.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_unavailable_harness_explains_itself_on_hover() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var (vm, service, _, tmp) = Build();
+            using var _tmp = tmp;
+            service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(supportedVendors: ["claude"]));
+            var view = new LauncherPaneView { DataContext = vm };
+            var window = new Window { Content = view, Width = 900, Height = 700 };
+            window.Show();
+            Settle(window);
+
+            var (agent, _) = OpenMenu(window, view, "AgentChip");
+            var tiles = ((Control)agent.Content!).GetVisualDescendants().OfType<Button>()
+                .Where(b => b.Width == 34).ToList();
+            var disabled = tiles.Where(t => !t.IsEnabled).ToList();
+
+            await Assert.That(disabled).IsNotEmpty();
+            foreach (var tile in disabled) {
+                await Assert.That(ToolTip.GetShowOnDisabled(tile)).IsTrue();
+                await Assert.That(ToolTip.GetTip(tile) as string).Contains("not installed or not supported");
+            }
+            var enabled = tiles.Single(t => t.IsEnabled);
+            await Assert.That(ToolTip.GetTip(enabled) as string).DoesNotContain("not installed");
+            agent.Hide();
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            vm.Dispose();
+        });
+    }
+
+    static readonly AccountViewDto HomeAccount = new("a1", "claude", "/u/.claude", "/u/.claude", "home", "recording");
+    static readonly AccountViewDto WorkAccount = new("a2", "claude", "/u/.claude-work", "/u/.claude-work", "work", "broken");
+
+    static AccountsSnapshotDto AccountsSnapshot(long revision, params AccountViewDto[] accounts) =>
+        new("h1", revision, accounts, [new("claude", "/u/.claude", "/u/.claude")]);
+
+    /// A connected local daemon the server lists under accounts/1, a repository chosen, and a
+    /// snapshot of two Claude accounts: home in the default directory, work in its own.
+    sealed class AccountRig : IDisposable {
+        public FakeDaemonClientService Daemon { get; } = new();
+        public FakeRemoteAgents Remote { get; } = new();
+        public BehaviorSubject<AccountsSnapshotDto?> Snapshots { get; } = new(null);
+        public RecordingLaunchClient Launch { get; } = new();
+        public HomeViewModel Vm { get; }
+
+        public AccountRig(string statePath) {
+            Daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
+            Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            Vm = new HomeViewModel(
+                Daemon, new AppStateStore(statePath), Launch, () => Task.FromResult(Array.Empty<string>()), TimeProvider.System,
+                viewerId: _ => Task.FromResult<string?>("u1"),
+                laneStatus: Observable.Return(new ServerLaneStatus(ServerLaneState.Connected)),
+                listing: Remote.Listing, daemonAccounts: Remote.DaemonAccounts, localAccounts: Snapshots);
+        }
+
+        public void AnswerListing() =>
+            Remote.ListingSubject.OnNext(new DaemonListing([new DaemonInfo {
+                Name = "daemon-a", OwnerUserId = "u1", Connected = true, SupportsAccountLaunches = true,
+                SupportedVendors = ["claude", "codex"],
+            }], 1, false));
+
+        public async Task ResolveAsync() {
+            AnswerListing();
+            await Vm.SelectRepositoryAsync("/repos/kcap-cli");
+            Snapshots.OnNext(AccountsSnapshot(1, HomeAccount, WorkAccount));
+            await UntilAsync(() => Vm.AccountPendingText is null && Vm.AccountSection, "the account choice resolving");
+        }
+
+        public void Dispose() {
+            Vm.Dispose();
+            Snapshots.Dispose();
+            Remote.Dispose();
+        }
+    }
+
+    static async Task UntilAsync(Func<bool> condition, string what, Window? window = null) {
+        for (var i = 0; i < 200 && !condition(); i++) {
+            await Task.Delay(10);
+            if (window is null) Dispatcher.UIThread.RunJobs();
+            else Settle(window);
+        }
+        if (!condition()) throw new TimeoutException($"timed out waiting for {what}");
+    }
+
+    static List<Button> PanelButtons(Flyout menu) =>
+        ((Control)menu.Content!).GetVisualDescendants().OfType<Button>().ToList();
+
+    static Button? NamedRow(Flyout menu, string name) =>
+        PanelButtons(menu).SingleOrDefault(b => AutomationProperties.GetName(b) == name);
+
+    static TextBlock? AccountHeader(Flyout menu) =>
+        ((Control)menu.Content!).GetVisualDescendants().OfType<TextBlock>().SingleOrDefault(t => t.Text == "Account");
+
+    static List<TextBlock> Texts(Control row) => row.GetVisualDescendants().OfType<TextBlock>().ToList();
+
+    /// Pins the Account section above the model rows: a row per account, the Default pill in neutral
+    /// brushes on the daemon's default only, the directory, a state other than Recording in its
+    /// attention colour, the check on the selection, and Tab from the search box reaching the first
+    /// row. Picking a row from the keyboard keeps the panel open and lists it again with the check moved.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_agent_panel_lists_the_account_rows_with_the_default_pill_and_focus_reaches_them() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var rig = new AccountRig(Tmp.PathTo("app-state.json"));
+            await rig.ResolveAsync();
+            var view = new LauncherPaneView { DataContext = rig.Vm };
+            var window = new Window { Content = view, Width = 900, Height = 700 };
+            window.Show();
+            Settle(window);
+
+            var (agent, _) = OpenMenu(window, view, "AgentChip");
+            Settle(window);
+
+            await Assert.That(AccountHeader(agent)!.Classes.Contains("sectionMeta")).IsTrue();
+            var home = NamedRow(agent, "home, selected")!;
+            var work = NamedRow(agent, "work")!;
+            var modelDefault = NamedRow(agent, "Default — Claude Code chooses, Claude Code, selected")!;
+            var order = ((Panel)home.Parent!).Children;
+            await Assert.That(order.IndexOf(home)).IsLessThan(order.IndexOf(work));
+            await Assert.That(order.IndexOf(work)).IsLessThan(order.IndexOf(modelDefault));
+
+            await Assert.That(Texts(home).Select(t => t.Text ?? "")).IsEquivalentTo(["home", "Default", "/u/.claude"], CollectionOrdering.Matching);
+            await Assert.That(Texts(work).Select(t => t.Text ?? "")).IsEquivalentTo(["work", "/u/.claude-work", "Broken"], CollectionOrdering.Matching);
+
+            var pill = (Border)Texts(home).Single(t => t.Text == "Default").Parent!;
+            await Assert.That(pill.Background).IsSameReferenceAs(view.FindResource("KcapSurfaceRaisedBrush"));
+            await Assert.That(pill.BorderBrush).IsSameReferenceAs(view.FindResource("KcapBorderBrush"));
+            await Assert.That(((TextBlock)pill.Child!).Foreground).IsSameReferenceAs(view.FindResource("KcapMutedBrush"));
+            await Assert.That(Texts(work).Single(t => t.Text == "Broken").Foreground).IsSameReferenceAs(view.FindResource("KcapWarningBrush"));
+
+            static bool Checked(Button row) => row.GetVisualDescendants().OfType<AppIcon>()
+                .Single(i => i.Kind == Lucide.Avalonia.LucideIconKind.Check).IsVisible;
+            await Assert.That(Checked(home)).IsTrue();
+            await Assert.That(Checked(work)).IsFalse();
+
+            var search = ((Control)agent.Content!).GetVisualDescendants().OfType<TextBox>().Single();
+            await Assert.That(search.IsFocused).IsTrue();
+            window.KeyPressQwerty(PhysicalKey.Tab, RawInputModifiers.None);
+            Settle(window);
+            await Assert.That(home.IsFocused).IsTrue();
+
+            window.KeyPressQwerty(PhysicalKey.Tab, RawInputModifiers.None);
+            Settle(window);
+            await Assert.That(work.IsFocused).IsTrue();
+            window.KeyPressQwerty(PhysicalKey.Enter, RawInputModifiers.None);
+            await UntilAsync(() => NamedRow(agent, "work, selected") is not null, "the picked row", window);
+            await Assert.That(rig.Vm.SelectedAccountLabel).IsEqualTo("work");
+            await Assert.That(agent.IsOpen).IsTrue();
+            await Assert.That(NamedRow(agent, "home")).IsNotNull();
+            await Assert.That(NamedRow(agent, "Default — Claude Code chooses, Claude Code, selected")).IsNotNull();
+
+            agent.Hide();
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        });
+    }
+
+    /// The field matches models and vendors, never accounts: typing an account's own label hides the
+    /// section rather than finding the row, and clearing the term brings it back.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_search_term_hides_the_account_section() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var rig = new AccountRig(Tmp.PathTo("app-state.json"));
+            await rig.ResolveAsync();
+            var view = new LauncherPaneView { DataContext = rig.Vm };
+            var window = new Window { Content = view, Width = 900, Height = 700 };
+            window.Show();
+            Settle(window);
+
+            var (agent, _) = OpenMenu(window, view, "AgentChip");
+            Settle(window);
+            await Assert.That(AccountHeader(agent)).IsNotNull();
+
+            var search = ((Control)agent.Content!).GetVisualDescendants().OfType<TextBox>().Single();
+            search.Text = "work";
+            Settle(window);
+            await Assert.That(AccountHeader(agent)).IsNull();
+            await Assert.That(NamedRow(agent, "work")).IsNull();
+            await Assert.That(NamedRow(agent, "Use “work”, Claude Code")).IsNotNull();
+
+            search.Text = "";
+            Settle(window);
+            await Assert.That(AccountHeader(agent)).IsNotNull();
+            await Assert.That(NamedRow(agent, "work")).IsNotNull();
+
+            agent.Hide();
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        });
+    }
+
+    /// Use default answers an account refusal only: a launch failure leaves it hidden, a refused
+    /// account shows it beside the named message, and pressing it takes the default without launching.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Use_default_shows_in_the_error_banner_only_for_an_account_refusal() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var rig = new AccountRig(Tmp.PathTo("app-state.json"));
+            await rig.ResolveAsync();
+            var vm = rig.Vm;
+            var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 900, Height = 700 };
+            window.Show();
+            Settle(window);
+
+            var banner = Find<Border>(window, "StartErrorBanner")!;
+            var useDefault = Find<Button>(window, "UseDefaultAccountButton")!;
+            var chip = Find<TextBlock>(window, "AgentChipLabel")!;
+
+            rig.Launch.Next = new LaunchOutcome(false, null, "Daemon 'kcap-dev' is at capacity.");
+            await vm.StartCommand.Execute();
+            Settle(window);
+            await Assert.That(banner.IsVisible).IsTrue();
+            await Assert.That(useDefault.IsVisible).IsFalse();
+
+            await vm.PickAccountAsync("a2");
+            Settle(window);
+            await Assert.That(chip.Text).IsEqualTo("Claude Code · Default · work");
+
+            rig.Snapshots.OnNext(AccountsSnapshot(2, HomeAccount));
+            await vm.StartCommand.Execute();
+            Settle(window);
+            await Assert.That(Find<TextBlock>(window, "StartErrorText")!.Text)
+                .IsEqualTo("work is not available on this machine. Use the default account or pick another.");
+            await Assert.That(useDefault.IsVisible).IsTrue();
+            await Assert.That(chip.Text).IsEqualTo("Claude Code · Default · work — unavailable");
+            var starts = rig.Launch.StartCount;
+
+            Click(window, useDefault);
+            await Assert.That(banner.IsVisible).IsFalse();
+            await Assert.That(useDefault.IsVisible).IsFalse();
+            await Assert.That(chip.Text).IsEqualTo("Claude Code · Default");
+            await Assert.That(rig.Launch.StartCount).IsEqualTo(starts);
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        });
+    }
+
+    /// The open panel follows the view-model: the pending line and its Retry stand in for the rows
+    /// until the listing and snapshot answer, and the rows then replace them without a reopen.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_open_panel_shows_the_rows_once_the_listing_and_snapshot_answer() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var rig = new AccountRig(Tmp.PathTo("app-state.json"));
+            await rig.Vm.SelectRepositoryAsync("/repos/kcap-cli");
+            rig.Remote.ListingSubject.OnNext(new DaemonListing(null, 1, true));
+            await UntilAsync(() => rig.Vm.AccountRetryVisible, "the failed listing");
+            var view = new LauncherPaneView { DataContext = rig.Vm };
+            var window = new Window { Content = view, Width = 900, Height = 700 };
+            window.Show();
+            Settle(window);
+
+            var (agent, _) = OpenMenu(window, view, "AgentChip");
+            Settle(window);
+            static bool Pending(Flyout menu) => ((Control)menu.Content!).GetVisualDescendants().OfType<TextBlock>()
+                .Any(t => t.Text == "Loading accounts…");
+            static Button? Retry(Flyout menu) => PanelButtons(menu).SingleOrDefault(b => b.Content as string == "Retry");
+            await Assert.That(AccountHeader(agent)).IsNotNull();
+            await Assert.That(Pending(agent)).IsTrue();
+            await Assert.That(Retry(agent)).IsNotNull();
+            await Assert.That(NamedRow(agent, "work")).IsNull();
+
+            rig.AnswerListing();
+            rig.Snapshots.OnNext(AccountsSnapshot(1, HomeAccount, WorkAccount));
+            await UntilAsync(() => NamedRow(agent, "work") is not null, "the account rows", window);
+
+            await Assert.That(agent.IsOpen).IsTrue();
+            await Assert.That(NamedRow(agent, "home, selected")).IsNotNull();
+            await Assert.That(Pending(agent)).IsFalse();
+            await Assert.That(Retry(agent)).IsNull();
+
+            agent.Hide();
+            Settle(window);
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        });
+    }
+
+    /// Real pointer input on a control inside the open panel, which lives in its own popup root.
+    static void ClickInPanel(Window window, Control target) {
+        Settle(window);
+        var root = TopLevel.GetTopLevel(target) ?? throw new InvalidOperationException("Click target is not shown.");
+        var origin = target.TranslatePoint(new Point(target.Bounds.Width / 2, target.Bounds.Height / 2), root)
+            ?? throw new InvalidOperationException("Click target is not under its root.");
+        root.MouseDown(origin, MouseButton.Left);
+        root.MouseUp(origin, MouseButton.Left);
+        Settle(window);
+    }
+
+    /// The rows belong to the selected vendor, so browsing another vendor's tab shows that vendor's
+    /// models without them, and coming back shows them again.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_account_section_shows_only_under_the_selected_vendors_tab() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var rig = new AccountRig(Tmp.PathTo("app-state.json"));
+            await rig.ResolveAsync();
+            var view = new LauncherPaneView { DataContext = rig.Vm };
+            var window = new Window { Content = view, Width = 900, Height = 700 };
+            window.Show();
+            Settle(window);
+
+            var (agent, _) = OpenMenu(window, view, "AgentChip");
+            Settle(window);
+            Button Tab(string label) => PanelButtons(agent).Single(b => b.Width == 34 && AutomationProperties.GetName(b) == label);
+            await Assert.That(AccountHeader(agent)).IsNotNull();
+
+            ClickInPanel(window, Tab("Codex"));
+            await Assert.That(AccountHeader(agent)).IsNull();
+            await Assert.That(NamedRow(agent, "work")).IsNull();
+            await Assert.That(NamedRow(agent, "GPT-5.6, Codex")).IsNotNull();
+
+            ClickInPanel(window, Tab("Claude Code"));
+            await Assert.That(AccountHeader(agent)).IsNotNull();
+            await Assert.That(NamedRow(agent, "work")).IsNotNull();
+
+            agent.Hide();
+            Settle(window);
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        });
+    }
+
+    /// The listing and snapshot re-emit on every server change notification; one that changes
+    /// nothing the panel draws must leave its rows, and the focus on them, in place.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_unchanged_listing_and_snapshot_leave_the_open_panel_rows_in_place() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var rig = new AccountRig(Tmp.PathTo("app-state.json"));
+            await rig.ResolveAsync();
+            var view = new LauncherPaneView { DataContext = rig.Vm };
+            var window = new Window { Content = view, Width = 900, Height = 700 };
+            window.Show();
+            Settle(window);
+
+            var (agent, _) = OpenMenu(window, view, "AgentChip");
+            Settle(window);
+            window.KeyPressQwerty(PhysicalKey.Tab, RawInputModifiers.None);
+            Settle(window);
+            var home = NamedRow(agent, "home, selected")!;
+            var modelDefault = NamedRow(agent, "Default — Claude Code chooses, Claude Code, selected")!;
+            await Assert.That(home.IsFocused).IsTrue();
+
+            rig.AnswerListing();
+            rig.Snapshots.OnNext(AccountsSnapshot(1, HomeAccount, WorkAccount));
+            Settle(window);
+
+            await Assert.That(NamedRow(agent, "home, selected")).IsSameReferenceAs(home);
+            await Assert.That(NamedRow(agent, "Default — Claude Code chooses, Claude Code, selected")).IsSameReferenceAs(modelDefault);
+            await Assert.That(home.IsFocused).IsTrue();
+
+            agent.Hide();
+            Settle(window);
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
         });
     }
 }

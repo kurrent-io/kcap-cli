@@ -215,6 +215,35 @@ public class AcpEventEnvelopeWireCompatTests {
         await Assert.That(rejected.Outcome).IsEqualTo(AcpBindOutcome.Rejected);
     }
 
+    /// A server that predates the field rejects nothing it never sees, so it rides the wire only when set.
+    [Test]
+    public async Task SourceEventId_never_rides_the_wire() {
+        var json = JsonSerializer.Serialize(new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: "hi", SourceEventId: Guid.NewGuid()),
+            CapacitorJsonContext.Default.AcpEventEnvelope);
+
+        await Assert.That(json).IsEqualTo(JsonSerializer.Serialize(new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: "hi"),
+            CapacitorJsonContext.Default.AcpEventEnvelope));
+    }
+
+    [Test]
+    public async Task DispatchId_rides_the_wire_only_when_set() {
+        var dispatch = Guid.NewGuid();
+        var set   = JsonSerializer.Serialize(new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, DispatchId: dispatch), CapacitorJsonContext.Default.AcpEventEnvelope);
+        var unset = JsonSerializer.Serialize(new AcpEventEnvelope(Kind: AcpEventKind.UserMessage), CapacitorJsonContext.Default.AcpEventEnvelope);
+
+        await Assert.That(set).Contains($@"""dispatch_id"":""{dispatch}""");
+        await Assert.That(unset).DoesNotContain("dispatch_id");
+    }
+
+    [Test]
+    public async Task TurnId_rides_the_wire_only_when_set() {
+        var set   = JsonSerializer.Serialize(new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, TurnId: "turn-3"), CapacitorJsonContext.Default.AcpEventEnvelope);
+        var unset = JsonSerializer.Serialize(new AcpEventEnvelope(Kind: AcpEventKind.UserMessage), CapacitorJsonContext.Default.AcpEventEnvelope);
+
+        await Assert.That(set).Contains(@"""turn_id"":""turn-3""");
+        await Assert.That(unset).DoesNotContain("turn_id");
+    }
+
     [Test]
     public async Task AcpLaunchConfirmOutcome_deserializes_every_server_camelCase_value() {
         // Including the multi-word member, which rides the wire as "alreadyConfirmed" — the one most

@@ -10,6 +10,7 @@ using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.Telemetry;
 using AppUnderTest = Capacitor.App.App;
 using Capacitor.Cli.Core;
 
@@ -86,6 +87,56 @@ public class WizardCompositionHappyPathTests {
 
         await Assert.That(requests.Single().Verb).IsEqualTo(MutationVerb.Install);
         await Assert.That(satisfied).IsTrue();
+    }
+
+    [Test]
+    public async Task The_done_page_reports_the_install_once_the_daemon_runs_and_only_then_opens() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        harness.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(
+            new ServiceSnapshot("daemon-a", false, "not_installed", null, "/opt/kcap/kcapd", null, null, false, false));
+        bool? daemonRanFirst = null;
+
+        var readiness = await AvaloniaSession.DispatchAsync(async () => {
+            WizardGraph? graph = null;
+            graph = WizardComposition.BuildGraph(harness.Options() with {
+                AlreadyAuthenticated = true,
+                ReportCliSetup = _ => {
+                    daemonRanFirst = graph!.Daemon.Satisfied;
+                    return Task.FromResult(true);
+                },
+            });
+            var done = graph.Steps.OfType<DoneStepViewModel>().Single();
+            await done.OnEnterAsync(CancellationToken.None);
+
+            return await done.WhenAnyValue(x => x.Readiness).FirstAsync(r => r != WorkspaceReadiness.Preparing).ToTask();
+        });
+
+        await Assert.That(readiness).IsEqualTo(WorkspaceReadiness.Ready);
+        await Assert.That(daemonRanFirst).IsTrue();
+    }
+
+    [Test]
+    public async Task The_done_page_does_not_report_an_install_whose_daemon_cannot_run() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        harness.Cli.CliPath = null;
+        var reports = 0;
+
+        var readiness = await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(harness.Options() with {
+                AlreadyAuthenticated = true,
+                ReportCliSetup = _ => {
+                    reports++;
+                    return Task.FromResult(true);
+                },
+            });
+            var done = graph.Steps.OfType<DoneStepViewModel>().Single();
+            await done.OnEnterAsync(CancellationToken.None);
+
+            return await done.WhenAnyValue(x => x.Readiness).FirstAsync(r => r != WorkspaceReadiness.Preparing).ToTask();
+        });
+
+        await Assert.That(readiness).IsEqualTo(WorkspaceReadiness.DaemonNotRunning);
+        await Assert.That(reports).IsEqualTo(0);
     }
 
     [Test]
@@ -268,6 +319,33 @@ public class WizardSignInOperationPreconditionTests {
 
         await Assert.That(result).IsTypeOf<AuthResult.Failed>();
         await Assert.That(File.Exists(Config.PathTo("tokens", $"{ProfileName}.json"))).IsFalse();
+    }
+
+    /// The paste path counts sign-ins as the CLI does, so desktop and CLI funnels compare.
+    [Test]
+    [Arguments("committed", "cli_setup_signin_completed")]
+    [Arguments("committed-none", "")]
+    [Arguments("denied", "cli_setup_signin_failed")]
+    [Arguments("unreachable", "")]
+    [Arguments("other", "")]
+    [Arguments("unsaved", "")]
+    [Arguments("cancelled", "")]
+    public async Task A_paste_outcome_reaches_the_funnel_as_the_cli_counts_it(string outcome, string expected) {
+        var probe = TelemetryProbe.Start(TelemetryStartup.ForDesktopApp(null, AuthEndpoints.DefaultSignupUrl), Config.Root);
+        TelemetryTestGuards.AssertEnabled("app", Config.Root, probe.Telemetry);
+        AuthResult result = outcome switch {
+            "committed"      => new AuthResult.Committed(ProfileName, ServerUrl, AuthProvider.GitHubApp, "ana", []),
+            "committed-none" => new AuthResult.Committed(ProfileName, ServerUrl, AuthProvider.None, null, []),
+            "unsaved"        => new AuthResult.Committed(ProfileName, ServerUrl, AuthProvider.GitHubApp, "ana", [], CredentialSaved: false),
+            "denied"         => new AuthResult.Failed("denied", AuthFailureReason.SigninDenied),
+            "unreachable"    => new AuthResult.Failed("unreachable", AuthFailureReason.Unreachable),
+            "other"          => new AuthResult.Failed("other"),
+            _                => new AuthResult.Cancelled(),
+        };
+
+        WizardSignInOperation.Recorded(result, probe.Funnel);
+
+        await Assert.That(string.Join(",", probe.Names.Where(n => n.StartsWith("cli_setup_signin", StringComparison.Ordinal)))).IsEqualTo(expected);
     }
 }
 

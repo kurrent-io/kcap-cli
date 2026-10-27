@@ -29,6 +29,18 @@ public static class KiroSettings {
         }
     }
 
+    /// A removal must distinguish an unset default from settings it cannot read. Throwing keeps
+    /// the cloned agent and previous-default marker available for retry.
+    public static string? ReadDefaultAgentStrict(string settingsPath) {
+        string contents;
+        try { contents = File.ReadAllText(settingsPath); }
+        catch (FileNotFoundException) { return null; }
+        catch (DirectoryNotFoundException) { return null; }
+        if (JsonNode.Parse(contents) is not JsonObject root)
+            throw new IOException($"Kiro settings at {settingsPath} are not a JSON object.");
+        return root[DefaultAgentKey]?.GetValue<string>();
+    }
+
     /// <summary>
     /// Sets <c>chat.defaultAgent</c> to <paramref name="agentName"/>, preserving
     /// every other key, creating the file/dir if needed. Returns false on I/O

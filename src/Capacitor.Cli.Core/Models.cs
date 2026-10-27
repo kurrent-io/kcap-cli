@@ -48,6 +48,12 @@ record TranscriptBatch {
     [JsonPropertyName("observed_commits")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ObservedCommit[]? ObservedCommits { get; init; }
+
+    // Every chunk of a split read but its last: the server leaves a commit stamped after this chunk's lines to a later
+    // chunk, which carries the same commits.
+    [JsonPropertyName("more_follows")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool MoreFollows { get; init; }
 }
 
 public record ErrorEntry(
@@ -150,6 +156,11 @@ class WatchState {
     public HashSet<(string Owner, string RepoName, int Number)> LinkedPullRequests { get; } = [];
     public DateTimeOffset                                       LastSecondaryProbe { get; set; }
     public string?                                              NextSecondaryRoot  { get; set; }
+
+    // Claude session and subagent watchers: PRs the transcript shows the agent creating, kept
+    // until the server accepts them.
+    public List<CreatedPullRequest> PendingCreatedPullRequests { get; } = [];
+    public DateTimeOffset           NextCreatedPullRequestLink { get; set; }
 
     public bool               InitialTitleSent   { get; set; }
     public bool               TitleGenerated     { get; set; }
@@ -627,12 +638,7 @@ public record EvalRetrospective {
     public List<string> Suggestions { get; init; } = [];
 }
 
-// Cross-eval memory — DEV-1434 / DEV-1438. Judges may optionally emit a
-// retain_fact when they spot a cross-cutting pattern; the CLI POSTs it to
-// the session-scoped endpoint and the server derives repo scope from the
-// session (facts live on JudgeFacts-repo-{repoHash}-{category} streams).
-// Facts accumulated on the same repo by any team member are fetched at
-// eval startup and injected into each judge's prompt as "known patterns".
+// A judge's retain_fact, posted to the session's judge-facts endpoint; the server derives the repo scope.
 record JudgeFactPayload {
     [JsonPropertyName("category")]
     public required string Category { get; init; }
@@ -659,35 +665,8 @@ record JudgeFactPayload {
     public string? EvidenceScopeToken { get; init; }
 }
 
-public record JudgeFact {
-    [JsonPropertyName("category")]
-    public required string Category { get; init; }
-
-    // Nullable for backward compat with older servers that don't return this field.
-    [JsonPropertyName("fact_hash")]
-    public string? FactHash { get; init; }
-
-    [JsonPropertyName("fact")]
-    public required string Fact { get; init; }
-
-    // Nullable for backward compat with older servers that don't return this field.
-    [JsonPropertyName("retainer_github_id")]
-    public long? RetainerGitHubId { get; init; }
-
-    [JsonPropertyName("source_session_id")]
-    public required string SourceSessionId { get; init; }
-
-    [JsonPropertyName("source_eval_run_id")]
-    public required string SourceEvalRunId { get; init; }
-
-    [JsonPropertyName("retained_at")]
-    public required DateTimeOffset RetainedAt { get; init; }
-}
-
-// Snapshot of a judge fact at eval time. Sent in the facts_used field of
-// SessionEvalCompletedPayload so the server can persist which facts were
-// in scope when the eval ran, even if the live judge_facts pool is later
-// modified (muted, deleted, replaced).
+// The element type of facts_used. Judges are given no retained facts, so the CLI always sends the list
+// empty; the server still reads it on the evals that carried some.
 public record EvalFactSnapshotPayload {
     [JsonPropertyName("category")]
     public required string Category { get; init; }
@@ -1061,6 +1040,8 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(PlanArtifactsResponseDto))]
 [JsonSerializable(typeof(Plans.PlanLedgerDto))]
 [JsonSerializable(typeof(List<Plans.SessionPlanDto>))]
+[JsonSerializable(typeof(MessageSenders.MessageSendersRequest))]
+[JsonSerializable(typeof(MessageSenders.MessageSendersResponseDto))]
 [JsonSerializable(typeof(EvalContextResult))]
 [JsonSerializable(typeof(EvalQuestionDto))]
 [JsonSerializable(typeof(EvalQuestionDto[]))]
@@ -1072,7 +1053,6 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(EvalRetrospectiveV2))]
 [JsonSerializable(typeof(SessionEvalCompletedPayloadV2))]
 [JsonSerializable(typeof(JudgeFactPayload))]
-[JsonSerializable(typeof(List<JudgeFact>))]
 [JsonSerializable(typeof(EvalFactSnapshotPayload))]
 [JsonSerializable(typeof(List<EvalFactSnapshotPayload>))]
 [JsonSerializable(typeof(EvalCatalogDto))]
@@ -1115,6 +1095,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(WorkItems.WorkItemTopologyDto))]
 [JsonSerializable(typeof(WorkItems.WorkItemDto))]
 [JsonSerializable(typeof(WorkItems.SessionSummaryDto))]
+[JsonSerializable(typeof(WorkItems.ViewerIdentityDto))]
 [JsonSerializable(typeof(WorkItems.WorkItemErrorDto))]
 [JsonSerializable(typeof(RepositoryPayload))]
 [JsonSerializable(typeof(GitCacheEntry))]
@@ -1185,6 +1166,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(StatusReportRequest))]
 [JsonSerializable(typeof(ResumingAgentClaim))]
 [JsonSerializable(typeof(ResumingAgentClaim[]))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Accounts.AccountsSnapshotDto))]
 // Surface 3 (new-harness detection): per-machine coding-agent inventory carried on the status report.
 [JsonSerializable(typeof(Capacitor.Cli.Core.Setup.HarnessInventory))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Setup.HarnessInventoryEntry))]
@@ -1312,6 +1294,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(Capacitor.Cli.Core.Http.PublishArtefactBody))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Http.PublishArtefactVersionBody))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Http.SetArtefactVisibilityBody))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Setup.VisibilityOptionsResponse))]
 [JsonSourceGenerationOptions(
     PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower,
     UseStringEnumConverter = true
@@ -1569,7 +1552,22 @@ public readonly record struct AcpEventEnvelope(
         // The subagent an event belongs to, and on subagent_started its role; null for the hosted
         // agent's own events. A server without these fields records a subagent's events as the parent's.
         string? AgentId   = null,
-        string? AgentType = null
+        string? AgentType = null,
+
+        // user_message — the vendor turn it opens. Sent only when set, so a server that predates it sees the
+        // shape it always has.
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        string? TurnId = null,
+
+        // user_message — the server dispatch that delivered it, kept so a viewer of the journal can ask the
+        // server who sent it. Sent only when set; the server ignores it.
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        Guid? DispatchId = null,
+
+        // user_message read from a stored transcript: the id the server keeps the event under. Local to the
+        // desktop chat, never serialized.
+        [property: JsonIgnore]
+        Guid? SourceEventId = null
     );
 
 /// <summary>
@@ -1727,12 +1725,10 @@ public readonly record struct LaunchAgentCommand(
         // NEVER used for consent matching, which stays on RequesterUserId. Appended last, same
         // wire-compat rule as the fields above — old daemons ignore it, old servers never set it.
         string?           RequesterDisplay = null,
-        // Caller-selected ACP permission preset ("explore"/"edit") for an interactive ACP-hosted
-        // launch. The AcpInteractionBridge auto-approves permission requests whose ACP tool kind the
-        // preset covers; everything else keeps prompting. Null for every non-preset launch; the
-        // orchestrator's pre-flight AcpPermissionPresetPolicy fails closed on a preset supplied for a
-        // review-flow / borrowed / non-ACP-routed launch. Appended last so the SignalR positional
-        // binding stays wire-compatible — old daemons ignore it, old servers never set it.
+        // Caller-selected ACP permission preset for an interactive ACP-hosted launch; the
+        // AcpInteractionBridge auto-approves the permission requests it covers. Null for every
+        // non-preset launch; the orchestrator's pre-flight AcpPermissionPresetPolicy fails closed on a
+        // preset supplied for a review-flow / borrowed / non-ACP-routed launch.
         string?           AcpPermissionPreset = null,
         // §2.7 B4: the hosted Codex thread to RESUME (via thread/resume, no second SessionStarted) instead
         // of starting fresh — set by the server only for a parked-reviewer relaunch, else null. Appended
@@ -1745,7 +1741,12 @@ public readonly record struct LaunchAgentCommand(
         // The agent's session start title. TitleDerived marks one cut from the prompt, which a
         // generated title replaces; otherwise it is the caller's and stays. Null from an older server.
         string?           Title        = null,
-        bool              TitleDerived = false
+        bool              TitleDerived = false,
+        // Registry id of the account to run under; null runs under the vendor's default directory.
+        string?           AccountId = null,
+        // The transport the server will validate this launch's registration against: "app-server" or
+        // "pty". Null from an older server, which leaves the daemon's own routing to decide.
+        string?           ExpectedRuntimeTransport = null
     );
 
 /// <summary>Caller-selected Codex launch posture. Valid ONLY for interactive, daemon-owned-worktree
@@ -1882,7 +1883,10 @@ public readonly record struct LiveAgentInfo(
         ulong?         ActivitySeq  = null,
         ulong?         IdleForMs    = null,
         bool?          TurnInFlight = null,
-        string?        LaunchStage  = null
+        string?        LaunchStage  = null,
+        string?        AccountDirectory = null,
+        string?        AccountId        = null,
+        string?        AccountLabel     = null
     );
 
 /// <summary>Phase B (D4 §6.4(2a)): an agent whose death could NOT be confirmed (record-write
@@ -1927,6 +1931,8 @@ public readonly record struct DaemonStatusReport(
         // every unsolicited report. The server's idle-marker coordinator confirms a claim only
         // against the report carrying ITS nonce — an unechoed report can never confirm one.
         string?                       EchoNonce                     = null,
+        // Advances with every change that can move ActiveCount; the server keeps the highest-versioned reading.
+        long?                         ActiveCountVersion            = null,
         ResumingAgentClaim[]?         ResumingAgents                = null
     );
 
@@ -2161,8 +2167,8 @@ public readonly record struct SendInputCommand(
         string    AgentId,
         string    Text,
         string[]? AttachmentIds,
-        // Names this dispatch when the daemon has to refuse it. Null from a server that does not send
-        // one, in which case there is nothing to name and no refusal is reported.
+        // Names this dispatch when the daemon has to refuse it, and on the user message a runtime records
+        // for it. Null from a server that does not send one, in which case there is nothing to name.
         Guid?     DispatchId = null
     );
 
@@ -2271,7 +2277,19 @@ public readonly record struct DaemonConnect(
         // before falling back to a fetch. False from a daemon predating it, whose fetch-only path
         // cannot see a branch that exists only here.
         bool                                        SupportsBranchBaseRef = false,
-        ResumingAgentClaim[]?                       ResumingAgents = null
+        ResumingAgentClaim[]?                       ResumingAgents = null,
+        // The daemon's ActiveCount and its version, read together, as on a status report.
+        int?                                        ActiveCount = null,
+        long?                                       ActiveCountVersion = null,
+        // The permission-preset tokens this daemon enforces, for every vendor in AcpPresetVendors.
+        // Null from a daemon predating the field, which the server reads as explore and edit only.
+        string[]?                                   AcpPresets = null,
+        // Advertises a launch that names an account. False from a daemon predating it; the server
+        // then never sends an AccountId.
+        bool                                        SupportsAccountLaunches = false,
+        Capacitor.Cli.Core.Accounts.AccountsSnapshotDto? Accounts = null,
+        // Per-account launchable models, keyed by registry id.
+        Dictionary<string, VendorModelOption[]>?    VendorModelsByAccount = null
     );
 
 public sealed record UnattendedVendorCapability(
@@ -2323,7 +2341,20 @@ public readonly record struct AgentRegistered(
         string? RuntimeTransport = null,
         // The session's start title, with the same meaning as on LaunchAgentCommand.
         string? Title        = null,
-        bool    TitleDerived = false
+        bool    TitleDerived = false,
+        // The daemon's ActiveCount and its version, read together after the agent was published.
+        int?    ActiveCount        = null,
+        long?   ActiveCountVersion = null,
+        // The agent's vendor. A re-registration after a reconnect has no launch on the server to
+        // read it from. Trailing name-bound field — an older server ignores it, an older daemon
+        // never sets it.
+        string? Vendor = null,
+        // The agent this one continues after a daemon restart could not resume it, from the resume ledger; the server
+        // checks the claim where it uses it. Trailing name-bound field — an older server ignores it.
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ContinuesAgentId = null,
+        string? AccountDirectory = null,
+        string? AccountId        = null,
+        string? AccountLabel     = null
     );
 
 public readonly record struct AgentStatusChanged(
@@ -2348,7 +2379,13 @@ public readonly record struct ReportAgentCommandsArgs(
 
 /// <param name="StopReason">The code of the daemon's own termination verdict, when it ended the agent.
 /// A server that predates it ignores the field.</param>
-public readonly record struct AgentUnregistered(string AgentId, string? StopReason = null);
+/// <param name="ActiveCount">The daemon's ActiveCount, read with <paramref name="ActiveCountVersion"/>.</param>
+public readonly record struct AgentUnregistered(
+        string  AgentId,
+        int?    ActiveCount        = null,
+        long?   ActiveCountVersion = null,
+        string? StopReason         = null
+    );
 
 public readonly record struct LaunchFailed(
         string AgentId,

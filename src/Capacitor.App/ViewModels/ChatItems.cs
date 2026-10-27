@@ -10,8 +10,12 @@ namespace Capacitor.App.ViewModels;
 /// One row of the Chat tab. Matched by DataTemplates on the concrete type.
 public abstract class ChatItemViewModel : ReactiveObject { }
 
-public sealed class UserTurnItem(string text) : ChatItemViewModel {
+public sealed class UserTurnItem(string text, IReadOnlyList<UserAttachment>? attachments = null, SenderLabel? sender = null) : ChatItemViewModel {
     public string Text { get; } = text;
+    public SenderLabel Sender { get; } = sender ?? new SenderLabel(default, null);
+    public bool HasText => !string.IsNullOrWhiteSpace(Text);
+    public IReadOnlyList<UserAttachment> Attachments { get; } = attachments ?? [];
+    public bool HasAttachments => Attachments.Count > 0;
 }
 
 public sealed class AssistantTextItem(string text) : ChatItemViewModel {
@@ -81,9 +85,13 @@ public sealed class SystemNoteItem(string text, string label = SystemNoteItem.No
 /// A bang command the user ran, and the output record that follows it. The output arrives later,
 /// so it is filled in on the same item.
 public sealed class ShellCommandItem : ChatItemViewModel {
-    public ShellCommandItem(string command) { Command = command; }
+    public ShellCommandItem(string command, SenderLabel? sender = null) {
+        Command = command;
+        Sender = sender ?? new SenderLabel(default, null);
+    }
 
     public string Command { get; }
+    public SenderLabel Sender { get; }
     public bool HasCommand => Command.Length > 0;
 
     string? _output;
@@ -103,8 +111,10 @@ public sealed class ShellCommandItem : ChatItemViewModel {
 public enum ToolOutcome { Running, Done, Error }
 
 public sealed class ToolCallItem(string name, string detail, ToolCategory category, string? label = null,
-        ToolCardKind cardKind = ToolCardKind.None, string? inputJson = null) : ChatItemViewModel {
+        ToolCardKind cardKind = ToolCardKind.None, string? inputJson = null, string? chip = null) : ChatItemViewModel {
     public string Name { get; } = name;
+    /// Lone-call header when the category word ("Tool") would hide which server this is.
+    public string? Chip { get; } = chip;
     public string Detail { get; } = detail;
     public ToolCategory Category { get; } = category;
     /// The verb phrase a row opens with; null when a built-in call carries its own prose
@@ -179,6 +189,18 @@ public sealed class ToolCallItem(string name, string detail, ToolCategory catego
     /// pulsing status pill so a live row is never blank.
     public bool IsRunning => _outcome == ToolOutcome.Running && !_isAwaitingPermission;
 
+    string? _previewPath;
+    public string? PreviewPath {
+        get => _previewPath;
+        set {
+            if (_previewPath == value) return;
+            _previewPath = value;
+            this.RaisePropertyChanged();
+            this.RaisePropertyChanged(nameof(HasPreview));
+        }
+    }
+    public bool HasPreview => !string.IsNullOrEmpty(PreviewPath);
+
 }
 
 /// A run of consecutive tool calls. Settled calls fold into Summary when there are two or more
@@ -216,16 +238,6 @@ public sealed class ToolGroupItem : ChatItemViewModel {
     string _summary = "";
     public string Summary { get => _summary; private set => this.RaiseAndSetIfChanged(ref _summary, value); }
 
-    /// What the header shows: the category phrase, plus a peek at the first settled detail while
-    /// folded so the useful bit is visible without expanding.
-    public string SummaryLine {
-        get {
-            if (_summary.Length == 0) return "";
-            if (_isExpanded || PeekDetail() is not { Length: > 0 } peek) return _summary;
-            return $"{_summary} · {peek}";
-        }
-    }
-
     bool _hasSummary;
     public bool HasSummary { get => _hasSummary; private set => this.RaiseAndSetIfChanged(ref _hasSummary, value); }
 
@@ -236,7 +248,7 @@ public sealed class ToolGroupItem : ChatItemViewModel {
     public bool ShowsKindChip => _calls.Count == 1;
 
     public string KindChip =>
-        _calls.Count == 1 ? ToolSummary.ChipLabel(_calls[0].Category) : "";
+        _calls.Count == 1 ? _calls[0].Chip ?? ToolSummary.ChipLabel(_calls[0].Category) : "";
 
     public LucideIconKind? HeaderIconKind {
         get {
@@ -334,14 +346,6 @@ public sealed class ToolGroupItem : ChatItemViewModel {
     void NotifyVisible() {
         this.RaisePropertyChanged(nameof(VisibleCalls));
         this.RaisePropertyChanged(nameof(HasVisibleCalls));
-        this.RaisePropertyChanged(nameof(SummaryLine));
-    }
-
-    /// First settled call's line, capped so the header stays one scannable row.
-    string? PeekDetail() {
-        var first = _calls.FirstOrDefault(c => c.IsSettled);
-        if (first is null) return null;
-        return first.DetailIsProse ? TextElision.End(first.LineText, 56) : TextElision.Middle(first.LineText, 56);
     }
 }
 

@@ -266,6 +266,76 @@ public class ChatTabViewSmokeTests {
         });
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_ended_session_hides_stale_terminal_controls_and_shows_the_ended_hint() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            var path = Tmp.CreateFile("ended-dialog.jsonl", [UserLine]);
+            await host.AttachAsync(path);
+            var opened = false;
+            host.Chat.ShowTerminal = () => opened = true;
+            var agent = Agent("a1", "claude", hasTerminal: true) with {
+                TranscriptPath = path, Status = "Running",
+                TerminalDialog = new TerminalDialogDto("", "", [], -1, "Choose an MCP server"),
+            };
+            try {
+                host.Daemon.Agents.AddOrUpdate(agent);
+                host.Settle();
+                var openTerminal = host.View.FindControl<Button>("TerminalMenuOpenTerminal")!;
+                await Assert.That(openTerminal.IsEffectivelyVisible).IsTrue();
+                Click(host, openTerminal);
+                await Assert.That(opened).IsTrue();
+
+                host.Daemon.Agents.AddOrUpdate(agent with { Status = "Completed" });
+                host.Settle();
+
+                await Assert.That(host.Composer.IsEffectivelyVisible).IsFalse();
+                await Assert.That(host.View.FindControl<Border>("ComposerCard")!.IsEffectivelyVisible).IsFalse();
+                await Assert.That(openTerminal.IsEffectivelyVisible).IsFalse();
+                await Assert.That(openTerminal.Focus()).IsFalse();
+                var hint = host.View.FindControl<TextBlock>("EndedComposerHint")!;
+                await Assert.That(hint.IsEffectivelyVisible).IsTrue();
+                await Assert.That(hint.Text).IsEqualTo("This session has ended");
+            } finally { await host.CloseAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_account_strip_sits_under_the_composer_card_inside_the_band() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            var path = Tmp.CreateFile("account.jsonl", [UserLine]);
+            try {
+                var strip = host.View.FindControl<Border>("AccountStrip")!;
+                var card = host.View.FindControl<Border>("ComposerCard")!;
+                var band = host.View.FindControl<Border>("ComposerBand")!;
+                await Assert.That(strip.IsVisible).IsFalse();
+
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
+                    TranscriptPath = path, AccountDirectory = "/home/me/.claude-work", AccountId = "acc1", AccountLabel = "work",
+                });
+                await (host.Chat.PendingReadForTesting ?? Task.CompletedTask);
+                host.Settle();
+
+                await Assert.That(strip.IsVisible).IsTrue();
+                await Assert.That(strip.Parent).IsSameReferenceAs(card.Parent);
+                await Assert.That(strip.GetVisualAncestors()).Contains(band);
+                var cardBottom = card.TranslatePoint(new Point(0, card.Bounds.Height), host.Window)!.Value.Y;
+                await Assert.That(strip.TranslatePoint(default, host.Window)!.Value.Y).IsGreaterThanOrEqualTo(cardBottom);
+                var texts = strip.GetVisualDescendants().OfType<TextBlock>().Select(t => t.Text).ToArray();
+                await Assert.That(texts).Contains("work");
+                await Assert.That(texts).Contains("/home/me/.claude-work");
+                await Assert.That(strip.GetVisualDescendants().OfType<ContentControl>().First().Content).IsNotNull();
+
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path });
+                host.Settle();
+                await Assert.That(strip.IsVisible).IsFalse();
+            } finally { await host.CloseAsync(); }
+        });
+    }
+
     /// Pins the two costs a long transcript could impose on the UI thread: one collection
     /// notification for the whole initial load, and containers for the viewport only.
     [Test]
@@ -316,8 +386,13 @@ public class ChatTabViewSmokeTests {
             var watch = System.Diagnostics.Stopwatch.StartNew();
             for (var i = 0; i < 80; i++) {
                 var middle = host.Scroll.Viewport.Height / 2;
-                var reading = drag ? null : items.GetRealizedContainers().FirstOrDefault(container =>
-                    container.TranslatePoint(default, host.Scroll) is { } point && point.Y <= middle && point.Y + container.Bounds.Height > middle);
+                var reading = drag ? null : items.GetRealizedContainers()
+                    .Select(container => (container, top: container.TranslatePoint(default, host.Scroll)?.Y))
+                    .Where(row => row.top is { } top && top < host.Scroll.Viewport.Height && top + row.container.Bounds.Height > 0
+                        && top <= middle && top + row.container.Bounds.Height > middle)
+                    .OrderBy(row => Math.Max(0, Math.Max(row.top!.Value - middle, middle - row.top.Value - row.container.Bounds.Height)))
+                    .Select(row => row.container)
+                    .FirstOrDefault();
                 var readingItem = reading?.DataContext;
                 var beforeY = reading?.TranslatePoint(default, host.Scroll)?.Y;
                 if (drag) host.Window.MouseMove(origin + new Vector(0, direction * (i + 1) * 2), RawInputModifiers.LeftMouseButton);
@@ -477,6 +552,197 @@ public class ChatTabViewSmokeTests {
         });
     }
 
+    [Test]
+    [Arguments(false, false)]
+    [Arguments(true, false)]
+    [Arguments(false, true)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Follow_tail_resumes_after_a_selection_is_cleared_or_hidden(bool collapse, bool appendWhileSelected) {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            try {
+                var path = Tmp.CreateFile("selection.jsonl", Enumerable.Repeat(UserLine, 20).Append(ThinkingLine).ToArray());
+                await host.LoadAsync(path);
+                var markdown = host.View.GetVisualDescendants().OfType<MarkdownView>()
+                    .Single(v => v.Classes.Contains("thinking"));
+                PresentAndLocate(host, markdown);
+                var block = markdown.GetVisualDescendants().OfType<TextBlock>()
+                    .First(t => MarkdownViewHarness.Reads(t) == "weighing it");
+                Point At(int index) {
+                    var glyph = block.TextLayout.HitTestTextPosition(index);
+                    return block.TranslatePoint(new Point(glyph.X + 1, glyph.Height / 2), host.Window)!.Value;
+                }
+                var start = At(0);
+                var end = At(6);
+                host.Window.MouseMove(start);
+                host.Window.MouseDown(start, MouseButton.Left);
+                host.Window.MouseMove(start + new Vector(0.1, 0), RawInputModifiers.LeftMouseButton);
+                await Assert.That(markdown.HasSelection).IsFalse();
+                await Assert.That(host.View.CanPreserveReadingPosition).IsFalse();
+                host.Window.MouseMove(end, RawInputModifiers.LeftMouseButton);
+                host.Window.MouseUp(end, MouseButton.Left);
+                host.Settle();
+                await Assert.That(markdown.HasSelection).IsTrue();
+                await Assert.That(host.View.CanPreserveReadingPosition).IsTrue();
+                await Assert.That(host.AtBottom()).IsTrue();
+
+                if (appendWhileSelected) {
+                    var offset = host.Scroll.Offset.Y;
+                    await host.AppendAndTickAsync(path, 2);
+                    host.Settle();
+                    await Assert.That(host.Scroll.Offset.Y).IsEqualTo(offset);
+                    await Assert.That(host.AtBottom()).IsFalse();
+                    await Assert.That(markdown.HasSelection).IsTrue();
+                }
+                if (collapse) {
+                    var summary = host.View.GetVisualDescendants().OfType<Button>()
+                        .Single(b => b.Classes.Contains("thinkingSummary"));
+                    Click(host, summary);
+                    await Assert.That(markdown.HasSelection).IsTrue();
+                    await Assert.That(markdown.IsEffectivelyVisible).IsFalse();
+                    Action<TimeSpan>? pendingFrame = null;
+                    host.View.RequestSmoothFrame = (_, frame) => pendingFrame = frame;
+                    var timestamp = TimeSpan.FromSeconds(1);
+                    void Wheel(double delta) {
+                        host.Window.MouseWheel(PresentAndLocate(host, host.View.FindControl<ItemsControl>("ChatItems")!), new Vector(0, delta));
+                        host.Settle();
+                        for (var i = 0; i < 100 && pendingFrame is { } frame; i++) {
+                            pendingFrame = null;
+                            timestamp += TimeSpan.FromMilliseconds(16);
+                            frame(timestamp);
+                            host.Settle();
+                        }
+                    }
+                    Wheel(100_000);
+                    await Assert.That(host.Scroll.Offset.Y).IsEqualTo(0);
+                    Wheel(-100_000);
+                    await Assert.That(host.AtBottom()).IsTrue();
+                    await Assert.That(host.View.CanPreserveReadingPosition).IsFalse();
+                } else {
+                    PresentAndLocate(host, markdown);
+                    var clear = At(9);
+                    host.Window.MouseMove(clear);
+                    host.Window.MouseDown(clear, MouseButton.Left);
+                    host.Window.MouseUp(clear, MouseButton.Left);
+                    host.Settle();
+                    await Assert.That(markdown.HasSelection).IsFalse();
+                    await Assert.That(host.View.CanPreserveReadingPosition).IsEqualTo(appendWhileSelected);
+                    if (appendWhileSelected) {
+                        host.Scroll.ScrollToEnd();
+                        host.Settle();
+                    }
+                }
+                await host.AppendAndTickAsync(path, 10);
+                host.Settle();
+                await Assert.That(host.AtBottom()).IsTrue();
+            } finally { await host.CloseAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_code_padding_selection_holds_the_chat_while_output_arrives() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            try {
+                var code = ThinkingLine.Replace("weighing it", "```\\nhello world\\n```");
+                var path = Tmp.CreateFile("padding-selection.jsonl", Enumerable.Repeat(UserLine, 20).Append(code).ToArray());
+                await host.LoadAsync(path);
+                var markdown = host.View.GetVisualDescendants().OfType<MarkdownView>().Single(v => v.Classes.Contains("thinking"));
+                PresentAndLocate(host, markdown);
+                var block = markdown.GetVisualDescendants().OfType<TextBlock>().Single(t => MarkdownViewHarness.Reads(t).Contains("hello world", StringComparison.Ordinal));
+                var first = block.TextLayout.HitTestTextPosition(0);
+                var last = block.TextLayout.HitTestTextPosition(8);
+                var start = block.TranslatePoint(new Point(first.X + block.Padding.Left - 8, first.Height / 2 + block.Padding.Top), host.Window)!.Value;
+                var end = block.TranslatePoint(new Point(last.X + block.Padding.Left, last.Height / 2 + block.Padding.Top), host.Window)!.Value;
+                host.Window.MouseMove(start);
+                host.Window.MouseDown(start, MouseButton.Left);
+                host.Window.MouseMove(end, RawInputModifiers.LeftMouseButton);
+                host.Window.MouseUp(end, MouseButton.Left);
+                host.Settle();
+                await Assert.That(markdown.HasSelection).IsTrue();
+                var offset = host.Scroll.Offset.Y;
+                await host.AppendAndTickAsync(path, 2);
+                host.Settle();
+                await Assert.That(host.Scroll.Offset.Y).IsEqualTo(offset);
+                await Assert.That(markdown.HasSelection).IsTrue();
+            } finally { await host.CloseAsync(); }
+        });
+    }
+
+    [Test]
+    [Arguments(false, false)]
+    [Arguments(true, false)]
+    [Arguments(false, true)]
+    [Arguments(true, true)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Selection_tracking_survives_clearing_and_reusing_a_markdown_row(bool plainFallback, bool reuse) {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            try {
+                var thinking = plainFallback
+                    ? ThinkingLine.Replace("weighing it", string.Concat(Enumerable.Repeat("> ", 128)) + "x")
+                    : ThinkingLine;
+                var path = Tmp.CreateFile("tracked-selection.jsonl", Enumerable.Repeat(UserLine, 20).Append(thinking).ToArray());
+                await host.LoadAsync(path);
+                var markdown = host.View.GetVisualDescendants().OfType<MarkdownView>().Single(v => v.Classes.Contains("thinking"));
+                var plain = markdown.Content as SelectableTextBlock;
+                if (plainFallback) {
+                    await Assert.That(plain).IsNotNull();
+                    plain!.SelectionStart = 0;
+                    plain.SelectionEnd = 4;
+                } else markdown.SelectAll();
+                await Assert.That(markdown.HasSelection).IsTrue();
+                var offset = host.Scroll.Offset.Y;
+                await host.AppendAndTickAsync(path, 2);
+                host.Settle();
+                await Assert.That(host.Scroll.Offset.Y).IsEqualTo(offset);
+                await Assert.That(host.AtBottom()).IsFalse();
+                if (reuse) markdown.Text = "replacement";
+                else if (plain is not null) plain.ClearSelection();
+                else markdown.ClearSelection();
+                await Assert.That(markdown.HasSelection).IsFalse();
+                host.Settle();
+                host.Scroll.ScrollToEnd();
+                host.Settle();
+                await host.AppendAndTickAsync(path, 4);
+                host.Settle();
+                await Assert.That(host.AtBottom()).IsTrue();
+            } finally { await host.CloseAsync(); }
+        });
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Sending_from_a_scrolled_up_chat_resumes_following(bool clickSend) {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            try {
+                var path = Tmp.CreateFile("send-scroll.jsonl", Enumerable.Repeat(UserLine, 40).ToArray());
+                await host.AttachAsync(path);
+                WheelUp(host);
+                host.Settle();
+                await Assert.That(host.AtBottom()).IsFalse();
+                var markdown = host.View.GetVisualDescendants().OfType<MarkdownView>().First(v => v.IsEffectivelyVisible);
+                markdown.SelectAll();
+                await Assert.That(markdown.HasSelection).IsTrue();
+                host.Type("continue");
+                if (clickSend) Click(host, host.View.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "SendButton"));
+                else host.PressEnter(RawInputModifiers.None);
+                host.Time.Advance(CrDelay);
+                await host.Terminal.PendingDeliveryForTesting!;
+                host.Settle();
+                await Assert.That(markdown.HasSelection).IsFalse();
+                await Assert.That(host.AtBottom()).IsTrue();
+                await host.AppendAndTickAsync(path, 10);
+                host.Settle();
+                await Assert.That(host.AtBottom()).IsTrue();
+            } finally { await host.CloseAsync(); }
+        });
+    }
+
     /// The window reuses one view for every session it opens: a reader who scrolled up in one
     /// session must not open the next one scrolled up and off the tail.
     [Test]
@@ -484,24 +750,29 @@ public class ChatTabViewSmokeTests {
     public async Task A_new_session_in_the_same_view_opens_at_the_bottom_and_follows() {
         await RunOnUiAsync(async () => {
             var host = new Host();
-            await host.LoadAsync(Tmp.CreateFile("first.jsonl", Enumerable.Repeat(UserLine, 60).ToArray()));
-            WheelUp(host);
-            host.Settle();
-            await Assert.That(host.Scroll.Offset.Y).IsEqualTo(0);
+            try {
+                await host.LoadAsync(Tmp.CreateFile("first.jsonl", Enumerable.Repeat(UserLine, 60).ToArray()));
+                WheelUp(host);
+                host.Settle();
+                await Assert.That(host.Scroll.Offset.Y).IsEqualTo(0);
 
-            var next = new Host(show: false);
-            var nextPath = Tmp.CreateFile("second.jsonl", Enumerable.Repeat(UserLine, 60).ToArray());
-            await next.LoadAsync(nextPath);
-            host.View.DataContext = next.Chat;
-            host.Settle();
-            await Assert.That(host.AtBottom()).IsTrue();
+                var next = new Host(show: false);
+                try {
+                    var nextPath = Tmp.CreateFile("second.jsonl", Enumerable.Repeat(UserLine, 60).ToArray());
+                    await next.LoadAsync(nextPath);
+                    host.View.DataContext = next.Chat;
+                    host.Settle();
+                    await Assert.That(host.AtBottom()).IsTrue();
+                    var items = host.View.FindControl<ItemsControl>("ChatItems")!;
+                    var last = items.ContainerFromItem(next.Chat.Items[^1])!;
+                    var lastBottom = last.TranslatePoint(new Point(0, last.Bounds.Height), host.Scroll)!.Value.Y;
+                    await Assert.That(Math.Abs(host.Scroll.Viewport.Height - lastBottom)).IsLessThan(40);
 
-            await next.AppendAndTickAsync(nextPath, 20);
-            host.Settle();
-            await Assert.That(host.AtBottom()).IsTrue();
-
-            await host.CloseAsync();
-            await next.CloseAsync();
+                    await next.AppendAndTickAsync(nextPath, 20);
+                    host.Settle();
+                    await Assert.That(host.AtBottom()).IsTrue();
+                } finally { await next.CloseAsync(); }
+            } finally { await host.CloseAsync(); }
         });
     }
 
@@ -574,22 +845,65 @@ public class ChatTabViewSmokeTests {
     public async Task A_link_in_an_assistant_row_opens_through_the_tabs_command() {
         await RunOnUiAsync(async () => {
             var host = new Host();
-            await host.LoadAsync(Tmp.CreateFile("link.jsonl", [AssistantLinkLine]));
+            var path = Tmp.CreateFile("link.jsonl", Enumerable.Repeat(UserLine, 40).Append(AssistantLinkLine).ToArray());
+            await host.LoadAsync(path);
 
-            await Assert.That(host.Chat.Items).Count().IsEqualTo(1);
+            await Assert.That(host.Chat.Items).Count().IsEqualTo(41);
 
-            var paragraph = host.View.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("markdown-paragraph"));
+            var paragraph = host.View.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("markdown-paragraph") && MarkdownViewHarness.Reads(t).Contains("docs", StringComparison.Ordinal));
             var glyph = paragraph.TextLayout.HitTestTextPosition("See ".Length);
             var origin = paragraph.TranslatePoint(new Point(glyph.X + paragraph.Padding.Left + 2, glyph.Y + paragraph.Padding.Top + glyph.Height / 2), host.Window)!.Value;
             host.Window.MouseMove(origin);
             host.Window.MouseDown(origin, MouseButton.Left);
+            await host.AppendAndTickAsync(path, 4);
+            host.Settle();
+            await Assert.That(host.AtBottom()).IsFalse();
             host.Window.MouseUp(origin, MouseButton.Left);
-            Dispatcher.UIThread.RunJobs();
+            host.Settle();
 
+            await Assert.That(host.AtBottom()).IsTrue();
             await Assert.That(host.Opener.Opened).IsEquivalentTo(new[] { "https://example.com/docs" });
             await host.CloseAsync();
         });
     }
+
+    [Test]
+    [Arguments(false, false)]
+    [Arguments(true, false)]
+    [Arguments(false, true)]
+    [NotInParallel("AvaloniaSession")]
+    public Task Follow_tail_resumes_after_a_primary_press(bool releaseOutside, bool loseCapture) => RunOnUiAsync(async () => {
+        var host = new Host();
+        try {
+            var path = Tmp.CreateFile("press-tail.jsonl", Enumerable.Repeat(UserLine, 40).ToArray());
+            await host.LoadAsync(path);
+            var items = host.View.FindControl<ItemsControl>("ChatItems")!;
+            var point = PresentAndLocate(host, items);
+            host.Window.MouseMove(point);
+            host.Window.MouseDown(point, MouseButton.Left);
+            await host.AppendAndTickAsync(path, 4);
+            host.Settle();
+            await Assert.That(host.AtBottom()).IsFalse();
+            host.Window.MouseDown(point, MouseButton.Right, RawInputModifiers.LeftMouseButton);
+            host.Window.MouseUp(point, MouseButton.Right, RawInputModifiers.LeftMouseButton);
+            await host.AppendAndTickAsync(path, 2);
+            host.Settle();
+            await Assert.That(host.AtBottom()).IsFalse();
+            if (loseCapture) {
+                IPointer? pointer = null;
+                host.Window.AddHandler(InputElement.PointerMovedEvent, (_, e) => pointer = e.Pointer, RoutingStrategies.Tunnel);
+                host.Window.MouseMove(point, RawInputModifiers.LeftMouseButton);
+                pointer!.Capture(items);
+                pointer.Capture(null);
+            } else {
+                var release = releaseOutside ? PresentAndLocate(host, host.Composer) : point;
+                host.Window.MouseUp(release, MouseButton.Left);
+            }
+            host.Settle();
+            await Assert.That(host.AtBottom()).IsTrue();
+            if (loseCapture) host.Window.MouseUp(point, MouseButton.Left);
+        } finally { await host.CloseAsync(); }
+    });
 
     /// A labelled row shows its verb phrase beside the detail; once the result lands the same item
     /// renders as a card with the page's name and its actions, and the plain row is gone.
@@ -708,7 +1022,9 @@ public class ChatTabViewSmokeTests {
             try {
                 var path = Tmp.CreateFile("escape.jsonl", [UserLine]);
                 var client = await host.AttachAsync(path);
-                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path, Status = "Running", AwaitingInput = false });
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
+                    TranscriptPath = path, Status = "Running", AwaitingInput = false, TurnAttested = true,
+                });
                 host.Type("keep this draft");
                 host.Chat.Tray.AddAll([new StagedAttachment("notes.txt", "text/plain", new byte[] { 1 })]);
                 if (button) Click(host, host.View.FindControl<Button>("InterruptButton")!);
@@ -723,6 +1039,119 @@ public class ChatTabViewSmokeTests {
         });
     }
 
+    /// A Working status is not proof of a turn: an idle PTY prompt reports AwaitingInput false
+    /// until a Stop lands. The button stays, so the shortcut's own gate is what keeps Escape off it.
+    [Test]
+    [Arguments(false, null, 0)]
+    [Arguments(false, false, 0)]
+    [Arguments(true, false, 1)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Escape_does_not_reach_a_prompt_without_a_confirmed_foreground_turn(
+            bool? awaitingInput, bool? turnAttested, int liveSubagents) {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            try {
+                var path = Tmp.CreateFile("escape-idle.jsonl", [UserLine]);
+                var client = await host.AttachAsync(path);
+                var ancestorSawEscape = false;
+                host.Window.KeyDown += (_, e) => ancestorSawEscape |= e.Key == Key.Escape;
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
+                    TranscriptPath = path, Status = "Running", AwaitingInput = awaitingInput, TurnAttested = turnAttested,
+                    LiveSubagents = liveSubagents,
+                });
+                host.Settle();
+                await Assert.That(host.Chat.ShowsInterrupt).IsTrue();
+                await Assert.That(host.Chat.CanInterruptWithEscape).IsFalse();
+                await Assert.That(host.View.FindControl<Button>("InterruptButton")!.Content).IsEqualTo("Interrupt");
+                host.Type("keep this draft");
+                host.Press(PhysicalKey.Escape);
+                await Assert.That(client.SentInput).IsEmpty();
+                await Assert.That(ancestorSawEscape).IsFalse();
+                await Assert.That(host.Composer.Text).IsEqualTo("keep this draft");
+                // An attested turn may be interrupted; the same shortcut goes inert as soon as it ends.
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
+                    TranscriptPath = path, Status = "Running", AwaitingInput = false, TurnAttested = true,
+                    LiveSubagents = liveSubagents,
+                });
+                host.Settle();
+                await Assert.That(host.View.FindControl<Button>("InterruptButton")!.Content).IsEqualTo("Interrupt (Esc)");
+                host.Press(PhysicalKey.Escape);
+                await Assert.That(client.SentInput).Count().IsEqualTo(1);
+                await Assert.That(client.SentInput[0]).IsEquivalentTo(new byte[] { 0x1b });
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
+                    TranscriptPath = path, Status = "Running", AwaitingInput = true, TurnAttested = false,
+                    LiveSubagents = liveSubagents,
+                });
+                host.Settle();
+                host.Press(PhysicalKey.Escape);
+                await Assert.That(client.SentInput).Count().IsEqualTo(1);
+                await Assert.That(host.Terminal.State.Phase).IsEqualTo(TerminalSessionPhase.Attached);
+                await Assert.That(host.Composer.Text).IsEqualTo("keep this draft");
+            } finally { await host.CloseAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_child_control_can_consume_Escape_before_the_chat_interrupts() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            try {
+                var path = Tmp.CreateFile("escape-child.jsonl", [UserLine]);
+                var client = await host.AttachAsync(path);
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
+                    TranscriptPath = path, Status = "Running", AwaitingInput = false, TurnAttested = true,
+                });
+                host.Settle();
+                await Assert.That(host.Chat.CanInterruptWithEscape).IsTrue();
+                host.Type("keep this draft");
+                var consumed = false;
+                host.Composer.KeyDown += (_, e) => {
+                    if (e.Key != Key.Escape) return;
+                    consumed = true;
+                    e.Handled = true;
+                };
+                host.Press(PhysicalKey.Escape);
+                await Assert.That(consumed).IsTrue();
+                await Assert.That(client.SentInput).IsEmpty();
+                await Assert.That(host.Composer.Text).IsEqualTo("keep this draft");
+            } finally { await host.CloseAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Escape_dismisses_the_composer_context_menu_before_interrupting_the_turn() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            try {
+                var path = Tmp.CreateFile("escape-menu.jsonl", [UserLine]);
+                var client = await host.AttachAsync(path);
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
+                    TranscriptPath = path, Status = "Running", AwaitingInput = false, TurnAttested = true,
+                });
+                host.Settle();
+                await Assert.That(host.Chat.CanInterruptWithEscape).IsTrue();
+                host.Type("keep this draft");
+                var item = new MenuItem { Header = "Copy" };
+                var menu = new ContextMenu { ItemsSource = new[] { item } };
+                host.Composer.ContextMenu = menu;
+                menu.Open(host.Composer);
+                host.Settle();
+                item.Focus();
+                await Assert.That(menu.IsOpen).IsTrue();
+                host.Press(PhysicalKey.Escape);
+                await Assert.That(menu.IsOpen).IsFalse();
+                await Assert.That(client.SentInput).IsEmpty();
+                host.Composer.Focus();
+                host.Press(PhysicalKey.Escape);
+                await Assert.That(client.SentInput).Count().IsEqualTo(1);
+                await Assert.That(client.SentInput[0]).IsEquivalentTo(new byte[] { 0x1b });
+                await Assert.That(host.Composer.Text).IsEqualTo("keep this draft");
+            } finally { await host.CloseAsync(); }
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_queue_banner_shows_sent_text_until_the_transcript_echoes_it() {
@@ -730,6 +1159,7 @@ public class ChatTabViewSmokeTests {
             var host = new Host();
             var path = Tmp.CreateFile("queue.jsonl", [UserLine]);
             var client = await host.AttachAsync(path);
+            host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path, Status = "Running", AwaitingInput = true });
             host.Type("queued follow-up");
             host.PressEnter(RawInputModifiers.None);
             host.Settle();
@@ -745,6 +1175,7 @@ public class ChatTabViewSmokeTests {
             await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == QueuedChatMessage.AwaitingPickupNote && t.IsVisible)).IsFalse();
             var queued = host.Chat.QueuedMessages.Single();
             var send = banner.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "SendQueuedButton" && b.IsVisible);
+            await Assert.That(send.Content).IsEqualTo("Send again");
             host.Type("queued follow-up");
             Click(host, send);
             await WaitUntilAsync(() => client.SentInput.Count == 3, what: "queued text pasted a second time");
@@ -968,6 +1399,10 @@ public class ChatTabViewSmokeTests {
             var you = host.View.GetVisualDescendants().OfType<TextBlock>()
                 .Single(t => t.Classes.Contains("toolKindChip") && t.Text == "You");
             await Assert.That(you.HorizontalAlignment).IsEqualTo(Avalonia.Layout.HorizontalAlignment.Left);
+
+            host.Chat.Items.OfType<UserTurnItem>().Single().Sender.Title = "Tony";
+            host.Settle();
+            await Assert.That(you.Text).IsEqualTo("Tony");
             await host.CloseAsync();
         });
     }
@@ -984,9 +1419,9 @@ public class ChatTabViewSmokeTests {
             await Assert.That(host.Chat.Items).Count().IsEqualTo(1);
             var summary = Summary(host.View);
             await Assert.That(summary.IsVisible).IsTrue();
-            await Assert.That(OnlyGroup(host).SummaryLine).IsEqualTo("Searched files, read a file · ls -la");
+            await Assert.That(OnlyGroup(host).Summary).IsEqualTo("Searched files, read a file");
             await Assert.That(summary.GetVisualDescendants().OfType<TextBlock>().Select(t => t.Text))
-                .Contains("Searched files, read a file · ls -la");
+                .Contains("Searched files, read a file");
             await Assert.That(ToolRows(host.View)).Count().IsEqualTo(1);
             await Assert.That(((ToolCallItem)ToolRows(host.View)[0].DataContext!).Outcome).IsEqualTo(ToolOutcome.Running);
             var card = host.View.GetVisualDescendants().OfType<Border>().Single(b => b.Classes.Contains("toolGroup"));
@@ -995,14 +1430,14 @@ public class ChatTabViewSmokeTests {
 
             Click(host, summary);
             await Assert.That(OnlyGroup(host).IsExpanded).IsTrue();
-            await Assert.That(OnlyGroup(host).SummaryLine).IsEqualTo("Searched files, read a file");
+            await Assert.That(OnlyGroup(host).Summary).IsEqualTo("Searched files, read a file");
             await Assert.That(ToolRows(host.View)).Count().IsEqualTo(3);
             await Assert.That(card.Classes.Contains("folded")).IsFalse();
             await Assert.That(card.Margin.Bottom).IsEqualTo(22);
 
             Click(host, summary);
             await Assert.That(OnlyGroup(host).IsExpanded).IsFalse();
-            await Assert.That(OnlyGroup(host).SummaryLine).IsEqualTo("Searched files, read a file · ls -la");
+            await Assert.That(OnlyGroup(host).Summary).IsEqualTo("Searched files, read a file");
             await Assert.That(ToolRows(host.View)).Count().IsEqualTo(1);
             await host.CloseAsync();
         });

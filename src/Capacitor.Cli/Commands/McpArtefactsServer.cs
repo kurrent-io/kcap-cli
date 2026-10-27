@@ -94,7 +94,7 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
         await using var writer = new StreamWriter(stdout, new UTF8Encoding(false));
         writer.AutoFlush = true;
 
-        await McpStdioLoop.RunAsync(reader, writer, TimedDispatchToolCallAsync, (id, method, request) => method switch {
+        await McpStdioLoop.RunAsync(reader, writer, tools, TimedDispatchToolCallAsync, (id, method, request) => method switch {
             null         => BuildErrorResponse(id, -32600, "Invalid request: method must be a string"),
             "initialize" => BuildInitializeResponse(id, request),
             "tools/list" => BuildToolsListResponse(id, tools),
@@ -111,6 +111,10 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
     internal const string ServerInstructions =
         "Use these tools to publish a self-contained HTML page and get a shareable link back — a plan, " +
         "a report, a comparison, anything a person would rather read as a page than as terminal output. " +
+        "When the user asks for an artifact, a page, a dashboard or a report to look at or share, this is " +
+        "how it is made: publish it with publish_page rather than with your harness's own artifact tool, " +
+        "unless they name that tool. Put the link in your reply every time; when your harness has a " +
+        "browser tool, also open the link there, and never open a system browser for it. " +
         "The page is served under a sandbox that cannot reach the network: inline every style, script " +
         "and image as a data URI, because an external URL will silently render as nothing. A page " +
         "is private to its owner until you say otherwise, so pass visibility (and grants, under " +
@@ -191,7 +195,7 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
                 return BuildToolResult(id, $"Error: HTTP {(int)httpResponse.StatusCode} — {body}", isError: true);
             }
 
-            return BuildToolResult(id, PageResultKeys.Rename(body));
+            return toolName == "publish_page" ? BuildPublishResult(id, body) : BuildToolResult(id, PageResultKeys.Rename(body));
         } catch (ArgumentException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
         } catch (HttpRequestException ex) {
@@ -435,6 +439,32 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
 
     static StringContent ToJsonContent(JsonObject body) => new(body.ToJsonString(), Encoding.UTF8, "application/json");
 
+    // Travels with every publish so it reaches a harness that surfaces neither server instructions
+    // nor a skill. A system browser is ruled out because a hosted agent's host is not the user's machine.
+    internal const string PublishFollowUp =
+        "Put this link in your reply. If your harness has a browser tool, also open the link there now; "
+      + "do not open a system browser.";
+
+    /// <summary>The follow-up rides inside the one JSON block rather than as a second content item:
+    /// harnesses join a result's blocks into one string, and the page card is built by parsing
+    /// that string as a single JSON document.</summary>
+    internal static string BuildPublishResult(JsonNode id, string body) {
+        var renamed = PageResultKeys.Rename(body);
+        JsonNode? root;
+
+        try {
+            root = JsonNode.Parse(renamed);
+        } catch (JsonException) {
+            return BuildToolResult(id, renamed);
+        }
+
+        if (root is not JsonObject page) return BuildToolResult(id, renamed);
+
+        page["follow_up"] = PublishFollowUp;
+
+        return BuildToolResult(id, page.ToJsonString(PageResultKeys.Output));
+    }
+
     static string BuildToolResult(JsonNode id, string text, bool isError = false) =>
         ToResponse<McpToolCallResult>(id, new([new("text", text)], isError ? true : null), McpJsonContext.Default.McpToolCallResult);
 
@@ -460,7 +490,8 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
 
     internal static McpTool[] BuildToolsList() => [
         new("publish_page",
-            "Publish a self-contained HTML page and get back a link anyone you grant access to can open. "
+            "Make the artifact, page, report or dashboard the user asked for: publish a self-contained "
+          + "HTML page and get back a link anyone you grant access to can open. "
           + "The page runs sandboxed with no network access, so inline every style, script and image as a "
           + "data URI. Pass the page as 'html' or name a local file with 'path'. It is private to you "
           + "unless you set visibility. Use update_id to publish a revision of a page you already "

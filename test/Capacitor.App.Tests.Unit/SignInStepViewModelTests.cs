@@ -570,6 +570,84 @@ public class SignInStepViewModelTests {
         await Assert.That(isError).IsFalse();
     }
 
+    /// A workspace kcap.ai is still creating is waited on inside the sign-in, saying so, never as a failure.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_workspace_still_being_created_is_a_wait_that_finishes_by_itself() {
+        var (waiting, status, isError, detail, satisfied) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness();
+            var live = new TaskCompletionSource<AuthResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+            h.Connect.Choice = ConnectChoice.Discover;
+            h.Operation = (_, _) => {
+                h.Progress.ProvisioningWait("Acme");
+                return live.Task;
+            };
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+
+            var run = h.SignIn();
+            var during = (h.Vm.Busy, h.Vm.Status, h.Vm.StatusIsError, h.Vm.StatusDetail);
+            live.SetResult(Committed(AuthProvider.WorkOS));
+            await run;
+
+            return (during.Busy, during.Status, during.StatusIsError, during.StatusDetail, h.Vm.Satisfied);
+        });
+
+        await Assert.That(waiting).IsTrue();
+        await Assert.That(status).IsEqualTo(SignInStepViewModel.WorkspaceSettingUp);
+        await Assert.That(isError).IsFalse();
+        await Assert.That(detail).IsEqualTo(SignInStepViewModel.WorkspaceSettingUpDetail("Acme"));
+        await Assert.That(satisfied).IsTrue();
+    }
+
+    /// A wait that ends before the workspace is live is still not a failed sign-in; a workspace kcap.ai
+    /// gave up on is, and says so rather than that the account has none.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task A_provisioning_wait_ends_as_a_retry_or_as_the_failure_it_was(bool failed) {
+        var (status, isError, detail) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness();
+            h.Connect.Choice = ConnectChoice.Discover;
+            h.Operation = (_, _) => {
+                h.Progress.ProvisioningWait("Acme");
+                if (failed) h.Progress.ProvisioningFailed("Acme");
+                return Task.FromResult<AuthResult>(failed
+                    ? new AuthResult.Failed("No kcap tenants are linked to your account.", AuthFailureReason.NoTenantsFound)
+                    : new AuthResult.Failed("Acme is still being created.", AuthFailureReason.ProvisioningInProgress));
+            };
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+
+            await h.SignIn();
+
+            return (h.Vm.Status, h.Vm.StatusIsError, h.Vm.StatusDetail);
+        });
+
+        await Assert.That(status).IsEqualTo(failed ? SignInStepViewModel.WorkspaceNotCreated : SignInStepViewModel.WorkspaceSettingUp);
+        await Assert.That(isError).IsEqualTo(failed);
+        await Assert.That(detail).IsEqualTo(failed
+            ? SignInStepViewModel.WorkspaceNotCreatedDetail("Acme")
+            : SignInStepViewModel.WorkspaceStillSettingUpDetail);
+    }
+
+    /// Opening kcap.ai's sign-up is remembered, so a relaunch can open on sign-in; a sign-in clears it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Opening_the_sign_up_is_remembered_until_a_sign_in_commits() {
+        var (opened, now, afterCommit) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness { SigningUp = true };
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+            var opened = h.AppState.State.WebSignUpOpenedAt;
+
+            await h.Vm.ContinueAfterSignUpCommand.Execute().ToTask();
+
+            return (opened, h.Time.GetUtcNow(), h.AppState.State.WebSignUpOpenedAt);
+        });
+
+        await Assert.That(opened).IsEqualTo(now);
+        await Assert.That(afterCommit).IsNull();
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Reopening_the_sign_up_opens_the_same_page() {
@@ -935,7 +1013,7 @@ public class SignInStepViewModelTests {
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_pane_renders_sign_in_with_the_work_account_first() {
-        var (workAccount, urlBox, urlBoxShown, statusShown) = await AvaloniaSession.DispatchAsync(async () => {
+        var (workAccount, urlBox, urlBoxShown, statusShown, editionFooter, signInFooter) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
             var edition = new EditionStepViewModel(CliTelemetry.Disabled(TimeProvider.System).Funnel, () => null);
             var vm = new OnboardingViewModel([edition, h.Vm]);
@@ -944,6 +1022,8 @@ public class SignInStepViewModelTests {
             var window = new MainWindow { Onboarding = vm };
             window.Show();
             Dispatcher.UIThread.RunJobs();
+            var footer = window.GetVisualDescendants().OfType<Border>().Single(b => b.Name == "StepFooter");
+            var footerOnEdition = footer.IsVisible;
 
             await edition.SignInCommand.Execute().ToTask(); // Edition -> Sign in
             await vm.PendingAdvanceForTesting;
@@ -958,14 +1038,16 @@ public class SignInStepViewModelTests {
             window.Close();
             Dispatcher.UIThread.RunJobs();
 
-            return (button, box, shown, statusVisible);
+            return (button, box, shown, statusVisible, footerOnEdition, footer.IsVisible);
         });
 
         await Assert.That(workAccount).IsNotNull();
         await Assert.That(urlBox).IsNotNull();
-        await Assert.That(urlBox!.Classes.Contains("frField")).IsTrue();
+        await Assert.That(urlBox!.Classes.Contains("onboardingField")).IsTrue();
         await Assert.That(urlBoxShown).IsFalse(); // behind "I have a workspace URL"
         await Assert.That(statusShown).IsFalse(); // the ready line only restates the button
+        await Assert.That(editionFooter).IsFalse();
+        await Assert.That(signInFooter).IsTrue();
     }
 
     [Test]

@@ -38,6 +38,13 @@ internal static class GitHubPrDetector {
             : null;
     }
 
+    /// <summary>The PR at <paramref name="url"/>, from any directory; a reply for another number is not it.</summary>
+    public static async Task<PrInfo?> DescribeAsync(string url, int number, string cwd, TimeSpan cap, CommandRunner run) {
+        if (!CommandArgument.IsPlain(url)) return null;
+
+        return Parse(await run("gh", $"pr view {url} --json {Fields}", cwd, cap))?.Pr is { } pr && pr.Number == number ? pr : null;
+    }
+
     const int HistoryDepth = 100;
 
     /// <summary>

@@ -25,7 +25,6 @@ sealed class McpHandoffServer(ConfigRoot config, ProfileContext profiles, TokenS
 
     public async Task<int> RunAsync() {
         var baseUrl = profiles.Resolution.ServerUrl!;
-        var current = WorkContextIds.CanonicalSessionId(HarnessRequesterContext.Resolve().SessionId);
 
         var tools = BuildToolsList();
 
@@ -52,6 +51,8 @@ sealed class McpHandoffServer(ConfigRoot config, ProfileContext profiles, TokenS
 
             try {
                 var client = await sessionClient.GetAsync();
+                // Per call: a hosted agent is bound to its session only after this server has started.
+                var current = WorkContextIds.CanonicalSessionId(HarnessRequesterContext.Resolve().SessionId);
                 return await HandleToolCallAsync(callId, callRequest, client, baseUrl, current);
             } catch (Exception ex) {
                 // The detail goes to stderr, not the client, which could leak local paths.
@@ -80,7 +81,7 @@ sealed class McpHandoffServer(ConfigRoot config, ProfileContext profiles, TokenS
         await using var writer = new StreamWriter(stdout, new UTF8Encoding(false));
         writer.AutoFlush = true;
 
-        await McpStdioLoop.RunAsync(reader, writer, TimedDispatchToolCallAsync, (id, method, request) => method switch {
+        await McpStdioLoop.RunAsync(reader, writer, tools, TimedDispatchToolCallAsync, (id, method, request) => method switch {
             null         => BuildErrorResponse(id, -32600, "Invalid request: method must be a string"),
             "initialize" => BuildInitializeResponse(id, request),
             "tools/list" => BuildToolsListResponse(id, tools),

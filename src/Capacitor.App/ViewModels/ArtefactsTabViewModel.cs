@@ -70,7 +70,8 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
             },
             Apply,
             "artefacts tab",
-            onSettled: RaiseLoading);
+            onSettled: RaiseLoading,
+            cached: state => _source?.Cached(state.SessionId));
         _activity = activity;
         _time = time;
         _openWorkingCopy = openWorkingCopy ?? OpenFile;

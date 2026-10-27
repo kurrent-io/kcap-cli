@@ -2,122 +2,104 @@ using Capacitor.Cli.Services;
 
 namespace Capacitor.Cli.Tests.Unit.Services;
 
-/// <summary>What the verify engine reads from a systemd manager: the daemon's pid from one query, and a
-/// refused systemctl call reported as false rather than thrown.</summary>
+/// <summary>The verify engines prove ownership against the job pid the manager reports, so a running
+/// systemd unit must answer with its MainPID and a stopped one with none.</summary>
 public class SystemdServiceManagerTests {
     [TempHome] public required TempHome Home { get; init; }
 
-    const string Id = "test";
-
-    static readonly string UnitFile = Path.Combine(".config", "systemd", "user", SystemdUnit.UnitName(Id));
+    static (int, string, string) Systemctl(string[] args, bool active) =>
+        args.Contains("is-active") ? (active ? 0 : 3, active ? "active\n" : "inactive\n", "")
+        : args.Contains("is-enabled") ? (0, "enabled\n", "")
+        : args.Contains("--property=MainPID") ? (0, "4242\n", "")
+        : (0, "", "");
 
     [Test]
-    public async Task Query_reports_the_main_pid_of_an_active_unit() {
-        var calls = new List<string[]>();
-        var mgr = new SystemdServiceManager(Home, runProcess: (_, args) => {
-            calls.Add(args);
-            return (0, "ActiveState=active\nUnitFileState=enabled\nMainPID=4242\n", "");
-        });
+    [Arguments(true, 4242)]
+    [Arguments(false, null)]
+    public async Task Query_reports_the_main_pid_only_while_running(bool active, int? expectedPid) {
+        var path = SystemdUnit.UnitPath(Home, "test");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "ExecStart=/opt/kcap/kcap-daemon --name test\n");
 
-        var q = mgr.Query(Id);
+        var query = new SystemdServiceManager(Home, runProcess: (_, args) => Systemctl(args, active)).Query("test");
 
-        await Assert.That(q.JobPid).IsEqualTo(4242);
-        await Assert.That(q.State).IsEqualTo(ServiceState.Running);
-        await Assert.That(calls).Count().IsEqualTo(1);
-        await Assert.That(calls[0]).IsEquivalentTo(SystemdUnit.ShowStateArgs(Id));
+        await Assert.That(query.State).IsEqualTo(active ? ServiceState.Running : ServiceState.Installed);
+        await Assert.That(query.JobPid).IsEqualTo(expectedPid);
     }
 
     [Test]
-    public async Task Start_and_stop_report_a_refusal() {
-        var mgr = new SystemdServiceManager(Home, runProcess: (_, _) => (5, "", "Unit not found."));
+    public async Task A_refused_start_or_stop_returns_false_with_the_error() {
+        var manager = new SystemdServiceManager(Home, runProcess: (_, _) => (1, "", "denied"));
 
-        await Assert.That(mgr.Start(Id, out var startError)).IsFalse();
-        await Assert.That(startError).Contains("Unit not found.");
-        await Assert.That(mgr.Stop(Id, out var stopError)).IsFalse();
-        await Assert.That(stopError).Contains("Unit not found.");
+        await Assert.That(manager.Start("test", out var startError)).IsFalse();
+        await Assert.That(startError).Contains("denied");
+        await Assert.That(manager.Stop("test", out var stopError)).IsFalse();
+        await Assert.That(stopError).Contains("denied");
     }
 
     [Test]
-    public async Task Uninstall_keeps_the_unit_when_a_failed_disable_leaves_the_daemon_running() {
-        var path = Home.CreateFile(UnitFile, "unit");
-        var mgr = new SystemdServiceManager(Home, runProcess: (_, args) =>
-            args.Contains("disable") ? (1, "", "Access denied")
-            : args.Contains("show") ? (0, "ActiveState=active\nUnitFileState=enabled\nMainPID=4242\n", "")
+    [Arguments("active", false)]
+    [Arguments("inactive", true)]
+    public async Task A_refused_disable_removes_the_unit_only_once_it_is_inactive(string activeState, bool removed) {
+        var path = SystemdUnit.UnitPath(Home, "test");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "ExecStart=/opt/kcap/kcap-daemon --name test\n");
+        var manager = new SystemdServiceManager(Home, runProcess: (_, args) =>
+            args.Contains("disable") ? (1, "", "timeout")
+            : args.Contains("is-active") ? (activeState == "active" ? 0 : 3, activeState + "\n", "")
             : (0, "", ""));
 
-        var ok = mgr.Uninstall(Id, out var error);
-
-        await Assert.That(ok).IsFalse();
-        await Assert.That(error).Contains("Access denied");
-        await Assert.That(File.Exists(path)).IsTrue();
+        await Assert.That(manager.Uninstall("test", out _)).IsEqualTo(removed);
+        await Assert.That(File.Exists(path)).IsEqualTo(!removed);
     }
 
     [Test]
-    public async Task Uninstall_keeps_the_unit_when_systemd_cannot_be_asked() {
-        var path = Home.CreateFile(UnitFile, "unit");
-        var mgr = new SystemdServiceManager(Home, runProcess: (_, _) => (1, "", "Failed to connect to bus"));
+    public async Task A_refused_reload_puts_the_previous_unit_back() {
+        var path = SystemdUnit.UnitPath(Home, "test");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        const string unit = "[Service]\nEnvironment=PATH=/usr/bin\nExecStart=/opt/kcap/kcap-daemon --name test\n";
+        File.WriteAllText(path, unit);
+        var manager = new SystemdServiceManager(Home, runProcess: (_, _) => (1, "", "denied"));
 
-        await Assert.That(mgr.Uninstall(Id, out _)).IsFalse();
-        await Assert.That(File.Exists(path)).IsTrue();
-    }
-
-    /// <summary>Disabling a unit systemd never loaded fails, but there is no daemon to leave behind.</summary>
-    [Test]
-    public async Task Uninstall_removes_the_unit_when_the_daemon_is_not_running() {
-        var path = Home.CreateFile(UnitFile, "unit");
-        var mgr = new SystemdServiceManager(Home, runProcess: (_, args) =>
-            args.Contains("disable") ? (1, "", "Unit file does not exist")
-            : args.Contains("show") ? (0, "ActiveState=inactive\nUnitFileState=\nMainPID=0\n", "")
-            : (0, "", ""));
-
-        var ok = mgr.Uninstall(Id, out var error);
-
-        await Assert.That(ok).IsTrue();
-        await Assert.That(error).IsNull();
-        await Assert.That(File.Exists(path)).IsFalse();
+        await Assert.That(() => manager.SetEnvironment("test", "PATH", "/usr/bin:/opt/agents")).Throws<InvalidOperationException>();
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(unit);
     }
 
     [Test]
-    public async Task Uninstall_keeps_the_unit_when_a_failed_disable_leaves_it_deactivating() {
-        var path = Home.CreateFile(UnitFile, "unit");
-        var mgr = new SystemdServiceManager(Home, runProcess: (_, args) =>
-            args.Contains("disable") ? (1, "", "Access denied")
-            : args.Contains("show") ? (0, "ActiveState=deactivating\nUnitFileState=enabled\nMainPID=4242\n", "")
-            : (0, "", ""));
+    public async Task SetEnvironment_returns_the_unit_it_replaced() {
+        var path = SystemdUnit.UnitPath(Home, "test");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        const string unit = "[Service]\nEnvironment=PATH=/usr/bin\nExecStart=/opt/kcap/kcap-daemon --name test\n";
+        File.WriteAllText(path, unit);
+        var manager = new SystemdServiceManager(Home, runProcess: (_, _) => (0, "", ""));
 
-        await Assert.That(mgr.Uninstall(Id, out _)).IsFalse();
-        await Assert.That(File.Exists(path)).IsTrue();
+        await Assert.That(manager.SetEnvironment("test", "PATH", "/usr/bin:/opt/agents")).IsEqualTo(unit);
+        await Assert.That(SystemdUnit.EnvFromUnit(File.ReadAllText(path))["PATH"]).IsEqualTo("/usr/bin:/opt/agents");
+        await Assert.That(manager.SetEnvironment("test", "PATH", "/usr/bin:/opt/agents")).IsNull();
     }
 
-    /// <summary>An exclusive handle makes the unit file unreadable on every platform and for root too; the
-    /// state still comes back from systemctl, so a failed disable keeps the unit instead of throwing.</summary>
+    /// <summary>A line kcap did not write is left alone, and that is a failure, not "already current".</summary>
     [Test]
-    public async Task Uninstall_keeps_an_unreadable_unit_whose_daemon_is_still_running() {
-        var path = Home.CreateFile(UnitFile, "unit");
-        var mgr = new SystemdServiceManager(Home, runProcess: (_, args) =>
-            args.Contains("disable") ? (1, "", "Access denied")
-            : args.Contains("show") ? (0, "ActiveState=active\nUnitFileState=enabled\nMainPID=4242\n", "")
-            : (0, "", ""));
+    public async Task A_line_it_cannot_rewrite_is_reported_rather_than_read_as_current() {
+        var path = SystemdUnit.UnitPath(Home, "test");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        const string unit = "[Service]\nEnvironment=PATH=/usr/bin KCAP_PROFILE=work\nExecStart=/opt/kcap/kcap-daemon --name test\n";
+        File.WriteAllText(path, unit);
+        var manager = new SystemdServiceManager(Home, runProcess: (_, _) => (0, "", ""));
 
-        bool ok;
-        using (new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
-            ok = mgr.Uninstall(Id, out _);
-
-        await Assert.That(ok).IsFalse();
-        await Assert.That(File.Exists(path)).IsTrue();
+        await Assert.That(() => manager.SetEnvironment("test", "PATH", "/usr/bin:/opt/agents")).Throws<InvalidOperationException>();
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(unit);
     }
 
     [Test]
-    public async Task Query_of_an_unreadable_unit_reports_its_state_without_a_binary() {
-        var path = Home.CreateFile(UnitFile, "ExecStart=/opt/kcap/kcap-daemon --name test");
-        var mgr = new SystemdServiceManager(Home, runProcess: (_, _) => (0, "ActiveState=active\nUnitFileState=enabled\nMainPID=4242\n", ""));
+    public async Task A_systemctl_that_cannot_start_puts_the_previous_unit_back() {
+        var path = SystemdUnit.UnitPath(Home, "test");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        const string unit = "[Service]\nEnvironment=PATH=/usr/bin\nExecStart=/opt/kcap/kcap-daemon --name test\n";
+        File.WriteAllText(path, unit);
+        var manager = new SystemdServiceManager(Home, runProcess: (_, _) => throw new System.ComponentModel.Win32Exception("no systemctl"));
 
-        ServiceQuery q;
-        using (new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
-            q = mgr.Query(Id);
-
-        await Assert.That(q.JobPid).IsEqualTo(4242);
-        await Assert.That(q.UnitPresent).IsTrue();
-        await Assert.That(q.BinaryPath).IsNull();
+        await Assert.That(() => manager.SetEnvironment("test", "PATH", "/usr/bin:/opt/agents")).Throws<System.ComponentModel.Win32Exception>();
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(unit);
     }
 }

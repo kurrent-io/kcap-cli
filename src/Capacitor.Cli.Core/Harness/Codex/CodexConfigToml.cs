@@ -102,6 +102,14 @@ public static class CodexConfigToml {
         UpdateMcpRegistration(configPath, remove: false,
                               Mcp.KcapBinaryCommand.Resolve(resolveBinaryPath));
 
+    /// <summary>Whether kcap previously registered MCP servers here, independently of recording hooks.</summary>
+    public static bool HasMcpInstallRecord(string configPath) {
+        var ledgerPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(configPath))!, "mcp-ownership-v1.json");
+        if (!File.Exists(ledgerPath)) return false;
+        CanonicalConfigPath(configPath);
+        return ReadOwnershipLedger(ledgerPath)?["entries"] is JsonObject entries && entries.Count > 0;
+    }
+
     /// <summary>
     /// Removes the kcap-owned MCP server entries (<see cref="KcapMcpServers.ForCodex"/>)
     /// from <c>~/.codex/config.toml</c> . Only those names

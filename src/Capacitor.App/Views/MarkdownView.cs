@@ -40,8 +40,12 @@ public sealed class MarkdownView : ContentControl {
     // The extension builds its TextMate highlighters on first use and keeps them, so one
     // instance serves the app; a per-view instance rebuilds them on every render.
     static readonly TextMateExtension Highlighting = new();
+    static readonly Cursor IBeamCursor = new(StandardCursorType.Ibeam);
+    static readonly Cursor HandCursor = new(StandardCursorType.Hand);
+    static readonly Cursor ArrowCursor = new(StandardCursorType.Arrow);
 
     readonly MarkdownViewer _viewer = new();
+    ChatTabView? _selectionHost;
     readonly DetailsState _details = new();
     readonly DetailsExtension _detailsExtension;
     readonly CodeBlockActions _codeActions;
@@ -72,7 +76,14 @@ public sealed class MarkdownView : ContentControl {
             if (OpenLink is { } open && open.CanExecute(e.Url)) open.Execute(e.Url);
         };
         MarkViewSelection.Attach(this, _viewer, CopySelectionAsync);
+        // Bubble on the host runs after the viewer's own move, which has already chosen Hand or
+        // the arrow. Prose takes the I-beam and a link the hand; a bare image stays on the arrow.
         AddHandler(PointerMovedEvent, OnPointerMoved, RoutingStrategies.Bubble, handledEventsToo: true);
+        AddHandler(PointerPressedEvent, OnSelectionInput, RoutingStrategies.Bubble, handledEventsToo: true);
+        AddHandler(PointerMovedEvent, OnSelectionInput, RoutingStrategies.Bubble, handledEventsToo: true);
+        AddHandler(PointerReleasedEvent, OnSelectionInput, RoutingStrategies.Bubble, handledEventsToo: true);
+        AddHandler(KeyDownEvent, OnSelectionInput, RoutingStrategies.Bubble, handledEventsToo: true);
+        AddHandler(KeyUpEvent, OnSelectionInput, RoutingStrategies.Bubble, handledEventsToo: true);
         ContextFlyout = TextContextMenu.ForMarkdown;
         Content = _viewer;
     }
@@ -81,13 +92,46 @@ public sealed class MarkdownView : ContentControl {
 
     internal void ExtendSelection(Point pointInView) {
         if (Content is MarkdownViewer) MarkViewSelection.Extend(_viewer, pointInView);
+        _selectionHost?.UpdateSelection(this);
     }
 
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e) {
+        base.OnAttachedToVisualTree(e);
+        _selectionHost = this.FindAncestorOfType<ChatTabView>();
+        _selectionHost?.UpdateSelection(this);
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e) {
+        _selectionHost?.RemoveSelection(this);
+        _selectionHost = null;
+        base.OnDetachedFromVisualTree(e);
+    }
+
+    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change) {
+        base.OnPropertyChanged(change);
+        if (change.Property != ContentProperty) return;
+        if (change.OldValue is SelectableTextBlock old) old.PropertyChanged -= OnPlainSelectionChanged;
+        if (change.NewValue is SelectableTextBlock plain) plain.PropertyChanged += OnPlainSelectionChanged;
+        _selectionHost?.UpdateSelection(this);
+    }
+
+    void OnPlainSelectionChanged(object? sender, AvaloniaPropertyChangedEventArgs e) {
+        if (e.Property == SelectableTextBlock.SelectionStartProperty || e.Property == SelectableTextBlock.SelectionEndProperty)
+            _selectionHost?.UpdateSelection(this);
+    }
+
+    void OnSelectionInput(object? sender, RoutedEventArgs e) => _selectionHost?.UpdateSelection(this);
+
     void OnPointerMoved(object? sender, PointerEventArgs e) {
-        var tip = FindHyperlinkAt(_viewer, e.GetPosition(_viewer))?.NavigateUri?.ToString()
-            ?? ImageUnder(e.Source as Visual)?.Target;
+        var link = FindHyperlinkAt(_viewer, e.GetPosition(_viewer));
+        var image = ImageUnder(e.Source as Visual);
+        var tip = link?.NavigateUri?.ToString() ?? image?.Target;
         if (!string.Equals(ToolTip.GetTip(_viewer) as string, tip, StringComparison.Ordinal))
             ToolTip.SetTip(_viewer, tip);
+        // Cursor inherits, so the viewer's value is what a child with none of its own shows.
+        _viewer.Cursor = link is not null || image?.Target is not null ? HandCursor
+            : image is not null ? ArrowCursor
+            : IBeamCursor;
     }
 
     static MarkdownImage? ImageUnder(Visual? visual) {
@@ -113,9 +157,16 @@ public sealed class MarkdownView : ContentControl {
         await clipboard.SetTextAsync(text);
     }
 
+    internal void ClearSelection() {
+        if (Content is SelectableTextBlock plain) plain.ClearSelection();
+        else _viewer.ClearSelection();
+        _selectionHost?.UpdateSelection(this);
+    }
+
     public void SelectAll() {
         if (Content is SelectableTextBlock plain) plain.SelectAll();
         else _viewer.SelectAll();
+        _selectionHost?.UpdateSelection(this);
     }
 
     /// Clearing first is what makes a build of the same text happen at all: the viewer renders on
@@ -134,6 +185,7 @@ public sealed class MarkdownView : ContentControl {
             _viewer.Markdown = null;
             Content = new SelectableTextBlock { Text = Text, TextWrapping = TextWrapping.Wrap };
         }
+        _selectionHost?.UpdateSelection(this);
     }
 
     internal string? KeyboardLinkUrl => _linkKeys.CurrentUrl;
@@ -178,7 +230,12 @@ public sealed class MarkdownView : ContentControl {
         // After the highlighter, whose code block renderer this one wraps.
         _viewer.Extensions.Add(_codeActions);
         // Only the pipeline change re-renders, so it goes last.
-        _viewer.Pipeline = Flavor == MarkdownFlavor.GitHub ? GitHubPipeline.Instance : null;
+        _viewer.Pipeline = Flavor switch {
+            MarkdownFlavor.GitHub => GitHubPipeline.Instance,
+            MarkdownFlavor.Prompt => ChatPipeline.Prompt,
+            _                     => ChatPipeline.Instance,
+        };
+        _selectionHost?.UpdateSelection(this);
     }
 
     /// Re-rendering rebuilds MarkView's selection index, so it always matches what is visible.

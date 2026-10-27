@@ -4,9 +4,9 @@
         xmlns:views="clr-namespace:Capacitor.App.Views"
         x:Class="Capacitor.App.Views.SettingsWindow"
         x:DataType="vm:SettingsViewModel"
-        Title="Kurrent Capacitor — Settings"
-        Icon="avares://Kurrent Capacitor/Assets/kcap-icon.png"
-        Width="540" Height="580" CanResize="False" WindowStartupLocation="CenterOwner"
+        Title="kcap — Settings"
+        Icon="avares://kcap-desktop/Assets/kcap-icon.png"
+        Width="600" Height="580" CanResize="False" WindowStartupLocation="CenterOwner"
         Background="{StaticResource KcapCanvasBrush}">
     <Grid Margin="28,20" RowDefinitions="*,Auto">
         <TabControl x:Name="SettingsTabs" Classes="kcapSettingsTabs" SelectedIndex="0">
@@ -105,13 +105,18 @@
                 <views:ProfilesSettingsView DataContext="{Binding Profiles}" />
             </TabItem>
 
+            <TabItem x:Name="AccountsTab" Classes="kcapSettingsTab" Header="Accounts"
+                     IsVisible="{Binding Accounts, Converter={x:Static ObjectConverters.IsNotNull}}">
+                <views:AccountsSettingsView DataContext="{Binding Accounts}" />
+            </TabItem>
+
             <TabItem x:Name="NotificationsTab" Classes="kcapSettingsTab" Header="Notifications">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,18,0,0">
                     <StackPanel Spacing="16">
                         <StackPanel Spacing="10">
                             <TextBlock Classes="kcapTitle" Text="Notifications" LineHeight="22" />
                             <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
-                                       Text="Shown only while Kurrent Capacitor is in the background. Your operating system must also allow notifications." />
+                                       Text="Shown only while kcap is in the background. Your operating system must also allow notifications." />
                         </StackPanel>
 
                         <Border x:Name="NotificationAccessNotice"
@@ -184,6 +189,13 @@
                 </ScrollViewer>
             </TabItem>
 
+            <TabItem x:Name="SearchTab" Classes="kcapSettingsTab" Header="Search"
+                     IsVisible="{Binding Search, Converter={x:Static ObjectConverters.IsNotNull}}">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,18,0,0">
+                    <views:SearchSettingsView DataContext="{Binding Search}" />
+                </ScrollViewer>
+            </TabItem>
+
             <TabItem x:Name="AppearanceTab" Classes="kcapSettingsTab" Header="Appearance"
                      IsVisible="{Binding Appearance, Converter={x:Static ObjectConverters.IsNotNull}}">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,18,0,0">
@@ -221,6 +233,88 @@
                                 </StackPanel>
                             </Grid>
                         </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem x:Name="PrivacyTab" Classes="kcapSettingsTab" Header="Privacy"
+                     IsVisible="{Binding Privacy, Converter={x:Static ObjectConverters.IsNotNull}}">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,18,0,0">
+                    <StackPanel Spacing="16">
+                        <StackPanel Spacing="10">
+                            <TextBlock Classes="kcapTitle" Text="Privacy" LineHeight="22" />
+                            <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
+                                       Text="Shared with the kcap command line on this computer." />
+                        </StackPanel>
+
+                        <Border Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+                                BorderThickness="1" CornerRadius="12" Padding="20">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="18">
+                                <StackPanel Spacing="5">
+                                    <TextBlock Classes="kcapLabel" Text="Send usage data" />
+                                    <TextBlock x:Name="UsageDataDescription" Classes="kcapHint" TextWrapping="Wrap"
+                                               Text="{Binding Privacy.Description, FallbackValue={x:Null}}" />
+                                    <TextBlock x:Name="UsageDataOverridden" Classes="kcapHint" TextWrapping="Wrap"
+                                               Text="{Binding Privacy.Overridden, FallbackValue={x:Null}}"
+                                               IsVisible="{Binding Privacy.Overridden, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}" />
+                                    <TextBlock x:Name="UsageDataHint" Classes="kcapHint" TextWrapping="Wrap"
+                                               Text="{Binding Privacy.Hint, FallbackValue={x:Null}}"
+                                               IsVisible="{Binding Privacy.Hint, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}" />
+                                </StackPanel>
+                                <ToggleSwitch Grid.Column="1" x:Name="UsageDataSwitch" Classes="kcapSwitch" VerticalAlignment="Center"
+                                              AutomationProperties.Name="Send usage data"
+                                              IsEnabled="{Binding Privacy.CanChange, FallbackValue=False}"
+                                              IsChecked="{Binding Privacy.SendUsageData, FallbackValue=False}" />
+                            </Grid>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem x:Name="ExperimentalTab" Classes="kcapSettingsTab" Header="Experimental"
+                     IsVisible="{Binding Experimental, Converter={x:Static ObjectConverters.IsNotNull}}">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,18,0,0">
+                    <StackPanel Spacing="16">
+                        <StackPanel Spacing="10">
+                            <TextBlock Classes="kcapTitle" Text="Experimental" LineHeight="22" />
+                            <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
+                                       Text="Features still being proven. Saved for this profile and shared with the kcap command line." />
+                            <TextBlock x:Name="ExperimentalProblem" Classes="kcapHint" TextWrapping="Wrap"
+                                       Text="{Binding Experimental.Problem, FallbackValue={x:Null}}"
+                                       IsVisible="{Binding Experimental.Problem, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}" />
+                        </StackPanel>
+
+                        <ItemsControl ItemsSource="{Binding Experimental.Features, FallbackValue={x:Null}}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate><StackPanel Spacing="16" /></ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:ExperimentalFeatureRowViewModel">
+                                    <Border Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+                                            BorderThickness="1" CornerRadius="12" Padding="20">
+                                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="18">
+                                            <StackPanel Spacing="5">
+                                                <TextBlock Classes="kcapLabel" Text="{Binding DisplayName}" />
+                                                <TextBlock Classes="kcapHint" TextWrapping="Wrap" Text="{Binding Description}" />
+                                                <TextBlock Classes="kcapHint" TextWrapping="Wrap" Text="{Binding StatusText}"
+                                                           Classes.attention="{Binding StatusIsWarning}"
+                                                           IsVisible="{Binding StatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                                    <TextBlock.Styles>
+                                                        <Style Selector="TextBlock.attention">
+                                                            <Setter Property="Foreground" Value="{StaticResource KcapWarningBrush}" />
+                                                        </Style>
+                                                    </TextBlock.Styles>
+                                                </TextBlock>
+                                            </StackPanel>
+                                            <ToggleSwitch Grid.Column="1" Classes="kcapSwitch" VerticalAlignment="Center"
+                                                          AutomationProperties.Name="{Binding DisplayName}"
+                                                          IsEnabled="{Binding CanChange}"
+                                                          IsChecked="{Binding IsEnabled, Mode=TwoWay}" />
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>

@@ -135,6 +135,35 @@ public class OnboardingViewModelTests {
         await Assert.That(entered).IsEqualTo(1);
     }
 
+    /// The counter counts pages this run shows, from the first page that offers a choice; a page shown before it
+    /// began passing through keeps its place.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_step_counter_counts_only_pages_this_run_shows() {
+        var (start, first, second, afterPassing) = await AvaloniaSession.DispatchAsync(async () => {
+            var install = new FakeWizardStep(WizardStepId.Install);
+            var vm = new OnboardingViewModel([
+                new FakeWizardStep(WizardStepId.Edition) { PassThrough = true },
+                install,
+                new FakeWizardStep(WizardStepId.SignIn) { PassThrough = true },
+                new FakeWizardStep(WizardStepId.Done)]);
+            await vm.PendingEnterForTesting;
+            var start = vm.Current.Id;
+            var first = vm.Eyebrow;
+
+            await vm.NextCommand.Execute().ToTask();
+            var second = vm.Eyebrow;
+            install.PassThrough = true;
+
+            return (start, first, second, vm.Eyebrow);
+        });
+
+        await Assert.That(start).IsEqualTo(WizardStepId.Install);
+        await Assert.That(first).StartsWith("STEP 1 OF 2 ·");
+        await Assert.That(second).StartsWith("STEP 2 OF 2 ·");
+        await Assert.That(afterPassing).StartsWith("STEP 2 OF 2 ·");
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Back_skips_pass_through_steps() {
@@ -173,16 +202,41 @@ public class OnboardingViewModelTests {
     public async Task Finish_later_follows_its_gate() {
         var (open, closed) = await AvaloniaSession.DispatchAsync(async () => {
             var gate = new System.Reactive.Subjects.BehaviorSubject<bool>(true);
-            var vm = new OnboardingViewModel([new FakeWizardStep(WizardStepId.Done)], canFinishLater: gate);
+            var vm = new OnboardingViewModel([new FakeWizardStep(WizardStepId.Edition)], canFinishLater: gate);
             await vm.PendingEnterForTesting;
 
-            var open = CanExecute(vm.FinishLaterCommand);
+            var open = (CanExecute(vm.FinishLaterCommand), vm.FinishLaterVisible);
             gate.OnNext(false);
-            return (open, CanExecute(vm.FinishLaterCommand));
+            return (open, (CanExecute(vm.FinishLaterCommand), vm.FinishLaterVisible));
         });
 
-        await Assert.That(open).IsTrue();
-        await Assert.That(closed).IsFalse();
+        await Assert.That(open).IsEqualTo((true, true));
+        await Assert.That(closed).IsEqualTo((false, false));
+    }
+
+    /// Done's own primary closes setup, so Finish later shows there only while the service is not running,
+    /// and follows it as it changes.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Finish_later_shows_on_the_done_page_only_while_the_service_is_not_running() {
+        var (onEdition, failed, running) = await AvaloniaSession.DispatchAsync(async () => {
+            var facts = DoneFacts.Empty with { DaemonProblem = "The daemon install failed (verify_viability)." };
+            var changed = new System.Reactive.Subjects.Subject<System.Reactive.Unit>();
+            var done = new DoneStepViewModel(() => facts, restate: changed);
+            var vm = new OnboardingViewModel([new FakeWizardStep(WizardStepId.Edition), done]);
+            await vm.PendingEnterForTesting;
+
+            var onEdition = vm.FinishLaterVisible;
+            await vm.NextCommand.Execute().ToTask();
+            var failed = vm.FinishLaterVisible;
+            facts = facts with { DaemonRunning = true, DaemonProblem = null };
+            changed.OnNext(System.Reactive.Unit.Default);
+            return (onEdition, failed, vm.FinishLaterVisible);
+        });
+
+        await Assert.That(onEdition).IsTrue();
+        await Assert.That(failed).IsTrue();
+        await Assert.That(running).IsFalse();
     }
 
     [Test]
@@ -354,7 +408,7 @@ public class OnboardingViewModelTests {
     [NotInParallel("AvaloniaSession")]
     public async Task Window_renders_the_current_steps_title() {
         var rendered = await AvaloniaSession.DispatchAsync(async () => {
-            var connect = new FakeWizardStep(WizardStepId.Edition, "Connect to Capacitor");
+            var connect = new FakeWizardStep(WizardStepId.Edition, "Connect to kcap");
             var vm = new OnboardingViewModel([connect]);
             await vm.PendingEnterForTesting;
 
@@ -369,12 +423,12 @@ public class OnboardingViewModelTests {
             window.Close();
             Dispatcher.UIThread.RunJobs();
 
-            return (title?.Text, title?.Classes.Contains("frHeadline"), eyebrow?.Text);
+            return (title?.Text, title?.Classes.Contains("onboardingHeadline"), eyebrow?.Text);
         });
 
-        await Assert.That(rendered.Item1).IsEqualTo("Connect to Capacitor");
+        await Assert.That(rendered.Item1).IsEqualTo("Connect to kcap");
         await Assert.That(rendered.Item2).IsTrue();
-        await Assert.That(rendered.Item3).IsEqualTo("STEP 1 OF 1 · CONNECT TO CAPACITOR");
+        await Assert.That(rendered.Item3).IsEqualTo("STEP 1 OF 1 · CONNECT TO KCAP");
     }
 
     // ── Busy gate and veto handling ──────────────────────────

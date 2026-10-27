@@ -42,8 +42,8 @@ public class TerminalAdviceTests {
             "The kcap on PATH (/usr/local/bin/kcap) is 1.2.0, and a local installation needs a kcap newer than 1.3.0. Update or remove it before setting up a local installation.",
             "The kcap on PATH (/usr/local/bin/kcap) is 1.2.0, and a local installation needs a kcap newer than 1.3.0. Update or remove it before setting up a local installation.");
         yield return () => (
-            "The desktop app's kcap (/Applications/Kurrent Capacitor.app/Contents/MacOS/kcap) is 1.2.0, and a local installation needs a kcap newer than 1.3.0. Update the desktop app before setting up a local installation.",
-            "The desktop app's kcap (/Applications/Kurrent Capacitor.app/Contents/MacOS/kcap) is 1.2.0, and a local installation needs a kcap newer than 1.3.0. Update the desktop app before setting up a local installation.");
+            "The desktop app's kcap (/Applications/kcap.app/Contents/MacOS/kcap) is 1.2.0, and a local installation needs a kcap newer than 1.3.0. Update the desktop app before setting up a local installation.",
+            "The desktop app's kcap (/Applications/kcap.app/Contents/MacOS/kcap) is 1.2.0, and a local installation needs a kcap newer than 1.3.0. Update the desktop app before setting up a local installation.");
         yield return () => (
             "The kcap on PATH (/usr/local/bin/kcap) did not report its version, and a local installation needs a kcap newer than 1.3.0. Update or remove it before setting up a local installation.",
             "The kcap on PATH (/usr/local/bin/kcap) did not report its version, and a local installation needs a kcap newer than 1.3.0. Update or remove it before setting up a local installation.");
@@ -135,6 +135,15 @@ public class TerminalAdviceTests {
         await Assert.That(stripped!).DoesNotContain("kcap setup");
         await Assert.That(stripped!).DoesNotContain("chmod");
         await Assert.That(stripped!).DoesNotContain("KCAP_");
+    }
+
+    [Test]
+    [Arguments("kcap local 1.2.0 was left as it was.")]
+    [Arguments("kcap local could not be upgraded.")]
+    [Arguments("kcap local is already at 1.2.0.")]
+    public async Task Local_product_names_are_kept_while_command_advice_is_removed(string status) {
+        await Assert.That(TerminalAdvice.Strip(status + " Run kcap local upgrade to try again.")).IsEqualTo(status);
+        await Assert.That(TerminalAdvice.Strip(status + " kcap local logs shows why.")).IsEqualTo(status);
     }
 
     [Test]

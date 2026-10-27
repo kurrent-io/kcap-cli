@@ -1,0 +1,307 @@
+[
+  {
+    "line": 1,
+    "rejected": null,
+    "events": [
+      {
+        "type": "AssistantTextGenerated",
+        "id": "10000000-0000-4000-8000-000000000001",
+        "causedBy": "p0",
+        "recordTimestamp": "2026-09-04T10:00:01Z",
+        "payload": {
+          "content": "hello",
+          "timestamp": "2026-09-04T10:00:01Z"
+        },
+        "usage": {
+          "inputTokens": "10",
+          "outputTokens": "5",
+          "totalTokens": "20",
+          "cachedInputTokens": "3",
+          "model": "claude-x",
+          "additionalCounts": {
+            "cache_creation_input_tokens": 2
+          }
+        },
+        "cacheCreation": 2,
+        "attachments": null
+      },
+      {
+        "type": "AssistantThinkingGenerated",
+        "id": "1acc0e2e-02ea-660e-c1e1-cc8f5f514555",
+        "causedBy": "p0",
+        "recordTimestamp": "2026-09-04T10:00:01Z",
+        "payload": {
+          "content": "hmm",
+          "encrypted": false,
+          "signature": "sig",
+          "timestamp": "2026-09-04T10:00:01Z"
+        },
+        "usage": null,
+        "cacheCreation": null,
+        "attachments": null
+      },
+      {
+        "type": "AssistantToolCallsGenerated",
+        "id": "680645cd-41c7-ca6a-eee4-20c3bbf94326",
+        "causedBy": "p0",
+        "recordTimestamp": "2026-09-04T10:00:01Z",
+        "payload": {
+          "toolCalls": [
+            {
+              "callId": "toolu_1",
+              "toolName": "Bash",
+              "arguments": {
+                "command": "ls"
+              },
+              "toolKind": "execute"
+            }
+          ],
+          "timestamp": "2026-09-04T10:00:01Z"
+        },
+        "usage": null,
+        "cacheCreation": null,
+        "attachments": null
+      }
+    ]
+  },
+  {
+    "line": 2,
+    "rejected": null,
+    "events": [
+      {
+        "type": "AssistantTextGenerated",
+        "id": "10000000-0000-4000-8000-000000000002",
+        "causedBy": null,
+        "recordTimestamp": "2026-09-04T10:00:02Z",
+        "payload": {
+          "content": "same response",
+          "timestamp": "2026-09-04T10:00:02Z"
+        },
+        "usage": null,
+        "cacheCreation": null,
+        "attachments": null
+      }
+    ]
+  },
+  {
+    "line": 3,
+    "rejected": null,
+    "events": [
+      {
+        "type": "ToolResultReceived",
+        "id": "10000000-0000-4000-8000-000000000003",
+        "causedBy": null,
+        "recordTimestamp": "2026-09-04T10:00:03Z",
+        "payload": {
+          "callId": "toolu_1",
+          "result": "done",
+          "timestamp": "2026-09-04T10:00:03Z"
+        },
+        "usage": null,
+        "cacheCreation": null,
+        "attachments": null
+      },
+      {
+        "type": "ToolResultReceived",
+        "id": "d07a54eb-ea4d-d88c-a57f-f36b93b0dc8f",
+        "causedBy": null,
+        "recordTimestamp": "2026-09-04T10:00:03Z",
+        "payload": {
+          "callId": "toolu_2",
+          "result": "x\n\ny",
+          "timestamp": "2026-09-04T10:00:03Z",
+          "extensions": {
+            "claude_code": {
+              "is_error": true,
+              "output_raw": [
+                {
+                  "type": "text",
+                  "text": "x"
+                },
+                {
+                  "type": "text",
+                  "text": "y"
+                }
+              ]
+            }
+          }
+        },
+        "usage": null,
+        "cacheCreation": null,
+        "attachments": null
+      }
+    ]
+  },
+  {
+    "line": 4,
+    "rejected": null,
+    "events": []
+  },
+  {
+    "line": 5,
+    "rejected": null,
+    "events": [
+      {
+        "type": "AssistantTextGenerated",
+        "id": "10000000-0000-4000-8000-000000000005",
+        "causedBy": null,
+        "recordTimestamp": "2026-09-04T10:00:05Z",
+        "payload": {
+          "content": "after a reset",
+          "timestamp": "2026-09-04T10:00:05Z"
+        },
+        "usage": {
+          "inputTokens": "10",
+          "outputTokens": "5",
+          "totalTokens": "20",
+          "cachedInputTokens": "3",
+          "model": "claude-x",
+          "additionalCounts": {
+            "cache_creation_input_tokens": 2
+          }
+        },
+        "cacheCreation": 2,
+        "attachments": null
+      }
+    ]
+  },
+  {
+    "line": 6,
+    "rejected": null,
+    "events": [
+      {
+        "type": "UserMessageReceived",
+        "id": "10000000-0000-4000-8000-000000000006",
+        "causedBy": null,
+        "recordTimestamp": "2026-09-04T10:00:06Z",
+        "payload": {
+          "content": "a meta prompt",
+          "timestamp": "2026-09-04T10:00:06Z",
+          "extensions": {
+            "claude_code": {
+              "is_meta": true,
+              "origin_kind": "human",
+              "is_handback": true,
+              "prompt_source": "keyboard",
+              "prompt_index": 2
+            }
+          }
+        },
+        "usage": null,
+        "cacheCreation": null,
+        "attachments": null
+      }
+    ]
+  },
+  {
+    "line": 7,
+    "rejected": null,
+    "events": [
+      {
+        "type": "UserMessageReceived",
+        "id": "10000000-0000-4000-8000-000000000007",
+        "causedBy": null,
+        "recordTimestamp": "2026-09-04T10:00:07Z",
+        "payload": {
+          "content": "see this",
+          "timestamp": "2026-09-04T10:00:07Z"
+        },
+        "usage": null,
+        "cacheCreation": null,
+        "attachments": [
+          {
+            "id": "271de4b3-d55b-1f02-a426-8d0940d5a82d",
+            "fileName": "attachment-271de4b3.png",
+            "contentType": "image/png",
+            "bytes": 8
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "line": 8,
+    "rejected": null,
+    "events": [
+      {
+        "type": "UserMessageReceived",
+        "id": "10000000-0000-4000-8000-000000000008",
+        "causedBy": null,
+        "recordTimestamp": "2026-09-04T10:00:08Z",
+        "payload": {
+          "content": "queued",
+          "timestamp": "2026-09-04T10:00:08Z",
+          "extensions": {
+            "claude_code": {
+              "origin_kind": "human",
+              "is_queued": true,
+              "command_mode": "prompt"
+            }
+          }
+        },
+        "usage": null,
+        "cacheCreation": null,
+        "attachments": [
+          {
+            "id": "75f9fbcb-5ad2-5691-8922-572193e196b1",
+            "fileName": "attachment-75f9fbcb.jpeg",
+            "contentType": "image/jpeg",
+            "bytes": 5
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "line": 9,
+    "rejected": true,
+    "events": []
+  },
+  {
+    "line": 10,
+    "rejected": null,
+    "events": [
+      {
+        "type": "ToolResultReceived",
+        "id": "10000000-0000-4000-8000-000000000010",
+        "causedBy": null,
+        "recordTimestamp": "2026-09-04T10:00:10Z",
+        "payload": {
+          "callId": "toolu_3",
+          "result": "{\u0022k\u0022:1}",
+          "timestamp": "2026-09-04T10:00:10Z",
+          "extensions": {
+            "claude_code": {
+              "is_sidechain": true,
+              "output_raw": {
+                "k": 1
+              }
+            }
+          }
+        },
+        "usage": null,
+        "cacheCreation": null,
+        "attachments": null
+      }
+    ]
+  },
+  {
+    "line": 11,
+    "rejected": null,
+    "events": [
+      {
+        "type": "UserMessageReceived",
+        "id": "4930d8f5-30ae-391e-6196-f6e5484b6042",
+        "causedBy": null,
+        "recordTimestamp": null,
+        "payload": {
+          "content": "no uuid",
+          "timestamp": "2026-09-04T10:00:00Z"
+        },
+        "usage": null,
+        "cacheCreation": null,
+        "attachments": null
+      }
+    ]
+  }
+]

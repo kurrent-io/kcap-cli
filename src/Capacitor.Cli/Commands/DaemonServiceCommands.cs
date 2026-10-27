@@ -1,6 +1,7 @@
 using System.Net.Sockets;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Install;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Services;
@@ -72,11 +73,85 @@ sealed class DaemonServiceCommands(
         return await verbs.EvaluateFlowEnsureAsync(profiles.Resolution.ProfileName, previousName);
     }
 
+    /// <summary>
+    /// Gives the flow's service unit the search path this process sees when a harness CLI is found on it
+    /// but not on the unit's, so the daemon finds what setup just found. Null when nothing needed it or the
+    /// platform has no service manager this can rewrite.
+    /// </summary>
+    internal static async Task<PathRefresh?> FlowRefreshPathAsync(
+            ConfigRoot root, ProfileContext profiles, UserHome home, TimeProvider time, HarnessRegistry harnesses) {
+        DaemonServiceCommands verbs;
+
+        try {
+            verbs = ForFlow(root, profiles, home, time);
+        } catch (PlatformNotSupportedException) {
+            return null;
+        }
+
+        return await verbs.RefreshStalePathAsync(harnesses);
+    }
+
+    /// <summary>Held from reading the unit's PATH to the last write, so a concurrent install's unit is never
+    /// merged into or restored over.</summary>
+    async Task<PathRefresh?> RefreshStalePathAsync(HarnessRegistry harnesses) {
+        using var txn = await ServiceTxnLock.TryAcquireAsync(store, id, ForcedLockWait, time);
+        if (txn is null) return new(UnitRefresh.Contended);
+
+        if (manager.UnitEnvironment(id) is not { } env) return null;
+
+        var path = ServicePath.Refreshed(env.GetValueOrDefault("PATH"), Environment.GetEnvironmentVariable("PATH"), harnesses);
+
+        return path is null ? null : await RefreshPathAsync(path);
+    }
+
+    /// <summary>launchd reads a plist only when the job loads, so the rewrite takes a reload that keeps the
+    /// daemon's agents for it to resume; systemd reads the unit at the next start, which the daemon is asked
+    /// for once idle.</summary>
+    async Task<PathRefresh> RefreshPathAsync(string path) {
+        switch (manager) {
+            case LaunchdServiceManager launchd: {
+                var started = time.GetTimestamp();
+                try {
+                    var outcome = launchd.RefreshUnit(
+                        id, () => Proceeds(StopForReload(id, "now", whenIdle: true)), () => RefreshDeadline - time.GetElapsedTime(started),
+                        out var error, amend: plist => LaunchdUnit.WithEnvironmentValue(plist, "PATH", path));
+                    return new(outcome, error);
+                } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) {
+                    return new(UnitRefresh.Failed, ex.Message);
+                }
+            }
+            case SystemdServiceManager systemd:
+                try {
+                    if (systemd.SetEnvironment(id, "PATH", path) is not { } previous) return new(UnitRefresh.Current);
+                    switch (await RequestRestartAsync("when-idle")) {
+                        case "restarting": return new(UnitRefresh.Reloaded);
+                        case "queued":     return new(UnitRefresh.NotLoaded);
+                    }
+                    if (manager.Query(id).State != ServiceState.Running) return new(UnitRefresh.NotLoaded);
+
+                    // A running daemon that took no restart keeps the old PATH; the unit must say so too, or
+                    // the next run reads the rewrite as applied.
+                    systemd.RestoreUnit(id, previous);
+                    return new(UnitRefresh.Deferred);
+                } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) {
+                    return new(UnitRefresh.Failed, ex.Message);
+                }
+            default:
+                return new(UnitRefresh.UnitUnsupported);
+        }
+    }
+
+    async Task<string?> RequestRestartAsync(string mode) {
+        try {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5), time);
+            return await DaemonRestartClient.RequestAsync(store, id, mode, cts.Token) is { Type: FrameType.RestartAck } reply ? reply.Text : null;
+        } catch (Exception ex) when (ex is SocketException or IOException or OperationCanceledException) {
+            return null;
+        }
+    }
+
     Task<FlowEnsure> EvaluateFlowEnsureAsync(string? profileName, string? previousName) =>
-        RetiringEnsureAsync(
-            id, previousName,
-            canRetire: SupportsVerify(manager),
-            manager.Query,
+        RetiringEnsureAsync(id, previousName, manager.Query,
             async retire => (await EvaluateEnsureAsync(profileName, retire)).Result);
 
     /// <summary>
@@ -89,14 +164,14 @@ sealed class DaemonServiceCommands(
     /// one is up; before that it is the only daemon the machine has.</para>
     /// </summary>
     internal static async Task<FlowEnsure> RetiringEnsureAsync(
-            string id, string? previousName, bool canRetire, Func<string, ServiceQuery> query,
+            string id, string? previousName, Func<string, ServiceQuery> query,
             Func<string?, Task<ServiceEnsureJson>> ensure) {
         var previous = string.IsNullOrWhiteSpace(previousName) ? null : DaemonStore.Sanitize(previousName);
 
         if (previous is null || previous == id || !HasUnit(query(previous))) return new(await ensure(null));
 
-        var result = await ensure(canRetire ? previous : null);
-        if (canRetire && result.Reason is "verify_retire_refused" or "verify_contended") result = await ensure(null);
+        var result = await ensure(previous);
+        if (result.Reason is "verify_retire_refused" or "verify_contended") result = await ensure(null);
 
         var after = query(previous);
 
@@ -337,7 +412,7 @@ sealed class DaemonServiceCommands(
         }
 
         // --replace only has meaning inside the verify transaction engine (it selects the
-        // ownership matrix in LaunchdServiceVerify.InstallVerifiedAsync) — a plain (non-verified) install
+        // ownership matrix in ServiceVerify.InstallVerifiedAsync) — a plain (non-verified) install
         // has no transaction to hand it to.
         if (replace && !verify) {
             await Console.Error.WriteLineAsync("install --replace requires --verify.");
@@ -372,11 +447,6 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
-        if (verify && !SupportsVerify(manager)) {
-            await Console.Error.WriteLineAsync($"install --verify is not supported for a {manager.Describe()}.");
-            return 1;
-        }
-
         var daemonPath = UnitIdentity.ResolveDaemonBinary();
         if (daemonPath is null) { await Console.Error.WriteLineAsync(DaemonCommands.DaemonNotFoundMessage()); return 1; }
 
@@ -403,11 +473,11 @@ sealed class DaemonServiceCommands(
             // install one whose daemon would exit config-invalid and never satisfy readiness.
             var profileUrlValid = await ServiceInstallViability.PinnedProfileServerUrlValidAsync(env, root);
             var exit = manager is LaunchdServiceManager launchd
-                ? await new LaunchdServiceVerify(store, root, launchd,
+                ? await new ServiceVerify(store, root, launchd,
                         n => DaemonPidProbe.ValidatedPid(store, n), (n, t) => HelloProbe.RunAsync(store, n, time, t),
                         time, profileViable: () => profileUrlValid, gateEnv: Environment.GetEnvironmentVariable)
                     .InstallVerifiedAsync(spec, replace: replace, CapacitorVersion.Current(), retireServiceId: retireId)
-                : await NewGenericVerify(() => profileUrlValid)
+                : await NewPollingVerify(() => profileUrlValid)
                     .InstallVerifiedAsync(spec, replace: replace, CapacitorVersion.Current(), retireServiceId: retireId);
             if (exit != VerifyExit.Ok) return exit;
         } else {
@@ -480,9 +550,7 @@ sealed class DaemonServiceCommands(
         var before = TryQuery(spec.ServiceId);
         if (manager.Install(spec, startNow, out var error)) return 0;
 
-        await Console.Error.WriteLineAsync(InstallFailure(
-            spec, manager.Describe(), error, before, TryQuery(spec.ServiceId),
-            verifySupported: SupportsVerify(manager)));
+        await Console.Error.WriteLineAsync(InstallFailure(spec, manager.Describe(), error, before, TryQuery(spec.ServiceId)));
         return 1;
     }
 
@@ -498,14 +566,12 @@ sealed class DaemonServiceCommands(
     /// daemon its unit names, and the command that reinstalls it. <paramref name="after"/> is read after
     /// the failure, because the install may already have stopped the old job.</summary>
     internal static string InstallFailure(
-            ServiceSpec spec, string describe, string? error, ServiceQuery? before, ServiceQuery? after, bool verifySupported) {
+            ServiceSpec spec, string describe, string? error, ServiceQuery? before, ServiceQuery? after) {
         var id      = spec.ServiceId;
         var message = $"Could not install service '{id}' ({describe}): {error}";
         if (before is not { Probe: LabelProbe.Loaded }) return message;
 
-        var reinstall = verifySupported
-            ? $"`kcap daemon service install --replace --verify --name {id}`"
-            : $"`kcap daemon service uninstall --name {id}`, then `kcap daemon service install --name {id}`";
+        var reinstall = $"`kcap daemon service install --replace --verify --name {id}`";
 
         var unit = after?.UnitPresent == true ? after : before;
         var ours = UnitIdentity.SameDaemon(unit.BinaryPath, spec.DaemonBinaryPath);
@@ -533,29 +599,17 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
-        var ended = await EndAgentsBeforeRemovalAsync(id);
+        var ended = await ServiceRemoval.EndAgentsAsync(store, id, time);
 
         if (!manager.Uninstall(id, out var error)) {
             await Console.Error.WriteLineAsync($"Could not uninstall service '{id}': {error}");
             return 1;
         }
 
-        if (!ended) DaemonCommands.MarkLedgerInterrupted(store, id, time);
+        if (!ended) DaemonCommands.MarkLedgerInterrupted(store, id, time, Console.Error);
 
         await Console.Out.WriteLineAsync($"Service '{id}' uninstalled ({manager.Describe()}).");
         return 0;
-    }
-
-    /// <summary>Asks a running daemon whose unit is being removed for good to end its agents and exit: the
-    /// bootout alone reaches it as SIGTERM, which keeps them for a successor that never starts. One that
-    /// does not answer is left to the bootout. False when the daemon was running and did not exit: its
-    /// ledger still names agents a later start would resume.</summary>
-    async Task<bool> EndAgentsBeforeRemovalAsync(string serviceId) {
-        if (DaemonPidProbe.ValidatedPid(store, serviceId) is null) return true;
-
-        return await DaemonShutdownClient.StopAndWaitAsync(
-                store, serviceId, new ShutdownRequestDto("end", "final"), DaemonCommands.StopExitWait, time, CancellationToken.None)
-            || DaemonPidProbe.ValidatedPid(store, serviceId) is null;
     }
 
     /// <summary>
@@ -583,13 +637,13 @@ sealed class DaemonServiceCommands(
                     // An install holding the lock may have repointed the unit at another copy of kcap.
                     continue;
                 } else {
-                    var ended = await EndAgentsBeforeRemovalAsync(unit);
+                    var ended = await ServiceRemoval.EndAgentsAsync(store, unit, time);
 
                     if (!manager.Uninstall(unit, out var error)) {
                         await Console.Error.WriteLineAsync($"Could not uninstall service '{unit}': {error}");
                         failed = true;
                     } else {
-                        if (!ended) DaemonCommands.MarkLedgerInterrupted(store, unit, time);
+                        if (!ended) DaemonCommands.MarkLedgerInterrupted(store, unit, time, Console.Error);
                         await Console.Out.WriteLineAsync($"Service '{unit}' uninstalled ({manager.Describe()}).");
                     }
                 }
@@ -623,43 +677,22 @@ sealed class DaemonServiceCommands(
         return Path.GetFullPath(path).StartsWith(root, ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
     }
 
-    /// <summary>
-    /// Whether <c>--verify</c> can run on <paramref name="manager"/>: it needs a Query that reports the
-    /// daemon's own pid. launchd runs <see cref="LaunchdServiceVerify"/>; the others run <see cref="GenericServiceVerify"/>.
-    /// </summary>
-    internal static bool SupportsVerify(IServiceManager manager) =>
-        manager is LaunchdServiceManager or WindowsScheduledTaskServiceManager or SystemdServiceManager;
-
+    /// <summary>Routes plain vs <c>--verify</c> starts: launchd through its transaction engine, every
+    /// other manager through <see cref="PollingServiceVerify"/>.</summary>
     internal async Task<int> Start(string[] args) {
         if (!args.Contains("--verify")) return await StartPlain();
-
-        if (!SupportsVerify(manager)) {
-            await Console.Error.WriteLineAsync($"start --verify is not supported for a {manager.Describe()}.");
-            return 1;
-        }
-
         if (manager is LaunchdServiceManager) return await StartVerified();
 
-        var exit = await NewGenericVerify().StartVerifiedAsync(id);
+        var exit = await NewPollingVerify().StartVerifiedAsync(id);
         if (exit == VerifyExit.Ok) {
             try { await Console.Out.WriteLineAsync($"Service '{id}' started (verified)."); } catch (IOException) { }
         }
         return exit;
     }
 
-    GenericServiceVerify NewGenericVerify(Func<bool>? profileViable = null) =>
+    PollingServiceVerify NewPollingVerify(Func<bool>? profileViable = null) =>
         new(store, manager, n => DaemonPidProbe.ValidatedPid(store, n), (n, t) => HelloProbe.RunAsync(store, n, time, t), time,
-            profileViable, unitEnv: UnitEnv);
-
-    /// <summary>The unit's baked environment, or null when there is no unit file to read.</summary>
-    IReadOnlyDictionary<string, string>? UnitEnv(string serviceId) {
-        var (path, parse) = manager switch {
-            SystemdServiceManager => (SystemdUnit.UnitPath(home, serviceId), (Func<string, IReadOnlyDictionary<string, string>>)SystemdUnit.EnvFromUnit),
-            WindowsScheduledTaskServiceManager => (WindowsTaskUnit.WrapperPath(root, serviceId), WindowsTaskUnit.EnvFromWrapper),
-            _ => (LaunchdUnit.PlistPath(home, serviceId), LaunchdUnit.EnvFromPlist),
-        };
-        return File.Exists(path) ? parse(File.ReadAllText(path)) : null;
-    }
+            profileViable);
 
     async Task<int> StartPlain() {
         using var txn = await ServiceTxnLock.TryAcquireAsync(store, id, TimeSpan.FromSeconds(10), time);
@@ -679,11 +712,11 @@ sealed class DaemonServiceCommands(
     }
 
     /// <summary>
-    /// <c>--verify</c>: hands off to the <see cref="LaunchdServiceVerify"/> transaction engine, which
+    /// <c>--verify</c>: hands off to the <see cref="ServiceVerify"/> transaction engine, which
     /// acquires the <see cref="ServiceTxnLock"/> itself — no double-acquire here.
     /// </summary>
     async Task<int> StartVerified() {
-        var engine = new LaunchdServiceVerify(store, root, (LaunchdServiceManager)manager,
+        var engine = new ServiceVerify(store, root, (LaunchdServiceManager)manager,
             n => DaemonPidProbe.ValidatedPid(store, n), (n, t) => HelloProbe.RunAsync(store, n, time, t), time,
             gateEnv: Environment.GetEnvironmentVariable);
         var exit = await engine.StartVerifiedAsync(id);
@@ -717,7 +750,7 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
-        if (!exited) DaemonCommands.MarkLedgerInterrupted(store, id, time, DaemonCommands.KeepsSavedResumes(request, outcome));
+        if (!exited) DaemonCommands.MarkLedgerInterrupted(store, id, time, Console.Error, DaemonCommands.KeepsSavedResumes(request, outcome));
 
         await Console.Out.WriteLineAsync($"Service '{id}' stopped (still installed).");
         return 0;
@@ -915,7 +948,7 @@ sealed class DaemonServiceCommands(
         int exit;
         if (manager is LaunchdServiceManager) {
             var profileUrlValid = await ServiceInstallViability.PinnedProfileServerUrlValidAsync(env, root);
-            var engine = new LaunchdServiceVerify(store, root, (LaunchdServiceManager)manager,
+            var engine = new ServiceVerify(store, root, (LaunchdServiceManager)manager,
                 n => DaemonPidProbe.ValidatedPid(store, n), (n, t) => HelloProbe.RunAsync(store, n, time, t),
                 time, profileViable: () => profileUrlValid, gateEnv: EnsureGateEnv(profileName, serverUrl));
             exit = await engine.InstallVerifiedAsync(spec, replace: false, CapacitorVersion.Current(), retireServiceId);
@@ -924,10 +957,10 @@ sealed class DaemonServiceCommands(
             gateReason       = engine.LastGateReason;
             viabilityReason  = engine.LastViabilityReason;
             bootRefusalToken = engine.LastBootRefusalToken;
-        } else if (retireServiceId is not null && SupportsVerify(manager)) {
+        } else if (retireServiceId is not null) {
             // Only the verified install retires, so a rename takes it over the plain one.
             var profileUrlValid = await ServiceInstallViability.PinnedProfileServerUrlValidAsync(env, root);
-            exit = await NewGenericVerify(() => profileUrlValid)
+            exit = await NewPollingVerify(() => profileUrlValid)
                 .InstallVerifiedAsync(spec, replace: false, CapacitorVersion.Current(), retireServiceId);
             verified = true;
         } else {
@@ -980,7 +1013,7 @@ sealed class DaemonServiceCommands(
         string? bootRefusalToken = null;
         int exit;
         if (manager is LaunchdServiceManager) {
-            var engine = new LaunchdServiceVerify(store, root, (LaunchdServiceManager)manager,
+            var engine = new ServiceVerify(store, root, (LaunchdServiceManager)manager,
                 n => DaemonPidProbe.ValidatedPid(store, n), (n, t) => HelloProbe.RunAsync(store, n, time, t),
                 time, gateEnv: EnsureGateEnv(profileName, serverUrl));
             exit = await engine.StartVerifiedAsync(id);
@@ -1018,16 +1051,18 @@ sealed class DaemonServiceCommands(
     }
 
     /// <summary>
-    /// The profile, server URL, expectation and consent-seed default the installed unit was baked with,
-    /// re-read from the unit file so <see cref="ServiceQuery"/> stays a pure lifecycle probe. All four are
-    /// null when the unit is absent or unreadable: this is evidence for an operator, never load-bearing.
+    /// UX-evidence-only re-read of the installed unit's baked environment (spec §3): which profile,
+    /// server URL, expectation and consent-seed default it was installed with. Sourced by re-reading the
+    /// plist rather than threading it through <see cref="ServiceQuery"/> so the query type stays a pure
+    /// lifecycle probe. All four are null when no unit is present or the re-read/parse fails for any
+    /// reason (moved/corrupt plist, permissions) — this is evidence for an operator, never load-bearing.
     /// </summary>
     (string? Profile, string? ServerUrl, string? ExpectedServer, string? ConsentSeed)
             UnitEnvEvidence(bool unitPresent) {
         if (!unitPresent) return (null, null, null, null);
 
         try {
-            if (UnitEnv(id) is not { } env) return (null, null, null, null);
+            if (manager.UnitEnvironment(id) is not { } env) return (null, null, null, null);
             env.TryGetValue(ProfileOverrides.ProfileVar, out var profile);
             env.TryGetValue("KCAP_EXPECT_SERVER_URL", out var expectedServer);
             env.TryGetValue("KCAP_CONSENT_SEED_DEFAULT", out var consentSeed);

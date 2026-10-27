@@ -33,6 +33,11 @@ internal sealed class FakeAcpRuntime : IHostedAgentRuntime, IAcpTranscriptSource
     public int  ReleaseFirstTurnCalls => Volatile.Read(ref _releaseFirstTurnCalls);
     public void ReleaseFirstTurn() => Interlocked.Increment(ref _releaseFirstTurnCalls);
 
+    int _serverBindSettledCalls;
+    public int  ServerBindSettledCalls => Volatile.Read(ref _serverBindSettledCalls);
+    public bool? ServerBound { get; private set; }
+    public void ServerBindSettled(bool bound) { ServerBound = bound; Interlocked.Increment(ref _serverBindSettledCalls); }
+
     public ChannelReader<AcpEventEnvelope> Envelopes       => _envelopes.Reader;
     public ChannelWriter<AcpEventEnvelope> EnvelopesWriter => _envelopes.Writer;
 

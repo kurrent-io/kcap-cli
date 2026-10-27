@@ -65,7 +65,7 @@ public partial class UnixPtyProcessOutputTests {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
 
         using var spawner = new UnixSpawnerThread();
-        var       proc    = SpawnCat(spawner); // cooked mode: the kernel echoes input
+        var       proc    = Spawn(spawner, IdleReader.Command, IdleReader.Args); // cooked mode: the kernel echoes input
         try {
             using (var cancelled = new CancellationTokenSource(TimeSpan.FromMilliseconds(100))) {
                 await ReadToEndAsync(proc, cancelled.Token).WaitAsync(Bound);
@@ -93,7 +93,7 @@ public partial class UnixPtyProcessOutputTests {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
 
         using var spawner = new UnixSpawnerThread();
-        var       proc    = SpawnCat(spawner);
+        var       proc    = Spawn(spawner, IdleReader.Command, IdleReader.Args);
 
         var read = ReadToEndAsync(proc);
         await Task.Delay(100);
@@ -147,9 +147,6 @@ public partial class UnixPtyProcessOutputTests {
         [LibraryImport("libc", SetLastError = true)]
         internal static partial int tgkill(int tgid, int tid, int sig);
     }
-
-    // Through sh: a multi-call coreutils binary (uutils) refuses the descriptor exec the PTY launcher uses.
-    static IPtyProcess SpawnCat(UnixSpawnerThread spawner) => Spawn(spawner, "/bin/sh", "-c", "exec cat");
 
     static IPtyProcess Spawn(UnixSpawnerThread spawner, string command, params string[] args)
         => new UnixPtyProcessFactory(spawner, TimeProvider.System).Spawn(command, args, AppContext.BaseDirectory);

@@ -18,6 +18,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     static readonly TimeSpan SnapshotGrace = TimeSpan.FromMinutes(5);
     sealed record Position(string Section, string? Thread, string Resolved, double Scroll, long Touched);
     readonly IPullRequestSource _source;
+    readonly LastReads<PullRequestSnapshot>? _snapshots;
     readonly Func<string?, string?> _readBranch;
     readonly bool _hasCustomBranchReader;
     readonly TimeProvider _time;
@@ -74,6 +75,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     int _pollAfter = 30;
     string _section = "overview";
     string? _thread;
+    internal const string NoPullRequestsNote = "No pull requests yet.";
     string _notice = WorkContextViewModel.WaitingNote;
     PullRequestReaderNote? _readerNote;
 
@@ -102,7 +104,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     public bool CanDisplay => _foreground && !_masked && (Remaining > 0
         || (_grace || RenewingSnapshot) && SnapshotDisplayRemaining > 0);
     public bool CanNavigate => CanDisplay && !_legacy;
-    bool CanDisplayReader => _readerVisible && CanDisplay && (CanReveal || _section == "overview" || _sections.ContainsKey(SectionKey));
+    bool CanDisplayReader => _readerVisible && CanDisplay && (CanReveal || !ReadsRows || _sections.ContainsKey(SectionKey));
     double Remaining => Math.Max(0, _accessSeconds - _time.GetElapsedTime(_accessStarted).TotalSeconds);
     bool RenewingSnapshot => _hasDisplayed && _accessSeconds > 0 && _overviewPending;
     // Both in-flight renewal and failed-renewal grace end at the same access-based deadline.
@@ -133,11 +135,18 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     public ReactiveCommand<Unit, Unit> SignInCommand { get; }
     public ReactiveCommand<Unit, Unit> LinkGitHubCommand { get; }
     public ReactiveCommand<Unit, Unit> InstallToolCommand { get; }
+    /// Puts <see cref="FixPrompt"/> in the session's composer for the user to send.
+    public ReactiveCommand<Unit, Unit> FixCommand { get; }
+    /// Whether this viewer's composer can take Fix's prompt: a read-only participant's cannot send it.
+    readonly Func<bool> _canRequestFix;
 
     public PullRequestContextViewModel(IObservable<AgentStatusDto?> presence, IPullRequestSource source, TimeProvider time, IUrlOpener opener,
         Action openReader, Action? signIn = null, Action? linkGitHub = null, IObservable<Unit>? signInCompleted = null, Func<PullRequestRepository?>? primaryRepo = null, Func<string?, string?>? readBranch = null,
-        Action<string>? linksChanged = null) {
+        LastReads<PullRequestSnapshot>? snapshots = null, Action<string>? linksChanged = null,
+        Action<string>? requestFix = null, Func<bool>? canRequestFix = null) {
         _source = source;
+        _snapshots = snapshots;
+        _canRequestFix = canRequestFix ?? (() => requestFix is not null);
         _linksChanged = linksChanged;
         _readBranch = readBranch ?? GitRepository.CurrentBranch;
         _hasCustomBranchReader = readBranch is not null;
@@ -165,6 +174,8 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         LinkGitHubCommand = ReactiveCommand.Create(() => linkGitHub?.Invoke());
         InstallToolCommand = ReactiveCommand.Create(() => LinkPolicy.Open(_opener, _readerNote?.InstallUrl));
         _subscriptions.Add(InstallToolCommand);
+        FixCommand = ReactiveCommand.Create(() => { if (ShowsFix && FixPrompt is { } prompt) requestFix?.Invoke(prompt); });
+        _subscriptions.Add(FixCommand);
         _subscriptions.Add(RefreshCommand); _subscriptions.Add(OpenReaderCommand); _subscriptions.Add(ShowSectionCommand);
         _subscriptions.Add(LoadMoreCommand); _subscriptions.Add(ReloadEarlierCommand); _subscriptions.Add(ExpandThreadCommand);
         _subscriptions.Add(OpenRowCommand); _subscriptions.Add(OpenGitHubCommand); _subscriptions.Add(OpenBodyLinkCommand);
@@ -177,6 +188,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
             // so only BorrowedFrom still has the branch live discovery matches.
             _worktree = CheckoutLabel.CheckoutPathFor(dto);
             if (dto.SessionId is not { Length: > 0 } id || _session == id) return;
+            var snapshot = _snapshots?.Get(id);
             CancelReads();
             if (_session is not null) _requestedSubject = null;
             _session = id;
@@ -196,7 +208,8 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
             _hasListed = false;
             ApplyRequestedSubject();
             _lastRefresh = null;
-            SetNotice("Loading pull requests…");
+            SetNotice(snapshot is null && _selected is null ? NoPullRequestsNote : "");
+            if (snapshot is not null) Seed(snapshot);
             RequestRefresh();
         }).DisposeWith(_subscriptions);
         signInCompleted?.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(_ => {
@@ -235,12 +248,14 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         _masked = true;
         _grace = false;
         _staleReason = null;
-        // Nothing polls in the background, and the return lists afresh anyway.
-        if (!foreground) _queuedRefresh = false;
         Notify();
+        // Nothing polls in the background, and the return lists afresh anyway.
+        if (!foreground) { _queuedRefresh = false; return; }
+        ShowLastOverview();
         // A null _lastRefresh means this session has never refreshed yet, so the coming discovery is
         // already fresh; force only a genuine return, where a prior refresh could have gone stale.
-        if (foreground) { if (_lastRefresh is not null) _refreshDiscovery = true; _lastRefresh = null; _lastOverview = null; RequestRefresh(); }
+        if (_lastRefresh is not null) _refreshDiscovery = true;
+        _lastRefresh = null; _lastOverview = null; RequestRefresh();
     }
     public void Reconnected() {
         if (_disposed) return;
@@ -278,7 +293,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         if (_readerVisible == visible) return;
         _readerVisible = visible;
         Notify();
-        if (visible && CanReveal && _section != "overview") LoadOrRefreshSection();
+        if (visible && CanReveal && ReadsRows) LoadOrRefreshSection();
     }
     public void SelectSubject(PullRequestSubjectDto subject) {
         if (_disposed) return;
@@ -301,6 +316,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         if (!_hasListed) {
             // Pin the requested subject without cancelling the initial link discovery.
             _selected = choice;
+            if (_notice == NoPullRequestsNote) _notice = "";
             this.RaisePropertyChanged(nameof(Selected));
             Notify();
             return;
@@ -336,13 +352,13 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         RequestOverview();
     }
     void ShowSection(string section) {
-        if (!CanNavigate || section is not ("overview" or "checks" or "reviewers" or "reviews" or "threads" or "thread_comments" or "conversation")) return;
+        if (!CanNavigate || section is not ("overview" or "conflicts" or "checks" or "reviewers" or "reviews" or "threads" or "thread_comments" or "conversation")) return;
         _section = section;
         ScrollOffset = 0;
         _openReader();
         _readerVisible = true;
         Notify();
-        if (section == "overview") return;
+        if (!ReadsRows) return;
         if (CanReveal) LoadOrRefreshSection();
         else if (CurrentSection is null && !(ReadRetryAt > _time.GetUtcNow().UtcDateTime)) { _lastOverview = null; RequestOverview(); }
     }

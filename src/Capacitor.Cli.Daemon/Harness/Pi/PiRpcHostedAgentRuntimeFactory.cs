@@ -59,6 +59,8 @@ namespace Capacitor.Cli.Daemon.Harness.Pi;
 /// reachable from any host — the Windows arm is otherwise unassertable on POSIX.</param>
 /// <param name="paths">Pi's layout as the entry point resolved it, whose auth and models files
 /// fingerprint the model catalog. Null publishes no fingerprint paths.</param>
+/// <param name="requestInteraction">Where an interactive launch asks its viewers a Pi dialog. Null
+/// cancels every dialog.</param>
 internal sealed partial class PiRpcHostedAgentRuntimeFactory(
         DaemonConfig                                                 config,
         ILoggerFactory                                                loggerFactory,
@@ -68,7 +70,8 @@ internal sealed partial class PiRpcHostedAgentRuntimeFactory(
         TimeSpan?                                                     readyDeadline = null,
         Func<string, string?>?                                        resolveVersion = null,
         bool?                                                         posixHost = null,
-        PiPaths?                                                      paths = null
+        PiPaths?                                                      paths = null,
+        Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>>? requestInteraction = null
     ) : IHostedAgentRuntimeFactory {
     readonly ILogger _logger = loggerFactory.CreateLogger<PiRpcHostedAgentRuntimeFactory>();
 
@@ -207,7 +210,8 @@ internal sealed partial class PiRpcHostedAgentRuntimeFactory(
                 ctx.Worktree.Path,
                 time,
                 readyDeadline: readyDeadline,
-                journal: ctx.Journal);
+                journal: ctx.Journal,
+                requestInteraction: requestInteraction);
         } catch {
             // Construction itself failing (it should not, in practice) still leaves a spawned child —
             // no orphan pi processes.

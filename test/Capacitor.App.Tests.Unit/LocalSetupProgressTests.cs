@@ -119,4 +119,111 @@ public class LocalSetupProgressTests {
         p.Apply(LocalSetupLine.Parse("{\"v\":1,\"event\":\"rolled_back\"}")!);
         await Assert.That(p.RollingBack).IsFalse();
     }
+
+    [Test]
+    public async Task A_model_pull_runs_the_search_row_and_finishes_installing() {
+        var p = Run(
+            "{\"v\":1,\"event\":\"unpacked\"}",
+            "{\"v\":1,\"event\":\"embeddings_ollama_found\",\"version\":\"0.12.3\",\"url\":\"http://localhost:11434\"}",
+            "{\"v\":1,\"event\":\"embeddings_model_pulling\",\"model\":\"mxbai-embed-large\"}",
+            "{\"v\":1,\"event\":\"embeddings_model_progress\",\"model\":\"mxbai-embed-large\",\"received\":50,\"bytes\":200}");
+
+        await Assert.That(p.Install.State).IsEqualTo(RowState.Done);
+        await Assert.That(p.Embeddings.Row.State).IsEqualTo(RowState.Running);
+        await Assert.That(p.Embeddings.Pulling).IsTrue();
+        await Assert.That(p.Embeddings.PullFraction).IsEqualTo(0.25);
+        await Assert.That(p.Embeddings.PullText).IsEqualTo("Downloading the Ollama model mxbai-embed-large… 25%");
+        await Assert.That(p.Embeddings.Summary).IsNull();
+    }
+
+    [Test]
+    public async Task A_builtin_download_runs_the_search_row_and_ends_in_the_builtin_model() {
+        var p = Run(
+            "{\"v\":1,\"event\":\"embeddings_builtin_downloading\",\"bytes\":336592896}");
+
+        await Assert.That(p.Embeddings.Row.State).IsEqualTo(RowState.Running);
+        await Assert.That(p.Embeddings.PullText).IsEqualTo("Downloading the built-in search model (321 MB)…");
+
+        p.Apply(LocalSetupLine.Parse("{\"v\":1,\"event\":\"embeddings_builtin_progress\",\"received\":84148224,\"bytes\":336592896}")!);
+
+        await Assert.That(p.Embeddings.PullText).IsEqualTo("Downloading the built-in search model (321 MB)… 25%");
+
+        p.Apply(LocalSetupLine.Parse("{\"v\":1,\"event\":\"embeddings_configured\",\"provider\":\"builtin\"}")!);
+
+        await Assert.That(p.Embeddings.Row.State).IsEqualTo(RowState.Done);
+        await Assert.That(p.Embeddings.Configured).IsTrue();
+        await Assert.That(p.Embeddings.Summary).IsEqualTo("Search by meaning with the built-in model.");
+        await Assert.That(p.Embeddings.ReembedNote).IsEqualTo("The search index for saved information is being built with the built-in model in the background.");
+    }
+
+    [Test]
+    public async Task A_switch_to_the_builtin_model_names_the_Ollama_model_it_replaced() {
+        var p = Run("{\"v\":1,\"event\":\"embeddings_configured\",\"provider\":\"builtin\",\"replaced_model\":\"mxbai-embed-large\"}");
+
+        await Assert.That(p.Embeddings.ReplacedModel).IsEqualTo("mxbai-embed-large");
+        await Assert.That(p.Embeddings.ReembedNote).IsEqualTo("The search index is being rebuilt with the built-in model in the background after switching from mxbai-embed-large. Your saved information is kept.");
+    }
+
+    [Test]
+    public async Task A_configured_model_ends_in_search_by_meaning_and_names_a_replaced_one() {
+        var p = Run(
+            "{\"v\":1,\"event\":\"embeddings_model_ready\",\"model\":\"nomic-embed-text\",\"dimensions\":768}",
+            "{\"v\":1,\"event\":\"embeddings_configured\",\"provider\":\"ollama\",\"model\":\"nomic-embed-text\",\"replaced_model\":\"mxbai-embed-large\"}");
+
+        await Assert.That(p.Embeddings.Row.State).IsEqualTo(RowState.Done);
+        await Assert.That(p.Embeddings.Pulling).IsFalse();
+        await Assert.That(p.Embeddings.Summary).IsEqualTo("Search by meaning with nomic-embed-text.");
+        await Assert.That(p.Embeddings.ReembedNote!).Contains("rebuilt with nomic-embed-text in the background");
+    }
+
+    /// The CLI's skip message is written for a terminal; the row keeps its cause and drops its advice.
+    [Test]
+    public async Task A_skip_ends_in_keyword_search_with_its_reason_and_fails_nothing() {
+        var p = Run(
+            "{\"v\":1,\"event\":\"embeddings_skipped\",\"code\":\"ollama_not_found\",\"message\":\"Ollama is not responding on http://localhost:11434; search works by keyword. Start Ollama, then run kcap setup --local again to turn on search by meaning.\"}",
+            "{\"v\":1,\"event\":\"starting\",\"unit\":\"u\"}");
+
+        await Assert.That(p.Embeddings.Row.State).IsEqualTo(RowState.Skipped);
+        await Assert.That(p.Embeddings.Skipped).IsTrue();
+        await Assert.That(p.Embeddings.Summary).IsEqualTo("Ollama is not responding on http://localhost:11434; search works by keyword.");
+        await Assert.That(p.FailedCode).IsNull();
+        await Assert.That(p.FirstStart.State).IsEqualTo(RowState.Running);
+    }
+
+    [Test]
+    public async Task A_decline_reads_as_chosen_rather_than_the_cli_flag_advice() {
+        var p = Run(
+            "{\"v\":1,\"event\":\"embeddings_skipped\",\"code\":\"declined\",\"message\":\"Search by meaning stays off, as an earlier setup chose; --embedding-model <model> turns it on.\"}");
+
+        await Assert.That(p.Embeddings.Summary).IsEqualTo("Search by keyword, as chosen.");
+    }
+
+    /// The server already serves the model when setup fails to clear its pending mark.
+    [Test]
+    public async Task A_failed_record_after_configuring_leaves_search_by_meaning() {
+        var p = Run(
+            "{\"v\":1,\"event\":\"embeddings_configured\",\"provider\":\"ollama\",\"model\":\"mxbai-embed-large\"}",
+            "{\"v\":1,\"event\":\"embeddings_skipped\",\"code\":\"write_failed\",\"message\":\"/x/embedding.json could not be written (disk full).\"}");
+
+        await Assert.That(p.Embeddings.Row.State).IsEqualTo(RowState.Done);
+        await Assert.That(p.Embeddings.Skipped).IsFalse();
+        await Assert.That(p.Embeddings.Summary).IsEqualTo("Search by meaning with mxbai-embed-large.");
+    }
+
+    [Test]
+    public async Task A_configured_model_with_nothing_replaced_still_says_stored_sessions_are_embedded() {
+        var p = Run("{\"v\":1,\"event\":\"embeddings_configured\",\"provider\":\"ollama\",\"model\":\"mxbai-embed-large\"}");
+
+        await Assert.That(p.Embeddings.ReembedNote).IsEqualTo("The search index for saved information is being built with mxbai-embed-large in the background.");
+    }
+
+    [Test]
+    public async Task A_run_that_halts_mid_pull_leaves_the_search_row_pending() {
+        var p = Run("{\"v\":1,\"event\":\"embeddings_model_pulling\",\"model\":\"m\"}");
+
+        p.Halt();
+
+        await Assert.That(p.Embeddings.Row.State).IsEqualTo(RowState.Pending);
+        await Assert.That(p.Embeddings.Pulling).IsFalse();
+    }
 }

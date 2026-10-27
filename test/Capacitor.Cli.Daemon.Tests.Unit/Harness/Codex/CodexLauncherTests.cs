@@ -65,18 +65,6 @@ public class CodexLauncherTests {
     }
 
     [Test]
-    public async Task BuildArgs_with_a_prompt_file_passes_a_pointer_in_place_of_the_prompt() {
-        var file = Path.Combine(Home.Path, "kcap-prompts", "a-1", "prompt.md");
-        var ctx  = NewCtx(prompt: "the whole diff", isReviewFlow: true) with { PromptFile = file };
-
-        var args = NewLauncher().BuildArgs(ctx).Args;
-
-        await Assert.That(args[^2]).IsEqualTo("--");
-        await Assert.That(args[^1]).IsEqualTo(PromptFile.Pointer(file));
-        await Assert.That(args).DoesNotContain("the whole diff");
-    }
-
-    [Test]
     public async Task BuildArgs_leaves_an_unmigrated_model_alone() {
         WriteCodexConfig("[notice.model_migrations]\n\"gpt-5.2\" = \"gpt-5.6\"\n");
 
@@ -126,6 +114,15 @@ public class CodexLauncherTests {
             "--no-alt-screen",
             "--", "carry on",
         }, CollectionOrdering.Matching);
+    }
+
+    /// <summary>A resume of an agent that was waiting sends no turn: an empty prompt adds no argument.</summary>
+    [Test]
+    public async Task A_resume_with_an_empty_prompt_passes_no_prompt_argument() {
+        var args = NewLauncher().BuildArgs(NewCtx(prompt: "") with { ResumeSessionId = "019a-thread" }).Args;
+
+        await Assert.That(args).DoesNotContain("--");
+        await Assert.That(args).DoesNotContain("");
     }
 
     [Test]
@@ -568,7 +565,10 @@ public class CodexLauncherTests {
             NewLauncher().Prepare(ctx);
             await Task.CompletedTask;
         });
-        await Assert.That(ex!.Message).Contains("kcap plugin install --codex");
+        var checkedDir = Path.Combine(Home.Path, ".codex");
+        await Assert.That(ex!.Message).Contains(checkedDir);
+        await Assert.That(ex.Message).Contains($"kcap accounts add codex {ShellArgument.Quote(checkedDir)}");
+        await Assert.That(ex.Message).Contains("kcap plugin install --codex --project");
     }
 
     [Test, NotInParallel]

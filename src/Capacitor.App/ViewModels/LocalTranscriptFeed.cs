@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness.Claude;
 
 namespace Capacitor.App.ViewModels;
 
@@ -10,6 +11,8 @@ internal sealed class LocalTranscriptFeed(
     readonly JsonlTail _tail = new(path);
     TranscriptContext? _context;
     int _linesRead;
+    /// Subagents whose starting call has been reported since the file was last read from its start.
+    readonly HashSet<string> _started = new(StringComparer.Ordinal);
 
     public long? CurrentOffset {
         get {
@@ -21,7 +24,7 @@ internal sealed class LocalTranscriptFeed(
 
     public FeedRead ReadAppended() {
         var result = _tail.ReadAppended();
-        if (result.Status == TailStatus.Reset) { _context = null; _linesRead = 0; }
+        if (result.Status == TailStatus.Reset) { _context = null; _linesRead = 0; _started.Clear(); }
         var lines = new List<ProjectedLine>(result.Lines.Count);
         if (result.Lines.Count > 0) {
             // The app has no session id and persists nothing, so the agent id stands in; only
@@ -51,7 +54,20 @@ internal sealed class LocalTranscriptFeed(
         var snapshot = status == FeedStatus.Reset
             ? Math.Max(result.SnapshotLength ?? 0, CurrentOffset ?? 0)
             : result.SnapshotLength;
-        return new(status, lines, snapshot, result.Failure);
+        // The chat applies a read's run signals only when it applies its lines, so only those reads report them.
+        return new(status, lines, snapshot, result.Failure) { Runs = status is FeedStatus.Ok or FeedStatus.Reset ? SubagentStarts() : [] };
+    }
+
+    // A running foreground subagent is named nowhere in the parent's file until its result arrives.
+    IReadOnlyList<RunSignal> SubagentStarts() {
+        var starts = ClaudeSubagentFiles.Starts(path, _started);
+        if (starts.Count == 0) return [];
+        var runs = new List<RunSignal>(starts.Count);
+        foreach (var (toolUseId, agentId) in starts) {
+            _started.Add(agentId);
+            runs.Add(new RunSignal.Identified(toolUseId, agentId));
+        }
+        return runs;
     }
 
     public void Dispose() { }

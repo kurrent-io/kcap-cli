@@ -117,7 +117,8 @@ public class AgentOrchestratorVendorTests {
         await Assert.That(commands!.Single().Name).IsEqualTo("review");
     }
 
-    /// <summary>A refused fresh launch keeps running locally, and nothing more reaches the server under its id.</summary>
+    /// <summary>A refused fresh launch keeps running locally, and nothing more reaches the server under its id.
+    /// Its stop still reaches the server as a status report, which is all that frees its slot there.</summary>
     [Test]
     public async Task A_refused_launch_keeps_running_and_sends_nothing_more_for_its_id() {
         using var repoPath = GitRepo.CreateWithCommit();
@@ -133,7 +134,9 @@ public class AgentOrchestratorVendorTests {
         await Assert.That(agent).IsNotNull();
         await Assert.That(agent!.IsServerSilent).IsTrue();
 
+        // The spy process exits at once, so its own cleanup may already be running and this call returns early.
         await orch.CleanupAgentForTest("refused-launch");
+        await WaitHarness.PollUntilAsync(() => server.StatusReports.Any(r => r.ActiveCount == 0));
 
         await Assert.That(server.AgentRegisteredCallCount).IsEqualTo(1);
         await Assert.That(server.StatusChangedCalls).IsEmpty();
@@ -165,6 +168,37 @@ public class AgentOrchestratorVendorTests {
 
         var (_, transport) = server.AgentRegisteredTransports.Single();
         await Assert.That(transport).IsEqualTo(CodexTransportDecision.Pty);
+    }
+
+    // A reconnect re-announces each agent with no launch on the server to read its vendor from, so
+    // every registration carries it — the first one and each re-announcement alike.
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Registration_reports_the_agents_vendor(bool reconnect) {
+        using var worktree = new TempDir();
+        string worktreePath = worktree.CreateDir("worktree");
+        var server = new CaptureServerConnection();
+
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        var agent = new AgentInstance(
+            "agent-claude", null, "", null, worktreePath, "claude",
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo(worktreePath, "", worktreePath, IsStandalone: true), new CancellationTokenSource()
+        ) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow
+        };
+
+        if (reconnect) {
+            orch.RegisterAgentForTest(agent);
+            await server.ReRegisterAgentsHook!();
+        } else {
+            await orch.RegisterAgentForTestAsync(agent);
+        }
+
+        await Assert.That(server.AgentRegisteredVendors.Single()).IsEqualTo(("agent-claude", (string?)"claude"));
     }
 
     [Test]
@@ -286,6 +320,24 @@ public class AgentOrchestratorVendorTests {
         await Assert.That(server.LaunchFailedCalls.Count).IsEqualTo(1);
         await Assert.That(server.LaunchFailedCalls[0].Reason).StartsWith("codex_posture_invalid:");
         await Assert.That(ptyFactory.SpawnCalls).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Unrecognised_expected_runtime_transport_is_rejected_as_semantic() {
+        var server = new SeqCaptureServerConnection();
+
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
+            server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
+            extraRuntimeFactories: [new SpyHostedAgentRuntimeFactory("codex") { SupportsUnattended = true }]);
+
+        await orch.SubmitLaunchAgentForTest(PostureCmd("agent-transport-tty", posture: null) with {
+            ExpectedRuntimeTransport = "tty", Epoch = orch.DaemonEpochForTest, Seq = 1, CommandId = "cmd-1",
+        });
+        await WaitHarness.SpinUntilAsync(() => server.Acks.Count > 0, WaitHarness.Bounded);
+
+        await Assert.That(server.Acks.Single().OutcomeKind).IsEqualTo(CommandOutcomeKind.LaunchRejected);
+        await Assert.That(server.Rejects.Single().Reason).IsEqualTo(CommandRejectedReason.Semantic);
+        await Assert.That(server.LaunchFaileds.Single().Reason).Contains("'tty'");
     }
 
     [Test]
@@ -427,7 +479,8 @@ public class AgentOrchestratorVendorTests {
             LaunchKind kind = LaunchKind.Default,
             bool borrowed = false,
             string vendor = "codex",
-            ILogger<AgentOrchestrator>? logger = null) {
+            ILogger<AgentOrchestrator>? logger = null,
+            string? expectedTransport = null) {
         var server     = new CaptureServerConnection();
         var ptyFactory = new SpyPtyProcessFactory();
         var codexSpy   = new SpyHostedAgentRuntimeFactory("codex") {
@@ -459,7 +512,8 @@ public class AgentOrchestratorVendorTests {
                 Kind: kind,
                 Borrowed: borrowed,
                 BorrowCwd: borrowed ? repoPath : null,
-                CodexPosture: posture));
+                CodexPosture: posture,
+                ExpectedRuntimeTransport: expectedTransport));
         } finally {
             if (startsReviewerBridge)
                 await orch.PermissionBridgeForTest.DisposeAsync();
@@ -494,6 +548,20 @@ public class AgentOrchestratorVendorTests {
         await Assert.That(codexSpy.LastContext!.CodexPosture!.Sandbox).IsEqualTo("danger-full-access");
         await Assert.That(codexSpy.LastContext!.CodexPosture!.Approval).IsEqualTo("untrusted");
 
+    }
+
+    /// <summary>The transport the server validates the registration against reaches the runtime factory,
+    /// which routes a pinned launch on it.</summary>
+    [Test]
+    [Arguments("app-server")]
+    [Arguments(null)]
+    public async Task Codex_launch_threads_the_expected_runtime_transport_into_the_start_context(string? expected) {
+        using var repoPath = GitRepo.CreateWithCommit();
+
+        var (_, codexSpy) = await LaunchForEchoAsync(repoPath, "agent-transport", posture: null, expectedTransport: expected);
+
+        await Assert.That(codexSpy.LastContext).IsNotNull();
+        await Assert.That(codexSpy.LastContext!.ExpectedRuntimeTransport).IsEqualTo(expected);
     }
 
     [Test]

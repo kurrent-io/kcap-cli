@@ -17,7 +17,7 @@ public class UpdateCommandBundledTests {
 
     [Test]
     public async Task Bundled_message_names_the_app_and_its_menu_item() {
-        await Assert.That(UpdateCommand.BundledMessage).Contains("Kurrent Capacitor");
+        await Assert.That(UpdateCommand.BundledMessage).Contains("kcap");
         await Assert.That(UpdateCommand.BundledMessage).Contains("Check for Updates…");
     }
 

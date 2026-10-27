@@ -34,6 +34,25 @@ public class KiroCrewHookInstallerTests {
     }
 
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Legacy_branded_hooks_can_still_be_refreshed_or_removed(bool remove) {
+        if (OperatingSystem.IsWindows()) return;
+        var legacy = KiroCrewHookInstaller.Render(null).Replace(
+            "sessions in kcap.", "sessions in Kurrent Capacitor.", StringComparison.Ordinal);
+        Tmp.CreateFile(["hooks", "kcap-spawn.sh"], legacy);
+
+        await Assert.That(KiroCrewHookInstaller.IsInstalled(Script)).IsTrue();
+        if (remove) {
+            await Assert.That(KiroCrewHookInstaller.Remove(Script)).IsEqualTo(KiroCrewHookInstaller.Outcome.Removed);
+            await Assert.That(File.Exists(Script)).IsFalse();
+        } else {
+            await Assert.That(KiroCrewHookInstaller.Install(Script, null)).IsEqualTo(KiroCrewHookInstaller.Outcome.Written);
+            await Assert.That(await File.ReadAllTextAsync(Script)).IsEqualTo(KiroCrewHookInstaller.Render(null));
+        }
+    }
+
+    [Test]
     public async Task Remove_leaves_a_script_kcap_did_not_write() {
         Tmp.CreateFile(["hooks", "kcap-spawn.sh"], "#!/bin/sh\n# event: agentSpawn\necho mine\n");
 

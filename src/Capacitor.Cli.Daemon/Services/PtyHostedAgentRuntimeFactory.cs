@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Daemon.Harness.Codex;
@@ -8,35 +9,34 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
-/// <see cref="IHostedAgentRuntimeFactory"/> for the interactive PTY-backed CLIs (Claude, Codex).
-/// Moved verbatim from the body of <see cref="AgentOrchestrator.HandleLaunchAgent"/> (Task
-/// 10): builds the <see cref="LauncherContext"/> (including the review-launch
-/// <see cref="ReviewLaunchBuilder.BuildAsync"/> call), runs <see cref="IHostedAgentLauncher.Prepare"/>
-/// then <see cref="IHostedAgentLauncher.BuildArgs"/>, assembles the daemon-injected env vars, spawns
-/// the PTY via the injected <see cref="IPtyProcessFactory"/> (the same instance
-/// <c>SpyPtyProcessFactory</c> asserts against in the vendor-routing tests), and wraps the result in
-/// a <see cref="PtyHostedAgentRuntime"/>.
+/// <see cref="IHostedAgentRuntimeFactory"/> for the interactive PTY-backed CLIs (Claude, Codex):
+/// builds the <see cref="LauncherContext"/>, runs <see cref="IHostedAgentLauncher.Prepare"/> then
+/// <see cref="IHostedAgentLauncher.BuildArgs"/>, assembles the daemon-injected env vars, spawns the
+/// PTY and wraps it in a <see cref="PtyHostedAgentRuntime"/>. A prompt that would otherwise sit on
+/// the command line is withheld from the args and pasted through the runtime after spawn.
 ///
-/// <see cref="CodexHooksNotInstalledException"/> from <c>Prepare</c> is intentionally left
-/// unhandled here — it propagates to the orchestrator, which maps it to <c>LaunchFailed</c> +
-/// worktree cleanup. Any other <c>Prepare</c> failure is soft-logged and swallowed so a
-/// settings-overlay glitch never blocks launch (same contract as before the refactor,
-/// <c>AgentOrchestrator.LogPrepareSoftFailure</c>).
+/// <see cref="CodexHooksNotInstalledException"/> from <c>Prepare</c> propagates to the orchestrator,
+/// which maps it to <c>LaunchFailed</c> and worktree cleanup. Any other <c>Prepare</c> failure is
+/// logged and swallowed so a settings-overlay glitch never blocks a launch.
 /// </summary>
-/// <param name="promptRoot">Where launch prompts are written. It must be owner-only, which the
-/// daemon's state directory is and a shared temp directory is not.</param>
+/// <param name="home">The daemon's home, against which an account directory is told apart from the
+/// vendor's built-in one.</param>
 internal sealed partial class PtyHostedAgentRuntimeFactory(
         IHostedAgentLauncher                  launcher,
         IPtyProcessFactory                    ptyFactory,
         ILogger<PtyHostedAgentRuntimeFactory> logger,
         TimeProvider                          time,
-        string                                promptRoot
+        UserHome                              home
     ) : IHostedAgentRuntimeFactory {
     public string Vendor            => launcher.Vendor;
     public bool   SupportsUnattended => launcher.SupportsUnattended;
     public bool   SupportsPrReview   => launcher.SupportsPrReview;
     public bool   SupportsBorrowedReviewFlow => launcher.SupportsBorrowedReviewFlow;
     public bool   SupportsRestartResume(string? runtimeTransport) => launcher.SupportsResume;
+
+    /// <summary>The launcher passes no prompt argument for an empty prompt and nothing is pasted, so the agent
+    /// reopens its session and waits.</summary>
+    public bool ResumesIdleWithoutPrompt(string? runtimeTransport) => SupportsRestartResume(runtimeTransport);
     public string? BorrowedReviewContainment => launcher.BorrowedReviewContainment;
 
     /// <summary>PTY factories delegate reviewer-model resolution to their launcher-owned policy — the
@@ -71,7 +71,8 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
             // talk to the review MCP tools.
             ReviewLaunch: ctx.IsReview && ctx.Review is { } reviewArgs
                 ? await ReviewLaunchBuilder.BuildAsync(ctx.Vendor, ctx.CapacitorPath, ctx.ServerUrl ?? "", reviewArgs.Owner, reviewArgs.Repo, reviewArgs.PrNumber)
-                : null
+                : null,
+            Account: ctx.Account
         ) {
             McpAllowlist = ctx.McpAllowlist,
             Work           = ctx.Work,
@@ -98,19 +99,14 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
 
         var launchArgs = launcher.BuildArgs(launcherCtx);
 
-        string? promptFile = null;
+        string? launchPrompt = null;
         if (launcherCtx.Prompt is { Length: > 0 } prompt
             && launchArgs.Args.Contains(prompt)
-            && !StaysInline(prompt, launchArgs.Args)) {
-            promptFile = PromptFile.Write(promptRoot, ctx.AgentId, prompt);
-            try {
-                launcherCtx = launcherCtx with { PromptFile = promptFile };
-                launchArgs  = launcher.BuildArgs(launcherCtx);
-            } catch {
-                PromptFile.Delete(promptFile);
-                throw;
-            }
-            LogPromptMovedToFile(ctx.AgentId, prompt.Length);
+            && !CommandLinePrompt.StaysInline(prompt, launchArgs.Args)) {
+            launcherCtx  = launcherCtx with { Prompt = null };
+            launchArgs   = launcher.BuildArgs(launcherCtx);
+            launchPrompt = prompt;
+            LogPromptPastedAfterSpawn(ctx.AgentId, prompt.Length);
         }
 
         var args          = launchArgs.Args;
@@ -123,7 +119,7 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
         if (!ctx.IsPrivate) {
             env[HostedAgent.RenderedVar] = HostedAgent.Rendered;
             env[HostedAgent.AgentIdVar]  = ctx.AgentId;
-            HostedLaunchMarkers.Apply(env, ctx.IsReviewFlow, ctx.FlowRole);
+            HostedLaunchMarkers.ApplyOverlay(env, ctx);
         }
 
         // Phase B (D4 §6.4(3)): stamp the daemon-identity markers so a restarted daemon's
@@ -149,32 +145,68 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
             env["KCAP_REVIEW_PR"] = reviewEnv.PrNumber.ToString();
         }
 
-        IPtyProcess pty;
-        try {
-            pty = ptyFactory.Spawn(launcher.CliPath, args, ctx.Worktree.Path, env, ctx.Cols, ctx.Rows);
-        } catch {
-            if (promptFile is not null) PromptFile.Delete(promptFile);
-            throw;
+        var removeEnv = ctx.Account is { } account
+            ? VendorHomeEnv.Apply(env, ctx.Vendor, account, home)
+            : FrozenSet<string>.Empty;
+
+        // Read before the spawn so a throw cannot orphan the PTY. Gates the multi-CR submit spray; see
+        // PtyHostedAgentRuntime.SubmitAsync.
+        var disablesApprovalPrompts = launcher.DisablesApprovalPrompts(launcherCtx);
+
+        var pty     = ptyFactory.Spawn(launcher.CliPath, args, ctx.Worktree.Path, env, ctx.Cols, ctx.Rows, removeEnv);
+        var runtime = new PtyHostedAgentRuntime(ctx.Vendor, pty, time, disablesApprovalPrompts, logger);
+
+        if (launchPrompt is not null) {
+            runtime.DeliverLaunchPrompt(launchPrompt);
+            _ = LogLaunchPromptOutcomeAsync(runtime.LaunchPromptDelivery!, ctx.AgentId);
         }
-
-        if (promptFile is not null)
-            _ = pty.WaitForExitAsync().ContinueWith(_ => PromptFile.Delete(promptFile), TaskScheduler.Default);
-
-        // Gate the multi-CR submit spray on whether this launch turned off approval prompts — the
-        // launcher is the authority (it set the flags). See PtyHostedAgentRuntime.SubmitAsync.
-        var runtime = new PtyHostedAgentRuntime(ctx.Vendor, pty, time, launcher.DisablesApprovalPrompts(launcherCtx));
 
         return new HostedRuntimeStart(runtime, mcpConfigPath);
     }
 
-    /// <summary>A slash command stays inline unless it is too long for a Windows command line, where
-    /// the spawn would fail outright.</summary>
-    static bool StaysInline(string prompt, IReadOnlyList<string> args) =>
-        PromptFile.IsSlashCommand(prompt) && !(OperatingSystem.IsWindows() && PromptFile.Overflows(args));
-
     [LoggerMessage(Level = LogLevel.Warning, Message = "Launcher Prepare soft-failure for agent {AgentId} (continuing)")]
     partial void LogPrepareSoftFailure(Exception ex, string agentId);
 
-    [LoggerMessage(Level = LogLevel.Debug, Message = "Agent {AgentId} reads its {Length}-character prompt from a file")]
-    partial void LogPromptMovedToFile(string agentId, int length);
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Agent {AgentId} receives its {Length}-character prompt through the PTY after spawn")]
+    partial void LogPromptPastedAfterSpawn(string agentId, int length);
+
+    /// <summary>An agent that never received its task leaves no other trace, so every withdrawn or
+    /// blind delivery is logged here.</summary>
+    async Task LogLaunchPromptOutcomeAsync(Task<LaunchPromptOutcome> delivery, string agentId) {
+        LaunchPromptOutcome outcome;
+
+        try {
+            outcome = await delivery.ConfigureAwait(false);
+        } catch (Exception ex) {
+            LogLaunchPromptFaulted(ex, agentId);
+
+            return;
+        }
+
+        switch (outcome) {
+            case LaunchPromptOutcome.Delivered:             LogLaunchPromptDelivered(agentId); break;
+            case LaunchPromptOutcome.DeliveredAfterMaxWait: LogLaunchPromptPastedBlind(agentId, PtyHostedAgentRuntime.LaunchPromptMaxWait.TotalSeconds); break;
+            case LaunchPromptOutcome.AgentExited:           LogLaunchPromptAgentExited(agentId); break;
+            case LaunchPromptOutcome.WriteFailed:           LogLaunchPromptWriteFailed(agentId); break;
+            default:                                        LogLaunchPromptWithdrawn(agentId, outcome); break;
+        }
+    }
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Agent {AgentId} received its launch prompt")]
+    partial void LogLaunchPromptDelivered(string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Agent {AgentId}'s startup output never settled; its launch prompt was pasted after {Seconds}s")]
+    partial void LogLaunchPromptPastedBlind(string agentId, double seconds);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Agent {AgentId} exited before it received its launch prompt")]
+    partial void LogLaunchPromptAgentExited(string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Agent {AgentId}'s launch prompt could not be written to its PTY")]
+    partial void LogLaunchPromptWriteFailed(string agentId);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Agent {AgentId}'s launch prompt was withdrawn ({Outcome})")]
+    partial void LogLaunchPromptWithdrawn(string agentId, LaunchPromptOutcome outcome);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Agent {AgentId}'s launch prompt delivery faulted")]
+    partial void LogLaunchPromptFaulted(Exception ex, string agentId);
 }

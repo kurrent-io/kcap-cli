@@ -7,7 +7,7 @@
                      x:TypeArguments="vm:LifecyclePromptViewModel"
                      x:DataType="vm:LifecyclePromptViewModel"
                      Title="{Binding Title}"
-                     Icon="avares://Kurrent Capacitor/Assets/kcap-icon.png"
+                     Icon="avares://kcap-desktop/Assets/kcap-icon.png"
                      Width="480" SizeToContent="Height" MaxHeight="560"
                      CanResize="False" Topmost="True" WindowStartupLocation="CenterOwner"
                      Background="{StaticResource KcapCanvasBrush}"
@@ -21,24 +21,24 @@
         <Grid Margin="36,44,36,28" RowDefinitions="*,Auto">
             <ScrollViewer Grid.Row="0">
                 <StackPanel>
-                    <Panel Width="64" Height="64" HorizontalAlignment="Center">
-                        <Image Source="avares://Kurrent Capacitor/Assets/kcap-icon.png"
+                    <Panel Width="64" Height="64" HorizontalAlignment="Left">
+                        <Image Source="avares://kcap-desktop/Assets/kcap-icon.png"
                                RenderOptions.BitmapInterpolationMode="HighQuality" />
                         <Border CornerRadius="12" BorderThickness="1" BorderBrush="{StaticResource KcapBorderBrush}" />
                     </Panel>
 
                     <TextBlock Margin="0,20,0,0" Text="{Binding Title}"
-                               HorizontalAlignment="Center" TextAlignment="Center"
+                               HorizontalAlignment="Left" TextAlignment="Left"
                                FontSize="19" FontWeight="SemiBold" LineHeight="26" LetterSpacing="-0.2"
                                Foreground="{StaticResource KcapTextBrush}" />
 
                     <StackPanel Margin="0,12,0,0" Orientation="Horizontal" Spacing="10"
-                                HorizontalAlignment="Center" IsVisible="{Binding ShowVersionChange}">
+                                HorizontalAlignment="Left" IsVisible="{Binding ShowVersionChange}">
                         <Border Padding="10,3" CornerRadius="999" BorderThickness="1"
                                 IsVisible="{Binding ShowInstalledVersion}"
                                 Background="{StaticResource KcapSurfaceBrush}"
                                 BorderBrush="{StaticResource KcapBorderBrush}">
-                            <TextBlock Text="{Binding InstalledVersion}" FontSize="12" FontFamily="{StaticResource FrMonoFont}"
+                            <TextBlock Text="{Binding InstalledVersion}" FontSize="12" FontFamily="{StaticResource OnboardingMonoFont}"
                                        Foreground="{StaticResource KcapMutedBrush}" />
                         </Border>
                         <views:AppIcon Kind="ArrowRight" Size="12" VerticalAlignment="Center" IsVisible="{Binding ShowInstalledVersion}"
@@ -46,15 +46,24 @@
                         <Border Padding="10,3" CornerRadius="999" BorderThickness="1"
                                 Background="{StaticResource KcapPurpleDimBrush}"
                                 BorderBrush="{StaticResource KcapPurpleBrush}">
-                            <TextBlock Text="{Binding UpdateVersion}" FontSize="12" FontFamily="{StaticResource FrMonoFont}"
+                            <TextBlock Text="{Binding UpdateVersion}" FontSize="12" FontFamily="{StaticResource OnboardingMonoFont}"
                                        Foreground="{StaticResource KcapPurpleBrush}" />
                         </Border>
                     </StackPanel>
 
                     <TextBlock Margin="0,14,0,0" Width="400" Text="{Binding Disclosure}"
-                               HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap"
+                               HorizontalAlignment="Left" TextAlignment="Left" TextWrapping="Wrap"
                                FontSize="13.5" LineHeight="21"
                                Foreground="{StaticResource KcapMutedBrush}" />
+
+                    <Border Margin="0,16,0,0" Padding="12,9" CornerRadius="8" BorderThickness="1"
+                            Background="{StaticResource KcapWarningDimBrush}"
+                            BorderBrush="{StaticResource KcapWarningBrush}"
+                            IsVisible="{Binding Warning, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                        <TextBlock Text="{Binding Warning}" TextWrapping="Wrap" Width="374"
+                                   FontSize="12.5" LineHeight="19"
+                                   Foreground="{StaticResource KcapWarningBrush}" />
+                    </Border>
 
                     <Border Margin="0,16,0,0" Padding="12,9" CornerRadius="8" BorderThickness="1"
                             Background="{StaticResource KcapWarningDimBrush}"

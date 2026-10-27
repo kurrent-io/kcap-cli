@@ -99,6 +99,38 @@ public class WizardSimpleStepsTests {
         public Task<ShimResult> InstallAsync(string target, CancellationToken ct) => Task.FromResult(result);
     }
 
+    sealed class GatedInstaller : ICliPathInstaller {
+        public readonly TaskCompletionSource<ShimResult> Result = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int Calls;
+        public string Disclosure => "";
+        public ShimPreflight Preflight(string target) => throw new NotSupportedException();
+        public Task<ShimResult> InstallAsync(string target, CancellationToken ct) {
+            Calls++;
+            return Result.Task;
+        }
+    }
+
+    /// The local install starts the link in the background; the harness step's Next joins it
+    /// rather than raising a second admin prompt.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_second_install_while_one_runs_joins_it() {
+        var (calls, first, second) = await AvaloniaSession.DispatchAsync(async () => {
+            var installer = new GatedInstaller();
+            var vm = new PathFixViewModel(installer, new FakeAppStateStore(), "/x");
+
+            var background = vm.InstallAsync();
+            var next       = vm.InstallAsync();
+            installer.Result.SetResult(new ShimResult(ShimOutcome.Installed, null, null));
+
+            return (installer.Calls, await background, await next);
+        });
+
+        await Assert.That(calls).IsEqualTo(1);
+        await Assert.That(first).IsTrue();
+        await Assert.That(second).IsTrue();
+    }
+
     static readonly ShimResult[] UnfinishedShims = [
         new(ShimOutcome.InstalledButNotOnPath, null, null),
         new(ShimOutcome.InstalledButNotOnPath, "Add: export PATH=\"/usr/local/bin:$PATH\"", null),
@@ -154,6 +186,7 @@ public class WizardSimpleStepsTests {
         public ShimHarness() {
             Destination = Path.Combine(TempDir, "kcap");
             Target      = Path.Combine(TempDir, "target-cli");
+            Probe.KcapPathBehavior = _ => Task.FromResult<string?>(Destination);
             Installer   = new PathShimInstaller(Runner, Probe, Destination);
             Vm          = new PathFixViewModel(Installer, Store, Target);
         }
@@ -178,6 +211,69 @@ public class WizardSimpleStepsTests {
         });
 
         await Assert.That(updates).IsEqualTo(1);
+    }
+
+    /// A background link's failure is shown to nobody, so the app's startup offer must stay free to raise it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_background_link_claims_no_offer() {
+        var updates = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new ShimHarness();
+            h.Runner.Enqueue(new ProcessResult(1, "", "Permission denied", false));
+
+            await h.Vm.LinkAsync(CancellationToken.None);
+
+            return h.Store.Updates;
+        });
+
+        await Assert.That(updates).IsEqualTo(0);
+    }
+
+    /// The handoff carries a failure the user may not have seen, but not their own cancel.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_unfinished_link_hands_off_its_reason_but_not_a_cancel() {
+        var (failed, cancelled, none) = await AvaloniaSession.DispatchAsync(async () => {
+            var failing = new PathFixViewModel(
+                new ScriptedInstaller(new ShimResult(ShimOutcome.Failed, "Permission denied.", null)), new FakeAppStateStore(), "/x");
+            var cancelling = new PathFixViewModel(
+                new ScriptedInstaller(new ShimResult(ShimOutcome.Cancelled, null, null)), new FakeAppStateStore(), "/x");
+            var idle = new PathFixViewModel(
+                new ScriptedInstaller(new ShimResult(ShimOutcome.Failed, null, null)), new FakeAppStateStore(), "/x");
+            await failing.LinkAsync(CancellationToken.None);
+            await cancelling.LinkAsync(CancellationToken.None);
+
+            return (await failing.UnfinishedAsync(), await cancelling.UnfinishedAsync(), await idle.UnfinishedAsync());
+        });
+
+        await Assert.That(failed).Contains("Permission denied.");
+        await Assert.That(cancelled).IsNull();
+        await Assert.That(none).IsNull();
+    }
+
+    sealed class SequencedInstaller(params Func<ShimResult>[] attempts) : ICliPathInstaller {
+        int _next;
+        public string Disclosure => "";
+        public ShimPreflight Preflight(string target) => throw new NotSupportedException();
+        public Task<ShimResult> InstallAsync(string target, CancellationToken ct) => Task.FromResult(attempts[_next++]());
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_cancel_does_not_hide_a_later_attempts_failure() {
+        var unfinished = await AvaloniaSession.DispatchAsync(async () => {
+            var vm = new PathFixViewModel(
+                new SequencedInstaller(
+                    () => new ShimResult(ShimOutcome.Cancelled, null, null),
+                    () => throw new IOException("disk full")),
+                new FakeAppStateStore(), "/x");
+            await vm.LinkAsync(CancellationToken.None);
+            await vm.LinkAsync(CancellationToken.None);
+
+            return await vm.UnfinishedAsync();
+        });
+
+        await Assert.That(unfinished).Contains("disk full");
     }
 
     [Test]
@@ -278,18 +374,6 @@ public class WizardSimpleStepsTests {
         await Assert.That(updates).IsEqualTo(0);
     }
 
-    /// A daemon that stopped short says why, rather than claiming setup is still under way.
-    [Test]
-    public async Task The_daemon_line_names_what_stopped_the_daemon() {
-        var stopped  = new DoneStepViewModel(() => DoneFacts.Empty with { DaemonProblem = "kcap isn't available on this machine." });
-        var underWay = new DoneStepViewModel(() => DoneFacts.Empty);
-        await stopped.OnEnterAsync(CancellationToken.None);
-        await underWay.OnEnterAsync(CancellationToken.None);
-
-        await Assert.That(stopped.DaemonLine).StartsWith("kcap isn't available on this machine.");
-        await Assert.That(underWay.DaemonLine).StartsWith("The daemon is being set up");
-    }
-
     // ── templates ────────────────────────────────────────────────────────────
 
     [Test]
@@ -306,7 +390,7 @@ public class WizardSimpleStepsTests {
 
             var texts    = window.GetVisualDescendants().OfType<TextBlock>().ToList();
             var title    = texts.FirstOrDefault(t => t.Name == "StepTitleText")?.Text;
-            var daemon   = texts.FirstOrDefault(t => t.Name == "DaemonLineText")?.Text;
+            var daemon   = texts.FirstOrDefault(t => t.Name == "ServicePillText")?.Text;
             var capture  = window.GetVisualDescendants().OfType<ItemsControl>().FirstOrDefault(i => i.Name == "CaptureItems")?.ItemCount;
 
             window.Close();
@@ -316,7 +400,7 @@ public class WizardSimpleStepsTests {
         });
 
         await Assert.That(result.title).IsEqualTo("From now on, your agents remember");
-        await Assert.That(result.daemon).StartsWith("Running as a service on test-mac.");
+        await Assert.That(result.daemon).IsEqualTo("Running");
         await Assert.That(result.capture).IsEqualTo(1);
     }
 }

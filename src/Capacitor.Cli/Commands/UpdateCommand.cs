@@ -11,7 +11,7 @@ public sealed class UpdateCommand(
         TimeProvider time, KcapReleaseClient? releases = null, ScriptUpdater? scriptUpdater = null, InstallKind? kind = null) {
     /// Printed by every `kcap update` invocation of a CLI that lives inside the desktop app.
     internal const string BundledMessage =
-        "This kcap is bundled with the Kurrent Capacitor desktop app; updates arrive through the app (\"Check for Updates…\" in the menu bar).";
+        "This kcap is bundled with the kcap desktop app; updates arrive through the app (\"Check for Updates…\" in the menu bar).";
 
     /// <summary>Printed by `kcap update` in the desktop app's snap, where snapd owns updates.</summary>
     internal static string SnapMessage(string? snapName) =>

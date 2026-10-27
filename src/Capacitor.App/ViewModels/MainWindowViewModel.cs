@@ -1,8 +1,10 @@
 using System.Reactive;
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Avalonia.Media;
 using Capacitor.App.Services;
@@ -80,6 +82,12 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     ObservableAsPropertyHelper<string>? _agentCountText;
     public string AgentCountText => _agentCountText?.Value ?? "";
 
+    // False until a snapshot has a daemon name or a displayable version. The help chip
+    // then shares the status line; a second row with nothing in it would leave the chip
+    // sitting under that line.
+    ObservableAsPropertyHelper<bool>? _showsDaemonLine;
+    public bool ShowsDaemonLine => _showsDaemonLine?.Value ?? false;
+
     internal const string RestartPendingMessage = "Daemon update pending — it restarts once its agents finish their current turn, then resumes them unless daemon.auto_resume is off.";
 
     // The daemon has a restart-after-update queued (DaemonRestartPendingWatcher) and we are
@@ -137,7 +145,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     /// Caption under the URL in the org label's hover — the org is what you point at, the
     /// server it talks to is what the hover tells you.
-    public const string ServerUrlTip = "Capacitor server for this organization";
+    public const string ServerUrlTip = "kcap server for this organization";
     public const string VersionIdentityTip = "Version of the kcap daemon on this machine";
     public const string AgentCountTip = "Agents running on this daemon";
 
@@ -146,6 +154,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// Constructed once at the composition root; the prompt window's onConcluded callback nudges
     /// the same instance.
     public ActivityViewModel Activity { get; }
+    public WebWorkspaceViewModel? Web { get; init; }
+    public ReactiveCommand<Unit, Unit> OpenLaunchApprovalsCommand { get; }
 
     /// The launcher pane's view model, built at the composition root over the SAME
     /// IDaemonClientService instance this window uses, never a second daemon connection. Null
@@ -157,7 +167,13 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     readonly Func<string, WorkspaceViewModel>? _workspaceFactory;
     readonly Func<string, AgentOrigin?> _originOf;
     readonly Func<string, RemoteSessionViewModel?>? _remoteFactory;
+    readonly Func<string, RemoteSessionViewModel?>? _serverFactory;
     readonly IAgentDirectory? _directory;
+    readonly IServerSessionsService? _sessions;
+    readonly IDisposable _onAppServer;
+    /// A session id names a session only within one server: a hand-off to the server's row is
+    /// sound only while the local daemon reports the app's server.
+    bool _localOnAppServer = true;
     readonly SerialDisposable _rebind = new();
 
     ISessionWorkspace? _currentWorkspace;
@@ -204,11 +220,20 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public ReactiveCommand<Unit, Unit> OpenSettingsCommand { get; }
     volatile Action? _openSettings;
 
+    /// Off macOS, the in-window menu's way to the uninstall; shown only where the app can remove itself.
+    public ReactiveCommand<Unit, Unit> UninstallCommand { get; }
+    volatile Action? _uninstall;
+
+    public bool ShowsUninstall {
+        get;
+        private set => this.RaiseAndSetIfChanged(ref field, value);
+    }
+
     /// Off macOS no native app menu is drawn, so Settings, the changelog and the version ride the
     /// rail's help flyout instead.
     public bool AppMenuInWindow { get; }
 
-    public string AppVersionLabel { get; } = $"Kurrent Capacitor {AppVersion.Display}";
+    public string AppVersionLabel { get; } = $"Desktop app {AppVersion.Display}";
 
     /// macOS opens its About panel from the native app menu; Windows has none, so the rail's help
     /// flyout opens the app's own.
@@ -226,11 +251,14 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public bool CanOpenSetup { get; }
     public HistoryImportRun? HistoryImport { get; }
     public bool HistoryImportVisible => HistoryImport is not null;
+    public bool HistoryImportRunning => HistoryImport is { Running: true };
+    /// Counts against the same total setup showed, so the figure reads as one run across both windows.
     public string HistoryImportStatus => HistoryImport is not { } run ? ""
-        : run.Running ? $"Importing history · {run.Imported:N0} sessions uploaded"
+        : run.Running ? $"Importing history · {run.ProcessedOfExpected} sessions processed"
         : run.State is ImportRunState.Failed or ImportRunState.Cancelled
-            ? $"History import didn't finish · {run.Imported:N0} sessions uploaded. Reopen setup to retry."
-        : $"History imported · {run.Imported:N0} sessions uploaded";
+            ? $"History import didn't finish · {run.ProcessedOfExpected} sessions processed. Reopen setup to retry"
+        : $"History imported · {run.Processed:N0} sessions processed";
+    public double HistoryImportProgress => HistoryImport?.Progress ?? 0;
 
     ObservableAsPropertyHelper<bool>? _signInVisible;
     /// True while the rail reads Signed out and a sign-in action exists — the help flyout
@@ -251,7 +279,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public ReactiveCommand<Unit, Unit> StartDaemonCommand { get; }
     public ReactiveCommand<Unit, Unit> RetryCommand { get; }
 
-    readonly TimeProvider _time;
+    public TimeProvider Time { get; }
 
     /// <param name="shutdownToken">
     /// Abandons StartDaemonAsync's WAIT (never the spawned daemon) on app shutdown. Must be linked
@@ -322,18 +350,23 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             NavigationGate? navigation = null, Action<Func<Task>>? trackWorkspaceTeardown = null,
             Func<string, WorkspaceViewModel>? workspaceFactory = null, SessionRailViewModel? rail = null,
             string? tenantName = null, IObservable<string?>? lifecycleAttention = null,
+            IObservable<string?>? identityReport = null,
             IObservable<ServerLaneStatus>? laneStatus = null, IObservable<bool>? restartPending = null,
             Func<string, AgentOrigin?>? originOf = null, Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
             IAgentDirectory? directory = null,
             Action<FeedbackCategory>? openFeedback = null, IUrlOpener? opener = null,
             Action? requestSignIn = null, IObservable<Action?>? settingsAction = null,
-            bool? appMenuInWindow = null, Action? requestSetup = null,
+            IObservable<Action?>? uninstallAction = null, bool? appMenuInWindow = null, Action? requestSetup = null,
             HistoryImportRun? historyImport = null,
             IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
-            IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null) {
+            IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null, Action? openLaunchApprovals = null,
+            Func<string, RemoteSessionViewModel?>? serverWorkspaceFactory = null, IServerSessionsService? sessions = null) {
         _service = service;
-        _time = time;
+        _serverFactory = serverWorkspaceFactory;
+        Time = time;
         Activity = activity;
+        OpenLaunchApprovalsCommand = ReactiveCommand.Create(openLaunchApprovals ?? (() => { }),
+            Observable.Return(openLaunchApprovals is not null));
         Home = home;
         _navigation = navigation ?? new NavigationGate();
         _trackTeardown = trackWorkspaceTeardown ?? RunUntracked;
@@ -341,6 +374,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         _originOf = originOf ?? (_ => AgentOrigin.Local);
         _remoteFactory = remoteWorkspaceFactory;
         _directory = directory;
+        _sessions = sessions;
+        _onAppServer = directory?.LocalDaemonOnAppServer.Subscribe(on => _localOnAppServer = on) ?? Disposable.Empty;
         Rail = rail;
         TenantName = ProfileLabelForRail(tenantName);
         CloseWorkspaceCommand = ReactiveCommand.Create(CloseWorkspace);
@@ -358,6 +393,12 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         OpenSettingsCommand = ReactiveCommand.Create(
             () => _openSettings?.Invoke(),
             settings.Select(open => open is not null).ObserveOn(RxSchedulers.MainThreadScheduler));
+        var uninstall       = (uninstallAction ?? Observable.Return<Action?>(null)).ObserveOn(RxSchedulers.MainThreadScheduler);
+        uninstall.Subscribe(run => {
+            _uninstall     = run;
+            ShowsUninstall = run is not null;
+        });
+        UninstallCommand    = ReactiveCommand.Create(() => _uninstall?.Invoke(), uninstall.Select(run => run is not null));
         SignInCommand       = ReactiveCommand.Create(() => { requestSignIn?.Invoke(); });
         CanOpenSetup = requestSetup is not null;
         SetupCommand = ReactiveCommand.Create(() => requestSetup?.Invoke());
@@ -408,15 +449,24 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
         this.WhenActivated(disposables => {
             if (historyImport is not null)
-                historyImport.WhenAnyValue(x => x.State, x => x.Imported, (state, imported) => (state, imported))
+                historyImport.WhenAnyValue(x => x.State, x => x.Processed, x => x.PassesDone, (state, processed, passes) => (state, processed, passes))
                     .ObserveOn(RxSchedulers.MainThreadScheduler)
-                    .Subscribe(_ => this.RaisePropertyChanged(nameof(HistoryImportStatus)))
+                    .Subscribe(_ => {
+                        this.RaisePropertyChanged(nameof(HistoryImportStatus));
+                        this.RaisePropertyChanged(nameof(HistoryImportRunning));
+                        this.RaisePropertyChanged(nameof(HistoryImportProgress));
+                    })
                     .DisposeWith(disposables);
             var status    = service.Status.ObserveOn(RxSchedulers.MainThreadScheduler);
             var snapshots = service.Snapshots.ObserveOn(RxSchedulers.MainThreadScheduler);
 
             _daemonName = snapshots.Select(s => s.Daemon.Name)
                 .ToProperty(this, x => x.DaemonName, "")
+                .DisposeWith(disposables);
+
+            _showsDaemonLine = snapshots
+                .Select(s => !string.IsNullOrEmpty(s.Daemon.Name) || StripBuildMetadata(s.Daemon.Version).Length > 0)
+                .ToProperty(this, x => x.ShowsDaemonLine, false)
                 .DisposeWith(disposables);
 
             _versionDisplay = snapshots.Select(s => StripBuildMetadata(s.Daemon.Version))
@@ -552,8 +602,27 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .ToProperty(this, x => x.ConnectionHasDetail, false)
                 .DisposeWith(disposables);
 
+            // A connect clears the progress lines back to the standing identity report, whichever of the two the
+            // main thread happens to see first.
+            string? identity = null;
+            // Each lifecycle lane's line until it is withdrawn, or a connect or identity report replaces it.
+            var laneLines = new string?[2];
+            identityReport?.ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(report => {
+                    var shown = identity;
+                    identity = report;
+                    if (report is not null) {
+                        laneLines.AsSpan().Clear();
+                        StartMessage = report;
+                    }
+                    else if (shown is not null && ReferenceEquals(StartMessage, shown)) StartMessage = null;
+                })
+                .DisposeWith(disposables);
             status.Where(s => s.State == AttachState.Connected)
-                .Subscribe(_ => StartMessage = null)
+                .Subscribe(_ => {
+                    laneLines.AsSpan().Clear();
+                    StartMessage = identity;
+                })
                 .DisposeWith(disposables);
 
             // Reconnect / already-running kicks only reattach. If we land Unreachable again while
@@ -568,14 +637,20 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
             // Status (start-action one-liners) and Attention (mutation-outcome presentation) both
             // land on StartMessage so the launcher banner is never mute after a Start daemon click.
-            void BindStartMessage(IObservable<string?>? source) =>
+            // A null takes back that lane's own line, if nothing has replaced it since, and shows
+            // the other lane's line again when it is still standing.
+            void BindStartMessage(IObservable<string?>? source, int lane) =>
                 source?.ObserveOn(RxSchedulers.MainThreadScheduler)
-                    .Where(msg => msg is not null)
-                    .Subscribe(msg => StartMessage = msg)
+                    .Subscribe(msg => {
+                        var posted = laneLines[lane];
+                        laneLines[lane] = msg;
+                        if (msg is not null) StartMessage = msg;
+                        else if (posted is not null && ReferenceEquals(StartMessage, posted)) StartMessage = laneLines[1 - lane] ?? identity;
+                    })
                     .DisposeWith(disposables);
 
-            BindStartMessage(lifecycleStatus);
-            BindStartMessage(lifecycleAttention);
+            BindStartMessage(lifecycleStatus, 0);
+            BindStartMessage(lifecycleAttention, 1);
         });
     }
 
@@ -601,9 +676,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             return true;
         }
 
-        ISessionWorkspace? next = lane == AgentOrigin.Remote && _remoteFactory is { } remote
-            ? remote(agentId)
-            : _workspaceFactory is { } local ? local(agentId) : null;
+        ISessionWorkspace? next = lane switch {
+            AgentOrigin.Remote => _remoteFactory?.Invoke(agentId),
+            AgentOrigin.Server => _serverFactory?.Invoke(agentId),
+            _ => _workspaceFactory?.Invoke(agentId),
+        };
         if (next is null) return false;
 
         SwapTo(next);
@@ -620,16 +697,16 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     static bool Superseded(ISessionWorkspace open, AgentOrigin lane) =>
         open is RemoteSessionViewModel remote
-            ? lane != AgentOrigin.Remote || remote.OriginChangedToLocal
+            ? remote.IsSessionOnly ? lane != AgentOrigin.Server : lane != AgentOrigin.Remote || remote.OriginChangedToLocal
             : lane != AgentOrigin.Local;
 
     /// The launch auto-open. `generation` is what the launch captured BEFORE its call: a success
     /// arriving after any navigation (closing the workspace, another session, close-to-hide, the
     /// shutdown latch) opens nothing, rather than attaching an invisible terminal or replacing what
     /// the user opened while the launch was in flight.
-    public void OpenSessionIfCurrent(string agentId, int generation) {
+    public void OpenSessionIfCurrent(string agentId, AgentOrigin origin, int generation) {
         if (generation != _navigation.Generation) return;
-        OpenSession(agentId);
+        OpenSession(agentId, origin);
     }
 
     /// The launcher words a launch failure, and an open workspace covers the launcher. Only a
@@ -663,7 +740,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         var live = CurrentWorkspace;
         CurrentWorkspace = null;
         _rebind.Disposable = Disposable.Empty;
-        if (Rail is not null) Rail.SelectedAgentId = null;
+        _handoff.Disposable = Disposable.Empty;
+        if (Rail is not null) Rail.SelectedSessionKey = null;
         _navigation.Latch();
         if (live is not null) _trackTeardown(live.TeardownAsync);
     }
@@ -671,29 +749,77 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     void SwapTo(ISessionWorkspace? next) {
         var outgoing = CurrentWorkspace;
         CurrentWorkspace = next;
-        if (Rail is not null) Rail.SelectedAgentId = next?.AgentId;
+        if (Rail is not null) Rail.SelectedSessionKey = next switch {
+            RemoteSessionViewModel { IsSessionOnly: true } session => $"server:{session.AgentId}",
+            RemoteSessionViewModel remote => $"remote:{remote.AgentId}",
+            null => null,
+            _ => $"local:{next.AgentId}",
+        };
         _navigation.Bump();
         if (outgoing is not null) _trackTeardown(outgoing.TeardownAsync);
+        _handoff.Disposable = Disposable.Empty;
         // Last, so a watch that fires synchronously on its first element cannot have the swap it
         // caused overwritten by the arming that is still returning.
-        WatchOrigin(next);
+        WatchOpen(next);
     }
 
     /// An open workspace follows its row across lanes, both directions, carrying the tab in use.
-    /// Nothing here ends a session — the row that wins says whether it did.
-    void WatchOrigin(ISessionWorkspace? workspace) {
-        var watch = workspace switch {
-            RemoteSessionViewModel remote => remote.OriginChangedChanges
+    /// Once its session ends it hands off to the server's row for that session, which opens the
+    /// ended session read-only; a session the server never lists closes as the rail has dropped it,
+    /// and a failed local agent closes at once so its reason stays where the rail shows it. A
+    /// session-only workspace closes on the server's own word that the session is gone, and follows
+    /// the session onto a daemon row that takes it up; a row removed by a page cut or a scope switch
+    /// is neither, and the workspace outlives it.
+    void WatchOpen(ISessionWorkspace? workspace) {
+        var moves = workspace switch {
+            RemoteSessionViewModel { IsSessionOnly: false } remote => remote.OriginChangedChanges
                 .Where(moved => moved)
                 .Take(1)
                 .ObserveOn(RxSchedulers.MainThreadScheduler)
-                .Subscribe(_ => Rebind(remote, AgentOrigin.Local, remote.IsTerminalActive, remote.IsPullRequestActive)),
+                .Subscribe(_ => Rebind(remote, AgentOrigin.Local, remote.AgentId, remote.IsTerminalActive, remote.IsPullRequestActive)),
             // Not a one-shot: a swap the host cannot complete leaves the watch armed for the next
             // proof, and one that completes retires it through the swap's own re-arming.
             WorkspaceViewModel local when _directory is { } directory => LocalRowMoves(directory, local.AgentId)
-                .Subscribe(_ => Rebind(local, AgentOrigin.Remote, local.IsTerminalActive, local.IsPullRequestActive)),
+                .Subscribe(_ => Rebind(local, AgentOrigin.Remote, local.AgentId, local.IsTerminalActive, local.IsPullRequestActive)),
             _ => Disposable.Empty,
         };
+        var ended = workspace switch {
+            WorkspaceViewModel local => local.Ended
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(_ => {
+                    if (!ReferenceEquals(CurrentWorkspace, workspace)) return;
+                    if (local.LastStatus == "Completed" && _localOnAppServer && local.SessionId is { Length: > 0 } sessionId && _directory is { } directory)
+                        ArmHandoff(local, directory, sessionId, $"local:{local.AgentId}", closeWithout: true);
+                    else CloseWorkspace();
+                }),
+            RemoteSessionViewModel { IsSessionOnly: true } session when _directory is { } directory => new CompositeDisposable(
+                (_sessions?.Dropped ?? Observable.Empty<string>())
+                    .Where(id => id == session.AgentId)
+                    .Take(1)
+                    .ObserveOn(RxSchedulers.MainThreadScheduler)
+                    .Subscribe(_ => { if (ReferenceEquals(CurrentWorkspace, workspace)) CloseWorkspace(); }),
+                directory.Rows.Connect()
+                    .ObserveOn(RxSchedulers.MainThreadScheduler)
+                    .SelectMany(changes => changes)
+                    .Where(change => change.Key == $"server:{session.AgentId}" && change.Reason == ChangeReason.Remove)
+                    .Subscribe(_ => {
+                        if (!ReferenceEquals(CurrentWorkspace, workspace)) return;
+                        if (DaemonRowFor(directory, session.AgentId) is { } row)
+                            Rebind(session, row.Origin, row.Id, terminal: false, pullRequest: session.IsPullRequestActive);
+                    })),
+            RemoteSessionViewModel { IsSessionOnly: false } remote => remote.SessionEndedChanges
+                .DistinctUntilChanged()
+                .Where(ended => ended)
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(_ => {
+                    if (!ReferenceEquals(CurrentWorkspace, workspace) || remote.OriginChangedToLocal) return;
+                    if (_directory is { } directory && _directory.Rows.Lookup($"remote:{remote.AgentId}") is { HasValue: false }
+                        && SessionOf(remote) is { Length: > 0 } sessionId)
+                        ArmHandoff(remote, directory, sessionId, $"remote:{remote.AgentId}", closeWithout: false);
+                }),
+            _ => Disposable.Empty,
+        };
+        var watch = new CompositeDisposable(moves, ended);
         // A watch that fired while it was still being armed has already swapped the workspace and
         // armed the next one: keeping this subscription would retire that one unwatched.
         if (ReferenceEquals(CurrentWorkspace, workspace)) _rebind.Disposable = watch;
@@ -732,12 +858,65 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         && !SessionStatusDots.IsTerminal(twin.Status)
         && twin.SessionId == droppedSession;
 
-    void Rebind(ISessionWorkspace open, AgentOrigin origin, bool terminal, bool pullRequest) {
+    static string? SessionOf(RemoteSessionViewModel remote) => remote.SessionId is { Length: > 0 } id ? id : null;
+
+    /// The daemon row that has taken up a session the server lists under its own spelling of the id:
+    /// one its lane vouches for now. A completed row, or a cached one whose socket or registry is
+    /// gone, is history the server row's removal exposes again, not a takeover.
+    static AgentRow? DaemonRowFor(IAgentDirectory directory, string serverSessionId) =>
+        directory.Rows.Items.FirstOrDefault(r => directory.IsHostedNow(r) && SessionIds.SameSession(serverSessionId, r.SessionId));
+
+    enum HandoffOutcome { ServerRow, Returned, Lapsed }
+
+    /// Waits for the server's row for the session, within the grace, unless the daemon row comes
+    /// back live first. `closeWithout` is the local workspace's rule: nothing arrived, so close as
+    /// the rail already dropped it; a hosted remote workspace keeps its retained transcript instead.
+    void ArmHandoff(ISessionWorkspace open, IAgentDirectory directory, string sessionId, string daemonKey, bool closeWithout) {
+        // The server spells the id its own way, so its row is found by identity rather than by key.
+        AgentRow? EndedServerRow() => directory.Rows.Items.FirstOrDefault(r => r.IsEndedSession && SessionIds.SameSession(r.SessionId, sessionId));
+        // The daemon row has returned only when a change to that row after arming shows it live and
+        // the directory still says so when the change is read: the directory can carry the row as
+        // running at the instant the workspace learns it completed, another row's revision proves
+        // nothing about it, and a burst can queue a live revision ahead of the end.
+        var outcomes = directory.Rows.Connect(suppressEmptyChangeSets: false)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Skip(1)
+            .Select(changes => changes.Any(change => change.Key == daemonKey
+                    && change.Reason is ChangeReason.Add or ChangeReason.Update or ChangeReason.Refresh
+                    && !SessionStatusDots.IsTerminal(change.Current.Status))
+                && directory.Rows.Lookup(daemonKey) is { HasValue: true, Value: var back } && !SessionStatusDots.IsTerminal(back.Status))
+            .StartWith(false)
+            .Select(returned => returned
+                ? HandoffOutcome.Returned
+                : EndedServerRow() is not null
+                    ? HandoffOutcome.ServerRow
+                    : (HandoffOutcome?)null)
+            .Where(outcome => outcome is not null)
+            .Select(outcome => outcome!.Value)
+            .Merge(After(Time, AgentDirectory.HandoverGrace).Select(_ => HandoffOutcome.Lapsed))
+            .Take(1);
+        _handoff.Disposable = outcomes.Subscribe(outcome => {
+            if (!ReferenceEquals(CurrentWorkspace, open)) return;
+            switch (outcome) {
+                case HandoffOutcome.ServerRow when EndedServerRow() is { } row: Rebind(open, AgentOrigin.Server, row.Id, terminal: false, pullRequest: false); break;
+                case HandoffOutcome.Lapsed when closeWithout: CloseWorkspace(); break;
+            }
+        });
+    }
+
+    readonly SerialDisposable _handoff = new();
+
+    static IObservable<Unit> After(TimeProvider time, TimeSpan due) => Observable.Create<Unit>(observer => {
+        var timer = time.CreateTimer(_ => RxSchedulers.MainThreadScheduler.Schedule(() => observer.OnNext(Unit.Default)), null, due, Timeout.InfiniteTimeSpan);
+        return timer;
+    });
+
+    void Rebind(ISessionWorkspace open, AgentOrigin origin, string id, bool terminal, bool pullRequest) {
         if (!ReferenceEquals(CurrentWorkspace, open)) return;
         var subject = open.PullRequests?.Selected?.Subject;
-        OpenSessionCore(open.AgentId, origin, revealInRail: false);
+        OpenSessionCore(id, origin, revealInRail: false);
         if (ReferenceEquals(CurrentWorkspace, open)) return;
-        open.HandDraftTo(origin);
+        if (origin != AgentOrigin.Server) open.HandDraftTo(origin);
         if (terminal) {
             switch (CurrentWorkspace) {
                 case WorkspaceViewModel local: local.ShowTerminalCommand.Execute().Subscribe(); break;

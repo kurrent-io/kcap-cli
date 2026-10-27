@@ -22,13 +22,16 @@ public sealed class LifecyclePromptViewModel : ReactiveObject {
     public string Disclosure { get; }
     public bool PathDegraded { get; }
 
+    /// Null collapses the warning box.
+    public string? Warning { get; }
+
     /// False for the acknowledge-only kinds (quarantine, update info).
     public bool ShowDeclineButton { get; }
 
     public string AcceptButtonText { get; }
 
-    /// Removing a profile cannot be undone, so its Accept is styled as destructive and Enter does
-    /// not press it.
+    /// Removing a profile or uninstalling cannot be undone, so Accept is styled as destructive and
+    /// Enter does not press it.
     public bool AcceptIsDestructive { get; }
 
     /// Null when PathDegraded is false — bound with StringConverters.IsNotNullOrEmpty so the
@@ -54,6 +57,7 @@ public sealed class LifecyclePromptViewModel : ReactiveObject {
         Title             = TitleFor(prompt.Kind);
         Disclosure        = prompt.Disclosure;
         PathDegraded      = prompt.PathDegraded;
+        Warning           = prompt.Warning;
         // The body text does not repeat the candidate, so it shows even without an installed version.
         if (prompt is { Kind: LifecyclePrompt.KindUpdateReady, DaemonVersion: { } next }) {
             UpdateVersion    = next;
@@ -68,10 +72,11 @@ public sealed class LifecyclePromptViewModel : ReactiveObject {
             LifecyclePrompt.KindRename         => "Rename and restart",
             LifecyclePrompt.KindRemoveProfile  => "Remove",
             LifecyclePrompt.KindSetup          => "Restart and continue",
+            LifecyclePrompt.KindUninstall      => "Uninstall",
             _                                  => "Continue",
         };
 
-        AcceptIsDestructive = prompt.Kind == LifecyclePrompt.KindRemoveProfile;
+        AcceptIsDestructive = prompt.Kind is LifecyclePrompt.KindRemoveProfile or LifecyclePrompt.KindUninstall;
 
         AcceptCommand  = ReactiveCommand.Create(() => Resolve(tcs, true));
         DeclineCommand = ReactiveCommand.Create(() => Resolve(tcs, false));
@@ -95,6 +100,7 @@ public sealed class LifecyclePromptViewModel : ReactiveObject {
         LifecyclePrompt.KindRename        => "Rename daemon",
         LifecyclePrompt.KindRemoveProfile => "Remove profile",
         LifecyclePrompt.KindSetup         => "Reopen setup",
+        LifecyclePrompt.KindUninstall     => "Uninstall kcap",
         _                                 => "Repair daemon service", // KindRepair and any future kind
     };
 }

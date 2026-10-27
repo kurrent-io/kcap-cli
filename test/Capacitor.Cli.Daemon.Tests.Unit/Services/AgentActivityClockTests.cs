@@ -143,6 +143,82 @@ public class AgentActivityClockTests {
         await Assert.That(clock.AwaitingInput).IsTrue();
     }
 
+    /// The quiet deadline can fall between a viewer's input and the repaint it provokes.
+    [Test]
+    public async Task Viewer_input_just_before_the_quiet_deadline_still_covers_its_repaint() {
+        var time = new FakeTimeProvider();
+        var clock = new AgentActivityClock(time);
+        time.Advance(AgentActivityClock.QuietTurn - TimeSpan.FromMilliseconds(50));
+        clock.NoteViewerInput();
+        time.Advance(TimeSpan.FromMilliseconds(50));
+        await Assert.That(clock.TryMarkQuiet(AgentActivityClock.QuietTurn)).IsTrue();
+
+        time.Advance(TimeSpan.FromMilliseconds(25));
+        clock.AdvanceTerminalOutput(hasVisibleText: true);
+        await Assert.That(clock.AwaitingInput).IsTrue();
+    }
+
+    [Test]
+    public async Task Idle_resize_grace_expires_even_when_output_keeps_arriving() {
+        var time = new FakeTimeProvider();
+        var clock = new AgentActivityClock(time);
+        time.Advance(AgentActivityClock.QuietTurn);
+        clock.TryMarkQuiet(AgentActivityClock.QuietTurn);
+        clock.NoteViewerInput();
+
+        clock.AdvanceTerminalOutput(hasVisibleText: true);
+        time.Advance(TimeSpan.FromMilliseconds(999));
+        clock.AdvanceTerminalOutput(hasVisibleText: true);
+        await Assert.That(clock.AwaitingInput).IsTrue();
+        await Assert.That(clock.ActivitySeq).IsEqualTo(3UL);
+        await Assert.That(clock.IdleForMs).IsEqualTo(0UL);
+
+        time.Advance(TimeSpan.FromMilliseconds(1));
+        clock.AdvanceTerminalOutput(hasVisibleText: true);
+        await Assert.That(clock.AwaitingInput).IsFalse();
+    }
+
+    [Test]
+    [Arguments("submit")]
+    [Arguments("hook")]
+    [Arguments("turn")]
+    [Arguments("activity")]
+    public async Task Real_activity_during_idle_resize_grace_publishes_working_immediately(string signal) {
+        var time = new FakeTimeProvider();
+        var clock = new AgentActivityClock(time);
+        time.Advance(AgentActivityClock.QuietTurn);
+        clock.TryMarkQuiet(AgentActivityClock.QuietTurn);
+        clock.NoteViewerInput();
+        var seen = new List<bool>();
+        clock.OnAwaitingInputChanged = seen.Add;
+
+        switch (signal) {
+            case "submit": clock.ClearAwaitingInputSince(clock.WaitGeneration); break;
+            case "hook": clock.SetAwaitingInput(false); break;
+            case "turn": clock.SetTurnInFlight(true); break;
+            case "activity": clock.Advance(); break;
+        }
+
+        await Assert.That(clock.AwaitingInput).IsFalse();
+        await Assert.That(seen).IsEquivalentTo([false], CollectionOrdering.Matching);
+        clock.AdvanceTerminalOutput(hasVisibleText: true);
+        await Assert.That(clock.AwaitingInput).IsFalse();
+    }
+
+    [Test]
+    public async Task Terminal_output_after_resize_grace_cannot_override_an_explicit_stop() {
+        var time = new FakeTimeProvider();
+        var clock = new AgentActivityClock(time);
+        time.Advance(AgentActivityClock.QuietTurn);
+        clock.TryMarkQuiet(AgentActivityClock.QuietTurn);
+        clock.NoteViewerInput();
+        clock.SetAwaitingInput(true);
+
+        time.Advance(TimeSpan.FromSeconds(2));
+        clock.AdvanceTerminalOutput(hasVisibleText: true);
+        await Assert.That(clock.AwaitingInput).IsTrue();
+    }
+
     /// A key that clears the wait starts its own quiet window. The idle time already elapsed
     /// must not mark the agent waiting again in the same instant.
     [Test]
@@ -197,6 +273,56 @@ public class AgentActivityClockTests {
 
         clock.SetAwaitingInput(false);
         await Assert.That(clock.AwaitingInput).IsFalse();
+        await Assert.That(notified).IsEqualTo(2);
+    }
+
+    /// A fresh launch and a cleared wait both read AwaitingInput false at an idle prompt, so
+    /// neither may attest a turn. Only a relayed submit or tool call does, until a turn end.
+    [Test]
+    public async Task Only_a_relayed_submit_attests_a_PTY_turn_and_a_turn_end_or_quiet_mark_retracts_it() {
+        var time     = new FakeTimeProvider();
+        var clock    = new AgentActivityClock(time);
+        var notified = 0;
+        clock.OnTurnAttestedChanged = () => notified++;
+
+        await Assert.That(clock.AwaitingInput).IsFalse();
+        await Assert.That(clock.TurnAttested).IsFalse();
+
+        clock.SetAwaitingInput(true);
+        clock.ClearAwaitingInputSince(clock.WaitGeneration);
+        clock.Advance();
+        await Assert.That(clock.AwaitingInput).IsFalse();
+        await Assert.That(clock.TurnAttested).IsFalse();
+        await Assert.That(notified).IsEqualTo(0);
+
+        clock.SetAwaitingInput(false);
+        await Assert.That(clock.TurnAttested).IsTrue();
+        clock.SetAwaitingInput(false);
+        await Assert.That(notified).IsEqualTo(1);
+
+        clock.SetAwaitingInput(true);
+        await Assert.That(clock.TurnAttested).IsFalse();
+        await Assert.That(notified).IsEqualTo(2);
+
+        clock.SetAwaitingInput(false);
+        time.Advance(AgentActivityClock.QuietTurn);
+        await Assert.That(clock.TryMarkQuiet(AgentActivityClock.QuietTurn)).IsTrue();
+        await Assert.That(clock.TurnAttested).IsFalse();
+        clock.Advance();
+        await Assert.That(clock.TurnAttested).IsFalse();
+        await Assert.That(notified).IsEqualTo(4);
+    }
+
+    [Test]
+    public async Task An_ACP_turn_gate_attests_a_turn_while_it_is_held() {
+        var clock    = new AgentActivityClock(new FakeTimeProvider());
+        var notified = 0;
+        clock.OnTurnAttestedChanged = () => notified++;
+
+        clock.SetTurnInFlight(true);
+        await Assert.That(clock.TurnAttested).IsTrue();
+        clock.SetTurnInFlight(false);
+        await Assert.That(clock.TurnAttested).IsFalse();
         await Assert.That(notified).IsEqualTo(2);
     }
 

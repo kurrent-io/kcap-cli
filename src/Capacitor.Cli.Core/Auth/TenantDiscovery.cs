@@ -65,7 +65,7 @@ public class TenantDiscovery(IAuthProxyClient proxy, ITenantPicker picker) {
 
         if (result.Tenants.Length == 0) {
             return new([], null,
-                "No Capacitor tenants are linked to your GitHub orgs. Ask your admin to install the Kurrent GitHub App on your org, or re-run with --server-url <url> for a self-hosted server.",
+                "No kcap tenants are linked to your GitHub orgs. Ask your admin to install the Kurrent GitHub App on your org, or re-run with --server-url <url> for a self-hosted server.",
                 NoTenantsFound: true);
         }
 

@@ -176,8 +176,8 @@ public class TrayAdapterTests {
                 return (menu.Items.Count, menu.Items.OfType<NativeMenuItemSeparator>().Count());
             });
 
-            await Assert.That(itemCount).IsEqualTo(7);
-            await Assert.That(separatorCount).IsEqualTo(2);
+            await Assert.That(itemCount).IsEqualTo(9);
+            await Assert.That(separatorCount).IsEqualTo(3);
         });
     }
 
@@ -210,7 +210,6 @@ public class TrayAdapterTests {
                     stop1.Header, stop1.CommandParameter, stop1.IsEnabled, ReferenceEquals(stop1.Command, vm.StopAgentCommand),
                     openWeb1.Header, openWeb1.CommandParameter, ReferenceEquals(openWeb1.Command, vm.OpenInWebCommand),
                     stop2.IsEnabled,
-                    // trailing separator after the agent section, then pause/open/sep/quit = 4 more items
                     menu.Items.Count);
             });
 
@@ -224,7 +223,7 @@ public class TrayAdapterTests {
             await Assert.That(result.Item8).IsEqualTo("Local:a1");
             await Assert.That(result.Item9).IsTrue();
             await Assert.That(result.Item10).IsFalse(); // stop2.IsEnabled — StopEnabled: false
-            await Assert.That(result.Item11).IsEqualTo(10);
+            await Assert.That(result.Item11).IsEqualTo(12);
         });
     }
 
@@ -253,9 +252,9 @@ public class TrayAdapterTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Rebuild_includes_review_item_between_agents_and_pause_when_pending_consent_positive() {
+    public async Task Rebuild_includes_review_item_before_window_actions_when_pending_consent_positive() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            var (header, reviewIndex, pauseIndex, commandMatches) = await AvaloniaSession.DispatchAsync(() => {
+            var (header, reviewIndex, openIndex, commandMatches) = await AvaloniaSession.DispatchAsync(() => {
                 var service = new FakeDaemonClientService();
                 var pause = new FakePauseController();
                 var consent = new FakeConsentService();
@@ -270,14 +269,14 @@ public class TrayAdapterTests {
 
                 var items = menu.Items.OfType<NativeMenuItem>().ToList();
                 var review = items.First(i => i.Header == "Review pending launches…");
-                var pauseItem = items.First(i => i.Header == "Pause new launches");
+                var openItem = items.First(i => i.Header == "Open kcap");
 
-                return (review.Header, menu.Items.IndexOf(review), menu.Items.IndexOf(pauseItem),
+                return (review.Header, menu.Items.IndexOf(review), menu.Items.IndexOf(openItem),
                     ReferenceEquals(review.Command, vm.ReviewPendingCommand));
             });
 
             await Assert.That(header).IsEqualTo("Review pending launches…");
-            await Assert.That(reviewIndex).IsEqualTo(pauseIndex - 1); // immediately before the pause toggle
+            await Assert.That(reviewIndex).IsEqualTo(openIndex - 1);
             await Assert.That(commandMatches).IsTrue();
         });
     }
@@ -334,24 +333,41 @@ public class TrayAdapterTests {
                 builder.Rebuild(menu, Model(agents: []));
 
                 var items = menu.Items.OfType<NativeMenuItem>().ToList();
-                var open = items.First(i => i.Header == "Open Kurrent Capacitor");
+                var open = items.First(i => i.Header == "Open kcap");
                 var quit = items.First(i => i.Header == "Quit");
                 return (open.Header, ReferenceEquals(open.Command, vm.OpenMainWindowCommand),
                     quit.Header, ReferenceEquals(quit.Command, vm.QuitCommand));
             });
 
-            await Assert.That(openHeader).IsEqualTo("Open Kurrent Capacitor");
+            await Assert.That(openHeader).IsEqualTo("Open kcap");
             await Assert.That(openMatches).IsTrue();
             await Assert.That(quitHeader).IsEqualTo("Quit");
             await Assert.That(quitMatches).IsTrue();
         });
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Launch_approvals_is_always_available_when_wired() => AvaloniaSession.RunOnUiAsync(async () => {
+        var service = new FakeDaemonClientService();
+        var opened = 0;
+        using var vm = new TrayViewModel(service, new FakePauseController(), NewActions(service), new FakeConsentService(),
+            openLaunchApprovals: () => opened++);
+        var menu = new NativeMenu();
+        new TrayMenuBuilder(vm).Rebuild(menu, Model());
+        var item = menu.Items.OfType<NativeMenuItem>().Single(i => i.Header == "Launch approvals…");
+        var layout = string.Join("|", menu.Items.Select(i => i is NativeMenuItem entry ? entry.Header : "-"));
+        await Assert.That(layout).Contains("Open kcap|Launch approvals…|-|Pause new launches|Settings…");
+        await Assert.That(item.IsEnabled).IsTrue();
+        ((INativeMenuItemExporterEventsImplBridge)item).RaiseClicked();
+        await Assert.That(opened).IsEqualTo(1);
+    });
+
     // ---- "Install command-line tool…" item ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public Task Settings_follows_Open_and_invokes_its_command() => AvaloniaSession.RunOnUiAsync(async () => {
+    public Task Settings_follows_Pause_and_invokes_its_command() => AvaloniaSession.RunOnUiAsync(async () => {
         var service = new FakeDaemonClientService();
         var opened = 0;
         using var vm = new TrayViewModel(service, new FakePauseController(), NewActions(service), new FakeConsentService(),
@@ -360,7 +376,7 @@ public class TrayAdapterTests {
         new TrayMenuBuilder(vm).Rebuild(menu, Model());
         var items = menu.Items.OfType<NativeMenuItem>().ToList();
         var settings = items.Single(i => i.Header == "Settings…");
-        await Assert.That(items.IndexOf(settings)).IsEqualTo(items.FindIndex(i => i.Header == "Open Kurrent Capacitor") + 1);
+        await Assert.That(items.IndexOf(settings)).IsEqualTo(items.FindIndex(i => i.Header == "Pause new launches") + 1);
         await Assert.That(settings.IsEnabled).IsTrue();
         ((INativeMenuItemExporterEventsImplBridge)settings).RaiseClicked();
         await Assert.That(opened).IsEqualTo(1);
@@ -389,9 +405,9 @@ public class TrayAdapterTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Rebuild_includes_the_shim_item_between_open_and_quit_when_offerable() {
+    public async Task Rebuild_includes_the_shim_item_after_settings_and_before_quit_when_offerable() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            var (header, shimIndex, openIndex, quitIndex, commandMatches) = await AvaloniaSession.DispatchAsync(() => {
+            var (header, shimIndex, settingsIndex, quitIndex, commandMatches) = await AvaloniaSession.DispatchAsync(() => {
                 var service = new FakeDaemonClientService();
                 var pause = new FakePauseController();
                 var consent = new FakeConsentService();
@@ -403,15 +419,15 @@ public class TrayAdapterTests {
 
                 var items = menu.Items.OfType<NativeMenuItem>().ToList();
                 var shim = items.First(i => i.Header == "Install command-line tool…");
-                var open = items.First(i => i.Header == "Open Kurrent Capacitor");
+                var settings = items.First(i => i.Header == "Settings…");
                 var quit = items.First(i => i.Header == "Quit");
 
-                return (shim.Header, menu.Items.IndexOf(shim), menu.Items.IndexOf(open), menu.Items.IndexOf(quit),
+                return (shim.Header, menu.Items.IndexOf(shim), menu.Items.IndexOf(settings), menu.Items.IndexOf(quit),
                     ReferenceEquals(shim.Command, vm.InstallShimCommand));
             });
 
             await Assert.That(header).IsEqualTo("Install command-line tool…");
-            await Assert.That(shimIndex).IsEqualTo(openIndex + 2);
+            await Assert.That(shimIndex).IsEqualTo(settingsIndex + 1);
             await Assert.That(shimIndex).IsLessThan(quitIndex); // still before the trailing separator + Quit
             await Assert.That(commandMatches).IsTrue();
         });
@@ -481,7 +497,7 @@ public class TrayAdapterTests {
             });
 
             await Assert.That(icon).IsNotNull();
-            await Assert.That(tooltip).IsEqualTo("Kurrent Capacitor");
+            await Assert.That(tooltip).IsEqualTo("kcap");
             await Assert.That(itemCountBeforeNeedsUpdate).IsEqualTo(0);
             await Assert.That(command).IsNull();
         });
@@ -507,7 +523,7 @@ public class TrayAdapterTests {
                 return (items, ReferenceEquals(trayIcon.Command, vm.OpenMainWindowCommand));
             });
 
-            await Assert.That(labels).Contains("Open Kurrent Capacitor");
+            await Assert.That(labels).Contains("Open kcap");
             await Assert.That(labels).Contains("Quit");
             await Assert.That(commandIsOpen).IsTrue();
         });

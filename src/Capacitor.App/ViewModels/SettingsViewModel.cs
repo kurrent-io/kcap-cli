@@ -164,16 +164,21 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
 
     public ProfilesSettingsViewModel? Profiles { get; }
 
+    public AccountsSettingsViewModel? Accounts { get; init; }
     public AppearanceSettingsViewModel? Appearance { get; init; }
+    public PrivacySettingsViewModel? Privacy { get; init; }
+    /// <summary>The local server's search, when this app runs one. The app owns it, so closing Settings leaves it running.</summary>
+    public LocalSearchViewModel? Search { get; init; }
+    public ExperimentalSettingsViewModel? Experimental { get; init; }
 
     /// What the OS calls the app that holds its notification switches.
     internal static string SystemSettingsName { get; } = OperatingSystem.IsWindows() ? "Windows Settings" : "System Settings";
 
     public string? NotificationAccessText => _access switch {
         DesktopNotificationAccess.Denied =>
-            $"Notifications from Kurrent Capacitor are turned off in {SystemSettingsName}, so none of these will appear.",
+            $"Notifications from kcap are turned off in {SystemSettingsName}, so none of these will appear.",
         DesktopNotificationAccess.NotDetermined =>
-            "Kurrent Capacitor has not been allowed to send notifications yet.",
+            "kcap has not been allowed to send notifications yet.",
         _ => null,
     };
 
@@ -412,7 +417,10 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     public void Dispose() {
         _lifetime.Cancel();
         _subscriptions.Dispose();
+        Accounts?.Dispose();
         Appearance?.Dispose();
+        Privacy?.Dispose();
+        Experimental?.Dispose();
         _lifetime.Dispose();
     }
 }

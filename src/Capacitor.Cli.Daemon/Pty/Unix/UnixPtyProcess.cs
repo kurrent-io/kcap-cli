@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace Capacitor.Cli.Daemon.Pty.Unix;
@@ -80,7 +81,8 @@ public sealed class UnixPtyProcess : IPtyProcess {
         return UnixPtyInterop.access(path, UnixPtyInterop.X_OK) == 0;
     }
 
-    static IReadOnlyDictionary<string, string> BuildChildEnv(Dictionary<string, string>? extraEnv, ushort cols, ushort rows) {
+    internal static IReadOnlyDictionary<string, string> BuildChildEnv(
+            Dictionary<string, string>? extraEnv, IReadOnlyCollection<string>? removeEnv, ushort cols, ushort rows) {
         var env = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
             if (entry is { Key: string key, Value: string value }) env[key] = value;
@@ -90,16 +92,19 @@ public sealed class UnixPtyProcess : IPtyProcess {
         env["COLUMNS"] = cols.ToString();
         env["LINES"]   = rows.ToString();
 
-        // Clear any hosted-agent identity/routing (and Claude session vars / daemon supervision
-        // state) the daemon may have inherited BEFORE re-applying extraEnv — matches the OLD
-        // managed child branch's ordering (unsetenv, then extraEnv setenv) exactly.
+        // Clear what the daemon inherited (hosted-agent identity, another harness's session, Claude's
+        // session vars, supervision state) before extraEnv, which re-adds what this launch sets.
         foreach (var key in PtyEnvScrub.ClaudeSessionVars) env.Remove(key);
+        foreach (var key in PtyEnvScrub.InheritedSessionVars) env.Remove(key);
         foreach (var key in PtyEnvScrub.HostedAgentVars) env.Remove(key);
         foreach (var key in PtyEnvScrub.DaemonSupervisionVars) env.Remove(key);
         // Defense in depth: CaptureBootCarriers already clears these from the daemon's
         // own ambient env at boot, so this loop should normally be a no-op — but a spawned agent
         // must never see the daemon's boot-local consent-seed/expectation/attempt vars either way.
         foreach (var key in DaemonRunner.BootCarriers.All) env.Remove(key);
+
+        if (removeEnv is not null)
+            foreach (var key in removeEnv) env.Remove(key);
 
         if (extraEnv is not null)
             foreach (var (key, value) in extraEnv) env[key] = value;
@@ -136,9 +141,10 @@ public sealed class UnixPtyProcess : IPtyProcess {
             TimeProvider                time,
             Dictionary<string, string>? extraEnv = null,
             ushort                      cols     = 120,
-            ushort                      rows     = 40
+            ushort                      rows     = 40,
+            IReadOnlyCollection<string>? removeEnv = null
         ) {
-        var childEnv = BuildChildEnv(extraEnv, cols, rows);
+        var childEnv = BuildChildEnv(extraEnv, removeEnv, cols, rows);
         var envpArr  = ToEnvpArray(childEnv);
 
         var resolvedPath = ResolveExecutableAbsolutePath(command, cwd, childEnv);
@@ -231,13 +237,39 @@ public sealed class UnixPtyProcess : IPtyProcess {
 
     internal int MasterFdForTest => (int)_master.DangerousGetHandle();
 
+    /// <summary>Runs with the master fd held, just before the write itself.</summary>
+    internal Action? BeforeMasterWriteForTest { get; set; }
+
     public Task WriteAsync(string input) => WriteAsync(Encoding.UTF8.GetBytes(input));
 
-    /// <summary>A no-op once disposal has begun: input for a closing PTY has nowhere to go.</summary>
+    /// <summary>A no-op once disposal has begun: input for a closing PTY has nowhere to go. That
+    /// includes a write that started first and fails because disposal took the child down under it.</summary>
     public Task WriteAsync(byte[] data) {
         if (Volatile.Read(ref _disposed) != 0) return Task.CompletedTask;
 
-        return Task.Run(() => _master.TryUse(fd => UnixPtyInterop.write(fd, data, data.Length)));
+        return Task.Run(() => {
+                try {
+                    _master.TryUse(fd => {
+                            BeforeMasterWriteForTest?.Invoke();
+                            WriteFully(data, chunk => UnixPtyInterop.write(fd, chunk.Span, chunk.Length));
+                        }
+                    );
+                } catch (IOException) when (Volatile.Read(ref _disposed) != 0) { }
+            }
+        );
+    }
+
+    /// <summary>A master write may take only part of the buffer, a signal may interrupt it before any
+    /// byte goes out, and a negative count otherwise is a failure; the first two would drop the tail
+    /// of a paste without a trace.</summary>
+    internal static void WriteFully(ReadOnlyMemory<byte> data, Func<ReadOnlyMemory<byte>, nint> write) {
+        while (data.Length > 0) {
+            var written = write(data);
+            if (written < 0 && Marshal.GetLastPInvokeError() == UnixPtyInterop.EINTR) continue;
+            if (written <= 0) throw new IOException($"The PTY master write returned {written}.");
+
+            data = data[(int) written..];
+        }
     }
 
     public void Resize(ushort cols, ushort rows) {
@@ -370,7 +402,8 @@ public class UnixPtyProcessFactory(UnixSpawnerThread spawner, TimeProvider time)
             string                      cwd,
             Dictionary<string, string>? extraEnv = null,
             ushort                      cols     = 120,
-            ushort                      rows     = 40
+            ushort                      rows     = 40,
+            IReadOnlyCollection<string>? removeEnv = null
         )
-        => UnixPtyProcess.Spawn(spawner, command, args, cwd, time, extraEnv, cols, rows);
+        => UnixPtyProcess.Spawn(spawner, command, args, cwd, time, extraEnv, cols, rows, removeEnv);
 }

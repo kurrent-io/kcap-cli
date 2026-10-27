@@ -346,7 +346,7 @@ public class CursorHookCommandTests {
         // pre-dispatch leaves behind.
         var spent = new FakeTimeProvider();
         var clock = new HookClock(spent);          // anchors on construction — advance AFTER it
-        spent.Advance(CursorHookCommand.Ceiling - HookBudget.Safety);
+        spent.Advance(CursorHookCommand.SessionStartCeiling - HookBudget.Safety);
 
         var exit = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), clock, Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory))
             .HandleWithDeps(
@@ -368,7 +368,7 @@ public class CursorHookCommandTests {
         // dispatcher must fail-open with return 0, never bubble the exception.
         var spent = new FakeTimeProvider();
         var clock = new HookClock(spent);
-        spent.Advance(CursorHookCommand.Ceiling);
+        spent.Advance(CursorHookCommand.SessionStartCeiling);
 
         var exit = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), clock, Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
             fx.Client,
@@ -509,39 +509,37 @@ public class CursorHookCommandTests {
                 _ => Task.FromResult(new AuthAttempt(fx.Client, AuthStatus.Ok)),
                 () => fx.Spool);
 
-        // Nothing inside can end this, so spend the ceiling from here: the cap must still return.
+        // Nothing inside can end this, so spend the ceiling from here: the cap must still return,
+        // well before the reader's own 10s, since the reader ignores the token it is handed.
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
         clock.Advance(CursorHookCommand.Ceiling);
 
         var exit = await call;
+        await Assert.That(elapsed.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(capture.GetCapturedOutput()).IsEqualTo("");
     }
 
-    // On the deadline branch, HandleCore must deterministically Cancel() its own `cts` rather
-    // than merely disposing it and trusting the CTS's internal timer to have already fired —
-    // that timer and the Task.Delay deadline task are two independent timers racing the same
-    // wall-clock target, so a dispose-without-cancel could leave the abandoned inner's
-    // cancellation-aware reads never actually observing cancellation. The reader here only
-    // completes via cancellation, so an observed cancellation is the only way this test can pass.
+    /// <summary>A sessionStart's longer ceiling covers its auth step too: a token refresh slower than any other event
+    /// may take still reaches dispatch and answers, rather than dropping the event with no output.</summary>
     [Test, NotInParallel]
-    public async Task HandleCore_deadline_win_cancels_the_abandoned_inners_token() {
+    public async Task A_sessionStart_whose_auth_outlasts_the_ordinary_ceiling_still_answers() {
         using var capture = ConsoleOutput.StartCapture();
         using var fx = new Fixture(Config.Root);
-        var reader = new CancelObservingReader();
+        var auth  = new TaskCompletionSource<AuthAttempt>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var clock = new FakeTimeProvider();
 
-        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(fx.Client, reader, fx.Spool);
+        var call = new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(clock), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory))
+            .HandleWithDeps(
+                new StringReader("""{"hook_event_name":"sessionStart","session_id":"abc"}"""),
+                _ => auth.Task,
+                () => fx.Spool);
 
-        await Assert.That(exit).IsEqualTo(0);
-        // The read never resolved (no hook_event_name was ever parsed), so there is
-        // nothing to emit.
-        await Assert.That(capture.GetCapturedOutput()).IsEqualTo("");
+        clock.Advance(CursorHookCommand.Ceiling + TimeSpan.FromSeconds(1));
+        auth.SetResult(new AuthAttempt(fx.Client, AuthStatus.Ok));
 
-        // The abandoned reader's ReadToEndAsync only ever completes by observing its
-        // CancellationToken fire. Give it a generous window relative to the 30ms budget —
-        // this asserts the cancellation was actually delivered promptly by HandleCore's
-        // explicit Cancel(), not "eventually, whenever the internal timer happens to tick".
-        var won = await Task.WhenAny(reader.Cancelled.Task, Task.Delay(TimeSpan.FromSeconds(2)));
-        await Assert.That(won).IsEqualTo(reader.Cancelled.Task);
+        await Assert.That(await call).IsEqualTo(0);
+        await Assert.That(capture.GetCapturedOutput()).IsEqualTo("{}\n");
     }
 
     [Test, NotInParallel]
@@ -559,7 +557,7 @@ public class CursorHookCommandTests {
             _ => Task.FromResult(new AuthAttempt(fx.Client, AuthStatus.Ok)),
             () => fx.Spool);
 
-        clock.Advance(CursorHookCommand.Ceiling);
+        clock.Advance(CursorHookCommand.SessionStartCeiling);
 
         var exit = await call;
         await Assert.That(exit).IsEqualTo(0);
@@ -587,7 +585,7 @@ public class CursorHookCommandTests {
                 () => fx.Spool);
 
         // The auth attempt never resolves, so spend the ceiling from here: the cap must return.
-        clock.Advance(CursorHookCommand.Ceiling);
+        clock.Advance(CursorHookCommand.SessionStartCeiling);
 
         var exit = await call;
 
@@ -624,6 +622,27 @@ public class CursorHookCommandTests {
         await Assert.That(fragment).Contains("Team memory");
     }
 
+    /// <summary>A sessionStart whose recording spends every second any other event may work still has budget left
+    /// for the fragment, since cursor-agent waits for sessionStart's answer; any other event spending the same is
+    /// out of budget.</summary>
+    [Test, NotInParallel]
+    public async Task A_sessionStart_whose_recording_spends_the_ordinary_budget_still_emits_the_fragment() {
+        using var fx = new Fixture(Config.Root);
+        fx.MemoryIndexBody = """[{"memory_id":"m1","slug":"s","audience":"org","description":"d","kind":"preference"}]""";
+        fx.SpendOnPost     = CursorHookCommand.Ceiling - HookBudget.Safety;
+
+        using var capture = ConsoleOutput.StartCapture();
+        using var wsDir   = new TempDir("ws");
+        var ws  = wsDir.Path.Replace('\\', '/').TrimEnd('/');
+        var sid = Guid.NewGuid().ToString("N");
+
+        await fx.HandleAsync($$"""{"hook_event_name":"sessionStart","session_id":"{{sid}}","workspace_roots":["{{ws}}"]}""");
+
+        var fragment = JsonNode.Parse(capture.GetCapturedOutput())!["additional_context"]?.GetValue<string>();
+        await Assert.That(fragment).IsNotNull().And.Contains("Team memory");
+        await Assert.That(CursorHookCommand.SessionStartCeiling).IsGreaterThan(CursorHookCommand.Ceiling);
+    }
+
     // [NotInParallel] for Console.Out, which the capture below redirects process-wide — matching
     // this file's precedent for every other capturing test above. The profile setting reaches the
     // hook through its own resolution, so nothing process-global carries it.
@@ -650,7 +669,7 @@ public class CursorHookCommandTests {
         using var capture = ConsoleOutput.StartCapture();
         // Spend the whole ceiling before dispatching: Remaining is then zero regardless of how fast
         // recording completes, so the skip is the guard's and not a scheduling accident.
-        fx.Clock.Advance(CursorHookCommand.Ceiling);
+        fx.Clock.Advance(CursorHookCommand.SessionStartCeiling);
 
         var exit = await fx.HandleAsync(
             $$"""{"hook_event_name":"sessionStart","session_id":"{{sid}}"}""");
@@ -827,7 +846,7 @@ public class CursorHookCommandTests {
         // Wait (bounded, real-time) for the request to ENTER the handler, then fire the budget clock.
         await handler.EnteredSignal.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
-        clock.Advance(CursorHookCommand.Ceiling);
+        clock.Advance(CursorHookCommand.SessionStartCeiling);
 
         var exit1 = await call;
         elapsed.Stop();
@@ -869,7 +888,7 @@ public class CursorHookCommandTests {
         using var capture = ConsoleOutput.StartCapture();
         // The recording POST spends the whole budget, which is how production reaches this guard:
         // the memory stage runs last, on what is left, and here nothing is.
-        fx.SpendOnPost = CursorHookCommand.Ceiling;
+        fx.SpendOnPost = CursorHookCommand.SessionStartCeiling;
 
         var exit = await fx.HandleAsync(payload);
 
@@ -1054,23 +1073,6 @@ public class CursorHookCommandTests {
     sealed class NeverCompletingReader : TextReader {
         public override Task<string> ReadToEndAsync(CancellationToken cancellationToken) =>
             Task.Delay(TimeSpan.FromSeconds(10), CancellationToken.None).ContinueWith(_ => "", TaskScheduler.Default);
-    }
-
-    // Honours the passed CancellationToken properly (unlike NeverCompletingReader above) —
-    // it only ever completes by observing the token fire, then signals `Cancelled` before
-    // throwing. Proves HandleCore's deadline branch deterministically cancels the abandoned
-    // inner rather than merely disposing its CTS.
-    sealed class CancelObservingReader : TextReader {
-        public TaskCompletionSource Cancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public override async Task<string> ReadToEndAsync(CancellationToken cancellationToken) {
-            var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            await using (cancellationToken.Register(() => tcs.TrySetResult())) {
-                await tcs.Task;
-            }
-            Cancelled.TrySetResult();
-            throw new OperationCanceledException(cancellationToken);
-        }
     }
 
     // The memory-index GET never resolves on its own — it only ends via the caller's own

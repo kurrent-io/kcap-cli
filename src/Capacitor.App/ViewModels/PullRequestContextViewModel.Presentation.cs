@@ -8,7 +8,7 @@ public sealed partial class PullRequestContextViewModel {
     public bool HasMultipleChoices => _choices.Count > 1;
     /// Always plural: identity lives on the card; the eyebrow only names how many are linked.
     public string SectionEyebrow => "PULL REQUESTS";
-    public string SectionMeta => _choices.Count.ToString(CultureInfo.InvariantCulture);
+    public string SectionMeta => _choices.Count > 0 ? _choices.Count.ToString(CultureInfo.InvariantCulture) : "";
     public string RepositoryLabel => _selected is { } choice ? $"{choice.Link.Owner}/{choice.Link.RepoName}" : "";
     public string NumberLabel => _selected is { } choice ? "#" + choice.Link.Number.ToString(CultureInfo.InvariantCulture) : "";
     public bool HasNumberLabel => NumberLabel.Length > 0;
@@ -22,6 +22,20 @@ public sealed partial class PullRequestContextViewModel {
     public bool CanOpenSource => _selected is { IsAvailable: true };
     /// Host exit beside status/repo once the card has settled on an overview or a legacy list.
     public bool ShowsOpenSource => CanOpenSource && (CanDisplay || IsLegacy);
+    /// Overview and conflicts render from the overview read alone; every other section pages rows.
+    bool ReadsRows => _section is not ("overview" or "conflicts");
+    public bool IsConflicts => _section == "conflicts";
+    public bool HasConflicts => CanDisplay && _overview is { Lifecycle: "open" or "draft", Mergeable: false };
+    /// Stays while selected, so the tab under the reader does not vanish when a poll clears the conflict.
+    public bool ShowsConflictsTab => HasConflicts || IsConflicts;
+    public PullRequestStatus ConflictsStatus => HasConflicts ? new("Merge conflicts", "conflict") : new("");
+    /// "No conflicts" only on a displayed overview that says so; an unknown or hidden answer is not a clean one.
+    public string ConflictsNote =>
+        !CanDisplay ? "Refresh access to open PR content."
+        : HasConflicts ? $"This branch has conflicts with {_overview?.BaseRef ?? "the base branch"} that must be resolved before it can merge."
+        : _overview is not { Lifecycle: "open" or "draft" } ? "This pull request is no longer open."
+        : _overview.Mergeable == true ? "This branch has no conflicts with the base branch."
+        : "GitHub has not reported whether this branch merges cleanly.";
     public bool IsChecks => _section == "checks";
     public bool IsReviewers => _section == "reviewers";
     public bool IsReviewSection => _section is "reviewers" or "reviews" or "threads" or "thread_comments";
@@ -31,7 +45,7 @@ public sealed partial class PullRequestContextViewModel {
     public IReadOnlyList<PullRequestRow> DiscussionRows => IsDiscussion ? _discussionRows : [];
     public string FreshnessLabel {
         get {
-            var time = IsOverview || HasStaleOverview ? FetchedLabel : SnapshotLabel;
+            var time = !ReadsRows || HasStaleOverview ? FetchedLabel : SnapshotLabel;
             return HasStaleOverview ? "Earlier snapshot" + (time.Length > 0 ? " · " + time : "") : time;
         }
     }
@@ -39,10 +53,10 @@ public sealed partial class PullRequestContextViewModel {
     public string OverviewFreshnessLabel => HasStaleOverview ? "Earlier snapshot" + (FetchedLabel.Length > 0 ? " · " + FetchedLabel : "") : FetchedLabel;
 
     public int SelectedTabIndex {
-        get => _section switch { "checks" => 1, "reviewers" or "reviews" or "threads" or "thread_comments" => 2, "conversation" => 3, _ => 0 };
+        get => _section switch { "checks" => 1, "reviewers" or "reviews" or "threads" or "thread_comments" => 2, "conversation" => 3, "conflicts" => 4, _ => 0 };
         set {
-            if (value is < 0 or > 3 || value == SelectedTabIndex) return;
-            ShowSection(value switch { 0 => "overview", 1 => "checks", 2 => "reviewers", 3 => "conversation", _ => _section });
+            if (value is < 0 or > 4 || value == SelectedTabIndex) return;
+            ShowSection(value switch { 0 => "overview", 1 => "checks", 2 => "reviewers", 3 => "conversation", 4 => "conflicts", _ => _section });
             this.RaisePropertyChanged();
         }
     }
@@ -95,6 +109,41 @@ public sealed partial class PullRequestContextViewModel {
         }
     }
 
+    /// Empty when the overview carries no thread summary, as a server without one sends, or when a zero is only
+    /// a lower bound, which says nothing about the threads it could not read.
+    public PullRequestStatus ThreadsStatus =>
+        CanDisplay && _overview?.Threads is { Availability.Status: "ready", Unresolved: { Value: { } count } unresolved }
+            ? count == 0
+                ? unresolved.Kind == "exact" ? new("No unresolved threads", "success", "Every review thread is resolved.") : new("")
+                : new($"{count}{(unresolved.Kind == "exact" ? "" : "+")} unresolved thread{(count == 1 && unresolved.Kind == "exact" ? "" : "s")}",
+                      "warning", "Review threads are still waiting on a reply or a fix.")
+            : new("");
+    public bool HasThreadsStatus => ThreadsStatus.Text.Length > 0;
+
+    /// What the agent is asked to do about everything that keeps an open pull request from merging, or
+    /// null when nothing does.
+    internal string? FixPrompt {
+        get {
+            if (!CanDisplay || _overview is not { Lifecycle: "open" or "draft" } overview) return null;
+            var asks = new List<string>();
+            if (overview.Mergeable == false) asks.Add("resolve the merge conflicts with the base branch");
+            if (overview.Threads is { Availability.Status: "ready", Unresolved: { Value: > 0 and var count } unresolved })
+                asks.Add($"address the {count}{(unresolved.Kind == "exact" ? "" : "+")} unresolved review thread{(count == 1 && unresolved.Kind == "exact" ? "" : "s")}");
+            if (ChecksStatus.Kind == "failure") asks.Add("fix the failing checks");
+            return asks.Count == 0 ? null : $"Get pull request {NumberLabel} ready to merge: {string.Join("; ", asks)}.";
+        }
+    }
+    /// The draft the user has not sent stays, with the prompt after it; a draft already holding the prompt is left as is.
+    internal static string WithFixPrompt(string draft, string prompt) =>
+        string.IsNullOrWhiteSpace(draft) ? prompt
+        : draft.Contains(prompt, StringComparison.Ordinal) ? draft
+        : draft.TrimEnd() + "\n\n" + prompt;
+
+    public bool ShowsFix => FixPrompt is not null && _canRequestFix();
+
+    /// Call when the host's composer gains or loses the ability to send, so <see cref="ShowsFix"/> is read again.
+    internal void FixAvailabilityChanged() => NotifyValue(ShowsFix);
+
     void NotifyPresentation() {
         NotifyValue(HasMultipleChoices);
         NotifyValue(SectionEyebrow);
@@ -106,6 +155,11 @@ public sealed partial class PullRequestContextViewModel {
         NotifyValue(ReferenceBase);
         NotifyValue(CanOpenSource);
         NotifyValue(ShowsOpenSource);
+        NotifyValue(IsConflicts);
+        NotifyValue(HasConflicts);
+        NotifyValue(ShowsConflictsTab);
+        NotifyValue(ConflictsStatus);
+        NotifyValue(ConflictsNote);
         NotifyValue(IsChecks);
         NotifyValue(IsReviewers);
         NotifyValue(IsReviewSection);
@@ -118,6 +172,9 @@ public sealed partial class PullRequestContextViewModel {
         NotifyValue(LifecycleStatus);
         NotifyValue(ReviewStatus);
         NotifyValue(ChecksStatus);
+        NotifyValue(ThreadsStatus);
+        NotifyValue(HasThreadsStatus);
+        NotifyValue(ShowsFix);
         NotifyValue(!ReferenceEquals(ReviewerRows, _reviewerRows), nameof(ReviewerRows));
         NotifyValue(!ReferenceEquals(CheckRows, _checkRows), nameof(CheckRows));
         NotifyValue(!ReferenceEquals(DiscussionRows, _discussionRows), nameof(DiscussionRows));

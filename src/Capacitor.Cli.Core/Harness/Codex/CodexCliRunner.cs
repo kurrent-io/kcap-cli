@@ -95,7 +95,7 @@ static class CodexCliRunner {
             Environment = {
                 // Symmetric with the Claude path — block any nested kcap hook
                 // forwarding so a headless codex invocation can't re-trigger import.
-                ["KCAP_SKIP"] = "1"
+                [HostedAgent.SkipVar] = "1"
             }
         };
         // A globally-set OPENAI_API_KEY overrides ChatGPT subscription auth in `codex exec`.

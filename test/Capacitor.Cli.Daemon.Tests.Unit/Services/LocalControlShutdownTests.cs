@@ -36,7 +36,8 @@ public class LocalControlShutdownTests {
     sealed class NoopPtyProcessFactory : IPtyProcessFactory {
         public IPtyProcess Spawn(
                 string command, string[] args, string cwd,
-                Dictionary<string, string>? extraEnv = null, ushort cols = 120, ushort rows = 40
+                Dictionary<string, string>? extraEnv = null, ushort cols = 120, ushort rows = 40,
+                IReadOnlyCollection<string>? removeEnv = null
             ) => throw new NotSupportedException("never spawns a PTY");
     }
 
@@ -82,7 +83,7 @@ public class LocalControlShutdownTests {
             new PermissionIpc(new PermissionPromptBroker(), NullLogger<PermissionIpc>.Instance),
             new DaemonStatusIpc(config, orchestrator, connection, notifier, TimeProvider.System),
             new DaemonSettingsIpc(config, orchestrator, notifier, NullLogger<DaemonSettingsIpc>.Instance),
-            TestFences.Ipc(config, orchestrator), TestShutdown.Ipc(orchestrator, restart, lifetime), NullLogger<LocalControlServer>.Instance);
+            TestFences.Ipc(config, orchestrator), TestShutdown.Ipc(orchestrator, restart, lifetime), TestAccountsIpc.Inert(), NullLogger<LocalControlServer>.Instance);
         await server.StartAsync(cts.Token);
 
         try {
@@ -91,11 +92,21 @@ public class LocalControlShutdownTests {
             while (!File.Exists(sockPath) && DateTime.UtcNow < deadline) await Task.Delay(20, cts.Token);
 
             async Task<LocalFrame?> Send(LocalFrame frame) {
-                using var sock = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-                await sock.ConnectAsync(new UnixDomainSocketEndPoint(sockPath), cts.Token);
-                await using var stream = new NetworkStream(sock, ownsSocket: false);
-                await FrameCodec.WriteAsync(stream, frame, cts.Token);
-                return await FrameCodec.ReadAsync(stream, cts.Token);
+                // Bind creates the socket file before Listen makes it ready to accept connections.
+                var connectDeadline = DateTime.UtcNow.AddSeconds(2);
+                while (true) {
+                    using var sock = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+                    try {
+                        await sock.ConnectAsync(new UnixDomainSocketEndPoint(sockPath), cts.Token);
+                    } catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionRefused) {
+                        if (DateTime.UtcNow >= connectDeadline) throw;
+                        await Task.Delay(20, cts.Token);
+                        continue;
+                    }
+                    await using var stream = new NetworkStream(sock, ownsSocket: false);
+                    await FrameCodec.WriteAsync(stream, frame, cts.Token);
+                    return await FrameCodec.ReadAsync(stream, cts.Token);
+                }
             }
 
             await body(orchestrator, spy, lifetime, Send);

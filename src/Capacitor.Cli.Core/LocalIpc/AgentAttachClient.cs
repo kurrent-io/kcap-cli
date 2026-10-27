@@ -3,6 +3,9 @@ namespace Capacitor.Cli.Core.LocalIpc;
 using System.Net.Sockets;
 
 public sealed class AgentAttachClient : IAsyncDisposable {
+    /// Advertised by a daemon that answers AttachWithRuntime.
+    public const string RuntimeCapability = "attach-runtime/1";
+
     // The single linearization point: first CAS winner decides RunAsync's result.
     // Values: AttachOutcome | Exception (callback fault) | _cancelledSentinel.
     object? _cause;
@@ -10,7 +13,9 @@ public sealed class AgentAttachClient : IAsyncDisposable {
 
     readonly string _socketPath;
     readonly string _agentId;
-    readonly Func<byte[], string?, CancellationToken, Task> _onAttached;
+    readonly bool _requestRuntime;
+    readonly bool _resizeOnAttach;
+    readonly Func<AttachAck, CancellationToken, Task> _onAttached;
     readonly Func<byte[], CancellationToken, Task> _onOutput;
     readonly Action<string, Exception>? _diagnostics;
     readonly SemaphoreSlim _writeLock = new(1, 1);
@@ -25,16 +30,21 @@ public sealed class AgentAttachClient : IAsyncDisposable {
     volatile bool _detachRequested;       // intent, never a cause
     volatile bool _attachedAny;           // true after either Attached reply
     volatile bool _attachedReadWrite;     // true only after a read-write Attached (not AttachedReadOnly)
+    DateTimeOffset? _runtimeStartedAt;    // read loop only
     int _disposed;                        // guards DisposeAsync re-entrancy
     Task<AttachOutcome>? _run;
 
     public AgentAttachClient(
             string socketPath, string agentId,
-            Func<byte[], string?, CancellationToken, Task> onAttachedAsync,
+            Func<AttachAck, CancellationToken, Task> onAttachedAsync,
             Func<byte[], CancellationToken, Task> onOutputAsync,
-            Action<string, Exception>? diagnostics = null) {
+            Action<string, Exception>? diagnostics = null,
+            bool requestRuntime = false,
+            bool resizeOnAttach = true) {
         _socketPath = socketPath;
         _agentId = agentId;
+        _requestRuntime = requestRuntime;
+        _resizeOnAttach = resizeOnAttach;
         _onAttached = onAttachedAsync;
         _onOutput = onOutputAsync;
         _diagnostics = diagnostics;
@@ -84,19 +94,22 @@ public sealed class AgentAttachClient : IAsyncDisposable {
                     break;
                 }
                 switch (frame.Type) {
+                    case FrameType.RuntimeStarted when _requestRuntime && !_attachedAny:
+                        _runtimeStartedAt = frame.StartedAt;
+                        break;
                     case FrameType.Attached: {
                         var (_, snapshot) = FrameCodec.Attached(frame);
                         _attachedAny = true;
                         _attachedReadWrite = true;
-                        if (!await InvokeCallbackAsync(() => _onAttached(snapshot, null, _lifetime.Token))) goto done;
-                        await WriteLockedAsync(SizeFrame(cols, rows)).ConfigureAwait(false);  // repaint nudge
+                        if (!await InvokeCallbackAsync(() => _onAttached(new AttachAck(snapshot, null, _runtimeStartedAt), _lifetime.Token))) goto done;
+                        if (_resizeOnAttach) await WriteLockedAsync(SizeFrame(cols, rows)).ConfigureAwait(false);
                         break;
                     }
                     case FrameType.AttachedReadOnly: {
                         var (_, reason, snapshot) = FrameCodec.AttachedReadOnly(frame);
                         _attachedAny = true;
                         _attachedReadWrite = false;
-                        if (!await InvokeCallbackAsync(() => _onAttached(snapshot, reason, _lifetime.Token))) goto done;
+                        if (!await InvokeCallbackAsync(() => _onAttached(new AttachAck(snapshot, reason, _runtimeStartedAt), _lifetime.Token))) goto done;
                         break;                                            // no nudge: never influence the clamp
                     }
                     case FrameType.Stdout:
@@ -209,7 +222,8 @@ public sealed class AgentAttachClient : IAsyncDisposable {
         await _writeLock.WaitAsync().ConfigureAwait(false);
         try {
             if (_detachRequested) { TryClaim(new AttachOutcome.Detached()); return false; }
-            await FrameCodec.WriteAsync(_stream!, new LocalFrame(FrameType.Attach) { Text = _agentId }, CancellationToken.None).ConfigureAwait(false);
+            var attach = new LocalFrame(_requestRuntime ? FrameType.AttachWithRuntime : FrameType.Attach) { Text = _agentId };
+            await FrameCodec.WriteAsync(_stream!, attach, CancellationToken.None).ConfigureAwait(false);
             return true;
         } finally { _writeLock.Release(); }
     }

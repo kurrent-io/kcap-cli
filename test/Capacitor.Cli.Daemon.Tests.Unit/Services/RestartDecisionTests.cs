@@ -46,6 +46,10 @@ public class RestartDecisionTests {
         await Assert.That(RestartDecision.BinaryChanged(A, A with { MtimeTicks = 2000 })).IsTrue();
 
     [Test]
+    public async Task A_new_current_target_is_a_change_with_size_and_mtime_equal() =>
+        await Assert.That(RestartDecision.BinaryChanged(A with { Target = "versions/1.0.0" }, A with { Target = "versions/1.1.0" })).IsTrue();
+
+    [Test]
     public async Task Identical_is_not_a_change() =>
         await Assert.That(RestartDecision.BinaryChanged(A, A)).IsFalse();
 

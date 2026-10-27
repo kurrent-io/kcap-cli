@@ -42,6 +42,13 @@ public enum FrameType : byte {
     // Daemon shutdown and interrupted-agent retry — one-shot; each is acked once.
     Shutdown    = 28, // Text = ShutdownRequestDto JSON
     AgentResume = 29, // Text = agent id
+    // Attach, answered with RuntimeStarted ahead of the Attached/AttachedReadOnly reply. Sent only to a
+    // daemon advertising AgentAttachClient.RuntimeCapability.
+    AttachWithRuntime = 30, // Text = agent id
+    // The session a hosted agent is bound to — one-shot. Sent only to a daemon advertising
+    // AgentSessionIpc.Capability.
+    AgentSession = 31, // Text = agent id
+    AccountsSubscribe = 32, // long-lived: push an AccountsSnapshot (immediate + on change)
     // daemon → client
     Attached  = 64,
     Stdout    = 65,
@@ -66,4 +73,7 @@ public enum FrameType : byte {
     AdmissionFenceAck = 82, // Text = AdmissionFenceAckDto JSON, reply to every fence frame
     ShutdownAck    = 83, // Text = "stopping"
     AgentResumeAck = 84, // Text = "resuming" | "not_interrupted" | "unknown"
+    RuntimeStarted = 85, // BE64 UTC ticks: the attached runtime's start, as the resume ledger's started_at
+    AgentSessionReply = 86, // Text = the agent's session id; empty when the daemon hosts no such agent or it has none yet
+    AccountsSnapshot = 87, // Text = AccountsSnapshotDto JSON, pushed on AccountsSubscribe
 }

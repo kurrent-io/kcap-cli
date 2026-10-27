@@ -28,7 +28,7 @@ public class LocalClientCopiesTests {
     [Test]
     public async Task Finds_the_kcap_on_path_and_the_desktop_apps_with_their_versions() {
         var onPath = Kcap("bin");
-        var app    = Kcap("Kurrent Capacitor.app/Contents/MacOS");
+        var app    = Kcap("kcap.app/Contents/MacOS");
         var runner = new FakeRunner(new() { [onPath] = Prints("1.2.0"), [app] = Prints("1.3.0+abc") });
 
         var copies = new LocalClientCopies(runner, Tmp.PathTo("bin"), self: null, [app, Tmp.PathTo("Elsewhere.app/Contents/MacOS/kcap")]).Find();
@@ -55,7 +55,7 @@ public class LocalClientCopiesTests {
 
     [Test]
     public async Task A_path_link_to_the_desktop_apps_kcap_is_one_copy_of_the_app() {
-        var app = Kcap("Kurrent Capacitor.app/Contents/MacOS");
+        var app = Kcap("kcap.app/Contents/MacOS");
         Tmp.CreateDir("bin");
         File.CreateSymbolicLink(Tmp.PathTo("bin", "kcap"), app);
         var runner = new FakeRunner(new() { [app] = Prints("1.2.0") });

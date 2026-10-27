@@ -60,13 +60,11 @@ public class PullRequestTonesTests {
         await Assert.That(PullRequestTones.Label(tone)).IsEqualTo(label);
     }
 
-    /// The card's lifecycle label shares the tone vocabulary: a conflicting open PR says so in
-    /// the warning colour, and a draft reads muted rather than green.
+    /// The lifecycle label names the lifecycle only: conflicts have their own status row, and a
+    /// draft reads muted rather than green.
     [Test]
-    public async Task The_lifecycle_status_names_conflicts_and_drafts() {
-        var conflict = PullRequestTones.LifecycleStatus(Overview("open", mergeable: false));
-        await Assert.That(conflict.Text).IsEqualTo("Merge conflicts");
-        await Assert.That(conflict.IsWarning).IsTrue();
+    public async Task The_lifecycle_status_names_drafts_but_not_conflicts() {
+        await Assert.That(PullRequestTones.LifecycleStatus(Overview("open", mergeable: false)).Text).IsEqualTo("Open");
 
         var draft = PullRequestTones.LifecycleStatus(Overview("draft"));
         await Assert.That(draft.Text).IsEqualTo("Draft");

@@ -14,6 +14,17 @@ public class ClaudeTranscriptEventsTests {
     static IReadOnlyList<CanonicalEvent> E(string line, int lineNumber = 1) => P(line, lineNumber).Events;
 
     [Test]
+    public async Task A_structured_local_command_keeps_its_id_and_exact_receipt_in_the_vendor_extension() {
+        var events = E($$$"""{"type":"system","subtype":"local_command","uuid":"{{{Uuid}}}","timestamp":"2026-08-26T12:00:00Z","commandRun":{"command":"rename","args":"a < b & c"}}""");
+        await Assert.That(events).Count().IsEqualTo(1);
+        await Assert.That(events[0].EventId).IsEqualTo(Guid.Parse(Uuid));
+        var message = (UserMessageReceived)events[0].Payload;
+        await Assert.That(message.Content).IsEqualTo("<command-name>/rename</command-name><command-args>a &lt; b &amp; c</command-args>");
+        await Assert.That(SchemaExtensions.Text(SchemaExtensions.Slug(message, ClaudeCodeExtension.Slug), ClaudeCodeExtension.LocalCommand)).IsEqualTo("/rename a < b & c");
+        await Assert.That(message.Timestamp.ToDateTimeOffset()).IsEqualTo(new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero));
+    }
+
+    [Test]
     public async Task String_user_content_is_one_user_message_on_the_record_id_with_its_timestamps() {
         var e = E($$$"""{"type":"user","uuid":"{{{Uuid}}}","parentUuid":"p1","message":{"role":"user","content":"hello"},"timestamp":"2026-08-26T12:00:00Z"}""");
         await Assert.That(e).Count().IsEqualTo(1);
@@ -69,8 +80,8 @@ public class ClaudeTranscriptEventsTests {
         await Assert.That(e[0].EventId).IsEqualTo(Guid.Parse(Uuid));
 
         var second = (ToolResultReceived)e[1].Payload;
-        await Assert.That(second.Result).IsEqualTo("a\nb");
-        await Assert.That(SchemaExtensions.Slug(second, "claude_code")).IsNull();
+        await Assert.That(second.Result).IsEqualTo("a\n\nb");
+        await Assert.That(SchemaExtensions.Slug(second, "claude_code")!.Fields.Keys).IsEquivalentTo(["output_raw"]);
         await Assert.That(e[1].EventId).IsEqualTo(TranscriptIds.ClaudeBlock(Guid.Parse(Uuid), 2));
     }
 

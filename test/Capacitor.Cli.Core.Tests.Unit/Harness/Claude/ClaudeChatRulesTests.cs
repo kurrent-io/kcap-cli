@@ -30,6 +30,17 @@ public class ClaudeChatRulesTests {
         await Assert.That(result.Envelopes.Any(e => e.Kind == AcpEventKind.UserMessage)).IsFalse();
     }
 
+    /// The record's uuid is the id the server stores the message under, and it survives the rules' rewrites.
+    [Test]
+    [Arguments("hello")]
+    [Arguments("<bash-input>ls</bash-input>")]
+    public async Task A_user_message_carries_the_records_uuid_as_its_source_event(string content) {
+        const string Uuid = "5f0c1d7e-9a63-4c1b-8f3e-2b7d4a9e6c10";
+        var user = P($$$"""{"type":"user","uuid":"{{{Uuid}}}","message":{"content":"{{{content}}}"}}""").Single();
+        await Assert.That(user.Kind).IsEqualTo(AcpEventKind.UserMessage);
+        await Assert.That(user.SourceEventId).IsEqualTo(Guid.Parse(Uuid));
+    }
+
     [Test]
     public async Task A_bang_command_shows_the_command_and_acknowledges_it() {
         var chat = TranscriptChat.For("claude")!;
@@ -137,6 +148,15 @@ public class ClaudeChatRulesTests {
         var opens = string.Concat(Enumerable.Repeat("<pasted_content id=\"a\">", 64));
         var shown = P("{\"type\":\"user\",\"message\":{\"content\":" + System.Text.Json.JsonSerializer.Serialize(opens + " tail") + "}}");
         await Assert.That(shown.Single().Text).IsEqualTo(opens + " tail");
+    }
+
+    /// <summary>An empty block adds no separator ahead of the first text kept, as the chat always joined.</summary>
+    [Test]
+    [Arguments("""[{"type":"text","text":""},{"type":"text","text":"a"}]""", "a")]
+    [Arguments("""[{"type":"text","text":"a"},{"type":"text","text":""}]""", "a\n")]
+    public async Task Empty_result_blocks_join_as_the_chat_always_joined(string content, string expected) {
+        var e = P($$$"""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t","content":{{{content}}}}]}}""");
+        await Assert.That(e[0].ToolResult).IsEqualTo(expected);
     }
 
     [Test]
@@ -348,9 +368,30 @@ public class ClaudeChatRulesTests {
         await Assert.That(detached.CallId).IsEqualTo("toolu_A");
         await Assert.That(detached.AgentId).IsEqualTo("a9f262478e032f427");
 
-        await Assert.That(R("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_A","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"a9f262478e032f427"}}""").Runs).IsEmpty();
         await Assert.That(R("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_A","content":"done"}]},"toolUseResult":{"status":"async_launched"}}""").Runs).IsEmpty();
         await Assert.That(R("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_A","content":"done"}]}}""").Runs).IsEmpty();
+    }
+
+    /// A subagent's own transcript is all sidechain records: hidden in the parent's chat, shown in its own,
+    /// along with the runs it starts.
+    [Test]
+    public async Task Sidechain_records_show_only_in_a_subagents_own_view() {
+        const string line = """{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"Found it"}]}}""";
+        var nested = ShellCall.Replace("\"type\":\"assistant\",", "\"type\":\"assistant\",\"isSidechain\":true,");
+        var own = TranscriptChat.ForSubagent("claude")!;
+
+        await Assert.That(R(line).Envelopes).IsEmpty();
+        await Assert.That(own.ProjectWithInputs(line, 1, Received, own.CreateContext("a1", "s1")).Envelopes.Single().Text).IsEqualTo("Found it");
+        await Assert.That(own.ProjectWithInputs(nested, 2, Received, own.CreateContext("a1", "s1")).Runs.Single()).IsTypeOf<RunSignal.Started>();
+    }
+
+    /// A foreground subagent's result names the agent that ran, which is how its row learns the id its
+    /// transcript is filed under.
+    [Test]
+    public async Task A_completed_foreground_result_identifies_its_agent() {
+        var identified = (RunSignal.Identified)R("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_A","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"a9f262478e032f427"}}""").Runs.Single();
+        await Assert.That(identified.CallId).IsEqualTo("toolu_A");
+        await Assert.That(identified.AgentId).IsEqualTo("a9f262478e032f427");
     }
 
     /// Runs twice: identified by origin_kind as the local leaf writes it, and by text alone as the
@@ -522,6 +563,17 @@ public class ClaudeChatRulesTests {
         await Assert.That(finished.CallId).IsEqualTo("toolu_A");
         await Assert.That(finished.AgentId).IsEqualTo("a9f262478e032f427");
         await Assert.That(finished.Outcome).IsNull();
+    }
+
+    /// A resumed Claude Code reports a background agent the previous process left running this way:
+    /// keyed by the agent id alone, with a status of its own.
+    [Test]
+    public async Task A_notification_for_an_agent_the_previous_process_left_running_finishes_it_as_stopped() {
+        var line = """{"type":"user","timestamp":"2026-10-22T13:42:55.148Z","origin":{"kind":"task-notification"},"promptSource":"system","message":{"role":"user","content":"<task-notification>\n<task-id>a9202cd3d93195cce</task-id>\n<output-file>/tmp/a9202cd3d93195cce.output</output-file>\n<status>stopped</status>\n<summary>Background agent \"Review Task 12 (spec + quality)\" didn't finish before the previous session ended</summary>\n<note>No completion record was found for it in the previous session.</note>\n</task-notification>"}}""";
+        var finished = (RunSignal.Finished)R(line).Runs.Single();
+        await Assert.That(finished.CallId).IsNull();
+        await Assert.That(finished.AgentId).IsEqualTo("a9202cd3d93195cce");
+        await Assert.That(finished.Outcome).IsEqualTo(RunOutcome.Stopped);
     }
 
     [Test]

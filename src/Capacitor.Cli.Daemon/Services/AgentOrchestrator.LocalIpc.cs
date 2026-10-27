@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Text;
 using System.Text.Json;
 using Capacitor.Cli.Core;
@@ -94,6 +95,45 @@ internal partial class AgentOrchestrator {
         return [.. live, .. ledger.Where(l => !listed.Contains(l.Entry.AgentId)).Select(l => LedgerStatusRow(l.Entry, l.Status))];
     }
 
+    /// <summary>The session the server files the agent under: the one it was launched or resumed into, else
+    /// the ACP session its runtime opened. Null until the agent has one.</summary>
+    static string? SessionOf(AgentInstance agent) =>
+        agent.SessionId ?? SessionIds.Canonical((agent.Runtime as IAcpTranscriptSource)?.AcpSessionId);
+
+    /// <summary>How long a session query waits for a launching agent's session to be bound on the server.
+    /// An ACP agent's first turn is queued before the agent is published and bound, so its first tool
+    /// call can arrive inside that window.</summary>
+    internal static readonly TimeSpan AgentSessionBindWait = TimeSpan.FromSeconds(10);
+
+    static readonly TimeSpan AgentSessionBindPoll = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>Answers a hosted agent's own kcap MCP servers, which start before the agent's session
+    /// exists and so cannot be handed it in their environment. An empty reply means no such agent, or no
+    /// session the server holds yet; the caller asks again on its next call.</summary>
+    public async Task HandleLocalAgentSessionAsync(string agentId, Stream stream, CancellationToken ct) {
+        var started = _time.GetTimestamp();
+        while (!AgentSessionSettled(agentId) && _time.GetElapsedTime(started) < AgentSessionBindWait)
+            await Task.Delay(AgentSessionBindPoll, _time, ct);
+
+        await FrameCodec.WriteAsync(stream, LocalFrame.AgentSessionReply(HeldSessionOf(agentId)), ct);
+    }
+
+    /// <summary>The agent's session once the server holds it. A transcript's session is held only once its
+    /// bind succeeded: answering it before, or after a failed bind, would have the caller keep an id the
+    /// server refuses for good.</summary>
+    string? HeldSessionOf(string agentId) =>
+        _agents.TryGetValue(agentId, out var agent)
+     && (agent.Runtime is not IAcpTranscriptSource || agent.TranscriptBound is true)
+            ? SessionOf(agent)
+            : null;
+
+    /// <summary>False while the agent is still launching, or its transcript's bind is still in flight.</summary>
+    bool AgentSessionSettled(string agentId) =>
+        _agents.TryGetValue(agentId, out var agent)
+            ? agent.Runtime is not IAcpTranscriptSource || agent.TranscriptBound is not null
+              || agent.Status is not ("Starting" or "Running")
+            : !_pendingLaunches.ContainsKey(agentId);
+
     internal static string TranscriptFormatOf(AgentInstance agent) =>
         agent.Runtime is IAcpTranscriptSource ? TranscriptFormats.Envelopes : TranscriptFormats.Vendor;
 
@@ -114,7 +154,7 @@ internal partial class AgentOrchestrator {
                 WorktreePath: a.Checkout.Worktree,
                 WorkLocation: a.Checkout.BorrowedFrom is null ? WorkLocationText.Owned : WorkLocationText.Borrowed,
                 BorrowedFrom: a.Checkout.BorrowedFrom,
-                SessionId: a.SessionId ?? SessionIds.Canonical((a.Runtime as IAcpTranscriptSource)?.AcpSessionId),
+                SessionId: SessionOf(a),
                 Branch: string.IsNullOrWhiteSpace(a.Worktree.Branch) ? null : a.Worktree.Branch,
                 // Only a live agent can wait on the user; a terminal one keeps whatever its clock
                 // last recorded, which must not read as a pending ask.
@@ -124,7 +164,11 @@ internal partial class AgentOrchestrator {
                 // count only while the agent is live, since nothing runs under a terminal one.
                 LiveSubagents: a.ActivityClock.LiveSubagents is { } live ? (a.Status == "Running" ? live : 0) : null,
                 UsageLimit: a.Status == "Running" ? a.UsageLimit : null,
-                TerminalDialog: a.Status == "Running" ? a.TerminalDialog : null))];
+                TerminalDialog: a.Status == "Running" ? a.TerminalDialog : null,
+                WorkingSince: a.Status == "Running" && a.ActivityClock.WorkingFor is { } working
+                    ? (_time.GetUtcNow() - working).UtcDateTime : null,
+                AccountDirectory: a.Account?.Directory, AccountId: a.Account?.AccountId, AccountLabel: a.Account?.Label,
+                TurnAttested: a.Status == "Running" && a.ActivityClock.TurnAttested))];
 
     /// The checkout is resolved as the live agent's is, so a row keeps its rail group across the handoff.
     static AgentStatusDto LedgerStatusRow(ResumeLedgerEntry entry, string status) {
@@ -141,7 +185,8 @@ internal partial class AgentOrchestrator {
             SessionId: entry.SessionId,
             Branch: string.IsNullOrWhiteSpace(worktree.Branch) ? null : worktree.Branch,
             TranscriptFormat: entry.TranscriptFormat,
-            Interruption: entry.State == ResumeState.Interrupted ? entry.LastError : null);
+            Interruption: entry.State == ResumeState.Interrupted ? entry.LastError : null,
+            AccountDirectory: entry.Launch.AccountDirectory, AccountId: entry.Launch.AccountId, AccountLabel: entry.Launch.AccountLabel);
     }
 
     /// <summary>
@@ -443,7 +488,7 @@ internal partial class AgentOrchestrator {
     }
 
     async Task HandleAdmittedLocalSpawnAsync(LocalFrame spawn, Stream stream, CancellationToken ct) {
-        var (vendor, work, isPrivate, cwd, args, cols, rows, startTitle) = FrameCodec.Spawn(spawn);
+        var (vendor, work, isPrivate, cwd, args, cols, rows, startTitle, accountId) = FrameCodec.Spawn(spawn);
 
         if (!_launchers.TryGetValue(vendor, out var launcher)) {
             await FrameCodec.WriteAsync(stream, LocalFrame.Error($"Unknown vendor: {vendor}"), ct);
@@ -452,6 +497,13 @@ internal partial class AgentOrchestrator {
 
         if (!Directory.Exists(cwd)) {
             await FrameCodec.WriteAsync(stream, LocalFrame.Error($"Directory does not exist: {cwd}"), ct);
+            return;
+        }
+
+        var resolution = ResolveAccount(vendor, accountId);
+
+        if (resolution.Refusal is { } refusal) {
+            await FrameCodec.WriteAsync(stream, LocalFrame.Error(refusal), ct);
             return;
         }
 
@@ -467,7 +519,8 @@ internal partial class AgentOrchestrator {
 
             var ctx = new LauncherContext(
                 agentId, cwd, worktree, Prompt: null, Model: "", Effort: null,
-                Tools: null, IsReview: false, IsReviewFlow: false, Review: null, ReviewLaunch: null
+                Tools: null, IsReview: false, IsReviewFlow: false, Review: null, ReviewLaunch: null,
+                Account: resolution.Account
             ) {
                 Work = work
             };
@@ -491,22 +544,25 @@ internal partial class AgentOrchestrator {
                 // through the daemon bridge. --private omits all of this.
                 env[HostedAgent.RenderedVar] = HostedAgent.Rendered;
                 env[HostedAgent.AgentIdVar]  = agentId;
-                HostedLaunchMarkers.Apply(env, isFlowParticipant: false, flowRole: null);
+                HostedLaunchMarkers.ApplyLocal(env, agentId, _config.Name);
                 if (_permissionBridge.BaseUrl is { } bridgeUrl) env[HostedAgent.BridgeUrlVar] = bridgeUrl;
             }
 
+            var removeEnv = resolution.Account is { } account
+                ? VendorHomeEnv.Apply(env, vendor, account, _config.Home)
+                : FrozenSet<string>.Empty;
+
             spawnedAtUtc = _time.GetUtcNow().UtcDateTime;
-            var pty     = _ptyFactory.Spawn(launcher.CliPath, built.Args, worktree.Path, env, cols, rows);
-            var runtime = new PtyHostedAgentRuntime(vendor, pty, _time);
+            var pty     = _ptyFactory.Spawn(launcher.CliPath, built.Args, worktree.Path, env, cols, rows, removeEnv);
+            var runtime = new PtyHostedAgentRuntime(vendor, pty, _time, logger: _logger);
 
             var startedAtUtc = _time.GetUtcNow().UtcDateTime;
 
-            agent = new AgentInstance(agentId, null, "", null, cwd, vendor, runtime, worktree, new CancellationTokenSource()) {
+            agent = new AgentInstance(agentId, null, "", null, cwd, vendor, runtime, worktree, new CancellationTokenSource(), resolution.Account) {
                 CreatedAt = startedAtUtc, LastOutputAt = startedAtUtc,
-                // Every launch path must go through CreateActivityClock() so the stage-advance report
-                // wiring is attached by construction. Inert here today (a local spawn is PTY-only and
-                // stamps no stage) — but a hand-built clock is exactly how that wiring goes silently
-                // missing the day this path grows an ACP runtime.
+                VendorSession = built.SessionId,
+                // Every launch path goes through CreateActivityClock(), even this PTY-only one that stamps
+                // no stage: a hand-built clock is how the stage-report wiring goes silently missing.
                 ActivityClock  = CreateActivityClock(),
                 IsPrivate      = isPrivate,
                 StartTitle     = startTitle,
@@ -543,7 +599,7 @@ internal partial class AgentOrchestrator {
     }
 
     /// <summary>Attach an existing agent to a local client (used by <c>kcap agent attach</c>).</summary>
-    public Task HandleLocalAttachAsync(string agentId, Stream stream, CancellationToken ct) {
+    public Task HandleLocalAttachAsync(string agentId, Stream stream, CancellationToken ct, bool reportRuntime = false) {
         if (!_agents.TryGetValue(agentId, out var agent))
             return FrameCodec.WriteAsync(stream, LocalFrame.NoSuchAgent(agentId), ct);
 
@@ -560,7 +616,7 @@ internal partial class AgentOrchestrator {
               + "Drive it from the dashboard."), ct);
 
         // The daemon, not the client, decides whether this attach carries input.
-        return AttachClientLoopAsync(agent, stream, ct, readOnly: !AcceptsTypedInput(agent.Kind));
+        return AttachClientLoopAsync(agent, stream, ct, readOnly: !AcceptsTypedInput(agent.Kind), reportRuntime);
     }
 
     /// A PR-review agent is a dialogue the reviewer types into; a flow participant is driven only
@@ -595,7 +651,7 @@ internal partial class AgentOrchestrator {
     /// running either way — the sink is just removed.
     /// </summary>
     internal async Task AttachClientLoopAsync(
-            AgentInstance agent, Stream stream, CancellationToken ct, bool readOnly = false) {
+            AgentInstance agent, Stream stream, CancellationToken ct, bool readOnly = false, bool reportRuntime = false) {
         // One NetworkStream, two writers (the sink's Stdout frames + Attached/Exited here):
         // serialise all writes through this lock. Reads (the input loop) are independent.
         var writeLock = new SemaphoreSlim(1, 1);
@@ -618,6 +674,7 @@ internal partial class AgentOrchestrator {
 
         try {
             // Bounded replay BEFORE any live chunk so the client paints a coherent screen.
+            if (reportRuntime) await Send(LocalFrame.RuntimeStarted(StartedAtOf(agent)));
             await Send(readOnly
                 ? FrameCodec.AttachedReadOnly(agent.Id, ProtectionReason(agent), snapshot)
                 : FrameCodec.Attached(agent.Id, snapshot));
@@ -652,9 +709,12 @@ internal partial class AgentOrchestrator {
                         // before the write so a wait that begins during it survives.
                         var waitGeneration = agent.ActivityClock.WaitGeneration;
 
+                        var submit = IsSubmit(f.Bytes);
+                        if (!submit) agent.ActivityClock.NoteViewerInput();
+
                         try {
                             await agent.Runtime.SendRawInputAsync(f.Bytes);
-                            if (IsSubmit(f.Bytes)) agent.ActivityClock.ClearAwaitingInputSince(waitGeneration);
+                            if (submit) agent.ActivityClock.ClearAwaitingInputSince(waitGeneration);
                         } catch (NotSupportedException) {
                             // ACP-backed runtimes (e.g. cursor) have no raw-input surface —
                             // AcpHostedAgentRuntime.SendRawInputAsync throws by design. Tell the
@@ -737,6 +797,9 @@ internal partial class AgentOrchestrator {
         }
 
         if (c > 0 && r > 0) {
+            // Arm before Resize: a PTY can produce the redraw on another thread immediately.
+            // All viewers (local, web, and a departing smaller viewer) share this path.
+            agent.ActivityClock.NoteViewerInput();
             agent.Runtime.Resize(c, r);
             agent.CurrentCols = c;
             agent.CurrentRows = r;

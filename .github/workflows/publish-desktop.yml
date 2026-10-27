@@ -1,0 +1,112 @@
+name: Publish desktop app
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      channel:
+        description: The Velopack channel, which is also the bucket prefix under desktop/.
+        required: true
+        type: string
+      artifact:
+        description: The release set the build job uploaded.
+        required: true
+        type: string
+      npm-platform:
+        description: The npm platform package whose trio the bundle must carry.
+        required: true
+        type: string
+      installers:
+        description: Space-separated suffixes after kcap-<version>-<channel>, one per installer.
+        required: true
+        type: string
+
+jobs:
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # A channel's feed manifest is read-merge-write, so each channel publishes alone. Without
+    # queue: max a group holds one pending job and cancels the older one, dropping a release.
+    concurrency:
+      group: desktop-publish-${{ inputs.channel }}
+      cancel-in-progress: false
+      queue: max
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      R2: --endpoint-url ${{ secrets.R2_ENDPOINT }}
+      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      DEST: s3://${{ secrets.R2_BUCKET }}/desktop/${{ inputs.channel }}
+      DOTNET_ROLL_FORWARD: Major
+      VERSION: ${{ inputs.version }}
+      CHANNEL: ${{ inputs.channel }}
+      INSTALLERS: ${{ inputs.installers }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: ./.github/actions/setup-dotnet
+
+      - name: Install vpk
+        run: dotnet tool install -g vpk --version 1.2.0
+
+      - name: Download the release set
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact }}
+          path: releases/
+
+      # Artifacts drop the execute bit.
+      - name: Restore the AppImage mode
+        if: contains(inputs.installers, '.AppImage')
+        run: chmod +x releases/*.AppImage
+
+      # The app ships only the trio npm shipped: a run that lost the npm race stops here.
+      - name: Verify the npm trio
+        env:
+          KCAP_NPM_PLATFORM: ${{ inputs.npm-platform }}
+        run: bash scripts/verify-npm-trio.sh "$VERSION" releases/kcap.sha256 releases/daemon.sha256
+
+      - name: Verify immutable objects
+        run: bash scripts/verify-desktop-immutables.sh releases "$VERSION" scripts/r2-fetch.sh "$CHANNEL"
+
+      # vpk uploads every asset the manifest lists, and the build renamed the installers it lists;
+      # the next step publishes the renamed ones.
+      - name: Upload the feed and packages
+        run: |
+          set -euo pipefail
+          jq '[.[] | select(.Type != "Installer")]' "releases/assets.$CHANNEL.json" > assets.tmp
+          mv assets.tmp "releases/assets.$CHANNEL.json"
+          vpk upload s3 --channel "$CHANNEL" --outputDir releases --endpoint "$R2_ENDPOINT" \
+            --bucket "$R2_BUCKET" --prefix "desktop/$CHANNEL" \
+            --keyId "$AWS_ACCESS_KEY_ID" --secret "$AWS_SECRET_ACCESS_KEY"
+
+      - name: Upload the installers and promote aliases
+        run: |
+          set -euo pipefail
+          aws s3 cp $R2 "$DEST/releases.$CHANNEL.json" merged.json
+          aliases="$(bash scripts/promote-desktop-aliases.sh merged.json "$VERSION")"
+          for suffix in $INSTALLERS; do
+            FILE="releases/kcap-$VERSION-$CHANNEL$suffix"
+            aws s3 cp $R2 "$FILE" "$DEST/kcap-$VERSION-$CHANNEL$suffix" --cache-control "public, max-age=31536000, immutable"
+            for alias in $aliases; do
+              case "$alias" in
+                beta)   aws s3 cp $R2 "$FILE" "$DEST/kcap-$CHANNEL-beta$suffix" --cache-control "public, max-age=300" ;;
+                stable) aws s3 cp $R2 "$FILE" "$DEST/kcap-$CHANNEL$suffix" --cache-control "public, max-age=300" ;;
+              esac
+            done
+          done
+
+      - name: Attach the installers to the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          files=()
+          for suffix in $INSTALLERS; do files+=("releases/kcap-$VERSION-$CHANNEL$suffix"); done
+          gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber

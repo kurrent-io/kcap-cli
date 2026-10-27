@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -161,6 +162,21 @@ static partial class ProcessHelpers {
         int                           processInformationLength,
         out int                       returnLength
     );
+
+    // ProcessCommandLineInformation: a UNICODE_STRING whose buffer follows it in the same allocation.
+    [LibraryImport("ntdll.dll", EntryPoint = "NtQueryInformationProcess")]
+    private static unsafe partial int NtQueryCommandLine(nint processHandle, int processInformationClass, void* processInformation,
+        int processInformationLength, out int returnLength);
+
+    const int ProcessCommandLineInformation = 60;
+    const int StatusInfoLengthMismatch      = unchecked((int)0xC0000004);
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct UnicodeString {
+        public ushort Length;
+        public ushort MaximumLength;
+        public nint   Buffer;
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     struct ProcessBasicInformation {
@@ -703,9 +719,29 @@ static partial class ProcessHelpers {
                 AddName(names, candidate);
             }
 
+            foreach (var candidate in ScriptNameCandidates(SplitWindowsCommandLine(QueryCommandLine(handle)))) {
+                AddName(names, candidate);
+            }
+
             return (ppid, names);
         } finally {
             CloseHandle(handle);
+        }
+    }
+
+    /// <summary>The process's command line, or null when it cannot be read.</summary>
+    static unsafe string? QueryCommandLine(nint handle) {
+        var status = NtQueryCommandLine(handle, ProcessCommandLineInformation, null, 0, out var needed);
+        if (status != StatusInfoLengthMismatch || needed <= sizeof(UnicodeString)) return null;
+
+        var buffer = new byte[needed];
+        fixed (byte* b = buffer) {
+            if (NtQueryCommandLine(handle, ProcessCommandLineInformation, b, needed, out _) != 0) return null;
+            var text  = (UnicodeString*)b;
+            var start = (byte*)text->Buffer;
+            // The string is expected to follow its header in this allocation; anything else is not read.
+            if (text->Length == 0 || start < b + sizeof(UnicodeString) || start + text->Length > b + needed) return null;
+            return new string((char*)start, 0, text->Length / 2);
         }
     }
 
@@ -765,7 +801,13 @@ static partial class ProcessHelpers {
         // identifies the agent on every layout.
         var names = new List<string>(3);
 
-        foreach (var candidate in ExecutableNameCandidates(ReadExecPathMac(pid))) {
+        var procArgs = ReadProcArgsMac(pid);
+
+        foreach (var candidate in ExecutableNameCandidates(procArgs is null ? null : ParseExecPath(procArgs))) {
+            AddName(names, candidate);
+        }
+
+        foreach (var candidate in ScriptNameCandidates(procArgs is null ? [] : ParseArgs(procArgs))) {
             AddName(names, candidate);
         }
 
@@ -778,13 +820,12 @@ static partial class ProcessHelpers {
     }
 
     /// <summary>
-    /// Returns the executable path of <paramref name="pid"/> via the
-    /// <c>KERN_PROCARGS2</c> sysctl — the same source <c>ps</c> uses — or null if it
-    /// can't be read. Unlike <c>proc_bsdinfo</c>'s name fields, the exec path is the
-    /// kernel's recorded image path and is not affected by a process changing its
-    /// title, so it reliably identifies the coding agent for the ancestry walk.
+    /// Returns the <c>KERN_PROCARGS2</c> buffer of <paramref name="pid"/> — the same source <c>ps</c>
+    /// uses — or null if it can't be read. Unlike <c>proc_bsdinfo</c>'s name fields, its exec path is
+    /// the kernel's recorded image path and is not affected by a process changing its title, so it
+    /// reliably identifies the coding agent for the ancestry walk.
     /// </summary>
-    static unsafe string? ReadExecPathMac(int pid) {
+    static unsafe byte[]? ReadProcArgsMac(int pid) {
         Span<int> mib = [CtlKern, KernProcArgs2, pid];
         nuint     size = 0;
 
@@ -805,8 +846,144 @@ static partial class ProcessHelpers {
                 }
             }
 
-            return ParseExecPath(buf.AsSpan(0, (int)size));
+            return buf.AsSpan(0, (int)size).ToArray();
         }
+    }
+
+    /// <summary>
+    /// The arguments in a <c>KERN_PROCARGS2</c> buffer: after <c>argc</c> and the exec path comes NUL
+    /// padding, then <c>argc</c> NUL-terminated strings. Pure so it is unit-testable; empty when the
+    /// buffer is too short to hold them.
+    /// </summary>
+    internal static IReadOnlyList<string> ParseArgs(ReadOnlySpan<byte> procArgs2) {
+        if (procArgs2.Length <= sizeof(int)) return [];
+
+        var argc = BitConverter.ToInt32(procArgs2[..sizeof(int)]);
+        var rest = procArgs2[sizeof(int)..];
+        var nul  = rest.IndexOf((byte)0);
+        if (nul < 0) return [];
+
+        // Only the padding after the exec path is skipped: past it each NUL ends one argument, an empty one
+        // included, so counting never runs on into the environment.
+        var first = rest[nul..].IndexOfAnyExcept((byte)0);
+        if (first < 0) return [];
+        rest = rest[(nul + first)..];
+        var args = new List<string>(Math.Clamp(argc, 0, 16));
+        while (args.Count < argc && !rest.IsEmpty) {
+            var end = rest.IndexOf((byte)0);
+            args.Add(Encoding.UTF8.GetString(end >= 0 ? rest[..end] : rest));
+            if (end < 0) break;
+            rest = rest[(end + 1)..];
+        }
+        return args;
+    }
+
+    /// <summary>
+    /// The names a JavaScript runtime's script identifies its agent by. Gemini CLI runs as <c>node</c>
+    /// and sets no title, so only the script it runs names it: the <c>gemini</c> shim the shebang
+    /// hands over, or the entry point inside its installed package. A script file of any other kind,
+    /// such as <c>codex.js</c>, names nothing: it is an ordinary script, not an installed agent.
+    /// </summary>
+    internal static IEnumerable<string> ScriptNameCandidates(IReadOnlyList<string> argv) {
+        if (argv.Count < 2 || !IsScriptRuntime(argv[0])) yield break;
+        if (ScriptArgument(argv) is not { } script) yield break;
+
+        if (!Path.HasExtension(script.Replace('\\', '/').Split('/')[^1]))
+            foreach (var candidate in ExecutableNameCandidates(script)) yield return candidate;
+
+        // An installed package's entry point is …/node_modules/[@scope/]<package>/….
+        var parts = script.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
+        var at    = Array.FindLastIndex(parts, part => part.Equals("node_modules", StringComparison.OrdinalIgnoreCase));
+        if (at < 0 || at + 1 >= parts.Length) yield break;
+        yield return parts[at + 1].StartsWith('@') && at + 2 < parts.Length ? parts[at + 2] : parts[at + 1];
+    }
+
+    /// The runtime's options that take their value as the next argument, so that value is not the script.
+    static readonly FrozenSet<string> ValueOptions = new[] {
+        "-r", "--require", "--import", "--loader", "--experimental-loader", "-C", "--conditions", "--input-type",
+        "--inspect-port", "--debug-port", "--title", "--env-file", "--env-file-if-exists", "--watch-path",
+        "--redirect-warnings", "--openssl-config", "--icu-data-dir", "--diagnostic-dir", "--report-dir",
+        "--report-directory", "--report-filename", "--heapsnapshot-signal", "--secure-heap", "--secure-heap-min",
+        "--cwd", "--config", "--preload"
+    }.ToFrozenSet(StringComparer.Ordinal);
+
+    /// The script the runtime runs, or null when it runs code given inline or on stdin.
+    static string? ScriptArgument(IReadOnlyList<string> argv) {
+        for (var i = 1; i < argv.Count; i++) {
+            var arg = argv[i];
+            if (arg is "--") return i + 1 < argv.Count ? argv[i + 1] : null;
+            if (arg is "-" or "-e" or "--eval" or "-p" or "--print"
+                || arg.StartsWith("--eval=", StringComparison.Ordinal) || arg.StartsWith("--print=", StringComparison.Ordinal)
+                || (arg.Length > 2 && arg[0] == '-' && arg[1] != '-' && arg.AsSpan(1).IndexOfAny('e', 'p') >= 0)) return null;
+            if (ValueOptions.Contains(arg)) { i++; continue; }
+            if (arg.StartsWith('-') || (i == 1 && arg == "run")) continue;
+            return arg;
+        }
+        return null;
+    }
+
+    static bool IsScriptRuntime(string argv0) {
+        var name = Path.GetFileNameWithoutExtension(argv0.Replace('\\', '/').Split('/')[^1]);
+        return name.Equals("node", StringComparison.OrdinalIgnoreCase) || name.Equals("nodejs", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("bun", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// A Windows command line split as the C runtime splits it. The program name runs to the first space or tab
+    /// outside quotes, each quote toggling them, with no escapes. After it, spaces and tabs outside quotes separate arguments;
+    /// before a quote, 2n backslashes are n and the quote toggles quoting, 2n+1 are n and a literal quote;
+    /// and <c>""</c> inside quotes is one literal quote.
+    /// </summary>
+    internal static IReadOnlyList<string> SplitWindowsCommandLine(string? commandLine) {
+        var args = new List<string>();
+        if (string.IsNullOrEmpty(commandLine)) return args;
+
+        var program     = 0;
+        var programName = new StringBuilder();
+        for (var inQuotes = false; program < commandLine.Length; program++) {
+            var c = commandLine[program];
+            if (c == '"') inQuotes = !inQuotes;
+            else if (!inQuotes && IsSeparator(c)) break;
+            else programName.Append(c);
+        }
+        args.Add(programName.ToString());
+
+        var current  = new StringBuilder();
+        var quoted   = false;
+        var inArg    = false;
+        for (var i = program; i < commandLine.Length; i++) {
+            var c = commandLine[i];
+            if (c == '\\') {
+                var run = 0;
+                while (i < commandLine.Length && commandLine[i] == '\\') { run++; i++; }
+                if (i < commandLine.Length && commandLine[i] == '"') {
+                    current.Append('\\', run / 2);
+                    if (run % 2 == 1) current.Append('"');
+                    else quoted = !quoted;
+                } else {
+                    current.Append('\\', run);
+                    i--;
+                }
+                inArg = true;
+            } else if (c == '"') {
+                if (quoted && i + 1 < commandLine.Length && commandLine[i + 1] == '"') {
+                    current.Append('"');
+                    i++;
+                } else {
+                    quoted = !quoted;
+                }
+                inArg = true;
+            } else if (IsSeparator(c) && !quoted) {
+                if (inArg) { args.Add(current.ToString()); current.Clear(); inArg = false; }
+            } else {
+                current.Append(c);
+                inArg = true;
+            }
+        }
+        if (inArg) args.Add(current.ToString());
+        return args;
+
+        static bool IsSeparator(char c) => c is ' ' or '\t';
     }
 
     /// <summary>
@@ -859,7 +1036,13 @@ static partial class ProcessHelpers {
         // …/claude/versions/<version>. All three go in; the walk matches on any.
         var names = new List<string>(4);
 
-        foreach (var candidate in ExecutableNameCandidates(ReadArgv0Linux(pid))) {
+        var argv = ReadArgvLinux(pid);
+
+        foreach (var candidate in ExecutableNameCandidates(argv.Count > 0 ? argv[0] : null)) {
+            AddName(names, candidate);
+        }
+
+        foreach (var candidate in ScriptNameCandidates(argv)) {
             AddName(names, candidate);
         }
 
@@ -879,22 +1062,20 @@ static partial class ProcessHelpers {
     }
 
     /// <summary>
-    /// Reads <c>argv[0]</c> from <c>/proc/&lt;pid&gt;/cmdline</c>, or null when it is
-    /// unreadable or empty (kernel threads have no cmdline).
+    /// Reads the arguments from <c>/proc/&lt;pid&gt;/cmdline</c>, empty when it is unreadable or empty
+    /// (kernel threads have no cmdline).
     /// </summary>
-    static string? ReadArgv0Linux(int pid) {
+    static IReadOnlyList<string> ReadArgvLinux(int pid) {
         try {
-            var cmdline = File.ReadAllText($"/proc/{pid}/cmdline");
-            var nul     = cmdline.IndexOf('\0');
-
-            return (nul >= 0 ? cmdline[..nul] : cmdline) is { Length: > 0 } argv0 ? argv0 : null;
+            var cmdline = File.ReadAllText($"/proc/{pid}/cmdline").TrimEnd('\0');
+            return cmdline.Length == 0 ? [] : cmdline.Split('\0');
         } catch {
-            return null;
+            return [];
         }
     }
 
     /// <summary>Agents whose process can sit between a kcap process and the harness it serves.</summary>
-    static readonly string[] NestableAgents = ["grok", "claude", "codex", "gemini", "copilot", "cursor-agent", "kiro", "opencode", "pi", "mistral-vibe", "agy", "antigravity"];
+    internal static readonly string[] NestableAgents = ["grok", "claude", "codex", "gemini", "copilot", "cursor-agent", "kiro", "opencode", "pi", "mistral-vibe", "agy", "antigravity"];
 
     /// <summary>The nearest coding agent on the ppid chain from <paramref name="startPid"/>, or null when
     /// none is found within <paramref name="maxHops"/> or the chain cannot be read.</summary>
@@ -923,7 +1104,7 @@ static partial class ProcessHelpers {
     /// substring, so descriptive names such as the Electron desktop "Claude Helper
     /// (Renderer)" don't masquerade as the <c>claude</c> CLI.
     /// </summary>
-    static bool MatchesAgentName(string comm, string vendor) {
+    internal static bool MatchesAgentName(string comm, string vendor) {
         if (string.IsNullOrEmpty(comm)) {
             return false;
         }

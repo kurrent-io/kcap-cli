@@ -795,6 +795,13 @@ public class SetupCommandTests {
     }
 
     [Test]
+    public async Task PathShimNotice_names_the_profile_line_a_standard_user_gets() {
+        var notice = SpectreFirstRunFlowProgress.PathShimNotice(macOS: true, "export PATH=\"$PATH:/Users/a/.local/bin\" (in ~/.zprofile)");
+
+        await Assert.That(notice).Contains("without admin rights, kcap adds export PATH=\"$PATH:/Users/a/.local/bin\" (in ~/.zprofile)");
+    }
+
+    [Test]
     public async Task LiveRecordingRestartTip_returns_note_when_any_agent_installed() {
         var result = new CodingAgentsStep.Result(
             ClaudeInstalled:       true,
@@ -861,15 +868,15 @@ public class SetupCommandTests {
         // prompt it names must appear verbatim in that skill's description (asserted below)
         // or the phrase we tell users to type won't reliably fire it.
         await Assert.That(SetupCommand.GuidedTourCallToAction).IsEqualTo(
-            "New to Capacitor? Prompt \"Start kcap guided tour\" in your coding agent to see what "
-          + "Capacitor can do for you");
+            "New to kcap? Prompt \"Start kcap guided tour\" in your coding agent to see what "
+          + "kcap can do for you");
     }
 
     [Test]
     public async Task ServerSetupCallToAction_is_the_exact_agreed_wording() {
         // Pinned wording: a question the reader self-selects on, then the instruction itself.
         await Assert.That(SetupCommand.ServerSetupQuestion).IsEqualTo(
-            "Did you create this Capacitor server?");
+            "Did you create this kcap server?");
 
         await Assert.That(SetupCommand.ServerSetupAction).IsEqualTo(
             "Complete server setup with instructions here:");
@@ -1518,6 +1525,52 @@ public class SetupCommandTests {
             captured.Profiles.Name)).IsNull();
     }
 
+    static VisibilityOptionsResponse Offer(string preselected, params string[] keys) => new() {
+        Options           = [.. keys.Select(k => new VisibilityOptionDto { Key = k, Label = $"label {k}", Detail = $"detail {k}" })],
+        DefaultVisibility = preselected,
+    };
+
+    public static IEnumerable<Func<(VisibilityOptionsResponse? Offer, string[] Keys, string Preselected)>> VisibilityOfferRows() => [
+        () => (Offer("private", "private", "public"), ["private", "public"], "private"),
+        () => (Offer("project", "private", "project", "public"), ["private", "project", "public"], "project"),
+        () => (Offer("org_public", "private", "project", "org_public", "public"), ["private", "project", "org_public", "public"], "org_public"),
+        () => (null, ["private", "project", "org_public", "public"], "org_public"),
+    ];
+
+    /// <summary>Step 3 offers the stops the server says the tenant can honour, in its order and with its copy, and
+    /// preselects its default; with no answer it offers every stop from <c>org_public</c></summary>
+    [Test]
+    [MethodDataSource(nameof(VisibilityOfferRows))]
+    public async Task Step_three_offers_what_the_tenant_can_honour(VisibilityOptionsResponse? offer, string[] keys, string preselected) {
+        var choices = SetupCommand.VisibilityChoices(offer);
+
+        await Assert.That(choices.Keys).IsEquivalentTo(keys, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+        await Assert.That(choices.Preselected).IsEqualTo(preselected);
+        await Assert.That(choices.Label(keys[0])).IsEqualTo(offer is null ? SetupCommand.VisibilityLabel(keys[0]) : $"label {keys[0]} [dim]— detail {keys[0]}[/]");
+    }
+
+    /// <summary>A scripted run that names no visibility takes the server's default, and <c>org_public</c> from a
+    /// server that answers 404 for the read or fails it</summary>
+    [Test]
+    [Arguments(200, """{"options":[{"key":"private","label":"Only me"},{"key":"project","label":"Project"}],"default_visibility":"project"}""", "project")]
+    [Arguments(404, "", "org_public")]
+    [Arguments(500, "", "org_public")]
+    [NotInParallel]
+    public async Task HandleAsync_NoPrompt_without_a_visibility_takes_the_servers_default(int status, string body, string expected) {
+        using var server = WireMockServer.Start();
+        StubAuthProviderNone(server);
+        server.Given(Request.Create().WithPath("/api/users/me/visibility-options").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(status).WithHeader("Content-Type", "application/json").WithBody(body));
+
+        await using var fixture = await HandleAsyncE2EFixture.CreateAsync("acme-visibility", "widgets", Config.Root);
+
+        var runner = FakeImportRunner.Succeeding();
+        var exit   = await Command(runner, fixture.RepoDir).HandleAsync(BuildArgs("--server-url", server.Url!, "--no-prompt"));
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(runner.Captured?.DefaultVisibility).IsEqualTo(expected);
+    }
+
     [Test]
     [NotInParallel]
     public async Task HandleAsync_SkipImportFlag_SuppressesAutoImport() {
@@ -1733,10 +1786,10 @@ public class SetupCommandTests {
         await Assert.That(workspace.Origin).IsEqualTo("https://acme.kcap.ai");
     }
 
-    // A run that never mentions a plan must not start a time-limited trial nobody chose.
+    // Null records that no plan was named, which is what lets provisioning ask for Team when Free is closed.
     [Test]
-    public async Task ParseRequestedWorkspace_defaults_to_the_free_plan() {
-        await Assert.That(Parse("setup", "--org", "Acme", "--slug", "acme").Workspace!.Tier).IsEqualTo(WorkspaceTier.Free);
+    public async Task ParseRequestedWorkspace_leaves_an_unnamed_plan_unset() {
+        await Assert.That(Parse("setup", "--org", "Acme", "--slug", "acme").Workspace!.Tier).IsNull();
     }
 
     [Test]

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness.Grok;
+using Capacitor.Cli.Core.Mcp;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
@@ -70,6 +71,68 @@ public class GrokHostedLaunchTests {
         await cts.CancelAsync();
         try { await run.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
         await fake.DisposeAsync();
+    }
+
+    static async Task<JsonElement> SessionNewMcpServersAsync(
+            RuntimeStartContext ctx, DaemonConfig? config = null, Func<string, string?>? resolveVendorVersion = null) {
+        var fake = new FakeAcpAgent();
+        using var cts = new CancellationTokenSource();
+        var run = fake.RunAsync(cts.Token);
+
+        var factory = new AcpHostedAgentRuntimeFactory(
+            descriptor: AcpVendorDescriptors.Grok,
+            config: config ?? new DaemonConfig(),
+            loggerFactory: NullLoggerFactory.Instance,
+            connection: new StubServerConnection(),
+            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess()),
+            timeProvider: TimeProvider.System,
+            resolveVendorVersion: resolveVendorVersion);
+
+        var start   = await factory.StartAsync(ctx, cts.Token).WaitAsync(HangGuard);
+        var servers = fake.ReceivedCalls.Single(c => c.Method == "session/new").Params!.Value.GetProperty("mcpServers").Clone();
+
+        await start.Runtime.DisposeAsync();
+        await cts.CancelAsync();
+        try { await run.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await fake.DisposeAsync();
+
+        return servers;
+    }
+
+    /// <summary>A hosted Grok gets every kcap server from the daemon, on the daemon's kcap, rather than
+    /// whatever its imported Cursor config holds: Grok runs a <c>session/new</c> server in place of a
+    /// same-named imported one, so a registration left on a removed binary cannot take a tool away.</summary>
+    [Test]
+    public async Task An_interactive_launch_brings_every_kcap_server_on_the_daemons_kcap() {
+        var servers = await SessionNewMcpServersAsync(Ctx() with { ServerUrl = "https://kcap.example" });
+
+        var expected = KcapMcpServers.ForHarness("grok").Select(s => JsonSerializer.Serialize(new {
+            name = s.Name, command = "/usr/local/bin/kcap", args = s.Args, env = new[] { new { name = "KCAP_URL", value = "https://kcap.example" } },
+        }));
+        await Assert.That(servers.EnumerateArray().Select(s => s.GetRawText())).IsEquivalentTo(expected);
+    }
+
+    /// <summary>The daemon's kcap set is for interactive launches only: it carries <c>kcap-flows</c>,
+    /// which would let a reviewer start a nested flow, so a review keeps exactly its own surface.</summary>
+    [Test]
+    public async Task A_review_launch_brings_only_its_result_channel() {
+        using var daemons = new TempDaemonStore();
+        var config = new DaemonConfig { GrokUnattendedReviewerEnabled = true, Store = daemons.Store, Name = "test-daemon", DaemonEpoch = "epoch-1" };
+        AcpHostedAgentRuntimeFactory.VersionStoreFor(config, AcpVendorDescriptors.Grok.Vendor).Affirm("1.0.52");
+
+        var servers = await SessionNewMcpServersAsync(
+            Ctx() with { IsReviewFlow = true, ServerUrl = "http://kcap.test" }, config, _ => "1.0.52");
+
+        var argvs = servers.EnumerateArray().Select(s => string.Join(" ", s.GetProperty("args").EnumerateArray().Select(a => a.GetString())));
+        await Assert.That(argvs).IsEquivalentTo(["mcp flow-result"]);
+    }
+
+    /// <summary>A private agent's child is given nothing that ties its session to the server.</summary>
+    [Test]
+    public async Task A_private_launch_brings_no_kcap_server() {
+        var servers = await SessionNewMcpServersAsync(Ctx() with { IsPrivate = true });
+
+        await Assert.That(servers.GetRawText()).IsEqualTo("[]");
     }
 
     /// <summary>Grok reports a turn's usage only on its own extension method, so a launch that did not

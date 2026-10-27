@@ -8,6 +8,7 @@ using Capacitor.Cli.Daemon.Harness.Muse;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
+using TUnit.Assertions.Enums;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Muse;
 
@@ -17,7 +18,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Muse;
 public class MuseHostedAgentRuntimeFactoryTests {
     static readonly TimeSpan HangGuard = TimeSpan.FromSeconds(10);
 
-    const string Kcap = "/usr/local/bin/kcap";
+    const string kcap = "/usr/local/bin/kcap";
     const string SearchTool = "mcp__kcap_sessions__search_sessions";
 
     [TempDaemonPaths] public required TempDaemonStore Daemons { get; init; }
@@ -62,7 +63,7 @@ public class MuseHostedAgentRuntimeFactoryTests {
         Model: model, Effort: null, Tools: null,
         IsReview: isReview, IsReviewFlow: isReviewFlow, Review: null,
         Cols: 80, Rows: 24,
-        ServerUrl: "http://kcap.test", DaemonBridgeUrl: null, CapacitorPath: Kcap,
+        ServerUrl: "http://kcap.test", DaemonBridgeUrl: null, CapacitorPath: kcap,
         McpAllowlist: allowlist, Work: work, DaemonId: "daemon-1", DaemonEpoch: "epoch-1",
         IsBorrowedSnapshot: borrowedSnapshot, ResumeSessionId: resume);
 
@@ -159,6 +160,22 @@ public class MuseHostedAgentRuntimeFactoryTests {
     }
 
     [Test]
+    public async Task The_factory_advertises_the_models_muse_cached_and_fingerprints_the_cache() {
+        var file = Home.CreateFile([".local", "share", "muse", "model-catalog", "6d657461__p746268.json"], """
+            {"schema_version":2,"provider_id":"meta","rows":[
+              {"model_id":"muse-spark-1.3","display_label":"muse-spark-1.3","visibility":"visible","release_date":"2026-09-02"},
+              {"model_id":"muse-spark-1.3-contributor","display_label":"muse-spark-1.3-contributor","visibility":"hidden","release_date":"2026-09-02"},
+              {"model_id":"muse-spark-1.2","display_label":"muse-spark-1.2","visibility":"visible","release_date":"2026-08-05"}]}
+            """);
+        var factory = NewRig().Factory;
+
+        var models = (await factory.ProbeModelsAsync(CancellationToken.None))!;
+
+        await Assert.That(models.Select(m => m.Value)).IsEquivalentTo(["muse-spark-1.3", "muse-spark-1.2"], CollectionOrdering.Matching);
+        await Assert.That(factory.CatalogFingerprintPaths).Contains(file);
+    }
+
+    [Test]
     public async Task Interactive_plan_asks_me_on_request_and_no_mcp() {
         var rig = NewRig();
 
@@ -205,7 +222,7 @@ public class MuseHostedAgentRuntimeFactoryTests {
 
         foreach (var (_, server) in servers) {
             await Assert.That((string?)server!["transport"]).IsEqualTo("stdio");
-            await Assert.That((string?)server["command"]).IsEqualTo(Kcap);
+            await Assert.That((string?)server["command"]).IsEqualTo(kcap);
             await Assert.That((string?)server["mode"]).IsEqualTo("required");
         }
 
@@ -449,7 +466,7 @@ public class MuseHostedAgentRuntimeFactoryTests {
 
         var minted = (string)Params(await relayed.Host.WaitForWriteAsync("session/start"))["sessionId"]!;
         var sessionStart = relayed.Relays.Single();
-        await Assert.That(sessionStart.CapacitorPath).IsEqualTo(Kcap);
+        await Assert.That(sessionStart.CapacitorPath).IsEqualTo(kcap);
         await Assert.That(sessionStart.SessionId).IsEqualTo(minted);
         await Assert.That(sessionStart.AgentId).IsEqualTo("agent-1");
         await Assert.That(sessionStart.ServerUrl).IsEqualTo("http://kcap.test");

@@ -365,9 +365,9 @@ public class SessionStartMemoryFoundationTests {
         // An older server ignores include=projects and answers with the bare array it always sent.
         var bareArray = await Provider($"[{entry}]").GetAsync(request);
         var withProjects = await Provider(
-            $"{{\"entries\":[{entry}],\"projects\":[{{\"slug\":\"capacitor\",\"name\":\"Kurrent Capacitor\"}}]}}").GetAsync(request);
+            $"{{\"entries\":[{entry}],\"projects\":[{{\"slug\":\"capacitor\",\"name\":\"kcap\"}}]}}").GetAsync(request);
         var projectsOnly = await Provider(
-            "{\"entries\":[],\"projects\":[{\"slug\":\"capacitor\",\"name\":\"Kurrent Capacitor\"}]}").GetAsync(request);
+            "{\"entries\":[],\"projects\":[{\"slug\":\"capacitor\",\"name\":\"kcap\"}]}").GetAsync(request);
         var neither = await Provider("{\"entries\":[],\"projects\":[]}").GetAsync(request);
 
         await Assert.That(bareArray.Fragment).Contains("- s: d");
@@ -377,6 +377,24 @@ public class SessionStartMemoryFoundationTests {
         await Assert.That(projectsOnly.Disposition).IsEqualTo(SessionStartMemoryDisposition.Ready);
         await Assert.That(projectsOnly.Fragment).Contains("This repo belongs to project \"capacitor\"");
         await Assert.That(neither.Disposition).IsEqualTo(SessionStartMemoryDisposition.CompleteWithoutContext);
+    }
+
+    [Test]
+    public async Task Provider_counts_a_logs_open_entries_after_its_slug() {
+        const string body = "{\"entries\":[" +
+            "{\"memory_id\":\"1\",\"slug\":\"inbox\",\"audience\":\"org\",\"description\":\"d\",\"kind\":\"project\",\"scope_kind\":\"repo\",\"form\":\"log\",\"open_entries\":3}," +
+            "{\"memory_id\":\"2\",\"slug\":\"quiet\",\"audience\":\"org\",\"description\":\"d\",\"kind\":\"project\",\"form\":\"log\",\"open_entries\":0}," +
+            "{\"memory_id\":\"3\",\"slug\":\"doc\",\"audience\":\"org\",\"description\":\"d\",\"kind\":\"project\",\"form\":\"document\",\"open_entries\":null}" +
+            "],\"projects\":[]}";
+        var provider = new SessionStartMemoryContextProvider(new FixedScopeResolver("repo", "machine"),
+            Lazy(new HttpClient(new StaticHandler(HttpStatusCode.OK, body))), Stopped());
+
+        var result = await provider.GetAsync(new SessionStartMemoryContextRequest("https://example", "/repo", false,
+            TimeSpan.FromSeconds(1), CancellationToken.None));
+
+        await Assert.That(result.Fragment).Contains("- inbox (3 open) [repo]: d");
+        await Assert.That(result.Fragment).Contains("- quiet (0 open): d");
+        await Assert.That(result.Fragment).Contains("- doc: d");
     }
 
     [Test]

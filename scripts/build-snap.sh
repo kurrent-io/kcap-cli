@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Usage: build-snap.sh [version]
-# Publishes the desktop app, kcap and kcap-daemon for this machine's architecture into .publish/snap,
-# adds the Claude Code plugin, and packs the snap. Packing runs in LXD unless snapcraft is told otherwise.
+# Stages the desktop app with kcap, kcap-daemon and the plugin in .publish/snap — the layout of the
+# release's Linux app directory — and packs the snap. Packing runs in LXD unless snapcraft is told otherwise.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 version="${1:-0.0.0-local}"
@@ -14,23 +14,15 @@ case "$(uname -m)" in
 esac
 
 stage="$root/.publish/snap"
-app="$root/.publish/snap-app"
-rm -rf "$stage" "$app"
+rm -rf "$stage"
 mkdir -p "$stage/bin"
 
 publish() { dotnet publish "$root/$1" -c Release -r "$rid" -p:MinVerVersionOverride="$version" -o "$2" "${@:3}"; }
+publish src/Capacitor.App/Capacitor.App.csproj "$stage" --self-contained
 publish src/Capacitor.Cli/Capacitor.Cli.csproj "$stage/bin"
 publish src/Capacitor.Cli.Daemon/Capacitor.Cli.Daemon.csproj "$stage/bin"
-publish src/Capacitor.App/Capacitor.App.csproj "$app" --self-contained
+find "$stage" -type f \( -name '*.dbg' -o -name '*.xml' -o -name '*.pdb' \) -delete
 
-# A snap command cannot contain a space, so the app's executable is renamed; its native libraries
-# sit beside it, as they do in the publish output.
-mv "$app/Kurrent Capacitor" "$stage/bin/kurrent-capacitor"
-cp "$app"/*.so "$stage/bin/"
-rm -rf "$app"
-find "$stage/bin" -type f \( -name '*.dbg' -o -name '*.xml' -o -name '*.pdb' \) -delete
-
-# The plugin goes beside bin/, not into it: on Linux bin/kcap is the CLI itself.
 bash "$root/scripts/bundle-app-plugin.sh" "$stage" "$version"
 echo "$version" > "$stage/VERSION"
 

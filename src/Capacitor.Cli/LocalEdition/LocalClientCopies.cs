@@ -12,8 +12,6 @@ sealed class LocalClientCopies(IProcessRunner runner, string? searchPath, string
 
     const int OutputLimit = 4096;
 
-    const string AppBundle = "Kurrent Capacitor.app";
-
     IReadOnlyList<ClientCopy>? _found;
 
     public static LocalClientCopies ForCurrentProcess(UserHome home, TimeProvider time) {
@@ -24,7 +22,7 @@ sealed class LocalClientCopies(IProcessRunner runner, string? searchPath, string
         return new(new ProcessRunner(time), Environment.GetEnvironmentVariable("PATH"), Environment.ProcessPath, apps);
     }
 
-    static string AppCli(string applications) => Path.Combine(applications, AppBundle, "Contents", "MacOS", "kcap");
+    internal static string AppCli(string applications) => Path.Combine(applications, "kcap.app", "Contents", "MacOS", "kcap");
 
     public IReadOnlyList<ClientCopy> Find() => _found ??= Locate().Select(c => c with { Version = VersionOf(c.Path) }).ToList();
 

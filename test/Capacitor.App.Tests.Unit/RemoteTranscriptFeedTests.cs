@@ -35,6 +35,22 @@ public class RemoteTranscriptFeedTests {
     }
 
     [Test]
+    public async Task A_hidden_local_command_receipt_survives_the_remote_feed() {
+        using var h = new Harness(vendor: "claude");
+        h.Access.OnNext(SessionAccessState.Established);
+        await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
+        h.Feed.ReadAppended();
+        h.Lane.PushStreamEvent(Envelope("s1", 2, CanonicalEventTypes.UserMessageReceived,
+            """{"content":"<command-name>/rename</command-name><command-args>a &lt; b</command-args>","extensions":{"claude_code":{"local_command":"/rename a < b"}}}"""));
+        await WaitUntilAsync(() => h.Feed.CurrentOffset == 3, what: "the receipt");
+        var line = h.Feed.ReadAppended().Lines.Single();
+        await Assert.That(line.Offset).IsEqualTo(2);
+        await Assert.That(line.Projection.SubmittedInputs).IsEquivalentTo(new[] { "/rename a < b" });
+        await Assert.That(line.Projection.Envelopes).IsEmpty();
+        await Assert.That(line.Projection.LiteralInputs).IsEmpty();
+    }
+
+    [Test]
     public async Task Seeds_from_the_detail_route_then_tails_from_the_last_event_number() {
         using var h = new Harness();
         h.Access.OnNext(SessionAccessState.Established);

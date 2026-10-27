@@ -11,15 +11,25 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 /// Captures LaunchFailedAsync calls and no-ops the other server-side methods
 /// so the orchestrator's launch flow doesn't touch a real SignalR connection.
 /// </summary>
-sealed class CaptureServerConnection() : ServerConnection(
-    new() { Name = "test", ServerUrl = "http://127.0.0.1:1" },
-    new FixedCredentialSource(),
-    NullLoggerFactory.Instance,
-    NullLogger<ServerConnection>.Instance
-, TimeProvider.System) {
+sealed class CaptureServerConnection : ServerConnection {
+    readonly DaemonConfig _config;
+
+    public CaptureServerConnection(DaemonConfig? config = null)
+        : this(config ?? new() { Name = "test", ServerUrl = "http://127.0.0.1:1" }, 0) { }
+
+    CaptureServerConnection(DaemonConfig config, int _) : base(
+            config, new FixedCredentialSource(), NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, TimeProvider.System) =>
+        _config = config;
+
     public            string?                               ConnectionIdForTest { get; init; } = "connection-1";
     internal override string?                               CurrentConnectionId => ConnectionIdForTest;
-    public            List<(string AgentId, string Reason)> LaunchFailedCalls   { get; } = [];
+    readonly List<(string AgentId, string Reason)> _launchFailedCalls = [];
+
+    /// <summary>A snapshot: the orchestrator reports a failed launch from its own tasks, so a test
+    /// reading this while an agent is still winding down must not enumerate a list being appended.</summary>
+    public IReadOnlyList<(string AgentId, string Reason)> LaunchFailedCalls {
+        get { lock (_launchFailedCalls) return [.. _launchFailedCalls]; }
+    }
 
     /// <summary>When set, LaunchFailedAsync still RECORDS the call (so a test can assert the
     /// send was attempted) but returns a faulted task — for the finalizer's verdict-report
@@ -49,15 +59,18 @@ sealed class CaptureServerConnection() : ServerConnection(
     /// <c>ReRegisterAsync</c> lands here). No-op'd: there is no hub to register with.</summary>
     public int RegisterDaemonCalls => Volatile.Read(ref _registerDaemonCalls);
 
-    public Exception? RegisterDaemonThrow { get; init; }
+    public Exception? RegisterDaemonThrow { get; set; }
 
-    internal override Task RegisterDaemonAsync() {
+    internal override Task RegisterDaemonAsync(RegistrationAttempt attempt) {
         Interlocked.Increment(ref _registerDaemonCalls);
-        return RegisterDaemonThrow is { } ex ? Task.FromException(ex) : Task.CompletedTask;
+        if (RegisterDaemonThrow is { } ex) return Task.FromException(ex);
+        attempt.Sending(_config.Advertisement);
+        attempt.Accept();
+        return Task.CompletedTask;
     }
 
     public override async Task LaunchFailedAsync(string agentId, string reason) {
-        LaunchFailedCalls.Add((agentId, reason));
+        lock (_launchFailedCalls) _launchFailedCalls.Add((agentId, reason));
         LaunchFailedEntered?.TrySetResult();
 
         if (LaunchFailedGate is { } gate) await gate.Task.ConfigureAwait(false);
@@ -115,9 +128,16 @@ sealed class CaptureServerConnection() : ServerConnection(
     /// <summary>The runtime transport ("pty" | "app-server") echoed on each registration, in call
     /// order — proves initial and reconnect re-registration report the same value.</summary>
     public List<(string AgentId, string? Transport)> AgentRegisteredTransports { get; } = [];
+    public List<(string AgentId, string? Vendor)> AgentRegisteredVendors { get; } = [];
+
+    /// <summary>The account each registration named, in call order.</summary>
+    public List<(string AgentId, string? Directory, string? AccountId, string? Label)> AgentRegisteredAccounts { get; } = [];
 
     /// <summary>The start title echoed on each registration, in call order.</summary>
     public List<(string AgentId, AgentStartTitle? Title)> AgentRegisteredTitles { get; } = [];
+
+    /// <summary>The agent each registration says it continues, in call order.</summary>
+    public List<(string AgentId, string? ContinuesAgentId)> AgentRegisteredContinues { get; } = [];
 
     /// <summary>The server's answer per agent id; accepted when unset or null.</summary>
     public Func<string, AgentRegisteredResponse?>? RegistrationResponse { get; set; }
@@ -125,13 +145,17 @@ sealed class CaptureServerConnection() : ServerConnection(
     public override async Task<AgentRegisteredResponse> AgentRegisteredAsync(
         string  agentId,              string? prompt, string? model, string? effort, string? repoPath,
         string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null,
-        string? runtimeTransport = null, AgentStartTitle? title = null) {
+        string? runtimeTransport = null, string? vendor = null, AgentStartTitle? title = null, string? continuesAgentId = null,
+        string? accountDirectory = null, string? accountId = null, string? accountLabel = null) {
         AgentRegisteredCallCount++;
+        lock (AgentRegisteredContinues) AgentRegisteredContinues.Add((agentId, continuesAgentId));
         lock (AgentRegisteredTitles) AgentRegisteredTitles.Add((agentId, title));
         lock (AcpCallOrder) AcpCallOrder.Add($"register:{agentId}");
         lock (AgentRegisteredCalls) AgentRegisteredCalls.Add((agentId, model));
         lock (AgentRegisteredPostures) AgentRegisteredPostures.Add((agentId, sandboxPolicy, approvalPolicy));
         lock (AgentRegisteredTransports) AgentRegisteredTransports.Add((agentId, runtimeTransport));
+        lock (AgentRegisteredVendors) AgentRegisteredVendors.Add((agentId, vendor));
+        lock (AgentRegisteredAccounts) AgentRegisteredAccounts.Add((agentId, accountDirectory, accountId, accountLabel));
 
         AgentRegisteredEntered?.TrySetResult();
         if (AgentRegisteredGate is { } gate) await gate.Task.ConfigureAwait(false);

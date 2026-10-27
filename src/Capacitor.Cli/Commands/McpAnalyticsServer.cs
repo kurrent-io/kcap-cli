@@ -94,7 +94,7 @@ sealed class McpAnalyticsServer(ConfigRoot config, ProfileContext profiles, Toke
         await using var writer = new StreamWriter(stdout, new UTF8Encoding(false));
         writer.AutoFlush = true;
 
-        await McpStdioLoop.RunAsync(reader, writer, TimedDispatchToolCallAsync, (id, method, request) => method switch {
+        await McpStdioLoop.RunAsync(reader, writer, tools, TimedDispatchToolCallAsync, (id, method, request) => method switch {
             "initialize" => BuildInitializeResponse(id, request),
             "tools/list" => BuildToolsListResponse(id, tools),
             _            => McpProtocol.TryHandleStandardMethod(method, id)
@@ -105,7 +105,7 @@ sealed class McpAnalyticsServer(ConfigRoot config, ProfileContext profiles, Toke
     }
 
     internal const string ServerInstructions =
-        "Query Kurrent Capacitor's AI coding-agent analytics (sessions, tool/skill/token usage, cost, " +
+        "Query kcap's AI coding-agent analytics (sessions, tool/skill/token usage, cost, " +
         "commits, PRs, evals) with governed read-only SQL. Call get_analytics_schema once to learn the " +
         "views, then write Postgres SELECTs for query_analytics. Rejections include the reason — fix the " +
         "SQL and retry.";

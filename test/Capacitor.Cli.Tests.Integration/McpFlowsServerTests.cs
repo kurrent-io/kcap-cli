@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json.Nodes;
+using Capacitor.Cli.Core;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -14,18 +16,19 @@ namespace Capacitor.Cli.Tests.Integration;
 /// leaks between tests, and asserts on the wire-level JSON-RPC envelopes
 /// the server emits plus the HTTP calls WireMock observed.
 /// </summary>
-public class McpFlowsServerTests : IDisposable {
+public class McpFlowsServerTests : IAsyncDisposable {
     [TempDaemonPaths] public required TempDaemonStore Daemons { get; init; }
     [TempConfigRoot]  public required TempConfigRoot  Config  { get; init; }
     [GitRepo]         public required GitRepo         Repo    { get; init; }
 
     readonly WireMockServer _server           = WireMockServer.Start();
     readonly List<Process>  _spawnedProcesses = [];
+    readonly List<(int Pid, string Identity)> _orphans = [];
 
     [Before(Test)]
     public void InitWorkspaceRepo() => Repo.AddRemote("https://github.com/test-owner/test-repo.git");
 
-    public void Dispose() {
+    public async ValueTask DisposeAsync() {
         foreach (var p in _spawnedProcesses) {
             try {
                 if (!p.HasExited) p.Kill(entireProcessTree: true);
@@ -33,6 +36,21 @@ public class McpFlowsServerTests : IDisposable {
             } catch {
                 // best-effort cleanup
             }
+        }
+
+        // Only the process that was started: a pid freed by an orphan that already exited can belong to anything now.
+        // Waited out, so no orphan outlives the test holding its pipes.
+        foreach (var (pid, identity) in _orphans) {
+            try {
+                if (ProcessStartToken.Matches(pid, identity) == true) {
+                    using var orphan = Process.GetProcessById(pid);
+                    orphan.Kill(entireProcessTree: true);
+                }
+            } catch {
+                // already gone
+            }
+
+            await PidIdentity.WaitUntilGoneAsync(pid, identity, TimeSpan.FromSeconds(10));
         }
 
         _server.Stop();
@@ -71,7 +89,8 @@ public class McpFlowsServerTests : IDisposable {
             string? workingDirectory  = null,
             string? harnessSessionId  = null,
             string? harnessProjectDir = null,
-            string? hostedAgentId     = null) {
+            string? hostedAgentId     = null,
+            bool    orphaned          = false) {
         _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody($$"""{"provider":"{{provider}}"}"""));
 
@@ -82,8 +101,48 @@ public class McpFlowsServerTests : IDisposable {
 
         ApplyHarnessSignals(psi, harnessSessionId, harnessProjectDir, hostedAgentId);
 
+        if (orphaned && !OperatingSystem.IsWindows()) return StartOrphaned(psi);
+
         var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start kcap process");
         _spawnedProcesses.Add(process);
+        return process;
+    }
+
+    /// <summary>
+    /// Starts the server through a shell that exits straight away, so the server is reparented to init and its
+    /// ancestry holds none of the processes this suite runs under. A server that finds a hosting variable walks its
+    /// ancestry for coding agents, and the coding agent a developer runs the suite from must not be one of them.
+    /// The returned process is the shell; its pipes are the server's, which the shell hands down. The shell writes the
+    /// server's pid to a file of its own, since its stderr is the server's too
+    /// </summary>
+    Process StartOrphaned(ProcessStartInfo server) {
+        var shell = new ProcessStartInfo("/bin/sh") {
+            RedirectStandardInput  = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError  = true,
+            UseShellExecute        = false,
+            WorkingDirectory       = server.WorkingDirectory,
+        };
+        // A POSIX shell (dash) points an asynchronous list's stdin at /dev/null before its own redirections run, so
+        // `<&0` would hand the server /dev/null; stdin is kept on fd 3 and restored from there. The background child
+        // waits for the shell ($$ inside it) to be gone before it becomes the server, since the server reads its
+        // ancestry at startup; a pid file that cannot be written kills the child before it starts.
+        var pidFile = Config.PathTo($"orphan-{Guid.NewGuid():N}.pid");
+        const string script =
+            "exec 3<&0; (while kill -0 $$ 2>/dev/null; do sleep 0.05; done; exec \"$@\" <&3 3<&-) & "
+          + "echo $! > \"$0\" || { kill $!; exit 97; }";
+        foreach (var arg in new[] { "-c", script, pidFile, server.FileName }) shell.ArgumentList.Add(arg);
+        foreach (var arg in server.ArgumentList) shell.ArgumentList.Add(arg);
+        shell.Environment.Clear();
+        foreach (var (key, value) in server.Environment) shell.Environment[key] = value;
+
+        var process = Process.Start(shell) ?? throw new InvalidOperationException("Failed to start the shell");
+        _spawnedProcesses.Add(process);
+        process.WaitForExit();
+        if (process.ExitCode != 0) throw new InvalidOperationException($"The shell could not start the server: exit {process.ExitCode}");
+        var pid = int.Parse(File.ReadAllText(pidFile).Trim(), CultureInfo.InvariantCulture);
+        _orphans.Add((pid, PidIdentity.Capture(pid)));
+
         return process;
     }
 
@@ -306,22 +365,13 @@ public class McpFlowsServerTests : IDisposable {
 
             var tools = response["result"]?["tools"]?.AsArray();
             await Assert.That(tools).IsNotNull();
-            await Assert.That(tools!.Count).IsEqualTo(13);
-
-            var names = tools.Select(t => t?["name"]?.GetValue<string>()).ToHashSet();
-            await Assert.That(names.Contains("start_review_flow")).IsTrue();
-            await Assert.That(names.Contains("submit_review_round")).IsTrue();
-            await Assert.That(names.Contains("get_review_flow_status")).IsTrue();
-            await Assert.That(names.Contains("close_review_flow")).IsTrue();
-            await Assert.That(names.Contains("start_flow")).IsTrue();
-            await Assert.That(names.Contains("send_to_participant")).IsTrue();
-            await Assert.That(names.Contains("get_flow_status")).IsTrue();
-            await Assert.That(names.Contains("close_flow")).IsTrue();
-            await Assert.That(names.Contains("list_reviewer_vendors")).IsTrue();
-            await Assert.That(names.Contains("list_flow_definitions")).IsTrue();
-            await Assert.That(names.Contains("get_flow_definition")).IsTrue();
-            await Assert.That(names.Contains("start_agent")).IsTrue();
-            await Assert.That(names.Contains("list_start_agent_options")).IsTrue();
+            await Assert.That(tools!.Select(t => t?["name"]?.GetValue<string>() ?? "").ToArray()).IsEquivalentTo([
+                "start_review_flow", "submit_review_round", "get_review_flow_status", "close_review_flow",
+                "start_flow", "send_to_participant", "get_flow_status", "close_flow",
+                "list_reviewer_vendors", "list_flow_definitions", "get_flow_definition",
+                "list_start_agent_options", "start_agent",
+                "schedule_wakeup", "list_wakeups", "cancel_wakeup"
+            ]);
         } finally {
             await ShutdownAsync(proc);
         }
@@ -1808,6 +1858,12 @@ public class McpFlowsServerTests : IDisposable {
     /// agent's id, a worktree collapsed to its repository, and one request with nothing read back.</summary>
     [Test]
     public async Task Start_agent_posts_once_and_returns_without_reading_the_agent_back() {
+        // Windows does not reparent, so the server stays in this process tree; it would shed the agent id under test
+        // wherever that tree already holds the coding agents its own walk counts
+        if (OperatingSystem.IsWindows()
+         && NestedHarness.IsNested(Environment.ProcessId, NestedHarness.AgentNames, ProcessHelpers.GetProcessInfo))
+            Skip.Test("On Windows the server cannot leave this process tree, and the tree holds nested coding agents");
+
         const string runningSession = "11111111-2222-3333-4444-555555555555";
 
         _server.Given(Request.Create().WithPath("/api/agents/start").UsingPost())
@@ -1825,7 +1881,8 @@ public class McpFlowsServerTests : IDisposable {
             "aaaaaaaabbbbbbbbccccccccdddddddd",
             harnessSessionId:  runningSession,
             harnessProjectDir: Repo.Path,
-            hostedAgentId:     "0f1e2d3c");
+            hostedAgentId:     "0f1e2d3c",
+            orphaned:          true);
 
         try {
             var args = new JsonObject {

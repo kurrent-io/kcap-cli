@@ -12,17 +12,25 @@ namespace Capacitor.Cli.Core.Harness.Claude;
 /// if the user had spoken. Also where a subagent's or a background command's launch, detachment
 /// and end are read.
 public sealed partial class ClaudeChatRules : IChatDisplayRules {
-    public static readonly ClaudeChatRules Instance = new();
+    public static readonly ClaudeChatRules Instance = new(ownTranscript: false);
+
+    /// For a subagent's own transcript, every record of which is a sidechain record.
+    public static readonly ClaudeChatRules Subagent = new(ownTranscript: true);
+
+    readonly bool _ownTranscript;
+
+    public bool StartsSubagentRows => true;
 
     const string StoppedTaskMessage = "Successfully stopped task";
     const string HandbackPointer = "This agent's report was delivered to you as a message";
 
-    ClaudeChatRules() { }
+    ClaudeChatRules(bool ownTranscript) => _ownTranscript = ownTranscript;
 
     public IReadOnlyList<string> LiteralInputs(CanonicalEvent evt, AcpEventEnvelope raw) {
         if (raw.Kind != AcpEventKind.UserMessage || raw.Text is not { Length: > 0 } text) return [];
         var slug = SchemaExtensions.Slug(evt.Payload, ClaudeCodeExtension.Slug);
-        if (SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsSidechain)
+        if (SchemaExtensions.Text(slug, ClaudeCodeExtension.LocalCommand) is not null
+            || SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsSidechain)
             || SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsMeta)
             || SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsCompactSummary)
             || SchemaExtensions.Text(slug, ClaudeCodeExtension.OriginKind) is not (null or "human")) return [];
@@ -41,6 +49,8 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
             || PeerMessage(slug, raw.Text) is not null) return null;
 
         var text = raw.Text ?? "";
+        if (SchemaExtensions.Text(slug, ClaudeCodeExtension.LocalCommand) is { } localCommand)
+            return SchemaExtensions.Text(slug, ClaudeCodeExtension.OriginKind) is null or "human" ? localCommand : null;
         if (BashCommand(text) is { } command) return "!" + command;
         var name = CommandName().Match(text).Groups[1].Value.Trim();
         if (name.StartsWith('/')) {
@@ -52,7 +62,8 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
 
     public AcpEventEnvelope? Filter(CanonicalEvent evt, AcpEventEnvelope envelope) {
         var slug = SchemaExtensions.Slug(evt.Payload, ClaudeCodeExtension.Slug);
-        if (SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsSidechain)) return null;
+        if (SchemaExtensions.Text(slug, ClaudeCodeExtension.LocalCommand) is not null) return null;
+        if (!_ownTranscript && SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsSidechain)) return null;
         // A peer message delivered while the session is idle is a meta record, and it is the
         // only record of that message.
         if (envelope.Kind == AcpEventKind.UserMessage && PeerMessage(slug, envelope.Text) is { } peer)
@@ -75,17 +86,37 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
             case AcpEventKind.ToolCall:
                 return envelope with { ToolKind = ClaudeToolKinds.Of(envelope.ToolName) };
             case AcpEventKind.ToolResult:
-                return envelope with { ToolIsError = SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsError) };
+                return envelope with {
+                    ToolIsError = SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsError),
+                    ToolResult  = ChatResultText(slug) ?? envelope.ToolResult,
+                };
             default:
                 return envelope;
         }
     }
 
-    /// A sidechain event is a subagent's own record, and a nested subagent is not the parent's
-    /// row. The meta flag is not consulted: a hidden row still ends its subagent.
+    /// The chat shows a block result's text blocks one per line, where the stored result joins them with
+    /// a blank line, as the server writes it.
+    static string? ChatResultText(Google.Protobuf.WellKnownTypes.Struct? slug) {
+        if (slug is null || !slug.Fields.TryGetValue(ClaudeCodeExtension.OutputRaw, out var raw) || raw.ListValue is not { } blocks) return null;
+
+        // The chat's own join: no separator ahead of the first text it has kept.
+        var sb    = new System.Text.StringBuilder();
+        var found = false;
+        foreach (var v in blocks.Values) {
+            if (v.StructValue is not { } b || SchemaExtensions.Text(b, "type") != "text" || SchemaExtensions.Text(b, "text") is not { } t) continue;
+            found = true;
+            if (sb.Length > 0) sb.Append('\n');
+            sb.Append(t);
+        }
+        return found ? TranscriptEnvelopes.Cap(sb.ToString()) : null;
+    }
+
+    /// A sidechain event is a subagent's own record: its runs are not the parent's rows, but are its own
+    /// view's. The meta flag is not consulted: a hidden row still ends its subagent.
     public IReadOnlyList<RunSignal> Runs(CanonicalEvent evt, AcpEventEnvelope raw) {
         var slug = SchemaExtensions.Slug(evt.Payload, ClaudeCodeExtension.Slug);
-        if (SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsSidechain)) return [];
+        if (!_ownTranscript && SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsSidechain)) return [];
 
         switch (raw.Kind) {
             case AcpEventKind.ToolCall when raw.ToolName is "Agent" or "Task" && raw.ToolCallId is { Length: > 0 } callId: {
@@ -99,9 +130,13 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
             case AcpEventKind.ToolResult when raw.ToolCallId is { Length: > 0 } callId && ToolUseResult(slug) is { } result: {
                 if (SchemaExtensions.Text(result, "backgroundTaskId") is { Length: > 0 } backgroundId)
                     return [new RunSignal.Detached(callId, backgroundId)];
-                if (SchemaExtensions.Text(result, "status") == "async_launched"
-                    && (SchemaExtensions.Text(result, "agentId") ?? SchemaExtensions.Text(result, "agent_id")) is { Length: > 0 } agentId)
-                    return [new RunSignal.Detached(callId, agentId)];
+                var resultAgentId = SchemaExtensions.Text(result, "agentId") ?? SchemaExtensions.Text(result, "agent_id");
+                switch (SchemaExtensions.Text(result, "status")) {
+                    case "async_launched" when resultAgentId is { Length: > 0 }:
+                        return [new RunSignal.Detached(callId, resultAgentId)];
+                    case "completed" when resultAgentId is { Length: > 0 }:
+                        return [new RunSignal.Identified(callId, resultAgentId)];
+                }
                 // The message gate keeps a TaskGet or TaskOutput probe, which carries the same
                 // task_id, from ending a running row.
                 if (SchemaExtensions.Text(result, "task_type") is "local_agent" or "local_bash"
@@ -123,6 +158,7 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
                     case "completed": outcome = RunOutcome.Done; break;
                     case "failed":    outcome = RunOutcome.Failed; break;
                     case "killed":    outcome = RunOutcome.Stopped; break;
+                    case "stopped":   outcome = RunOutcome.Stopped; break;
                     default:          return [];
                 }
                 return [new RunSignal.Finished(callId, agentId, outcome, evt.Timestamp)];

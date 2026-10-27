@@ -4,7 +4,7 @@ Linear: AI-2704. Follow-up to the desktop daemon Settings rename (#886).
 
 ## Problem
 
-A rename retires the old daemon's service (`LaunchdServiceVerify.RetireAsync` → bootout), which kills every
+A rename retires the old daemon's service (`ServiceVerify.RetireAsync` → bootout), which kills every
 agent and evaluation the old daemon runs. Settings checks "zero active agents" from a status snapshot,
 then awaits the profile write, the mutation lane and the CLI. Work admitted anywhere in that gap is
 killed by the retirement. The snapshot also misses work the daemon has admitted but not yet published

@@ -61,22 +61,29 @@ public class AppStartupTests {
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task BuildAndShowMainWindow_takes_over_the_onboarding_window() {
-        var (same, paneVisible, surfaceVisible, handedVm) = await AvaloniaSession.DispatchAsync(async () => {
+        var appState = AppState();
+        await appState.UpdateAsync(s => s with { WindowWidth = 1552, WindowHeight = 888 });
+        var savedState = await appState.LoadAsync();
+        // The handover uses its prepared snapshot, even if the store changes before it is applied.
+        await appState.UpdateAsync(s => s with { WindowWidth = 1600, WindowHeight = 900 });
+        var (same, paneVisible, surfaceVisible, handedVm, width, height) = await AvaloniaSession.DispatchAsync(async () => {
             var (desktop, _) = FakeClassicDesktopLifetime.Create();
             var wizard = new OnboardingViewModel([new FakeWizardStep(WizardStepId.Edition)]);
             await wizard.PendingEnterForTesting;
             var onboarding = AppUnderTest.ShowWizardWindow(desktop, wizard);
+            onboarding.Width = 820;
+            onboarding.Height = 700;
             Dispatcher.UIThread.RunJobs();
 
             var service = new FakeDaemonClientService();
             var (actions, notifier) = NewActions(service);
             var window = AppUnderTest.BuildAndShowMainWindow(
-                service, Config.Root, AppState(), actions, notifier, new FakeTicker(), CancellationToken.None,
-                TestActivity.New(), new NeverLaunchClient(), TimeProvider.System, adopt: onboarding);
+                service, Config.Root, appState, actions, notifier, new FakeTicker(), CancellationToken.None,
+                TestActivity.New(), new NeverLaunchClient(), TimeProvider.System, adopt: (onboarding, savedState));
             Dispatcher.UIThread.RunJobs();
 
             var result = (ReferenceEquals(window, onboarding), window.OnboardingPane.IsVisible,
-                window.SessionsSurface.IsVisible, window.DataContext is MainWindowViewModel);
+                window.SessionsSurface.IsVisible, window.DataContext is MainWindowViewModel, window.Width, window.Height);
             window.Close();
             return result;
         });
@@ -85,6 +92,8 @@ public class AppStartupTests {
         await Assert.That(paneVisible).IsFalse();
         await Assert.That(surfaceVisible).IsTrue();
         await Assert.That(handedVm).IsTrue();
+        await Assert.That(width).IsEqualTo(1552);
+        await Assert.That(height).IsEqualTo(888);
     }
 
     [Test]
@@ -168,7 +177,7 @@ public class AppStartupTests {
             Dispatcher.UIThread.RunJobs(); // ReactiveWindow<T>'s Loaded->Activator.Activate() wiring
 
             var vm = (MainWindowViewModel)window.DataContext!;
-            var result = (vm.ServerLaneTip, vm.Rail?.Repos.Sum(r => r.Sessions.Count));
+            var result = (vm.ServerLaneTip, vm.Rail?.Groups.Sum(r => r.Sessions.Count));
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
@@ -723,7 +732,7 @@ public class AppStartupTests {
         await Assert.That(stillTracked).IsFalse();
     }
 
-    /// Tray "Open Kurrent Capacitor" on a hidden window re-shows THAT window (no rebuild).
+    /// Tray "Open kcap" on a hidden window re-shows THAT window (no rebuild).
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task ShowMainWindow_reshows_same_instance() {
@@ -849,6 +858,75 @@ public class AppStartupTests {
 
         await Assert.That(trayIcons).IsEqualTo(0);
         await Assert.That(errorWindowShown).IsTrue();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Startup_failure_closes_the_main_window_and_disables_approval_menus() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var (desktop, fake) = FakeClassicDesktopLifetime.Create();
+            var (coordinator, _) = NewCoordinator();
+            coordinator.ShowMainWindow();
+            var main = coordinator.Window!;
+            desktop.MainWindow = main;
+            var bar = new AppMenuBar(new RecordingOpener(), () => [], () => null);
+            bar.SetLaunchApprovalsAction(() => { });
+            var originalMenu = bar.Build(main);
+            var approvals = ((NativeMenuItem)originalMenu.Items[0]).Menu!.Items
+                .OfType<NativeMenuItem>().Single(i => i.Header == "Launch approvals…");
+            await Assert.That(approvals.IsEnabled).IsTrue();
+            using var shutdown = new CancellationTokenSource();
+            await AppUnderTest.HandleStartupFailureAsync(
+                desktop, new InvalidOperationException("boom"), service: null, shutdown, [], menuBar: bar, coordinator: coordinator);
+            Dispatcher.UIThread.RunJobs();
+
+            try {
+                await Assert.That(coordinator.Window).IsNull();
+                await Assert.That((object?)AppUnderTest.MainWindowAction(coordinator)).IsNull();
+                coordinator.ShowMainWindow();
+                await Assert.That(coordinator.Window).IsNull();
+                await Assert.That(main.IsVisible).IsFalse();
+                await Assert.That(approvals.IsEnabled).IsFalse();
+                await Assert.That(fake.MainWindow).IsNotNull();
+                await Assert.That(fake.MainWindow!.IsVisible).IsTrue();
+                var errorMenu = bar.Build(fake.MainWindow);
+                var errorApprovals = ((NativeMenuItem)errorMenu.Items[0]).Menu!.Items
+                    .OfType<NativeMenuItem>().Single(i => i.Header == "Launch approvals…");
+                await Assert.That(errorApprovals.IsEnabled).IsFalse();
+            } finally {
+                fake.MainWindow?.Close();
+                Dispatcher.UIThread.RunJobs();
+            }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Startup_failure_closes_the_wizard_without_requesting_handover() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var (desktop, fake) = FakeClassicDesktopLifetime.Create();
+            using var shutdown = new CancellationTokenSource();
+            var wizard = new OnboardingViewModel([new FakeWizardStep(WizardStepId.Edition)], shutdown.Token);
+            await wizard.PendingEnterForTesting;
+            var window = AppUnderTest.ShowWizardWindow(desktop, wizard,
+                shuttingDown: () => shutdown.IsCancellationRequested);
+            var closed = false;
+            window.Closed += (_, _) => closed = true;
+
+            await AppUnderTest.HandleStartupFailureAsync(
+                desktop, new InvalidOperationException("boom"), service: null, shutdown, []);
+
+            try {
+                await Assert.That(shutdown.IsCancellationRequested).IsTrue();
+                await Assert.That(closed).IsTrue();
+                await Assert.That(wizard.Closed).IsFalse();
+                await Assert.That(fake.MainWindow).IsNotSameReferenceAs(window);
+                await Assert.That(fake.MainWindow!.IsVisible).IsTrue();
+            } finally {
+                fake.MainWindow?.Close();
+                Dispatcher.UIThread.RunJobs();
+            }
+        });
     }
 
     /// A failure LATER in the success path (e.g. the tray's own construction throwing) leaves the

@@ -2,8 +2,10 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Telemetry;
 using Capacitor.Cli.PrDetection;
+using TUnit.Core.Enums;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -18,6 +20,30 @@ public class McpWorkItemsServerTests {
     static ValueTask<string?> NoRepo() => ValueTask.FromResult<string?>(null);
 
     static JsonObject Args(string json) => JsonNode.Parse(json)!.AsObject();
+
+    /// <summary>A daemon-hosted agent's MCP server has no session in its environment, so the daemon is
+    /// asked, through the lookup production runs; the ambient KCAP_SESSION_ID it inherited loses.</summary>
+    [Test, NotInParallel]
+    [ExcludeOn(OS.Windows)] // Unix-domain socket path
+    public async Task Declare_without_a_session_sends_the_hosted_agents_and_an_explicit_one_wins() {
+        using var daemons = new TempDaemonStore();
+        await using var daemon = new FakeAgentSessionDaemon(
+            daemons.Store.SocketPath("daemon-a"), [AgentSessionIpc.Capability], "ses_01JC7QY3VZ8K");
+        using var dir       = EnvScope.Exclusive(DaemonStore.DaemonsDirEnvVar, daemons.Directory);
+        using var name      = EnvScope.Exclusive(DaemonNameResolver.NameVar, "daemon-a");
+        // Unique per run: a bound session is kept for the life of the process.
+        using var agent     = EnvScope.Exclusive(HostedAgent.DaemonAgentIdVar, $"agent-{Guid.NewGuid():N}");
+        using var claude    = EnvScope.Exclusive("CLAUDE_CODE_SESSION_ID", null);
+        using var codex     = EnvScope.Exclusive("CODEX_THREAD_ID", null);
+        using var grok      = EnvScope.Exclusive("GROK_SESSION_ID", null);
+        using var inherited = EnvScope.Exclusive("KCAP_SESSION_ID", "22222222222222222222222222222222");
+
+        var defaulted  = McpWorkItemsServer.BuildDeclareBody(Args("""{"pr_number":123}"""));
+        var explicitly = McpWorkItemsServer.BuildDeclareBody(Args("""{"session_id":"s1","pr_number":123}"""));
+
+        await Assert.That(defaulted["session_id"]!.GetValue<string>()).IsEqualTo("ses_01JC7QY3VZ8K");
+        await Assert.That(explicitly["session_id"]!.GetValue<string>()).IsEqualTo("s1");
+    }
 
     [Test]
     public async Task Declare_body_carries_session_id_and_issue_key() {
@@ -114,7 +140,7 @@ public class McpWorkItemsServerTests {
             "declare_work_breakdown", "retract_work_breakdown",
             "declare_work_relation", "retract_work_relation",
             "get_work_item_topology",
-            "merge_work_item", "detach_work_item",
+            "merge_work_item", "detach_work_item", "declare_work_incomplete",
             "dismiss_next_work", "restore_next_work", "list_dismissed_next_work",
             "list_loose_ends", "claim_loose_end", "release_loose_end", "close_loose_end", "reopen_loose_end",
             "list_work_item_evals", "get_work_item_eval", "request_work_item_eval", "cancel_work_item_eval"
@@ -152,11 +178,20 @@ public class McpWorkItemsServerTests {
     }
 
     [Test]
-    public async Task Merge_and_detach_declare_their_required_ids() {
+    public async Task Corrections_declare_their_required_ids() {
         var byName = McpWorkItemsServer.BuildToolsList().ToDictionary(t => t.Name);
 
         await Assert.That(byName["merge_work_item"].InputSchema.Required).IsEquivalentTo(new[] { "work_item_id", "into_work_item_id" });
         await Assert.That(byName["detach_work_item"].InputSchema.Required).IsEquivalentTo(new[] { "work_item_id" });
+        await Assert.That(byName["declare_work_incomplete"].InputSchema.Required).IsEquivalentTo(new[] { "work_item_id" });
+    }
+
+
+    [Test]
+    public async Task Incomplete_body_leaves_out_an_absent_reason() {
+        var body = McpWorkItemsServer.BuildDeclareIncompleteBody(Args("""{"work_item_id":"wi-1","session_id":"s1"}"""));
+
+        await Assert.That(body.ToJsonString()).IsEqualTo("""{"session_id":"s1"}""");
     }
 
     [Test]
@@ -411,16 +446,11 @@ public class McpWorkItemsServerTests {
 
     [Test]
     public async Task No_tool_advertises_a_server_owned_source_or_declared_by_argument() {
-        // Named "advertises", not "accepts" (review correction): without additionalProperties:false a
-        // JSON Schema does not forbid a caller supplying these keys, so this test proves only that we
-        // never invite them. The guarantee that they are never FORWARDED is a property of the body
-        // builders, asserted separately below.
+        // The stdio loop refuses a key a tool does not declare, so not advertising these keeps them out of
+        // every call. That the body builders never forward them is asserted separately below.
         var tools = McpWorkItemsServer.BuildToolsList();
 
-        // Non-vacuity only: without this the loop body would never run if BuildToolsList returned
-        // empty and the test would pass having checked nothing. Deliberately NOT an exact count
-        // (review finding) — Tools_list_exposes_the_declare_and_breakdown_surface already pins the
-        // exact set, and duplicating it here would make an unrelated new tool fail this test too.
+        // Non-vacuity only, not an exact count: Tools_list_exposes_the_declare_and_breakdown_surface pins the set.
         await Assert.That(tools.Length).IsGreaterThan(0);
 
         foreach (var tool in tools) {
@@ -724,6 +754,16 @@ public class McpWorkItemsServerTests {
         await Assert.That(h.Method).IsEqualTo(HttpMethod.Get);
         await Assert.That(h.Url).IsEqualTo("http://x/api/work-items/wi-1/topology");
         await Assert.That(h.Body).IsNull();
+    }
+
+    [Test]
+    public async Task Dispatch_declare_work_incomplete_posts_the_session_and_reason_to_the_items_route() {
+        var h = await DispatchAsync("declare_work_incomplete", """{"work_item_id":"wi-1","session_id":"s1","reason":"The migration bug is still open"}""");
+
+        await Assert.That(h.Calls).IsEqualTo(1);
+        await Assert.That(h.Method).IsEqualTo(HttpMethod.Post);
+        await Assert.That(h.Url).IsEqualTo("http://x/api/work-items/wi-1/incomplete");
+        await Assert.That(h.Body).IsEqualTo("""{"session_id":"s1","reason":"The migration bug is still open"}""");
     }
 
     [Test]

@@ -78,14 +78,21 @@ public static class WorkOSDiscovery {
             return Failed(progress, TenantDiscovery.Describe(result.Error, AuthProvider.WorkOS), ct);
         }
 
-        var tenants = probe is null ? result.Tenants : await DropGoneAsync(result.Tenants, probe, auth.AccessToken, progress, ct);
+        var (tenants, pending) = probe is null
+            ? (result.Tenants, [])
+            : await DropGoneAsync(result.Tenants, probe, auth.AccessToken, progress, ct);
+
+        if (tenants.Length == 0 && pending.Length > 0) {
+            return new WorkOSDiscoveryFlow.Failed(
+                $"{pending[0].Label} is still being created.", AuthFailureReason.ProvisioningInProgress);
+        }
 
         if (tenants.Length == 0) {
             return await OfferCreateAsync(
                 proxyConfig, auth, orgSwitch, orglessRefresh, provisioner, funnel, time, ct, progress);
         }
 
-        var picked = tenants.Length == 1 && !confirmPick
+        var picked = tenants.Length == 1 && !confirmPick && pending.Length == 0
             ? tenants[0]
             : await picker.PickAsync(
                 tenants,
@@ -104,22 +111,32 @@ public static class WorkOSDiscovery {
     /// <summary>
     /// A removed tenant can keep its WorkOS organization, so the proxy still lists it. Picking it would
     /// configure a profile against a host that only answers 404; leaving it out lets an account whose
-    /// every workspace is gone reach the create offer instead.
+    /// every workspace is gone reach the create offer instead. One still being created is left out too,
+    /// and returned apart so nothing is offered or taken in its place.
     /// </summary>
-    internal static async Task<DiscoveredTenant[]> DropGoneAsync(
+    internal static async Task<(DiscoveredTenant[] Kept, DiscoveredTenant[] Pending)> DropGoneAsync(
             DiscoveredTenant[] tenants, Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>> probe,
             string bearer, IAuthProgress progress, CancellationToken ct) {
         var answers = await Task.WhenAll(tenants.Select(t => probe(t, bearer, ct)));
         var kept    = new List<DiscoveredTenant>(tenants.Length);
+        var pending = new List<DiscoveredTenant>();
 
         for (var i = 0; i < tenants.Length; i++) {
-            if (answers[i] == WorkspaceAnswer.Gone)
-                progress.Notice($"{tenants[i].Label} ({tenants[i].Origin}) no longer answers, so it is left out.");
-            else
-                kept.Add(tenants[i]);
+            switch (answers[i]) {
+                case WorkspaceAnswer.Gone:
+                    progress.Notice($"{tenants[i].Label} ({tenants[i].Origin}) no longer answers, so it is left out.");
+                    break;
+                case WorkspaceAnswer.Pending:
+                    progress.Notice($"{tenants[i].Label} ({tenants[i].Origin}) is still being created, so it is left out for now.");
+                    pending.Add(tenants[i]);
+                    break;
+                default:
+                    kept.Add(tenants[i]);
+                    break;
+            }
         }
 
-        return [.. kept];
+        return ([.. kept], [.. pending]);
     }
 
     static async Task<WorkOSDiscoveryFlow> OfferCreateAsync(
@@ -138,7 +155,7 @@ public static class WorkOSDiscovery {
         funnel.TenantNone(AuthProvider.WorkOS);
 
         if (provisioner is null) {
-            progress.Error("No Capacitor tenants are linked to your account. Ask your admin to invite you.");
+            progress.Error("No kcap tenants are linked to your account. Ask your admin to invite you.");
 
             return new WorkOSDiscoveryFlow.NoTenants();
         }

@@ -11,7 +11,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Pty.Unix;
 public class PtySpawnTests {
     [Test, RunOn(OS.Linux | OS.MacOs)]
     public async Task Successful_spawn_returns_a_reapable_child_and_a_captured_identity() {
-        var plan = PreflightCoreutil("sleep 5");
+        var plan = Preflight("/bin/sleep", ["sleep", "5"]);
         try {
             var rc = Spawn(plan, out var result);
             try {
@@ -78,7 +78,7 @@ public class PtySpawnTests {
         // Passing a deliberately WRONG expected_parent simulates "the real daemon died and I was
         // reparented" without actually killing anything — the child must self-kill and the
         // parent must see failed_step=parent_died, NEVER a false success.
-        var plan = PreflightCoreutil("sleep 5");
+        var plan = Preflight("/bin/sleep", ["sleep", "5"]);
         try {
             var rc = Spawn(plan, out var result, expectedParent: 1 /* init — never our real parent */);
             await Assert.That(rc).IsEqualTo(-1);
@@ -102,7 +102,7 @@ public class PtySpawnTests {
         // in-flight handshake": the byte is pending for the whole handshake window, so the poll
         // reports it and the cancel arm fires regardless of scheduling. pty_spawn kills + reaps
         // the child on this path, so no process leaks (result.Pid stays 0 on the cancel arm).
-        var plan = PreflightCoreutil("sleep 5");
+        var plan = Preflight("/bin/sleep", ["sleep", "5"]);
         var (cancelRead, cancelWrite) = MakePipe();
         UnixPtyInterop.write(cancelWrite, [1], 1); // arm cancellation before the handshake polls
         try {
@@ -128,7 +128,7 @@ public class PtySpawnTests {
         // yields the shim's deliberate empty "uncapturable" marker, and whether it exits in time
         // is scheduling — a loaded runner loses that race routinely. Either outcome is the
         // contract; a token for some other process, or a failed spawn, is not.
-        var plan = PreflightCoreutil("sleep 0");
+        var plan = Preflight("/bin/sleep", ["sleep", "0"]);
         try {
             var rc = Spawn(plan, out var result);
             try {
@@ -158,7 +158,7 @@ public class PtySpawnTests {
         // descriptor onto this PTY agent's terminal — crossing an isolation boundary the daemon
         // draws deliberately. The master must therefore be close-on-exec, exactly as the error
         // pipe already is.
-        var plan = PreflightCoreutil("sleep 5");
+        var plan = Preflight("/bin/sleep", ["sleep", "5"]);
         try {
             var rc = Spawn(plan, out var result);
             try {
@@ -186,7 +186,7 @@ public class PtySpawnTests {
     /// again.</summary>
     [Test, RunOn(OS.Linux | OS.MacOs)]
     public async Task Spawn_leaves_the_calling_threads_signal_mask_as_it_found_it() {
-        var plan = PreflightCoreutil("sleep 5");
+        var plan = Preflight("/bin/sleep", ["sleep", "5"]);
         try {
             var before = CurrentThreadSignalMask();
             var rc     = Spawn(plan, out var result);
@@ -209,7 +209,7 @@ public class PtySpawnTests {
     /// exactly as exec alone would.</summary>
     [Test, RunOn(OS.Linux)]
     public async Task Child_starts_with_the_callers_blocked_and_ignored_signals() {
-        var plan = PreflightCoreutil("cat /proc/self/status");
+        var plan = Preflight("/bin/grep", ["grep", "^Sig", "/proc/self/status"]); // not cat: see IdleReader
         try {
             var caller = ReadStatusFields(File.ReadAllText("/proc/thread-self/status"));
             var rc     = Spawn(plan, out var result);
@@ -240,7 +240,7 @@ public class PtySpawnTests {
         var saved = new byte[SigactionSize];
         if (sigaction(sigurg, ignore, saved) != 0) throw new InvalidOperationException("sigaction failed");
 
-        var plan = PreflightCoreutil("cat /proc/self/status");
+        var plan = Preflight("/bin/grep", ["grep", "^Sig", "/proc/self/status"]); // not cat: see IdleReader
         try {
             var rc = Spawn(plan, out var result);
             try {
@@ -306,9 +306,6 @@ public class PtySpawnTests {
     // native walk to the NULL sentinel reads out of bounds unless every array handed across
     // the P/Invoke boundary carries a trailing NULL element.
     static string?[] EmptyEnvp() => [null];
-
-    // Through sh: a multi-call coreutils binary (uutils) refuses the descriptor exec the PTY launcher uses.
-    static IntPtr PreflightCoreutil(string commandLine) => Preflight("/bin/sh", ["sh", "-c", "exec " + commandLine]);
     static string?[] NullTerm(string?[] a) => a.Length > 0 && a[^1] is null ? a : [.. a, null];
 
     static IntPtr Preflight(string exe, string?[] argv, int? execveatSupported = null) {

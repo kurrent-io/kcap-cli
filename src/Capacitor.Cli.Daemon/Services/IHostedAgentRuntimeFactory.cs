@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.LocalIpc;
@@ -122,14 +123,28 @@ internal interface IHostedAgentRuntimeFactory {
     /// probe has passed for the vendor and transport.</summary>
     bool SupportsRestartResume(string? runtimeTransport) => false;
 
+    /// <summary>Whether a restart resume of an agent that was waiting for input can start with no prompt at all.
+    /// Only a runtime that judges the resume by its process, not by a first turn, may say so.</summary>
+    bool ResumesIdleWithoutPrompt(string? runtimeTransport) => false;
+
     /// <summary>The models this vendor can launch on this machine, or null when it publishes no
     /// catalog. Null is also every probe failure: consumers then fall through to their other sources
     /// instead of reading an empty list as "nothing usable".</summary>
     Task<IReadOnlyList<VendorModelOption>?> ProbeModelsAsync(CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<VendorModelOption>?>(null);
 
+    /// <summary>The catalog of the account whose config directory is <paramref name="configDirectory"/>;
+    /// null is the daemon's own default. A vendor whose catalog does not depend on the account answers
+    /// its one catalog.</summary>
+    Task<IReadOnlyList<VendorModelOption>?> ProbeModelsAsync(string? configDirectory, CancellationToken ct) =>
+        ProbeModelsAsync(ct);
+
     /// <summary>Files whose fingerprint change means the catalog may have changed. Statted, never read.</summary>
     IReadOnlyList<string> CatalogFingerprintPaths => [];
+
+    /// <summary><see cref="CatalogFingerprintPaths"/> for the account whose config directory is
+    /// <paramref name="configDirectory"/>; null is the daemon's own default.</summary>
+    IReadOnlyList<string> CatalogFingerprintPathsFor(string? configDirectory) => CatalogFingerprintPaths;
 
     /// <summary>Where this runtime's attachments land for a launch of <paramref name="kind"/>. The
     /// question is whether the process can be running, write-contained, while a fetch for it happens:
@@ -209,12 +224,11 @@ internal sealed record RuntimeStartContext(
         // and reap it. Empty when a test/legacy caller omits them — the markers are simply not written.
         string             DaemonId    = "",
         string             DaemonEpoch = "",
-        // Optional MCP-server list for session/new — null/empty for every launch today
-        // (no caller populates this yet; interactive launches must keep it empty). The reviewer
-        // path is the first planned consumer. Distinct from McpAllowlist above, which is a PTY-only
-        // materialization concern (an allowlist of names the launcher writes into a temp
-        // mcp-config file) — this is the literal ACP session/new payload for descriptors that
-        // support it.
+        // This daemon's name, which selects its control socket among the daemons on the machine.
+        string             DaemonName  = "",
+        // Extra servers for an interactive ACP launch's session/new, sent after kcap's own set where the
+        // descriptor injects one. Ignored by a review flow, whose list the factory builds, and by a
+        // descriptor without SupportsMcpServers.
         IReadOnlyList<AcpMcpServerSpec>? McpServers = null,
         // True only when a borrowed request has been materialized into a fully independent,
         // daemon-owned repository snapshot. Factories use this to revalidate exact artifacts.
@@ -261,7 +275,7 @@ internal sealed record RuntimeStartContext(
         // AcpHostedAgentRuntime.StartAsync is a silent no-op against a null clock. Null for the PTY
         // launchers (AgentInstance owns their clock) and for constructions predating this field.
         AgentActivityClock? ActivityClock = null,
-        // Caller-selected ACP permission preset ("explore"/"edit"), carried verbatim from
+        // Caller-selected ACP permission preset, carried verbatim from
         // LaunchAgentCommand.AcpPermissionPreset. The ACP factory resolves it (for non-review-flow
         // launches only) into an AcpLaunchPermissionPreset and wires it onto the interaction bridge.
         // Null for every non-preset launch and constructions predating this field.
@@ -290,5 +304,13 @@ internal sealed record RuntimeStartContext(
         string?             PinnedSessionId = null,
         // The transport a resumed or continued agent ran on, from its ledger entry; a factory with
         // more than one transport starts it on that one. Null for a fresh launch.
-        string?             RequestedTransport = null
+        string?             RequestedTransport = null,
+        // The transport the server will validate this launch's registration against. Null from an
+        // older server. A ledger transport above outranks it.
+        string?             ExpectedRuntimeTransport = null,
+        // Which of the agent's user messages the server has stored, answered by its transcript forwarder once
+        // one is bound. Null for constructions predating this field.
+        Func<IAcpPersistenceProbe?>? PersistenceProbe = null,
+        // Null for a vendor without accounts.
+        ResolvedAccount?    Account = null
     );

@@ -74,6 +74,20 @@ public class PluginCommandToolsOnlyTests {
     }
 
     [Test]
+    public async Task Cursor_refresh_relocates_MCP_even_when_recording_hooks_are_already_current() {
+        var env = Env();
+        var cursor = env.Harnesses.Of<CursorHarness>().Paths;
+        PluginCommand.InstallCursorHooks(cursor.UserHooksJson);
+        HarnessMcpProjections.Cursor.Register(cursor.UserMcpJson, env.Home,
+            resolveBinaryPath: () => "/Users/someone/Applications/kcap.app/Contents/MacOS/kcap");
+        var hooks = File.ReadAllText(cursor.UserHooksJson);
+        await Assert.That(await Run(env, "plugin", "install", "--cursor", "--if-installed", "--strict-refresh")).IsEqualTo(0);
+        await Assert.That(File.ReadAllText(cursor.UserMcpJson)).Contains(TestBinaryPath);
+        await Assert.That(File.ReadAllText(cursor.UserMcpJson)).DoesNotContain("/Users/someone/Applications/kcap.app");
+        await Assert.That(File.ReadAllText(cursor.UserHooksJson)).IsEqualTo(hooks);
+    }
+
+    [Test]
     public async Task Tools_only_install_discloses_that_capture_is_unchanged() {
         var stdout = new StringWriter();
 
@@ -223,15 +237,18 @@ public class PluginCommandToolsOnlyTests {
     public async Task Plain_refresh_of_a_tools_only_vibe_install_heals_mcp_without_adding_hooks() {
         var env  = Env();
         var vibe = env.Harnesses.Of<MistralVibeHarness>().Paths;
-        await Run(env, "plugin", "install", "--mistral-vibe", "--tools-only");
+        await Run(env with { ResolveMcpBinaryPath = () => "/Users/someone/Applications/kcap.app/Contents/MacOS/kcap" },
+            "plugin", "install", "--mistral-vibe", "--tools-only");
         var config  = TomlSerializer.Deserialize<TomlTable>(await File.ReadAllTextAsync(vibe.ConfigToml))!;
         var servers = (TomlTableArray)config["mcp_servers"];
         servers.Remove(servers.Single(t => (string)t["name"] == "kcap-sessions"));
         await File.WriteAllTextAsync(vibe.ConfigToml, TomlSerializer.Serialize(config));
 
-        await Assert.That(await Run(env, "plugin", "install", "--mistral-vibe", "--if-installed")).IsEqualTo(0);
+        await Assert.That(await Run(env, "plugin", "install", "--mistral-vibe", "--if-installed", "--strict-refresh")).IsEqualTo(0);
 
         await Assert.That(await File.ReadAllTextAsync(vibe.ConfigToml)).Contains("kcap-sessions");
+        await Assert.That(await File.ReadAllTextAsync(vibe.ConfigToml)).DoesNotContain("/Users/someone/Applications/kcap.app");
+        await Assert.That(await File.ReadAllTextAsync(vibe.ConfigToml)).Contains(TestBinaryPath);
         await Assert.That(File.Exists(vibe.HooksToml)).IsFalse();
     }
 

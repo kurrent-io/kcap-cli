@@ -7,7 +7,12 @@ public interface ITerminalSurface {
     /// Renders already-decoded text — callers own UTF-8 decoding (Utf8StreamDecoder) since the
     /// control's own byte-array Feed re-decodes fresh on every call and corrupts a code point
     /// split across frames.
-    void Feed(string text);
+    /// A replay restores the screen without answering historical terminal queries.
+    void Feed(string text, bool replay = false);
+
+    /// Pieces in order, drawn once: joining a replay's pieces first would be another copy of
+    /// megabytes on the large-object heap.
+    void Feed(IReadOnlyList<string> pieces, bool replay = false);
 
     /// Keyboard input AND terminal-generated protocol replies (e.g. a DSR/CPR answer) — both
     /// need to reach the attached PTY, so the VM forwards this to SendInputAsync verbatim.

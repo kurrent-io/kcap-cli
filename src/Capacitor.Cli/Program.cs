@@ -27,6 +27,8 @@ if (args.Length < 1) {
 
 var command = args[0];
 
+NestedHarness.ShedInheritedHosting();
+
 // `skills sync --auto` outlives the hook that spawned it, and that hook closes the pipe read ends as
 // it exits: a write afterwards lands on a dead fd and can take the sync down with it. The writers
 // are replaced HERE rather than at dispatch because config and profile resolution sit in between and
@@ -92,7 +94,7 @@ if (InteractiveLifetime.IsInteractiveCommand(command) && detachedImport is null)
 // ResolveForRepo can shell out to `git remote -v` and emit warnings, and
 // the update-check task hits the npm registry — both pure noise inside a
 // nested headless invocation.
-if (Environment.GetEnvironmentVariable("KCAP_SKIP") is "1"
+if (Environment.GetEnvironmentVariable(HostedAgent.SkipVar) is "1"
  && command == "hook"
  && (args.Contains("--claude") || args.Contains("--cursor") || args.Contains("--copilot") || args.Contains("--gemini") || args.Contains("--kiro") || args.Contains("--pi") || args.Contains("--opencode") || args.Contains("--antigravity") || args.Contains("--mistral-vibe") || args.Contains("--grok") || args.Contains("--muse"))) {
     return 0;
@@ -272,7 +274,7 @@ if (args.Skip(1).Any(a => a is "--help" or "-h")) {
 // report-version: a no-server host must still hit ReportVersionCommand.HandleAsync's own
 // fail-open logic and return 0 silently, per its doc comment — never the generic
 // "No server configured" exit 1 this gate would otherwise produce.
-string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout", "cleanup", "config", "daemon", "setup", "local", "status", "harness", "update", "refresh", "plugin", "accounts", "profile", "use", "repos", "login", "ignore", "allow", "remap", "uninstall", "cursor-verify-appendonly", "agent", "report-version", "muse-assistant", RefreshTokenHandoff.Command];
+string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout", "cleanup", "config", "experimental", "daemon", "setup", "local", "status", "harness", "update", "refresh", "plugin", "accounts", "profile", "use", "repos", "login", "ignore", "allow", "remap", "uninstall", "cursor-verify-appendonly", "agent", "report-version", "muse-assistant", RefreshTokenHandoff.Command];
 
 // `import --discover` reads local transcripts and never calls the server, so it belongs with the
 // offline commands — and it is most useful before setup has run, which is exactly when there is no
@@ -489,6 +491,8 @@ switch (command) {
         return await Run<HarnessCommand>().HandleAsync(args);
     case "config":
         return await Run<ConfigCommand>().HandleAsync(args);
+    case "experimental":
+        return await Run<ExperimentalCommand>().HandleAsync(args);
     case "ignore":
         return await Run<IgnoreCommand>().HandleAsync(args);
     case "allow":
@@ -894,8 +898,8 @@ switch (command) {
 
         return await Run<CopilotFinalizeDrainCommand>().Run(cfSessionId, cfPath);
     }
-    case "set-title" when args.Length < 2:
-        Console.Error.WriteLine("Usage: kcap set-title <title>");
+    case "set-title" when args.Length < 2 || args is [_, SetTitleCommand.AutoFlag]:
+        Console.Error.WriteLine("Usage: kcap set-title [--auto] <title>");
 
         return 1;
     case "set-title": {
@@ -908,8 +912,11 @@ switch (command) {
             return 1;
         }
 
+        // Only the first argument is the flag: an unquoted title may itself contain "--auto".
+        var auto = args[1] == SetTitleCommand.AutoFlag;
+
         // Join all remaining args as the title (supports unquoted multi-word titles)
-        var title = string.Join(' ', args.Skip(1)).Trim();
+        var title = string.Join(' ', args.Skip(auto ? 2 : 1)).Trim();
 
         if (string.IsNullOrWhiteSpace(title)) {
             Console.Error.WriteLine("Title cannot be empty");
@@ -917,20 +924,11 @@ switch (command) {
             return 1;
         }
 
-        // Limit to 120 chars
         if (title.Length > 120) {
             title = title[..120];
         }
 
-        try {
-            await Api().SetSessionTitleAsync(stSessionId, title);
-        } catch (CapacitorApiException ex) {
-            Console.Error.WriteLine(ex.Message);
-
-            return 1;
-        }
-
-        return 0;
+        return await Run<SetTitleCommand>().Handle(stSessionId, title, auto, Console.Error);
     }
     // Hidden, tooling-internal: spawned once by the npm wrapper's `runUpdate` right after
     // `npm install` lands the new binary, so the server observes the new version immediately
@@ -963,17 +961,13 @@ switch (command) {
         if (args.Contains("--claude") && args.Contains("--plan-edit")) {
             return await Run<ClaudeHookCommand>().HandlePlanEdit(new StringReader(claudeHookBody!));
         }
-        // Task 12: global, session-agnostic drain pass run early in EVERY non-Codex hook
-        // invocation — centralizes the per-vendor AgentHookPoster.DrainSpoolsAsync calls Tasks 4-6
-        // added (removed from their Handle methods so this runs exactly once per invocation) and
-        // additionally covers Claude/Cursor, which never called it (they only drain their OWN
-        // route-agnostic FIFO backlog via HookSpool.DrainAllAsync). Codex is exempt — it runs its
-        // own drain in the BACKGROUND, after satisfying its synchronous stdout contract.
-        // Cross-process-throttled (~30s) and auth-gated inside DrainSpoolsAsync, so this adds no
-        // per-invocation network cost beyond a disk stat on the vast majority of firings.
-        // No acceptability conjunct here: DrainSpoolsAsync owns that decision, and it reaps both
-        // spools BEFORE returning. Gating the call would mean a config broken for weeks never reaps
-        // anything, and the per-session cap does not bound the number of stale files.
+        if (args.Contains("--claude") && baseUrl is not null)
+            claudeHookBody = await Run<ClaudeHookCommand>().PrepareForDrain(claudeHookBody!);
+
+        // The global drain reaps stale process claims as well as retained spool files. A Claude
+        // start must claim its live process first, so an old PID cannot end that resumed session.
+        // Codex drains in the background after its synchronous stdout response. Delivery is
+        // throttled and auth-gated inside the drain; retention still runs with unusable config.
         if (!args.Contains("--codex") && baseUrl is not null) {
             var poster = new AgentHookPoster(
                 config, profiles,
@@ -982,7 +976,7 @@ switch (command) {
             await poster.DrainSpoolsAsync(
                 new HookSpool(config, time),
                 new TranscriptSpool(config, time),
-                sessionId: null); // current session unknown here — reading stdin now would consume it
+                sessionId: null);
         }
         if (args.Contains("--claude")) {
             return await Run<ClaudeHookCommand>().Handle(new StringReader(claudeHookBody!));
@@ -994,7 +988,10 @@ switch (command) {
             return codexExit;
         }
         if (args.Contains("--cursor")) {
-            return await Run<CursorHookCommand>().Handle(Console.In);
+            // Not Console.In: it reads synchronously inside ReadToEndAsync, so a held-open stdin would block
+            // before the hook's deadline race starts. A stream-backed reader awaits off the calling thread.
+            using var cursorStdin = new StreamReader(Console.OpenStandardInput(), Console.InputEncoding);
+            return await Run<CursorHookCommand>().Handle(cursorStdin);
         }
         if (args.Contains("--copilot")) {
             return await Run<CopilotHookCommand>().Handle(Console.In, args);

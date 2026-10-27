@@ -13,15 +13,15 @@ public sealed record ActivityRow(
     string PrimaryDetail, string SecondaryLine, string SecondaryTip,
     string RequesterFull, string RepoFull);
 
-/// Renders the consent decision log for the Launches flyout: pure file I/O via the injected
+/// Renders the consent decision log for the Launch approvals window: pure file I/O via the injected
 /// `read`, so the feed works with the daemon stopped or unreachable. No FileSystemWatcher —
-/// refreshed on flyout visibility, a 2-tick stat poll while visible, and an own-resolution nudge (App
+/// refreshed on window visibility, a 2-tick stat poll while visible, and an own-resolution nudge (App
 /// wires RequestRefresh into ConsentPromptViewModel's onConcluded callback).
 ///
 /// Constructed once at the composition root and lives for the app's lifetime, like ConsentService
 /// — it subscribes to the SHARED ticker directly in the constructor rather than through
 /// WhenActivated/window activation, since the prompt-window factory must capture this same
-/// instance independently of MainWindowViewModel's own construction. The ticker already delivers
+/// instance independently of the main window's own construction. The ticker already delivers
 /// on the UI thread (UiTicker's doc comment), so no ObserveOn is needed here.
 ///
 /// That constructor-scoped subscription is why this is IDisposable: the shared ticker is
@@ -49,7 +49,7 @@ public sealed class ActivityViewModel : ReactiveObject, IDisposable {
     }
 
     bool _hasLoaded;
-    /// False until the first log read applies — so the flyout does not flash the empty copy first.
+    /// False until the first log read applies — so the window does not flash the empty copy first.
     public bool HasLoaded {
         get => _hasLoaded;
         private set {
@@ -91,10 +91,8 @@ public sealed class ActivityViewModel : ReactiveObject, IDisposable {
         _tickSub.Dispose();
     }
 
-    /// Flyout-visibility trigger: a true transition (flyout open AND window visible, per
-    /// MainWindow.axaml.cs) does an immediate read and primes the poll's stat baseline so the very
-    /// next tick doesn't immediately re-read the same unchanged content. A no-op on a repeated call
-    /// with the same value.
+    /// Refreshes on becoming visible and primes the stat baseline to avoid a duplicate read
+    /// on the next tick. Repeated calls with the same visibility are ignored.
     public void OnTabVisibleChanged(bool visible) {
         if (visible == _visible) return;
         _visible = visible;

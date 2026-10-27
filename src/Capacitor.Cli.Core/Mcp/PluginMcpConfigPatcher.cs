@@ -69,14 +69,5 @@ public static class PluginMcpConfigPatcher {
     }
 
     /// <summary>The shipped literal, or an absolute path (either OS's flavour) whose file is a kcap binary.</summary>
-    public static bool IsPatchable(string command) {
-        if (command == KcapMcpServers.Command) return true;
-
-        var windowsRooted = command.Length >= 3 && char.IsAsciiLetter(command[0]) && command[1] == ':' && command[2] is '\\' or '/';
-        if (!command.StartsWith('/') && !command.StartsWith('\\') && !windowsRooted) return false;
-
-        var name = command[(command.LastIndexOfAny(['/', '\\']) + 1)..];
-
-        return name.Equals("kcap", StringComparison.OrdinalIgnoreCase) || name.Equals("kcap.exe", StringComparison.OrdinalIgnoreCase);
-    }
+    public static bool IsPatchable(string command) => KcapBinaryCommand.IsKcap(command);
 }

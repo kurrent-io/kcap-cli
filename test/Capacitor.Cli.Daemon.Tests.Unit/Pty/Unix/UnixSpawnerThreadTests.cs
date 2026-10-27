@@ -58,8 +58,7 @@ public class UnixSpawnerThreadTests {
         // (mirrors PtySpawnTests.Preflight): macOS always reports 0, and forcing an EXEC_FD plan
         // there fails at the exec step (pty_spawn has no fd-exec primitive off Linux).
         var execveatSupported = UnixPtyInterop.pty_probe_execveat();
-        // Through sh: a multi-call coreutils binary (uutils) refuses the descriptor exec the PTY launcher uses.
-        var rc = UnixPtyInterop.pty_preflight("/bin/sh", ["sh", "-c", "exec sleep 3", null], [null], execveatSupported, out var plan);
+        var rc = UnixPtyInterop.pty_preflight("/bin/sleep", ["sleep", "3", null], [null], execveatSupported, out var plan);
         await Assert.That(rc).IsEqualTo(0);
 
         var result = spawner.SpawnOn(plan, [null], AppContext.BaseDirectory, 40, 120, Environment.ProcessId, -1);

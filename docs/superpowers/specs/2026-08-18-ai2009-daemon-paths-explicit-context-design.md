@@ -90,7 +90,7 @@ per-site judgement:
 - **First parameter** for the static helpers: `DaemonRestartMarker`, `DaemonVersionMarker`,
   `ServiceTxnLock`, `ServiceTxnMarker`, `BootRefusalReader`, `BootRefusalMarker`,
   `ConsentDecisionLogReader`, `DaemonPidProbe`, `DaemonKill`, `HelloProbe`.
-- **Constructor dependency** for types that already take injected deps: `LaunchdServiceVerify`,
+- **Constructor dependency** for types that already take injected deps: `ServiceVerify`,
   `LocalControlOps`, `LocalControlClient`, `LocalControlServer`, `DaemonMutationLane`,
   `RestartCoordinator`. `AgentOrchestrator` is not among them — it reaches daemon state through
   `DaemonConfig`, which carries the context for it.
@@ -146,7 +146,7 @@ Of the 137 daemon-key `[NotInParallel]` attributes:
 **94% removable.** The blocked bucket is softer than it looks: 6 of 7 already carry independent
 serialisation and merely shed the daemon key from an existing attribute. Exactly one file needs a
 replacement — `ServiceTxnMarkerTests`, which swaps `ServiceTxnMarker.FlushDirectory`, an
-`internal static Func<string,bool>` that every `LaunchdServiceVerify*` test writes markers through.
+`internal static Func<string,bool>` that every `ServiceVerify*` test writes markers through.
 It takes a **bare** `[NotInParallel]`, not a new key: a key covers only the tests that name it, and
 the concurrent writers here are whole other suites that never would.
 
@@ -177,7 +177,7 @@ This also retires the 12 privately-invented short prefixes (`lcc`, `lco`, `lcp`,
 ### Spawning the real binary
 
 13 test files locate the real `kcap` binary, via **11 hand-rolled copies** of
-`GetCliBinaryPath()`. Only `LaunchdServiceVerifyProcessTests` passes `KCAP_DAEMONS_DIR` to its child;
+`GetCliBinaryPath()`. Only `ServiceVerifyProcessTests` passes `KCAP_DAEMONS_DIR` to its child;
 the other 12 inherit the assembly-wide pin.
 
 A single `KcapProcess` helper in `Capacitor.Tests.Helpers` replaces all 11 resolvers and
@@ -211,7 +211,7 @@ sentinel is in place.
 
 ## Traps
 
-- `LaunchdServiceVerifyProcessTests` inspects a flock from the parent while the child holds it, so the
+- `ServiceVerifyProcessTests` inspects a flock from the parent while the child holds it, so the
   parent's context and the child's env must agree.
 - `DaemonStopSelfPidTests` writes a PID file naming the test runner itself — the source of the
   `UninstallCommandTests` flake, since `daemon stop --yes` enumerates the directory and
@@ -232,7 +232,7 @@ One ticket, landed as a sequence so each step builds and passes:
 1. Introduce `DaemonStore` (folding in `LocalSocketPaths`); keep the static delegating to it.
 2. Convert the daemon cluster via DI and `DaemonConfig.Paths`/`StateDirectory`.
 3. Convert the Core markers and `ConsentDecisionLogReader`.
-4. Convert the `LaunchdServiceVerify` tree.
+4. Convert the `ServiceVerify` tree.
 5. Convert `DaemonCommands`, `StatusCommand`, `AgentCommand`, and the CLI entry point.
 6. Convert the App composition root.
 7. Delete the static and `LocalSocketPaths`.

@@ -5,8 +5,8 @@
         xmlns:cmd="clr-namespace:Capacitor.Cli.Core.Commands;assembly=Capacitor.Cli.Core"
         x:Class="Capacitor.App.Views.FeedbackWindow"
         x:DataType="vm:FeedbackViewModel"
-        Title="Kurrent Capacitor — Send feedback"
-        Icon="avares://Kurrent Capacitor/Assets/kcap-icon.png"
+        Title="kcap — Send feedback"
+        Icon="avares://kcap-desktop/Assets/kcap-icon.png"
         Width="560" Height="560" CanResize="False" WindowStartupLocation="CenterOwner"
         Background="{StaticResource KcapCanvasBrush}">
     <Grid Margin="28,24" RowDefinitions="Auto,*,Auto">

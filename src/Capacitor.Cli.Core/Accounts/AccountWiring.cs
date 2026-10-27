@@ -36,10 +36,12 @@ public static class AccountWiring {
         };
     }
 
-    public static RecordingState State(VendorAccount account, UserHome home) {
-        switch (account.Vendor) {
+    public static RecordingState State(VendorAccount account, UserHome home) => State(account.Vendor, account.Directory, home);
+
+    public static RecordingState State(HarnessId vendor, string directory, UserHome home) {
+        switch (vendor) {
             case HarnessId.Claude: {
-                var settings = AccountLayouts.Claude(home, account.Directory).UserSettings;
+                var settings = AccountLayouts.Claude(home, directory).UserSettings;
                 if (IsMalformed(settings)) return RecordingState.Broken;
                 if (!ClaudePluginInstaller.IsPluginEnabled(settings)) return RecordingState.NotWired;
                 if (ClaudePluginInstaller.IsEffectivelyInstalled(settings)) return RecordingState.Recording;
@@ -48,7 +50,7 @@ public static class AccountWiring {
                 return ClaudePluginInstaller.HasInstallRecord(settings) ? RecordingState.Broken : RecordingState.Installed;
             }
             case HarnessId.Codex: {
-                var hooks = AccountLayouts.Codex(home, account.Directory).UserHooksJson;
+                var hooks = AccountLayouts.Codex(home, directory).UserHooksJson;
                 // Codex refuses a file with a byte-order mark; rewiring rewrites it without one.
                 if (IsMalformed(hooks) || CodexHooksInstaller.StartsWithByteOrderMark(hooks)) return RecordingState.Broken;
                 return CodexHooksInstaller.ReferencesKcapHook(hooks) ? RecordingState.Installed : RecordingState.NotWired;

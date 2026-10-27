@@ -1,4 +1,6 @@
 using Capacitor.App.Services;
+using Capacitor.App.Services.LocalSetup;
+using Capacitor.App.Services.Mutation;
 using TUnit.Assertions.Enums;
 using Capacitor.Cli.Core;
 
@@ -526,6 +528,40 @@ public class KcapCliTests {
         await Assert.That(runner.SeenOptions!.EnvOverlay!.ContainsKey(KcapCli.ExpectServerUrlVar)).IsFalse();
     }
 
+    public static IEnumerable<Func<(MutationVerb Verb, AccountArgs Args, string[] Expected)>> AccountVerbArgv() {
+        yield return () => (MutationVerb.AccountAdd, new AccountArgs("codex", "/Users/me/.codex-work", null, null),
+            ["accounts", "add", "codex", "/Users/me/.codex-work", "--json"]);
+        yield return () => (MutationVerb.AccountRemove, new AccountArgs(null, null, "abcd1234", null), ["accounts", "remove", "abcd1234", "--json"]);
+        yield return () => (MutationVerb.AccountRename, new AccountArgs(null, null, "abcd1234", "Work account"),
+            ["accounts", "rename", "abcd1234", "Work account", "--json"]);
+        yield return () => (MutationVerb.AccountRewire, new AccountArgs(null, null, "abcd1234", null), ["accounts", "rewire", "abcd1234", "--json"]);
+        yield return () => (MutationVerb.AccountRewire, new AccountArgs(null, null, null, null), ["accounts", "rewire", "--json"]);
+    }
+
+    [Test]
+    [MethodDataSource(nameof(AccountVerbArgv))]
+    public async Task Account_verbs_spell_their_argv_with_json(MutationVerb verb, AccountArgs args, string[] expected) {
+        var runner = new FakeProcessRunner();
+
+        await MakeCli(runner).AccountsAsync(verb, args, CancellationToken.None);
+
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(expected, CollectionOrdering.Matching);
+        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(60));
+    }
+
+    [Test]
+    public async Task Account_verbs_run_without_a_canonical_server() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCli(runner, terminalPath: "/opt/homebrew/bin:/usr/bin:/bin", canonicalServer: null);
+
+        await cli.AccountsAsync(MutationVerb.AccountRewire, new AccountArgs(null, null, null, null), CancellationToken.None);
+
+        await Assert.That(runner.SeenFileName).IsEqualTo("kcap");
+        await Assert.That(runner.SeenOptions!.EnvOverlay!.Keys).IsEquivalentTo(
+            ["KCAP_PROFILE", KcapCli.SpawnNoTelemetryVar, "PATH"], CollectionOrdering.Any);
+        await Assert.That(runner.SeenOptions!.EnvOverlay!["KCAP_PROFILE"]).IsEqualTo("work");
+    }
+
     [Test]
     public async Task PluginInstallAsync_with_null_CliPath_returns_exit_127_without_calling_the_runner() {
         var runner = new FakeProcessRunner();
@@ -638,16 +674,27 @@ public class KcapCliTests {
         var cli = MakeCli(runner);
         using var interrupt = new CancellationTokenSource();
 
-        await cli.SetupLocalAsync(_ => { }, interrupt.Token, CancellationToken.None);
+        await cli.SetupLocalAsync(new LocalEmbeddingChoice("nomic-embed-text"), _ => { }, interrupt.Token, CancellationToken.None);
 
         await Assert.That(runner.SeenArgs).IsEquivalentTo(
-            ["setup", "--local", "--json", "--single-user", "--yes"], CollectionOrdering.Matching);
+            ["setup", "--local", "--json", "--single-user", "--yes", "--embedding-model", "nomic-embed-text"], CollectionOrdering.Matching);
         await Assert.That(runner.SeenOptions!.EnvOverlay!["KCAP_PROFILE"]).IsEqualTo("work");
         await Assert.That(runner.SeenOptions!.EnvOverlay![KcapCli.SpawnNoTelemetryVar]).IsEqualTo("1");
         await Assert.That(runner.SeenOptions!.Interrupt).IsEqualTo(interrupt.Token);
         await Assert.That(runner.SeenOptions!.Timeout).IsNull();
         // Above the 26 min a recovery and commit can spend back to back after the interrupt.
         await Assert.That(runner.SeenOptions!.InterruptGrace).IsEqualTo(TimeSpan.FromMinutes(30));
+    }
+
+    [Test]
+    public async Task SetupLocalAsync_passes_keyword_only_as_no_embeddings() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCli(runner);
+
+        await cli.SetupLocalAsync(LocalEmbeddingChoice.KeywordOnly, _ => { }, CancellationToken.None, CancellationToken.None);
+
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(
+            ["setup", "--local", "--json", "--single-user", "--yes", "--no-embeddings"], CollectionOrdering.Matching);
     }
 
     /// The caller's token bounds only the work before the spawn: a running setup stops through its
@@ -658,7 +705,7 @@ public class KcapCliTests {
         var cli = MakeCli(runner);
         using var caller = new CancellationTokenSource();
 
-        await cli.SetupLocalAsync(_ => { }, CancellationToken.None, caller.Token);
+        await cli.SetupLocalAsync(LocalEmbeddingChoice.Default, _ => { }, CancellationToken.None, caller.Token);
 
         await Assert.That(runner.SeenStreamingToken.CanBeCanceled).IsFalse();
     }
@@ -668,7 +715,7 @@ public class KcapCliTests {
         var runner = new FakeProcessRunner();
         var cli = MakeCliWithNullPath(runner);
 
-        var result = await cli.SetupLocalAsync(_ => { }, CancellationToken.None, CancellationToken.None);
+        var result = await cli.SetupLocalAsync(LocalEmbeddingChoice.Default, _ => { }, CancellationToken.None, CancellationToken.None);
 
         await Assert.That(result.ExitCode).IsEqualTo(-1);
         await Assert.That(result.Tail).IsEquivalentTo(
@@ -706,6 +753,22 @@ public class KcapCliTests {
         await Assert.That(result.Tail).IsEquivalentTo(
             [new StreamedLine(ProcessStreamKind.Stderr, "kcap CLI not found")], CollectionOrdering.Matching);
         await Assert.That(runner.SeenFileName).IsNull();
+    }
+
+    [Test]
+    [Arguments(false, new[] { "uninstall", "--yes", "--force", "--keep-path-links" })]
+    [Arguments(true, new[] { "uninstall", "--yes", "--force", "--keep-path-links", "--purge-local" })]
+    public async Task UninstallAsync_builds_argv_env_with_no_timeout(bool purgeLocal, string[] expected) {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCli(runner);
+        using var caller = new CancellationTokenSource();
+
+        await cli.UninstallAsync(purgeLocal, _ => { }, caller.Token);
+
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(expected, CollectionOrdering.Matching);
+        await Assert.That(runner.SeenOptions!.EnvOverlay!["KCAP_PROFILE"]).IsEqualTo("work");
+        await Assert.That(runner.SeenOptions!.Timeout).IsNull();
+        await Assert.That(runner.SeenStreamingToken.CanBeCanceled).IsFalse();
     }
 
     [Test]

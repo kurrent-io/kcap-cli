@@ -8,7 +8,7 @@ Avalonia wizard being retired by AI-2053): `DaemonStepViewModel` classifies a fr
 `service status --json`, `DaemonMutationLane` dispatches and classifies the mutation, and
 `ReasonRouting` maps `start_gate_reason=` tokens to a recovery surface. The CLI has all the
 primitives — `service status --json`, `service install --verify`, `service start --verify`, the
-`LaunchdServiceVerify` transaction engine with coded exits — but nothing that composes them into the
+`ServiceVerify` transaction engine with coded exits — but nothing that composes them into the
 ladder the flow needs.
 
 ## The ladder

@@ -42,7 +42,7 @@
             <views:AppIcon Kind="Circle" Size="12" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" IsVisible="{Binding ShowsRing}"
                            Foreground="{StaticResource KcapPurpleBrush}" />
             <Ellipse Width="5" Height="5" Fill="{StaticResource KcapPurpleBrush}"
-                     HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding ShowsRing}" />
+                     HorizontalAlignment="Center" VerticalAlignment="Center" UseLayoutRounding="False" IsVisible="{Binding ShowsRing}" />
             <views:AppIcon Kind="Clock" Size="12" IsVisible="{Binding ShowsClock}" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
                            Foreground="{StaticResource KcapWarningBrush}" />
             <views:AppIcon Kind="CircleQuestionMark" Size="12" Foreground="{StaticResource KcapWarningBrush}" HorizontalAlignment="Center"

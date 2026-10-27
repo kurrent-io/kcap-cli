@@ -303,6 +303,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     readonly Func<bool, JsonObject>? _sessionNewMeta;
     readonly Func<AcpNotification, IReadOnlyList<AcpEventEnvelope>>? _turnUsageReader;
     readonly Func<AcpNotification, AcpSubagentSignal?>? _subagentReader;
+    readonly AcpQuestionProtocol? _questionProtocol;
 
     // A subagent's ACP sessionId → the agent id its events carry. Entries stay after it finishes, so a
     // straggling update is still not mistaken for the hosted agent's own.
@@ -523,11 +524,13 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             Func<bool, JsonObject>?                                                         sessionNewMeta = null,
             Func<JsonElement, IReadOnlySet<string>, bool>?                                  admissionMatcher = null,
             Func<AcpNotification, IReadOnlyList<AcpEventEnvelope>>?                         turnUsageReader = null,
-            Func<AcpNotification, AcpSubagentSignal?>?                                      subagentReader = null
+            Func<AcpNotification, AcpSubagentSignal?>?                                      subagentReader = null,
+            AcpQuestionProtocol?                                                            questionProtocol = null
         ) {
         _sessionNewMeta = sessionNewMeta;
         _turnUsageReader = turnUsageReader;
         _subagentReader  = subagentReader;
+        _questionProtocol = questionProtocol;
         _journal = journal;
         _admittedToolIds = admittedToolIds;
         _policySnapshot  = policySnapshot;
@@ -580,7 +583,8 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 notifyPolicyDecision,
                 policyCwd,
                 policyJudge,
-                admissionMatcher: admissionMatcher);
+                admissionMatcher: admissionMatcher,
+                questionProtocol: questionProtocol);
         }
 
         // The original launch's incarnation. Every later candidate goes through the same wiring
@@ -948,6 +952,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                     throw new InvalidOperationException("ACP session/new response did not contain a sessionId.");
 
                 _sessionId = sessionId;
+                _interactionBridge?.MarkBridgedSinceStart(sessionId);
 
                 LogSessionStarted(_agentId, sessionId);
                 AcpMetrics.SessionsStarted.Add(1);
@@ -1162,7 +1167,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// dropped-count) rather than silently discarding the input via the channel's own drop-write
     /// behavior.
     /// </summary>
-    Task EnqueueTurn(string text, bool acknowledgeWrite) {
+    Task EnqueueTurn(string text, bool acknowledgeWrite, Guid? dispatchId = null) {
         var written = acknowledgeWrite
             ? new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
             : null;
@@ -1187,7 +1192,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 return written.Task;
             }
 
-            EmitEnvelope(AcpEventTranslator.BuildUserMessage(seq: 0, NowIso(), text), advanceActivity: false);
+            EmitEnvelope(AcpEventTranslator.BuildUserMessage(seq: 0, NowIso(), text) with { DispatchId = dispatchId }, advanceActivity: false);
 
             if (!_pendingTurns.Writer.TryWrite(new PendingTurn(text, written))) {
                 // The channel was completed (the runtime went terminal) — the only way a not-full
@@ -1483,6 +1488,11 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     public Task SendUserInputAndWaitForWriteAsync(string text) {
         RequireSessionId();
         return EnqueueTurn(text, acknowledgeWrite: true);
+    }
+
+    public Task SendDispatchedInputAsync(string text, Guid dispatchId, bool waitForWrite) {
+        RequireSessionId();
+        return EnqueueTurn(text, acknowledgeWrite: waitForWrite, dispatchId);
     }
 
     public async Task WaitForTurnIdleAsync(CancellationToken ct) {
@@ -2989,6 +2999,11 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                     "ACP: elicitation declined by the reconnect router (uninstalled incarnation or non-running phase) for agent {AgentId}.",
                     _agentId);
                 return AcpInteractionBridge.ElicitationCancelResult();
+            case var method when _questionProtocol is { } protocol && method == protocol.Method:
+                _logger.LogDebug(
+                    "ACP: {Method} declined by the reconnect router (uninstalled incarnation or non-running phase) for agent {AgentId}.",
+                    method, _agentId);
+                return protocol.Reply(null);
             default:
                 return null; // unclaimed methods keep the connection's -32601 default-decline posture
         }

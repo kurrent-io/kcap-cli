@@ -105,9 +105,7 @@ public sealed record AcpMcpServerEnvVar(
 );
 
 /// <summary><c>session/new</c> params. <c>Cwd</c> must be an absolute path (the worktree root).
-/// <c>McpServers</c> is always sent as an array (never omitted) — empty for every launch until a
-/// caller populates RuntimeStartContext.McpServers (no caller does yet — the reviewer path is
-/// the first planned consumer).</summary>
+/// <c>McpServers</c> is always sent as an array, never omitted.</summary>
 public sealed record SessionNewParams(
     [property: JsonPropertyName("cwd")]        string             Cwd,
     [property: JsonPropertyName("mcpServers")] AcpMcpServerSpec[] McpServers,

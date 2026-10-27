@@ -7,6 +7,7 @@ using Capacitor.App.Services.Onboarding;
 using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalEdition;
+using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Core;
 
 namespace Capacitor.App.Tests.Unit;
@@ -47,6 +48,7 @@ public class WizardCompositionLocalPathTests {
 
             await graph.Steps.OfType<EditionStepViewModel>().Single().ChooseLocalCommand.Execute().ToTask();
             await graph.ViewModel.PendingAdvanceForTesting;
+            await graph.ViewModel.NextCommand.Execute().ToTask();
             var during = (graph.ViewModel.Current.Id, harness.Lane.Requests.Count, harness.Cli.StatusCallCount);
 
             print!(new StreamedLine(ProcessStreamKind.Stdout, LocalSetupScript.Committed));
@@ -69,6 +71,51 @@ public class WizardCompositionLocalPathTests {
         await Assert.That(visited).DoesNotContain(WizardStepId.SignIn);
         await Assert.That(after).IsEqualTo(WizardStepId.Harnesses);
         await Assert.That(requests.Single().Verb).IsEqualTo(MutationVerb.Install);
+    }
+
+    /// The terminal command is part of the install itself, before any harness is chosen; otherwise
+    /// the app offers it on first launch after setup has finished.
+    [Test]
+    public async Task A_settled_local_install_puts_kcap_on_the_terminal_path() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        harness.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(NotInstalled());
+        var installer = new RecordingInstaller();
+        harness.ShimInstaller = installer;
+        var exit = new TaskCompletionSource<StreamingResult>();
+        Action<StreamedLine>? print = null;
+        harness.Cli.SetupLocalBehavior = (onLine, _, _) => {
+            print = onLine;
+            return exit.Task;
+        };
+
+        var (during, targets) = await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(harness.Options());
+            await graph.ViewModel.PendingEnterForTesting;
+
+            await graph.Steps.OfType<EditionStepViewModel>().Single().ChooseLocalCommand.Execute().ToTask();
+            await graph.ViewModel.PendingAdvanceForTesting;
+            await graph.ViewModel.NextCommand.Execute().ToTask();
+            var during = installer.Targets.Count;
+
+            print!(new StreamedLine(ProcessStreamKind.Stdout, LocalSetupScript.Committed));
+            exit.SetResult(new StreamingResult(0, false, []));
+            await WizardFixtures.WaitUntilAsync(() => installer.Targets.Count == 1, what: "the settled install to link kcap");
+
+            return (during, installer.Targets.ToList());
+        }).WaitAsync(TimeSpan.FromSeconds(30));
+
+        await Assert.That(during).IsEqualTo(0);
+        await Assert.That(targets.Single()).IsEqualTo(harness.ShimTarget);
+    }
+
+    sealed class RecordingInstaller : ICliPathInstaller {
+        public readonly List<string> Targets = [];
+        public string Disclosure => "";
+        public ShimPreflight Preflight(string target) => ShimPreflight.Installable;
+        public Task<ShimResult> InstallAsync(string target, CancellationToken ct) {
+            Targets.Add(target);
+            return Task.FromResult(new ShimResult(ShimOutcome.Installed, null, null));
+        }
     }
 
     /// The durable half of the local-path predicate is read at build, on Edition entry and on a settled
@@ -104,22 +151,24 @@ public class WizardCompositionLocalPathTests {
         harness.Identity = ("default", LocalSetupScript.ServerUrl, "daemon-a");
         harness.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(NotInstalled());
 
-        var (start, backVisible, afterBack, signInShown, installs, setups) = await AvaloniaSession.DispatchAsync(async () => {
+        var (start, eyebrow, backVisible, afterBack, signInShown, installs, setups) = await AvaloniaSession.DispatchAsync(async () => {
             var graph = WizardComposition.BuildGraph(harness.Options() with { AlreadyAuthenticated = true });
             await graph.ViewModel.PendingEnterForTesting;
             var start = graph.ViewModel.Current.Id;
+            var eyebrow = graph.ViewModel.Eyebrow;
             var backVisible = graph.ViewModel.BackVisible;
 
             await graph.ViewModel.BackCommand.Execute().ToTask();
             await WizardFixtures.WaitUntilAsync(
                 () => harness.Lane.Requests.Count == 1, what: "composition to enable the daemon");
 
-            return (start, backVisible, graph.ViewModel.Current.Id,
+            return (start, eyebrow, backVisible, graph.ViewModel.Current.Id,
                 !graph.Steps.OfType<SignInStepViewModel>().Single().PassThrough,
                 harness.Lane.Requests.Count(r => r.Verb == MutationVerb.Install), harness.Cli.SetupLocalCallCount);
         }).WaitAsync(TimeSpan.FromSeconds(30));
 
         await Assert.That(start).IsEqualTo(WizardStepId.Harnesses);
+        await Assert.That(eyebrow).StartsWith("STEP 1 OF 3 ·");
         await Assert.That(backVisible).IsFalse();
         await Assert.That(afterBack).IsEqualTo(WizardStepId.Harnesses);
         await Assert.That(signInShown).IsFalse();
@@ -127,15 +176,18 @@ public class WizardCompositionLocalPathTests {
         await Assert.That(setups).IsEqualTo(0);
     }
 
+    /// A web sign-up opened before the local install began does not pull the run onto sign-in.
     [Test]
-    public async Task Pending_setup_starts_at_install() {
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Pending_setup_starts_at_install(bool webSignUpOpened) {
         using var harness = new WizardFixtures.GraphHarness(Config.Root);
         harness.LocalRoot = LocalSetupScript.PendingSetup(Config);
         var exit = new TaskCompletionSource<StreamingResult>();
         harness.Cli.SetupLocalBehavior = (_, _, _) => exit.Task;
 
         var (current, backVisible, setups, requests) = await AvaloniaSession.DispatchAsync(async () => {
-            var graph = WizardComposition.BuildGraph(harness.Options());
+            var graph = WizardComposition.BuildGraph(harness.Options() with { ResumeWebSignUp = webSignUpOpened });
             await graph.ViewModel.PendingEnterForTesting;
 
             return (graph.ViewModel.Current.Id, graph.ViewModel.BackVisible, harness.Cli.SetupLocalCallCount,
@@ -150,7 +202,7 @@ public class WizardCompositionLocalPathTests {
     }
 
     /// The run's own rollback clears the journal before it fails, so the settle must republish the
-    /// durable state before Back and Finish later are restated, not after.
+    /// durable state before Back is restated, not after. Nothing is connected, so Finish later stays hidden.
     [Test]
     public async Task A_pending_setup_that_rolls_back_and_fails_unlocked_offers_back_to_edition() {
         using var harness = new WizardFixtures.GraphHarness(Config.Root);
@@ -187,28 +239,34 @@ public class WizardCompositionLocalPathTests {
         await Assert.That(lockedBefore).IsFalse();
         await Assert.That(backVisible).IsTrue();
         await Assert.That(canBack).IsTrue();
-        await Assert.That(canFinishLater).IsTrue();
+        await Assert.That(canFinishLater).IsFalse();
         await Assert.That(afterBack).IsEqualTo(WizardStepId.Edition);
     }
 
+    /// A workspace signed in at start is this run's: setup opens on harnesses as its first step, with no way back
+    /// to a finished sign-in or an edition it cannot change.
     [Test]
-    public async Task Cloud_forced_setup_is_unchanged() {
+    public async Task Cloud_forced_setup_starts_at_harnesses_as_step_one() {
         using var harness = new WizardFixtures.GraphHarness(Config.Root);
 
-        var (start, canFinishLater, afterBack, install) = await AvaloniaSession.DispatchAsync(async () => {
+        var (start, eyebrow, backVisible, canFinishLater, afterBack, install) = await AvaloniaSession.DispatchAsync(async () => {
             var graph = WizardComposition.BuildGraph(harness.Options() with { AlreadyAuthenticated = true });
             await graph.ViewModel.PendingEnterForTesting;
             var start = graph.ViewModel.Current.Id;
+            var eyebrow = graph.ViewModel.Eyebrow;
+            var backVisible = graph.ViewModel.BackVisible;
             var canFinishLater = await graph.ViewModel.FinishLaterCommand.CanExecute.FirstAsync();
 
             await graph.ViewModel.BackCommand.Execute().ToTask();
 
-            return (start, canFinishLater, graph.ViewModel.Current.Id, graph.Steps.OfType<InstallStepViewModel>().Single());
+            return (start, eyebrow, backVisible, canFinishLater, graph.ViewModel.Current.Id, graph.Steps.OfType<InstallStepViewModel>().Single());
         });
 
         await Assert.That(start).IsEqualTo(WizardStepId.Harnesses);
+        await Assert.That(eyebrow).StartsWith("STEP 1 OF 3 ·");
+        await Assert.That(backVisible).IsFalse();
         await Assert.That(canFinishLater).IsTrue();
-        await Assert.That(afterBack).IsEqualTo(WizardStepId.SignIn);
+        await Assert.That(afterBack).IsEqualTo(WizardStepId.Harnesses);
         await Assert.That(install.PassThrough).IsTrue();
         await Assert.That(harness.Cli.SetupLocalCallCount).IsEqualTo(0);
     }
@@ -236,8 +294,32 @@ public class WizardCompositionLocalPathTests {
         await Assert.That(harness.Cli.SetupLocalCallCount).IsEqualTo(0);
     }
 
+    /// Before a server is connected the app has nothing to show, so Finish later stays hidden on every page up to
+    /// the install, including the first page after stepping back to it.
     [Test]
-    public async Task Finish_later_is_disabled_until_installed() {
+    public async Task Finish_later_waits_for_a_connected_server_on_every_page() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+
+        var (atLaunch, onInstall, backOnEdition) = await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(harness.Options());
+            await graph.ViewModel.PendingEnterForTesting;
+            var atLaunch = graph.ViewModel.FinishLaterVisible;
+
+            await graph.Steps.OfType<EditionStepViewModel>().Single().ChooseLocalCommand.Execute().ToTask();
+            await graph.ViewModel.PendingAdvanceForTesting;
+            var onInstall = (graph.ViewModel.Current.Id, graph.ViewModel.FinishLaterVisible);
+
+            await graph.ViewModel.BackCommand.Execute().ToTask();
+            return (atLaunch, onInstall, (graph.ViewModel.Current.Id, graph.ViewModel.FinishLaterVisible));
+        });
+
+        await Assert.That(atLaunch).IsFalse();
+        await Assert.That(onInstall).IsEqualTo((WizardStepId.Install, false));
+        await Assert.That(backOnEdition).IsEqualTo((WizardStepId.Edition, false));
+    }
+
+    [Test]
+    public async Task Finish_later_appears_once_the_install_connects() {
         using var harness = new WizardFixtures.GraphHarness(Config.Root);
         var exit = new TaskCompletionSource<StreamingResult>();
         Action<StreamedLine>? print = null;
@@ -254,6 +336,7 @@ public class WizardCompositionLocalPathTests {
 
             await graph.Steps.OfType<EditionStepViewModel>().Single().ChooseLocalCommand.Execute().ToTask();
             await graph.ViewModel.PendingAdvanceForTesting;
+            await graph.ViewModel.NextCommand.Execute().ToTask();
             var during = await finishLater.CanExecute.FirstAsync();
 
             print!(new StreamedLine(ProcessStreamKind.Stdout, LocalSetupScript.Committed));
@@ -264,10 +347,12 @@ public class WizardCompositionLocalPathTests {
             // delivered to the UI thread afterwards, so a direct read can still see the disabled value.
             await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
 
-            return (before, during, await finishLater.CanExecute.FirstAsync());
+            // ReactiveCommand publishes CanExecute on its scheduler after the install settles.
+            // Wait for that notification rather than reading the cached busy value.
+            return (before, during, await finishLater.CanExecute.FirstAsync(enabled => enabled));
         }).WaitAsync(TimeSpan.FromSeconds(30));
 
-        await Assert.That(before).IsTrue();
+        await Assert.That(before).IsFalse();
         await Assert.That(during).IsFalse();
         await Assert.That(after).IsTrue();
     }

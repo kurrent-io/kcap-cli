@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Capacitor.App.Services.LocalSetup;
+using Capacitor.App.Services.Mutation;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 
@@ -76,18 +78,27 @@ public interface IKcapCli {
     /// flagless Claude default.
     Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct, IReadOnlyList<string>? options = null);
 
+    /// <c>accounts add|remove|rename|rewire … --json</c>, which prints one AccountActionResultDto line.
+    /// No server overlay: the account verbs touch nothing on the server.
+    Task<ProcessResult> AccountsAsync(MutationVerb verb, AccountArgs args, CancellationToken ct);
+
     /// `import` with scope/vendor flags, streamed live via onLine — unbounded internal timeout
     /// (imports are long; ct cancellation is the only bound).
     Task<StreamingResult> ImportAsync(ImportRequest request, Action<StreamedLine> onLine, CancellationToken ct);
 
-    /// `setup --local --json --single-user --yes`, streamed live via onLine. No internal timeout:
-    /// <paramref name="ct"/> bounds only the work before the spawn; once running, the child stops only
-    /// through <paramref name="interrupt"/>, which lets the CLI roll back before a tree kill.
-    Task<StreamingResult> SetupLocalAsync(Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct);
+    /// `setup --local --json --single-user --yes` and the embedding choice's flag, streamed live via onLine. No
+    /// internal timeout: <paramref name="ct"/> bounds only the work before the spawn; once running, the child stops
+    /// only through <paramref name="interrupt"/>, which lets the CLI roll back before a tree kill.
+    Task<StreamingResult> SetupLocalAsync(
+        LocalEmbeddingChoice embeddings, Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct);
 
     /// `local upgrade --json --no-update-check`, streamed live via onLine, with the same cancellation
     /// contract as <see cref="SetupLocalAsync"/>.
     Task<StreamingResult> LocalUpgradeAsync(Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct);
+
+    /// `uninstall --yes --force --keep-path-links` (and `--purge-local`), streamed live via onLine. No internal
+    /// timeout; <paramref name="ct"/> bounds only the work before the spawn, so a running uninstall is never killed.
+    Task<StreamingResult> UninstallAsync(bool purgeLocal, Action<StreamedLine> onLine, CancellationToken ct);
 
     /// `local start`, bounded above the CLI's own readiness budget.
     Task<ProcessResult> LocalStartAsync(CancellationToken ct);
@@ -251,6 +262,23 @@ public sealed class KcapCli : IKcapCli {
             new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: MutationTimeout), ct).ConfigureAwait(false);
     }
 
+    public async Task<ProcessResult> AccountsAsync(MutationVerb verb, AccountArgs args, CancellationToken ct) {
+        string[] argv = verb switch {
+            MutationVerb.AccountAdd    => ["accounts", "add", Required(args.Vendor), Required(args.Directory), "--json"],
+            MutationVerb.AccountRemove => ["accounts", "remove", Required(args.AccountId), "--json"],
+            MutationVerb.AccountRename => ["accounts", "rename", Required(args.AccountId), Required(args.Label), "--json"],
+            MutationVerb.AccountRewire => args.AccountId is { } id ? ["accounts", "rewire", id, "--json"] : ["accounts", "rewire", "--json"],
+            _                          => throw new ArgumentOutOfRangeException(nameof(verb), verb, "not an account verb"),
+        };
+        if (CliPath is not { } cliPath) return await NoCliResult().ConfigureAwait(false);
+
+        return await Run(cliPath, argv,
+            new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: MutationTimeout), ct).ConfigureAwait(false);
+
+        static string Required(string? value) =>
+            value ?? throw new ArgumentException("The account verb is missing one of its arguments.", nameof(args));
+    }
+
     public async Task<StreamingResult> ImportAsync(ImportRequest request, Action<StreamedLine> onLine, CancellationToken ct) {
         if (CliPath is not { } cliPath)
             return new StreamingResult(-1, false, [new StreamedLine(ProcessStreamKind.Stderr, "kcap CLI not found")]);
@@ -284,11 +312,12 @@ public sealed class KcapCli : IKcapCli {
             new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false)), onLine, ct).ConfigureAwait(false);
     }
 
-    public async Task<StreamingResult> SetupLocalAsync(Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct) {
+    public async Task<StreamingResult> SetupLocalAsync(
+            LocalEmbeddingChoice embeddings, Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct) {
         if (CliPath is not { } cliPath)
             return new StreamingResult(-1, false, [new StreamedLine(ProcessStreamKind.Stderr, "kcap CLI not found")]);
 
-        return await _runner.RunStreamingAsync(cliPath, ["setup", "--local", "--json", "--single-user", "--yes"],
+        return await _runner.RunStreamingAsync(cliPath, ["setup", "--local", "--json", "--single-user", "--yes", .. embeddings.Args],
             new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Interrupt: interrupt, InterruptGrace: SetupInterruptGrace),
             onLine, CancellationToken.None).ConfigureAwait(false);
     }
@@ -300,6 +329,18 @@ public sealed class KcapCli : IKcapCli {
         return await _runner.RunStreamingAsync(cliPath, ["local", "upgrade", "--json", "--no-update-check"],
             new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Interrupt: interrupt, InterruptGrace: UpgradeInterruptGrace),
             onLine, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    public async Task<StreamingResult> UninstallAsync(bool purgeLocal, Action<StreamedLine> onLine, CancellationToken ct) {
+        if (CliPath is not { } cliPath)
+            return new StreamingResult(-1, false, [new StreamedLine(ProcessStreamKind.Stderr, "kcap CLI not found")]);
+
+        string[] args = purgeLocal
+            ? ["uninstall", "--yes", "--force", "--keep-path-links", "--purge-local"]
+            : ["uninstall", "--yes", "--force", "--keep-path-links"];
+
+        return await _runner.RunStreamingAsync(cliPath, args,
+            new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false)), onLine, CancellationToken.None).ConfigureAwait(false);
     }
 
     public async Task<ProcessResult> LocalStartAsync(CancellationToken ct) {

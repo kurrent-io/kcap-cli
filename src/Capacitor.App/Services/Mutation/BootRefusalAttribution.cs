@@ -9,7 +9,7 @@ namespace Capacitor.App.Services.Mutation;
 ///
 /// <para>For DETACHED starts the mutation lane is the marker's single consumer — attribution requires
 /// the lane's own attempt GUID, never a foreign one. That makes this the DUAL of
-/// <c>LaunchdServiceVerify.Attributable</c>, which claims service-unit refusals and so requires the ABSENCE
+/// <c>ServiceVerify.Attributable</c>, which claims service-unit refusals and so requires the ABSENCE
 /// of an attempt id: a marker satisfies at most one of the two.</para>
 /// </summary>
 public static class BootRefusalAttribution {

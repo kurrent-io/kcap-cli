@@ -26,11 +26,8 @@ sealed class SystemdServiceManager(
     }
 
     public ServiceStatus Status(string serviceId) {
-        var path = SystemdUnit.UnitPath(home, serviceId);
-        if (!File.Exists(path)) return new ServiceStatus(ServiceState.NotInstalled, null);
-        var (_, active, _)      = ServiceProcess.Run("systemctl", SystemdUnit.IsActiveArgs(serviceId));
-        var (enabledExit, _, _) = ServiceProcess.Run("systemctl", SystemdUnit.IsEnabledArgs(serviceId));
-        return new ServiceStatus(SystemdUnit.StatusFrom(active, enabledExit), UnitBinary(serviceId));
+        var query = Query(serviceId);
+        return query.UnitPresent ? new ServiceStatus(query.State, query.BinaryPath) : new ServiceStatus(ServiceState.NotInstalled, null);
     }
 
     public string? UnitBinary(string serviceId) {
@@ -42,13 +39,23 @@ sealed class SystemdServiceManager(
         }
     }
 
-    /// <summary>The state comes from systemctl alone, so an unreadable unit file costs only the binary path:
-    /// <see cref="Uninstall"/> runs this after a failed disable and must get an answer, not an exception.</summary>
+    public IReadOnlyDictionary<string, string>? UnitEnvironment(string serviceId) {
+        var path = SystemdUnit.UnitPath(home, serviceId);
+        return File.Exists(path) ? SystemdUnit.EnvFromUnit(File.ReadAllText(path)) : null;
+    }
+
     public ServiceQuery Query(string serviceId) {
-        var unitPresent = File.Exists(SystemdUnit.UnitPath(home, serviceId));
-        var bin = unitPresent ? UnitBinary(serviceId) : null;
-        var (exit, output, _) = _runProcess("systemctl", SystemdUnit.ShowStateArgs(serviceId));
-        return SystemdUnit.QueryFromShow(exit, output, unitPresent, bin);
+        var path = SystemdUnit.UnitPath(home, serviceId);
+        var unitPresent = File.Exists(path);
+        var (_, active, _)      = _runProcess("systemctl", SystemdUnit.IsActiveArgs(serviceId));
+        var (enabledExit, _, _) = _runProcess("systemctl", SystemdUnit.IsEnabledArgs(serviceId));
+        var bin = unitPresent ? SystemdUnit.BinaryFromUnit(File.ReadAllText(path)) : null;
+        var state = SystemdUnit.StatusFrom(active, enabledExit);
+        var probe = state != ServiceState.NotInstalled ? LabelProbe.Loaded : LabelProbe.Absent;
+        var jobPid = state == ServiceState.Running
+            ? SystemdUnit.MainPid(_runProcess("systemctl", SystemdUnit.MainPidArgs(serviceId)).StdOut)
+            : null;
+        return new ServiceQuery(probe, unitPresent, state, bin, jobPid);
     }
 
     /// <summary>The unit-writing half of <see cref="Install"/>, split out so it is testable without
@@ -85,10 +92,43 @@ sealed class SystemdServiceManager(
         return true;
     }
 
+    /// <summary>Sets one variable in the unit and reloads systemd's copy; the daemon reads it on its next
+    /// start. Returns the unit as it was, for <see cref="RestoreUnit"/>; null when the unit is absent or
+    /// already carries the value. A line it cannot rewrite safely throws, and a refused reload puts the
+    /// previous unit back before throwing.</summary>
+    public string? SetEnvironment(string serviceId, string key, string value) {
+        var path = SystemdUnit.UnitPath(home, serviceId);
+        if (!File.Exists(path)) return null;
+
+        var previous = File.ReadAllText(path);
+        if (SystemdUnit.EnvFromUnit(previous).TryGetValue(key, out var current) && current == value) return null;
+        if (SystemdUnit.WithEnvironmentValue(previous, key, value) is not { } rewritten)
+            throw new InvalidOperationException($"its {key} line is not one kcap wrote, so it was left unchanged");
+
+        _writeUnit(path, rewritten, null);
+        try {
+            Reload();
+        } catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception
+                                          or IOException or UnauthorizedAccessException) {
+            _writeUnit(path, previous, null);
+            try {
+                Systemctl(SystemdUnit.DaemonReloadArgs());
+            } catch (Exception again) when (again is System.ComponentModel.Win32Exception or IOException) {
+                // The reload that failed is the one to report.
+            }
+            throw;
+        }
+
+        return previous;
+    }
+
+    public void RestoreUnit(string serviceId, string unitText) {
+        _writeUnit(SystemdUnit.UnitPath(home, serviceId), unitText, null);
+        Reload();
+    }
+
     void Reload() {
-        var (exit, _, err) = _runProcess("systemctl", SystemdUnit.DaemonReloadArgs());
-        if (exit != 0)
-            throw new InvalidOperationException($"systemctl --user daemon-reload exited {exit}{(string.IsNullOrWhiteSpace(err) ? "" : $": {err.Trim()}")}");
+        if (Systemctl(SystemdUnit.DaemonReloadArgs()) is { } error) throw new InvalidOperationException(error);
     }
 
     /// <summary>A refused reload or enable puts the previous unit file back, so a failed install leaves
@@ -121,24 +161,15 @@ sealed class SystemdServiceManager(
         if (!Install(spec, startNow: true, out var error)) throw new InvalidOperationException(error);
     }
 
-    /// <summary>A failed disable keeps the unit unless a query proves its daemon stopped, so a rollback never
-    /// reports a removal that left the process behind.</summary>
     public bool Uninstall(string serviceId, out string? error) {
-        if (Systemctl(SystemdUnit.DisableNowArgs(serviceId)) is { } disableError
-         && Query(serviceId) is not { Probe: LabelProbe.Loaded or LabelProbe.Absent, State: not ServiceState.Running }) {
-            error = $"{disableError}; the daemon may still be running, so its unit was kept";
-            return false;
-        }
-
         var path = SystemdUnit.UnitPath(home, serviceId);
-        try {
-            if (File.Exists(path)) File.Delete(path);
-        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
-            error = $"could not remove {path}: {ex.Message}";
+        if (Systemctl(SystemdUnit.DisableNowArgs(serviceId)) is { } disableError
+            && _runProcess("systemctl", SystemdUnit.IsActiveArgs(serviceId)).StdOut.Trim() is not ("inactive" or "failed")) {
+            error = $"{disableError} — unit file retained: {path}";
             return false;
         }
-
-        Systemctl(SystemdUnit.DaemonReloadArgs());
+        if (File.Exists(path)) File.Delete(path);
+        _runProcess("systemctl", SystemdUnit.DaemonReloadArgs());
         error = null;
         return true;
     }

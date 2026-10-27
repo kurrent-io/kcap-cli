@@ -12,6 +12,7 @@ public static class CanonicalEventTime {
         AssistantToolCallsGenerated p => p.Timestamp?.ToDateTimeOffset(),
         ToolResultReceived p          => p.Timestamp?.ToDateTimeOffset(),
         SubagentCompleted p           => p.Timestamp?.ToDateTimeOffset(),
+        SubagentStarted p             => p.Timestamp?.ToDateTimeOffset(),
         _                             => null,
     };
 }

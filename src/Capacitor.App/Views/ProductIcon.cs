@@ -8,8 +8,8 @@ namespace Capacitor.App.Views;
 /// with heavier strokes; the windows built in code take WindowIcon. XAML windows name the same
 /// avares:// URI directly.
 static class ProductIcon {
-    const string AssetUri = "avares://Kurrent Capacitor/Assets/kcap-icon.png";
-    const string TrayAssetUri = "avares://Kurrent Capacitor/Assets/kcap-tray-icon.png";
+    const string AssetUri = "avares://kcap-desktop/Assets/kcap-icon.png";
+    const string TrayAssetUri = "avares://kcap-desktop/Assets/kcap-tray-icon.png";
 
     static readonly Lazy<Bitmap> LazyBitmap = new(() => Load(AssetUri));
     static readonly Lazy<Bitmap> LazyTrayBitmap = new(() => Load(TrayAssetUri));

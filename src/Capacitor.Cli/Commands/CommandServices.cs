@@ -55,6 +55,8 @@ public static class CommandServices {
             sp.GetRequiredService<UserHome>(), sp.GetRequiredService<BinaryProbe>()));
         services.AddSingleton(sp => LegacySkillsRoots.FromEnvironment(sp.GetRequiredService<UserHome>()));
         services.AddSingleton(sp => AccountStore.Beside(sp.GetRequiredService<DaemonStore>()));
+        // Transient, so each command reads the console as it stands when it is built.
+        services.AddTransient(_ => StandardStreams.FromProcess());
         services.AddSingleton(sp => PluginEnvironment.FromProcess(
                 sp.GetRequiredService<ProfileContext>().Snapshot,
                 sp.GetRequiredService<UserHome>(),
@@ -98,11 +100,13 @@ public static class CommandServices {
         services.AddTransient<AgentCommand>();
         services.AddTransient<CleanupCommand>();
         services.AddTransient<ConfigCommand>();
+        services.AddTransient<ExperimentalCommand>();
         services.AddTransient<CurateCommand>();
         services.AddTransient<MemoriesCommand>();
         services.AddTransient<ArtefactCommand>();
         services.AddTransient<DaemonCommands>();
         services.AddTransient<ErrorsCommand>();
+        services.AddTransient<SetTitleCommand>();
         services.AddTransient<EvalCommand>();
         services.AddTransient<FeedbackCommand>();
         services.AddTransient<HarnessCommand>();
@@ -155,6 +159,7 @@ public static class CommandServices {
         services.AddTransient<McpKnowledgeServer>();
         services.AddTransient<McpReviewServer>();
         services.AddTransient<McpJudgeServer>();
+        services.AddSingleton(sp => new KcapLinkRemover(KcapLinkFolders.For(sp.GetRequiredService<UserHome>()), Environment.ProcessPath ?? ""));
         services.AddTransient<UninstallCommand>();
         services.AddTransient<UpdateCommand>();
         services.AddTransient<RefreshCommand>();

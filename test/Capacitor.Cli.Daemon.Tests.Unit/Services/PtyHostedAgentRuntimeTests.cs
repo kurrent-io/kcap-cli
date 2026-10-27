@@ -1,6 +1,8 @@
 using System.Runtime.CompilerServices;
 using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Services;
+using Capacitor.Cli.Daemon.Tests.Unit.Pty;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
@@ -8,6 +10,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 public class PtyHostedAgentRuntimeTests {
     // Records every write so we can assert the split-write ordering.
     sealed class RecordingPty : IPtyProcess {
+        public Queue<byte[]> Output { get; } = new();
         public List<string> StringWrites { get; } = [];
         public List<byte[]>  ByteWrites   { get; } = [];
         public (ushort Cols, ushort Rows)? LastResize { get; private set; }
@@ -22,7 +25,7 @@ public class PtyHostedAgentRuntimeTests {
 
 #pragma warning disable CS1998
         public async IAsyncEnumerable<byte[]> ReadOutputAsync([EnumeratorCancellation] CancellationToken ct = default) {
-            yield break;
+            while (Output.TryDequeue(out var bytes)) yield return bytes;
         }
 #pragma warning restore CS1998
 
@@ -85,6 +88,33 @@ public class PtyHostedAgentRuntimeTests {
         await runtime.SendSpecialKeyAsync("definitely-not-a-key");
 
         await Assert.That(pty.ByteWrites.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    [Arguments(9)]
+    [Arguments(1000)]
+    [Arguments(1002)]
+    [Arguments(1003)]
+    public async Task Wheel_reports_are_dropped_after_the_source_disables_mouse_tracking(int mode) {
+        var pty = new RecordingPty();
+        await using var runtime = new PtyHostedAgentRuntime("claude", pty, TimeProvider.System);
+        var report = "\x1b[<64;10;5M"u8.ToArray();
+        Capacitor.Remote.Models.TerminalScrollKey.TryCreate(report, out var key);
+        await runtime.SendSpecialKeyAsync(key);
+        await Assert.That(pty.ByteWrites).IsEmpty();
+
+        pty.Output.Enqueue(System.Text.Encoding.UTF8.GetBytes($"\x1b[?{mode}"));
+        pty.Output.Enqueue("h"u8.ToArray());
+        await foreach (var _ in runtime.ReadOutputAsync()) { }
+        await runtime.SendSpecialKeyAsync(key);
+        await Assert.That(pty.ByteWrites.Single()).IsEquivalentTo(report);
+
+        pty.Output.Enqueue(System.Text.Encoding.UTF8.GetBytes($"\x1b[?{mode}l"));
+        await foreach (var _ in runtime.ReadOutputAsync()) { }
+        await runtime.SendSpecialKeyAsync(key);
+        await runtime.SendSpecialKeyAsync("Enter");
+        await Assert.That(pty.ByteWrites.Count).IsEqualTo(2);
+        await Assert.That(pty.ByteWrites[^1]).IsEquivalentTo(new byte[] { 0x0d });
     }
 
     [Test]
@@ -159,6 +189,184 @@ public class PtyHostedAgentRuntimeTests {
         await Assert.That(pty.StringWrites.Count).IsEqualTo(2);   // paste + exactly one CR
         await Assert.That(pty.StringWrites[0]).IsEqualTo("\x1b[200~hello\x1b[201~");
         await Assert.That(pty.StringWrites[1]).IsEqualTo("\r");
+    }
+
+    static Task PumpAsync(PtyHostedAgentRuntime runtime) =>
+        Task.Run(async () => { await foreach (var _ in runtime.ReadOutputAsync()) { } });
+
+    /// <summary>Advances the fake clock in slices, yielding between them so timer continuations
+    /// run, until <paramref name="done"/> or the span is used up.</summary>
+    static async Task StepAsync(FakeTimeProvider time, TimeSpan span, Func<bool> done) {
+        var step = TimeSpan.FromMilliseconds(250);
+
+        for (var advanced = TimeSpan.Zero; advanced <= span + span / 2 && !done(); advanced += step) {
+            time.Advance(step);
+            await Task.Delay(10);
+        }
+
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (!done() && DateTime.UtcNow < deadline) await Task.Delay(10);
+    }
+
+    /// <summary>The launch prompt owns the input lane from the start, so a message the user sends
+    /// while the TUI is still starting lands after it, never before.</summary>
+    [Test]
+    public async Task Launch_prompt_lands_before_a_follow_up_sent_during_startup() {
+        var pty     = new RecordingScriptedPtyProcess();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, TimeProvider.System, approvalsDisabled: false);
+
+        runtime.DeliverLaunchPrompt("build it");
+        var followUp = runtime.SendUserInputAsync("and test it");
+        _ = PumpAsync(runtime);
+        pty.Emit("banner");
+
+        await followUp.WaitAsync(TimeSpan.FromSeconds(10));
+
+        await Assert.That(string.Join("|", pty.Writes))
+            .IsEqualTo("\x1b[200~build it\x1b[201~|\r|\x1b[200~and test it\x1b[201~|\r");
+        pty.Exit();
+    }
+
+    /// <summary>Output that keeps coming, such as a startup spinner, postpones the paste until it stops.</summary>
+    [Test]
+    public async Task Launch_prompt_waits_until_startup_output_stops() {
+        var time    = new FakeTimeProvider();
+        var pty     = new RecordingScriptedPtyProcess();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, time, approvalsDisabled: false);
+
+        runtime.DeliverLaunchPrompt("build it");
+        _ = PumpAsync(runtime);
+        pty.Emit("spinner");
+        await Task.Delay(100);
+
+        time.Advance(TimeSpan.FromMilliseconds(300));
+        await Task.Delay(50);
+        pty.Emit("spinner");
+        await Task.Delay(100);
+        time.Advance(TimeSpan.FromMilliseconds(300));
+        await Task.Delay(100);
+
+        await Assert.That(pty.Writes).IsEmpty();
+
+        await StepAsync(time, PtyHostedAgentRuntime.LaunchPromptQuietWindow, () => pty.Writes.Count >= 1);
+
+        await Assert.That(pty.Writes[0]).IsEqualTo("\x1b[200~build it\x1b[201~");
+        pty.Exit();
+    }
+
+    /// <summary>A TUI that never settles still gets its prompt once the startup wait expires.</summary>
+    [Test]
+    public async Task Launch_prompt_is_pasted_when_the_startup_wait_expires_without_output() {
+        var time    = new FakeTimeProvider();
+        var pty     = new RecordingScriptedPtyProcess();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, time, approvalsDisabled: false);
+
+        runtime.DeliverLaunchPrompt("build it");
+        await StepAsync(time, PtyHostedAgentRuntime.LaunchPromptMaxWait, () => pty.Writes.Count >= 1);
+
+        await Assert.That(pty.Writes[0]).IsEqualTo("\x1b[200~build it\x1b[201~");
+        await StepAsync(time, PtyHostedAgentRuntime.SingleSubmitDelay, () => runtime.LaunchPromptDelivery!.IsCompleted);
+        await Assert.That(await runtime.LaunchPromptDelivery!).IsEqualTo(LaunchPromptOutcome.DeliveredAfterMaxWait);
+        pty.Exit();
+    }
+
+    /// <summary>An agent that is already gone gets nothing pasted, and the lane is released for
+    /// whoever asks next.</summary>
+    [Test]
+    public async Task Launch_prompt_is_dropped_when_the_agent_exited_before_startup_settled() {
+        var pty     = new RecordingScriptedPtyProcess();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, TimeProvider.System, approvalsDisabled: false);
+        pty.Exit();
+
+        runtime.DeliverLaunchPrompt("build it");
+        var outcome = await runtime.LaunchPromptDelivery!.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await Assert.That(outcome).IsEqualTo(LaunchPromptOutcome.AgentExited);
+        await Assert.That(pty.Writes).IsEmpty();
+        await runtime.SendUserInputAsync("later").WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    /// <summary>A viewer's keystrokes must reach the TUI while the launch prompt is still waiting for
+    /// startup to settle: that is how a human dismisses a dialog the paste would otherwise answer.</summary>
+    [Test]
+    public async Task Raw_input_during_startup_is_not_held_behind_the_launch_prompt() {
+        var pty     = new RecordingScriptedPtyProcess();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, TimeProvider.System, approvalsDisabled: false);
+
+        runtime.DeliverLaunchPrompt("build it");
+        await runtime.SendRawInputAsync([0x1b]).WaitAsync(TimeSpan.FromSeconds(2));
+
+        await Assert.That(string.Join("|", pty.Writes)).IsEqualTo("\x1b");
+        pty.Exit();
+    }
+
+    /// <summary>A graceful stop during the startup wait withdraws the prompt: pasting it after the
+    /// stop's "/exit" would start a turn the stop just asked to end.</summary>
+    [Test]
+    public async Task Launch_prompt_is_dropped_when_a_graceful_stop_is_requested_during_startup() {
+        var pty     = new RecordingScriptedPtyProcess();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, TimeProvider.System, approvalsDisabled: false);
+
+        runtime.DeliverLaunchPrompt("build it");
+        await runtime.RequestGracefulStopAsync();
+        var outcome = await runtime.LaunchPromptDelivery!.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await Assert.That(outcome).IsEqualTo(LaunchPromptOutcome.StopRequested);
+        await Assert.That(string.Join("|", pty.Writes)).IsEqualTo("/exit|\r");
+        pty.Exit();
+    }
+
+    /// <summary>Text carrying the paste-end sequence, such as captured terminal output, must not end
+    /// the paste early and turn the rest into keystrokes.</summary>
+    [Test]
+    public async Task An_embedded_paste_end_marker_cannot_end_a_follow_up_paste_early() {
+        var pty     = new RecordingPty();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, TimeProvider.System, approvalsDisabled: false);
+
+        await runtime.SendUserInputAsync("one\x1b[201~\rtwo\x1b[200~three");
+
+        await Assert.That(pty.StringWrites[0]).IsEqualTo("\x1b[200~one[201~\rtwo[200~three\x1b[201~");
+    }
+
+    /// <summary>Dropping only the marker's own ESC would let the ESC before it form a new marker.</summary>
+    [Test]
+    public async Task An_escape_before_a_paste_end_marker_cannot_form_a_new_marker() {
+        var pty     = new RecordingPty();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, TimeProvider.System, approvalsDisabled: false);
+
+        await runtime.SendUserInputAsync("one\x1b\x1b[201~\rtwo");
+
+        await Assert.That(pty.StringWrites[0]).IsEqualTo("\x1b[200~one[201~\rtwo\x1b[201~");
+    }
+
+    [Test]
+    public async Task An_embedded_paste_end_marker_cannot_end_the_launch_prompt_paste_early() {
+        var pty     = new RecordingScriptedPtyProcess();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, TimeProvider.System, approvalsDisabled: false);
+
+        runtime.DeliverLaunchPrompt("one\x1b[201~\rtwo");
+        _ = PumpAsync(runtime);
+        pty.Emit("banner");
+        var outcome = await runtime.LaunchPromptDelivery!.WaitAsync(TimeSpan.FromSeconds(10));
+
+        await Assert.That(outcome).IsEqualTo(LaunchPromptOutcome.Delivered);
+        await Assert.That(pty.Writes[0]).IsEqualTo("\x1b[200~one[201~\rtwo\x1b[201~");
+        pty.Exit();
+    }
+
+    /// <summary>Disposal during the startup wait abandons the prompt without faulting the delivery.</summary>
+    [Test]
+    public async Task Launch_prompt_delivery_ends_quietly_when_the_runtime_is_disposed_during_startup() {
+        var pty     = new RecordingScriptedPtyProcess();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, TimeProvider.System, approvalsDisabled: false);
+
+        runtime.DeliverLaunchPrompt("build it");
+        await runtime.DisposeAsync();
+
+        var outcome = await runtime.LaunchPromptDelivery!.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await Assert.That(outcome).IsEqualTo(LaunchPromptOutcome.Cancelled);
+        await Assert.That(pty.Writes).IsEmpty();
     }
 
     /// <summary>The graceful stop reaches its "/exit" write while a delivery is parked mid-write —

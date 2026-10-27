@@ -2,6 +2,7 @@ using System.Runtime.Versioning;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Harness.Antigravity;
+using Capacitor.Cli.Daemon.Harness.Codex;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -293,7 +294,7 @@ public class DaemonRunnerAntigravityFloorTests {
         using var stubDir = StubAgy("1.1.10", out var stub);
 
         var capabilities = DaemonRunner.ComputeUnattendedVendorCapabilities(
-            [new FakeFactory("antigravity", advertised: true, cliPath: stub)], Config(),
+            [new FakeFactory("antigravity", advertised: true, cliPath: stub)], Config(), CodexTransportResolution.Unresolved,
             advertised: ["antigravity"]);
 
         var antigravity = capabilities.Single();
@@ -315,7 +316,7 @@ public class DaemonRunnerAntigravityFloorTests {
         using var stubDir = StubAgy("0.56.0", out var stub);
 
         var capabilities = DaemonRunner.ComputeUnattendedVendorCapabilities(
-            [new FakeFactory("gemini", advertised: true, cliPath: stub)], Config(), advertised: ["gemini"]);
+            [new FakeFactory("gemini", advertised: true, cliPath: stub)], Config(), CodexTransportResolution.Unresolved, advertised: ["gemini"]);
 
         var gemini = capabilities.Single();
 

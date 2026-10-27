@@ -11,6 +11,7 @@ public sealed record LocalFrame(FrameType Type) {
     public ushort       Rows     { get; init; }
     public WorkLocation Work     { get; init; }
     public int          ExitCode { get; init; }
+    public DateTimeOffset StartedAt { get; init; }
 
     public static LocalFrame Stdin(byte[] b)            => new(FrameType.Stdin)  { Bytes = b };
     public static LocalFrame Stdout(byte[] b)           => new(FrameType.Stdout) { Bytes = b };
@@ -18,6 +19,8 @@ public sealed record LocalFrame(FrameType Type) {
     public static LocalFrame Detach()                   => new(FrameType.Detach);
     public static LocalFrame Exited(int code)           => new(FrameType.Exited) { ExitCode = code };
     public static LocalFrame Error(string m)            => new(FrameType.Error)  { Text = m };
+    public static LocalFrame RuntimeStarted(DateTimeOffset at) => new(FrameType.RuntimeStarted) { StartedAt = at };
+    public static LocalFrame AccountsSubscribe()        => new(FrameType.AccountsSubscribe);
 
     /// <summary>The refusal for an id the daemon is not running; an attach to a resuming agent retries on
     /// this text and on no other.</summary>
@@ -30,6 +33,8 @@ public sealed record LocalFrame(FrameType Type) {
     public static LocalFrame ShutdownAck(string status) => new(FrameType.ShutdownAck)          { Text = status };
     public static LocalFrame AgentResume(string agentId) => new(FrameType.AgentResume)         { Text = agentId };
     public static LocalFrame AgentResumeAck(string status) => new(FrameType.AgentResumeAck)    { Text = status };
+    public static LocalFrame AgentSession(string agentId) => new(FrameType.AgentSession)       { Text = agentId };
+    public static LocalFrame AgentSessionReply(string? sessionId) => new(FrameType.AgentSessionReply) { Text = sessionId ?? "" };
     public static LocalFrame Stop(string agentId)      => new(FrameType.Stop)       { Text = agentId };
     public static LocalFrame StopAck(string payload)    => new(FrameType.StopAck)    { Text = payload };
     public static LocalFrame StopV2(bool force, string agentId) => FrameCodec.StopV2(force, agentId);

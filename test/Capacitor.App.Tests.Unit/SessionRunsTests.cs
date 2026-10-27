@@ -29,6 +29,8 @@ public class SessionRunsTests {
 
     static RunRow Only(SessionRuns s) => s.Rows.Single();
 
+    static RunSignal.Identified Identified(string? callId, string agentId) => new(callId, agentId);
+
     static RunSignal.Started Shell(string callId, DateTimeOffset? at = null) =>
         new(callId, "Run the full suite", "dotnet test", at ?? T0, RunKind.Shell, Provisional: true);
 
@@ -45,6 +47,20 @@ public class SessionRunsTests {
         s.Apply(Signals(Detached("c1", "b1")));
         await Assert.That(s.Rows).IsEmpty();
         await Assert.That(changes).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task A_batch_that_starts_and_finishes_a_command_never_reports_it_running() {
+        var s = new SessionRuns(Clock());
+        var seen = new List<int>();
+        s.Changed += () => seen.Add(s.RunningCommandCount);
+        s.ApplyAll([
+            Signals(Shell("c1")),
+            Mixed([new AcpEventEnvelope(Kind: AcpEventKind.ToolResult, ToolCallId: "c1")], Detached("c1", "b1")),
+            Signals(Finished("c1", "b1")),
+        ]);
+        await Assert.That(seen).IsEquivalentTo([0]);
+        await Assert.That(Only(s).State).IsEqualTo(RunState.Done);
     }
 
     [Test]
@@ -180,6 +196,47 @@ public class SessionRunsTests {
         await Assert.That(s.Rows[1].State).IsEqualTo(RunState.Failed);
         await Assert.That(s.Rows[1].StateText).IsEqualTo("failed · 1m 02s");
         await Assert.That(s.RunningCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task A_start_record_row_is_named_and_ended_by_its_agent() {
+        var s     = new SessionRuns(Clock());
+        var start = Signals([.. TranscriptChat.SubagentStart("a1", "explorer", T0, rules: null)]);
+        s.Apply(start);
+        s.Apply(start);
+
+        await Assert.That(Only(s).AgentId).IsEqualTo("a1");
+        await Assert.That(Only(s).CanOpen).IsTrue();
+        await Assert.That(s.RunningCount).IsEqualTo(1);
+
+        s.Apply(Signals(Finished(null, "a1", outcome: null, at: T0.AddSeconds(62))));
+        await Assert.That(Only(s).State).IsEqualTo(RunState.Done);
+        await Assert.That(s.RunningCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task A_second_start_for_the_same_agent_is_its_own_row() {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals([.. TranscriptChat.SubagentStart("a1", "explorer", T0, rules: null)]));
+        s.Apply(Signals(Finished(null, "a1", outcome: null, at: T0.AddMinutes(1))));
+        s.Apply(Signals([.. TranscriptChat.SubagentStart("a1", "explorer", T0.AddMinutes(5), rules: null)]));
+
+        await Assert.That(s.Rows.Count).IsEqualTo(2);
+        await Assert.That(s.RunningCount).IsEqualTo(1);
+
+        s.Apply(Signals(Finished(null, "a1", outcome: null, at: T0.AddMinutes(6))));
+        await Assert.That(s.RunningCount).IsEqualTo(0);
+    }
+
+    /// A lane that cannot read a subagent's transcript must not offer a row that opens nothing.
+    [Test]
+    public async Task A_row_offers_to_open_only_where_the_lane_can_open_it() {
+        var s = new SessionRuns(Clock()) { OpensSubagents = false };
+        s.Apply(Signals([.. TranscriptChat.SubagentStart("a1", "explorer", T0, rules: null)]));
+        await Assert.That(Only(s).CanOpen).IsFalse();
+
+        s.OpensSubagents = true;
+        await Assert.That(Only(s).CanOpen).IsTrue();
     }
 
     [Test]
@@ -569,5 +626,124 @@ public class SessionRunsTests {
         await Assert.That(s.RunningCount).IsEqualTo(1);
         await Assert.That(s.RunningCommandCount).IsEqualTo(0);
         await Assert.That(changes).IsEqualTo(1);
+    }
+
+    /// A start with no call names a subagent only when it is the one running subagent still unnamed: with
+    /// two, the records' order says nothing about which is which. A command row is never named.
+    [Test]
+    public async Task A_start_with_no_call_names_only_a_lone_unnamed_subagent() {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals(Started("c1"), Started("c2", T0.AddSeconds(1)), Shell("c4")));
+        s.Apply(Signals(Detached("c4", "b4"), Identified(null, "a1")));
+        await Assert.That(s.Rows.All(row => !row.CanOpen)).IsTrue();
+
+        s.Apply(Signals(Identified("c2", "a2"), Identified(null, "a1")));
+
+        await Assert.That(string.Join(",", s.Rows.Select(row => row.AgentId ?? "-"))).IsEqualTo("a1,a2,-");
+        await Assert.That(string.Join(",", s.Rows.Select(row => row.CanOpen))).IsEqualTo("True,True,False");
+    }
+
+    /// A detach names its own row by its own id, which leaves the held id's owner as the one candidate left.
+    [Test]
+    public async Task A_held_id_pairs_once_a_detach_names_the_other_candidate() {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals(Started("c1"), Started("c2", T0.AddSeconds(1)), Identified(null, "a1")));
+
+        s.Apply(Signals(Detached("c2", "b2")));
+
+        await Assert.That(string.Join(",", s.Rows.Select(row => row.AgentId ?? "-"))).IsEqualTo("a1,b2");
+    }
+
+    /// A candidate that ends could have owned a held id, so the id is dropped rather than placed on the one left;
+    /// a fresh id then pairs with it.
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task A_held_id_is_dropped_when_a_candidate_ends(bool byResult) {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals(Started("c1"), Started("c2", T0.AddSeconds(1)), Identified(null, "a1")));
+
+        s.Apply(byResult ? Result("c1", isError: true) : Signals(Finished("c1", null)));
+        await Assert.That(s.Rows[1].AgentId).IsNull();
+
+        s.Apply(Signals(Identified(null, "a2")));
+        await Assert.That(s.Rows[1].AgentId).IsEqualTo("a2");
+    }
+
+    /// The drop happens at the end itself, so a later signal in the same projection cannot pair the held id first —
+    /// whether the id was held before the projection or within it.
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task A_held_id_is_dropped_before_a_later_signal_in_the_same_projection_pairs_it(bool heldWithin) {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals(Started("c1"), Started("c2", T0.AddSeconds(1)), Started("c3", T0.AddSeconds(2))));
+        if (!heldWithin) s.Apply(Signals(Identified(null, "a1")));
+
+        s.Apply(heldWithin
+            ? Signals(Identified(null, "a1"), Finished("c1", null), Identified("c3", "a3"))
+            : Signals(Finished("c1", null), Identified("c3", "a3")));
+
+        await Assert.That(s.Rows[1].AgentId).IsNull();
+        await Assert.That(s.Rows[2].AgentId).IsEqualTo("a3");
+    }
+
+    /// The call's own id outranks a paired guess, and the agent's end then finds the right row.
+    [Test]
+    public async Task An_id_by_call_replaces_a_paired_guess_and_its_end_follows() {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals(Started("c1"), Identified(null, "guess"), Started("c2", T0.AddSeconds(1))));
+        s.Apply(Signals(Identified("c1", "a1"), Identified("c2", "guess")));
+
+        s.Apply(Signals(Finished(null, "guess")));
+
+        await Assert.That(s.Rows[0].AgentId).IsEqualTo("a1");
+        await Assert.That(s.Rows[0].IsEnded).IsFalse();
+        await Assert.That(s.Rows[1].IsEnded).IsTrue();
+    }
+
+    [Test]
+    public async Task A_launch_acknowledgement_names_a_background_subagent() {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals(Started("c1"), Detached("c1", "a1")));
+        await Assert.That(Only(s).AgentId).IsEqualTo("a1");
+        await Assert.That(Only(s).CanOpen).IsTrue();
+    }
+
+    [Test]
+    public async Task An_id_read_by_call_names_that_row() {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals(Started("c1"), Started("c2")));
+        s.Identify("c2", "a2");
+        await Assert.That(s.Rows[1].AgentId).IsEqualTo("a2");
+        await Assert.That(s.Rows[0].AgentId).IsNull();
+    }
+
+    /// A start record for an agent its own call already named moves nothing, so its end still finds that row.
+    [Test]
+    public async Task A_start_record_for_a_placed_agent_names_no_other_row() {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals(Started("cB"), Detached("cB", "b")));
+        s.Apply(Signals(Started("cF", T0.AddSeconds(1)), Identified(null, "b")));
+
+        s.Apply(Signals(Finished(null, "b")));
+
+        await Assert.That(s.Rows[1].AgentId).IsNull();
+        await Assert.That(s.Rows[0].IsEnded).IsTrue();
+        await Assert.That(s.Rows[1].IsEnded).IsFalse();
+    }
+
+    /// An id can beat its call's own line: by call it waits for that row, without one it waits until one row
+    /// is the only candidate.
+    [Test]
+    public async Task An_id_that_arrives_before_its_row_names_it_once_it_starts() {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals(Identified("c1", "a1"), Identified(null, "b")));
+
+        s.Apply(Signals(Started("c1")));
+        s.Apply(Signals(Started("c2", T0.AddSeconds(1))));
+
+        await Assert.That(s.Rows[0].AgentId).IsEqualTo("a1");
+        await Assert.That(s.Rows[1].AgentId).IsEqualTo("b");
     }
 }

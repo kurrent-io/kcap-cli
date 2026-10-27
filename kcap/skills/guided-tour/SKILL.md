@@ -1,18 +1,19 @@
 ---
 name: guided-tour
 description: >-
-  Guided tour of Kurrent Capacitor (Kcap) for someone who has it installed but does
-  not yet know what it does for them — "what does capacitor do for me", "what is
+  Guided tour of kcap for someone who has it installed but does
+  not yet know what it does for them — "what does kcap do for me", "what is
   kcap", "is this thing doing anything", "what can kcap do", "just installed
-  capacitor, now what", "give me a tour", "Start kcap guided tour" (the prompt
+  kcap, now what", "give me a tour", "Start kcap guided tour" (the prompt
   `kcap setup` tells them to type) — or when they invoke this skill directly by
-  its listed name. Seven short cards, one per reply: welcome, capture,
-  investigate, collaborate, review, use, reuse — each a handful of questions to
+  its listed name. Also recognizes the former name Capacitor, including
+  "what is Capacitor" and "Start Capacitor guided tour". Seven short cards, one
+  per reply: welcome, capture, investigate, collaborate, review, use, reuse — each a handful of questions to
   ask the coding agent. Offers to install kcap if it is not set up. Not for
   general session recall on an established user — that is the recap skill.
 ---
 
-# Kcap guided tour
+# kcap guided tour
 
 The tour is **seven cards, one card per reply**. Emit each card verbatim from its template below,
 with only the placeholders filled. Do not rewrite, reorder, shorten or add to a card, and print
@@ -39,7 +40,7 @@ nothing before or after it: no preamble, no commentary, no summary of what the c
 | placeholder | value | fallback |
 |---|---|---|
 | `{{AGENT}}` | the product name of the harness running this tour: Claude Code, Codex, Cursor, Copilot, Gemini CLI, Kiro, OpenCode, Pi or Antigravity | — |
-| `{{OTHER_AGENT}}` on card 4 | Codex | Claude Code when `{{AGENT}}` is Codex |
+| `{{OTHER_AGENT}}` on cards 1 and 4 | Codex | Claude Code when `{{AGENT}}` is Codex |
 | `{{OTHER_AGENT}}` on card 5 | from `list_reviewer_vendors`, excluding the harness running the tour (its `driver_vendor`, or `{{AGENT}}`'s token when that is absent): `codex` if listed, else `claude`, else the first one listed, by product name (`codex` → Codex, `claude` → Claude Code) | as card 4 |
 | `{{T1}}`, `{{T2}}`, `{{T3}}` | the first names of up to three distinct teammates, most recent first (TEAMMATES below) | `my teammate` for each one missing; capitalise it when it opens the question |
 | `{{CAPTURE}}` | the team table, or the one-line variant (CAPTURE below) | — |
@@ -107,11 +108,11 @@ refused with `analytics_not_in_plan`. Pick the variant from what Q-CAPTURE retur
 - **Refused, failed, timed out or no rows** — one line. Run `search_sessions` with
   `author: "<user>"`, `repo: "all"`, `limit: 1`, empty `query`, and read `resolved_author.session_count` as `<N>`:
 
-  `Kcap has **<N>** of your sessions`
+  `kcap has **<N>** of your sessions`
 
   Print that line only when `<N>` is at least 1. Otherwise — `<user>` unknown, the lookup
   failed, `<N>` zero or `no_author_match` set — print
-  `Kcap is recording your sessions from here on` instead.
+  `kcap is recording your sessions from here on` instead.
 
 The tour never asks the user to import anything, on any card. An empty or missed lookup is not
 proof the user has no history — setup may still be importing it in the background — so the card
@@ -123,15 +124,15 @@ shows what is there, or the placeholder line, and moves on.
 
 ---
 
-## 👋 Welcome  · 1 of 7
+## 👋 Capture every step of your work, remembered and shared  · 1 of 7
 
-Kcap is the shared memory, observability, and collaboration layer for the modern A-SDLC. Ask {{AGENT}}:
+Examples of what you can accomplish with kcap. Ask {{AGENT}}:
 
 **❯** Are there any loose ends, or did we cover everything in the plan?
 **❯** What did we finish, what was checked, and what remains?
 **❯** What decisions and checks sit behind this PR?
-
-Capture, investigate, collaborate, review, use, reuse: every step of your work, remembered and shared
+**❯** Open the PR. Complete a {{OTHER_AGENT}} code review flow and address the findings
+**❯** I hit my usage limit in {{OTHER_AGENT}}. Find my active session on the feature and continue it here
 
 ── 1 of 7 · Type `next` and hit Enter to continue · `stop` to exit ──
 
@@ -143,11 +144,11 @@ Capture, investigate, collaborate, review, use, reuse: every step of your work, 
 
 ## ⚡ Capture  · 2 of 7
 
-Kcap helps users understand what work they accomplished, what they're currently working on, and what they should focus on next. Kcap stores every session your coding agents run (Claude Code, Codex, Cursor, Copilot and more) into one searchable history your agents can use
+kcap helps users understand what work they accomplished, what they're currently working on, and what they should focus on next. kcap stores every session your coding agents run (Claude Code, Codex, Cursor, Copilot and more) into one searchable history your agents can use
 
 {{CAPTURE}}
 
-Let's look at how you can work with Kcap
+Let's look at how you can work with kcap
 
 ── 2 of 7 · Type `next` and hit Enter to continue · `stop` to exit ──
 
@@ -165,7 +166,7 @@ The stored history is searchable, retrievable, and actionable. Ask {{AGENT}}:
 **❯** We worked on this feature already, find the sessions and summarize the work we did
 **❯** Was there anything I was working on last month that isn't quite finished?
 **❯** What did my team accomplish yesterday, and what are they working on today?
-**❯** Why doesn't {{AGENT}} remember what it skipped over? Kcap to the rescue!
+**❯** Why doesn't {{AGENT}} remember what it skipped over? kcap to the rescue!
 
 ── 3 of 7 · Type `next` and hit Enter to continue · `stop` to exit ──
 
@@ -260,8 +261,8 @@ the card implied should be there.
 | 1 | loose ends / plan coverage; finished, checked, remaining | `list_loose_ends`, the session's declared plan (`get_declared_plans`), `get_session_summary`. A server without next-work answers `list_loose_ends` with "not enabled": answer from the summary's Unfinished section instead |
 | 1, 5 | decisions behind a PR; review a teammate's PR | `kcap-review`: `get_pr_summary`, then `search_context` / `get_transcript` for the reasoning |
 | 3, 4, 6 | past sessions, team activity, who solved what, unfinished work | `search_sessions`, `list_repo_sessions`, `get_session_summary` |
-| 4, 6 | continue another session (a teammate's, or one from another agent) | `continue_session`; if it refuses because that session may still be running, ask before retrying with `force: true` |
-| 5 | spec and code review flows | the agent-flows skill: `get_flow_definition` first, the reviewer is `{{OTHER_AGENT}}`. A flow needs a connected kcap daemon with that reviewer installed — if the start is refused, say exactly which part is missing |
+| 1, 4, 6 | continue another session (a teammate's, or one from another agent) | `continue_session` takes a session id, so find it first: `list_repo_sessions` (`state: "active"`, `owner: "me"` for the user's own) or `search_sessions` on the feature's keywords, and confirm the match with the user when more than one fits. If it refuses because that session may still be running, ask before retrying with `force: true` |
+| 1, 5 | spec and code review flows | the agent-flows skill: `get_flow_definition` first, the reviewer is `{{OTHER_AGENT}}`. A flow needs a connected kcap daemon with that reviewer installed — if the start is refused, say exactly which part is missing |
 | 6 | what to do next; what is blocking | `get_next_work`, citing its because-clauses. If it reports next-work is not enabled, answer from the latest session summaries' Unfinished sections and say the ranked list is off on this server |
 | 7 | evaluate a session | `kcap eval`: LLM judges, 1–3 minutes and real spend. Say both and get a go before starting; run it in the background where the harness allows |
 | 7 | promote lessons | `kcap curate apply --dry-run` first and show what would be written; write only on an explicit yes. On a young record there is nothing to promote yet — say so plainly |

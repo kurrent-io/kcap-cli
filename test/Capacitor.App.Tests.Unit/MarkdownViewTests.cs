@@ -10,6 +10,7 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using Capacitor.App.Views;
 using MarkView.Avalonia;
+using MarkView.Avalonia.Rendering.Inlines;
 using ReactiveUI.Reactive;
 using static Capacitor.App.Tests.Unit.AvaloniaSession;
 using static Capacitor.App.Tests.Unit.MarkdownViewHarness;
@@ -537,6 +538,82 @@ public class MarkdownViewTests {
                 await Assert.That(Paragraphs(root).Single()).IsSameReferenceAs(prose);
                 await Assert.That(Actions(Hosts(root)[0], "markdown-code-run")).IsEmpty();
                 await Assert.That(Actions(Hosts(root)[0], "markdown-code-copy").Count).IsEqualTo(1);
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins the prompt's subset: emphasis, strikethrough, code, lists, quotes and a bare URL
+    /// render, and nothing else markdown would read into typed text does — a heading, a rule, a
+    /// setext underline, HTML, an entity, link syntax, an indented block or a backslash escape.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_prompt_renders_only_what_someone_types_on_purpose() {
+        await RunOnUiAsync(async () => {
+            var typed = "C:\\Users\\me\\.config \\*\n# not a heading\nunderlined\n---\n***\n&amp; <b>x</b> [label](l.example)\n    indented\n**bold** *em* ~~struck~~ `code` https://u.example\n\n```\nvar x = 1;\n```\n\n- one\n\n> quoted";
+            var (window, root, opened) = Show(typed, MarkdownFlavor.Prompt);
+            try {
+                var paragraph = Paragraphs(root).First();
+                await Assert.That(Reads(paragraph).ReplaceLineEndings("\n")).IsEqualTo(string.Join('\n',
+                    @"C:\Users\me\.config \*", "# not a heading", "underlined", "---", "***",
+                    "&amp; <b>x</b> [label](l.example)", "indented", "bold em struck code https://u.example"));
+                await Assert.That(Spans<Bold>(paragraph.Inlines!).Count()).IsEqualTo(1);
+                await Assert.That(Spans<Italic>(paragraph.Inlines!).Count()).IsEqualTo(1);
+                await Assert.That(Spans<Run>(paragraph.Inlines!).Any(r => r.Text == "code" && r.Classes.Contains("markdown-code-inline"))).IsTrue();
+                await Assert.That(Spans<MarkdownHyperlink>(paragraph.Inlines!).Select(l => l.NavigateUri!.ToString()))
+                    .IsEquivalentTo(["https://u.example/"]);
+                await Assert.That(All<Separator>(root).Any(s => s.Classes.Contains("markdown-thematic-break"))).IsFalse();
+                var code = All<Border>(root).Single(b => b.Classes.Contains("markdown-code-block"));
+                await Assert.That(Reads(All<TextBlock>(code).Single())).IsEqualTo("var x = 1;");
+                await Assert.That(All<TextBlock>(root).Count(t => t.Classes.Contains("markdown-list-marker") && t.Text == "•")).IsEqualTo(1);
+                var quote = All<Border>(root).Single(b => b.Classes.Contains("markdown-blockquote"));
+                await Assert.That(Paragraphs(quote).Select(Reads)).IsEquivalentTo(["quoted"]);
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins that a prompt keeps its line breaks and its runs of blank lines, where chat joins the
+    /// lines of a paragraph and collapses blank lines to one paragraph gap.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_prompt_keeps_its_newlines_and_blank_lines() {
+        await RunOnUiAsync(async () => {
+            const string typed = "one\ntwo\n\n\n\nthree";
+            var (window, root, _) = Show(typed, MarkdownFlavor.Prompt);
+            try {
+                await Assert.That(Reads(Paragraphs(root).Single()).ReplaceLineEndings("\n")).IsEqualTo(typed);
+            } finally { window.Close(); }
+
+            (window, root, _) = Show(typed);
+            try {
+                await Assert.That(string.Join('|', Paragraphs(root).Select(Reads))).IsEqualTo("one two|three");
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins the paragraph's last line for a code span that crosses a newline: the blank line after
+    /// it is counted from where the span ends, not from the line it starts on.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_prompt_counts_blank_lines_after_a_code_span_that_crosses_a_line() {
+        await RunOnUiAsync(async () => {
+            var (window, root, _) = Show("`x\ny`\n\nz", MarkdownFlavor.Prompt);
+            try {
+                await Assert.That(Reads(Paragraphs(root).Single()).ReplaceLineEndings("\n")).IsEqualTo("x y\n\nz");
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins that a rule standing on its own line stays text: Markdig's list parser opens one itself,
+    /// apart from the thematic break parser the prompt leaves out.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_prompt_shows_a_standalone_rule_as_typed() {
+        await RunOnUiAsync(async () => {
+            const string typed = "---\n\n- - -\n\n***\n\n___";
+            var (window, root, _) = Show(typed, MarkdownFlavor.Prompt);
+            try {
+                await Assert.That(All<Separator>(root).Any(s => s.Classes.Contains("markdown-thematic-break"))).IsFalse();
+                await Assert.That(Reads(Paragraphs(root).Single()).ReplaceLineEndings("\n")).IsEqualTo(typed);
             } finally { window.Close(); }
         });
     }

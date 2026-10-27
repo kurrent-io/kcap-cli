@@ -29,7 +29,9 @@ internal sealed record SessionStartMemoryEntry(
     // The memory's home scope (org|project|repo) + the resolved project slug for a project-scoped row.
     // Defaulted so an older server (no scope fields) parses as org, which renders unannotated.
     [property: JsonPropertyName("scope_kind")] string? ScopeKind = null,
-    [property: JsonPropertyName("project_slug")] string? ProjectSlug = null);
+    [property: JsonPropertyName("project_slug")] string? ProjectSlug = null,
+    // A log's count of open entries; null on a document and from a server that predates logs.
+    [property: JsonPropertyName("open_entries")] int? OpenEntries = null);
 
 /// <summary>A project the cwd repo is confirmed to belong to: the slug an agent passes on the
 /// place axis of a save, and the human name it is known by.</summary>

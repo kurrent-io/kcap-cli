@@ -10,6 +10,9 @@ public static class CanonicalEventTypes {
     public const string SessionStarted              = "SessionStarted";
     public const string UsageApplied                = "UsageApplied";
     public const string SubagentCompleted           = "SubagentCompleted";
+    public const string SubagentStarted             = "SubagentStarted";
+    public const string ContextCompacted            = "ContextCompacted";
+    public const string CodexUsageBackfilled        = "CodexUsageBackfilled";
 
     public static string Of(object payload) => payload switch {
         Kurrent.Agent.Schema.Events.UserMessageReceived         => UserMessageReceived,
@@ -20,6 +23,9 @@ public static class CanonicalEventTypes {
         Kurrent.Agent.Schema.Events.SessionStarted              => SessionStarted,
         Transcripts.UsageApplied                                => UsageApplied,
         Kurrent.Agent.Schema.Events.SubagentCompleted           => SubagentCompleted,
+        Kurrent.Agent.Schema.Events.SubagentStarted             => SubagentStarted,
+        ContextCompactedEvent                                   => ContextCompacted,
+        Harness.Codex.CodexUsageBackfilledEvent                 => CodexUsageBackfilled,
         _ => throw new ArgumentException($"No canonical event type for {payload.GetType().Name}", nameof(payload)),
     };
 }

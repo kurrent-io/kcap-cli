@@ -220,6 +220,23 @@ public class PiRpcHostedAgentRuntimeTests {
     }
 
     [Test]
+    public async Task A_dispatched_prompt_stamps_its_dispatch_on_its_user_message_and_its_echo_adds_none() {
+        var (rt, proc) = NewRuntime();
+        await using var _ = rt;
+        var dispatch = Guid.NewGuid();
+
+        await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
+        await rt.SendDispatchedInputAsync("do the thing", dispatch, waitForWrite: false).WaitAsync(HangGuard);
+        proc.Push(UserMessage("do the thing"));
+        proc.Push(AssistantText("on it"));
+
+        var sent = await NextEnvelopeAsync(rt);
+        await Assert.That(sent.Kind).IsEqualTo(AcpEventKind.UserMessage);
+        await Assert.That(sent.DispatchId).IsEqualTo(dispatch);
+        await Assert.That((await NextEnvelopeAsync(rt)).Kind).IsEqualTo(AcpEventKind.AssistantText);
+    }
+
+    [Test]
     public async Task A_rejected_prompt_emits_a_system_note() {
         var (rt, proc) = NewRuntime();
         await using var _ = rt;
@@ -504,6 +521,111 @@ public class PiRpcHostedAgentRuntimeTests {
         await rt.SendUserInputAsync("lands after the end").WaitAsync(HangGuard);
 
         await Assert.That(rt.PendingCommandCount).IsEqualTo(0);
+    }
+
+    // ---- Dialogs ----
+
+    static async Task<string> UiResponseAsync(FakePiRpcProcess process) {
+        using var cts = new CancellationTokenSource(HangGuard);
+        while (true) {
+            if (process.Writes.FirstOrDefault(w => w.Contains("\"extension_ui_response\"", StringComparison.Ordinal)) is { } line)
+                return line;
+            await Task.Delay(10, cts.Token);
+        }
+    }
+
+    /// <summary>The pump must keep translating while a viewer decides; the answer reaches Pi under the
+    /// dialog's own id, asked against the session the transcript is bound to.</summary>
+    [Test]
+    public async Task A_dialog_is_asked_off_the_pump_and_its_answer_written_back() {
+        var asked  = new TaskCompletionSource<AcpInteractionRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var answer = new TaskCompletionSource<AcpInteractionDecision>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (rt, proc) = NewRuntime(requestInteraction: (request, _) => { asked.TrySetResult(request); return answer.Task; });
+        await using var _ = rt;
+        await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
+        rt.ServerBindSettled(bound: true);
+
+        proc.Push("""{"type":"extension_ui_request","id":"ui-7","method":"input","title":"Your name"}""");
+        var request = await asked.Task.WaitAsync(HangGuard);
+        proc.Push(AssistantText("still reading"));
+
+        await Assert.That((await NextEnvelopeAsync(rt)).Text).IsEqualTo("still reading");
+        await Assert.That(request.AcpSessionId).IsEqualTo(PiSessionId);
+        await Assert.That(request.Prompt).IsEqualTo("Your name");
+
+        answer.SetResult(new AcpInteractionDecision("answered", null, null, null, "Ada", null));
+
+        await Assert.That(await UiResponseAsync(proc)).IsEqualTo("""{"type":"extension_ui_response","id":"ui-7","value":"Ada"}""");
+    }
+
+    /// <summary>A launch prompt's dialog arrives before the server has bound the session, and the server
+    /// refuses an interaction for an unbound one.</summary>
+    [Test]
+    public async Task A_dialog_waits_for_the_server_bind_before_it_is_asked() {
+        var asked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (rt, proc) = NewRuntime(requestInteraction: (_, _) => {
+            asked.TrySetResult();
+            return Task.FromResult(new AcpInteractionDecision("answered", "yes", null, null, null, null));
+        });
+        await using var _ = rt;
+        await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
+
+        proc.Push(DialogRequest("confirm"));
+        proc.Push(AssistantText("sentinel"));
+        await NextEnvelopeAsync(rt);
+
+        await Assert.That(asked.Task.IsCompleted).IsFalse();
+
+        rt.ServerBindSettled(bound: true);
+
+        await Assert.That(await UiResponseAsync(proc)).IsEqualTo("""{"type":"extension_ui_response","id":"ui-1","confirmed":true}""");
+    }
+
+    /// <summary>A private agent, or one whose bind failed, must not send a dialog's text to the server.</summary>
+    [Test]
+    public async Task A_dialog_on_an_unbound_session_is_cancelled_without_asking() {
+        var asked = false;
+        var (rt, proc) = NewRuntime(requestInteraction: (_, _) => {
+            asked = true;
+            return Task.FromResult(new AcpInteractionDecision("answered", "yes", null, null, null, null));
+        });
+        await using var _ = rt;
+        await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
+        rt.ServerBindSettled(bound: false);
+
+        proc.Push(DialogRequest("confirm"));
+
+        await Assert.That(await UiResponseAsync(proc)).IsEqualTo("""{"type":"extension_ui_response","id":"ui-1","cancelled":true}""");
+        await Assert.That(asked).IsFalse();
+    }
+
+    [Test]
+    public async Task A_dialog_with_nobody_to_ask_is_cancelled_at_once() {
+        var (rt, proc) = NewRuntime();
+        await using var _ = rt;
+        await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
+
+        proc.Push(DialogRequest("confirm"));
+
+        await Assert.That(await UiResponseAsync(proc)).IsEqualTo("""{"type":"extension_ui_response","id":"ui-1","cancelled":true}""");
+    }
+
+    /// <summary>Pi dismisses a timed dialog itself, so the viewer's card must close with it.</summary>
+    [Test]
+    public async Task A_timed_dialog_withdraws_the_question_when_pi_stops_waiting() {
+        var withdrawn = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (rt, proc) = NewRuntime(requestInteraction: async (_, ct) => {
+            await using (ct.Register(withdrawn.SetResult)) await Task.Delay(Timeout.Infinite, ct);
+            return default;
+        });
+        await using var _ = rt;
+        await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
+        rt.ServerBindSettled(bound: true);
+
+        proc.Push("""{"type":"extension_ui_request","id":"ui-1","method":"select","title":"t","options":["a"],"timeout":50}""");
+
+        await withdrawn.Task.WaitAsync(HangGuard);
+        await Assert.That(await UiResponseAsync(proc)).IsEqualTo("""{"type":"extension_ui_response","id":"ui-1","cancelled":true}""");
     }
 
     // ---- Stopping ----

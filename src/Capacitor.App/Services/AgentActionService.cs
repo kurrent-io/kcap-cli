@@ -87,25 +87,26 @@ public sealed class AgentActionService {
     /// while a protected kind's confirm-then-force dialog is still open, since the agent stays
     /// in-flight for the whole RunStopAsync call — other agents run concurrently.
     /// Never throws — this is a UI command target, not a Task the caller awaits.
-    public void RequestStop(string agentId, string label, string kind, AgentOrigin origin = AgentOrigin.Local) {
+    /// <paramref name="accepted"/> runs, off the UI thread, once the server accepts a remote stop.
+    public void RequestStop(string agentId, string label, string kind, AgentOrigin origin = AgentOrigin.Local, Action? accepted = null) {
         var key = StopKey(origin, agentId);
         lock (_lock) {
             if (_inFlight.Contains(key)) return;
             _inFlight = _inFlight.Add(key);
             _stopsInFlight.OnNext(_inFlight);
         }
-        _ = Task.Run(() => origin == AgentOrigin.Remote ? RunRemoteStopAsync(agentId, label, key) : RunStopAsync(agentId, label, kind, key));
+        _ = Task.Run(() => origin == AgentOrigin.Remote ? RunRemoteStopAsync(agentId, label, key, accepted) : RunStopAsync(agentId, label, kind, key));
     }
 
     /// A remote row's stop never reaches ILocalControlOps — it goes to the server hub, which
-    /// forwards it to the owning daemon. Ok is silent: the row's disappearance comes from the
+    /// forwards it to the owning daemon. Ok is not a toast: the row's disappearance comes from the
     /// next registry update, same as a local stop's confirmation-by-absence.
-    async Task RunRemoteStopAsync(string agentId, string label, string key) {
+    async Task RunRemoteStopAsync(string agentId, string label, string key, Action? accepted) {
         try {
             if (_lane is null) { _notifier.Notify("Not signed in to a server"); return; }
             var outcome = await _lane.RequestStopAgentAsync(agentId, _shutdownToken).ConfigureAwait(false);
             switch (outcome.Result) {
-                case HubCallResult.Ok: break;
+                case HubCallResult.Ok: accepted?.Invoke(); break;
                 case HubCallResult.NotConnected: _notifier.Notify("Not connected to the server"); break;
                 case HubCallResult.Denied: _notifier.Notify($"The server declined to stop {label}"); break;
                 default: _notifier.Notify($"Couldn't stop {label}: {outcome.Reason}"); break;
@@ -178,6 +179,10 @@ public sealed class AgentActionService {
     /// server than this machine's local one. Never throws.
     public void OpenInWebRemote(string agentId) =>
         OpenUrl(_remoteServerUrl, AgentPath(agentId), "Not signed in to a server");
+
+    /// A session's own page, for a row no agent stands behind. Never throws.
+    public void OpenSessionInWeb(string sessionId) =>
+        OpenUrl(_remoteServerUrl, $"/sessions/{Uri.EscapeDataString(sessionId)}", "Not signed in to a server");
 
     /// The work item's page, always on the app profile's own server: that is the server whose read
     /// named the id, and a daemon snapshot's server may be a different one. Never throws.

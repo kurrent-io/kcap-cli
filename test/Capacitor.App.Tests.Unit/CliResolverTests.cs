@@ -63,23 +63,23 @@ public class CliResolverTests {
 
     [Test]
     public async Task ResolvePath_uses_the_bundle_sibling_when_present() {
-        var sibling = Path.Combine("/Applications/Kurrent Capacitor.app/Contents/MacOS", "kcap");
+        var sibling = Path.Combine("/Applications/kcap.app/Contents/MacOS", "kcap");
 
-        var path = CliResolver.ResolvePath(_ => null, p => p == sibling, "/Applications/Kurrent Capacitor.app/Contents/MacOS", "kcap");
+        var path = CliResolver.ResolvePath(_ => null, p => p == sibling, "/Applications/kcap.app/Contents/MacOS", "kcap");
 
         await Assert.That(path).IsEqualTo(sibling);
     }
 
     [Test]
     public async Task ResolvePath_override_wins_over_the_bundle_sibling() {
-        var path = CliResolver.ResolvePath(_ => "/opt/kcap/kcap", _ => true, "/Applications/Kurrent Capacitor.app/Contents/MacOS");
+        var path = CliResolver.ResolvePath(_ => "/opt/kcap/kcap", _ => true, "/Applications/kcap.app/Contents/MacOS");
 
         await Assert.That(path).IsEqualTo("/opt/kcap/kcap");
     }
 
     [Test]
     public async Task ResolvePath_finds_the_windows_sibling_by_its_exe_name() {
-        const string dir = @"C:\Users\me\AppData\Local\KurrentCapacitor\current";
+        const string dir = @"C:\Users\me\AppData\Local\kcap\current";
         var sibling = Path.Combine(dir, "kcap.exe");
 
         var path = CliResolver.ResolvePath(_ => null, p => p == sibling, dir, "kcap.exe");

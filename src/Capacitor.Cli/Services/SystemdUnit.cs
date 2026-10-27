@@ -57,7 +57,11 @@ static class SystemdUnit {
     public static string[] IsActiveArgs(string id)  => ["--user", "is-active", UnitName(id)];
     public static string[] IsEnabledArgs(string id) => ["--user", "is-enabled", UnitName(id)];
     public static string[] NeedDaemonReloadArgs(string id) => ["--user", "show", "--property=NeedDaemonReload", "--value", UnitName(id)];
-    public static string[] ShowStateArgs(string id) => ["--user", "show", "--property=ActiveState,UnitFileState,MainPID", UnitName(id)];
+    public static string[] MainPidArgs(string id) => ["--user", "show", "--property=MainPID", "--value", UnitName(id)];
+
+    /// <summary>Reads <see cref="MainPidArgs"/> output: null when the unit has no main process (systemd prints 0).</summary>
+    public static int? MainPid(string output) =>
+        int.TryParse(output.Trim(), out var pid) && pid > 0 ? pid : null;
 
     /// <summary>Reads <see cref="NeedDaemonReloadArgs"/> output: <c>yes</c> when systemd's copy of the unit is stale.</summary>
     public static bool NeedsDaemonReload(string output) => output.Trim().Equals("yes", StringComparison.OrdinalIgnoreCase);
@@ -65,74 +69,6 @@ static class SystemdUnit {
     public static ServiceState StatusFrom(string activeOut, int enabledExit) {
         if (activeOut.Trim().Equals("active", StringComparison.OrdinalIgnoreCase)) return ServiceState.Running;
         return enabledExit == 0 ? ServiceState.Installed : ServiceState.NotInstalled;
-    }
-
-    // The UnitFileState values for which `systemctl is-enabled` exits 0.
-    static readonly string[] EnabledFileStates = ["enabled", "enabled-runtime", "static", "alias", "indirect", "generated", "transient"];
-
-    /// <summary>
-    /// A query from <see cref="ShowStateArgs"/> output. <c>MainPID</c> is the daemon's own pid because
-    /// <c>ExecStart</c> runs it directly. A failed <c>systemctl</c> — no user bus over SSH or in a container —
-    /// reads <see cref="LabelProbe.Unknown"/>, never Absent: absence would let a verify treat a live unit as free.
-    ///
-    /// <para>Only <c>inactive</c> and <c>failed</c> prove the daemon is gone. Any other state — <c>activating</c>
-    /// during the restart delay, <c>deactivating</c> while a stop is still killing it — is Unknown and
-    /// Running with no pid, so nothing treats a daemon that may be alive as stopped.</para>
-    ///
-    /// <para>A unit file on disk that systemd knows is Installed even when disabled: <c>ensure</c> and the
-    /// desktop app start a present unit, and a verified start must not then read it as missing.</para>
-    /// </summary>
-    public static ServiceQuery QueryFromShow(int exitCode, string output, bool unitPresent, string? binaryPath) {
-        if (exitCode != 0) return new ServiceQuery(LabelProbe.Unknown, unitPresent, ServiceState.NotInstalled, binaryPath, null);
-
-        var props = output.Split('\n')
-            .Select(l => l.Trim())
-            .Where(l => l.Contains('='))
-            .ToDictionary(l => l[..l.IndexOf('=')], l => l[(l.IndexOf('=') + 1)..], StringComparer.Ordinal);
-
-        var activeState = props.GetValueOrDefault("ActiveState");
-        if (activeState is not ("active" or "reloading" or "inactive" or "failed"))
-            return new ServiceQuery(LabelProbe.Unknown, unitPresent, ServiceState.Running, binaryPath, null);
-
-        var fileState = props.GetValueOrDefault("UnitFileState");
-        var known     = EnabledFileStates.Contains(fileState) || (unitPresent && fileState is { Length: > 0 } and not "not-found");
-        var active    = activeState is "active" or "reloading";
-        var state     = active ? ServiceState.Running : known ? ServiceState.Installed : ServiceState.NotInstalled;
-        var pid       = active && int.TryParse(props.GetValueOrDefault("MainPID"), out var p) && p > 0 ? p : (int?)null;
-
-        return new ServiceQuery(state == ServiceState.NotInstalled ? LabelProbe.Absent : LabelProbe.Loaded, unitPresent, state, binaryPath, pid);
-    }
-
-    /// <summary>
-    /// The <c>Environment=</c> assignments of a unit <see cref="Unit"/> rendered, undoing its quoting and
-    /// <c>%</c> doubling, so a rename can prove the unit it retires belongs to the same profile.
-    /// </summary>
-    public static Dictionary<string, string> EnvFromUnit(string unitText) {
-        var env = new Dictionary<string, string>(StringComparer.Ordinal);
-
-        foreach (var raw in unitText.Split('\n')) {
-            var line = raw.Trim();
-            if (!line.StartsWith("Environment=", StringComparison.Ordinal)) continue;
-
-            var assignment = line["Environment=".Length..];
-            if (assignment.Length >= 2 && assignment[0] == '"' && assignment[^1] == '"')
-                assignment = Unescape(assignment[1..^1]);
-
-            var eq = assignment.IndexOf('=');
-            if (eq <= 0) continue;
-            env[assignment[..eq]] = assignment[(eq + 1)..].Replace("%%", "%");
-        }
-
-        return env;
-    }
-
-    static string Unescape(string s) {
-        var sb = new StringBuilder(s.Length);
-        for (var i = 0; i < s.Length; i++) {
-            if (s[i] == '\\' && i + 1 < s.Length) i++;
-            sb.Append(s[i]);
-        }
-        return sb.ToString();
     }
 
     /// <summary>
@@ -193,7 +129,63 @@ static class SystemdUnit {
         return BinaryFromUnit(rewritten) == binary ? rewritten : null;
     }
 
+    /// <summary>
+    /// The unit with its <c>Environment=</c> assignment of <paramref name="key"/> set to
+    /// <paramref name="value"/>, added ahead of <c>ExecStart=</c> when absent; null when it already is that
+    /// or the unit has no <c>ExecStart=</c>.
+    /// </summary>
+    public static string? WithEnvironmentValue(string unitText, string key, string value) {
+        var before = EnvFromUnit(unitText);
+        if (before.TryGetValue(key, out var current) && current == value) return null;
+
+        ServiceText.RequireValidEnvName(key);
+        ServiceText.RequireNoControlCharacters(key, value);
+        var assignment = $"Environment={EnvAssignment(key, ServiceText.SystemdValue(value))}";
+
+        var lines = unitText.Split('\n').ToList();
+        if (current is not null) {
+            // Only the line Unit writes: a hand-written one may carry other assignments the rewrite would drop.
+            var ours  = $"Environment={EnvAssignment(key, ServiceText.SystemdValue(current))}";
+            var index = lines.FindIndex(l => l.Trim() == ours);
+            if (index < 0) return null;
+            lines[index] = assignment;
+        } else {
+            var exec = lines.FindIndex(l => l.StartsWith("ExecStart=", StringComparison.Ordinal));
+            if (exec < 0) return null;
+            lines.Insert(exec, assignment);
+        }
+
+        var rewritten = string.Join('\n', lines);
+
+        return EnvFromUnit(rewritten).TryGetValue(key, out var written) && written == value ? rewritten : null;
+    }
+
     static string UnescapeExpansions(string s) => s.Replace("%%", "%").Replace("$$", "$");
+
+    /// <summary>The <c>Environment=</c> assignments of a rendered unit, reversing <see cref="EnvAssignment"/>.</summary>
+    public static Dictionary<string, string> EnvFromUnit(string unitText) {
+        var env = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var raw in unitText.Split('\n')) {
+            var line = raw.Trim();
+            if (!line.StartsWith("Environment=", StringComparison.Ordinal)) continue;
+            var assignment = Unquote(line["Environment=".Length..]);
+            var eq = assignment.IndexOf('=');
+            if (eq <= 0) continue;
+            env[assignment[..eq]] = assignment[(eq + 1)..].Replace("%%", "%");
+        }
+        return env;
+    }
+
+    static string Unquote(string s) {
+        if (s.Length == 0 || s[0] != '"') return s;
+        var sb = new StringBuilder();
+        for (var i = 1; i < s.Length; i++) {
+            if (s[i] == '\\' && i + 1 < s.Length) { sb.Append(s[++i]); continue; }
+            if (s[i] == '"') break;
+            sb.Append(s[i]);
+        }
+        return sb.ToString();
+    }
 
     // ── systemd value/argument quoting ──
     // systemd splits Environment= and ExecStart on unquoted whitespace, so any

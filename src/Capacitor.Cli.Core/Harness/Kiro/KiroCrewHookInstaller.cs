@@ -10,7 +10,8 @@ public static class KiroCrewHookInstaller {
     public enum Outcome { Unchanged, Written, Removed, Unowned, Unsupported, Failed }
 
     /// <summary>Identifies a script as kcap's, so kcap never overwrites or deletes a user's own hook.</summary>
-    const string OwnershipLine = "# kcap: records Kiro Crew sessions in Kurrent Capacitor. Remove with: kcap plugin remove --kiro";
+    const string LegacyOwnershipLine = "# kcap: records Kiro Crew sessions in Kurrent Capacitor. Remove with: kcap plugin remove --kiro";
+    const string OwnershipLine = "# kcap: records Kiro Crew sessions in kcap. Remove with: kcap plugin remove --kiro";
 
     /// <summary>Records that kcap installed the script, so a refresh can tell a Crew installed since from
     /// a script the user deleted. Crew imports only <c>*.sh</c>, so it ignores this file.</summary>
@@ -39,7 +40,10 @@ public static class KiroCrewHookInstaller {
 
     public static bool IsInstalled(string scriptPath) {
         try {
-            return File.Exists(scriptPath) && File.ReadAllText(scriptPath).Contains(OwnershipLine, StringComparison.Ordinal);
+            if (!File.Exists(scriptPath)) return false;
+            var body = File.ReadAllText(scriptPath);
+            return body.Contains(OwnershipLine, StringComparison.Ordinal)
+                || body.Contains(LegacyOwnershipLine, StringComparison.Ordinal);
         } catch {
             return false;
         }

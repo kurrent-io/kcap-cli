@@ -102,7 +102,7 @@ public class EditionStepViewModelTests {
         });
 
         await Assert.That(reason).IsEqualTo(
-            "This Mac is set up for a cloud workspace. Moving it to local comes in a later release.");
+            "This machine is set up for a cloud workspace. Switching to local setup isn't supported yet.");
         await Assert.That(canChoose).IsFalse();
     }
 
@@ -148,7 +148,9 @@ public class EditionStepViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_pane_shows_the_cards_in_place_of_next_and_the_cloud_card_reaches_sign_in() {
+    [Arguments("CloudEditionButton")]
+    [Arguments("ExistingWorkspaceButton")]
+    public async Task The_pane_shows_the_cards_in_place_of_next_and_each_cloud_action_reaches_sign_in(string action) {
         var (localShown, cloudShown, signInShown, nextShown, after) = await AvaloniaSession.DispatchAsync(async () => {
             var edition = new EditionStepViewModel(CliTelemetry.Disabled(TimeProvider.System).Funnel, () => null);
             var vm = new OnboardingViewModel([edition, new FakeWizardStep(WizardStepId.SignIn)]);
@@ -167,7 +169,7 @@ public class EditionStepViewModelTests {
             var signIn = Named<Button>("ExistingWorkspaceButton")?.IsEffectivelyVisible;
             var next = Named<Button>("NextButton")?.IsEffectivelyVisible;
 
-            cloud.Command!.Execute(null);
+            Named<Button>(action)!.Command!.Execute(null);
             await vm.PendingAdvanceForTesting;
             Dispatcher.UIThread.RunJobs();
             var current = vm.Current.Id;
@@ -183,6 +185,44 @@ public class EditionStepViewModelTests {
         await Assert.That(signInShown).IsTrue();
         await Assert.That(nextShown).IsFalse();
         await Assert.That(after).IsEqualTo(WizardStepId.SignIn);
+    }
+
+    /// The footer sits inside a disabled button, whose template may fade everything it holds;
+    /// the reason is the one part of the card that must stay at full strength.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_unavailable_local_card_says_why_in_its_own_footer() {
+        var (inCard, footerShown, enabled, help, footerOpacity, headOpacity) = await AvaloniaSession.DispatchAsync(async () => {
+            var edition = new EditionStepViewModel(
+                CliTelemetry.Disabled(TimeProvider.System).Funnel, () => EditionStepViewModel.UnsupportedPlatform);
+            var vm = new OnboardingViewModel([edition, new FakeWizardStep(WizardStepId.SignIn)]);
+            await vm.PendingEnterForTesting;
+
+            var window = new MainWindow { Onboarding = vm };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var local = window.GetVisualDescendants().OfType<Button>().First(c => c.Name == "LocalEditionButton");
+            var reason = window.GetVisualDescendants().OfType<TextBlock>().First(c => c.Name == "LocalUnavailableText");
+            var head = local.GetVisualDescendants().OfType<Grid>().First(g => g.Classes.Contains("onboardingEditionHead"));
+            var result = (reason.GetVisualAncestors().Contains(local), reason.IsEffectivelyVisible, local.IsEffectivelyEnabled,
+                Avalonia.Automation.AutomationProperties.GetHelpText(local), EffectiveOpacity(reason), EffectiveOpacity(head));
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+
+            return result;
+        });
+
+        await Assert.That(inCard).IsTrue();
+        await Assert.That(footerShown).IsTrue();
+        await Assert.That(enabled).IsFalse();
+        await Assert.That(help).IsEqualTo(EditionStepViewModel.UnsupportedPlatform);
+        await Assert.That(footerOpacity).IsEqualTo(1.0);
+        await Assert.That(headOpacity).IsEqualTo(0.5);
+
+        static double EffectiveOpacity(Avalonia.Visual visual) =>
+            visual.GetSelfAndVisualAncestors().Aggregate(1.0, (opacity, v) => opacity * v.Opacity);
     }
 
     [Test]

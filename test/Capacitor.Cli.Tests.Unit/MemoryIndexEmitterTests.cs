@@ -86,6 +86,19 @@ public class MemoryIndexEmitterTests {
     }
 
     [Test]
+    public async Task Counts_a_logs_open_entries_and_ignores_a_count_that_is_not_a_number() {
+        var index = new JsonArray(
+            new JsonObject { ["memory_id"] = "i1", ["slug"] = "inbox", ["audience"] = "org", ["description"] = "d", ["kind"] = "project", ["scope_kind"] = "repo", ["open_entries"] = 2 },
+            new JsonObject { ["memory_id"] = "i2", ["slug"] = "odd",   ["audience"] = "org", ["description"] = "d", ["kind"] = "project", ["open_entries"] = JsonNode.Parse("\"2\"") }
+        );
+
+        var fragment = MemoryIndexEmitter.BuildFragment(index, disabled: false)!;
+
+        await Assert.That(fragment).Contains("- inbox (2 open) [repo]: d");
+        await Assert.That(fragment).Contains("- odd: d");
+    }
+
+    [Test]
     public async Task Missing_scope_renders_untagged_for_an_older_server() {
         // A server that predates scope on the index sends no scope_kind — the line renders exactly as before.
         var fragment = MemoryIndexEmitter.BuildFragment(Index(("legacy", "org", "d")), disabled: false)!;
@@ -214,10 +227,10 @@ public class MemoryIndexEmitterTests {
         var entries = new[] { new SessionStartMemoryEntry("id", "a-rule", "org", "d", "feedback") };
 
         var fragment = MemoryIndexEmitter.BuildFragment(
-            entries, [new SessionStartMemoryProject("capacitor", "Kurrent Capacitor")])!;
+            entries, [new SessionStartMemoryProject("capacitor", "kcap")])!;
 
         await Assert.That(fragment).Contains(
-            "This repo belongs to project \"capacitor\" (Kurrent Capacitor). " +
+            "This repo belongs to project \"capacitor\" (kcap). " +
             "Save learnings that span its repos with project: \"capacitor\".");
         await Assert.That(fragment.IndexOf("This repo belongs", StringComparison.Ordinal))
             .IsLessThan(fragment.IndexOf("## Team memory", StringComparison.Ordinal));
@@ -229,7 +242,7 @@ public class MemoryIndexEmitterTests {
     public async Task Lead_in_alone_is_a_fragment_when_the_index_is_empty() {
         // A project with no memories yet is exactly when the agent needs the slug it can save to,
         // so projects alone must produce a fragment where entries alone would produce none.
-        var fragment = MemoryIndexEmitter.BuildFragment([], [new SessionStartMemoryProject("capacitor", "Kurrent Capacitor")]);
+        var fragment = MemoryIndexEmitter.BuildFragment([], [new SessionStartMemoryProject("capacitor", "kcap")]);
 
         await Assert.That(fragment).IsNotNull();
         await Assert.That(fragment!.StartsWith(MemoryIndexEmitter.FragmentMarker, StringComparison.Ordinal)).IsTrue();
@@ -252,11 +265,11 @@ public class MemoryIndexEmitterTests {
     [Test]
     public async Task Several_projects_get_a_line_each() {
         var fragment = MemoryIndexEmitter.BuildFragment([], [
-            new SessionStartMemoryProject("capacitor", "Kurrent Capacitor"),
+            new SessionStartMemoryProject("capacitor", "kcap"),
             new SessionStartMemoryProject("platform", "Platform")
         ])!;
 
-        await Assert.That(fragment).Contains("This repo belongs to project \"capacitor\" (Kurrent Capacitor).");
+        await Assert.That(fragment).Contains("This repo belongs to project \"capacitor\" (kcap).");
         await Assert.That(fragment).Contains("This repo belongs to project \"platform\" (Platform).");
         await Assert.That(fragment.Split('\n').Count(l => l.StartsWith("This repo belongs", StringComparison.Ordinal)))
             .IsEqualTo(2);

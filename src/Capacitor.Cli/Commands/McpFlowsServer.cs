@@ -23,11 +23,11 @@ partial class McpFlowsServer(
     public async Task<int> RunAsync(string? driverArg = null) {
         var baseUrl = profiles.Resolution.ServerUrl!;
 
-        // Requester context is resolved ONCE here, from the running harness rather than from the
-        // environment this process inherited — see HarnessRequesterContext for why an inherited
-        // KCAP_SESSION_ID / process cwd names the launching session instead of this driver. Both the
-        // session id and the working directory come from the same resolution, so a flow can never be
-        // attributed to one session while being reviewed in another session's checkout.
+        // Requester context comes from the running harness rather than from the environment this
+        // process inherited — see HarnessRequesterContext for why an inherited KCAP_SESSION_ID /
+        // process cwd names the launching session instead of this driver. The directory is resolved
+        // once; the session on each call, because a hosted agent is bound to one only after this
+        // server has started.
         var requester    = HarnessRequesterContext.Resolve();
         var cwd          = requester.ProjectDir ?? workdir.Path;
         var repoRoot     = GitRepository.FindRoot(cwd);
@@ -81,7 +81,7 @@ partial class McpFlowsServer(
                 return await HandleToolCallAsync(
                     callId, callRequest, client, baseUrl, cwd, repoRoot, await repository.GetAsync(),
                     clock: new FlowRetryClock(time),
-                    requestingSessionId: requester.SessionId, driverVendor: driverVendor,
+                    requestingSessionId: HarnessRequesterContext.Resolve().SessionId, driverVendor: driverVendor,
                     reviewerVendorPreference: LoadReviewerVendorPreferenceAsync,
                     callerAgentId: callerAgentId);
             } catch (Exception ex) {
@@ -114,7 +114,7 @@ partial class McpFlowsServer(
         await using var writer = new StreamWriter(stdout, new UTF8Encoding(false));
         writer.AutoFlush = true;
 
-        await McpStdioLoop.RunAsync(reader, writer, TimedDispatchToolCallAsync, (id, method, request) => method switch {
+        await McpStdioLoop.RunAsync(reader, writer, tools, TimedDispatchToolCallAsync, (id, method, request) => method switch {
             "initialize" => BuildInitializeResponse(id, request),
             "tools/list" => BuildToolsListResponse(id, tools),
             _            => McpProtocol.TryHandleStandardMethod(method, id)
@@ -569,6 +569,20 @@ partial class McpFlowsServer(
                         return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot, time), isError: true);
 
                     var (text, isError) = StartAgentTool.Render((int)answer.StatusCode, await answer.Content.ReadAsStringAsync(), start.WorkItem);
+
+                    return BuildToolResult(id, text, isError);
+                }
+            }
+
+            if (WakeUpTools.Handles(toolName)) {
+                var (answer, how) = await WakeUpTools.SendAsync(toolName, arguments, client, apiRoot, requestingSessionId, callerAgentId, clock);
+                if (answer is null) return BuildToolResult(id, WakeUpTools.Unanswered(toolName, how), isError: true);
+
+                using (answer) {
+                    if (answer.StatusCode == HttpStatusCode.Unauthorized)
+                        return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot, time), isError: true);
+
+                    var (text, isError) = WakeUpTools.Render(toolName, (int)answer.StatusCode, await answer.Content.ReadAsStringAsync(), arguments);
 
                     return BuildToolResult(id, text, isError);
                 }
@@ -2783,7 +2797,8 @@ partial class McpFlowsServer(
             McpToolAnnotations.Read
         ),
         StartAgentOptionsTool.Describe(),
-        StartAgentTool.Describe()
+        StartAgentTool.Describe(),
+        .. WakeUpTools.Describe()
     ];
 }
 

@@ -12,6 +12,9 @@ namespace Capacitor.Cli.LocalEdition;
 /// does, so no older kcap can select a version below data the new server may have migrated; started under a
 /// rewritten unit; committed by clearing the journal. A failure before the switch starts the old version again if it
 /// was running. After it nothing is restored: the new version stays selected and stopped.</para>
+///
+/// <para>A recorded built-in embedding choice has the new version's model set fetched while staging. After the commit,
+/// finished or rolled forward, the record names that set once it is in place, and every other model set is removed.</para>
 /// </summary>
 sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progress) {
     const string StagingName = "upgrade";
@@ -54,7 +57,7 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
 
         if (installed.UnitAbsent || !File.Exists(unit.ServerBinary))
             throw Failed(LocalInstallFailureCode.StartFailed,
-                $"The local server is uninstalled. Run kcap setup --local to reinstall Capacitor local {from}, then kcap local upgrade.");
+                $"The local server is uninstalled. Run kcap setup --local to reinstall kcap local {from}, then kcap local upgrade.");
 
         if (installed.Owner != OwnerDecision.Ours)
             throw Failed(LocalInstallFailureCode.NotOurServer,
@@ -77,8 +80,17 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
         var entry = lease.Begin(LocalUpgradeJournal.Operation, LocalUpgradeJournal.Staging, ServerStart.Allow, installation.Id,
             LocalUpgradeJournal.Build(details));
 
+        LocalModelSetDownloader models;
+        LocalEmbeddingModelManifest? modelSet;
+
         try {
-            await stager().StageAsync(version, StagingName, progress, ct);
+            var bundle = stager();
+            models   = bundle.ModelSets();
+            modelSet = (await bundle.StageAsync(version, StagingName, progress, ct)).Manifest.EmbeddingModel;
+
+            await StageModelSetAsync(models, modelSet, version, ct);
+            // A failed download or a reused set is not a cancellation point, so a cancel there must not become a degraded upgrade.
+            ct.ThrowIfCancellationRequested();
         } catch (Exception ex) {
             try {
                 LocalBin.Discard(stack.Root, StagingName, version);
@@ -87,7 +99,7 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
                 // The journal stays at staging, and the next lifecycle command removes what is left.
             }
 
-            throw Failed(Classify(ex, ct), $"{Describe(ex, ct)} Capacitor local {from} was left as it was.");
+            throw Failed(Classify(ex, ct), $"{Describe(ex, ct)} kcap local {from} was left as it was.");
         }
 
         entry = lease.Advance(entry, LocalUpgradeJournal.Stopping, ServerStart.Deny);
@@ -110,7 +122,48 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
         entry = lease.Advance(entry, LocalUpgradeJournal.Switching, ServerStart.Deny);
         Switch(lease, entry, details);
 
-        return await StartNewAsync(lease, entry, details);
+        var upgraded = await StartNewAsync(lease, entry, details);
+
+        SettleModelSets(modelSet);
+
+        return upgraded;
+    }
+
+    /// <summary>Fetches the new version's model set only when built-in is already recorded: an upgrade never decides
+    /// embeddings. A failed download degrades the new server to keyword search; only cancellation escapes.</summary>
+    async Task StageModelSetAsync(LocalModelSetDownloader models, LocalEmbeddingModelManifest? modelSet, string version, CancellationToken ct) {
+        if (LocalEmbeddingFile.Read(stack.Root) is not { Provider: LocalEmbeddingProvider.Builtin } recorded) return;
+
+        if (modelSet is null) {
+            progress.Report(new LocalInstallEvent.EmbeddingsSkipped(LocalEmbeddingSkipCode.BuiltinUnavailable,
+                $"kcap local {version} offers no built-in search model; the server searches by keyword."));
+            return;
+        }
+
+        await LocalEmbeddingStep.FetchBuiltinAsync(models, modelSet, recorded, progress, ct);
+    }
+
+    /// <summary>Under the lease, after a commit. The unit already runs the server with the built-in provider, so a record
+    /// still naming the old set would make the next setup replace the unit for nothing. The set the record names is
+    /// never removed: a failed download or record write leaves it the one the next setup can serve. Never throws.</summary>
+    void SettleModelSets(LocalEmbeddingModelManifest? modelSet) {
+        if (modelSet is null) return;
+
+        string? recordedSet = null;
+
+        if (LocalEmbeddingFile.Read(stack.Root) is { Provider: LocalEmbeddingProvider.Builtin } recorded) {
+            recordedSet = recorded.ModelSetId;
+
+            if (recordedSet != modelSet.ModelSet && LocalModelSets.IsPresent(stack.Root, modelSet)) {
+                try {
+                    if (LocalEmbeddingFile.Write(stack.Root, LocalEmbeddingSetting.Builtin(modelSet.ModelSet))) recordedSet = modelSet.ModelSet;
+                } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+                    // The next setup rewrites the record and the unit.
+                }
+            }
+        }
+
+        LocalModelSets.RemoveAllBut(stack.Root, modelSet.ModelSet, recordedSet);
     }
 
     /// <summary>Finishes an upgrade the previous lifecycle command left in the journal.</summary>
@@ -133,10 +186,12 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
 
                 Switch(lease, entry, details);
                 await StartNewAsync(lease, entry, details);
+                SettleModelSets(LocalModelSets.Bundled(stack.Root, details.To));
                 return;
 
             case LocalUpgradeJournal.Starting:
                 await StartNewAsync(lease, entry, details);
+                SettleModelSets(LocalModelSets.Bundled(stack.Root, details.To));
                 return;
 
             default:
@@ -156,7 +211,7 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
             LocalBin.Switch(stack.Root, details.To);
         } catch (Exception ex) {
             throw new LocalUpgradeFailure(LocalInstallFailureCode.CommitFailed,
-                $"The switch to Capacitor local {details.To} could not be confirmed ({ex.Message}). Nothing was restored; the next kcap local upgrade, start or setup --local finishes it.",
+                $"The switch to kcap local {details.To} could not be confirmed ({ex.Message}). Nothing was restored; the next kcap local upgrade, start or setup --local finishes it.",
                 switched: true);
         }
 
@@ -194,7 +249,7 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
             CompleteOrThrow(lease, details);
 
             throw new LocalUpgradeFailure(LocalInstallFailureCode.StartFailed,
-                $"Capacitor local {details.To} did not start: {ex.Message} It stays selected and stopped, and {details.From} is kept in "
+                $"kcap local {details.To} did not start: {ex.Message} It stays selected and stopped, and {details.From} is kept in "
               + $"{bundle}. Nothing is rolled back; kcap local logs shows why, and kcap local start tries again.",
                 switched: true);
         }
@@ -233,7 +288,7 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
     /// <summary>The journal is kept at <c>starting</c>, so the next lifecycle command starts the new version again.</summary>
     static LocalUpgradeFailure Unfinished(UpgradeDetails details, string why) =>
         new(LocalInstallFailureCode.StartFailed,
-            $"Capacitor local {details.To} is selected, but {why}. Nothing is rolled back; the next kcap local upgrade, start or setup --local finishes the upgrade.",
+            $"kcap local {details.To} is selected, but {why}. Nothing is rolled back; the next kcap local upgrade, start or setup --local finishes the upgrade.",
             switched: true);
 
     /// <summary>Whether the old version is back as it was, and a sentence saying so; never throws.</summary>
@@ -248,12 +303,12 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
             if (details.WasRunning) {
                 progress.Report(new LocalInstallEvent.Restarting(details.From));
                 await Control.StartAsync(Installed(), _ => { }, CancellationToken.None);
-                outcome = (true, $"Capacitor local {details.From} was started again.");
+                outcome = (true, $"kcap local {details.From} was started again.");
             } else {
-                outcome = (true, $"Capacitor local {details.From} stays selected and stopped, as it was.");
+                outcome = (true, $"kcap local {details.From} stays selected and stopped, as it was.");
             }
         } catch (Exception ex) {
-            outcome = (false, $"Capacitor local {details.From} stays selected but did not start again ({ex.Message}); kcap local start tries again.");
+            outcome = (false, $"kcap local {details.From} stays selected but did not start again ({ex.Message}); kcap local start tries again.");
         }
 
         lease.Complete();

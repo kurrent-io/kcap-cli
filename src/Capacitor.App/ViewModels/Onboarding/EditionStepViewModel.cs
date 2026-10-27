@@ -6,20 +6,22 @@ using ReactiveUI.Reactive;
 namespace Capacitor.App.ViewModels.Onboarding;
 
 /// <summary>
-/// The first page: what Capacitor is, and which edition this machine sets up. Cloud and "already
-/// have a workspace" continue to Sign-in, Local to Install.
+/// The first page: which edition this machine sets up. Cloud and "already have a workspace" continue
+/// to Sign-in, Local to Install.
 /// </summary>
 public sealed class EditionStepViewModel : ReactiveObject, IWizardStep {
-    public const string LocalTitle = "For you, locally";
+    public const string LocalTitle = "Create a local workspace";
     public const string LocalDetail =
-        "For a Mac one person uses, no account. The server is downloaded to this Mac and runs there, so your sessions " +
-        "never leave it. Free.";
-    public const string CloudTitle = "For your team, cloud";
+        "Keep your sessions on this machine for your own use. The local edition is free. No account is needed.";
+    public const string CloudTitle = "Create a cloud workspace";
     public const string CloudDetail =
-        "A Team workspace on kcap.ai that your team shares. Sign in with your work account; Team is free for 60 days.";
+        "Share sessions with your team in a workspace hosted on kcap.ai. Start with a 60-day free trial of the Team plan.";
+    public const string ExistingTitle = "Sign in to a workspace";
+    public const string ExistingDetail =
+        "Connect to a workspace you created or one your team invited you to.";
     public const string UnsupportedPlatform = "The local edition isn't available on this platform yet.";
     public const string CloudProfilePresent =
-        "This Mac is set up for a cloud workspace. Moving it to local comes in a later release.";
+        "This machine is set up for a cloud workspace. Switching to local setup isn't supported yet.";
 
     readonly SetupFunnel   _funnel;
     readonly Func<string?> _localUnavailableReason;
@@ -44,17 +46,13 @@ public sealed class EditionStepViewModel : ReactiveObject, IWizardStep {
     }
 
     public WizardStepId Id                => WizardStepId.Edition;
-    public string       Title             => "Your coding agents, with a memory";
+    public string       Title             => "Set up kcap";
     public string       Eyebrow           => "Get started";
     public bool         Applicable        => true;
     public bool         Satisfied         => true;
     public bool         Skippable         => false;
     public bool         OwnsPrimaryAction => true;
     public bool         PassThrough       => _locked();
-
-    public string Lede =>
-        "Capacitor records the sessions your coding agents run on this machine and gives them tools to search " +
-        "that history, so what you already worked out is there the next time you need it.";
 
     public EditionChoice? Choice {
         get => _choice;

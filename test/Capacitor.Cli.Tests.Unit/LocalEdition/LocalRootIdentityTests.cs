@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.Versioning;
+using System.Text.RegularExpressions;
 using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.LocalEdition;
 
@@ -66,15 +67,23 @@ public class LocalRootIdentityTests {
     public async Task Case_only_roots_on_a_case_sensitive_volume_are_different() {
         Skip.When(!OperatingSystem.IsMacOS(), "needs hdiutil");
 
+        // Spotlight and fseventsd read these markers at mount, so the volume never gets a busy holder.
+        var seed = Tmp.CreateDir("seed");
+        seed.CreateFile(".metadata_never_index");
+        seed.CreateFile(".fseventsd/no_log");
+
         var image = Tmp.PathTo("cs.dmg");
         var mount = Tmp.CreateDir("m");
-        var attached = false;
-        bool detached;
+        string? device = null;
 
         try {
-            Skip.When(Run("hdiutil", "create", "-size", "20m", "-fs", "Case-sensitive APFS", "-volname", "kcs", image) != 0, "hdiutil create failed");
-            Skip.When(Run("hdiutil", "attach", "-nobrowse", "-mountpoint", mount, image) != 0, "hdiutil attach failed");
-            attached = true;
+            Skip.When(Run("hdiutil", "create", "-srcfolder", seed, "-format", "UDRW", "-size", "20m", "-fs", "Case-sensitive APFS", "-volname", "kcs", image) != 0, "hdiutil create failed");
+            var (attachExit, attachOutput) = RunWithOutput("hdiutil", "attach", "-nobrowse", "-noautoopen", "-owners", "off", "-mountpoint", mount, image);
+            Skip.When(attachExit != 0, "hdiutil attach failed");
+            // The first device row names the image's whole disk; detaching that releases the image, not just its volume.
+            device = attachOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                         .Select(line => line.Split((char[])[' ', '\t'], 2)[0])
+                         .FirstOrDefault(WholeDisk.IsMatch) ?? mount;
 
             var upper = Directory.CreateDirectory(Path.Combine(mount, "Root")).FullName;
             Directory.CreateDirectory(Path.Combine(mount, "root"));
@@ -82,21 +91,19 @@ public class LocalRootIdentityTests {
 
             await Assert.That(LocalRootIdentity.Compare(root, Path.Combine(mount, "root"))).IsEqualTo(RootMatch.Different);
         } finally {
-            detached = !attached || await DetachAsync(mount);
+            if (device is not null) await DetachAsync(device, mount);
         }
-
-        await Assert.That(detached).IsTrue();
     }
 
-    // On a loaded runner Spotlight or fseventsd can hold a fresh volume busy for seconds, refusing even a
-    // forced detach.
-    static async Task<bool> DetachAsync(string mount) {
+    // Cleanup, not what the test pins: on a loaded runner Spotlight or fseventsd can hold a fresh volume busy past
+    // every forced detach, and failing the test there would report a passing comparison as a failure.
+    static async Task DetachAsync(string device, string mount) {
         foreach (var pause in (int[])[0, 1, 2, 4, 8]) {
             await Task.Delay(TimeSpan.FromSeconds(pause));
-            if (Run("hdiutil", "detach", "-force", mount) == 0) return true;
+            if (Run("hdiutil", "detach", "-force", device) == 0) return;
         }
 
-        return false;
+        if (Run("diskutil", "unmount", "force", mount) == 0) Run("hdiutil", "detach", "-force", device);
     }
 
     [Test]
@@ -204,19 +211,26 @@ public class LocalRootIdentityTests {
         await Assert.That(LocalRootIdentity.Decide(root, new(new OwnerReading.Unreadable("denied"), Gone))).IsEqualTo(OwnerDecision.Unknown);
     }
 
-    static int Run(string file, params string[] args) {
+    // A whole disk, not one of its slices (/dev/disk4s1): detaching the slice can leave the image attached.
+    static readonly Regex WholeDisk = new(@"^/dev/disk\d+$");
+
+    static int Run(string file, params string[] args) => RunWithOutput(file, args).Exit;
+
+    static (int Exit, string Output) RunWithOutput(string file, params string[] args) {
         try {
             var psi = new ProcessStartInfo(file) { RedirectStandardOutput = true, RedirectStandardError = true };
             foreach (var a in args) psi.ArgumentList.Add(a);
 
             using var p = Process.Start(psi)!;
-            p.StandardOutput.ReadToEnd();
-            p.StandardError.ReadToEnd();
+            // Both drained at once: a child that fills one pipe while the other is read to its end would block forever.
+            var output = p.StandardOutput.ReadToEndAsync();
+            var error  = p.StandardError.ReadToEndAsync();
+            Task.WaitAll(output, error);
             p.WaitForExit();
 
-            return p.ExitCode;
+            return (p.ExitCode, output.Result);
         } catch (System.ComponentModel.Win32Exception) {
-            return -1;
+            return (-1, "");
         }
     }
 }

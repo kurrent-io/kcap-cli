@@ -54,7 +54,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
 
     internal const string WaitingNote      = "Waiting for session…";
     internal const string LoadingNote      = "Loading…";
-    internal const string NoWorkItemNote   = "No work item yet — the agent can attach one with declare.";
+    internal const string NoWorkItemNote   = "No work item yet. Ask the agent to link this session to an issue or task.";
     internal const string NoRepositoryNote = "No repository on this session, so a work item cannot attach.";
     internal const string SignedOutNote    = "Sign in to see the work context.";
     internal const string NotInPlanNote    = "Work items are not in this workspace's plan.";
@@ -127,6 +127,11 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     /// add up to the list.
     public IReadOnlyList<RunCount> RunCounts =>
         [.. RunCountOrder.Select(state => new RunCount(state, _runs.Count(state))).Where(c => c.Count > 0)];
+
+    /// A subagent row the user chose to read; the workspace opens its transcript in place of the chat.
+    public event Action<RunRow>? RunOpened;
+
+    public ReactiveCommand<RunRow, Unit> OpenRunCommand { get; }
 
     /// The plan the session works from. Server-derived, and read on its own lease so a slow plan
     /// read never holds the work item back.
@@ -225,7 +230,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         private set { if (_isRefreshing != value) { this.RaiseAndSetIfChanged(ref _isRefreshing, value); this.RaisePropertyChanged(nameof(RefreshTip)); } }
     }
     bool _hasSession;
-    // Subject, not WhenAnyValue — same RxAppBuilder init trap as SessionRailViewModel.SelectedAgentId.
+    // Subject, not WhenAnyValue — same RxAppBuilder init trap as SessionRailViewModel.SelectedSessionKey.
     readonly BehaviorSubject<bool> _hasSessionChanges = new(false);
     public bool HasSession {
         get => _hasSession;
@@ -283,7 +288,8 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
             ex => WorkContextRead.Of(WorkContextReadKind.Unreachable, ex.Message),
             Apply,
             "work context",
-            reading => IsReading = reading);
+            reading => IsReading = reading,
+            cached: _source.Cached);
         Plan = new PlanSectionViewModel(plans, planActivity ?? new PlanActivity(), time);
         Artefacts = artefacts;
         _opener = opener;
@@ -292,6 +298,8 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         _runs = runs;
         _runs.Changed += RefreshRuns;
         InitializeProjections();
+        OpenRunCommand = ReactiveCommand.Create<RunRow>(row => { if (row.CanOpen) RunOpened?.Invoke(row); });
+        _disposables.Add(OpenRunCommand);
         _disposables.Add(_hasSessionChanges);
         _disposables.Add(_canOpenWorkItem);
 
@@ -394,6 +402,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
 
     internal void Reconnected() {
         if (_tornDown) return;
+        ForgetViewer();
         Plan.Refresh();
         Artefacts?.Refresh();
         _reader.Refresh();
@@ -401,6 +410,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
 
     void OnSignInCompleted() {
         if (_tornDown) return;
+        ForgetViewer();
         Plan.Refresh();
         Artefacts?.Refresh();
         _reader.Refresh();
@@ -428,6 +438,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     /// The server has just said the viewer may not have this data, so nothing of it stays visible.
     void ApplyTerminal(WorkContextPhase phase) {
         ClearServerProjections();
+        ForgetViewer();
         Phase = phase;
         IsStale = false;
     }

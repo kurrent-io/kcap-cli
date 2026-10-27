@@ -1,6 +1,5 @@
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
-using System.Text;
 using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core.LocalIpc;
@@ -87,6 +86,10 @@ public sealed class TerminalTabViewModel : ReactiveObject {
 
     int _resolveState;
     IDisposable? _agentsSub;
+    IDisposable? _statusSub;
+    // Whether the daemon the status stream is connected to now answers AttachWithRuntime. Never carried
+    // across a reconnect: a restart can bring up a daemon that predates the request and drops it.
+    volatile bool _reportsRuntime;
     ITimer? _resolveTimer;
 
     int _attemptGeneration;
@@ -305,27 +308,47 @@ public sealed class TerminalTabViewModel : ReactiveObject {
         set {
             if (_surfaceShown == value) return;
             _surfaceShown = value;
-            if (value) FeedHeld();
+            if (value) {
+                FeedHeld();
+                ResizeSurface();
+            }
         }
     }
 
-    readonly StringBuilder _held = new();
+    bool AgentIsWaiting => _lastDto is { Status: "Running", AwaitingInput: true };
+
+    // Idle chat viewers must not provoke redraws. Active and unknown turns retain terminal
+    // negotiation: a buffered query can still be waiting for its first answer.
+    void ResizeSurface() {
+        if ((!SurfaceShown && AgentIsWaiting) || State is not { Phase: TerminalSessionPhase.Attached, ReadOnly: false }
+            || Surface is not { } surface || _client is not { } client) return;
+        var (cols, rows) = surface.CurrentSize;
+        _ = client.ResizeAsync(cols, rows);
+    }
+
+    // Held ring replays are megabytes; kept as the pieces they arrived in so holding them adds no copy.
+    readonly List<string> _held = [];
+    IReadOnlyList<string>? _heldSnapshot;
     ITerminalSurface? _heldSurface;
     int _heldGeneration;
     ITimer? _heldTimer;
     bool _heldArmed;
 
-    void Deliver(int generation, ITerminalSurface surface, string text) {
+    void Deliver(int generation, ITerminalSurface surface, string text) => Deliver(generation, surface, [text]);
+
+    void Deliver(int generation, ITerminalSurface surface, IReadOnlyList<string> pieces, bool replay = false) {
         if (_surfaceShown) {
-            surface.Feed(text);
+            surface.Feed(pieces, replay);
             return;
         }
         if (!ReferenceEquals(_heldSurface, surface)) {
             _held.Clear();
+            _heldSnapshot = null;
             _heldSurface = surface;
             _heldGeneration = generation;
         }
-        _held.Append(text);
+        if (replay) _heldSnapshot = pieces;
+        else _held.AddRange(pieces);
         if (_heldArmed) return;
         _heldArmed = true;
         // Off-thread in production, synchronous under a fake clock: the scheduler keeps the feed
@@ -336,11 +359,14 @@ public sealed class TerminalTabViewModel : ReactiveObject {
 
     void FeedHeld() {
         _heldArmed = false;
-        if (_held.Length == 0) return;
-        var text = _held.ToString();
+        if (_held.Count == 0 && _heldSnapshot is null) return;
+        var snapshot = _heldSnapshot;
+        _heldSnapshot = null;
+        var pieces = _held.ToArray();
         _held.Clear();
         if (_heldSurface is not { } surface || Retired(_heldGeneration)) return;
-        surface.Feed(text);
+        if (snapshot is not null) surface.Feed(snapshot, replay: true);
+        if (pieces.Length > 0) surface.Feed(pieces);
     }
 
     public ReactiveCommand<Unit, Unit> ReattachCommand { get; }
@@ -355,6 +381,9 @@ public sealed class TerminalTabViewModel : ReactiveObject {
     /// Test-only seam: the current attempt's RunAttemptAsync task (attach + pump + outcome
     /// mapping) -- awaited after driving a fake client's Result/RunStarted from outside.
     internal Task? CurrentRunForTesting => _runTask;
+
+    /// Test-only seam: the ledger read a status change started on a settled tab.
+    internal Task? PendingRecoveryForTesting { get; private set; }
 
     /// <param name="resumeLedger">Reads an agent's resume ledger entry; null leaves a dropped connection final.</param>
     /// <param name="reconnectWindow">How long a dropped connection waits for the agent to resume.</param>
@@ -379,6 +408,9 @@ public sealed class TerminalTabViewModel : ReactiveObject {
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(OnAgentsChanged);
 
+        _statusSub = daemon.Status.Subscribe(status =>
+            _reportsRuntime = status.Capabilities?.Contains(AgentAttachClient.RuntimeCapability) == true);
+
         _resolveTimer = time.CreateTimer(_ => OnResolveTimeout(), null, ResolveBudget, Timeout.InfiniteTimeSpan);
     }
 
@@ -398,6 +430,7 @@ public sealed class TerminalTabViewModel : ReactiveObject {
 
     void HandleDtoObserved(AgentStatusDto dto) {
         var previous = _lastDto?.Status;
+        var wasWaiting = AgentIsWaiting;
         _lastDto = dto;
         // Claim pending → dto-won, or recover timeout-won → dto-won when a late agent row lands
         // after NotFound. A concurrent TeardownAsync's disposed state loses neither CAS.
@@ -421,7 +454,10 @@ public sealed class TerminalTabViewModel : ReactiveObject {
             // teardown removes them.
             if (state != ResolveDtoWon) return;
             if (SessionStatusDots.IsTerminal(dto.Status)) HandleAgentEnded();
-            else ReconcileResumeStatus(previous, dto);
+            else {
+                ReconcileResumeStatus(previous, dto);
+                if (wasWaiting && !AgentIsWaiting) ResizeSurface();
+            }
             return;
         }
     }
@@ -578,21 +614,16 @@ public sealed class TerminalTabViewModel : ReactiveObject {
                 return; // retired before the swap even finished
             }
 
-            // The dispatched swap has run the view's Model binding and the control's synchronous
-            // resize, so CurrentSize is the real pane size. Read it before RunAsync starts rather
-            // than resending after Attached: the client's post-attach nudge writes at RunAsync's
-            // size and last write wins, so a resend from OnAttachedAsync is a no-op. A
-            // never-laid-out first open reads the surface's constructor size; WireSurface's Resized
-            // lane corrects it once the control is measured.
             var (cols, rows) = surface.CurrentSize;
 
             // Suspension point 2 (the one most likely to straddle a concurrent TeardownAsync):
             // never call the factory for a retired attempt.
             if (Retired(generation)) return;
 
+            var requestRuntime = _reportsRuntime;
             var client = _factory(
-                _agentId,
-                (snapshot, reason, ct) => OnAttachedAsync(generation, openingToken, surface, decoder, snapshot, reason, ct),
+                _agentId, requestRuntime,
+                (ack, ct) => OnAttachedAsync(generation, openingToken, surface, decoder, ack, ct),
                 (bytes, ct) => OnOutputAsync(generation, surface, decoder, bytes, ct));
 
             // One more check right before publishing: a retirement landing exactly between the
@@ -605,7 +636,7 @@ public sealed class TerminalTabViewModel : ReactiveObject {
 
             _client = client;
             WireSurface(surface, client, generation);
-            _runTask = RunAttemptAsync(generation, openingToken, client, surface, decoder, cols, rows, token);
+            _runTask = RunAttemptAsync(generation, openingToken, client, surface, decoder, cols, rows, requestRuntime, token);
         } catch (OperationCanceledException) {
             // Retired before the swap even finished (e.g. TeardownAsync raced this call) --
             // expected, not an error.
@@ -629,24 +660,28 @@ public sealed class TerminalTabViewModel : ReactiveObject {
             _ = client.SendInputAsync(bytes);
         };
         surface.Resized += (cols, rows) => {
-            if (Retired(generation) || State.ReadOnly) return;
+            if (Retired(generation) || (!SurfaceShown && AgentIsWaiting)
+                || State is not { Phase: TerminalSessionPhase.Attached, ReadOnly: false }) return;
             _ = client.ResizeAsync(cols, rows);
         };
     }
 
-    async Task OnAttachedAsync(int generation, int openingToken, ITerminalSurface surface, Utf8StreamDecoder decoder, byte[] snapshot, string? reason, CancellationToken ct) {
-        var text = decoder.Decode(snapshot);
-        DateTimeOffset? incarnation;
-        lock (_resumeLock) incarnation = _attemptIncarnation.Generation == generation ? _attemptIncarnation.Stamp : null;
-        incarnation ??= RunningIncarnation(ReadLedger());
+    async Task OnAttachedAsync(int generation, int openingToken, ITerminalSurface surface, Utf8StreamDecoder decoder, AttachAck ack, CancellationToken ct) {
+        var pieces = decoder.DecodePieces(ack.Snapshot);
+        var incarnation = ack.RuntimeStartedAt;
+        if (incarnation is null) {
+            lock (_resumeLock) incarnation = _attemptIncarnation.Generation == generation ? _attemptIncarnation.Stamp : null;
+            incarnation ??= RunningIncarnation(ReadLedger());
+        }
         await Dispatcher.UIThread.InvokeAsync(() => {
             if (Retired(generation)) return;
             lock (_resumeLock) {
                 _resumeDeadline = null;
                 _attachedIncarnation = incarnation;
             }
-            Deliver(generation, surface, text);
-            Publish(TerminalSessionState.Attached(reason), openingToken);
+            Deliver(generation, surface, pieces, replay: AgentIsWaiting);
+            Publish(TerminalSessionState.Attached(ack.ReadOnlyReason), openingToken);
+            ResizeSurface();
         }, DispatcherPriority.Default, ct);
     }
 
@@ -658,12 +693,12 @@ public sealed class TerminalTabViewModel : ReactiveObject {
         }, DispatcherPriority.Default, ct);
     }
 
-    async Task RunAttemptAsync(int generation, int openingToken, ITerminalAttachClient client, ITerminalSurface surface, Utf8StreamDecoder decoder, int cols, int rows, CancellationToken ct) {
+    async Task RunAttemptAsync(int generation, int openingToken, ITerminalAttachClient client, ITerminalSurface surface, Utf8StreamDecoder decoder, int cols, int rows, bool requestRuntime, CancellationToken ct) {
         AttachOutcome outcome;
         try {
-            // The runtime this attempt is for is the one the ledger records before it dials: an
-            // acknowledgement can arrive after a successor has rewritten the entry.
-            if (_resumeLedger is not null) {
+            // A daemon that cannot say which runtime the attach reached leaves the guess to the ledger
+            // before dialing: an acknowledgement can arrive after a successor has rewritten the entry.
+            if (_resumeLedger is not null && !requestRuntime) {
                 var incarnation = await Task.Run(() => RunningIncarnation(ReadLedger()), ct).ConfigureAwait(false);
                 lock (_resumeLock) _attemptIncarnation = (generation, incarnation);
             }
@@ -679,8 +714,9 @@ public sealed class TerminalTabViewModel : ReactiveObject {
         }
 
         if (ResumeVerdict(outcome) is { } verdict) {
-            await FinishAttemptAsync(generation, openingToken, surface, decoder, verdict).ConfigureAwait(false);
+            var settled = await FinishAttemptAsync(generation, openingToken, surface, decoder, verdict).ConfigureAwait(false);
             if (verdict.Phase == TerminalSessionPhase.Resuming) _ = WaitForResumeAsync(generation);
+            else if (settled) await RecheckSettledAsync(generation, verdict).ConfigureAwait(false);
             return;
         }
 
@@ -691,7 +727,31 @@ public sealed class TerminalTabViewModel : ReactiveObject {
             AttachOutcome.ConnectionLost    => TerminalSessionState.Failed(LostConnection),
             _                                => TerminalSessionState.Failed("unknown attach outcome"),
         };
-        await FinishAttemptAsync(generation, openingToken, surface, decoder, mapped).ConfigureAwait(false);
+        var published = await FinishAttemptAsync(generation, openingToken, surface, decoder, mapped).ConfigureAwait(false);
+        if (published && outcome is AttachOutcome.Exited) await RecheckSettledAsync(generation, mapped).ConfigureAwait(false);
+    }
+
+    /// The verdict read the ledger before it was published, and rows that arrived meanwhile reached a tab
+    /// still attached, where they changed nothing: the entry read after publishing is newer than both. An
+    /// interruption it publishes is read past again, since a retry's rows can land while it is in flight.
+    async Task RecheckSettledAsync(int generation, TerminalSessionState settled) {
+        while (true) {
+            var entry = await Task.Run(ReadLedger).ConfigureAwait(false);
+            var interrupted = entry is { State: ResumeState.Interrupted } && settled.Phase != TerminalSessionPhase.Interrupted;
+            if (!interrupted && !NamesAnotherRuntime(settled, entry)) return;
+            TerminalSessionState? published = null;
+            await Dispatcher.UIThread.InvokeAsync(() => {
+                if (Retired(generation) || State != settled) return;
+                if (!interrupted) {
+                    AwaitRetriedResume();
+                    return;
+                }
+                published = TerminalSessionState.Interrupted(entry!.LastError);
+                Publish(published, null);
+            });
+            if (published is null) return;
+            settled = published;
+        }
     }
 
     static string Describe(AttachCallbackException ex) => ex.InnerException?.Message ?? ex.Message;
@@ -734,13 +794,22 @@ public sealed class TerminalTabViewModel : ReactiveObject {
 
     // The row the Agents cache last showed; UI thread only.
     AgentStatusDto? _lastDto;
-    // The ledger's start stamp for the runtime the last attach reached, and the one the current attempt
-    // read before dialing; null when unknown. Guarded by _resumeLock.
+    // The start stamp of the runtime the last attach reached, as its acknowledgement reported it or, from a
+    // daemon that does not, as the ledger read before dialing guessed it; null when unknown. Guarded by
+    // _resumeLock.
     DateTimeOffset? _attachedIncarnation;
     (int Generation, DateTimeOffset? Stamp) _attemptIncarnation;
 
     static DateTimeOffset? RunningIncarnation(ResumeLedgerEntry? entry) =>
         entry is { State: ResumeState.Running, StartedAt: { } started } ? started : null;
+
+    /// Whether the ledger names a runtime other than the one `settled` ended on. An exit ended on the
+    /// runtime attached, which an unknown stamp counts as, as the exit's own verdict did; any other end
+    /// left no runtime, so one coming back or running is another.
+    bool NamesAnotherRuntime(TerminalSessionState settled, ResumeLedgerEntry? entry) =>
+        settled.Phase == TerminalSessionPhase.Exited
+            ? entry is not null && IsSuccessor(entry)
+            : entry is { State: ResumeState.Resuming or ResumeState.Running };
 
     /// A resuming entry, or a running one stamped by a different start than the runtime attached to.
     bool IsSuccessor(ResumeLedgerEntry entry) {
@@ -751,7 +820,8 @@ public sealed class TerminalTabViewModel : ReactiveObject {
     }
 
     /// A tab that settled on an end follows a later status change: an interrupted agent shows why, and
-    /// one a retry brings back under the same id starts a resume wait, which decides from the ledger.
+    /// one a retry brings back under the same id starts a resume wait, once the ledger names a runtime
+    /// other than the one the tab ended on; a restart's row can arrive after its runtime already exited.
     /// A change only: an unchanged row replayed by the cache starts nothing. A tab with an attempt in
     /// flight or already waiting is left to it; its own end reads the ledger.
     void ReconcileResumeStatus(string? previous, AgentStatusDto dto) {
@@ -765,7 +835,20 @@ public sealed class TerminalTabViewModel : ReactiveObject {
             return;
         }
 
-        if (dto.Status == "Resuming" || previous == "Interrupted" || SessionStatusDots.IsTerminal(previous)) AwaitRetriedResume();
+        if (dto.Status == "Resuming" || previous == "Interrupted" || SessionStatusDots.IsTerminal(previous))
+            PendingRecoveryForTesting = RecoverIfAnotherRuntimeAsync(Volatile.Read(ref _attemptGeneration), Volatile.Read(ref _openingToken), State);
+    }
+
+    /// Bound to the attempt it started from, since states are compared by value and a later attempt can
+    /// settle on one equal to this; and to the opening token, since a reattach claims it before its
+    /// generation moves and before it leaves the settled state.
+    async Task RecoverIfAnotherRuntimeAsync(int generation, int openingToken, TerminalSessionState settled) {
+        var entry = await Task.Run(ReadLedger).ConfigureAwait(false);
+        if (!NamesAnotherRuntime(settled, entry)) return;
+        await Dispatcher.UIThread.InvokeAsync(() => {
+            if (Retired(generation) || Volatile.Read(ref _openingToken) != openingToken || State != settled) return;
+            AwaitRetriedResume();
+        });
     }
 
     void AwaitRetriedResume() {
@@ -825,12 +908,13 @@ public sealed class TerminalTabViewModel : ReactiveObject {
     // nothing else in this VM ever calls Flush -- without it, that trailing partial sequence is
     // silently dropped instead of rendering (typically as U+FFFD, same as any other genuinely
     // truncated stream).
-    Task FinishAttemptAsync(int generation, int openingToken, ITerminalSurface surface, Utf8StreamDecoder decoder, TerminalSessionState state) =>
+    Task<bool> FinishAttemptAsync(int generation, int openingToken, ITerminalSurface surface, Utf8StreamDecoder decoder, TerminalSessionState state) =>
         Dispatcher.UIThread.InvokeAsync(() => {
-            if (Retired(generation)) return;
+            if (Retired(generation)) return false;
             var remainder = decoder.Flush();
             if (remainder.Length > 0) surface.Feed(remainder);
             Publish(state, openingToken);
+            return true;
         }, DispatcherPriority.Default, CancellationToken.None).GetTask();
 
     async Task RunDetachAsync() {
@@ -863,11 +947,14 @@ public sealed class TerminalTabViewModel : ReactiveObject {
 
         _agentsSub?.Dispose();
         _agentsSub = null;
+        _statusSub?.Dispose();
+        _statusSub = null;
         _resolveTimer?.Dispose();
         _resolveTimer = null;
         _heldTimer?.Dispose();
         _heldTimer = null;
         _held.Clear();
+        _heldSnapshot = null;
 
         Interlocked.Increment(ref _attemptGeneration);
 

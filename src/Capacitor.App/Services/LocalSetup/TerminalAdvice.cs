@@ -31,7 +31,8 @@ public static partial class TerminalAdvice {
     private static partial Regex SentenceBreak();
 
     [GeneratedRegex(
-        @"\bkcap\s+(setup|local|upgrade|uninstall|login|logout|daemon|import|status|start|stop|agent|mcp|hook)\b"
+        @"\bkcap\s+(setup|upgrade|uninstall|login|logout|daemon|import|status|start|stop|agent|mcp|hook)\b"
+      + @"|\bkcap\s+local(?:\s+(status|start|stop|restart|open|logs|upgrade|uninstall|help)\b|\s+--[\w-]+|(?=\s*([.!?]|$)))"
       + @"|^\s*run\s|\b(set|unset|export)\s+KCAP_[A-Z_]+|\brun setup again\b|\bin your terminal\b",
         RegexOptions.IgnoreCase)]
     private static partial Regex Advice();

@@ -1,7 +1,7 @@
 namespace Capacitor.App.ViewModels.Onboarding;
 
 /// Declaration order is display order.
-public enum WizardStepId { Edition, Install, SignIn, Harnesses, Import, Done }
+public enum WizardStepId { Edition, Install, SignIn, Harnesses, Import, Privacy, Done }
 
 public enum WizardNavigation { Back, Next, Skip }
 
@@ -41,6 +41,10 @@ public interface IWizardStep {
 
     /// Already done with nothing left to ask: forward navigation steps over it.
     bool PassThrough => false;
+
+    /// False hides the shell's Finish later while this step is current. A step that changes it raises
+    /// PropertyChanged for it.
+    bool OffersFinishLater => true;
 
     bool CanContinue => true;
     bool CanSkip => true;

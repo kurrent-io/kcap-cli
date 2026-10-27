@@ -1,6 +1,7 @@
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Avalonia.Threading;
+using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests;
@@ -13,6 +14,42 @@ namespace Capacitor.App.Tests.Unit;
 
 [NotInParallel("AvaloniaSession")]
 public class PullRequestContextViewModelTests {
+    [Test]
+    public Task An_empty_list_keeps_its_empty_state_while_polling_until_a_PR_is_found() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        try {
+            h.Source.Links = [];
+            h.Source.ListGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            h.Push();
+            h.Vm.SetForeground(true);
+            await WaitUntilAsync(() => h.Source.Lists > 0, what: "initial discovery started");
+            await Assert.That(h.Vm.Notice).IsEqualTo("No pull requests yet.");
+            await Assert.That(h.Vm.SectionMeta).IsEmpty();
+
+            h.Source.ListGate.SetResult();
+            await WaitUntilAsync(() => h.Vm.HasListed && !h.Vm.IsReading, what: "empty discovery settled");
+            await Assert.That(h.Vm.Notice).IsEqualTo("No pull requests yet.");
+            await Assert.That(h.Vm.HasNotice).IsTrue();
+
+            h.Source.ListGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            var lists = h.Source.Lists;
+            h.Time.Advance(TimeSpan.FromSeconds(30));
+            await WaitUntilAsync(() => h.Source.Lists > lists, what: "background poll started");
+            await Assert.That(h.Vm.Notice).IsEqualTo("No pull requests yet.");
+            await Assert.That(h.Vm.SectionMeta).IsEmpty();
+            await Assert.That(h.Vm.ShowsRefreshing).IsFalse();
+
+            h.Source.Links = [Link(1)];
+            h.Source.ListGate.SetResult();
+            await WaitUntilAsync(() => h.Vm.HasPullRequest && !h.Vm.IsReading, what: "PR discovered");
+            await Assert.That(h.Vm.Notice).IsEmpty();
+            await Assert.That(h.Vm.SectionMeta).IsEqualTo("1");
+        } finally {
+            h.Source.ListGate?.TrySetResult();
+            await h.Dispose();
+        }
+    });
+
     [Test]
     public Task Link_changes_notify_the_rail_for_initial_discovery_attachments_and_removals() => RunOnUiAsync(async () => {
         var notifications = new List<string>();
@@ -45,6 +82,8 @@ public class PullRequestContextViewModelTests {
             h.Time.Advance(TimeSpan.FromSeconds(3));
             h.Vm.Refresh();
             await WaitUntilAsync(() => !h.Vm.HasPullRequest && !h.Vm.IsReading, what: "removal discovered by manual refresh");
+            await Assert.That(h.Vm.Notice).IsEqualTo("No pull requests yet.");
+            await Assert.That(h.Vm.SectionMeta).IsEmpty();
             await Assert.That(notifications).IsEquivalentTo(new[] { "session", "session", "session", "session" });
         } finally { await h.Dispose(); }
     });
@@ -147,6 +186,34 @@ public class PullRequestContextViewModelTests {
             await Assert.That(h.Vm.IsReading).IsFalse();
         } finally {
             await h.Dispose();
+        }
+    });
+
+    /// A card rebuilt for a session it already showed has its list and overview before any read
+    /// lands, and still lists again.
+    [Test]
+    public Task A_reopened_session_shows_its_last_card_while_it_reads_again() => RunOnUiAsync(async () => {
+        var snapshots = new LastReads<PullRequestSnapshot>();
+        var first = new Harness(snapshots: snapshots);
+        try {
+            first.Push();
+            await first.Show();
+        } finally {
+            await first.Dispose();
+        }
+
+        var second = new Harness(snapshots: snapshots);
+        try {
+            second.Source.ListGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            second.Push();
+            second.Vm.SetForeground(true);
+
+            await Assert.That(second.Vm.CanReveal).IsTrue();
+            await Assert.That(second.Vm.HasListed).IsTrue();
+            await WaitUntilAsync(() => second.Source.Lists == 1, what: "the list read again");
+            second.Source.ListGate.SetResult();
+        } finally {
+            await second.Dispose();
         }
     });
 
@@ -330,6 +397,27 @@ public class PullRequestContextViewModelTests {
         await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(1);
         await Assert.That(h.Vm.Selected.IsAvailable).IsTrue();
         await h.Dispose();
+    });
+
+    /// A PR pinned before discovery settles is the card's subject, so the empty message never sits beside it.
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public Task A_menu_choice_pinned_during_discovery_hides_the_empty_message(bool beforePresence) => RunOnUiAsync(async () => {
+        var h = new Harness();
+        try {
+            h.Source.ListGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            if (!beforePresence) h.Push();
+            h.Vm.SelectSubject(PullRequestWire.Subject(FakePullRequestSource.Link(1)));
+            if (beforePresence) h.Push();
+            h.Vm.SetForeground(true);
+            await WaitUntilAsync(() => h.Source.Lists > 0, what: "initial discovery started");
+            await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(1);
+            await Assert.That(h.Vm.Notice).IsEmpty();
+        } finally {
+            h.Source.ListGate?.TrySetResult();
+            await h.Dispose();
+        }
     });
 
     [Test]
@@ -811,6 +899,124 @@ public class PullRequestContextViewModelTests {
         await h.Dispose();
     });
 
+    static Func<PullRequestSubjectDto, CancellationToken, Task<PullRequestRead<PullRequestOverviewDto>>> Outstanding(
+            Harness h, bool? mergeable, int? unresolved, string kind = "exact", string rollup = "success", string lifecycle = "open") =>
+        (subject, _) => {
+            var ready = h.Source.Overview(subject);
+            return Task.FromResult(ready with { Data = ready.Data! with {
+                Lifecycle = lifecycle, Mergeable = mergeable,
+                Checks = ready.Data.Checks! with { Rollup = rollup },
+                Threads = unresolved is null ? null : new() {
+                    Availability = new() { Status = "ready", FetchedAt = h.Time.GetUtcNow().UtcDateTime },
+                    Unresolved = new() { Value = unresolved, Kind = kind },
+                },
+            } });
+        };
+
+    /// The card counts the threads still unresolved, and offers Fix only while something keeps an open pull
+    /// request from merging; Fix hands the composer a prompt naming each of those things.
+    [Test]
+    public Task Outstanding_work_is_counted_and_fix_prompts_for_each_part() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        try {
+            h.Source.OverviewResponses.Enqueue(Outstanding(h, mergeable: false, unresolved: 2, rollup: "failure"));
+            h.Push(); await h.Show();
+
+            await Assert.That(h.Vm.ThreadsStatus.Text).IsEqualTo("2 unresolved threads");
+            await Assert.That(h.Vm.ShowsFix).IsTrue();
+            await h.Vm.FixCommand.Execute();
+            await Assert.That(h.Fixes.Single()).IsEqualTo(
+                "Get pull request #2 ready to merge: resolve the merge conflicts with the base branch; address the 2 unresolved review threads; fix the failing checks.");
+        } finally { await h.Dispose(); }
+    });
+
+    /// Conflicts get a status row and a reader tab of their own, read from the overview alone: opening
+    /// the tab must not page rows from the server.
+    [Test]
+    public Task Conflicts_open_their_own_tab_without_paging() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        try {
+            h.Source.OverviewResponses.Enqueue(Outstanding(h, mergeable: false, unresolved: 0));
+            h.Push(); await h.Show();
+            h.Vm.SetReaderVisible(true);
+
+            await Assert.That(h.Vm.HasConflicts).IsTrue();
+            await Assert.That(h.Vm.ConflictsStatus.Text).IsEqualTo("Merge conflicts");
+            await Assert.That(h.Vm.LifecycleStatus.Text).IsEqualTo("Open");
+            await h.Vm.ShowSectionCommand.Execute("conflicts");
+
+            await Assert.That(h.Vm.IsConflicts).IsTrue();
+            await Assert.That(h.Vm.SelectedTabIndex).IsEqualTo(4);
+            await Assert.That(h.Vm.ShowsLoading).IsFalse();
+            await Assert.That(h.Vm.PageNote).IsEmpty();
+            await Assert.That(h.Source.Pages).IsEqualTo(0);
+            await Assert.That(h.Vm.FreshnessLabel).IsEqualTo(h.Vm.FetchedLabel);
+            await Assert.That(h.Vm.FreshnessLabel).IsNotEmpty();
+        } finally { await h.Dispose(); }
+    });
+
+    /// Only a mergeable overview reads as clean: an unreported answer must not claim the conflicts are gone.
+    [Test]
+    [Arguments(true, "This branch has no conflicts with the base branch.")]
+    [Arguments(null, "GitHub has not reported whether this branch merges cleanly.")]
+    public Task The_conflicts_note_claims_a_clean_branch_only_when_reported(bool? mergeable, string note) => RunOnUiAsync(async () => {
+        var h = new Harness();
+        try {
+            h.Source.OverviewResponses.Enqueue(Outstanding(h, mergeable, unresolved: 0));
+            h.Push(); await h.Show();
+
+            await Assert.That(h.Vm.HasConflicts).IsFalse();
+            await Assert.That(h.Vm.ConflictsNote).IsEqualTo(note);
+        } finally { await h.Dispose(); }
+    });
+
+    /// Fix follows whether the composer can send, such as a session ending under it: the prompt would
+    /// otherwise land in a composer that is hidden or refuses it.
+    [Test]
+    public Task Fix_is_hidden_once_the_composer_cannot_send() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        try {
+            h.Source.OverviewResponses.Enqueue(Outstanding(h, mergeable: false, unresolved: 1));
+            h.Push(); await h.Show();
+            await Assert.That(h.Vm.ShowsFix).IsTrue();
+            var raised = new List<string?>();
+            h.Vm.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+            h.CanFix = false;
+            h.Vm.FixAvailabilityChanged();
+
+            await Assert.That(raised).Contains(nameof(PullRequestContextViewModel.ShowsFix));
+            await Assert.That(h.Vm.ShowsFix).IsFalse();
+            await h.Vm.FixCommand.Execute();
+            await Assert.That(h.Fixes).IsEmpty();
+        } finally { await h.Dispose(); }
+    });
+
+    [Test]
+    public async Task Fix_keeps_an_unsent_draft_ahead_of_its_prompt() {
+        await Assert.That(PullRequestContextViewModel.WithFixPrompt("  ", "Fix it.")).IsEqualTo("Fix it.");
+        await Assert.That(PullRequestContextViewModel.WithFixPrompt("my draft\n", "Fix it.")).IsEqualTo("my draft\n\nFix it.");
+        await Assert.That(PullRequestContextViewModel.WithFixPrompt("my draft\n\nFix it.", "Fix it.")).IsEqualTo("my draft\n\nFix it.");
+    }
+
+    [Test]
+    [Arguments(true, 0, "exact", "success", "open", "No unresolved threads", false)]
+    [Arguments(null, null, "exact", "success", "open", "", false)]
+    [Arguments(true, 100, "lower_bound", "success", "open", "100+ unresolved threads", true)]
+    [Arguments(true, 0, "lower_bound", "success", "open", "", false)]
+    [Arguments(null, 1, "exact", "success", "draft", "1 unresolved thread", true)]
+    public Task Fix_shows_only_for_an_open_pull_request_with_outstanding_work(
+            bool? mergeable, int? unresolved, string kind, string rollup, string lifecycle, string threads, bool fix) => RunOnUiAsync(async () => {
+        var h = new Harness();
+        try {
+            h.Source.OverviewResponses.Enqueue(Outstanding(h, mergeable, unresolved, kind, rollup, lifecycle));
+            h.Push(); await h.Show();
+
+            await Assert.That(h.Vm.ThreadsStatus.Text).IsEqualTo(threads);
+            await Assert.That(h.Vm.ShowsFix).IsEqualTo(fix);
+        } finally { await h.Dispose(); }
+    });
+
     [Test]
     public Task The_title_opens_the_overview_tab_even_after_another_section() => RunOnUiAsync(async () => {
         var opened = 0;
@@ -1083,11 +1289,14 @@ public class PullRequestContextViewModelTests {
         internal PullRequestContextViewModel Vm { get; }
         internal TimerCountingTimeProvider Clock { get; }
         internal Subject<System.Reactive.Unit> SignIn { get; } = new();
-        internal Harness(Func<PullRequestRepository?>? primary = null, Action? onOpen = null, Func<string?, string?>? readBranch = null, Action<string>? linksChanged = null) {
+        internal readonly List<string> Fixes = [];
+        internal bool CanFix = true;
+        internal Harness(Func<PullRequestRepository?>? primary = null, Action? onOpen = null, Func<string?, string?>? readBranch = null,
+                LastReads<PullRequestSnapshot>? snapshots = null, Action<string>? linksChanged = null) {
             Source = new(Time);
             Clock = new(Time);
             Vm = new(Presence, Source, Clock, Opener, onOpen ?? (() => { }), primaryRepo: primary, signInCompleted: SignIn, readBranch: readBranch,
-                linksChanged: linksChanged);
+                snapshots: snapshots, linksChanged: linksChanged, requestFix: Fixes.Add, canRequestFix: () => CanFix);
         }
         internal void Push() => Presence.OnNext(Agent("agent", "claude", hasTerminal: false, sessionId: "session", branch: "feature"));
         /// Returns once the initial reads have settled, not just once the overview is admitted: a read's settle

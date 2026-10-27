@@ -1,13 +1,13 @@
 name: kcap
-title: Kurrent Capacitor
-summary: Record, review and run coding-agent sessions
+title: kcap
+summary: Run and watch coding agents
 description: |
-  Kurrent Capacitor records coding-agent sessions (Claude Code, Codex, Cursor and others) to a
-  Capacitor server, runs agents remotely through a local daemon, and gives pull-request reviews
-  the context of the sessions that produced them.
+  kcap records coding-agent sessions (Claude Code, Codex, Cursor and others) to a Capacitor
+  server, runs agents remotely through a local daemon, and gives pull-request reviews the
+  context of the sessions that produced them.
 
-  This snap ships the Kurrent Capacitor desktop app together with the `kcap` CLI and daemon it
-  drives, so the two always match.
+  This snap ships the kcap desktop app together with the `kcap` CLI and daemon it drives, so
+  the two always match.
 adopt-info: kcap
 base: core26
 grade: devel
@@ -23,11 +23,11 @@ apps:
   kcap:
     command: bin/kcap
   desktop:
-    command: bin/kurrent-capacitor
+    command: kcap-desktop
 
 parts:
   kcap:
-    # Prebuilt by scripts/build-snap.sh: the same self-contained publishes the other platforms ship.
+    # Staged by scripts/build-snap.sh in the layout the release's Linux app directory uses.
     plugin: dump
     source: .publish/snap
     override-build: |

@@ -66,7 +66,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         writer.AutoFlush = true;
 
         try {
-            await McpStdioLoop.RunAsync(reader, writer, TimedDispatchToolCallAsync, (id, method, request) => method switch {
+            await McpStdioLoop.RunAsync(reader, writer, tools, TimedDispatchToolCallAsync, (id, method, request) => method switch {
                 "initialize" => BuildInitializeResponse(id, request),
                 "tools/list" => BuildToolsListResponse(id, tools),
                 _            => McpProtocol.TryHandleStandardMethod(method, id)
@@ -144,6 +144,14 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
 
         if (toolName == SessionEvalsTool.Name) {
             return await HandleSessionEvalsAsync(id, arguments, client, baseUrl);
+        }
+
+        if (toolName == EvalReportTool.ReportName) {
+            return await HandleEvalReportAsync(id, arguments, client, baseUrl, cwdRepoHash);
+        }
+
+        if (toolName == EvalReportTool.RunsName) {
+            return await HandleEvalRunsAsync(id, arguments, client, baseUrl, cwdRepoHash);
         }
 
         var singlePlan = false;
@@ -308,6 +316,61 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
                 : BuildToolResult(id, result.ToJsonString());
         } catch (ArgumentException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
+        }
+    }
+
+    async Task<string> HandleEvalReportAsync(JsonNode id, JsonObject? arguments, HttpClient client, string baseUrl, string? cwdRepoHash) {
+        try {
+            var sessionId = ReadString(arguments, "session_id", "`session_id` must be a string.");
+            if (!string.IsNullOrWhiteSpace(sessionId) && !SessionEvalsTool.IsSessionId(sessionId))
+                throw new ArgumentException("`session_id` must match ^[A-Za-z0-9_-]{1,128}$.");
+
+            if (string.IsNullOrWhiteSpace(sessionId)) {
+                var repoHash = ResolveRepoHash(arguments, cwdRepoHash, RepoShapeMessage);
+                using var trends = await client.GetAsync(EvalReportTool.BuildTrendsUrl(baseUrl, repoHash, time));
+                if (trends.StatusCode == HttpStatusCode.Unauthorized)
+                    return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time), isError: true);
+                if (!trends.IsSuccessStatusCode)
+                    return BuildToolResult(id, $"Error: HTTP {(int)trends.StatusCode} reading the repository's evals", isError: true);
+                if (EvalReportTool.Runs(await trends.Content.ReadAsStringAsync()).FirstOrDefault() is not { } latest)
+                    return BuildToolResult(id, "No session of this repository that you can see has a completed eval in the last year.");
+                sessionId = latest.SessionId;
+            }
+
+            using var progress = await client.GetAsync(EvalReportTool.BuildProgressUrl(baseUrl, sessionId));
+            if (progress.StatusCode == HttpStatusCode.Unauthorized)
+                return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time), isError: true);
+
+            var body             = progress.StatusCode == HttpStatusCode.OK ? await progress.Content.ReadAsStringAsync() : null;
+            var (text, isError)  = EvalReportTool.Render(sessionId, progress.StatusCode, body);
+            return BuildToolResult(id, text, isError);
+        } catch (ArgumentException ex) {
+            return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
+        } catch (HttpRequestException ex) {
+            return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
+        } catch (JsonException) {
+            return BuildToolResult(id, "Error: the repository's evals could not be read: the response was not valid JSON.", isError: true);
+        }
+    }
+
+    async Task<string> HandleEvalRunsAsync(JsonNode id, JsonObject? arguments, HttpClient client, string baseUrl, string? cwdRepoHash) {
+        try {
+            var limit    = EvalReportTool.ParseLimit(arguments);
+            var repoHash = ResolveRepoHash(arguments, cwdRepoHash, RepoShapeMessage);
+            using var trends = await client.GetAsync(EvalReportTool.BuildTrendsUrl(baseUrl, repoHash, time));
+            if (trends.StatusCode == HttpStatusCode.Unauthorized)
+                return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time), isError: true);
+            if (!trends.IsSuccessStatusCode)
+                return BuildToolResult(id, $"Error: HTTP {(int)trends.StatusCode} reading the repository's evals", isError: true);
+
+            var runs = EvalReportTool.Runs(await trends.Content.ReadAsStringAsync());
+            return BuildToolResult(id, EvalReportTool.ProjectRuns(runs, limit).ToJsonString());
+        } catch (ArgumentException ex) {
+            return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
+        } catch (HttpRequestException ex) {
+            return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
+        } catch (JsonException) {
+            return BuildToolResult(id, "Error: the repository's evals could not be read: the response was not valid JSON.", isError: true);
         }
     }
 
@@ -630,12 +693,32 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
             first["hits"]                 = merged;
             first["widened_to_all_repos"] = true;
 
-            // The flag describes one request's lexical lanes; a lexical hit in either scope clears it.
-            var firstNoLexical   = ReadNoLexicalMatch(first);
-            var widenedNoLexical = ReadNoLexicalMatch(widened);
+            // Each flag describes one request. A null no_lexical_match is unknown (a timed-out transcript lane), so
+            // "no match" survives only when both requests said so. A body without the flag says nothing, so the other
+            // request's answer stands; null lane flags mean that request ran no lexical search.
+            if (first.ContainsKey("no_lexical_match") && widened.ContainsKey("no_lexical_match")) {
+                var firstNoLexical   = ReadBool(first, "no_lexical_match");
+                var widenedNoLexical = ReadBool(widened, "no_lexical_match");
+                first["no_lexical_match"] = firstNoLexical is false || widenedNoLexical is false ? false
+                                          : firstNoLexical is true && widenedNoLexical is true ? true
+                                          : null;
+            } else if (widened.ContainsKey("no_lexical_match")) {
+                first["no_lexical_match"] = widened["no_lexical_match"]?.DeepClone();
+            }
 
-            if (firstNoLexical is not null || widenedNoLexical is not null) {
-                first["no_lexical_match"] = (firstNoLexical ?? true) && (widenedNoLexical ?? true);
+            foreach (var field in new[] { "bounded_lanes", "timed_out_lanes" }) {
+                var firstLanes   = first[field] as JsonArray;
+                var widenedLanes = widened[field] as JsonArray;
+                if (firstLanes is null && widenedLanes is null) continue;
+
+                var names = new List<string>();
+                foreach (var lane in (firstLanes ?? new JsonArray()).Concat(widenedLanes ?? new JsonArray())) {
+                    if (lane is JsonValue v && v.TryGetValue<string>(out var name) && !names.Contains(name)) names.Add(name);
+                }
+
+                var union = new JsonArray();
+                foreach (var name in names) union.Add((JsonNode?)JsonValue.Create(name));
+                first[field] = union;
             }
 
             return first.ToJsonString();
@@ -643,8 +726,8 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
             return firstBody;
         }
 
-        static bool? ReadNoLexicalMatch(JsonObject body) =>
-            body["no_lexical_match"] is JsonValue v && v.TryGetValue<bool>(out var b) ? b : null;
+        static bool? ReadBool(JsonObject body, string field) =>
+            body[field] is JsonValue v && v.TryGetValue<bool>(out var b) ? b : null;
     }
 
     static string BuildSummaryUrl(string baseUrl, string sessionId) =>
@@ -975,7 +1058,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
     internal static McpTool[] BuildToolsList() => [
         new(
             "search_sessions",
-            "Search past Kurrent Capacitor sessions by keywords and/or author name. query takes one to three keywords or identifiers, NEVER a sentence or a question: the literal lanes require every term to appear inside one transcript event or one turn summary, so a sentence gets zero literal hits and the page fills with embedding neighbours that look confident and are not. Identifiers are the strongest input: a ticket id (PROJ-1234, #1234), a file name (Elements.g.cs), a symbol. On a miss, retry with a single identifier before widening the query. Read hit_kind on every hit: transcript and title are literal matches on your terms; turn_prose and semantic can be nearest-neighbour hits that do not contain the query at all, so check the snippet for your term before trusting them. Searches the current repo first and AUTOMATICALLY widens to all visible repos when results are thin (response then carries widened_to_all_repos: true); every hit includes its repo, so check it before assuming a hit is from this repo. Pass repo: \"all\" to search everywhere explicitly, or repo: \"<owner>/<name>\" to pin another repo (explicit repo never widens). Returns ranked hits with session_id, title, owner, snippet, hit_kind, (for transcript hits) hit_event_index + agent_id for drilling into the exact moment with get_session_transcript, and (for turn_prose hits) hit_turn_index for get_turn. For 'have we done this before / why did we / who decided X / when did we work on Y' questions, search here before grepping the code or git log — it searches the reasoning across past sessions, not just the code.",
+            "Search past kcap sessions by keywords and/or author name. query takes one to three keywords or identifiers, NEVER a sentence or a question: the literal lanes require every term to appear inside one transcript event or one turn summary, so a sentence gets zero literal hits and the page fills with embedding neighbours that look confident and are not. Identifiers are the strongest input: a ticket id (PROJ-1234, #1234), a file name (Elements.g.cs), a symbol. On a miss, retry with a single identifier before widening the query. Read hit_kind on every hit: transcript and title are literal matches on your terms; turn_prose and semantic can be nearest-neighbour hits that do not contain the query at all, so check the snippet for your term before trusting them. Searches the current repo first and AUTOMATICALLY widens to all visible repos when results are thin (response then carries widened_to_all_repos: true); every hit includes its repo, so check it before assuming a hit is from this repo. Pass repo: \"all\" to search everywhere explicitly, or repo: \"<owner>/<name>\" to pin another repo (explicit repo never widens). Returns ranked hits with session_id, title, owner, snippet, hit_kind, (for transcript hits) hit_event_index + agent_id for drilling into the exact moment with get_session_transcript, and (for turn_prose hits) hit_turn_index for get_turn. For 'have we done this before / why did we / who decided X / when did we work on Y' questions, search here before grepping the code or git log — it searches the reasoning across past sessions, not just the code.",
             new(
                 "object",
                 new() {
@@ -992,7 +1075,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         ),
         new(
             "list_repo_sessions",
-            "List the sessions you are allowed to see on a repository, or on every repository with repo: \"all\". Without a time window, state defaults to active and rows are ordered by last activity, running ones first, so no finished session appears unless you pass state: \"all\" or \"ended\", and one row back on a busy repo usually means only your own session is running. With since and/or until the tool lists the sessions worked on in that period: state then defaults to all, rows are ordered by started_at, newest first, and the response echoes the window it applied as since and until. A session is in the window when it started before until and ended at or after since, or, while still open, was last active at or after since. Activity is not checked event by event, so a session that spans the window lists for it even if it was idle inside it. since and until each take an instant ending in Z or an offset (2026-09-27T09:00:00Z), a date (2026-09-27, the start of that day in this machine's time zone) or a duration back from now (36h, 14d, 2w); for one whole day pass that date as since and the next date as until, and pass the same instant as both to list the sessions that spanned it. When the response carries next_cursor there are more rows: call again with cursor set to it, the same repo and optionally limit, and nothing else, because the cursor carries the window, state, owner and touching_path of the page it came from. total counts the whole window, not the rows left. An argument the tool does not declare (from, to, a date range) is ignored rather than rejected. Each row carries session_id, owner, repo, vendor, status, access_level, stale, started_at, ended_at, last_activity_at, branch, cwd, last_prompt, write_attempt_paths and write_attempt_count; repo is the session's primary repository, null when it has none. Rows are visibility-filtered: a teammate who is missing may simply have a private session. Below access_level \"full\" the branch, cwd, prompt and paths are blank, and touching_path only ever matches sessions you hold at \"full\". stale is set only on an active session with no activity for over an hour; an ended session is never stale. write_attempt_paths are Edit/Write tool inputs recorded at invocation time: attempts, not confirmed writes; first call per event only; paths as the tool received them; nothing from Bash, MultiEdit, NotebookEdit, apply_patch, MCP file tools or subagents. On a running session, list_turns works at \"activity\" and above while get_turn and get_session_transcript need \"full\": for a full row, the latest closed turn is get_turn on the last index list_turns returns; an activity row stops at list_turns. Reach for this when you find unexplained state in a checkout and need to know which session is doing it, or to answer what you or the team worked on over a period: owner: \"me\" for your own work, no owner for everyone you can see. Read what a listed session did with get_session_summary.",
+            "List the sessions you are allowed to see on a repository, or on every repository with repo: \"all\". Without a time window, state defaults to active and rows are ordered by last activity, running ones first, so no finished session appears unless you pass state: \"all\" or \"ended\", and one row back on a busy repo usually means only your own session is running. With since and/or until the tool lists the sessions worked on in that period: state then defaults to all, rows are ordered by started_at, newest first, and the response echoes the window it applied as since and until. A session is in the window when it started before until and ended at or after since, or, while still open, was last active at or after since. Activity is not checked event by event, so a session that spans the window lists for it even if it was idle inside it. since and until each take an instant ending in Z or an offset (2026-09-27T09:00:00Z), a date (2026-09-27, the start of that day in this machine's time zone) or a duration back from now (36h, 14d, 2w); for one whole day pass that date as since and the next date as until, and pass the same instant as both to list the sessions that spanned it. When the response carries next_cursor there are more rows: call again with cursor set to it, the same repo and optionally limit, and nothing else, because the cursor carries the window, state, owner and touching_path of the page it came from. total counts the whole window, not the rows left. An argument the tool does not declare (from, to, a date range) is refused with an error naming it. Each row carries session_id, owner, repo, vendor, status, access_level, stale, started_at, ended_at, last_activity_at, branch, cwd, last_prompt, write_attempt_paths and write_attempt_count; repo is the session's primary repository, null when it has none. Rows are visibility-filtered: a teammate who is missing may simply have a private session. Below access_level \"full\" the branch, cwd, prompt and paths are blank, and touching_path only ever matches sessions you hold at \"full\". stale is set only on an active session with no activity for over an hour; an ended session is never stale. write_attempt_paths are Edit/Write tool inputs recorded at invocation time: attempts, not confirmed writes; first call per event only; paths as the tool received them; nothing from Bash, MultiEdit, NotebookEdit, apply_patch, MCP file tools or subagents. On a running session, list_turns works at \"activity\" and above while get_turn and get_session_transcript need \"full\": for a full row, the latest closed turn is get_turn on the last index list_turns returns; an activity row stops at list_turns. Reach for this when you find unexplained state in a checkout and need to know which session is doing it, or to answer what you or the team worked on over a period: owner: \"me\" for your own work, no owner for everyone you can see. Read what a listed session did with get_session_summary.",
             new(
                 "object",
                 new() {
@@ -1092,6 +1175,8 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
             McpToolAnnotations.Read
         ),
         SessionEvalsTool.Definition,
+        EvalReportTool.ReportDefinition,
+        EvalReportTool.RunsDefinition,
         ConnectionTool.Definition
     ];
 }

@@ -164,6 +164,30 @@ public class LocalServerRecoveryViewModelTests {
         });
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_dashboard_start_disables_the_banner_command_until_it_finishes() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var release = new TaskCompletionSource<ProcessResult>();
+            var recorder = new Recorder { Next = _ => release.Task };
+            using var status = new BehaviorSubject<ServerLaneStatus>(new(ServerLaneState.Retrying));
+            using var vm = Build(status, isLocalServer: true, recorder);
+            var command = (ICommand)vm.StartCommand;
+
+            await Assert.That(command.CanExecute(null)).IsTrue();
+            var run = vm.StartAsync();
+            await Assert.That(vm.IsStarting).IsTrue();
+            await Assert.That(command.CanExecute(null)).IsFalse();
+            await Assert.That(await vm.StartAsync()).IsFalse();
+
+            release.SetResult(Started);
+            await Assert.That(await run).IsTrue();
+            await Assert.That(vm.IsStarting).IsFalse();
+            await Assert.That(command.CanExecute(null)).IsTrue();
+            await Assert.That(recorder.Starts).IsEqualTo(1);
+        });
+    }
+
     /// A throw out of the reconnect must not escape the command, where nothing observes it.
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -174,8 +198,7 @@ public class LocalServerRecoveryViewModelTests {
                 status, isLocalServer: true, _ => Task.FromResult(Started),
                 () => throw new ObjectDisposedException("lane"), CancellationToken.None);
 
-            await vm.StartCommand.Execute().ToTask();
-
+            await Assert.That(await vm.StartAsync()).IsFalse();
             await Assert.That(vm.Message).Contains("reconnecting failed");
         });
     }

@@ -293,7 +293,8 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
                 journal: ctx.Journal,
                 sessionNewMeta: descriptor.SessionNewMeta,
                 turnUsageReader: descriptor.TurnUsageReader,
-                subagentReader: descriptor.SubagentReader
+                subagentReader: descriptor.SubagentReader,
+                questionProtocol: descriptor.QuestionProtocol
             );
 
             // MUST precede StartAsync below: the handshake's SetLaunchStage stamps are no-ops against
@@ -307,10 +308,9 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             throw;
         }
 
-        // Review flow: the injected result channel + allowlist. Otherwise unchanged (null today).
         var mcpServers = ctx.IsReviewFlow
             ? descriptor.ReviewFlowMcpTransport == AcpReviewFlowMcpTransport.SessionNew ? reviewMcp : null
-            : descriptor.SupportsMcpServers ? ctx.McpServers : null;
+            : descriptor.SupportsMcpServers ? InteractiveMcpServers(descriptor, ctx) : null;
 
         // An unattended reviewer's MCP surface is a security boundary: the flow-result channel must be
         // present and every flow-STARTING server absent, or a reviewer could start a nested flow. That
@@ -653,6 +653,13 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         !ctx.IsReviewFlow                 ? AcpUnattendedInteractionPolicy.Disabled
         : ctx.IsBorrowedSnapshot          ? AcpUnattendedInteractionPolicy.Fail
         : descriptor.UnattendedInteractionPolicy;
+
+    /// <summary>A private agent is handed no kcap server, as a --private local launch is not; the servers Grok
+    /// loads from the user's own config, kcap's among them, are the user's choice and still start.</summary>
+    static IReadOnlyList<AcpMcpServerSpec> InteractiveMcpServers(AcpVendorDescriptor descriptor, RuntimeStartContext ctx) =>
+        descriptor.InjectsKcapMcpServers && !ctx.IsPrivate
+            ? [.. AcpInteractiveKcapMcp.Build(ctx, descriptor.Vendor), .. ctx.McpServers ?? []]
+            : ctx.McpServers ?? [];
 
     /// <summary>
     /// Fail-closed validation + build of the review-flow MCP list, run as the FIRST thing in

@@ -92,7 +92,7 @@ public class SessionMutationServerContractTests : IDisposable {
         var run = await RunAsync(UnreachableUrl, sessionIdEnv: null, "disable", SessionId);
 
         await Assert.That(run.ExitCode).IsEqualTo(0);
-        await Assert.That(run.Stderr).Contains("Kurrent Capacitor API cannot be reached");
+        await Assert.That(run.Stderr).Contains("kcap API cannot be reached");
         await Assert.That(run.Stdout).Contains("Session disabled locally");
     }
 
@@ -136,39 +136,119 @@ public class SessionMutationServerContractTests : IDisposable {
 
     // --- kcap set-title ---
 
-    /// <summary>The title post carries the ambient session id alongside the joined title, and prints nothing.</summary>
+    void StubAgentTitle(bool applied, string? shown) =>
+        _server.Given(Request.Create().WithPath("/hooks/agent-title").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithBody(new JsonObject { ["applied"] = applied, ["title"] = shown }.ToJsonString()));
+
+    JsonNode SingleAgentTitleBody() {
+        var posts = _server.FindLogEntries(Request.Create().WithPath("/hooks/agent-title").UsingPost());
+
+        return posts.Count == 1 ? JsonNode.Parse(posts[0].RequestMessage.Body!)! : throw new InvalidOperationException($"{posts.Count} agent-title posts");
+    }
+
+    /// <summary>A plain title is a rename: the post carries the ambient session id and the joined title, and an applied
+    /// title prints nothing.</summary>
     [Test]
-    public async Task Set_title_posts_the_session_id_and_title() {
+    public async Task Set_title_posts_a_rename_with_the_session_id_and_title() {
         StubAuthConfig();
-        _server.Given(Request.Create().WithPath("/hooks/set-title").UsingPost())
-            .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
+        StubAgentTitle(applied: true, "Refit the boiler");
 
         var run = await RunAsync(_server.Url!, sessionIdEnv: SessionId, "set-title", "Refit", "the", "boiler");
 
         await Assert.That(run.ExitCode).IsEqualTo(0);
         await Assert.That(run.Stdout).IsEqualTo("");
+        await Assert.That(run.Stderr).IsEqualTo("");
+
+        var posts = _server.FindLogEntries(Request.Create().WithPath("/hooks/agent-title").UsingPost());
+        var body  = SingleAgentTitleBody();
+        await Assert.That(body["session_id"]?.GetValue<string>()).IsEqualTo(SessionIdPath);
+        await Assert.That(body["title"]?.GetValue<string>()).IsEqualTo("Refit the boiler");
+        await Assert.That(body["rename"]?.GetValue<bool>()).IsTrue();
+        await Assert.That(Header(posts[0], "Authorization")).IsEqualTo($"Bearer {BearerToken}");
+        await Assert.That(Header(posts[0], "X-Kcap-Cli-Version")).IsNotNull();
+    }
+
+    [Test]
+    public async Task Set_title_auto_posts_a_title_that_is_not_a_rename() {
+        StubAuthConfig();
+        StubAgentTitle(applied: true, "Refit the boiler");
+
+        var run = await RunAsync(_server.Url!, sessionIdEnv: SessionId, "set-title", "--auto", "Refit the boiler");
+
+        await Assert.That(run.ExitCode).IsEqualTo(0);
+        var body = SingleAgentTitleBody();
+        await Assert.That(body["title"]?.GetValue<string>()).IsEqualTo("Refit the boiler");
+        await Assert.That(body["rename"]?.GetValue<bool>()).IsFalse();
+    }
+
+    /// <summary>The server answering that another title stands is not success: the agent must not report a rename.</summary>
+    [Test]
+    public async Task Set_title_reports_a_rename_the_server_did_not_apply() {
+        StubAuthConfig();
+        StubAgentTitle(applied: false, "Renamed in the dashboard");
+
+        var run = await RunAsync(_server.Url!, sessionIdEnv: SessionId, "set-title", "Refit");
+
+        await Assert.That(run.ExitCode).IsEqualTo(3);
+        await Assert.That(run.Stderr).Contains("Title not applied: the session keeps \"Renamed in the dashboard\".");
+    }
+
+    /// <summary>A chosen title outranking the first-prompt title is the intended outcome, so it is reported without
+    /// failing the command the hook asks the agent to run silently.</summary>
+    [Test]
+    public async Task Set_title_auto_that_loses_says_so_and_succeeds() {
+        StubAuthConfig();
+        StubAgentTitle(applied: false, shown: null);
+
+        var run = await RunAsync(_server.Url!, sessionIdEnv: SessionId, "set-title", "--auto", "Refit");
+
+        await Assert.That(run.ExitCode).IsEqualTo(0);
+        await Assert.That(run.Stderr).Contains("Title not applied: the session keeps its current title.");
+    }
+
+    [Test]
+    public async Task Set_title_reads_auto_later_in_the_title_as_a_word() {
+        StubAuthConfig();
+        StubAgentTitle(applied: true, "Explain the --auto flag");
+
+        var run = await RunAsync(_server.Url!, sessionIdEnv: SessionId, "set-title", "Explain", "the", "--auto", "flag");
+
+        await Assert.That(run.ExitCode).IsEqualTo(0);
+        var body = SingleAgentTitleBody();
+        await Assert.That(body["title"]?.GetValue<string>()).IsEqualTo("Explain the --auto flag");
+        await Assert.That(body["rename"]?.GetValue<bool>()).IsTrue();
+    }
+
+    /// <summary>An older server has no agent-title route (a bare 404): the title goes to set-title, which only fills
+    /// an untitled session, so the command cannot claim it applied.</summary>
+    [Test]
+    public async Task Set_title_against_an_older_server_falls_back_and_says_it_is_unconfirmed() {
+        StubAuthConfig();
+        _server.Given(Request.Create().WithPath("/hooks/agent-title").UsingPost()).RespondWith(Response.Create().WithStatusCode(404));
+        _server.Given(Request.Create().WithPath("/hooks/set-title").UsingPost()).RespondWith(Response.Create().WithStatusCode(200));
+
+        var run = await RunAsync(_server.Url!, sessionIdEnv: SessionId, "set-title", "Refit");
+
+        await Assert.That(run.ExitCode).IsEqualTo(3);
+        await Assert.That(run.Stderr).Contains("cannot confirm");
 
         var posts = _server.FindLogEntries(Request.Create().WithPath("/hooks/set-title").UsingPost());
         await Assert.That(posts.Count).IsEqualTo(1);
-
-        var body = JsonNode.Parse(posts[0].RequestMessage.Body!)!;
-        await Assert.That(body["session_id"]?.GetValue<string>()).IsEqualTo(SessionIdPath);
-        await Assert.That(body["title"]?.GetValue<string>()).IsEqualTo("Refit the boiler");
-        await Assert.That(Header(posts[0], "Authorization")).IsEqualTo($"Bearer {BearerToken}");
-        await Assert.That(Header(posts[0], "X-Kcap-Cli-Version")).IsNotNull();
+        await Assert.That(JsonNode.Parse(posts[0].RequestMessage.Body!)!["title"]?.GetValue<string>()).IsEqualTo("Refit");
     }
 
     /// <summary>A rejected title is a plain failure: the status is reported and the exit code is 1.</summary>
     [Test]
     public async Task Set_title_fails_when_the_server_refuses() {
         StubAuthConfig();
-        _server.Given(Request.Create().WithPath("/hooks/set-title").UsingPost())
-            .RespondWith(Response.Create().WithStatusCode(500));
+        _server.Given(Request.Create().WithPath("/hooks/agent-title").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(403));
 
         var run = await RunAsync(_server.Url!, sessionIdEnv: SessionId, "set-title", "Refit");
 
         await Assert.That(run.ExitCode).IsEqualTo(1);
-        await Assert.That(run.Stderr).Contains("Server returned HTTP 500");
+        await Assert.That(run.Stderr).Contains("Server returned HTTP 403");
     }
 
     // --- fixtures ---

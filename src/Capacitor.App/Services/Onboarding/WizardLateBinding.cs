@@ -1,3 +1,5 @@
+using Capacitor.App.Services.LocalSetup;
+using Capacitor.App.Services.Mutation;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 
@@ -71,14 +73,21 @@ public sealed class LateBoundKcapCli(Func<IKcapCli> bind, string? cliPath) : IKc
     public Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct, IReadOnlyList<string>? options = null) =>
         bind().PluginInstallAsync(vendorFlag, ct, options);
 
+    public Task<ProcessResult> AccountsAsync(MutationVerb verb, AccountArgs args, CancellationToken ct) =>
+        bind().AccountsAsync(verb, args, ct);
+
     public Task<StreamingResult> ImportAsync(ImportRequest request, Action<StreamedLine> onLine, CancellationToken ct) =>
         bind().ImportAsync(request, onLine, ct);
 
-    public Task<StreamingResult> SetupLocalAsync(Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct) =>
-        bind().SetupLocalAsync(onLine, interrupt, ct);
+    public Task<StreamingResult> SetupLocalAsync(
+            LocalEmbeddingChoice embeddings, Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct) =>
+        bind().SetupLocalAsync(embeddings, onLine, interrupt, ct);
 
     public Task<StreamingResult> LocalUpgradeAsync(Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct) =>
         bind().LocalUpgradeAsync(onLine, interrupt, ct);
+
+    public Task<StreamingResult> UninstallAsync(bool purgeLocal, Action<StreamedLine> onLine, CancellationToken ct) =>
+        bind().UninstallAsync(purgeLocal, onLine, ct);
 
     public Task<ProcessResult> LocalStartAsync(CancellationToken ct) => bind().LocalStartAsync(ct);
 }

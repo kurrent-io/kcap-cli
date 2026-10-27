@@ -7,7 +7,9 @@ namespace Capacitor.App.ViewModels;
 /// State is what it presents, which reads Stopped for a still-running row once the session is over.
 public sealed class RunRow : ReactiveObject {
     bool _isBackground;
+    string? _agentId;
     bool _outcomeUnknown;
+    bool _openable = true;
     RunState _state = RunState.Running;
     string _stateText = "";
 
@@ -31,6 +33,33 @@ public sealed class RunRow : ReactiveObject {
 
     public bool IsBackground { get => _isBackground; private set => this.RaiseAndSetIfChanged(ref _isBackground, value); }
 
+    /// The subagent's id, which its own transcript is filed under; null for a command, or until it is known.
+    public string? AgentId {
+        get => _agentId;
+        private set {
+            if (_agentId == value) return;
+            this.RaiseAndSetIfChanged(ref _agentId, value);
+            this.RaisePropertyChanged(nameof(CanOpen));
+        }
+    }
+
+    /// Whether the subagent's own transcript can be opened from this row.
+    public bool CanOpen => Kind == RunKind.Agent && AgentId is not null && _openable;
+
+    /// Set by the owning lane: false where it has no way to read a subagent's transcript.
+    internal bool Openable {
+        get => _openable;
+        set {
+            if (_openable == value) return;
+            _openable = value;
+            this.RaisePropertyChanged(nameof(CanOpen));
+        }
+    }
+
+    internal void Identify(string agentId) {
+        if (Kind == RunKind.Agent) AgentId = agentId;
+    }
+
     public RunState State {
         get => _state;
         private set {
@@ -38,6 +67,7 @@ public sealed class RunRow : ReactiveObject {
             this.RaiseAndSetIfChanged(ref _state, value);
             this.RaisePropertyChanged(nameof(IsRunning));
             this.RaisePropertyChanged(nameof(IsFailed));
+            this.RaisePropertyChanged(nameof(StateWord));
         }
     }
 
@@ -46,7 +76,19 @@ public sealed class RunRow : ReactiveObject {
     public bool IsRunning => State == RunState.Running;
     public bool IsFailed  => State == RunState.Failed;
 
-    internal void MarkBackground() => IsBackground = true;
+    /// The row's state without its ticking duration, so a screen reader's name for it changes only when the run does.
+    public string StateWord => State switch {
+        RunState.Running when IsBackground => "running in background",
+        RunState.Running                   => "running",
+        RunState.Failed                    => "failed",
+        RunState.Stopped                   => "stopped",
+        _                                  => "done",
+    };
+
+    internal void MarkBackground() {
+        IsBackground = true;
+        this.RaisePropertyChanged(nameof(StateWord));
+    }
 
     /// An end with an outcome is final. One without reads as done until one with an outcome
     /// arrives, and the earlier of the two dates the row: the server stamps a stop when it heard

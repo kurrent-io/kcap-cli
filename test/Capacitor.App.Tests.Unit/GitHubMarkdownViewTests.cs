@@ -115,7 +115,7 @@ public class GitHubMarkdownViewTests {
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task An_image_shows_its_picture_once_its_bytes_arrive() {
-        var png = new byte[] { 0x89, (byte)'P', (byte)'N', (byte)'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0 };
+        var png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
         var svg = System.Text.Encoding.UTF8.GetBytes("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"2000\" height=\"20\"><rect width=\"2000\" height=\"20\"/></svg>");
         await RunOnUiAsync(() => WithImageBytes(png, async () => {
             var (window, root, _) = Show("![shot](https://h/x.png) <img src=\"https://h/badge\" alt=\"b\" height=\"20px\">", MarkdownFlavor.GitHub);

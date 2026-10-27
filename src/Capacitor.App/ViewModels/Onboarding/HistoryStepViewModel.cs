@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.ComponentModel;
+using System.Reactive;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core.FirstRun;
 using Capacitor.Cli.Core.Harness;
@@ -12,7 +13,8 @@ public enum HistoryState { Looking, NoHarness, NoHistory, OnlyUnmatched, Unreada
 /// <summary>
 /// Which repositories' past sessions to upload, how far each goes, and how far back. Discovery
 /// runs on entry for the harnesses the Harnesses page turned recording on for; Next starts the
-/// import and moves on at once, because the import outlives the page.
+/// import and moves on at once, because the import outlives the page. The page leads with what
+/// it found and what it will import, and keeps the per-repository choices behind Customize.
 /// </summary>
 public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     internal const string DocsUrl = "https://github.com/kurrent-io/kcap-cli#configuration";
@@ -24,8 +26,10 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     readonly Func<bool>                        _onLocalPath;
 
     IReadOnlyList<HarnessId>? _discoveredFor;
+    bool                      _discoveredLocal;
     HistoryState              _state = HistoryState.Looking;
     bool                      _titleLocally = true;
+    bool                      _customizing;
     int                       _unmatched;
     HistoryImportRun?         _run;
     CancellationTokenSource?  _discovery;
@@ -39,6 +43,8 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         _time        = time;
         _onLocalPath = onLocalPath ?? (() => false);
         MachineName = machineName;
+
+        ToggleCustomizeCommand = ReactiveCommand.Create(() => { Customizing = !Customizing; });
     }
 
     public WizardStepId Id         => WizardStepId.Import;
@@ -47,9 +53,11 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     public bool         Applicable => true;
     public string       SkipLabel  => "Not now";
 
-    public string Lede =>
-        "Capacitor uploads the transcripts your harnesses have already written, so your past work is searchable " +
-        "from day one. Nothing leaves this machine until you choose.";
+    public string Lede => _onLocalPath()
+        ? "kcap imports the transcripts your harnesses have already written, so your past work is searchable " +
+          "from day one. Everything stays on this machine."
+        : "kcap uploads the transcripts your harnesses have already written, so your past work is searchable " +
+          "from day one. Nothing leaves this machine until you choose.";
 
     public string MachineName { get; }
 
@@ -69,6 +77,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
             this.RaisePropertyChanged(nameof(DeclineNote));
             this.RaisePropertyChanged(nameof(CloudDeclineVisible));
             this.RaisePropertyChanged(nameof(LocalDeclineVisible));
+            this.RaisePropertyChanged(nameof(DetailsVisible));
             Restate();
         }
     }
@@ -91,15 +100,23 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
 
     string? LocalEmptyMessage => State switch {
         HistoryState.NoHarness =>
-            "No harnesses were connected in this setup. Go back to connect one, or import later from Help and support → Set up Capacitor.",
+            "No harnesses were connected in this setup. Go back to connect one, or import later from Help and support → Set up kcap.",
         HistoryState.NoHistory =>
             $"No history on {MachineName} to import. New sessions will record as they happen.",
         HistoryState.OnlyUnmatched =>
             $"Found {SessionCount(_unmatched)} on {MachineName}, but none matched a repository. Those sessions stay on this Mac.",
         HistoryState.Unreadable =>
-            $"Could not read history on {MachineName}. Import it later from Help and support → Set up Capacitor.",
+            $"Could not read history on {MachineName}. Import it later from Help and support → Set up kcap.",
         _ => null,
     };
+
+    /// The local edition has nobody to share with, so its track is skip or import.
+    public bool LocalLevels => _discoveredLocal;
+    public bool CloudLevels => !_discoveredLocal;
+
+    public string LevelsNote => _discoveredLocal
+        ? "Checked repositories import into kcap on this Mac"
+        : "Checked repositories import with your recording privacy setting. Only me keeps a repository's history private";
 
     /// "from ✓ Claude Code ✓ Codex": the harnesses this page reads from.
     public IReadOnlyList<string> FromLabels { get; private set; } = [];
@@ -114,6 +131,58 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         !HasRepos || _unmatched == 0 ? null
         : _onLocalPath()             ? $"{SessionCount(_unmatched)} on disk don't match a repository. Those sessions stay on this Mac."
         :                              $"{SessionCount(_unmatched)} on disk don't match a repository. Use kcap remap to link them.";
+
+    /// Off until asked for: most people import everything found, so the per-repository choices wait behind Customize.
+    public bool Customizing {
+        get => _customizing;
+        private set {
+            this.RaiseAndSetIfChanged(ref _customizing, value);
+            this.RaisePropertyChanged(nameof(DetailsVisible));
+            this.RaisePropertyChanged(nameof(CustomizeLabel));
+        }
+    }
+
+    public bool DetailsVisible => HasRepos && Customizing;
+
+    public string CustomizeLabel => Customizing ? "Hide options" : "Customize";
+
+    public ReactiveCommand<Unit, Unit> ToggleCustomizeCommand { get; }
+
+    /// What discovery found, before any choice narrows it.
+    public string? FoundLine {
+        get {
+            var repos = Groups.SelectMany(g => g.Repos).ToList();
+            if (repos.Count == 0) return null;
+
+            return $"Found {SessionCount(repos.Sum(r => r.Sessions))} in {RepositoryCount(repos.Count)} on {MachineName}";
+        }
+    }
+
+    /// What Next will import, following the repositories and window chosen under Customize.
+    public string? ImportLine {
+        get {
+            var total = Groups.Sum(g => g.Repos.Count);
+            if (total == 0 || _windows.Count == 0) return null;
+            if (SelectedCount == 0) return "Nothing is selected to import";
+
+            var from = total == 1         ? "the one repository"
+                : SelectedCount == total ? $"all {total.ToString("N0", CultureInfo.CurrentCulture)} repositories"
+                :                          $"{SelectedCount.ToString("N0", CultureInfo.CurrentCulture)} of {RepositoryCount(total)}";
+            var window = SelectedWindow;
+            var span   = window.Since is null ? "your whole history" : $"the {window.Label.ToLowerInvariant()}";
+
+            return CountFor(window) is { } count
+                ? $"kcap imports {count} from {from}, covering {span}"
+                : $"kcap imports {span} from {from}";
+        }
+    }
+
+    /// Who can read a Shared import, said outside Customize because Shared is the cloud default. Once the
+    /// import starts the choices are locked, so it stops pointing at them.
+    public string? SharingLine =>
+        _discoveredLocal || !Groups.SelectMany(g => g.Repos).Any(r => r.Level == ImportLevel.Shared) ? null
+        : ImportStarted ? "Shared imports follow your recording privacy setting"
+        :                 "Shared imports follow your recording privacy setting. Use Customize to keep a repository to Only me";
 
     /// Titling runs your own agent, so it is a choice only where a harness that titles is in scope.
     public bool TitlingOffered => HasRepos && FromHarnesses.Any(h => h is HarnessId.Claude or HarnessId.Codex);
@@ -138,10 +207,10 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     public bool DeclineVisible => HasRepos;
 
     public const string CloudDeclineNote =
-        "Not now means Capacitor starts its history from today. Nothing is deleted either way, and you can widen the window later with kcap import.";
+        "Not now means kcap starts its history from today. Nothing is deleted either way, and you can widen the window later with kcap import.";
 
     public const string LocalDeclineNote =
-        "Not now means Capacitor starts its history from today. Nothing is deleted either way, and you can import more later from Help and support → Set up Capacitor.";
+        "Not now means kcap starts its history from today. Nothing is deleted either way, and you can import more later from Help and support → Set up kcap.";
 
     public string? DeclineNote => !DeclineVisible ? null : _onLocalPath() ? LocalDeclineNote : CloudDeclineNote;
 
@@ -164,6 +233,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     void OnRunChanged(object? sender, PropertyChangedEventArgs e) {
         if (e.PropertyName != nameof(HistoryImportRun.State)) return;
         this.RaisePropertyChanged(nameof(ImportStarted));
+        this.RaisePropertyChanged(nameof(SharingLine));
         this.RaisePropertyChanged(nameof(Skippable));
         this.RaisePropertyChanged(nameof(NextLabel));
         this.RaisePropertyChanged(nameof(Satisfied));
@@ -177,7 +247,8 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         var scope = _inScope();
         // The same harnesses as last time: the list the user may already have adjusted stands. A
         // discovery that could not read the disk is asked again.
-        if (_discoveredFor is not null && _discoveredFor.SequenceEqual(scope) && State != HistoryState.Unreadable)
+        if (_discoveredFor is not null && _discoveredFor.SequenceEqual(scope) && _discoveredLocal == _onLocalPath()
+            && State != HistoryState.Unreadable)
             return Task.CompletedTask;
 
         _discovery?.Cancel();
@@ -189,8 +260,12 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         this.RaisePropertyChanged(nameof(Groups));
         this.RaisePropertyChanged(nameof(Windows));
         this.RaisePropertyChanged(nameof(UnmatchedNote));
-        _discoveredFor = scope;
-        FromHarnesses  = scope;
+        _discoveredFor   = scope;
+        _discoveredLocal = _onLocalPath();
+        this.RaisePropertyChanged(nameof(LocalLevels));
+        this.RaisePropertyChanged(nameof(CloudLevels));
+        this.RaisePropertyChanged(nameof(LevelsNote));
+        FromHarnesses    = scope;
         FromLabels     = [.. scope.Select(HarnessRegistry.LabelOf)];
         this.RaisePropertyChanged(nameof(FromLabels));
         this.RaisePropertyChanged(nameof(TitlingOffered));
@@ -237,7 +312,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
 
         // Owners by their most recent repository, repositories in the report's own order.
         Groups = [.. report.Repos
-            .Select(r => new HistoryRepoRow(r))
+            .Select(r => new HistoryRepoRow(r, _discoveredLocal))
             .GroupBy(r => r.Owner, StringComparer.OrdinalIgnoreCase)
             .OrderByDescending(g => g.Max(r => r.LastSessionAt ?? DateTimeOffset.MinValue))
             .ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
@@ -305,7 +380,8 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
                 Private: level == ImportLevel.OnlyMe, SkipTitle: skip));
         }
 
-        var expected = selected.Sum(r => r.SessionsSince(window.Since) ?? 0);
+        var counts   = selected.Select(r => r.SessionsSince(window.Since)).ToList();
+        var expected = counts.Any(c => c is null) ? 0 : counts.Sum(c => c!.Value);
         var caption  = window.Since is null ? "from your whole history" : $"from the {window.Label.ToLowerInvariant()}";
         var run      = new HistoryImportRun(expected, selected.Count, caption, passes.Count, _post);
         Run = run;
@@ -323,6 +399,9 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         foreach (var window in Windows) window.CountLabel = CountFor(window);
         this.RaisePropertyChanged(nameof(SelectedCount));
         this.RaisePropertyChanged(nameof(NextLabel));
+        this.RaisePropertyChanged(nameof(FoundLine));
+        this.RaisePropertyChanged(nameof(ImportLine));
+        this.RaisePropertyChanged(nameof(SharingLine));
     }
 
     string? CountFor(HistoryWindowOption window) {
@@ -335,4 +414,6 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     }
 
     internal static string SessionCount(int count) => count == 1 ? "1 session" : $"{count.ToString("N0", CultureInfo.CurrentCulture)} sessions";
+
+    static string RepositoryCount(int count) => count == 1 ? "1 repository" : $"{count.ToString("N0", CultureInfo.CurrentCulture)} repositories";
 }

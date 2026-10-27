@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Threading;
+using Avalonia.Interactivity;
 using Capacitor.App.ViewModels;
 
 namespace Capacitor.App.Views;
@@ -17,6 +18,9 @@ public partial class RemoteSessionView : UserControl {
     public RemoteSessionView() {
         InitializeComponent();
         TerminalClipboard.Attach(this, TerminalHost);
+        TerminalHost.ViewportChanged += (cols, rows) => {
+            if (DataContext is RemoteSessionViewModel model) model.Terminal?.SetViewport(cols, rows);
+        };
         TerminalHost.PropertyChanged += (_, e) => {
             if (e.Property == SvcSystems.UI.Terminal.TerminalControl.ModelProperty && TerminalHost.Model is not null
                 && DataContext is RemoteSessionViewModel { IsTerminalActive: true })
@@ -26,7 +30,13 @@ public partial class RemoteSessionView : UserControl {
             ArtefactsPane.Content = null;
             PullRequestPane.Content = null;
             ArmTabFocus();
+            TerminalHost.ReportViewport();
         };
+    }
+
+    void OnTerminalKeyClick(object? sender, RoutedEventArgs e) {
+        TerminalViewport.ShowTail();
+        TerminalHost.Focus();
     }
 
     void ArmTabFocus() {
@@ -35,7 +45,7 @@ public partial class RemoteSessionView : UserControl {
         _tabFocus = model is null ? null : model
             .WhenAnyValue(vm => vm.ActiveTab, vm => vm.ShowsPanes)
             .Subscribe(pair => Dispatcher.UIThread.Post(() => {
-                if (!ReferenceEquals(model, DataContext) || !pair.Property2) return;
+                if (!ReferenceEquals(model, DataContext) || !(pair.Property2 || model is { ShowsTerminalPane: true })) return;
                 if (pair.Property1 == RemoteTab.Artefacts && ArtefactsPane.Content is null && model is not null)
                     ArtefactsPane.Content = new ArtefactsView { DataContext = model.Artefacts };
                 if (pair.Property1 == RemoteTab.PullRequest && PullRequestPane.Content is null && model?.PullRequests is { } pullRequests)

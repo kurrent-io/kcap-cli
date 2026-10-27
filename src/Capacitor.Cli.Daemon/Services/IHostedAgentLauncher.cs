@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.LocalIpc;
 
@@ -111,7 +112,8 @@ internal sealed record LauncherContext(
         bool                              IsReview,
         bool                              IsReviewFlow,
         ReviewLaunchInfo?                 Review,
-        ReviewLaunchBuilder.ReviewLaunch? ReviewLaunch
+        ReviewLaunchBuilder.ReviewLaunch? ReviewLaunch,
+        ResolvedAccount?                  Account = null
     ) {
     /// <summary>Owned worktree (daemon-created) vs borrowed cwd (the user's own checkout).
     /// Borrowed-cwd launches skip repo-mutating <c>Prepare()</c> steps.</summary>
@@ -135,11 +137,6 @@ internal sealed record LauncherContext(
     /// that passed the orchestrator's <c>ClaudePermissionModePolicy</c> guard.</summary>
     public string? PermissionMode { get; init; }
 
-    /// <summary>Set when <see cref="Prompt"/> is kept off the command line: the launcher passes
-    /// <see cref="Services.PromptFile.Pointer"/> to this file in place of the prompt, and lets the agent
-    /// read the file's directory.</summary>
-    public string? PromptFile { get; init; }
-
     /// <summary>The vendor session id a fresh interactive launch is told to use, so the daemon knows it
     /// before the vendor writes anything. Null when the vendor or launch kind is not pinned.</summary>
     public string? PinnedSessionId { get; init; }
@@ -148,4 +145,5 @@ internal sealed record LauncherContext(
     public string? ResumeSessionId { get; init; }
 }
 
-internal readonly record struct LaunchArgs(string[] Args, string? McpConfigPath);
+/// <param name="SessionId">The vendor session a local launch runs under, when its args pin or name one.</param>
+internal readonly record struct LaunchArgs(string[] Args, string? McpConfigPath, string? SessionId = null);

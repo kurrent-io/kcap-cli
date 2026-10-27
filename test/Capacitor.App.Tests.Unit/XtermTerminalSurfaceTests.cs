@@ -87,7 +87,37 @@ public class XtermTerminalSurfaceTests {
             surface.Feed("c");
 
             await Assert.That(File.ReadAllText(dump)).IsEqualTo("ab⏵c");
-            await Assert.That(surface.Model.Terminal.Engine.GetLine(0)).IsEqualTo("ab▶c");
+            await Assert.That(surface.Model.Terminal.Engine.GetLine(0)).IsEqualTo("ab►c");
+        });
+    }
+
+    /// Pins that a feed parsed in pieces reads as the same text: marks on either side of a parse
+    /// seam are both rewritten, and a surrogate pair split by one draws as the character.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments("⏵⏵", "►►")]
+    [Arguments("𝄞z", "𝄞z")]
+    public async Task A_feed_split_across_parse_seams_draws_as_one(string tail, string drawn) {
+        await RunOnUiAsync(async () => {
+            var surface = new XtermTerminalSurface(40, 4);
+            // Carriage returns keep the cursor on line 0 while pushing the tail onto the seam.
+            surface.Feed([new string('\r', 32 * 1024 - 1) + tail]);
+
+            await Assert.That(surface.Model.Terminal.Engine.GetLine(0)).IsEqualTo(drawn);
+        });
+    }
+
+    /// Pins that pieces fed together reach the emulator in order, each through the tap and the rewrite.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Pieces_fed_together_draw_in_order() {
+        await RunOnUiAsync(async () => {
+            var dump = Tmp.PathTo("feed.bin");
+            var surface = new XtermTerminalSurface(40, 4, dump);
+            surface.Feed(["ab", "⏵c"]);
+
+            await Assert.That(File.ReadAllText(dump)).IsEqualTo("ab⏵c");
+            await Assert.That(surface.Model.Terminal.Engine.GetLine(0)).IsEqualTo("ab►c");
         });
     }
 

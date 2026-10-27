@@ -6,7 +6,7 @@ namespace Capacitor.App.Views;
 /// while the terminal has focus. Ctrl+R itself does not: that key is the terminal's
 /// reverse-i-search. macOS leaves Ctrl+R unbound for the same reason.
 static class RefreshShortcut {
-    public static bool UsesControl { get; } = !OperatingSystem.IsMacOS();
+    public static bool UsesControl { get; } = !ShortcutLabels.UsesCommandKey;
 
     public static KeyGesture Primary { get; } = new(Key.R, UsesControl ? KeyModifiers.Control : KeyModifiers.Meta);
 

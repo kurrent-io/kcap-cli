@@ -22,6 +22,7 @@ sealed class RecordingServiceManager(Dictionary<string, string?> binaries) : ISe
     public IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec) => [];
     public IReadOnlyList<string> ListInstalled() => [.. binaries.Keys];
     public IReadOnlyList<string>? TryListInstalled() => ListingFails ? null : ListInstalled();
+    public IReadOnlyDictionary<string, string>? UnitEnvironment(string serviceId) => null;
 
     public ServiceStatus Status(string serviceId) {
         Interlocked.Increment(ref _statusReads);
