@@ -10,6 +10,7 @@ using Capacitor.App.Views;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests;
 using Capacitor.Cli.Core.WorkItems;
@@ -26,7 +27,7 @@ static class DocsShotScenes {
 
     public static readonly string[] Names = [
         "desktop-main", "desktop-permission-card", "desktop-help-menu", "desktop-settings",
-        "desktop-wizard-edition", "desktop-wizard-sign-in", "desktop-local-recovery"];
+        "desktop-wizard-edition", "desktop-wizard-sign-in", "desktop-wizard-history", "desktop-local-recovery"];
 
     const string ServerUrl = "https://northwind.kcap.ai";
     const string PaymentsRepo = "/Users/maya/dev/northwind/payments-api";
@@ -207,13 +208,43 @@ static class DocsShotScenes {
     const double SettingsHeight = 760;
 
     /// The setup wizard from the real wizard graph, opened on `startAt` before anything has been chosen.
-    public static async Task<DocsShotScene> WizardAsync(TempConfigRoot config, WizardStepId startAt) {
+    public static Task<DocsShotScene> WizardAsync(TempConfigRoot config, WizardStepId startAt) =>
+        WizardAsync(config, startAt, null);
+
+    /// The wizard on its History step once discovery has read Maya's machine. The graph's own History
+    /// step names this host, so the scene puts one naming hers in its place.
+    public static Task<DocsShotScene> WizardHistoryAsync(TempConfigRoot config) {
+        var cli = new FakeKcapCli { DiscoverBehavior = _ => Task.FromResult<ImportDiscoveryReport?>(NorthwindHistory()) };
+        var history = new HistoryStepViewModel(cli, () => [HarnessId.Claude, HarnessId.Codex], action => action(),
+            "maya-mbp", new FakeTimeProvider(Now));
+        return WizardAsync(config, WizardStepId.Import, history);
+    }
+
+    static ImportDiscoveryReport NorthwindHistory() {
+        var d30 = new DateOnly(2026, 9, 26);
+        var d90 = new DateOnly(2026, 7, 28);
+        ImportDiscoveryRepo Repo(string name, int all, int last90, int last30, int daysAgo) =>
+            new("northwind", name, all, Now.AddDays(-daysAgo), [new(d30, last30), new(d90, last90), new(null, all)]);
+
+        return new([
+            Repo("payments-api", 18, 14, 6, 0),
+            Repo("storefront", 12, 9, 4, 1),
+            Repo("inventory-service", 7, 5, 2, 3),
+            Repo("design-system", 5, 3, 1, 9),
+        ], 0, [new(d30, 13), new(d90, 31), new(null, 42)]);
+    }
+
+    static async Task<DocsShotScene> WizardAsync(TempConfigRoot config, WizardStepId startAt, HistoryStepViewModel? history) {
         var scene = new DocsShotScene();
         try {
             var harness = scene.Own(new WizardFixtures.GraphHarness(config.Root));
             var graph = WizardComposition.BuildGraph(harness.Options());
-            var vm = new OnboardingViewModel(graph.Steps, startAt: startAt);
+            IReadOnlyList<IWizardStep> steps = history is null
+                ? graph.Steps
+                : [.. graph.Steps.Select(s => s.Id == history.Id ? history : s)];
+            var vm = new OnboardingViewModel(steps, startAt: startAt);
             await vm.PendingEnterForTesting;
+            if (history is not null) await history.Discovery;
             scene.Present(new Views.MainWindow { Onboarding = vm, Width = 760, Height = 760 });
             return scene;
         } catch {

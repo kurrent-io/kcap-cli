@@ -79,7 +79,7 @@ public sealed class DocsShots {
     public async Task The_scene_names_match_the_docs_manifest() {
         await Assert.That(DocsShotScenes.Names).IsEquivalentTo([
             "desktop-main", "desktop-permission-card", "desktop-help-menu", "desktop-settings",
-            "desktop-wizard-edition", "desktop-wizard-sign-in", "desktop-local-recovery"]);
+            "desktop-wizard-edition", "desktop-wizard-sign-in", "desktop-wizard-history", "desktop-local-recovery"]);
     }
 
     [Test]
@@ -122,6 +122,11 @@ public sealed class DocsShots {
     [Test, DocsShot("desktop-wizard-sign-in")]
     public async Task The_setup_wizard_asks_to_sign_in_with_a_work_account() {
         await CaptureAsync(() => DocsShotScenes.WizardAsync(Config, WizardStepId.SignIn), "WorkAccountButton");
+    }
+
+    [Test, DocsShot("desktop-wizard-history")]
+    public async Task The_setup_wizard_offers_to_import_the_history_it_found() {
+        await CaptureAsync(() => DocsShotScenes.WizardHistoryAsync(Config), "FoundLineText");
     }
 
     [Test, DocsShot("desktop-local-recovery")]
