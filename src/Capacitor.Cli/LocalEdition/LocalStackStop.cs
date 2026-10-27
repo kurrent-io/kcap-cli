@@ -43,14 +43,11 @@ static class LocalStackStop {
             throw new LocalLifecycleException($"The local server is stopped, but {live} under {root.Directory}. Nothing was removed.");
     }
 
-    /// <summary>Removes each named directory under the root, a symlink without following it, then syncs the root.</summary>
+    /// <summary>Removes each named directory under the root, a link without following it, then syncs the root.</summary>
     public static void Delete(LocalRoot root, params string[] names) {
         foreach (var name in names) {
             var path = Path.Combine(root.Directory, name);
-
-            if (new DirectoryInfo(path).LinkTarget is not null || File.Exists(path)) File.Delete(path);
-            else if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
-            else continue;
+            if (!LocalTree.Remove(path)) continue;
 
             FaultPoints.Hit($"unlink:{path}");
         }

@@ -293,6 +293,14 @@ public class LocalPreflightTests {
         await Assert.That(new LocalPlatform(mac, linux, musl, arch).SupportsLocalEdition).IsEqualTo(expected);
 
     [Test]
+    public async Task Windows_names_its_bundle_win_but_does_not_offer_the_local_edition_yet() {
+        var windows = new LocalPlatform(false, false, false, Architecture.X64) { IsWindows = true };
+
+        await Assert.That(windows.Rid).IsEqualTo("win-x64");
+        await Assert.That(windows.SupportsLocalEdition).IsFalse();
+    }
+
+    [Test]
     public async Task Copies_newer_than_the_floor_pass() {
         var plan = Preflight(copies: [
             new(ClientCopyKind.OnPath, "/usr/local/bin/kcap", "1.3.1-alpha.0.1"),

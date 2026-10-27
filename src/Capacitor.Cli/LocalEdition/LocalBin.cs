@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.Cli.LocalEdition;
@@ -9,9 +10,15 @@ static class LocalBin {
 
     public static string StagingDir(LocalRoot root, string name) => Path.Combine(Directory(root), $".staging-{name}");
 
-    /// <summary>Points <c>bin/current</c> at <paramref name="version"/> by an atomic rename.</summary>
+    /// <summary>Points <c>bin/current</c> at <paramref name="version"/>: by an atomic rename on Unix, and on Windows by
+    /// replacing a junction, which leaves a moment with no <c>current</c>. Nothing can start the server in that
+    /// moment: a switch only runs with the unit stopped and disabled, under the upgrade journal.</summary>
     public static void Switch(LocalRoot root, string version) {
-        Commands.ScriptUpdater.SwitchLink(Path.Combine(Directory(root), "current"), version);
+        var current = Path.Combine(Directory(root), "current");
+
+        if (OperatingSystem.IsWindows()) WindowsJunction.Replace(current, Path.Combine(Directory(root), version));
+        else Commands.ScriptUpdater.SwitchLink(current, version);
+
         DurableDirectory.Sync(Directory(root));
     }
 
