@@ -19,8 +19,15 @@ public sealed class HarnessSettingsRow : ReactiveObject {
     public string Label { get; }
     public string Signal { get; }
     public string ConnectionLabel => _wired switch {
-        true => "Connected · sessions are recorded", false => "Not connected", null => "Could not check the connection",
+        true => "Connected", false => "Not connected", null => "Couldn't check",
     };
+    public string ConnectionTip => _wired switch {
+        true => "kcap records this tool's sessions to this profile",
+        false => "kcap is not recording this tool",
+        null => "kcap could not read this tool's settings to tell whether it is connected",
+    };
+    public bool IsNotConfigured => _wired == false;
+    public bool ConnectionUnknown => _wired is null;
     internal bool? Wired => _wired;
     public bool IsConfigured => _wired == true;
     /// What activating the checkbox does now, for a screen reader.
@@ -30,6 +37,9 @@ public sealed class HarnessSettingsRow : ReactiveObject {
         this.RaisePropertyChanged(nameof(ConnectionLabel));
         this.RaisePropertyChanged(nameof(IsConfigured));
         this.RaisePropertyChanged(nameof(ToggleActionName));
+        this.RaisePropertyChanged(nameof(ConnectionTip));
+        this.RaisePropertyChanged(nameof(IsNotConfigured));
+        this.RaisePropertyChanged(nameof(ConnectionUnknown));
     }
     public string? ConsentNote => Id == HarnessId.Codex ? HarnessRowViewModel.CodexConsentNote : null;
     public string? Message { get => _message; private set => this.RaiseAndSetIfChanged(ref _message, value); }

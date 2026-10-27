@@ -38,10 +38,18 @@
                                             <ContentControl HorizontalAlignment="Center" VerticalAlignment="Center"
                                                             Content="{Binding Id, Converter={x:Static views:VendorGlyphConverter.Instance}, ConverterParameter=16}" />
                                         </Border>
-                                        <StackPanel Grid.Column="2" Classes="settingsRowText">
-                                            <TextBlock Classes="kcapLabel" Text="{Binding Label}" TextWrapping="Wrap" />
-                                            <TextBlock Classes="kcapHint" Text="{Binding ConnectionLabel}" TextWrapping="Wrap" />
-                                        </StackPanel>
+                                        <WrapPanel Grid.Column="2" VerticalAlignment="Center">
+                                            <TextBlock Classes="kcapLabel" Text="{Binding Label}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                            <Border Classes="settingsStatus harnessStatus" Classes.attention="{Binding ConnectionUnknown}"
+                                                    ToolTip.Tip="{Binding ConnectionTip}">
+                                                <StackPanel Orientation="Horizontal" Spacing="5">
+                                                    <views:AppIcon Kind="CircleCheck" Size="12" IsVisible="{Binding IsConfigured}" />
+                                                    <views:AppIcon Kind="Circle" Size="12" IsVisible="{Binding IsNotConfigured}" />
+                                                    <views:AppIcon Kind="TriangleAlert" Size="12" IsVisible="{Binding ConnectionUnknown}" />
+                                                    <TextBlock Text="{Binding ConnectionLabel}" Classes.attention="{Binding ConnectionUnknown}" />
+                                                </StackPanel>
+                                            </Border>
+                                        </WrapPanel>
                                         <Button Grid.Column="3" Classes="kcapGhost settingsCompact" Content="Repair"
                                                 VerticalAlignment="Center"
                                                 AutomationProperties.Name="{Binding Label, StringFormat='Repair {0} connection'}"

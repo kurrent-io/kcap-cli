@@ -38,7 +38,7 @@ public class HarnessesSettingsViewModelTests {
         wired = true;
         await vm.ConnectAsync(row);
         await Assert.That(row.Message!).Contains("Setup completed");
-        await Assert.That(row.ConnectionLabel).IsEqualTo("Connected · sessions are recorded");
+        await Assert.That(row.ConnectionLabel).IsEqualTo("Connected");
         detected[HarnessId.Cursor] = new(false, true);
         await vm.RescanAsync();
         await Assert.That(vm.Rows.Count).IsEqualTo(2);
