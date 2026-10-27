@@ -64,11 +64,9 @@ public sealed class PullRequestToneCache : IDisposable {
         _time = time;
         _refreshEvery = refreshEvery ?? DefaultRefreshEvery;
         _endedRefreshEvery = endedRefreshEvery ?? DefaultEndedRefreshEvery;
-        // A local row's session id names a session on whatever server the daemon reports; only
-        // while that is the app's own server can it be read here (the directory's own rule).
         directory.Rows.Connect().ToCollection()
             .CombineLatest(directory.LocalDaemonOnAppServer, (rows, localOnAppServer) => rows
-                .Where(r => r.SessionId is { Length: > 0 } && (localOnAppServer || r.Origin != AgentOrigin.Local))
+                .Where(r => r.SessionId is { Length: > 0 } && Polled(r, localOnAppServer))
                 .ToList())
             .Subscribe(rows => {
                 lock (_lock) {
@@ -85,6 +83,18 @@ public sealed class PullRequestToneCache : IDisposable {
             .DisposeWith(_subscriptions);
         _timer = time.CreateTimer(_ => Tick(), null, TickEvery, TickEvery);
     }
+
+    /// A teammate's session is never read here, whichever lane shows it: each read costs the server
+    /// a visibility check and a GitHub-backed admission per PR every access window, and under Team
+    /// there are hundreds. Its PRs show when it opens. A daemon row the server has not named yet is
+    /// presumed the viewer's own, as the directory presumes; a listed row waits for the owners read.
+    /// A local row's session id names a session on whatever server the daemon reports; only while
+    /// that is the app's own server can it be read here (the directory's own rule).
+    static bool Polled(AgentRow row, bool localOnAppServer) => row.Origin switch {
+        AgentOrigin.Local => localOnAppServer && row.OwnerIsViewer != false,
+        AgentOrigin.Server => row.OwnerIsViewer == true,
+        _ => row.OwnerIsViewer != false,
+    };
 
     public IObservable<IReadOnlyDictionary<string, PullRequestTone>> Tones => _published.DistinctUntilChanged(new MapEquality());
 
