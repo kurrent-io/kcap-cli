@@ -17,8 +17,14 @@ static unsafe class ServiceInstaller {
     public const int NotElevatedExit = 5;
     static readonly TimeSpan StateWait = TimeSpan.FromSeconds(30);
 
-    public static string InstallDirectory =>
-        ServiceIdentity.InstallDirectory(Environment.GetEnvironmentVariable("ProgramFiles") ?? @"C:\Program Files");
+    /// <summary>Under Program Files as the machine records it. The elevated process's own environment is built
+    /// from the user's, which a process without elevation can change, and would pick where SYSTEM's binary goes</summary>
+    public static string InstallDirectory => ServiceIdentity.InstallDirectory(ProgramFiles());
+
+    static string ProgramFiles() {
+        using var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion");
+        return key?.GetValue("ProgramFilesDir") is string path && Path.IsPathFullyQualified(path) ? path : @"C:\Program Files";
+    }
 
     public static string InstalledBinary => Path.Combine(InstallDirectory, ServiceIdentity.ExecutableName);
 
@@ -45,6 +51,19 @@ static unsafe class ServiceInstaller {
         var running = service is not null && service.Status == ServiceControllerStatus.Running;
         var steps = InstallPlan.For(service is not null, current, running);
 
+        try {
+            RunSteps(steps, service, sourceExe);
+        } catch {
+            // The service was stopped for the upgrade; left that way, nothing supervises anyone's daemon
+            if (running) StartAgain();
+            throw;
+        }
+
+        Console.WriteLine(steps.Count == 0 ? "kcap-service is installed, current and running" : "kcap-service is installed and running");
+        return 0;
+    }
+
+    static void RunSteps(IReadOnlyList<InstallStep> steps, ServiceController? service, string sourceExe) {
         foreach (var step in steps) {
             Console.WriteLine($"install: {step}");
             switch (step) {
@@ -74,9 +93,18 @@ static unsafe class ServiceInstaller {
                     break;
             }
         }
+    }
 
-        Console.WriteLine(steps.Count == 0 ? "kcap-service is installed, current and running" : "kcap-service is installed and running");
-        return 0;
+    static void StartAgain() {
+        try {
+            using var service = Existing();
+            if (service is null || service.Status != ServiceControllerStatus.Stopped) return;
+            service.Start();
+            service.WaitForStatus(ServiceControllerStatus.Running, StateWait);
+            Console.Error.WriteLine("install failed; kcap-service was started again as it was");
+        } catch (Exception ex) when (ex is InvalidOperationException or System.ServiceProcess.TimeoutException) {
+            Console.Error.WriteLine($"install failed, and starting kcap-service again also failed: {ex.Message}");
+        }
     }
 
     public static int Uninstall() {

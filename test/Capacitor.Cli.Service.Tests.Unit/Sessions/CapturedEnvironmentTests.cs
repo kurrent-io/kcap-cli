@@ -25,4 +25,13 @@ public class CapturedEnvironmentTests {
 
         await Assert.That(env.Keys).IsEquivalentTo(["OK"]);
     }
+
+    /// A launch with the logon environment alone is the fallback; a value the file got wrong must not throw instead
+    [Test]
+    public async Task A_null_value_is_dropped_and_names_differing_in_case_keep_the_last() {
+        var env = CapturedEnvironment.Parse("""{"GONE":null,"Path":"C:\\a","PATH":"C:\\b"}""");
+
+        await Assert.That(env.Keys).IsEquivalentTo(["Path"]);
+        await Assert.That(env["PATH"]).IsEqualTo(@"C:\b");
+    }
 }

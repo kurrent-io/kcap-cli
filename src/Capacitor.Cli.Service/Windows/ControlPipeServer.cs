@@ -15,6 +15,10 @@ namespace Capacitor.Cli.Service.Windows;
 sealed class ControlPipeServer(ControlDispatcher dispatcher, TimeProvider time, IServiceLog log) : IDisposable {
     const int MaxRequestChars = 4096;
 
+    /// <summary>A client writes its one line as soon as it connects; one that does not is let go, so idle
+    /// connections cannot pile up</summary>
+    static readonly TimeSpan RequestWait = TimeSpan.FromSeconds(10);
+
     readonly CancellationTokenSource _stop = new();
 
     public void Start() => _ = Task.Run(AcceptLoopAsync);
@@ -58,8 +62,10 @@ sealed class ControlPipeServer(ControlDispatcher dispatcher, TimeProvider time, 
                 await using var writer = new StreamWriter(pipe, leaveOpen: true);
                 writer.AutoFlush = true;
 
+                using var wait = new CancellationTokenSource(RequestWait, time);
+                using var bound = CancellationTokenSource.CreateLinkedTokenSource(wait.Token, _stop.Token);
                 var buffer = new char[MaxRequestChars];
-                var line = await ReadLineAsync(reader, buffer).ConfigureAwait(false);
+                var line = await ReadLineAsync(reader, buffer, bound.Token).ConfigureAwait(false);
                 if (line is null) return;
 
                 string? sid = null;
@@ -74,10 +80,10 @@ sealed class ControlPipeServer(ControlDispatcher dispatcher, TimeProvider time, 
     }
 
     /// <summary>One line, refused past the cap rather than buffered without bound</summary>
-    static async Task<string?> ReadLineAsync(StreamReader reader, char[] buffer) {
+    static async Task<string?> ReadLineAsync(StreamReader reader, char[] buffer, CancellationToken ct) {
         var length = 0;
         while (length < buffer.Length) {
-            var read = await reader.ReadAsync(buffer.AsMemory(length, 1)).ConfigureAwait(false);
+            var read = await reader.ReadAsync(buffer.AsMemory(length, 1), ct).ConfigureAwait(false);
             if (read == 0) return length == 0 ? null : new string(buffer, 0, length);
             if (buffer[length] == '\n') return new string(buffer, 0, length).TrimEnd('\r');
             length++;

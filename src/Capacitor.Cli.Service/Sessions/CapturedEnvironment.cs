@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -15,16 +16,20 @@ public static partial class CapturedEnvironment {
     partial class Json : JsonSerializerContext;
 
     /// <summary>Empty for anything that is not a JSON object of strings; a name that could not be an
-    /// environment variable is dropped</summary>
+    /// environment variable is dropped, and of names differing only in case the last one wins</summary>
     public static IReadOnlyDictionary<string, string> Parse(string json) {
+        Dictionary<string, string>? values;
         try {
-            var values = JsonSerializer.Deserialize(json, Json.Default.DictionaryStringString);
-            if (values is null) return new Dictionary<string, string>();
-            return values
-                .Where(kv => kv.Key.Length > 0 && kv.Key.IndexOfAny(['=', '\0']) < 0 && !kv.Value.Contains('\0'))
-                .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
+            values = JsonSerializer.Deserialize(json, Json.Default.DictionaryStringString);
         } catch (JsonException) {
-            return new Dictionary<string, string>();
+            return FrozenDictionary<string, string>.Empty;
         }
+        if (values is null) return FrozenDictionary<string, string>.Empty;
+
+        var env = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, value) in values) {
+            if (key.Length > 0 && key.IndexOfAny(['=', '\0']) < 0 && value is not null && !value.Contains('\0')) env[key] = value;
+        }
+        return env;
     }
 }

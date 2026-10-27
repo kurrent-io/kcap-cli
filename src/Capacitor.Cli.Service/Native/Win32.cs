@@ -22,7 +22,7 @@ static unsafe partial class Win32 {
     public const int SERVICE_CONFIG_DESCRIPTION = 1, SERVICE_CONFIG_FAILURE_ACTIONS = 2, SERVICE_CONFIG_DELAYED_AUTO_START_INFO = 3;
     public const int SC_ACTION_RESTART = 1;
     public const int MOVEFILE_REPLACE_EXISTING = 0x1, MOVEFILE_DELAY_UNTIL_REBOOT = 0x4;
-    public const int ERROR_SERVICE_DOES_NOT_EXIST = 1060, ERROR_SERVICE_MARKED_FOR_DELETE = 1072;
+    public const int ERROR_SERVICE_DOES_NOT_EXIST = 1060, ERROR_SERVICE_MARKED_FOR_DELETE = 1072, ERROR_ALREADY_EXISTS = 183;
 
     [StructLayout(LayoutKind.Sequential)]
     public struct WTS_SESSION_INFO { public int SessionId; public IntPtr WinStationName; public int State; }
@@ -141,6 +141,10 @@ static unsafe partial class Win32 {
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool IsProcessInJob(IntPtr process, IntPtr job, [MarshalAs(UnmanagedType.Bool)] out bool result);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

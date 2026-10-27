@@ -68,6 +68,11 @@ sealed unsafe class WindowsDaemonHost : IDaemonHost {
                 var handle = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE, false, process.Id);
                 if (handle == IntPtr.Zero) continue;
                 var job = OpenJobObjectW(JOB_OBJECT_ALL_ACCESS, false, ServiceIdentity.JobName(user.Sid));
+                // Any user can create a job under that name; one the daemon is not in is not the service's
+                if (job != IntPtr.Zero && !(IsProcessInJob(handle, job, out var member) && member)) {
+                    CloseHandle(job);
+                    job = IntPtr.Zero;
+                }
                 return new Win32RunningDaemon(process.Id, handle, job);
             }
         }
@@ -76,10 +81,15 @@ sealed unsafe class WindowsDaemonHost : IDaemonHost {
 
     public IRunningDaemon Launch(SessionUser user, Enrollment enrollment) {
         using var token = UserToken.ForSession(user.SessionId) ?? throw new InvalidOperationException("the session has ended");
-        var captured = enrollment.EnvironmentFile is { } file ? token.Impersonate(() => ReadCaptured(file)) : null;
-        var plan = DaemonLaunchPlan.For(enrollment, user.ProfileDirectory, token.Environment(), captured);
+        var plan = PlanFor(token, user, enrollment);
 
         var job = CreateJobObjectW(IntPtr.Zero, ServiceIdentity.JobName(user.Sid));
+        // Any user can create a job under that name first and keep a handle that ends this one's daemon. Such
+        // a job is left alone for an unnamed one, which a later run of the service cannot adopt.
+        if (job != IntPtr.Zero && Marshal.GetLastPInvokeError() == ERROR_ALREADY_EXISTS) {
+            CloseHandle(job);
+            job = CreateJobObjectW(IntPtr.Zero, null);
+        }
         if (job == IntPtr.Zero) throw Failure("CreateJobObject");
 
         var stderr = IntPtr.Zero;
@@ -111,11 +121,17 @@ sealed unsafe class WindowsDaemonHost : IDaemonHost {
         using var token = UserToken.ForSession(user.SessionId) ?? throw new InvalidOperationException("the session has ended");
         if (!token.Impersonate(() => File.Exists(enrollment.CliPath))) throw new InvalidOperationException($"{enrollment.CliPath} does not exist");
 
-        var block = new DaemonLaunchPlan("", token.Environment(), "", "").EnvironmentBlock();
+        // The daemon's own environment, so a captured HOME or KCAP_DAEMONS_DIR points the CLI at its socket
+        var block = PlanFor(token, user, enrollment).EnvironmentBlock();
         var info = Start(token, DaemonLaunchPlan.StopCommandLine(enrollment), block, user.ProfileDirectory, IntPtr.Zero);
         ResumeThread(info.hThread);
         CloseHandle(info.hThread);
         CloseHandle(info.hProcess);
+    }
+
+    static DaemonLaunchPlan PlanFor(UserToken token, SessionUser user, Enrollment enrollment) {
+        var captured = enrollment.EnvironmentFile is { } file ? token.Impersonate(() => ReadCaptured(file)) : null;
+        return DaemonLaunchPlan.For(enrollment, user.ProfileDirectory, token.Environment(), captured);
     }
 
     /// <summary>Suspended, with no window, and inheriting nothing but <paramref name="stdio"/> when one is given</summary>
