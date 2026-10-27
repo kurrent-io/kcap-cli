@@ -241,4 +241,26 @@ public class DaemonCommandsServiceUninstallUnderTests {
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(File.Exists(unit)).IsTrue();
     }
+
+    /// <summary>Stopping the daemon is the first step of removing its unit; when the supervisor cannot say
+    /// anything about that unit, neither step is taken, or the daemon would end up stopped beside a unit
+    /// that stays installed.</summary>
+    [Test]
+    public async Task UninstallUnder_leaves_a_unit_whose_state_is_unknown_and_its_daemon_alone() {
+        Skip.When(OperatingSystem.IsWindows(), "the stand-in daemon is identified through /proc");
+        var app = Path.GetFullPath("/apps/kcap/current");
+        using var child = DummyProcess.StartSleep(120);
+        File.WriteAllText(Daemons.Store.PidPath("laptop"), $"{child.Pid}\n{ProcessStartToken.ForPid(child.Pid)}\n");
+        var ledger = ResumeLedgerStore.For(Daemons.Store, "laptop");
+        ledger.Write(ResumeLedgerEntries.For("agent-1", ResumeState.Running));
+        var manager = new RecordingServiceManager(new() { ["laptop"] = Path.Combine(app, "kcap-daemon.exe") });
+        manager.Unanswered.Add("laptop");
+        using var console = ConsoleOutput.StartFullCapture();
+
+        var exit = await Commands(manager).UninstallUnder(app);
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(manager.Uninstalled).IsEmpty();
+        await Assert.That(ledger.ReadAll().Single().State).IsEqualTo(ResumeState.Running);
+    }
 }
