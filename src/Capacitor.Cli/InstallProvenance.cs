@@ -15,15 +15,18 @@ public static class InstallProvenance {
 
     /// <summary>The command that installs kcap again the way it was installed.</summary>
     public static string ReinstallCommand() =>
-        ReinstallCommand(Kind(), OperatingSystem.IsWindows(), SnapLayout.OfRunningBinary()?.Name);
+        ReinstallCommand(Kind(), OperatingSystem.IsWindows(), SnapLayout.OfRunningBinary());
 
-    internal static string ReinstallCommand(InstallKind kind, bool windows, string? snapName = null) => kind switch {
+    internal static string ReinstallCommand(InstallKind kind, bool windows, SnapLayout? snap = null) => kind switch {
         InstallKind.Script when windows      => "irm https://www.kurrent.io/install.ps1 | iex",
         InstallKind.Script                   => "curl -fsSL https://www.kurrent.io/install | bash",
         // Callers mostly show this when `kcap` is not on PATH, which for a snap means /snap/bin is missing from
         // it; a damaged snap's missing plugin still needs the reinstall. One line that pastes into a shell as is.
-        InstallKind.Snap when snapName is { } name =>
-            $"export PATH=\"/snap/bin:$PATH\"  # or reinstall: sudo snap remove {name} && sudo snap install {name} --classic",
+        // A local install is replaced from a file: removing it first leaves nothing if the Store has no kcap.
+        InstallKind.Snap when snap is { IsLocal: true } =>
+            "export PATH=\"/snap/bin:$PATH\"  # or reinstall: sudo snap install --dangerous --classic <file>.snap",
+        InstallKind.Snap when snap is not null =>
+            $"export PATH=\"/snap/bin:$PATH\"  # or reinstall: sudo snap remove {snap.Name} && sudo snap install {snap.Name} --classic",
         _                                    => "npm install -g @kurrent/kcap",
     };
 

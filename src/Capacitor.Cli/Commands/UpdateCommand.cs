@@ -16,7 +16,7 @@ public sealed class UpdateCommand(
     /// <summary>Printed by `kcap update` in the desktop app's snap. snapd refreshes a Store install, but never a
     /// local one (`snap install --dangerous`, revisions x1, x2, …), so that one is pointed at a new .snap file.</summary>
     internal static string SnapMessage(SnapLayout? snap) =>
-        snap is not null && snap.Revision.StartsWith('x')
+        snap is { IsLocal: true }
             ? $"This kcap is a locally installed snap (revision {snap.Revision}); snapd does not update it. Install a newer one with: sudo snap install --dangerous --classic <file>.snap"
             : $"This kcap is part of the kcap snap; snapd keeps it up to date. To update now: sudo snap refresh{(snap is null ? "" : " " + snap.Name)}";
 

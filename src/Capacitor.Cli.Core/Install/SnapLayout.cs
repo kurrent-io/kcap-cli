@@ -12,6 +12,10 @@ public sealed record SnapLayout(string Name, string Revision) {
 
     public string Current => $"{MountRoot}{Name}/{CurrentName}";
 
+    /// <summary>Installed from a file (`snap install --dangerous`, revisions x1, x2, …): the Store neither
+    /// refreshes nor reinstalls it.</summary>
+    public bool IsLocal => Revision.StartsWith('x');
+
     static readonly Lazy<SnapLayout?> Running = new(() => FromBinary(Environment.ProcessPath));
 
     /// <summary>The snap the running binary belongs to, or null when it is not running from one.</summary>
