@@ -875,6 +875,7 @@ public partial class App : Application {
             agentId => _coordinator?.Window?.DataContext is MainWindowViewModel vm && vm.OpenSession(agentId));
         var drafts = new ComposerDrafts();
         var transcripts = new LocalTranscripts();
+        var readings = new AccountReadings(accounts.Snapshot, remoteAgents.DrawableDaemonAccounts, UsageClock.Create(_time));
         WorkspaceViewModel BuildWorkspace(string agentId) => new(
             agentId, service, actions, attachFactory, () => new XtermTerminalSurface(80, 24, PtyDumpPath), _time, workspaceOpener, permissions,
             workContext, ops, uploader,
@@ -884,7 +885,7 @@ public partial class App : Application {
             commands: commands, drafts: drafts, inputSending: attention.ReplySending,
             resumeLedger: id => ResumeLedgerStore.For(_daemonStore, service.DaemonName).TryRead(id),
             pullRequestSnapshots: pullRequestSnapshots, transcripts: transcripts,
-            pullRequestLinksChanged: pullRequestTones.Refresh, senders: senders);
+            pullRequestLinksChanged: pullRequestTones.Refresh, readings: readings, senders: senders);
         // The origin lookup below and this call are two reads of a cache the directory's own
         // background recompute mutates, so the row can be gone by the time this runs: no row, no
         // host, and the click opens nothing.
@@ -895,7 +896,7 @@ public partial class App : Application {
                     pullRequests: pullRequests, requestSignIn: requestSignIn, linkGitHub: linkGitHub,
                     signInCompleted: serverClients.SignInCompleted, plans: plans, drafts: drafts, inputSending: attention.ReplySending,
                     pullRequestSnapshots: pullRequestSnapshots, pullRequestLinksChanged: pullRequestTones.Refresh, readSubagent: readSubagent,
-                    senders: senders)
+                    readings: readings, senders: senders)
                 : null;
         // A session the server lists with no daemon behind it: read-only, so no terminal surface.
         RemoteSessionViewModel? BuildServer(string sessionId) =>
@@ -904,7 +905,8 @@ public partial class App : Application {
                     surfaceFactory: null, planArtifacts, commands,
                     pullRequests: pullRequests, requestSignIn: requestSignIn, linkGitHub: linkGitHub,
                     signInCompleted: serverClients.SignInCompleted, plans: plans, drafts: drafts, inputSending: attention.ReplySending,
-                    pullRequestSnapshots: pullRequestSnapshots, pullRequestLinksChanged: pullRequestTones.Refresh, readSubagent: readSubagent)
+                    pullRequestSnapshots: pullRequestSnapshots, pullRequestLinksChanged: pullRequestTones.Refresh, readSubagent: readSubagent,
+                    readings: readings)
                 : null;
 
         _coordinator = new MainWindowCoordinator(
@@ -918,7 +920,7 @@ public partial class App : Application {
                 requestSignIn: requestSignIn,
                 lifecycleAttention: lifecycleAttention, identityReport: lifecycle.IdentityReport,
                 pullRequestSummaries: pullRequestTones.Summaries,
-                directory: directory, remoteAgents: remoteAgents, lane: serverLane, localAccounts: accounts.Snapshot,
+                directory: directory, remoteAgents: remoteAgents, lane: serverLane, localAccounts: accounts.Snapshot, readings: readings,
                 viewerId: viewerId, localMachineId: machineId, restartPending: restartPending.Pending,
                 // A row present on both lanes is the local one: the local socket is the richer
                 // workspace, and the directory only keeps both rows when the twin is unproven.
@@ -1661,7 +1663,7 @@ public partial class App : Application {
             UiScaleSetting? uiScale = null, UsageDataNotice? usageNotice = null,
             WebWorkspaceViewModel? web = null, Action? openLaunchApprovals = null,
             Func<string, RemoteSessionViewModel?>? serverWorkspaceFactory = null, IServerSessionsService? sessions = null,
-            RailPreferencesStore? railPreferences = null, string? profileName = null) {
+            RailPreferencesStore? railPreferences = null, AccountReadings? readings = null, string? profileName = null) {
         // Notifier is set on the WINDOW (the toast overlay), not the ViewModel — the toast
         // is a View-level concern (WindowNotificationManager lives on MainWindow) independent of
         // the VM's WhenActivated-scoped projections.
@@ -1682,7 +1684,7 @@ public partial class App : Application {
             service, remoteAgents ?? new NoRemoteAgents(), lane ?? new NoServerLane(), new RepoIdentityResolver(),
             GitRepository.ResolveMainRepoRoot, localMachineId, appServerUrl: null, time);
 
-        var readings = new AccountReadings(
+        readings ??= new AccountReadings(
             localAccounts ?? Observable.Return<AccountsSnapshotDto?>(null),
             remoteAgents?.DrawableDaemonAccounts ?? Observable.Return<IReadOnlyList<DaemonAccountsDto>>([]),
             UsageClock.Create(time));

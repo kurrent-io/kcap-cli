@@ -124,12 +124,13 @@ public class ChatTabViewSmokeTests {
         /// `show: false` leaves the window unshown, so the view has no template and no
         /// ScrollViewer until Show() is called — the order production takes, where the tab's
         /// first read starts before the workspace view exists.
-        public Host(bool show = true, IObservable<string?>? sessionId = null) {
+        public Host(bool show = true, IObservable<string?>? sessionId = null, IObservable<Capacitor.Cli.Core.Accounts.AccountsSnapshotDto?>? accountReadings = null) {
             Runs = new SessionRuns(Time);
             Terminal = new TerminalTabViewModel("a1", Daemon, Attach.Factory, () => new FakeTerminalSurface(), Time);
             Chat = new ChatTabViewModel(
                 "a1", Daemon, new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), _presence), new NoAttachmentUploader(), TranscriptChat.For("claude"), Opener, Time, Permissions, Runs,
-                sessionId: sessionId, localDaemonOnAppServer: Observable.Return(true));
+                sessionId: sessionId, localDaemonOnAppServer: Observable.Return(true),
+                accountReadings: accountReadings, usageClock: Observable.Return(StripReadings.Now));
             View = new ChatTabView { DataContext = Chat };
             Window = new Window { Content = View, Width = 800, Height = 600 };
             if (!show) return;
@@ -332,6 +333,35 @@ public class ChatTabViewSmokeTests {
                 host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path });
                 host.Settle();
                 await Assert.That(strip.IsVisible).IsFalse();
+            } finally { await host.CloseAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_strip_draws_a_danger_pill_for_a_blocked_account() {
+        await RunOnUiAsync(async () => {
+            var readings = new BehaviorSubject<Capacitor.Cli.Core.Accounts.AccountsSnapshotDto?>(StripReadings.Snapshot(
+                StripReadings.Account("acc1", StripReadings.Blocked(TimeSpan.FromMinutes(65),
+                    StripReadings.Window(300, 100, TimeSpan.FromMinutes(65)), StripReadings.Window(10080, 81, TimeSpan.FromDays(3))))));
+            var host = new Host(accountReadings: readings);
+            var path = Tmp.CreateFile("blocked.jsonl", [UserLine]);
+            try {
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
+                    TranscriptPath = path, AccountDirectory = StripReadings.Directory, AccountId = "acc1", AccountLabel = "work",
+                });
+                await (host.Chat.PendingReadForTesting ?? Task.CompletedTask);
+                await WaitUntilAsync(() => { host.Settle(); return host.Chat.ShowsAccountUsage; }, what: "the bars");
+
+                var strip = host.View.FindControl<Border>("AccountStrip")!;
+                var pill = host.View.FindControl<Border>("AccountStripBlocked")!;
+                await Assert.That(pill.IsEffectivelyVisible).IsTrue();
+                await Assert.That(pill.GetVisualDescendants().OfType<TextBlock>().Single().Text).IsEqualTo("Limit hit · resets in 1h 05m");
+                await Assert.That(host.View.FindControl<TextBlock>("AccountStripDirectory")!.IsEffectivelyVisible).IsFalse();
+                await Assert.That(host.View.FindControl<TextBlock>("AccountStripReset")!.IsEffectivelyVisible).IsFalse();
+                var shown = strip.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToArray();
+                await Assert.That(shown).Contains("100%");
+                await Assert.That(shown).Contains("81%");
             } finally { await host.CloseAsync(); }
         });
     }

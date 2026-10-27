@@ -649,13 +649,13 @@ public class RemoteAgentsServiceTests {
 
     static readonly DateTime FirstConnect = new(2026, 10, 27, 9, 0, 0, DateTimeKind.Utc);
 
-    static DaemonInfo Host(string name, string machine = "m1", DateTime? connectedAt = null) =>
+    internal static DaemonInfo Host(string name, string machine = "m1", DateTime? connectedAt = null) =>
         new() { Name = name, OwnerUserId = "u1", MachineId = machine, ConnectedAt = connectedAt ?? FirstConnect, Connected = true };
 
     static DaemonAccountsDto AccountsOf(string name) => new() { DaemonName = name, HostId = "h-" + name, Revision = 1 };
 
     /// A lane whose listing and accounts answers the test swaps between steps; a null answer is a failed fetch.
-    sealed class GateRig : IDisposable {
+    internal sealed class GateRig : IDisposable {
         public readonly FakeServerLane Lane = new();
         public readonly RemoteAgentsService Service;
         public volatile IReadOnlyList<DaemonInfo>? Listing;

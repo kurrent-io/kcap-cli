@@ -10,6 +10,7 @@ using Avalonia.Collections;
 using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Remote.Models;
@@ -494,6 +495,33 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     bool _showsAccountStrip;
     public bool ShowsAccountStrip { get => _showsAccountStrip; private set => this.RaiseAndSetIfChanged(ref _showsAccountStrip, value); }
 
+    readonly BehaviorSubject<string?> _accountIds = new(null);
+
+    AccountUsageView? _accountStripUsage;
+    /// The session's account reading on its host, or null when the host is not drawable or the
+    /// account has no registry id there.
+    public AccountUsageView? AccountStripUsage {
+        get => _accountStripUsage;
+        private set {
+            if (Equals(_accountStripUsage, value)) return;
+            this.RaiseAndSetIfChanged(ref _accountStripUsage, value);
+            this.RaisePropertyChanged(nameof(ShowsAccountUsage));
+            this.RaisePropertyChanged(nameof(ShowsAccountDirectory));
+            this.RaisePropertyChanged(nameof(AccountReadingNote));
+        }
+    }
+
+    public bool ShowsAccountUsage => _accountStripUsage is { } usage && usage.LineText != AccountUsage.NoReading;
+
+    public bool ShowsAccountDirectory => !ShowsAccountUsage;
+
+    public string? AccountReadingNote => _accountStripUsage?.LineText == AccountUsage.NoReading ? "· " + AccountUsage.NoReading : null;
+
+    static AccountUsageView? StripUsage(string? accountId, AccountsSnapshotDto? snapshot, DateTimeOffset now) =>
+        accountId is not null && snapshot?.Accounts?.FirstOrDefault(a => a.Id == accountId) is { } account
+            ? AccountUsage.Project(account, now, TimeZoneInfo.Local)
+            : null;
+
     string _statusText = "";
     public string StatusText { get => _statusText; private set => this.RaiseAndSetIfChanged(ref _statusText, value); }
 
@@ -682,11 +710,13 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             SessionRuns runs, string? unavailableNote = null, IObservable<string?>? sessionId = null,
             IObservable<bool>? localDaemonOnAppServer = null, PlanActivity? planActivity = null,
             Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null, LocalTranscripts? transcripts = null,
-            IMessageSenderSource? senders = null, IObservable<Unit>? signInCompleted = null)
+            IMessageSenderSource? senders = null, IObservable<AccountsSnapshotDto?>? accountReadings = null,
+            IObservable<DateTimeOffset>? usageClock = null, IObservable<Unit>? signInCompleted = null)
         : this(agentId, AgentOrigin.Local, LocalSession(agentId, daemon), daemon.Snapshots.Select(s => s.Daemon.SupportedVendors),
                input, uploader, projection is null ? null : LocalFeed(agentId, projection, time, transcripts), opener, time, permissions,
                runs, unavailableNote, null, sessionId, localDaemonOnAppServer, planActivity: planActivity, openCard: openCard,
-               drafts: drafts, senders: senders, signInCompleted: signInCompleted) { }
+               drafts: drafts, senders: senders, accountReadings: accountReadings, usageClock: usageClock,
+               signInCompleted: signInCompleted) { }
 
     public ChatTabViewModel(
             string agentId, AgentOrigin origin, IObservable<ChatSessionInfo> session, IObservable<string[]?> supportedVendors,
@@ -695,6 +725,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             IObservable<string?>? sessionId = null, IObservable<bool>? localDaemonOnAppServer = null,
             IObservable<IReadOnlyList<QueuedInputItem>>? serverQueue = null, PlanActivity? planActivity = null,
             Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null, IMessageSenderSource? senders = null,
+            IObservable<AccountsSnapshotDto?>? accountReadings = null, IObservable<DateTimeOffset>? usageClock = null,
             IObservable<Unit>? signInCompleted = null) {
         _drafts = drafts;
         _origin = origin;
@@ -777,6 +808,14 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(OnSession)
             .DisposeWith(_disposables);
+
+        if (accountReadings is not null)
+            _accountIds.DistinctUntilChanged()
+                .CombineLatest(accountReadings, usageClock ?? Observable.Return(time.GetUtcNow()), StripUsage)
+                .DistinctUntilChanged()
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(usage => AccountStripUsage = usage)
+                .DisposeWith(_disposables);
 
         _timer = time.CreateTimer(_ => OnTick(), null, PollInterval, PollInterval);
 
@@ -1091,6 +1130,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         ShowsAccountStrip = directory is not null
             && (string.Equals(info.Vendor, HarnessId.Claude.VendorId, StringComparison.OrdinalIgnoreCase)
              || string.Equals(info.Vendor, HarnessId.Codex.VendorId, StringComparison.OrdinalIgnoreCase));
+        _accountIds.OnNext(info.AccountId);
     }
 
     /// A panel command such as /status writes nothing to the transcript, so the panel opening

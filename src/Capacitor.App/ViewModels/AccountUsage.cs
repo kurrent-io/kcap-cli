@@ -14,7 +14,7 @@ public static class AccountUsage {
 
     public static readonly TimeSpan ReadyFreshness = TimeSpan.FromHours(1);
 
-    const string NoReading = "no reading yet";
+    public const string NoReading = "no reading yet";
     const string Unknown   = "usage unknown";
 
     public static AccountUsageView Project(AccountViewDto account, DateTimeOffset now, TimeZoneInfo zone) {

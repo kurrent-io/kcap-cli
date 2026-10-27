@@ -520,15 +520,9 @@ public partial class LauncherPaneView : UserControl {
                 if (usage.LineText is not null) Add(Faint(usage.LineText));
             } else {
                 foreach (var bar in usage.Bars) {
-                    var tone = bar.Tone switch {
-                        UsageTone.Warning => warning,
-                        UsageTone.Danger  => Brush("KcapDangerBrush"),
-                        UsageTone.Unknown => Brush("KcapBorderStrongBrush"),
-                        _                 => muted,
-                    };
                     var fill = new Border {
-                        Background = tone, CornerRadius = new CornerRadius(2),
-                        Width = bar.Percent is { } percent ? 46 * Math.Clamp(percent, 0, 100) / 100.0 : 46,
+                        Background = Brush(UsageToneBrushConverter.FillKey(bar.Tone)), CornerRadius = new CornerRadius(2),
+                        Width = UsageBarFillConverter.Width(bar, 46),
                         HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left,
                     };
                     var track = new Border {
@@ -539,7 +533,7 @@ public partial class LauncherPaneView : UserControl {
                     mini.Children.Add(track);
                     mini.Children.Add(new TextBlock {
                         Text = bar.PercentText, FontSize = 10.5,
-                        Foreground = bar.Tone is UsageTone.Warning or UsageTone.Danger ? tone : muted,
+                        Foreground = Brush(UsageToneBrushConverter.TextKey(bar.Tone)),
                     });
                     track.VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center;
                     Add(mini);
