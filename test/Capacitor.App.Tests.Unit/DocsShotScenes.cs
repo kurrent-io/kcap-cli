@@ -2,18 +2,18 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Avalonia.Threading;
 using Capacitor.App.Services;
-using Capacitor.App.Services.Mutation;
 using Capacitor.App.Services.Onboarding;
 using Capacitor.App.ViewModels;
 using Capacitor.App.ViewModels.Onboarding;
-using Capacitor.App.Views;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Commands;
-using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests;
+using Capacitor.Cli.Core.Plans;
 using Capacitor.Cli.Core.WorkItems;
+using Capacitor.Remote.Models;
 using DynamicData;
 using Microsoft.Extensions.Time.Testing;
 using static Capacitor.App.Tests.Unit.FakeDaemonClientService;
@@ -22,12 +22,15 @@ namespace Capacitor.App.Tests.Unit;
 
 /// The fictional Northwind tenant every docs figure is rendered over, so no real host, path or user
 /// reaches a published image.
-static class DocsShotScenes {
+static partial class DocsShotScenes {
     public const string OutEnvVar = "KCAP_SHOTS_OUT";
 
     public static readonly string[] Names = [
         "desktop-main", "desktop-permission-card", "desktop-help-menu", "desktop-settings",
-        "desktop-wizard-edition", "desktop-wizard-sign-in", "desktop-wizard-history", "desktop-local-recovery"];
+        "desktop-wizard-edition", "desktop-wizard-sign-in", "desktop-wizard-history", "desktop-local-recovery",
+        "desktop-launcher", "desktop-pull-request", "desktop-work-context", "desktop-rail-grouped",
+        "desktop-settings-notifications", "desktop-settings-accounts", "desktop-settings-profiles", "desktop-settings-search",
+        "desktop-launch-approvals", "desktop-consent-prompt"];
 
     const string ServerUrl = "https://northwind.kcap.ai";
     const string PaymentsRepo = "/Users/maya/dev/northwind/payments-api";
@@ -43,7 +46,8 @@ static class DocsShotScenes {
         """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"Passed! 48 tests, 0 failed"}]}}""",
     ];
 
-    public static void Northwind(FakeDaemonClientService service) {
+    public static void Northwind(FakeDaemonClientService service, bool moreSessions = false) {
+        service.DaemonName = "maya-mbp";
         service.SnapshotsSubject.OnNext(Snap(daemon: "maya-mbp", version: "1.4.0", serverUrl: ServerUrl, connection: "connected", active: 2, max: 5));
         service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
         var now = Now.UtcDateTime;
@@ -60,46 +64,103 @@ static class DocsShotScenes {
             "a3", "agent", "claude", StorefrontRepo, "Completed",
             null, null, null, now.AddHours(-2), null, null,
             Title: "Tidy the README", SessionId: "s3"));
+        if (!moreSessions) return;
+        service.Agents.AddOrUpdate(new AgentStatusDto(
+            "a4", "agent", "claude", PaymentsRepo, "Completed",
+            null, null, "maya", now.AddDays(-1), null, "Maya Chen",
+            Title: "Add idempotency keys to refunds", SessionId: "s4"));
+        service.Agents.AddOrUpdate(new AgentStatusDto(
+            "a5", "agent", "claude", StorefrontRepo, "Running",
+            null, null, "maya", now.AddMinutes(-5), null, "Maya Chen",
+            Title: "Lazy-load the product images", SessionId: "s5"));
     }
 
     public static BehaviorSubject<IReadOnlyDictionary<string, RailPullRequestSummary>> PullRequests() =>
         new(new Dictionary<string, RailPullRequestSummary> {
-            ["s1"] = new([new(Subject("payments-api", 42), RetryTitle, "Open")]),
-            ["s2"] = new([new(Subject("storefront", 118), "Round totals at the line level", "Merged")]),
+            ["s1"] = new([new(PullRequestWire.Subject(NorthwindPullRequestSource.Link), NorthwindPullRequestSource.Title, "Open")]),
+            ["s2"] = new([new(new PullRequestSubjectDto {
+                Provider = "github", Host = "github.com", RepoHash = "northwind-storefront", Owner = "northwind", RepoName = "storefront", Number = 118,
+            }, "Round totals at the line level", "Merged")]),
         });
 
     /// The payments session's work context: one in-flight work item Maya is on.
     static WorkContextRead PaymentsWorkContext() {
-        var row = new SessionWorkItemAssignmentDto { WorkItemId = "w1", Label = "PAY-142", Source = "mcp", Confidence = 1, IsPrimary = true };
-        var item = new WorkItemDto {
-            WorkItemId = "w1",
-            Title = RetryTitle,
-            Key = new WorkItemKeyDto { ShortKey = "PAY-142", Provider = "linear", Kind = "issue", Value = "PAY-142" },
-            State = new WorkItemStateDto { Kind = "in_flight" },
-            Links = [new WorkItemLinkDto {
-                Kind = "issue", Provider = "linear", Value = "PAY-142", ShortKey = "PAY-142",
-                Url = "https://linear.app/northwind/issue/PAY-142", Title = RetryTitle, LinkClass = "link", IsSeed = true,
-            }],
-            Contributors = [new WorkItemContributorDto { UserId = "maya", DisplayName = "Maya Chen" }],
-            SessionCount = 1,
-        };
-        return new WorkContextRead(WorkContextReadKind.Ready, [row], row, item, null, new SessionSummaryDto { SessionId = "s1" }, false, false, false, null);
+        var row = Assignment("w1", "PAY-142", primary: true);
+        return new WorkContextRead(WorkContextReadKind.Ready, [row], row, PaymentsItem(), null, new SessionSummaryDto { SessionId = "s1" }, false, false, false, null);
     }
 
-    static PullRequestSubjectDto Subject(string repo, int number) => new() {
-        Provider = "github", Host = "github.com", RepoHash = $"northwind-{repo}", Owner = "northwind", RepoName = repo, Number = number,
+    /// PAY-142 as the work-context figure shows it: split into two parts, shared with Dana, part of a
+    /// larger effort and waiting on another item.
+    public static WorkContextRead PaymentsWorkContextInFull() {
+        var row = Assignment("w1", "PAY-142", primary: true);
+        var item = PaymentsItem() with {
+            Overview = "Charges fail outright when the payments gateway answers 503 during a deploy. Retry the transient failures with backoff, without ever charging twice.",
+            Parts = [
+                new WorkItemPartDto { WorkItemId = "w2", Title = "Classify transient gateway errors", Ordinal = 1, IsSettled = true, SettledAt = Now.AddHours(-3) },
+                new WorkItemPartDto { WorkItemId = "w3", Title = "Retry policy with backoff", Ordinal = 2 },
+            ],
+            Contributors = [
+                new WorkItemContributorDto { UserId = "maya", DisplayName = "Maya Chen", LastActivityAt = Now.AddMinutes(-2) },
+                new WorkItemContributorDto { UserId = "dana", DisplayName = "Dana Okafor", LastActivityAt = Now.AddMinutes(-12) },
+            ],
+            SessionCount = 3,
+        };
+        var topology = new WorkItemTopologyDto {
+            Item = new WorkItemRefDto { WorkItemId = "w1", Title = RetryTitle },
+            PartOf = new WorkItemRefDto { WorkItemId = "w0", Title = "Payments reliability" },
+            BlockedBy = [new WorkItemRefDto { WorkItemId = "w9", Title = "Rotate the gateway sandbox credentials" }],
+        };
+        return new WorkContextRead(WorkContextReadKind.Ready, [row, Assignment("w3", "Retry policy with backoff", primary: false)], row, item,
+            topology, new SessionSummaryDto { SessionId = "s1" }, false, false, false, null);
+    }
+
+    static SessionWorkItemAssignmentDto Assignment(string id, string label, bool primary) =>
+        new() { WorkItemId = id, Label = label, Source = "mcp", Confidence = 1, IsPrimary = primary };
+
+    static WorkItemDto PaymentsItem() => new() {
+        WorkItemId = "w1",
+        Title = RetryTitle,
+        Key = new WorkItemKeyDto { ShortKey = "PAY-142", Provider = "linear", Kind = "issue", Value = "PAY-142" },
+        State = new WorkItemStateDto { Kind = "in_flight" },
+        Links = [new WorkItemLinkDto {
+            Kind = "issue", Provider = "linear", Value = "PAY-142", ShortKey = "PAY-142",
+            Url = "https://linear.app/northwind/issue/PAY-142", Title = RetryTitle, LinkClass = "link", IsSeed = true,
+        }],
+        Contributors = [new WorkItemContributorDto { UserId = "maya", DisplayName = "Maya Chen" }],
+        SessionCount = 1,
     };
+
+    /// The plan the payments session declared, part way through.
+    public static SessionPlansRead PaymentsPlan() {
+        static PlanLedgerTaskDto Step(int ordinal, string title, string status) =>
+            new() { TaskId = $"p{ordinal}", Ordinal = ordinal, Title = title, Status = status, Source = "agent" };
+        return new(SessionPlansReadKind.Ready, [new SessionPlanDto {
+            PlanId = "plan-1", IsCurrent = true,
+            Tasks = [
+                Step(1, "Classify the transient gateway status codes", "completed"),
+                Step(2, "Wrap GatewayClient in a retry policy", "completed"),
+                Step(3, "Carry the idempotency key across attempts", "in_progress"),
+                Step(4, "Replay the 503 burst in the integration suite", "pending"),
+            ],
+        }]);
+    }
 
     /// The main window over the Northwind tenant, not yet shown. With `openSession` the payments
     /// session is open and its transcript read. With `localServerDown` the server is the local
-    /// edition's and its lane is retrying, so the launcher offers to start it.
+    /// edition's and its lane is retrying, so the launcher offers to start it. With `remoteMachine`
+    /// Maya owns a second daemon, so the launcher offers a machine choice. `arrange` runs last, over
+    /// the finished window model.
     public static async Task<DocsShotScene> MainWindowAsync(
             IReadOnlySet<string>? pendingIds = null, IReadOnlyList<PendingPermissionRequest>? permissionRequests = null,
             Action<FeedbackCategory>? openFeedback = null, Action? requestSetup = null,
-            bool openSession = true, bool localServerDown = false) {
+            bool openSession = true, bool localServerDown = false, WorkContextRead? workContext = null,
+            SessionPlansRead? plan = null, bool moreSessions = false, bool remoteMachine = false,
+            Func<MainWindowViewModel, Task>? arrange = null) {
         var scene = new DocsShotScene();
         try {
-            await BuildMainWindowAsync(scene, pendingIds, permissionRequests, openFeedback, requestSetup, openSession, localServerDown);
+            var vm = await BuildMainWindowAsync(scene, pendingIds, permissionRequests, openFeedback, requestSetup, openSession,
+                localServerDown, workContext ?? PaymentsWorkContext(), plan, moreSessions, remoteMachine);
+            if (arrange is not null) await arrange(vm);
             return scene;
         } catch {
             await scene.DisposeAsync();
@@ -107,30 +168,71 @@ static class DocsShotScenes {
         }
     }
 
-    static async Task BuildMainWindowAsync(DocsShotScene scene, IReadOnlySet<string>? pendingIds,
+    /// The launcher with Maya's next task typed and every chip chosen, a log file staged beside it.
+    public static Task<DocsShotScene> LauncherAsync() => MainWindowAsync(openSession: false, remoteMachine: true, arrange: async vm => {
+        var home = vm.Home!;
+        await home.SelectRepositoryAsync(PaymentsRepo);
+        home.Goal = "Add retry to the payments gateway";
+        home.SelectedModel = "claude-opus-5";
+        home.SelectedEffort = "high";
+        home.SelectedPermissionMode = ClaudePermissionModes.AcceptEdits;
+        home.Tray.AddAll([new StagedAttachment("gateway-503.log", "text/plain", new byte[18 * 1024])]);
+        await WorkspaceFixtures.WaitUntilAsync(() => home.MachinePickerVisible, what: "the machine chip");
+    });
+
+    /// The payments session's pull request open on its Checks tab. The reader reads only while its
+    /// window shows, so the scene settles once the checks have been read there.
+    public static async Task<DocsShotScene> PullRequestAsync() {
+        PullRequestContextViewModel? reader = null;
+        var scene = await MainWindowAsync(arrange: vm => {
+            vm.OpenSessionPullRequest("a1", AgentOrigin.Local, PullRequestWire.Subject(NorthwindPullRequestSource.Link));
+            reader = ((WorkspaceViewModel)vm.CurrentWorkspace!).PullRequests!;
+            return Task.CompletedTask;
+        });
+        scene.Settled = () => {
+            if (reader!.CanReveal && !reader.IsChecks) reader.SelectedTabIndex = 1;
+            return reader.CheckRows.Count == 4 && !reader.IsReading && reader.ShowsFix;
+        };
+        return scene;
+    }
+
+    /// The payments session with its work context read in full, people and plan opened, in a window
+    /// tall enough that the whole panel shows.
+    public static async Task<DocsShotScene> WorkContextAsync() {
+        var scene = await MainWindowAsync(workContext: PaymentsWorkContextInFull(), plan: PaymentsPlan(), arrange: async vm => {
+            var context = ((WorkspaceViewModel)vm.CurrentWorkspace!).WorkContext;
+            await WorkspaceFixtures.WaitUntilAsync(() => context.IsReady && context.HasParts && context.Plan.HasTasks, what: "the work context");
+            await context.TogglePeopleCommand.Execute();
+            await context.Plan.ToggleCommand.Execute();
+        });
+        scene.Window.Height = 1120;
+        return scene;
+    }
+
+    static async Task<MainWindowViewModel> BuildMainWindowAsync(DocsShotScene scene, IReadOnlySet<string>? pendingIds,
             IReadOnlyList<PendingPermissionRequest>? permissionRequests, Action<FeedbackCategory>? openFeedback,
-            Action? requestSetup, bool openSession, bool localServerDown) {
+            Action? requestSetup, bool openSession, bool localServerDown, WorkContextRead workContextRead,
+            SessionPlansRead? plan, bool moreSessions, bool remoteMachine) {
         var transcript = openSession ? scene.Own(new TempDir()) : null;
         var homeState = scene.Own(TempDir.WithPathTo("app-state.json", out var homeStatePath));
         var service = new FakeDaemonClientService();
-        Northwind(service);
+        Northwind(service, moreSessions);
         var permissions = new FakePermissionService();
         foreach (var request in permissionRequests ?? []) permissions.Add(request);
         var actions = new AgentActionService(new ScriptedLocalControlOps(), new AppNotifier(), new RecordingOpener(),
             service.SnapshotsSubject, CancellationToken.None, NeverConfirm.Confirm);
         var pullRequests = scene.Own(PullRequests());
         var attach = new FakeTerminalAttachClientFactory();
-        var workContext = new FakeWorkContextSource { Default = PaymentsWorkContext() };
+        var workContext = new FakeWorkContextSource { Default = workContextRead };
+        var plans = plan is null ? null : new FakePlanSource { Default = plan };
         var clock = new FakeTimeProvider(Now);
-        var linkedPullRequests = new FakePullRequestSource(clock) {
-            Links = [new PullRequestLinkDto {
-                Provider = "github", Host = "github.com", RepoHash = "northwind-payments-api", Owner = "northwind", RepoName = "payments-api",
-                Number = 42, Url = "https://github.com/northwind/payments-api/pull/42", Title = RetryTitle, HeadRef = "feat/gateway-retry",
-            }],
-            TitleFor = _ => RetryTitle,
-        };
+        var linkedPullRequests = new NorthwindPullRequestSource(clock);
+        IReadOnlyList<DaemonInfo> machines = remoteMachine
+            ? [new DaemonInfo { Name = "maya-studio", OwnerUserId = "maya", Connected = true, Platform = "linux", RepoPaths = [PaymentsRepo] }]
+            : [];
         var home = scene.Own(new HomeViewModel(service, new AppStateStore(homeStatePath), new NoLaunch(),
-            () => Task.FromResult<string[]>([PaymentsRepo, StorefrontRepo]), clock));
+            () => Task.FromResult<string[]>([PaymentsRepo, StorefrontRepo]), clock,
+            daemons: Observable.Return(machines), viewerId: _ => Task.FromResult<string?>("maya")));
         BehaviorSubject<ServerLaneStatus>? lane = null;
         if (localServerDown) {
             service.SnapshotsSubject.OnNext(Snap(daemon: "maya-mbp", version: "1.4.0", serverUrl: ServerUrl, connection: "disconnected", active: 2, max: 5));
@@ -154,7 +256,7 @@ static class DocsShotScenes {
             workspaceFactory: id => new WorkspaceViewModel(
                 id, service, actions, attach.Factory, () => new FakeTerminalSurface(),
                 clock, new RecordingOpener(), permissions, workContext,
-                new ScriptedLocalControlOps(), new NoAttachmentUploader(), pullRequests: linkedPullRequests),
+                new ScriptedLocalControlOps(), new NoAttachmentUploader(), pullRequests: linkedPullRequests, plans: plans),
             rail: rail, home: home, tenantName: localServerDown ? "local" : "northwind", laneStatus: lane,
             openFeedback: openFeedback, requestSetup: requestSetup) { Web = web };
         scene.Present(new Views.MainWindow { DataContext = vm });
@@ -180,32 +282,8 @@ static class DocsShotScenes {
             await attach.Created[^1].TriggerAttached([]);
             Dispatcher.UIThread.RunJobs();
         }
+        return vm;
     }
-
-    /// The settings window over the Northwind profile, not yet shown, tall enough that the whole
-    /// Daemon tab shows without scrolling.
-    public static async Task<DocsShotScene> SettingsAsync(TempConfigRoot config) {
-        var scene = new DocsShotScene();
-        try {
-            ConfigMutator.Mutate(config.Root, c => c with { Profiles = new() {
-                ["northwind"] = new Profile { ServerUrl = ServerUrl, Daemon = new DaemonSettings { Name = "maya-mbp", MaxAgents = 5 } }
-            } });
-            var service = new FakeDaemonClientService();
-            Northwind(service);
-            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["settings/1"]));
-            var vm = scene.Own(new SettingsViewModel(new SettingsProfileStore(config.Root, "northwind", ServerUrl),
-                service, new ScriptedLocalControlOps(), (_, _) => Task.FromResult(false),
-                (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded()),
-                (_, _) => Task.FromResult(false), _ => Task.FromResult(false), true, Task.CompletedTask, (_, _) => Task.FromResult(true)));
-            scene.Present(new SettingsWindow { DataContext = vm, Height = SettingsHeight });
-            return scene;
-        } catch {
-            await scene.DisposeAsync();
-            throw;
-        }
-    }
-
-    const double SettingsHeight = 760;
 
     /// The setup wizard from the real wizard graph, opened on `startAt` before anything has been chosen.
     public static Task<DocsShotScene> WizardAsync(TempConfigRoot config, WizardStepId startAt) =>

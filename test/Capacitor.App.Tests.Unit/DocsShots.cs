@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Media.Imaging;
@@ -43,11 +44,16 @@ public sealed class DocsShots {
             window.Show();
             window.SetRenderScaling(2);
             afterShow?.Invoke(window);
-            for (var i = 0; i < MaxPumps && !Ready(window, sentinelControlName); i++) Pump(window);
+            for (var i = 0; i < MaxPumps && !(Ready(window, sentinelControlName) && scene.Settled()); i++) {
+                Pump(window);
+                await Task.Delay(5);
+            }
             if (Find(window, sentinelControlName) is null)
                 throw new TimeoutException($"{name}: no control named '{sentinelControlName}' appeared");
             if (!Ready(window, sentinelControlName))
                 throw new TimeoutException($"{name}: '{sentinelControlName}' is present but never became ready");
+            if (!scene.Settled())
+                throw new TimeoutException($"{name}: the scene never settled");
             // Deactivating the window keeps the caret; only dropping focus hides it. An open flyout
             // holds focus on a button and closes when focus leaves it, so only a text box loses it.
             if (window.FocusManager?.GetFocusedElement() is TextBox) window.FocusManager.Focus(null);
@@ -79,7 +85,10 @@ public sealed class DocsShots {
     public async Task The_scene_names_match_the_docs_manifest() {
         await Assert.That(DocsShotScenes.Names).IsEquivalentTo([
             "desktop-main", "desktop-permission-card", "desktop-help-menu", "desktop-settings",
-            "desktop-wizard-edition", "desktop-wizard-sign-in", "desktop-wizard-history", "desktop-local-recovery"]);
+            "desktop-wizard-edition", "desktop-wizard-sign-in", "desktop-wizard-history", "desktop-local-recovery",
+            "desktop-launcher", "desktop-pull-request", "desktop-work-context", "desktop-rail-grouped",
+            "desktop-settings-notifications", "desktop-settings-accounts", "desktop-settings-profiles", "desktop-settings-search",
+            "desktop-launch-approvals", "desktop-consent-prompt"]);
     }
 
     [Test]
@@ -134,18 +143,72 @@ public sealed class DocsShots {
         await CaptureAsync(() => DocsShotScenes.MainWindowAsync(openSession: false, localServerDown: true), "StartLocalServerButton");
     }
 
-    static void OpenHelpFlyoutInsideTheWindow(Window window) {
-        var help = window.FindDescendantOfType<SessionRailView>()!.FindControl<Button>("RailHelpButton")!;
-        ((Flyout)help.Flyout!).ShowAt(help);
+    [Test, DocsShot("desktop-launcher")]
+    public async Task The_launcher_holds_a_goal_with_every_chip_chosen() {
+        await CaptureAsync(DocsShotScenes.LauncherAsync, "GoalInput");
+    }
+
+    [Test, DocsShot("desktop-pull-request")]
+    public async Task The_pull_request_tab_shows_its_checks_and_offers_a_fix() {
+        await CaptureAsync(DocsShotScenes.PullRequestAsync, "FixPullRequestButton");
+    }
+
+    [Test, DocsShot("desktop-work-context")]
+    public async Task The_work_context_shows_parts_people_pull_requests_and_plan() {
+        await CaptureAsync(DocsShotScenes.WorkContextAsync, "PlanTaskList");
+    }
+
+    [Test, DocsShot("desktop-rail-grouped")]
+    public async Task The_rail_groups_live_and_ended_sessions_by_repository() {
+        await CaptureAsync(() => DocsShotScenes.MainWindowAsync(openSession: false, moreSessions: true), "SessionMeta");
+    }
+
+    [Test, DocsShot("desktop-settings-notifications")]
+    public async Task The_settings_window_shows_the_notification_switches() {
+        await CaptureAsync(() => DocsShotScenes.SettingsAsync(Config, "NotificationsTab"), "PermissionNotificationsToggle");
+    }
+
+    [Test, DocsShot("desktop-settings-accounts")]
+    public async Task The_settings_window_lists_accounts_with_a_row_menu_open() {
+        await CaptureAsync(() => DocsShotScenes.SettingsAsync(Config, "AccountsTab"), "AddAccountButton",
+            afterShow: window => OpenFlyoutInsideTheWindow(window, window.GetVisualDescendants().OfType<Button>()
+                .Single(b => b.Classes.Contains("accountMenu") && AutomationProperties.GetName(b) == "Actions for northwind"), "desktop-settings-accounts"));
+    }
+
+    [Test, DocsShot("desktop-settings-profiles")]
+    public async Task The_settings_window_lists_the_profiles() {
+        await CaptureAsync(() => DocsShotScenes.SettingsAsync(Config, "ProfilesTab"), "ProfilesTitleText");
+    }
+
+    [Test, DocsShot("desktop-settings-search")]
+    public async Task The_settings_window_offers_the_built_in_search_model() {
+        await CaptureAsync(() => DocsShotScenes.SettingsAsync(Config, "SearchTab", localSearch: true), "SearchCurrentText");
+    }
+
+    [Test, DocsShot("desktop-launch-approvals")]
+    public async Task The_launch_approvals_window_lists_recent_decisions() {
+        await CaptureAsync(DocsShotScenes.LaunchApprovalsAsync, "ActivityItems");
+    }
+
+    [Test, DocsShot("desktop-consent-prompt")]
+    public async Task The_consent_prompt_asks_to_allow_a_requested_launch() {
+        await CaptureAsync(DocsShotScenes.ConsentPromptAsync, "AllowOnceButton");
+    }
+
+    static void OpenHelpFlyoutInsideTheWindow(Window window) =>
+        OpenFlyoutInsideTheWindow(window, window.FindDescendantOfType<SessionRailView>()!.FindControl<Button>("RailHelpButton")!, "desktop-help-menu");
+
+    static void OpenFlyoutInsideTheWindow(Window window, Button button, string figure) {
+        ((Flyout)button.Flyout!).ShowAt(button);
         Dispatcher.UIThread.RunJobs();
         window.UpdateLayout();
         var presenter = window.FindDescendantOfType<FlyoutPresenter>()
-            ?? throw new InvalidOperationException("desktop-help-menu: the help flyout has no presenter in the window");
+            ?? throw new InvalidOperationException($"{figure}: the flyout has no presenter in the window");
         var bounds = new Rect(presenter.Bounds.Size).TransformToAABB(presenter.TransformToVisual(window)!.Value);
         var frame = new Rect(window.Bounds.Size);
         if (!frame.Contains(bounds))
             throw new InvalidOperationException(
-                $"desktop-help-menu: the help flyout at {bounds} overflows the window {frame} " +
+                $"{figure}: the flyout at {bounds} overflows the window {frame} " +
                 $"(left {Math.Max(0, -bounds.X)}, top {Math.Max(0, -bounds.Y)}, " +
                 $"right {Math.Max(0, bounds.Right - frame.Width)}, bottom {Math.Max(0, bounds.Bottom - frame.Height)})");
     }

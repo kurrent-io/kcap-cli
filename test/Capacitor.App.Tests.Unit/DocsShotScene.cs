@@ -12,6 +12,9 @@ sealed class DocsShotScene : IAsyncDisposable {
 
     public Window Window => _window ?? throw new InvalidOperationException("The scene was never given a window");
 
+    /// What the figure still waits on once its window shows, beyond the sentinel control.
+    public Func<bool> Settled { get; set; } = () => true;
+
     public T Own<T>(T disposable) where T : IDisposable {
         _teardown.Push(() => { disposable.Dispose(); return Task.CompletedTask; });
         return disposable;
