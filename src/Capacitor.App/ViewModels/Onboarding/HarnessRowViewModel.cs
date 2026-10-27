@@ -1,3 +1,4 @@
+using Capacitor.App.Services;
 using System.Reactive;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Setup;
@@ -40,8 +41,7 @@ public sealed class HarnessRowViewModel : ReactiveObject {
 
     public string SignalLine => Declined ? $"{Signal} · you turned this down before" : Signal;
 
-    /// Claude Code and Codex install their tools with capture; the two cannot be answered apart.
-    public bool ToolsBundled => Id == HarnessId.Claude || Id == HarnessId.Codex;
+    public bool ToolsBundled => HarnessInstallOptions.ToolsBundled(Id);
 
     public string? ConsentNote => Id == HarnessId.Codex ? CodexConsentNote : null;
 
@@ -85,16 +85,5 @@ public sealed class HarnessRowViewModel : ReactiveObject {
 
     public ReactiveCommand<Unit, Unit> RetryCommand { get; }
 
-    /// What `plugin install` takes after the vendor flag for this row's answer. Tools are the MCP
-    /// servers and what steers the agent to them, so declining them skips all three where a vendor
-    /// installs them.
-    internal IReadOnlyList<string> InstallOptions =>
-        ToolsBundled         ? []
-        : Record && !Tools   ? [.. ToolParts.Select(part => $"--skip-{Id.VendorId}-{part}")]
-        : !Record && Tools   ? ["--tools-only"]
-        :                      [];
-
-    // Cursor and Kiro carry no instructions block of their own.
-    IEnumerable<string> ToolParts =>
-        Id == HarnessId.Cursor || Id == HarnessId.Kiro ? ["mcp", "skills"] : ["mcp", "skills", "instructions"];
+    internal IReadOnlyList<string> InstallOptions => HarnessInstallOptions.For(Id, Record, Tools);
 }

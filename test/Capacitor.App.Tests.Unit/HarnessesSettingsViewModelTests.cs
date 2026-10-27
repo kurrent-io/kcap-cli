@@ -29,7 +29,7 @@ public class HarnessesSettingsViewModelTests {
         await Assert.That(vm.Rows.Count).IsEqualTo(1);
         var row = vm.Rows[0];
         await Assert.That(row.Signal).Contains("PATH");
-        await Assert.That(row.ConnectionLabel).IsEqualTo("Not connected");
+        await Assert.That(row.ConnectionLabel).IsNull();
         await Assert.That(row.ConsentNote).IsNotNull();
         cli.PluginInstallAsync("--codex", Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
             .Returns(new ProcessResult(1, "", "installation failed", false), new ProcessResult(0, "", "", false));
@@ -38,7 +38,7 @@ public class HarnessesSettingsViewModelTests {
         wired = true;
         await vm.ConnectAsync(row);
         await Assert.That(row.Message!).Contains("Setup completed");
-        await Assert.That(row.ConnectionLabel).IsEqualTo("Connected");
+        await Assert.That(row.ConnectionLabel).IsEqualTo("Recording");
         detected[HarnessId.Cursor] = new(false, true);
         await vm.RescanAsync();
         await Assert.That(vm.Rows.Count).IsEqualTo(2);
@@ -188,5 +188,54 @@ public class HarnessesSettingsViewModelTests {
         await Assert.That(vm.Rows[0].ErrorTitle).IsNotNull();
         await Assert.That(vm.Rows[0].Message).IsEqualTo("Cancelled. Nothing changed.");
         await cli.DidNotReceive().PluginInstallAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>());
+    });
+
+    /// Install only ever adds, so turning the tools off for a recorded tool takes everything out
+    /// and puts the hooks back alone; nothing on disk says tools are there, so the answer is kept.
+    [Test]
+    public Task Turning_tools_off_reinstalls_the_hooks_alone_and_remembers_it() => AvaloniaSession.RunOnUiAsync(async () => {
+        var cli = Substitute.For<IKcapCli>();
+        cli.PluginRemoveAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(new ProcessResult(0, "", "", false));
+        cli.PluginInstallAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
+            .Returns(new ProcessResult(0, "", "", false));
+        var memory = new AppStateStore(Config.Root.Path("app-state.json"));
+        using var vm = new HarnessesSettingsViewModel(Seed(), cli,
+            _ => Task.FromResult<IReadOnlyDictionary<HarnessId, DetectedAgent>>(new Dictionary<HarnessId, DetectedAgent> { [HarnessId.Cursor] = new(false, true) }),
+            isWired: _ => true, toolsMemory: memory);
+        await vm.RescanAsync();
+        var row = vm.Rows[0];
+        await Assert.That(row.Tools).IsTrue();
+
+        await vm.ToggleToolsAsync(row);
+
+        Received.InOrder(() => {
+            cli.PluginRemoveAsync(HarnessId.Cursor.PluginInstallFlag, Arg.Any<CancellationToken>());
+            cli.PluginInstallAsync(HarnessId.Cursor.PluginInstallFlag, Arg.Any<CancellationToken>(),
+                Arg.Is<IReadOnlyList<string>?>(o => o != null && o.SequenceEqual(new[] { "--skip-cursor-mcp", "--skip-cursor-skills" })));
+        });
+        await Assert.That(row.Tools).IsFalse();
+        await Assert.That((await memory.LoadAsync()).HarnessToolsByVendor!["cursor"]).IsFalse();
+
+        using var reopened = new HarnessesSettingsViewModel(Seed(), cli,
+            _ => Task.FromResult<IReadOnlyDictionary<HarnessId, DetectedAgent>>(new Dictionary<HarnessId, DetectedAgent> { [HarnessId.Cursor] = new(false, true) }),
+            isWired: _ => true, toolsMemory: memory);
+        await reopened.RescanAsync();
+        await Assert.That(reopened.Rows[0].Tools).IsFalse();
+    });
+
+    [Test]
+    public Task Tools_for_an_unrecorded_tool_install_tools_only() => AvaloniaSession.RunOnUiAsync(async () => {
+        var cli = Substitute.For<IKcapCli>();
+        cli.PluginInstallAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>())
+            .Returns(new ProcessResult(0, "", "", false));
+        using var vm = new HarnessesSettingsViewModel(Seed(), cli,
+            _ => Task.FromResult<IReadOnlyDictionary<HarnessId, DetectedAgent>>(new Dictionary<HarnessId, DetectedAgent> { [HarnessId.Gemini] = new(true, true) }),
+            isWired: _ => false);
+        await vm.RescanAsync();
+        await vm.ToggleToolsAsync(vm.Rows[0]);
+        await cli.DidNotReceive().PluginRemoveAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>());
+        await cli.Received(1).PluginInstallAsync(HarnessId.Gemini.PluginInstallFlag, Arg.Any<CancellationToken>(),
+            Arg.Is<IReadOnlyList<string>?>(o => o != null && o.SequenceEqual(new[] { "--tools-only" })));
+        await Assert.That(vm.Rows[0].ToolsOnly).IsTrue();
     });
 }

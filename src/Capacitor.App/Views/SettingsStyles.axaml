@@ -341,7 +341,7 @@
     <Style Selector="CheckBox.settingsHarnessCheck">
         <Setter Property="VerticalAlignment" Value="Center" />
         <Setter Property="MinWidth" Value="0" />
-        <Setter Property="Padding" Value="0" />
+        <Setter Property="Padding" Value="8,0,0,0" />
     </Style>
     <!-- Vendor logos differ in shape and weight; a shared tile gives them one optical size. -->
     <Style Selector="Border.settingsGlyphTile">

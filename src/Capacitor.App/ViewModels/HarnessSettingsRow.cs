@@ -1,47 +1,83 @@
-using Capacitor.App.ViewModels.Onboarding;
+using Capacitor.App.Services;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Setup;
 using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
 
+/// One coding tool as Settings shows it. What kcap set up for it is the computer's, not a profile's:
+/// the hooks it installs carry no profile, and each session picks one when it starts.
 public sealed class HarnessSettingsRow : ReactiveObject {
     string? _message;
     string? _errorTitle;
     bool? _wired;
-    internal HarnessSettingsRow(HarnessIdentity identity, DetectedAgent detected, bool? wired) {
+    bool _tools;
+
+    internal HarnessSettingsRow(HarnessIdentity identity, DetectedAgent detected, bool? wired, bool tools, string? server = null) {
         _wired = wired;
+        _tools = tools;
         Id = identity.Id;
         Label = identity.Label;
         Signal = detected.BinaryFound ? "Found on your terminal PATH" : "Harness configuration found";
+        ConsentNote = Id == HarnessId.Codex
+            ? $"Also opens Codex's sandbox network to {(string.IsNullOrEmpty(server) ? "this app's server" : server)}, the server of the profile this app uses, so its skills can reach it."
+            : null;
     }
+
     public HarnessId Id { get; }
     public string Label { get; }
     public string Signal { get; }
-    public string ConnectionLabel => _wired switch {
-        true => "Connected", false => "Not connected", null => "Couldn't check",
-    };
-    public string ConnectionTip => _wired switch {
-        true => "kcap records this tool's sessions to this profile",
-        false => "kcap is not recording this tool",
-        null => "kcap could not read this tool's settings to tell whether it is connected",
-    };
-    public bool IsNotConfigured => _wired == false;
-    public bool ConnectionUnknown => _wired is null;
+    public string? ConsentNote { get; }
+
+    /// Claude Code and Codex install their tools with recording, so one choice covers both.
+    public bool ToolsBundled => HarnessInstallOptions.ToolsBundled(Id);
+    /// Grok loads the tools set up for Claude Code; kcap installs none for it.
+    public bool OffersTools => !ToolsBundled && Id != HarnessId.Grok;
+    public bool RecordOnly => !ToolsBundled && !OffersTools;
+
     internal bool? Wired => _wired;
     public bool IsConfigured => _wired == true;
-    /// What activating the checkbox does now, for a screen reader.
-    public string ToggleActionName => IsConfigured ? $"Disconnect {Label} from kcap" : $"Connect {Label} to kcap";
+    public bool ConnectionUnknown => _wired is null;
+    /// Tools installed for a tool kcap does not record.
+    public bool ToolsOnly => _wired == false && _tools && OffersTools;
+    public bool HasStatus => IsConfigured || ConnectionUnknown || ToolsOnly;
+
+    /// Whether kcap's tools are installed, as far as Settings last set them.
+    public bool Tools => ToolsBundled ? IsConfigured : _tools;
+
+    public string? ConnectionLabel => _wired switch {
+        true => "Recording", null => "Couldn't check", _ => ToolsOnly ? "Tools only" : null,
+    };
+    public string? ConnectionTip => _wired switch {
+        true => "kcap records this tool's sessions; each one goes to the profile its repository resolves to",
+        null => "kcap could not read this tool's settings to tell whether it records",
+        _ => ToolsOnly ? "kcap's tools are installed, but sessions are not recorded" : null,
+    };
+
+    public string RecordLabel => ToolsBundled ? "Record sessions and kcap tools" : "Record sessions";
+    public string RecordName => $"Record {Label} sessions";
+    public string ToolsName => $"Install kcap tools for {Label}";
+
     internal void SetWired(bool? wired) {
         _wired = wired;
-        this.RaisePropertyChanged(nameof(ConnectionLabel));
-        this.RaisePropertyChanged(nameof(IsConfigured));
-        this.RaisePropertyChanged(nameof(ToggleActionName));
-        this.RaisePropertyChanged(nameof(ConnectionTip));
-        this.RaisePropertyChanged(nameof(IsNotConfigured));
-        this.RaisePropertyChanged(nameof(ConnectionUnknown));
+        Raise();
     }
-    public string? ConsentNote => Id == HarnessId.Codex ? HarnessRowViewModel.CodexConsentNote : null;
+
+    internal void SetTools(bool tools) {
+        _tools = tools;
+        Raise();
+    }
+
+    void Raise() {
+        this.RaisePropertyChanged(nameof(IsConfigured));
+        this.RaisePropertyChanged(nameof(ConnectionUnknown));
+        this.RaisePropertyChanged(nameof(ToolsOnly));
+        this.RaisePropertyChanged(nameof(HasStatus));
+        this.RaisePropertyChanged(nameof(Tools));
+        this.RaisePropertyChanged(nameof(ConnectionLabel));
+        this.RaisePropertyChanged(nameof(ConnectionTip));
+    }
+
     public string? Message { get => _message; private set => this.RaiseAndSetIfChanged(ref _message, value); }
     /// Set when Message reports a failure, which then reads as that failure's detail.
     public string? ErrorTitle { get => _errorTitle; private set => this.RaiseAndSetIfChanged(ref _errorTitle, value); }

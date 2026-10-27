@@ -1096,6 +1096,7 @@ public partial class App : Application {
         return new HarnessesSettingsViewModel(settings, cli,
             HarnessesStepViewModel.BuildDetectionFeed(probe, _userHome), _shutdown.Token,
             id => harnesses[id].Signals.IsWired,
+            toolsMemory: _appState,
             ensureTerminalCommand: shimInstaller is null ? null : async ct => {
                 // An inconclusive probe never offers an install, as in setup.
                 if (await probe.KcapOnPathAsync(ct) != false) return null;

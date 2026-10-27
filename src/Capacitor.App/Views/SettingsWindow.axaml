@@ -51,19 +51,6 @@
                 </Border>
             </TabItem>
 
-            <TabItem x:Name="HarnessesTab" Classes="settingsNav" AutomationProperties.Name="Harnesses"
-                     IsVisible="{Binding Harnesses, Converter={x:Static ObjectConverters.IsNotNull}}">
-                <TabItem.Header>
-                    <StackPanel Orientation="Horizontal" Spacing="10">
-                        <views:AppIcon Kind="Terminal" Size="16" />
-                        <TextBlock Text="Harnesses" VerticalAlignment="Center" />
-                    </StackPanel>
-                </TabItem.Header>
-                <Border IsEnabled="{Binding !IsBusy}">
-                    <views:HarnessesSettingsView DataContext="{Binding Harnesses}" />
-                </Border>
-            </TabItem>
-
             <TabItem x:Name="DaemonTab" Classes="settingsNav" AutomationProperties.Name="Daemon">
                 <TabItem.Header>
                     <StackPanel Orientation="Horizontal" Spacing="10">
@@ -374,6 +361,19 @@
                         <views:SearchSettingsView DataContext="{Binding Search}" />
                     </views:SettingsPage>
                 </ScrollViewer>
+            </TabItem>
+
+            <TabItem x:Name="HarnessesTab" Classes="settingsNav" AutomationProperties.Name="Harnesses"
+                     IsVisible="{Binding Harnesses, Converter={x:Static ObjectConverters.IsNotNull}}">
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <views:AppIcon Kind="Terminal" Size="16" />
+                        <TextBlock Text="Harnesses" VerticalAlignment="Center" />
+                    </StackPanel>
+                </TabItem.Header>
+                <Border IsEnabled="{Binding !IsBusy}">
+                    <views:HarnessesSettingsView DataContext="{Binding Harnesses}" />
+                </Border>
             </TabItem>
 
             <TabItem x:Name="AccountsTab" Classes="settingsNav" AutomationProperties.Name="Accounts"
