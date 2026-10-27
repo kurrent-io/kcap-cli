@@ -47,13 +47,15 @@ sealed class SystemdServiceManager(
     public ServiceQuery Query(string serviceId) {
         var path = SystemdUnit.UnitPath(home, serviceId);
         var unitPresent = File.Exists(path);
+        // Read from the file, so it stays known when systemd does not answer: `uninstall --under` decides
+        // which units it owns from this.
+        var bin = unitPresent ? SystemdUnit.BinaryFromUnit(File.ReadAllText(path)) : null;
         var (_, active, _)      = _runProcess("systemctl", SystemdUnit.IsActiveArgs(serviceId));
         // is-active prints a state whenever systemd answers. Nothing means the user bus is unreachable
         // (an SSH login without lingering, a container): reading that as Absent would free a live unit.
-        if (string.IsNullOrWhiteSpace(active)) return new ServiceQuery(LabelProbe.Unknown, unitPresent, ServiceState.NotInstalled, null, null);
+        if (string.IsNullOrWhiteSpace(active)) return new ServiceQuery(LabelProbe.Unknown, unitPresent, ServiceState.NotInstalled, bin, null);
 
         var (enabledExit, _, _) = _runProcess("systemctl", SystemdUnit.IsEnabledArgs(serviceId));
-        var bin = unitPresent ? SystemdUnit.BinaryFromUnit(File.ReadAllText(path)) : null;
         var state = SystemdUnit.StatusFrom(active, enabledExit);
         var probe = state != ServiceState.NotInstalled ? LabelProbe.Loaded : LabelProbe.Absent;
         var jobPid = state == ServiceState.Running

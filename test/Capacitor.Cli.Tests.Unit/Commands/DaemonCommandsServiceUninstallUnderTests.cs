@@ -223,4 +223,22 @@ public class DaemonCommandsServiceUninstallUnderTests {
     public async Task IsUnder_compares_whole_path_segments(string path, string dir, bool ignoreCase, bool expected) {
         await Assert.That(DaemonServiceCommands.IsUnder(Path.GetFullPath(path), dir, ignoreCase)).IsEqualTo(expected);
     }
+
+    /// <summary>Without a user bus nothing can be disabled, so a unit the folder owns must fail the run and
+    /// stay, never be skipped as someone else's and reported as success.</summary>
+    [Test]
+    public async Task UninstallUnder_without_a_reachable_systemd_fails_and_keeps_an_owned_unit() {
+        var app  = Path.GetFullPath("/apps/kcap/current");
+        var unit = SystemdUnit.UnitPath(Home, "laptop");
+        Directory.CreateDirectory(Path.GetDirectoryName(unit)!);
+        File.WriteAllText(unit, SystemdUnit.Unit(new ServiceSpec(
+            "laptop", Path.Combine(app, "bin", "kcap-daemon"), "/x/daemon.log", new Dictionary<string, string>(), [])));
+        var manager = new SystemdServiceManager(Home, runProcess: (_, _) => (1, "", "Failed to connect to bus: No medium found"));
+        using var console = ConsoleOutput.StartFullCapture();
+
+        var exit = await Commands(manager).UninstallUnder(app);
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(File.Exists(unit)).IsTrue();
+    }
 }

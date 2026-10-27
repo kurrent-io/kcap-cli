@@ -114,4 +114,18 @@ public class SystemdServiceManagerTests {
         await Assert.That(query.Probe).IsEqualTo(LabelProbe.Unknown);
         await Assert.That(query.JobPid).IsNull();
     }
+
+    /// <summary>The unit's binary comes from the file, so it stays known without systemd.</summary>
+    [Test]
+    public async Task Query_without_a_reachable_systemd_still_reads_the_units_binary() {
+        var path = SystemdUnit.UnitPath(Home, "test");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "ExecStart=/opt/kcap/kcap-daemon --name test\n");
+        var manager = new SystemdServiceManager(Home, runProcess: (_, _) => (1, "", "Failed to connect to bus: No medium found"));
+
+        var query = manager.Query("test");
+
+        await Assert.That(query.Probe).IsEqualTo(LabelProbe.Unknown);
+        await Assert.That(query.BinaryPath).IsEqualTo("/opt/kcap/kcap-daemon");
+    }
 }
