@@ -101,13 +101,20 @@ public class MacAppRemovalTests {
         var unrelated = Tmp.CreateFile(Path.Combine(library, "Preferences", "com.example.other.plist"), "");
         var removal = new MacAppRemoval(new NoProcesses(), new UserHome(Tmp.PathTo("home")), bundle, []);
 
-        removal.DeleteSupportFiles();
+        await Assert.That(removal.DeleteSupportFiles()).IsTrue();
 
         await Assert.That(Directory.Exists(caches)).IsFalse();
         await Assert.That(Directory.Exists(http)).IsFalse();
         await Assert.That(Directory.Exists(saved)).IsFalse();
         await Assert.That(File.Exists(prefs)).IsFalse();
         await Assert.That(File.Exists(unrelated)).IsTrue();
+    }
+
+    [Test]
+    public async Task A_bundle_without_an_identifier_reports_its_support_files_as_left() {
+        var removal = new MacAppRemoval(new NoProcesses(), new UserHome(Tmp.PathTo("home")), Tmp.CreateDir("Bare.app"), []);
+
+        await Assert.That(removal.DeleteSupportFiles()).IsFalse();
     }
 
     [Test]

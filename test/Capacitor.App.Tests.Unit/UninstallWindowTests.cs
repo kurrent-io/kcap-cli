@@ -13,7 +13,7 @@ namespace Capacitor.App.Tests.Unit;
 public class UninstallWindowTests {
     sealed class SuccessfulRemoval : IAppRemoval {
         public Task<IReadOnlyList<string>> RemoveLinksAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>([]);
-        public void DeleteSupportFiles() { }
+        public bool DeleteSupportFiles() => true;
         public Task<bool> TrashBundleAsync(CancellationToken ct) => Task.FromResult(true);
         public void RevealBundle() => throw new InvalidOperationException("Successful removal should not need Finder.");
     }
@@ -76,8 +76,9 @@ public class UninstallWindowTests {
                 details.Command!.Execute(details.CommandParameter);
                 Dispatcher.UIThread.RunJobs();
                 await Assert.That(progress.FindControl<Control>("HistoryPanel")!.IsVisible).IsTrue();
-                await Assert.That(run.Lines).Contains("Removed daemon service 'kcap'.");
-                await Assert.That(run.Lines).Contains("Moved the app to the Trash.");
+                await Assert.That(progress.FindControl<Control>("ReceiptList")!.IsVisible).IsTrue();
+                await Assert.That(progress.FindControl<Control>("LinesScroll")!.IsVisible).IsFalse();
+                await Assert.That(run.DetailsLabel).IsEqualTo("Hide what was removed");
                 await SavePreviewAsync(progress, "-details");
 
                 var done = progress.FindControl<Button>("CloseButton")!;
@@ -113,6 +114,8 @@ public class UninstallWindowTests {
                 await Assert.That(window.Title).IsEqualTo("kcap was not fully uninstalled");
                 await Assert.That(window.FindControl<TextBlock>("RestartAdvice")!.IsVisible).IsFalse();
                 await Assert.That(window.FindControl<Control>("HistoryPanel")!.IsVisible).IsTrue();
+                await Assert.That(window.FindControl<Control>("LinesScroll")!.IsVisible).IsTrue();
+                await Assert.That(window.FindControl<Control>("ReceiptList")!.IsVisible).IsFalse();
                 var close = window.FindControl<Button>("CloseButton")!;
                 await Assert.That(close.Content).IsEqualTo("Close");
                 await Assert.That(close.IsEnabled).IsTrue();
