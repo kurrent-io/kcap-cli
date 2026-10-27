@@ -7,6 +7,7 @@ using Capacitor.App.Services.Onboarding;
 using Capacitor.App.ViewModels;
 using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.App.Views;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalIpc;
@@ -90,9 +91,11 @@ static class DocsShotScenes {
 
     /// The main window over the Northwind tenant, not yet shown. With `openSession` the payments
     /// session is open and its transcript read; the transcript's directory lives until the window closes.
+    /// With `localServerDown` the server is the local edition's and its lane is retrying, so the launcher
+    /// offers to start it.
     public static async Task<(MainWindowViewModel Vm, Views.MainWindow Window, FakePermissionService Permissions)> MainWindowAsync(
             IReadOnlySet<string>? pendingIds = null, Action<FeedbackCategory>? openFeedback = null,
-            Action? requestSetup = null, bool openSession = true) {
+            Action? requestSetup = null, bool openSession = true, bool localServerDown = false) {
         var service = new FakeDaemonClientService();
         Northwind(service);
         var permissions = new FakePermissionService();
@@ -112,6 +115,15 @@ static class DocsShotScenes {
         var homeState = TempDir.WithPathTo("app-state.json", out var homeStatePath);
         var home = new HomeViewModel(service, new AppStateStore(homeStatePath), new NoLaunch(),
             () => Task.FromResult<string[]>([PaymentsRepo, StorefrontRepo]), clock);
+        BehaviorSubject<ServerLaneStatus>? lane = null;
+        LocalServerRecoveryViewModel? localServer = null;
+        if (localServerDown) {
+            service.SnapshotsSubject.OnNext(Snap(daemon: "maya-mbp", version: "1.4.0", serverUrl: ServerUrl, connection: "disconnected", active: 3, max: 5));
+            lane = new BehaviorSubject<ServerLaneStatus>(new(ServerLaneState.Retrying, "Connection refused"));
+            localServer = new LocalServerRecoveryViewModel(lane, isLocalServer: true,
+                _ => Task.FromResult(new ProcessResult(0, "", "", false)), () => Task.CompletedTask, CancellationToken.None);
+            home.AttachLocalServerRecovery(localServer);
+        }
         var web = new WebWorkspaceViewModel(ServerUrl, new RecordingOpener(), _ => { }, CancellationToken.None);
         MainWindowViewModel? vm = null;
         var directory = new AgentDirectory(
@@ -126,12 +138,15 @@ static class DocsShotScenes {
                 id, service, actions, attach.Factory, () => new FakeTerminalSurface(),
                 clock, new RecordingOpener(), permissions, workContext,
                 new ScriptedLocalControlOps(), new NoAttachmentUploader(), pullRequests: linkedPullRequests),
-            rail: rail, home: home, tenantName: "northwind", openFeedback: openFeedback, requestSetup: requestSetup) { Web = web };
+            rail: rail, home: home, tenantName: localServerDown ? "local" : "northwind", laneStatus: lane,
+            openFeedback: openFeedback, requestSetup: requestSetup) { Web = web };
         var window = new Views.MainWindow { DataContext = vm };
         TempDir? transcript = null;
         window.Closed += (_, _) => {
             rail.Dispose();
             home.Dispose();
+            localServer?.Dispose();
+            lane?.Dispose();
             web.Dispose();
             homeState.Dispose();
             pullRequests.Dispose();

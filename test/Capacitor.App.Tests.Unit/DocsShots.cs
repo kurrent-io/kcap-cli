@@ -63,7 +63,7 @@ public sealed class DocsShots {
         var control = window.GetVisualDescendants().OfType<Control>().FirstOrDefault(c => c.Name == name);
         return control switch {
             TextBlock text => !string.IsNullOrEmpty(text.Text),
-            { } c => c.IsVisible,
+            { } c => c.IsEffectivelyVisible,
             _ => false
         };
     }
@@ -76,13 +76,12 @@ public sealed class DocsShots {
     }
 
     [Test]
-    public async Task Every_scene_test_names_a_known_scene_once() {
+    public async Task Every_scene_has_exactly_one_test() {
         var named = typeof(DocsShots).GetMethods()
             .Where(m => m.GetCustomAttribute<TestAttribute>() is not null)
             .Select(m => m.GetCustomAttribute<DocsShotAttribute>()?.Name)
             .OfType<string>().ToArray();
-        await Assert.That(named.Except(DocsShotScenes.Names)).IsEmpty();
-        await Assert.That(named.Distinct().Count()).IsEqualTo(named.Length);
+        await Assert.That(named).IsEquivalentTo(DocsShotScenes.Names);
     }
 
     [Test, DocsShot("desktop-main")]
@@ -120,6 +119,13 @@ public sealed class DocsShots {
     [Test, DocsShot("desktop-wizard-sign-in")]
     public async Task The_setup_wizard_asks_to_sign_in_with_a_work_account() {
         await CaptureAsync("desktop-wizard-sign-in", async () => await DocsShotScenes.WizardAsync(Config, WizardStepId.SignIn), "WorkAccountButton");
+    }
+
+    [Test, DocsShot("desktop-local-recovery")]
+    public async Task The_launcher_offers_to_start_the_local_server() {
+        await CaptureAsync("desktop-local-recovery",
+            async () => (await DocsShotScenes.MainWindowAsync(openSession: false, localServerDown: true)).Window,
+            "StartLocalServerButton");
     }
 
     static void OpenHelpFlyoutInsideTheWindow(Window window) {
