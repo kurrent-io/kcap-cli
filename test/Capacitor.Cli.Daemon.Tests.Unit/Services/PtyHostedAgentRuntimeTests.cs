@@ -270,6 +270,80 @@ public class PtyHostedAgentRuntimeTests {
         pty.Exit();
     }
 
+    /// <summary>A startup dialog goes quiet while it waits for an answer. Pasting then would let the
+    /// submit Enter pick its default option, so the prompt waits for the dialog however long it
+    /// stays, then for the redraw after it to settle.</summary>
+    [Test]
+    public async Task Launch_prompt_waits_for_a_startup_dialog_to_close() {
+        var time    = new FakeTimeProvider();
+        var pty     = new RecordingScriptedPtyProcess();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, time, approvalsDisabled: false);
+
+        runtime.DeliverLaunchPrompt("build it");
+        _ = PumpAsync(runtime);
+        pty.Emit("dialog");
+        await Task.Delay(100);
+        runtime.NoteTerminalDialog(true);
+
+        await StepAsync(time, PtyHostedAgentRuntime.LaunchPromptMaxWait * 2, () => pty.Writes.Count >= 1);
+        await Assert.That(pty.Writes).IsEmpty();
+
+        await runtime.SendRawInputAsync("\r"u8.ToArray()).WaitAsync(TimeSpan.FromSeconds(2));
+        pty.Emit("composer");
+        await Task.Delay(100);
+        runtime.NoteTerminalDialog(false);
+
+        await StepAsync(time, PtyHostedAgentRuntime.LaunchPromptQuietWindow + PtyHostedAgentRuntime.SingleSubmitDelay,
+            () => runtime.LaunchPromptDelivery!.IsCompleted);
+
+        await Assert.That(await runtime.LaunchPromptDelivery!).IsEqualTo(LaunchPromptOutcome.Delivered);
+        await Assert.That(string.Join("|", pty.Writes)).IsEqualTo("\r|\x1b[200~build it\x1b[201~|\r");
+        pty.Exit();
+    }
+
+    /// <summary>A dialog drawn after the paste holds the submit until it is answered, and the answer
+    /// itself is not held behind the waiting submit.</summary>
+    [Test]
+    public async Task Launch_prompt_submit_waits_for_a_dialog_that_appears_after_the_paste() {
+        var time    = new FakeTimeProvider();
+        var pty     = new RecordingScriptedPtyProcess();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, time, approvalsDisabled: false);
+
+        runtime.DeliverLaunchPrompt("build it");
+        _ = PumpAsync(runtime);
+        pty.Emit("banner");
+        await StepAsync(time, PtyHostedAgentRuntime.LaunchPromptQuietWindow, () => pty.Writes.Count >= 1);
+        runtime.NoteTerminalDialog(true);
+
+        await StepAsync(time, PtyHostedAgentRuntime.SingleSubmitDelay * 4, () => pty.Writes.Count >= 2);
+        await Assert.That(string.Join("|", pty.Writes)).IsEqualTo("\x1b[200~build it\x1b[201~");
+
+        await runtime.SendRawInputAsync([0x1b]).WaitAsync(TimeSpan.FromSeconds(2));
+        runtime.NoteTerminalDialog(false);
+
+        await StepAsync(time, PtyHostedAgentRuntime.SingleSubmitDelay, () => runtime.LaunchPromptDelivery!.IsCompleted);
+        await Assert.That(await runtime.LaunchPromptDelivery!).IsEqualTo(LaunchPromptOutcome.Delivered);
+        await Assert.That(string.Join("|", pty.Writes)).IsEqualTo("\x1b[200~build it\x1b[201~|\x1b|\r");
+        pty.Exit();
+    }
+
+    [Test]
+    public async Task Launch_prompt_is_dropped_when_a_graceful_stop_is_requested_while_a_dialog_shows() {
+        var pty     = new RecordingScriptedPtyProcess();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, TimeProvider.System, approvalsDisabled: false);
+
+        runtime.DeliverLaunchPrompt("build it");
+        _ = PumpAsync(runtime);
+        pty.Emit("dialog");
+        runtime.NoteTerminalDialog(true);
+        await runtime.RequestGracefulStopAsync();
+        var outcome = await runtime.LaunchPromptDelivery!.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await Assert.That(outcome).IsEqualTo(LaunchPromptOutcome.StopRequested);
+        await Assert.That(string.Join("|", pty.Writes)).IsEqualTo("/exit|\r");
+        pty.Exit();
+    }
+
     /// <summary>An agent that is already gone gets nothing pasted, and the lane is released for
     /// whoever asks next.</summary>
     [Test]

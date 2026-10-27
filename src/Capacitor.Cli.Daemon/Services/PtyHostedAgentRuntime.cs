@@ -67,8 +67,10 @@ internal sealed partial class PtyHostedAgentRuntime(
     readonly SemaphoreSlim           _lane        = new(1, 1);
     readonly TaskCompletionSource    _firstOutput = new(TaskCreationOptions.RunContinuationsAsynchronously);
     readonly CancellationTokenSource _disposal    = new();
+    readonly Lock                    _dialogGate  = new();
     long                             _lastOutputAt;
     volatile bool                    _stopRequested;
+    TaskCompletionSource?            _dialogGone;
 
     /// <summary>The pending launch-prompt delivery, or null when the launch carried no prompt to paste.</summary>
     internal Task<LaunchPromptOutcome>? LaunchPromptDelivery { get; private set; }
@@ -90,11 +92,28 @@ internal sealed partial class PtyHostedAgentRuntime(
         }
     }
 
+    public void NoteTerminalDialog(bool showing) {
+        lock (_dialogGate) {
+            if (showing) {
+                _dialogGone ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            } else if (_dialogGone is { } gone) {
+                _dialogGone = null;
+                gone.TrySetResult();
+            }
+        }
+    }
+
+    Task? DialogGone {
+        get { lock (_dialogGate) { return _dialogGone?.Task; } }
+    }
+
     /// <summary>
     /// Makes <paramref name="prompt"/> the agent's first message without putting it on the command
     /// line: pastes it once startup output has been quiet for <see cref="LaunchPromptQuietWindow"/>
     /// or <see cref="LaunchPromptMaxWait"/> has passed. A text follow-up sent meanwhile lands after
     /// it; raw and special keys do not wait, so a viewer can answer a startup dialog themselves.
+    /// A dialog on screen is not a settled startup and has no time limit: its default option would
+    /// take the submit Enter and leave the prompt unsent in the composer.
     /// </summary>
     internal void DeliverLaunchPrompt(string prompt) {
         if (LaunchPromptDelivery is not null) throw new InvalidOperationException("The launch prompt is already queued.");
@@ -109,14 +128,35 @@ internal sealed partial class PtyHostedAgentRuntime(
             if (_stopRequested) return LaunchPromptOutcome.StopRequested;
 
             await _lane.WaitAsync(_disposal.Token);
+            var holdsLane = true;
 
             try {
                 if (_stopRequested) return LaunchPromptOutcome.StopRequested;
 
                 await pty.WriteAsync(BracketedPaste.Frame(prompt));
-                await SubmitAsync();
+
+                if (approvalsDisabled) {
+                    await SubmitAsync();
+                } else {
+                    await Task.Delay(SingleSubmitDelay, time, _disposal.Token);
+
+                    // Answering a dialog that came up after the paste takes the lane, so the submit
+                    // waits for it without holding the lane.
+                    if (DialogGone is not null) {
+                        _lane.Release();
+                        holdsLane = false;
+                        await WaitWhileDialogShowsAsync(_disposal.Token);
+                        await _lane.WaitAsync(_disposal.Token);
+                        holdsLane = true;
+                        if (_stopRequested) return LaunchPromptOutcome.StopRequested;
+                    }
+
+                    await WriteSubmitCarriageReturnAsync();
+                }
             } finally {
-                try { _lane.Release(); } catch (ObjectDisposedException) { }
+                if (holdsLane) {
+                    try { _lane.Release(); } catch (ObjectDisposedException) { }
+                }
             }
 
             return settled ? LaunchPromptOutcome.Delivered : LaunchPromptOutcome.DeliveredAfterMaxWait;
@@ -141,6 +181,13 @@ internal sealed partial class PtyHostedAgentRuntime(
         var started = time.GetTimestamp();
 
         while (!pty.HasExited && !_stopRequested) {
+            if (DialogGone is not null) {
+                await WaitWhileDialogShowsAsync(ct);
+                started = time.GetTimestamp();
+
+                continue;
+            }
+
             var remaining = LaunchPromptMaxWait - time.GetElapsedTime(started);
             if (remaining <= TimeSpan.Zero) return false;
 
@@ -159,6 +206,15 @@ internal sealed partial class PtyHostedAgentRuntime(
         }
 
         return true;
+    }
+
+    /// <summary>Returns once no dialog is on screen, or the agent has exited or been asked to stop.</summary>
+    async Task WaitWhileDialogShowsAsync(CancellationToken ct) {
+        while (DialogGone is { } gone && !pty.HasExited && !_stopRequested) {
+            try {
+                await gone.WaitAsync(LaunchPromptExitPoll, time, ct);
+            } catch (TimeoutException) { }
+        }
     }
 
     /// <summary>

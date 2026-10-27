@@ -3675,6 +3675,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     void NoteScreen(AgentInstance agent, ClaudeScreenWatcher screen, byte[] data) {
         screen.Resize(agent.CurrentCols, agent.CurrentRows);
         var (usageLimit, dialog) = screen.Observe(data);
+        agent.Runtime.NoteTerminalDialog(dialog is not null);
         if (Equals(agent.UsageLimit, usageLimit) && Equals(agent.TerminalDialog, dialog)) return;
         agent.UsageLimit     = usageLimit;
         agent.TerminalDialog = dialog;
