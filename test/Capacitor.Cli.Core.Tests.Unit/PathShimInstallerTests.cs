@@ -652,8 +652,9 @@ public class PathShimInstallerTests {
     public async Task DescribeAsync_names_an_admin_link_it_would_leave_alone() {
         Skip.When(OperatingSystem.IsWindows(), "macOS lstat semantics");
         using var tmp = new TempDir();
+        using var system = new TempDir();
         var home = new UserHome(tmp.Path);
-        var adminLink = tmp.CreateFile(["admin", "kcap"], "someone else's");
+        var adminLink = system.CreateFile("kcap", "someone else's");
         var installer = new PathShimInstaller(new FakeProcessRunner(), new FakeLoginShellProbe(), adminLink, home,
             new ShellProfile(home, "/bin/zsh"), mayElevate: _ => Task.FromResult(true));
 

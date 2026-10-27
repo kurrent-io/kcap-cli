@@ -45,8 +45,7 @@ public sealed partial class PathShimInstaller(
     DisclosureSpan[] DescribeProfileRoute(string target, ShellProfile profile, UserHome home) {
         var folder = ShellProfile.Folder(home);
         if (profile is not { ProfilePath: { } file, Disclosure: not null })
-            return [new("kcap can't set PATH for this shell, so you'll need to add "), new(ShellProfile.Tilde(home, folder), Code: true),
-                new(" to it yourself.")];
+            return [new("kcap can't set PATH for this shell, so you'll need to put "), new("kcap", Code: true), new(" on it yourself.")];
         if (Preflight(Path.Combine(folder, "kcap"), target) == ShimPreflight.Conflict) return Untouched(Path.Combine(folder, "kcap"));
         return [.. LinkedInto(folder, ", and "), new(ShellProfile.Tilde(home, file), Code: true),
             new(" gets one marked line adding that folder to PATH. Uninstalling kcap removes it.")];
