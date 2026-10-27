@@ -21,8 +21,8 @@
                                Foreground="{StaticResource KcapFaintBrush}" />
                     <Button x:Name="ProfileCard" Classes="kcapChip settingsProfileCard" Classes.selected="{Binding #ProfilesTab.IsSelected}" Click="OnProfileCardClick"
                             IsEnabled="{Binding Profiles, Converter={x:Static ObjectConverters.IsNotNull}}"
-                            AutomationProperties.Name="{Binding ProfileName, StringFormat='Profile {0}. Manage profiles'}"
-                            ToolTip.Tip="Manage profiles">
+                            AutomationProperties.Name="{Binding ProfileCardHint}"
+                            ToolTip.Tip="{Binding ProfileCardHint}" ToolTip.ShowOnDisabled="True">
                         <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
                             <Border Classes="settingsGlyphTile" Width="30" Height="30">
                                 <views:AppIcon Kind="UserRound" Size="16" HorizontalAlignment="Center" VerticalAlignment="Center" />
@@ -32,8 +32,8 @@
                                            Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
                                 <TextBlock Text="{Binding ServerLabel}" FontSize="11.5"
                                            Foreground="{StaticResource KcapMutedBrush}" TextTrimming="CharacterEllipsis" />
-                                <TextBlock Classes="profileManageLabel" Text="Manage profiles" FontSize="11.5" Margin="0,5,0,0"
-                                           IsVisible="{Binding Profiles, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                                <TextBlock Classes="profileManageLabel" Text="{Binding ProfileCardLabel}" FontSize="11.5" Margin="0,5,0,0"
+                                           TextWrapping="Wrap" />
                             </StackPanel>
                             <views:AppIcon Grid.Column="2" Kind="ChevronRight" Size="14" VerticalAlignment="Center"
                                            Foreground="{StaticResource KcapFaintBrush}"

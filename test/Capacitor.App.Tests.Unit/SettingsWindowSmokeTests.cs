@@ -45,6 +45,17 @@ public class SettingsWindowSmokeTests {
             var alerts = window.FindControl<TabItem>("NotificationsTab")!;
             await Assert.That(window.CanResize).IsTrue();
             await Assert.That(profiles.IsEffectivelyVisible).IsFalse();
+            var card = window.FindControl<Button>("ProfileCard")!;
+            await Assert.That(card.IsEffectivelyEnabled).IsFalse();
+            await Assert.That(ToolTip.GetShowOnDisabled(card)).IsTrue();
+            const string unavailableHint = "Current profile: work\nProfile management is unavailable";
+            await Assert.That(ToolTip.GetTip(card) as string).IsEqualTo(unavailableHint);
+            await Assert.That(AutomationProperties.GetName(card)).IsEqualTo(unavailableHint);
+            var label = card.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("profileManageLabel"));
+            await Assert.That(label.IsEffectivelyVisible).IsTrue();
+            await Assert.That(label.Text).IsEqualTo("Management unavailable");
+            Click(window, card);
+            await Assert.That(tabs.SelectedItem).IsEqualTo(window.FindControl<TabItem>("CaptureTab"));
             var daemonPosition = daemon.TranslatePoint(default, window)!.Value;
             var alertsPosition = alerts.TranslatePoint(default, window)!.Value;
             await Assert.That(alertsPosition.X).IsEqualTo(daemonPosition.X);
@@ -160,6 +171,10 @@ public class SettingsWindowSmokeTests {
             var tab  = window.FindControl<TabItem>("ProfilesTab")!;
             var card = window.FindControl<Button>("ProfileCard")!;
             Settle(window);
+            await Assert.That(card.IsEffectivelyEnabled).IsTrue();
+            const string manageHint = "Current profile: work\nSelect to manage profiles";
+            await Assert.That(ToolTip.GetTip(card) as string).IsEqualTo(manageHint);
+            await Assert.That(AutomationProperties.GetName(card)).IsEqualTo(manageHint);
             Click(window, card);
             await Assert.That(tabs.SelectedItem).IsEqualTo(tab);
             var presenter = card.GetVisualDescendants().OfType<Avalonia.Controls.Presenters.ContentPresenter>()
