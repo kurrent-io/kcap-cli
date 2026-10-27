@@ -13,8 +13,9 @@ public static class Clipboard {
     public static bool TryCopy(string text) {
         try {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) return RunWithStdin("pbcopy", "", text);
-            // clip reads stdin in the OEM code page unless it starts with a UTF-16LE byte-order mark.
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return RunWithStdin("clip", "", "\uFEFF" + text, Encoding.Unicode);
+            // clip reads stdin in the OEM code page unless it starts with a UTF-16LE byte-order mark,
+            // which the redirected stream's Encoding.Unicode writer emits on its own.
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return RunWithStdin("clip", "", text, Encoding.Unicode);
 
             // Linux: prefer Wayland, fall back to X11
             return RunWithStdin("wl-copy", "", text) || RunWithStdin("xclip", "-selection clipboard", text);

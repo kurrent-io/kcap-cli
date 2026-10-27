@@ -360,6 +360,19 @@ public class FeedbackViewModelTests {
     }
 
     [Test]
+    public async Task With_mail_an_opened_draft_with_no_clipboard_keeps_the_form() {
+        var mailed = new List<FeedbackSubmission>();
+        using var vm = MailVm(new ScriptedFeedbackApi(), mailed, opened: true, cutShort: false, copied: false);
+        vm.Message = "It broke.";
+
+        await vm.SendCommand.Execute().ToTask();
+
+        await Assert.That(vm.IsSent).IsFalse();
+        await Assert.That(vm.Message).IsEqualTo("It broke.");
+        await Assert.That(vm.Outcome).Contains("team@kcap.ai");
+    }
+
+    [Test]
     public async Task With_mail_no_mail_app_keeps_the_form_and_names_the_address() {
         var mailed = new List<FeedbackSubmission>();
         using var vm = MailVm(new ScriptedFeedbackApi(), mailed, opened: false, cutShort: false, copied: false);

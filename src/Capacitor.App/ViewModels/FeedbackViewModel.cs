@@ -219,19 +219,19 @@ public sealed class FeedbackViewModel : ReactiveObject, IDisposable {
         RaiseDerived();
     }
 
-    // The form stays up whenever it holds the only full copy of the report.
+    // Without a clipboard copy the form stays up: it is the only sure copy of the report, since a
+    // launched mail handler is no proof a draft appeared.
     static string? MailRefusal(FeedbackMailOutcome mailed) => (mailed.Opened, mailed.Draft.CutShort, mailed.Copied) switch {
-        (true, true, false)  => "Draft opened, cut short to fit a mail link, and the report couldn't be copied. Copy the rest of your message from here into the draft.",
-        (true, _, _)         => null,
+        (true, _, true)      => null,
         (false, _, true)     => $"Couldn't open a mail app. The report is on your clipboard: paste it into an email to {FeedbackMail.Address}.",
+        (true, true, false)  => "Draft opened, cut short to fit a mail link, and the report couldn't be copied. Copy the rest of your message from here into the draft.",
+        (true, false, false) => $"Draft opened, but the report couldn't be copied. If no draft appeared, copy your message from here and email it to {FeedbackMail.Address}.",
         (false, _, false)    => $"Couldn't open a mail app or copy the report. Copy your message and email it to {FeedbackMail.Address}.",
     };
 
-    static string MailSent(FeedbackMailOutcome mailed) => (mailed.Draft.CutShort, mailed.Copied) switch {
-        (false, false) => "Draft opened in your mail app. Send it from there.",
-        (false, true)  => "Draft opened in your mail app. Send it from there; a copy is on your clipboard.",
-        (true, _)      => "Draft opened, cut short to fit a mail link. The full report is on your clipboard: paste it over the draft's text before sending.",
-    };
+    static string MailSent(FeedbackMailOutcome mailed) => mailed.Draft.CutShort
+        ? "Draft opened, cut short to fit a mail link. The full report is on your clipboard: paste it over the draft's text before sending."
+        : "Draft opened in your mail app. Send it from there; a copy is on your clipboard.";
 
     public void Dispose() {
         if (_disposed) return;
