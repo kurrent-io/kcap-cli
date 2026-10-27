@@ -116,18 +116,16 @@
         </ScrollViewer>
 
         <Border Grid.Row="1" Classes="settingsActionBar">
-            <Border.Styles>
-                <Style Selector="TextBlock.kcapHint.saved">
-                    <Setter Property="Foreground" Value="{StaticResource KcapSuccessBrush}" />
-                </Style>
-            </Border.Styles>
             <Grid ColumnDefinitions="Auto,*" ColumnSpacing="16" MaxWidth="680" HorizontalAlignment="Left">
                 <Button x:Name="SaveCaptureButton" Classes="kcapPrimary" Content="Save changes"
                         Command="{Binding SaveCommand}" />
-                <Grid Grid.Column="1" ColumnDefinitions="Auto,*" ColumnSpacing="6" VerticalAlignment="Center">
-                    <views:AppIcon Kind="CircleCheck" Size="14" Foreground="{StaticResource KcapSuccessBrush}"
-                                   VerticalAlignment="Center" IsVisible="{Binding Saved}" />
-                    <TextBlock x:Name="CaptureMessageText" Grid.Column="1" Classes="kcapHint" Classes.saved="{Binding Saved}" Text="{Binding Message}"
+                <Grid Grid.Column="1" ColumnDefinitions="Auto,*" VerticalAlignment="Center">
+                    <!-- Only the outcome is green; what the save left alone stays a plain hint. -->
+                    <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,0,6,0" IsVisible="{Binding Saved}">
+                        <views:AppIcon Kind="CircleCheck" Size="14" Foreground="{StaticResource KcapSuccessBrush}" VerticalAlignment="Center" />
+                        <TextBlock Classes="kcapHint" Text="Saved." Foreground="{StaticResource KcapSuccessBrush}" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <TextBlock x:Name="CaptureMessageText" Grid.Column="1" Classes="kcapHint" Text="{Binding Message}"
                                TextWrapping="Wrap" VerticalAlignment="Center" />
                 </Grid>
             </Grid>

@@ -55,7 +55,7 @@ public sealed class CaptureSettingsViewModel : ReactiveObject, IDisposable {
             Saved = false;
         }
     }
-    /// The message confirms a save rather than reporting a problem.
+    /// The save went through; the message then adds what it did not change.
     public bool Saved { get => _saved; private set => this.RaiseAndSetIfChanged(ref _saved, value); }
     /// A save in progress: the one Capture operation closing Settings must wait for.
     public bool Busy { get => _busy; private set => this.RaiseAndSetIfChanged(ref _busy, value); }
@@ -116,7 +116,7 @@ public sealed class CaptureSettingsViewModel : ReactiveObject, IDisposable {
                 DefaultVisibility = visibility, AllowedRepos = allowedRepos, ExcludedRepos = excludedRepos,
                 AllowedPaths = allowedPaths, ExcludedPaths = excludedPaths,
             }, _lifetime.Token, keepVisibility: VisibilityVisible && !VisibilityEditable);
-            Message = "Saved. Sessions already on the server are unchanged.";
+            Message = "Sessions already on the server are unchanged.";
             Saved = true;
         } catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) {
         } catch (Exception ex) {
