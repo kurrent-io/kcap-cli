@@ -526,7 +526,6 @@ public class SessionRailViewModelTests {
         });
     }
 
-    /// A Team scope from saved preferences, a viewer's shape or the command all land on Mine.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_locked_scope_stays_on_mine() {
@@ -535,7 +534,8 @@ public class SessionRailViewModelTests {
             var sessions = new FakeServerSessionsService();
             var teams = RailPreferences.Default with { Scope = RailScope.Team, Grouping = RailGrouping.Date };
             var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System,
-                sessions: sessions, preferences: teams, scopeLocked: true, bindUserPreferences: _ => Task.FromResult(teams));
+                sessions: sessions, preferences: teams with { Grouping = RailGrouping.Repository },
+                scopeLocked: true, bindUserPreferences: _ => Task.FromResult(teams));
             using (directory) using (sessions) using (rail) {
                 await Assert.That(rail.Scope).IsEqualTo(RailScope.Mine);
                 await Assert.That(sessions.Scope).IsEqualTo(RailScope.Mine);
