@@ -86,7 +86,7 @@ public class ExperimentalSettingsViewModelTests {
         await Until(() => row.StatusText == "Applying…", "applying");
 
         service.SnapshotsSubject.OnNext(Reporting(resolved: true, active: true, acknowledged: false, failed: true));
-        await Until(() => row.StatusText == "Applied; the server has not been told yet", "applied locally");
+        await Until(() => row.StatusText == ExperimentalFeatureRowViewModel.AppliedLocallyText, "applied locally");
 
         service.SnapshotsSubject.OnNext(Reporting(resolved: true, active: false, reason: "codex is older than 0.146.0"));
         await Until(() => row.StatusText == "On, not active: codex is older than 0.146.0", "not active");

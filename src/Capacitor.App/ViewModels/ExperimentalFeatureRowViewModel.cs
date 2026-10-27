@@ -25,6 +25,11 @@ public sealed class ExperimentalFeatureRowViewModel : ReactiveObject {
         Recompute();
     }
 
+    /// The daemon routes on what the server last accepted, so Codex keeps the previous setting until a
+    /// registration carries the change; the next connection does that unprompted.
+    public const string AppliedLocallyText =
+        "Saved. Codex keeps the previous setting until the daemon next connects to your kcap server.";
+
     internal string Id => _feature.Id;
     public string DisplayName => _feature.DisplayName;
     public string Description => _feature.Description;
@@ -84,7 +89,7 @@ public sealed class ExperimentalFeatureRowViewModel : ReactiveObject {
             ExperimentalFeatureStateKind.Active => "Active",
             ExperimentalFeatureStateKind.OnNotActive => $"On, not active: {reason}",
             ExperimentalFeatureStateKind.Applying => "Applying…",
-            ExperimentalFeatureStateKind.AppliedLocally => "Applied; the server has not been told yet",
+            ExperimentalFeatureStateKind.AppliedLocally => AppliedLocallyText,
             ExperimentalFeatureStateKind.Unknown => "This daemon is too old to apply it. Update kcap and restart the daemon",
             ExperimentalFeatureStateKind.DaemonNotRunning when _enabled => "Saved; applies when the daemon starts",
             _ => "",
