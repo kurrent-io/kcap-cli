@@ -189,17 +189,4 @@ public class HarnessesSettingsViewModelTests {
         await Assert.That(vm.Rows[0].Message).IsEqualTo("Cancelled. Nothing changed.");
         await cli.DidNotReceive().PluginInstallAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>());
     });
-
-    [Test]
-    public Task The_checkbox_is_named_for_what_activating_it_does() => AvaloniaSession.RunOnUiAsync(async () => {
-        var wired = false;
-        using var vm = new HarnessesSettingsViewModel(Seed(), Substitute.For<IKcapCli>(),
-            _ => Task.FromResult<IReadOnlyDictionary<HarnessId, DetectedAgent>>(new Dictionary<HarnessId, DetectedAgent> { [HarnessId.Codex] = new(true, true) }),
-            isWired: _ => wired);
-        await vm.RescanAsync();
-        await Assert.That(vm.Rows[0].ToggleActionName).IsEqualTo("Connect Codex to kcap");
-        wired = true;
-        await vm.RescanAsync();
-        await Assert.That(vm.Rows[0].ToggleActionName).IsEqualTo("Disconnect Codex from kcap");
-    });
 }

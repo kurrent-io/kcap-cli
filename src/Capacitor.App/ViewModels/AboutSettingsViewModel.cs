@@ -24,7 +24,9 @@ public sealed class AboutSettingsViewModel : ReactiveObject, IDisposable {
         _cliVersion = cliVersion;
         _lifetime = CancellationTokenSource.CreateLinkedTokenSource(appLifetime);
         LocalStack = localStack;
-        service.Snapshots.Select(s => MainWindowViewModel.StripBuildMetadata(s.Daemon.Version))
+        // The service keeps its last snapshot after a disconnect, so the version only stands while attached.
+        service.Status.CombineLatest(service.Snapshots.Select(s => MainWindowViewModel.StripBuildMetadata(s.Daemon.Version)),
+                (status, version) => status.State == AttachState.Connected ? version : "")
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(v => DaemonVersion = v.Length > 0 ? v : null)
             .DisposeWith(_subscriptions);
