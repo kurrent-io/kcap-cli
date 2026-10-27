@@ -881,11 +881,14 @@ public class MainWindowViewModelTests {
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Shutdown_latch_can_repeat_after_the_session_rail_is_disposed() {
-        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+        await AvaloniaSession.RunOnUiAsync(async () => {
             using var directory = new FakeAgentDirectory();
             using var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System);
             var service = new FakeDaemonClientService();
-            var vm = NewVm(service, workspaceFactory: id => NewWorkspace(service, id), rail: rail);
+            var tracked = 0;
+            Task? teardown = null;
+            var vm = NewVm(service, workspaceFactory: id => NewWorkspace(service, id), rail: rail,
+                trackWorkspaceTeardown: start => { tracked++; teardown = start(); });
             vm.OpenSession("session");
             var workspace = vm.CurrentWorkspace;
             await Assert.That(workspace).IsNotNull();
@@ -894,13 +897,15 @@ public class MainWindowViewModelTests {
             vm.LatchShutdown();
             await Assert.That(vm.CurrentWorkspace).IsNull();
             await Assert.That(rail.SelectedSessionKey).IsNull();
-            await workspace!.TeardownAsync();
+            await Assert.That(tracked).IsEqualTo(1);
+            await teardown!;
             rail.Dispose();
             vm.LatchShutdown();
             // MainWindowCoordinator also releases the workspace from the final Closed event.
             vm.CloseWorkspace();
 
             await Assert.That(vm.CurrentWorkspace).IsNull();
+            await Assert.That(tracked).IsEqualTo(1);
         });
     }
 
