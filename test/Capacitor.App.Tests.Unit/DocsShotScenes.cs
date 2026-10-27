@@ -3,12 +3,15 @@ using System.Reactive.Subjects;
 using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.Services.Mutation;
+using Capacitor.App.Services.Onboarding;
 using Capacitor.App.ViewModels;
+using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests;
+using Capacitor.Cli.Core.Telemetry;
 using Capacitor.Cli.Core.WorkItems;
 using DynamicData;
 using Microsoft.Extensions.Time.Testing;
@@ -167,6 +170,32 @@ static class DocsShotScenes {
             (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded()),
             (_, _) => Task.FromResult(false), _ => Task.FromResult(false), true, Task.CompletedTask, (_, _) => Task.FromResult(true));
         return new SettingsWindow { DataContext = vm };
+    }
+
+    /// The setup wizard on its edition choice, over placeholder steps for the rest of the run.
+    public static async Task<Views.MainWindow> WizardEditionAsync() {
+        var edition = new EditionStepViewModel(CliTelemetry.Disabled(TimeProvider.System).Funnel, () => null);
+        IWizardStep[] steps = [
+            edition,
+            .. new[] { WizardStepId.Install, WizardStepId.SignIn, WizardStepId.Harnesses, WizardStepId.Import,
+                WizardStepId.Privacy, WizardStepId.Done }.Select(id => new FakeWizardStep(id)),
+        ];
+        return await WizardWindowAsync(new OnboardingViewModel(steps, startAt: WizardStepId.Edition));
+    }
+
+    /// The setup wizard's sign-in step from the real wizard graph, before any sign-in has started; the
+    /// graph's fixtures live until the window closes.
+    public static async Task<Views.MainWindow> WizardSignInAsync(TempConfigRoot config) {
+        var harness = new WizardFixtures.GraphHarness(config.Root);
+        var graph = WizardComposition.BuildGraph(harness.Options());
+        var window = await WizardWindowAsync(new OnboardingViewModel(graph.Steps, startAt: WizardStepId.SignIn));
+        window.Closed += (_, _) => harness.Dispose();
+        return window;
+    }
+
+    static async Task<Views.MainWindow> WizardWindowAsync(OnboardingViewModel vm) {
+        await vm.PendingEnterForTesting;
+        return new Views.MainWindow { Onboarding = vm, Width = 760, Height = 760 };
     }
 
     sealed class NoLaunch : ILaunchClient {

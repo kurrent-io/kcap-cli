@@ -15,7 +15,7 @@ sealed class DocsShotAttribute(string name) : Attribute {
     public string Name { get; } = name;
 }
 
-/// Renders the desktop app's docs figures when KCAP_SHOTS_OUT names an existing directory; skipped otherwise.
+/// Renders the desktop app's docs figures when KCAP_SHOTS_OUT is the absolute path of an existing directory; skipped otherwise.
 [NotInParallel("AvaloniaSession")]
 public sealed class DocsShots {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
@@ -25,8 +25,8 @@ public sealed class DocsShots {
     static string OutDir {
         get {
             var dir = Environment.GetEnvironmentVariable(DocsShotScenes.OutEnvVar);
-            Skip.Unless(dir is not null && Directory.Exists(dir),
-                $"Docs screenshot harness: set {DocsShotScenes.OutEnvVar} to an existing directory to render the figures");
+            Skip.Unless(dir is not null && Path.IsPathRooted(dir) && Directory.Exists(dir),
+                $"Docs screenshot harness: set {DocsShotScenes.OutEnvVar} to the absolute path of an existing directory to render the figures");
             return dir!;
         }
     }
@@ -109,6 +109,16 @@ public sealed class DocsShots {
     [Test, DocsShot("desktop-settings")]
     public async Task The_settings_window_shows_the_profile_and_daemon() {
         await CaptureAsync("desktop-settings", () => Task.FromResult<Window>(DocsShotScenes.Settings(Config)), "SettingsTabs");
+    }
+
+    [Test, DocsShot("desktop-wizard-edition")]
+    public async Task The_setup_wizard_offers_the_cloud_and_local_editions() {
+        await CaptureAsync("desktop-wizard-edition", async () => await DocsShotScenes.WizardEditionAsync(), "CloudEditionButton");
+    }
+
+    [Test, DocsShot("desktop-wizard-sign-in")]
+    public async Task The_setup_wizard_asks_to_sign_in_with_a_work_account() {
+        await CaptureAsync("desktop-wizard-sign-in", async () => await DocsShotScenes.WizardSignInAsync(Config), "WorkAccountButton");
     }
 
     static void OpenHelpFlyoutInsideTheWindow(Window window) {
