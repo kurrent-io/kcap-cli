@@ -50,15 +50,18 @@ public class ShutdownTranscriptSpoolTests {
     }
 
     /// <summary>
-    /// The spooled tail carries its commits, since its lines are read as observed on replay.
+    /// The spooled tail carries its commits, since its lines are read as observed on replay, and a chunk with more to
+    /// follow says so, since replay posts it as stored.
     /// </summary>
     [Test]
     public async Task build_batch_carries_observed_commits_only_when_observing() {
-        var observing = System.Text.Json.Nodes.JsonNode.Parse(WatchCommand.BuildTranscriptSpoolBatch(Sid, null, "claude", ["{\"k\":1}"], [0], []))!;
+        var observing = System.Text.Json.Nodes.JsonNode.Parse(WatchCommand.BuildTranscriptSpoolBatch(Sid, null, "claude", ["{\"k\":1}"], [0], [], moreFollows: true))!;
         var not       = System.Text.Json.Nodes.JsonNode.Parse(WatchCommand.BuildTranscriptSpoolBatch(Sid, null, "claude", ["{\"k\":1}"], [0], null))!;
 
         await Assert.That(observing["observed_commits"]!.AsArray().Count).IsEqualTo(0);
+        await Assert.That(observing["more_follows"]!.GetValue<bool>()).IsTrue();
         await Assert.That(not.AsObject().ContainsKey("observed_commits")).IsFalse();
+        await Assert.That(not.AsObject().ContainsKey("more_follows")).IsFalse();
     }
 
     [Test]
@@ -152,6 +155,33 @@ public class ShutdownTranscriptSpoolTests {
             spool, transcriptPath, Sid, agentId: null, vendor: "claude", linesProcessed: 1, commits: new CommitObservation.Covered(commits), ct: CancellationToken.None);
 
         await Assert.That(result).IsEqualTo(TranscriptSpool.AppendResult.Appended);
+    }
+
+    /// <summary>A tail the cap cuts after its first chunk still replays its commits, which that chunk left to the
+    /// next one.</summary>
+    [Test]
+    public async Task shutdown_tail_cut_by_the_cap_still_spools_its_commits() {
+        using var tmp = new TempDir();
+        var lines          = Enumerable.Range(0, TranscriptBatchBuffer.MaxLines).Select(n => $"{{\"line\":{n}}}").Append("{\"pad\":\"" + new string('x', 8192) + "\"}");
+        var transcriptPath = tmp.CreateDir("shut-cut").CreateFile("transcript.jsonl", string.Join('\n', lines) + "\n");
+        var commits        = new SessionCommits(tmp.PathTo("commits.jsonl"));
+        commits.Append(new ObservedCommit { Sha = "aaa", Message = "Fix watcher" });
+
+        var spool  = new TranscriptSpool(tmp.PathTo("shut-cut-spool"), capBytes: 4096, time: TimeProvider.System);
+        var result = await Watch.SpoolUndeliveredTranscriptTailAsync(
+            spool, transcriptPath, Sid, agentId: null, vendor: "claude", linesProcessed: 0, commits: new CommitObservation.Covered(commits), ct: CancellationToken.None);
+
+        var replay = new List<System.Text.Json.Nodes.JsonNode>();
+        await spool.DrainAsync(Sid, body => { replay.Add(System.Text.Json.Nodes.JsonNode.Parse(body)!); return Task.FromResult(DrainOutcome.Delivered); },
+            () => false, CancellationToken.None);
+
+        await Assert.That(result).IsEqualTo(TranscriptSpool.AppendResult.MarkedNeedsImport);
+        await Assert.That(replay.Count).IsEqualTo(2);
+        await Assert.That(replay[0]["lines"]!.AsArray().Count).IsEqualTo(TranscriptBatchBuffer.MaxLines);
+        await Assert.That(replay[0]["more_follows"]!.GetValue<bool>()).IsTrue();
+        await Assert.That(replay[^1]["lines"]!.AsArray().Count).IsEqualTo(0);
+        await Assert.That(replay[^1]["observed_commits"]![0]!["sha"]!.GetValue<string>()).IsEqualTo("aaa");
+        await Assert.That(replay[^1].AsObject().ContainsKey("more_follows")).IsFalse();
     }
 
     /// <summary>Cap exhaustion at shutdown must never silently drop the tail — it marks needs-import

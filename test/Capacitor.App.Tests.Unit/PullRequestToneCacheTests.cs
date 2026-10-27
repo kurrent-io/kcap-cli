@@ -192,6 +192,46 @@ public class PullRequestToneCacheTests {
     static AgentRow Row(string id, string? sessionId) => AgentRow.FromLocal(
         new(id, "agent", "claude", "/repo", "Running", null, null, null, DateTime.UtcNow, null, null, SessionId: sessionId), Repo);
 
+    static AgentRow Ended(string sessionId) => ServerRow(sessionId, "ended");
+
+    /// The viewer's own listed session, as the directory marks it once the owners read has landed.
+    static AgentRow ServerRow(string sessionId, string status) => AgentRow.FromServer(new Capacitor.Remote.Models.RepoSessionDto {
+        SessionId = sessionId, Status = status, AccessLevel = "full", Vendor = "claude", Title = "Session",
+        Owner = new() { UserId = "u1", DisplayName = "Alexey" },
+        StartedAt = DateTimeOffset.UnixEpoch, LastActivityAt = DateTimeOffset.UnixEpoch.AddHours(1),
+        EndedAt = status == "ended" ? DateTimeOffset.UnixEpoch.AddHours(1) : null,
+        Repo = new() { Hash = "h", Owner = "kurrent-io", Name = "kcap-cli" },
+    }, hostedPresentation: false) with { OwnerIsViewer = true };
+
+    /// A teammate's session is not this app's to poll, whichever lane shows it: under Team the
+    /// listing holds hundreds, and each read costs the server a visibility check and, per PR, a
+    /// GitHub-backed admission. Its PRs show when the session opens. A listed row whose owner the
+    /// server has not named yet waits too; a daemon row it has not named is presumed the viewer's.
+    [Test]
+    public async Task A_row_the_server_names_as_a_teammates_is_not_read() {
+        var (directory, source, _, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        directory.Rows.AddOrUpdate(ServerRow("mine", "active"));
+        directory.Rows.AddOrUpdate(ServerRow("theirs", "active") with { OwnerIsViewer = false });
+        directory.Rows.AddOrUpdate(ServerRow("unknown", "ended") with { OwnerIsViewer = null });
+        directory.Rows.AddOrUpdate(Row("a1", "local-theirs") with { OwnerIsViewer = false });
+        directory.Rows.AddOrUpdate(AgentRow.FromRemote(new AgentInstanceDto {
+            AgentId = "b1", Status = "Running", DaemonName = "work-mac", OwnerUserId = "u2",
+            Vendor = "claude", RepoOwner = "o", RepoName = "r", SessionId = "remote-theirs",
+        }) with { OwnerIsViewer = false });
+
+        await WaitUntilAsync(() => cache.CurrentSummaries.ContainsKey("mine"), "own row read");
+        await Task.Delay(100);
+        await Assert.That(source.Lists).IsEqualTo(1);
+        await Assert.That(cache.CurrentSummaries.Keys).IsEquivalentTo(new[] { "mine" });
+
+        directory.Rows.AddOrUpdate(ServerRow("unknown", "ended"));
+
+        await WaitUntilAsync(() => cache.CurrentSummaries.ContainsKey("unknown"), "row read once its owner is known");
+        await Assert.That(source.Lists).IsEqualTo(2);
+    }
+
     static (FakeAgentDirectory Directory, FakePullRequestSource Source, FakeTimeProvider Time, PullRequestToneCache Cache) Build() {
         var directory = new FakeAgentDirectory();
         var time = new FakeTimeProvider();
@@ -265,6 +305,77 @@ public class PullRequestToneCacheTests {
 
         time.Advance(TimeSpan.FromMinutes(2));
         await WaitUntilAsync(() => source.Lists == 2, what: "second read");
+    }
+
+    /// An ended session's pull requests move rarely, so its rows read on the slow cadence while a
+    /// live row keeps the two-minute one.
+    [Test]
+    public async Task An_ended_sessions_pull_requests_refresh_on_the_slow_cadence() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        source.AccessSeconds = 3600;
+        directory.Rows.AddOrUpdate(Ended("s1"));
+        await WaitUntilAsync(() => source.Lists == 1, what: "first read");
+
+        time.Advance(TimeSpan.FromMinutes(2).Add(TimeSpan.FromSeconds(1)));
+        await Assert.That(source.Lists).IsEqualTo(1);
+
+        time.Advance(TimeSpan.FromMinutes(8));
+        await WaitUntilAsync(() => source.Lists == 2, what: "second read");
+    }
+
+    /// A session no daemon hosts is somebody's terminal or a teammate's: under Team there can be
+    /// hundreds, and none of them is this app's to poll every two minutes.
+    [Test]
+    public async Task A_live_server_rows_pull_requests_refresh_on_the_slow_cadence() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        source.AccessSeconds = 3600;
+        directory.Rows.AddOrUpdate(ServerRow("s1", "active"));
+        await WaitUntilAsync(() => source.Lists == 1, what: "first read");
+
+        time.Advance(TimeSpan.FromMinutes(2).Add(TimeSpan.FromSeconds(1)));
+        await Assert.That(source.Lists).IsEqualTo(1);
+
+        time.Advance(TimeSpan.FromMinutes(8));
+        await WaitUntilAsync(() => source.Lists == 2, what: "second read");
+    }
+
+    /// A daemon taking the session up puts it back on the fast cadence at once, not after the slow
+    /// interval it was last given.
+    [Test]
+    public async Task A_session_a_daemon_takes_up_returns_to_the_fast_cadence() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        source.AccessSeconds = 3600;
+        directory.Rows.AddOrUpdate(ServerRow("s1", "active"));
+        await WaitUntilAsync(() => source.Lists == 1, what: "first read");
+
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+        time.Advance(TimeSpan.FromMinutes(2).Add(TimeSpan.FromSeconds(1)));
+
+        await WaitUntilAsync(() => source.Lists == 2, what: "read on the fast cadence");
+    }
+
+    /// Every listed session comes due at once after a connect or a scope switch; the reads go out a
+    /// few at a time, not all together.
+    [Test]
+    public async Task A_tick_starts_at_most_eight_reads_at_once() {
+        var (directory, source, _, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        source.ListGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        directory.Rows.Edit(rows => { for (var i = 0; i < 20; i++) rows.AddOrUpdate(Ended($"s{i}")); });
+
+        await WaitUntilAsync(() => source.Lists >= 8, what: "the first reads");
+        await Task.Delay(100);
+        await Assert.That(source.Lists).IsEqualTo(8);
+
+        source.ListGate.SetResult();
+        await WaitUntilAsync(() => source.Lists == 20, what: "the rest follow");
     }
 
     [Test]

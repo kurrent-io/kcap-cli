@@ -114,7 +114,7 @@ partial class McpFlowsServer(
         await using var writer = new StreamWriter(stdout, new UTF8Encoding(false));
         writer.AutoFlush = true;
 
-        await McpStdioLoop.RunAsync(reader, writer, TimedDispatchToolCallAsync, (id, method, request) => method switch {
+        await McpStdioLoop.RunAsync(reader, writer, tools, TimedDispatchToolCallAsync, (id, method, request) => method switch {
             "initialize" => BuildInitializeResponse(id, request),
             "tools/list" => BuildToolsListResponse(id, tools),
             _            => McpProtocol.TryHandleStandardMethod(method, id)
@@ -569,6 +569,20 @@ partial class McpFlowsServer(
                         return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot, time), isError: true);
 
                     var (text, isError) = StartAgentTool.Render((int)answer.StatusCode, await answer.Content.ReadAsStringAsync(), start.WorkItem);
+
+                    return BuildToolResult(id, text, isError);
+                }
+            }
+
+            if (WakeUpTools.Handles(toolName)) {
+                var (answer, how) = await WakeUpTools.SendAsync(toolName, arguments, client, apiRoot, requestingSessionId, callerAgentId, clock);
+                if (answer is null) return BuildToolResult(id, WakeUpTools.Unanswered(toolName, how), isError: true);
+
+                using (answer) {
+                    if (answer.StatusCode == HttpStatusCode.Unauthorized)
+                        return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot, time), isError: true);
+
+                    var (text, isError) = WakeUpTools.Render(toolName, (int)answer.StatusCode, await answer.Content.ReadAsStringAsync(), arguments);
 
                     return BuildToolResult(id, text, isError);
                 }
@@ -2783,7 +2797,8 @@ partial class McpFlowsServer(
             McpToolAnnotations.Read
         ),
         StartAgentOptionsTool.Describe(),
-        StartAgentTool.Describe()
+        StartAgentTool.Describe(),
+        .. WakeUpTools.Describe()
     ];
 }
 

@@ -7,6 +7,9 @@ namespace Capacitor.Cli.Core.LocalEdition;
 
 /// <summary>The signed description of one local-edition bundle archive.</summary>
 public sealed record LocalBundleManifest(string Version, string Rid, string Archive, string Sha256, long Size, string KeyId) {
+    /// <summary>The built-in embedding model set this release ships with, when the manifest names one.</summary>
+    public LocalEmbeddingModelManifest? EmbeddingModel { get; init; }
+
     /// <summary>Checks the signature over the bytes as downloaded, then that the manifest describes
     /// exactly the bundle that was asked for.</summary>
     public static LocalBundleManifest Verify(ReadOnlySpan<byte> manifest, string signature, ECDsa key, string version, string rid) {
@@ -38,7 +41,12 @@ public sealed record LocalBundleManifest(string Version, string Rid, string Arch
         var size = Int(obj, "size");
         if (size is null or <= 0) throw Refused("The bundle manifest carries no usable size.");
 
-        return new(version, rid, archive, sha!, size.Value, keyId!);
+        LocalEmbeddingModelManifest? model = null;
+
+        if (obj.TryGetPropertyValue("embedding_model", out var entry))
+            model = LocalEmbeddingModelManifest.Parse(entry) ?? throw Refused("The bundle manifest carries a malformed embedding model entry.");
+
+        return new(version, rid, archive, sha!, size.Value, keyId!) { EmbeddingModel = model };
     }
 
     static LocalBundleException Refused(string message) => new(LocalInstallFailureCode.VerificationFailed, message);

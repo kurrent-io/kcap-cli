@@ -91,6 +91,17 @@ mcp flows:
       get_flow_status        Get status, rounds, and pending messages.
       close_flow             Close a flow run.
 
+    Wake-up tools (a running hosted agent only):
+      schedule_wakeup        Have a prompt delivered to this agent later, by
+                             `delay_minutes` or `at` (1 minute to 7 days), waking
+                             it if idle. A terminal session or flow participant is
+                             refused.
+      list_wakeups           This session's pending wake-ups, and those settled in
+                             the last 24 hours with how they ended.
+      cancel_wakeup          Cancel a pending wake-up by `wakeup_id`.
+    A server without wake-ups (or with `Features:AgentWakeUps` off) is reported
+    as not supporting them.
+
   The reviewer vendor is chosen independently of the driver harness. Pass the
   lowercase canonical token; naming a reviewer is never inferred from the driver.
   The tokens above are the protocol vocabulary — availability is per daemon: the
@@ -184,6 +195,10 @@ mcp workitems:
                                 survives (work_item_id, into_work_item_id).
       detach_work_item         Durably detach a session from a work item it
                                 was wrongly attached to.
+      declare_work_incomplete  Declare that the session's work on an item is
+                                not finished (work_item_id, optional
+                                reason), so a tracker close does not mark
+                                it done.
       dismiss_next_work        Record that the user turned down a presented
                                 next-work suggestion (target_key; repo_hash
                                 defaults to this checkout), so it stops being

@@ -19,7 +19,7 @@ public static class KcapBinaryCommand {
         catch { /* fall back to the PATH-resolved wrapper command */ }
         if (string.IsNullOrWhiteSpace(path)) return KcapMcpServers.Command;
 
-        return resolveBinaryPath is null ? ScriptInstallLayout.Stabilize(path) : path;
+        return resolveBinaryPath is null ? InstallPaths.Stabilize(path) : path;
     }
 
     /// <summary>
@@ -44,13 +44,13 @@ public static class KcapBinaryCommand {
         if (string.IsNullOrWhiteSpace(processPath)) return null;
 
         if (string.Equals(Path.GetFileNameWithoutExtension(processPath), "kcap", StringComparison.OrdinalIgnoreCase))
-            return ScriptInstallLayout.Stabilize(processPath);
+            return InstallPaths.Stabilize(processPath);
 
         var dir = Path.GetDirectoryName(processPath);
         if (string.IsNullOrEmpty(dir)) return null;
 
         var sibling = Path.Combine(dir, OperatingSystem.IsWindows() ? "kcap.exe" : "kcap");
-        return File.Exists(sibling) ? ScriptInstallLayout.Stabilize(sibling) : null;
+        return File.Exists(sibling) ? InstallPaths.Stabilize(sibling) : null;
     }
 
     /// <summary>Whether a registered command runs kcap: the bare literal, or an absolute path (either

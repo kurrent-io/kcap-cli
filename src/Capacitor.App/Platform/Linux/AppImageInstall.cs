@@ -12,17 +12,25 @@ public sealed record AppImageInstall(string Image) {
     public static AppImageInstall? Detect(Func<string, string?> getEnv) =>
         getEnv("APPIMAGE") is { Length: > 0 } image ? new(image) : null;
 
+    /// Where the CLI and plugin are copied out of the mount: everything of the app's that outlives it.
+    public static string StagedRoot(Func<string, string?> getEnv, UserHome home) =>
+        Path.Combine(DataHome(getEnv, home), "kcap", "desktop");
+
+    public static string StagedCliDirectory(string stagedRoot) => Path.Combine(stagedRoot, "bin");
+
+    internal static string DataHome(Func<string, string?> getEnv, UserHome home) =>
+        getEnv("XDG_DATA_HOME") is { } xdg && Path.IsPathRooted(xdg)
+            ? xdg
+            : Path.Combine(home.Path, ".local", "share");
+
     /// Copies the bundle's CLI and plugin out of the mount and returns the directory to run the CLI
     /// from. Each file is replaced by rename, so a running daemon keeps its old inode and sees an
     /// update the way it does after `kcap update`. When the copy fails the CLI runs from the mount.
     public string TakeCliOutOfMount(Func<string, string?> getEnv, UserHome home, string appDirectory) {
         var bundleCli = BundleLayout.CliDirectory(appDirectory);
-        var dataHome = getEnv("XDG_DATA_HOME") is { } xdg && Path.IsPathRooted(xdg)
-            ? xdg
-            : Path.Combine(home.Path, ".local", "share");
         var bundlePlugin = BundleLayout.PluginDirectory(appDirectory);
-        var root   = Path.Combine(dataHome, "kcap", "desktop");
-        var target = Path.Combine(root, "bin");
+        var root   = StagedRoot(getEnv, home);
+        var target = StagedCliDirectory(root);
         var plugin = BundleLayout.PluginDirectory(root);
         var stamp  = Path.Combine(root, "image.stamp");
         var identity = ImageIdentity();

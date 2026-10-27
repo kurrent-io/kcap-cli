@@ -1,3 +1,6 @@
+using Avalonia.Automation.Peers;
+using Avalonia.Automation.Provider;
+using Avalonia.Controls;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.Services;
@@ -63,19 +66,21 @@ public class HistoryStepViewModelTests {
         await Assert.That(h.Vm.NextLabel).IsEqualTo("Import 3 repositories");
     }
 
-    /// The local edition has no other readers: its track is skip or import, and import is private.
+    /// The local edition has no other readers: a repository imports or not, and an import is private.
     [Test]
-    public async Task On_the_local_path_every_repository_imports_privately_with_no_shared_stop() {
+    public async Task On_the_local_path_every_repository_imports_privately_with_no_shared_choice() {
         var h = new Harness(Report(), onLocalPath: true);
         await h.EnterAsync();
         var acme = h.Vm.Groups.Single(g => g.Owner == "acme");
-        acme.Stop = (int)ImportLevel.Shared;
+        acme.OnlyMe = false;
+        h.Repo("solo/notes").Level = ImportLevel.Shared;
 
         await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
         await h.Vm.Run!.Completion;
 
         await Assert.That(h.Vm.LocalLevels).IsTrue();
-        await Assert.That(h.Vm.Groups.SelectMany(g => g.Repos).All(r => r is { Level: ImportLevel.OnlyMe, LastStop: 1 })).IsTrue();
+        await Assert.That(h.Vm.SharingLine).IsNull();
+        await Assert.That(h.Vm.Groups.SelectMany(g => g.Repos).All(r => r is { Level: ImportLevel.OnlyMe, Local: true })).IsTrue();
         await Assert.That(h.Cli.ImportRequests.Single().Private).IsTrue();
         await Assert.That(h.Cli.ImportRequests.Single().Repos!).IsEquivalentTo(["acme/web", "acme/api", "solo/notes"], CollectionOrdering.Matching);
     }
@@ -92,6 +97,31 @@ public class HistoryStepViewModelTests {
         await Assert.That(h.Vm.NextLabel).IsEqualTo("Import 2 repositories");
     }
 
+    /// The page says what it found and what Next will import, and the second line follows the choices under Customize.
+    [Test]
+    public async Task The_summary_follows_the_repositories_and_window_chosen() {
+        var h = new Harness(Report());
+        await h.EnterAsync();
+        var found = h.Vm.FoundLine;
+        var byDefault = h.Vm.ImportLine;
+
+        h.Repo("acme/web").Level = ImportLevel.Skip;
+        foreach (var w in h.Vm.Windows) w.IsSelected = w.Since is null; // the pane's radio group does this
+        var narrowed = h.Vm.ImportLine;
+
+        var sharedNoted = h.Vm.SharingLine;
+        foreach (var repo in h.Vm.Groups.SelectMany(g => g.Repos)) repo.Level = ImportLevel.OnlyMe;
+        var privateNoted = h.Vm.SharingLine;
+        foreach (var repo in h.Vm.Groups.SelectMany(g => g.Repos)) repo.Level = ImportLevel.Skip;
+
+        await Assert.That(sharedNoted).IsNotNull();
+        await Assert.That(privateNoted).IsNull();
+        await Assert.That(found).IsEqualTo("Found 53 sessions in 3 repositories on test-mac");
+        await Assert.That(byDefault).IsEqualTo("kcap imports 27 sessions from all 3 repositories, covering the last 90 days");
+        await Assert.That(narrowed).IsEqualTo("kcap imports 13 sessions from 2 of 3 repositories, covering your whole history");
+        await Assert.That(h.Vm.ImportLine).IsEqualTo("Nothing is selected to import");
+    }
+
     [Test]
     public async Task A_window_a_repository_did_not_report_shows_no_count_rather_than_zero() {
         var report = new ImportDiscoveryReport(
@@ -100,30 +130,59 @@ public class HistoryStepViewModelTests {
         await h.EnterAsync();
 
         await Assert.That(h.Vm.Windows.All(w => w.CountLabel is null)).IsTrue();
+        await Assert.That(h.Vm.ImportLine).IsEqualTo("kcap imports the last 90 days from the one repository");
     }
 
-    /// The owner track is a bulk set; it reads a level back only when every repository agrees.
+    /// The owner's boxes are bulk sets that read back a value only while its repositories agree, and a
+    /// repository checked again keeps the audience it had.
     [Test]
-    public async Task The_owner_track_sets_every_repository_and_reads_mixed_when_they_disagree() {
+    public async Task The_owner_boxes_set_every_repository_and_read_mixed_when_they_disagree() {
         var h = new Harness(Report());
         await h.EnterAsync();
         var acme = h.Vm.Groups.Single(g => g.Owner == "acme");
 
-        h.Repo("acme/api").Level = ImportLevel.OnlyMe;
-        var mixed = (acme.Mixed, acme.Stop, acme.SignalLine);
+        h.Repo("acme/api").OnlyMe = true;
+        var mixedAudience = (acme.Included, acme.OnlyMe, acme.SignalLine);
+        h.Repo("acme/web").Included = false;
+        var mixedImport = (acme.Included, acme.OnlyMe);
 
-        var stopsRaised = 0;
+        acme.Included = false;
+        var none = (acme.Included, acme.OnlyMeEnabled);
+
+        var includedRaised = 0;
         foreach (var repo in acme.Repos)
-            repo.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(HistoryRepoRow.Stop)) stopsRaised++; };
+            repo.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(HistoryRepoRow.Included)) includedRaised++; };
+        acme.Included = true;
+        var raisedOnCheck = includedRaised;
+        var restored = (h.Repo("acme/web").Level, h.Repo("acme/api").Level);
 
-        acme.Stop = (int)ImportLevel.Skip;
+        acme.OnlyMe = true;
 
-        await Assert.That(mixed).IsEqualTo((true, -1, "2 repositories · mixed"));
-        await Assert.That(acme.Repos.All(r => r.Level == ImportLevel.Skip)).IsTrue();
-        await Assert.That(acme.Repos.All(r => r.Stop == (int)ImportLevel.Skip)).IsTrue();
-        // The row track binds Stop. A Level write that does not raise it leaves the children on Shared.
-        await Assert.That(stopsRaised).IsEqualTo(acme.Repos.Count);
+        await Assert.That(mixedAudience).IsEqualTo((true, (bool?)null, "2 repositories · mixed"));
+        await Assert.That(mixedImport).IsEqualTo(((bool?)null, (bool?)true));
+        await Assert.That(none).IsEqualTo(((bool?)false, false));
+        // The row's box binds Included. A Level write that does not raise it leaves the row unchecked.
+        await Assert.That(raisedOnCheck).IsEqualTo(acme.Repos.Count);
+        await Assert.That(restored).IsEqualTo((ImportLevel.Shared, ImportLevel.OnlyMe));
+        await Assert.That(acme.Repos.All(r => r.Level == ImportLevel.OnlyMe)).IsTrue();
         await Assert.That(acme.Mixed).IsFalse();
+    }
+
+    /// The owner's Only me reaches a repository skipped at the time, so checking it later does not bring
+    /// it back shared.
+    [Test]
+    public async Task Only_me_on_the_owner_carries_to_a_skipped_repository() {
+        var h = new Harness(Report());
+        await h.EnterAsync();
+        var acme = h.Vm.Groups.Single(g => g.Owner == "acme");
+
+        h.Repo("acme/web").Included = false;
+        acme.OnlyMe = true;
+        var whileSkipped = h.Repo("acme/web").Level;
+        h.Repo("acme/web").Included = true;
+
+        await Assert.That(whileSkipped).IsEqualTo(ImportLevel.Skip);
+        await Assert.That(h.Repo("acme/web").Level).IsEqualTo(ImportLevel.OnlyMe);
     }
 
     /// --private is per invocation, so each level is its own pass, with the window and titling choice.
@@ -135,6 +194,10 @@ public class HistoryStepViewModelTests {
         await h.EnterAsync();
         h.Repo("solo/notes").Level = ImportLevel.OnlyMe;
         h.Vm.TitleLocally = false;
+        var sharing = new List<string?>();
+        h.Vm.PropertyChanged += (_, e) => {
+            if (e.PropertyName == nameof(HistoryStepViewModel.SharingLine)) sharing.Add(h.Vm.SharingLine);
+        };
 
         var left = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
         var first = h.Cli.ImportRequests.Single();
@@ -149,6 +212,7 @@ public class HistoryStepViewModelTests {
         await Assert.That(h.Cli.ImportRequests[1].Repos!).IsEquivalentTo(["acme/web", "acme/api"], CollectionOrdering.Matching);
         await Assert.That(h.Cli.ImportRequests[1].Private).IsFalse();
         await Assert.That(h.Vm.Run!.Expected).IsEqualTo(27);
+        await Assert.That(sharing.Last()).IsEqualTo("Shared imports follow your recording privacy setting");
     }
 
     [Test]
@@ -407,11 +471,13 @@ public class HistoryStepViewModelTests {
         await Assert.That(h.Vm.TitlingOffered).IsFalse();
     }
 
+    /// The checkboxes wait behind Customize; opening it draws an Import and an Only me box per owner and
+    /// per repository. What Next would leave out or share stays in view either way.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_pane_draws_a_track_per_owner_and_per_repository() {
-        var tracks = await AvaloniaSession.DispatchAsync(async () => {
-            var h = new Harness(Report());
+    public async Task The_pane_draws_boxes_per_owner_and_per_repository_once_customizing() {
+        var (before, after, notes) = await AvaloniaSession.DispatchAsync(async () => {
+            var h = new Harness(Report(unmatched: 4));
             var vm = new OnboardingViewModel([h.Vm, new DoneStepViewModel(() => DoneFacts.Empty)]);
             await vm.PendingEnterForTesting;
             await h.Vm.Discovery;
@@ -420,14 +486,55 @@ public class HistoryStepViewModelTests {
             window.Show();
             Dispatcher.UIThread.RunJobs();
 
-            var count = window.GetVisualDescendants().OfType<ImportTrack>().Count();
+            int Shown() => window.GetVisualDescendants().OfType<CheckBox>()
+                .Count(c => c.Name is "OwnerImportCheck" or "RepoImportCheck" or "OwnerOnlyMeCheck" or "RepoOnlyMeCheck" && c.IsEffectivelyVisible);
+            var collapsed = Shown();
+            var notesShown = window.GetVisualDescendants().OfType<TextBlock>()
+                .Count(t => t.Name is "UnmatchedNoteText" or "SharingLineText" && t.IsEffectivelyVisible);
+            window.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "CustomizeButton").Command!.Execute(null);
+            Dispatcher.UIThread.RunJobs();
+            var open = Shown();
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
 
-            return count;
+            return (collapsed, open, notesShown);
         });
 
-        await Assert.That(tracks).IsEqualTo(5); // two owners, three repositories
+        await Assert.That(before).IsEqualTo(0);
+        await Assert.That(notes).IsEqualTo(2);
+        await Assert.That(after).IsEqualTo(10);
+    }
+
+    /// A mixed Only me box is half-filled, and a click on it turns every repository private rather than
+    /// widening them all to shared.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_click_on_a_mixed_only_me_box_keeps_every_repository_private() {
+        var levels = await AvaloniaSession.DispatchAsync(async () => {
+            var h = new Harness(Report());
+            await h.EnterAsync();
+            h.Repo("acme/api").OnlyMe = true;
+            h.Vm.ToggleCustomizeCommand.Execute().Subscribe();
+            var window = new Window { Content = new HistoryPaneView { DataContext = h.Vm }, Width = 800, Height = 900 };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var box = window.GetVisualDescendants().OfType<CheckBox>()
+                .First(c => c.Name == "OwnerOnlyMeCheck" && c.DataContext is HistoryOwnerGroup { Owner: "acme" });
+            var mixedShown = box.IsChecked;
+            ((IToggleProvider)ControlAutomationPeer.CreatePeerForElement(box)!).Toggle();
+            Dispatcher.UIThread.RunJobs();
+            var result = (Mixed: mixedShown, Clicked: box.IsChecked,
+                Levels: h.Vm.Groups.Single(g => g.Owner == "acme").Repos.Select(r => r.Level).ToList());
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            return result;
+        });
+
+        await Assert.That(levels.Mixed).IsNull();
+        await Assert.That(levels.Clicked).IsTrue();
+        await Assert.That(levels.Levels.All(l => l == ImportLevel.OnlyMe)).IsTrue();
     }
 }

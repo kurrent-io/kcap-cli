@@ -442,4 +442,22 @@ public class RestartCoordinatorTests {
             return RestartOutcome.NoOp;
         }
     }
+
+    /// <summary>A snap refresh repoints <c>current</c> at the new revision; that, not the binary's size or
+    /// timestamp, is what tells the revisions apart.</summary>
+    [Test]
+    public async Task A_snap_binary_is_compared_by_the_revision_current_names() {
+        var asked = new List<string>();
+        string? Link(string dir) { asked.Add(dir); return "43"; }
+
+        var target = RestartCoordinator.CurrentTarget("/snap/kcap/42/bin/kcap-daemon", layout: null, Link);
+
+        await Assert.That(target).IsEqualTo("43");
+        await Assert.That(asked).IsEquivalentTo(["/snap/kcap/current"]);
+    }
+
+    [Test]
+    public async Task Outside_a_script_install_or_a_snap_there_is_no_link_to_compare() {
+        await Assert.That(RestartCoordinator.CurrentTarget("/usr/local/bin/kcap-daemon", layout: null, _ => "unexpected")).IsNull();
+    }
 }

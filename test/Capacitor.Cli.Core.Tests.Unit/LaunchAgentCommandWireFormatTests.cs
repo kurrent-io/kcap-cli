@@ -155,6 +155,32 @@ public class LaunchAgentCommandWireFormatTests {
     }
 
     [Test]
+    public async Task Expected_runtime_transport_binds_by_name() {
+        const string wire =
+            """
+            {"agent_id":"exp00001","prompt":null,"model":"opus","effort":null,"repo_path":"/tmp/repo","tools":null,"attachment_ids":null,"vendor":"codex","expected_runtime_transport":"app-server"}
+            """;
+
+        var parsed = JsonSerializer.Deserialize(wire, CapacitorJsonContext.Default.LaunchAgentCommand);
+
+        await Assert.That(parsed.ExpectedRuntimeTransport).IsEqualTo("app-server");
+        await Assert.That(parsed.Vendor).IsEqualTo("codex");
+    }
+
+    [Test]
+    public async Task Absent_expected_runtime_transport_binds_null() {
+        const string legacyWire =
+            """
+            {"agent_id":"exp00002","prompt":null,"model":"opus","effort":null,"repo_path":"/tmp/repo","tools":null,"attachment_ids":null,"vendor":"codex","kind":"reviewFlow"}
+            """;
+
+        var parsed = JsonSerializer.Deserialize(legacyWire, CapacitorJsonContext.Default.LaunchAgentCommand);
+
+        await Assert.That(parsed.ExpectedRuntimeTransport).IsNull();
+        await Assert.That(parsed.Kind).IsEqualTo(LaunchKind.ReviewFlow);
+    }
+
+    [Test]
     public async Task Borrowed_and_BorrowCwd_round_trip_snake_case() {
         // Phase A: the server tells the daemon to launch against the user's own checkout
         // (skip worktree creation) instead of a fresh daemon-owned worktree. Appended last after
@@ -307,6 +333,21 @@ public class LaunchAgentCommandWireFormatTests {
         await Assert.That(json).Contains("\"inactivity_bound_seconds\":180");
         var back = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.LaunchAgentCommand);
         await Assert.That(back.InactivityBoundSeconds).IsEqualTo(180);
+    }
+
+    [Test]
+    public async Task AccountId_roundtrips_and_defaults_null_when_absent() {
+        var legacyJson = """{"agent_id":"a1","model":"m","repo_path":"/r","vendor":"claude"}""";
+        var legacy = JsonSerializer.Deserialize(legacyJson, CapacitorJsonContext.Default.LaunchAgentCommand);
+        await Assert.That(legacy.AccountId).IsNull();
+
+        var cmd = new LaunchAgentCommand(
+            AgentId: "a1", Prompt: null, Model: "m", Effort: null, RepoPath: "/r",
+            Tools: null, AttachmentIds: null, Vendor: "claude", AccountId: "a1b2");
+        var json = JsonSerializer.Serialize(cmd, ServerWireOptions);
+        await Assert.That(json).Contains("\"account_id\":\"a1b2\"");
+        var back = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.LaunchAgentCommand);
+        await Assert.That(back.AccountId).IsEqualTo("a1b2");
     }
 
     [Test]

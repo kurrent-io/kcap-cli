@@ -68,8 +68,55 @@ public class WorktreeManagerTests {
         }
     }
 
+    /// <summary>
+    /// Fetching a head that moves a submodule makes git fetch the submodule too, from the submodule's own
+    /// remote. That remote is the user's business, not the review's: unreachable here, it must not fail
+    /// the launch.
+    /// </summary>
     [Test]
-    public async Task CreateAsync_with_a_local_only_sha_checks_it_out_without_a_remote() {
+    public async Task CreateAsync_fetches_a_head_that_moves_a_submodule_whose_remote_is_unreachable() {
+        using var sub = GitRepo.CreateWithCommit("sub");
+        using var up = GitRepo.CreateWithCommit("upstream");
+        up.Do("-c", "protocol.file.allow=always", "submodule", "add", sub, "vendored");
+        up.Commit("add submodule");
+        up.Config("uploadpack.allowAnySHA1InWant", "true");
+
+        using var cloneDir = new TempDir("clone");
+        var clone = up.Clone(cloneDir.PathTo("repo"));
+        clone.Do("-c", "protocol.file.allow=always", "submodule", "update", "--init");
+
+        sub.CreateFile("moved.txt", "moved");
+        sub.CommitAll("moved");
+        var vendored = GitRepo.At(up.PathTo("vendored"));
+        vendored.Do("fetch", "-q", "origin");
+        vendored.Do("checkout", "-q", sub.Head);
+        up.Add("vendored");
+        up.Commit("move the submodule");
+        up.Do("update-ref", "refs/pull/7/head", up.Head);
+        var head = up.Head;
+        // The clone's submodule remote must not exist: a recursing fetch that could reach the moved commit would make
+        // the HEAD assertion prove nothing. Repointed rather than deleted, since Windows keeps git's read-only files.
+        var missing = cloneDir.PathTo("no-such-remote");
+        GitRepo.At(clone.PathTo("vendored")).Do("remote", "set-url", "origin", missing);
+        clone.Do("config", "submodule.vendored.url", missing);
+        await Assert.That(Directory.Exists(missing)).IsFalse();
+
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var worktree = await manager.CreateAsync(clone, name: "review-pr-7", baseRef: "refs/pull/7/head");
+
+        try {
+            await Assert.That(GitRepo.At(worktree.Path).Head).IsEqualTo(head);
+        } finally {
+            await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
+        }
+    }
+
+    /// <summary>A commit is named whole when kcap's git hook recorded it, and by the abbreviation git printed when
+    /// the server read it off a shell <c>git commit</c>.</summary>
+    [Test]
+    [Arguments(40)]
+    [Arguments(7)]
+    public async Task CreateAsync_with_a_local_only_sha_checks_it_out_without_a_remote(int shaLength) {
         using var repo = GitRepo.Create("local-only");
 
         repo.CreateFile("a.txt", "a");
@@ -79,11 +126,35 @@ public class WorktreeManagerTests {
         repo.CommitAll("second");
 
         var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
-        var worktree = await manager.CreateAsync(repo, name: "local-sha", baseRef: first);
+        var worktree = await manager.CreateAsync(repo, name: "local-sha", baseRef: first[..shaLength]);
 
         try {
             await Assert.That(GitRepo.At(worktree.Path).Head).IsEqualTo(first);
             await Assert.That(worktree.FetchedRef).IsNull();
+        } finally {
+            await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
+        }
+    }
+
+    /// <summary>A branch whose name is all hex starts from that branch, not from a same-named tag that rev-parse
+    /// would resolve first when the name is read as a sha.</summary>
+    [Test]
+    public async Task CreateAsync_with_a_hex_named_branch_starts_from_the_branch_not_a_same_named_tag() {
+        using var repo = GitRepo.Create("hex-branch");
+
+        repo.CreateFile("a.txt", "a");
+        repo.CommitAll("first");
+        var first = repo.Head;
+        repo.Do("branch", "cafe1234");
+        repo.CreateFile("b.txt", "b");
+        repo.CommitAll("second");
+        repo.Do("tag", "cafe1234");
+
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var worktree = await manager.CreateAsync(repo, name: "hex-branch", baseRef: "cafe1234");
+
+        try {
+            await Assert.That(GitRepo.At(worktree.Path).Head).IsEqualTo(first);
         } finally {
             await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
         }
@@ -105,6 +176,28 @@ public class WorktreeManagerTests {
         try {
             await Assert.That(GitRepo.At(worktree.Path).Head).IsEqualTo(lateSha);
             await Assert.That(worktree.FetchedRef).IsEqualTo("refs/kcap/review/remote-sha");
+        } finally {
+            await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
+        }
+    }
+
+    /// <summary>An abbreviation made on another machine and pushed is found among origin's branches, which a fetch
+    /// of the abbreviation itself cannot do.</summary>
+    [Test]
+    public async Task CreateAsync_with_an_abbreviation_pushed_to_origin_starts_from_that_commit() {
+        using var repo = MakeUpstreamWithSideRef("refs/pull/11/head", out _);
+
+        // Committed after the clone, so the clone's object store cannot have it.
+        repo.Upstream.CreateFile("pushed.txt", "pushed");
+        repo.Upstream.CommitAll("pushed commit");
+        var pushed = repo.Upstream.Head;
+
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var worktree = await manager.CreateAsync(repo.Clone, name: "pushed-short-sha", baseRef: pushed[..7]);
+
+        try {
+            await Assert.That(GitRepo.At(worktree.Path).Head).IsEqualTo(pushed);
+            await Assert.That(worktree.FetchedRef).IsNull();
         } finally {
             await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
         }

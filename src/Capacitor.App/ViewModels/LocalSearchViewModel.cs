@@ -11,43 +11,54 @@ using ReactiveUI.Reactive;
 namespace Capacitor.App.ViewModels;
 
 /// <summary>
-/// How the local server searches, beside its version in the rail, and a flyout that changes it by running
-/// setup again. An upgrade and a search change cannot run together, so each holds the other off.
+/// How the local server searches: a word beside its version in the rail, which opens the Settings tab that
+/// changes it by running setup again. An upgrade and a search change cannot run together, so each holds the other off.
 /// </summary>
 public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
     public const string BusyText = "Another local setup, upgrade or uninstall is running on this Mac. Try again once it has finished.";
 
     static readonly string[] Derived = [
         nameof(Running), nameof(StateText), nameof(CurrentText), nameof(CanApply), nameof(ApplyLabel), nameof(Embeddings),
-        nameof(FailureText),
+        nameof(FailureText), nameof(ShowsSettingsLink), nameof(ShowsInlineSettings),
     ];
 
     readonly LocalSearchController _search;
     readonly LocalUpgradeController _upgrade;
     readonly Func<LocalEmbeddingSetting?> _readSetting;
+    readonly Func<CancellationToken, Task<LocalEmbeddingModelManifest?>> _builtinOffer;
     readonly Func<Task> _reconnect;
     readonly CancellationToken _shutdown;
     readonly IScheduler _readScheduler;
     readonly CompositeDisposable _disposables = new();
     readonly SerialDisposable _read = new();
+    readonly SerialDisposable _offer = new();
     LocalEmbeddingSetting? _current;
+    bool _canOpenSettings;
     bool _loaded;
 
     /// <param name="readSetting">The installation's recorded embedding setting; a disk read, run on
     /// <paramref name="readScheduler"/> (the task pool by default), never on the UI thread.</param>
+    /// <param name="builtinOffer">The built-in model set the installed stack offers, or null; asked again on every reconnect,
+    /// which follows an upgrade.</param>
+    /// <param name="openSettings">What opens Settings on its Search tab, null while no Settings window can open.</param>
     public LocalSearchViewModel(
-            Func<LocalEmbeddingSetting?> readSetting, IObservable<ServerLaneStatus> status, LocalSearchController search,
-            LocalUpgradeController upgrade, Func<Task> reconnect, CancellationToken shutdown, IScheduler? readScheduler = null) {
+            Func<LocalEmbeddingSetting?> readSetting, Func<CancellationToken, Task<LocalEmbeddingModelManifest?>> builtinOffer,
+            IObservable<ServerLaneStatus> status, LocalSearchController search,
+            LocalUpgradeController upgrade, Func<Task> reconnect, CancellationToken shutdown, IScheduler? readScheduler = null,
+            IObservable<Action?>? openSettings = null) {
         _search        = search;
         _upgrade       = upgrade;
         _readSetting   = readSetting;
+        _builtinOffer  = builtinOffer;
         _reconnect     = reconnect;
         _shutdown      = shutdown;
         _readScheduler = readScheduler ?? RxSchedulers.TaskpoolScheduler;
         _read.DisposeWith(_disposables);
+        _offer.DisposeWith(_disposables);
 
         Choice = new SearchChoiceViewModel { Reconfiguring = true };
         ReadSetting();
+        LookUpOffer();
 
         Observable.Switch(search.WhenAnyValue(x => x.Progress)
                 .Select(p => p.Embeddings.Changed.Select(_ => Unit.Default).StartWith(Unit.Default)))
@@ -67,10 +78,21 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
             .Skip(1)
             .Where(connected => connected)
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(_ => ReadSetting())
+            .Subscribe(_ => {
+                ReadSetting();
+                LookUpOffer();
+            })
             .DisposeWith(_disposables);
 
-        ApplyCommand = ReactiveCommand.CreateFromTask(ApplyAsync);
+        ApplyCommand        = ReactiveCommand.CreateFromTask(ApplyAsync);
+        Action? open = null;
+        var settings = openSettings ?? Observable.Return<Action?>(null);
+        settings.Subscribe(action => {
+            open             = action;
+            _canOpenSettings = action is not null;
+            Refresh();
+        }).DisposeWith(_disposables);
+        OpenSettingsCommand = ReactiveCommand.Create(() => open?.Invoke(), settings.Select(action => action is not null));
     }
 
     public SearchChoiceViewModel Choice { get; }
@@ -83,22 +105,25 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
     public string? StateText =>
         Running ? "setting up search"
         : !_loaded ? null
-        : _current?.Model is not null ? "search by meaning" : "keyword search";
+        : CurrentByMeaning ? "search by meaning" : "keyword search";
 
     public string? CurrentText => !_loaded ? null
-        : (_current?.Model is { } model
-            ? $"Searches by meaning with {model}."
-            : "Searches by keyword, unless an embedding provider is set in the server's own settings.")
+        : (_current switch {
+            { Model: { } model }                         => $"Searches by meaning with {model}.",
+            { Provider: LocalEmbeddingProvider.Builtin } => "Searches by meaning with the built-in model.",
+            _                                            => "Searches by keyword, unless an embedding provider is set in the server's own settings.",
+        })
         + (_current is { Pending: true } ? " The change is not applied yet." : "");
 
     public bool CanApply =>
-        _loaded && !Running && !_upgrade.Running && Choice.Valid
-     && (Choice.Choice.Model != CurrentModel || _current is null or { Pending: true });
+        _loaded && !Running && !_upgrade.Running && Choice.Valid && !Choice.AwaitingOffer
+     && (Differs(Choice.Choice) || _current is null or { Pending: true });
 
-    public string ApplyLabel => Choice.Choice.Model switch {
-        null                                  => "Use keyword search",
-        _ when CurrentModel is null           => "Turn on search by meaning",
-        _                                     => "Use this model",
+    public string ApplyLabel => Choice.Choice switch {
+        { ByMeaning: false }                         => "Use keyword search",
+        _ when !CurrentByMeaning                     => "Turn on search by meaning",
+        { Provider: LocalEmbeddingProvider.Builtin } => "Use the built-in model",
+        _                                            => "Use this model",
     };
 
     public string? FailureText => !Running && _search.Outcome is LocalInstallOutcome.Failed failed
@@ -107,7 +132,21 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
 
     public ReactiveCommand<Unit, Unit> ApplyCommand { get; }
 
-    string? CurrentModel => _current?.Model;
+    public ReactiveCommand<Unit, Unit> OpenSettingsCommand { get; }
+
+    /// The rail word opens the Settings tab when there is one to open.
+    public bool ShowsSettingsLink => StateText is not null && _canOpenSettings;
+
+    /// Without a Settings window, the rail word opens the same controls in place.
+    public bool ShowsInlineSettings => StateText is not null && !_canOpenSettings;
+
+    bool CurrentByMeaning => _current is { Model: not null } or { Provider: LocalEmbeddingProvider.Builtin };
+
+    bool Differs(LocalEmbeddingChoice choice) => choice.Provider switch {
+        LocalEmbeddingProvider.Builtin => _current?.Provider != LocalEmbeddingProvider.Builtin,
+        LocalEmbeddingProvider.Ollama  => _current?.Model != choice.Model,
+        _                              => CurrentByMeaning,
+    };
 
     Task ApplyAsync() => CanApply ? _search.StartAsync(Choice.Choice, _shutdown) : Task.CompletedTask;
 
@@ -127,6 +166,14 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
                 _loaded  = true;
                 Refresh();
             }, ex => Console.Error.WriteLine($"kcap app: reading the local search setting failed: {ex.Message}"));
+
+    void LookUpOffer() =>
+        _offer.Disposable = Observable.FromAsync(_builtinOffer)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(Choice.OfferBuiltin, ex => {
+                Console.Error.WriteLine($"kcap app: looking up the built-in search model failed: {ex.Message}");
+                Choice.OfferBuiltin(null);
+            });
 
     // A changed model restarts the server; the lane would find it on its own backoff.
     async Task ReconnectAsync() {

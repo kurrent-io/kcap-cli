@@ -7,6 +7,30 @@ namespace Capacitor.Cli.Commands;
 /// typed argument must fail loudly rather than be dropped — while the rules the server owns
 /// (vocabularies, cross-entity constraints) surface as its coded 4xx bodies.</summary>
 static class McpToolArguments {
+    /// <summary>The refusal for a call to one of <paramref name="tools"/> that passes arguments its schema does not
+    /// declare, naming them and the ones it does; null otherwise, including for a tool not in the list, which its
+    /// server answers itself. An undeclared argument would otherwise be dropped, and a dropped filter reads as an
+    /// applied one.</summary>
+    internal static string? UndeclaredArguments(IReadOnlyList<McpTool> tools, JsonObject request) {
+        try {
+            if (request["params"] is not JsonObject parameters) return null;
+            if (parameters["name"] is not JsonValue nameValue || !nameValue.TryGetValue<string>(out var name)) return null;
+            if (tools.FirstOrDefault(t => t.Name == name) is not { } tool) return null;
+            if (parameters["arguments"] is not JsonObject arguments) return null;
+
+            var declared = tool.InputSchema.Properties;
+            List<string> unknown = [.. arguments.Select(a => a.Key).Where(key => !declared.ContainsKey(key))];
+            if (unknown.Count == 0) return null;
+
+            var accepted = declared.Count == 0 ? "it takes no arguments" : $"it takes {string.Join(", ", declared.Keys)}";
+
+            return $"{name} does not take {string.Join(", ", unknown)}: {accepted}. Nothing was done.";
+        } catch (ArgumentException) {
+            // A duplicated key surfaces on the first read of its object, and the tool's own handler answers it.
+            return null;
+        }
+    }
+
     /// <summary>A required non-blank string; absent, null, blank or wrong-typed throws the clean
     /// tool-error shape.</summary>
     internal static string RequireString(JsonObject? args, string key) {

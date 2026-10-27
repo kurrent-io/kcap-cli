@@ -251,7 +251,7 @@ static class ClaudeCliRunner {
             CreateNoWindow         = true,
             Environment = {
                 // Prevent the headless claude session from triggering kcap hooks (avoids infinite loop)
-                ["KCAP_SKIP"] = "1"
+                [HostedAgent.SkipVar] = "1"
             }
         };
         psi.Environment.Remove("CLAUDECODE");

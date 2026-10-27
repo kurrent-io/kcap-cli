@@ -27,7 +27,9 @@ public class HarnessesStepViewModelTests {
         public readonly HarnessesStepViewModel Vm;
 
         public Harness(ConfigRoot config, IReadOnlyDictionary<HarnessId, DetectedAgent>? detected = null,
-                IReadOnlySet<HarnessId>? declined = null, PathFixViewModel? pathFix = null, bool local = false) {
+                IReadOnlySet<HarnessId>? declined = null, PathFixViewModel? pathFix = null, bool local = false,
+                Func<CancellationToken, Task<VisibilityOptionsResponse?>>? visibilityOptions = null,
+                Func<int, IReadOnlyDictionary<HarnessId, DetectedAgent>>? detectOnCall = null) {
             detected ??= new Dictionary<HarnessId, DetectedAgent> {
                 [HarnessId.Claude] = new(true, true),
                 [HarnessId.Cursor] = new(false, true),
@@ -35,13 +37,14 @@ public class HarnessesStepViewModelTests {
             };
             Vm = new HarnessesStepViewModel(
                 Cli,
-                _ => { DetectCalls++; return Task.FromResult(detected); },
+                _ => { DetectCalls++; return Task.FromResult(detectOnCall?.Invoke(DetectCalls) ?? detected); },
                 () => declined ?? new HashSet<HarnessId>(),
                 Stamped.AddRange,
                 config, pathFix,
                 _ => Task.FromResult<IReadOnlySet<string>?>(ProviderKeys),
                 "test-mac",
-                onLocalPath: local ? () => true : null);
+                onLocalPath: local ? () => true : null,
+                visibilityOptions: visibilityOptions);
         }
 
         public HarnessRowViewModel Row(string label) => Vm.Rows.First(r => r.Label == label);
@@ -256,6 +259,101 @@ public class HarnessesStepViewModelTests {
         await Assert.That(satisfied).IsTrue();
     }
 
+    static VisibilityOptionsResponse Offer(string preselected, params string[] keys) => new() {
+        Options           = [.. keys.Select(k => new VisibilityOptionDto { Key = k, Label = $"label {k}", Detail = $"detail {k}" })],
+        DefaultVisibility = preselected,
+    };
+
+    public static IEnumerable<Func<(Func<CancellationToken, Task<VisibilityOptionsResponse?>>? Read, string[] Values, string? FirstLabel)>> OfferRows() => [
+        () => (_ => Task.FromResult<VisibilityOptionsResponse?>(Offer("private", "private", "public")), ["private", "public"], "label private"),
+        () => (_ => Task.FromResult<VisibilityOptionsResponse?>(Offer("project", "private", "project", "public")), ["private", "project", "public"], "label private"),
+        () => (_ => Task.FromResult<VisibilityOptionsResponse?>(Offer("org_public", "private", "project", "org_public", "public")),
+               ["private", "project", "org_public", "public"], "label private"),
+        () => (_ => Task.FromResult<VisibilityOptionsResponse?>(null), ["private", "project", "org_public", "public"], "Only me"),
+        () => (_ => Task.FromException<VisibilityOptionsResponse?>(new HttpRequestException("down")), ["private", "project", "org_public", "public"], "Only me"),
+        () => (null, ["private", "project", "org_public", "public"], "Only me"),
+    ];
+
+    /// The step offers the answers the server says this tenant can honour, in its order and copy, and every answer
+    /// when the server says nothing or the read fails. It still waits for an explicit choice
+    [Test]
+    [MethodDataSource(nameof(OfferRows))]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Who_can_read_offers_what_the_tenant_can_honour(
+            Func<CancellationToken, Task<VisibilityOptionsResponse?>>? read, string[] values, string? firstLabel) {
+        var (offered, label, visibility) = await AvaloniaSession.DispatchAsync(async () => {
+            var h = new Harness(Config.Root, visibilityOptions: read);
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+
+            return (h.Vm.VisibilityOptions.Select(o => o.Value).ToList(), h.Vm.VisibilityOptions[0].Label, h.Vm.Visibility);
+        });
+
+        await Assert.That(offered).IsEquivalentTo(values, CollectionOrdering.Matching);
+        await Assert.That(label).IsEqualTo(firstLabel);
+        await Assert.That(visibility).IsNull();
+    }
+
+    /// A revisit re-reads the offer without detecting the harnesses again: an answer chosen from an earlier offer that
+    /// the server no longer makes is cleared, so it cannot be saved.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_revisit_after_the_offer_shrank_clears_an_answer_no_longer_offered() {
+        var (offered, visibility, detections) = await AvaloniaSession.DispatchAsync(async () => {
+            var reads = 0;
+            var h = new Harness(Config.Root,
+                visibilityOptions: _ => Task.FromResult<VisibilityOptionsResponse?>(++reads == 1
+                    ? Offer("org_public", "private", "project", "org_public", "public")
+                    : Offer("private", "private", "public")));
+
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+            h.Vm.Visibility = "org_public";
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+
+            return (h.Vm.VisibilityOptions.Select(o => o.Value).ToList(), h.Vm.Visibility, h.DetectCalls);
+        });
+
+        await Assert.That(offered).IsEquivalentTo(["private", "public"], CollectionOrdering.Matching);
+        await Assert.That(visibility).IsNull();
+        await Assert.That(detections).IsEqualTo(1);
+    }
+
+    /// A revisit whose re-read fails falls back to every answer, as a first entry does, rather than keeping the
+    /// earlier, narrower offer.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_revisit_whose_read_fails_offers_every_answer() {
+        var (offered, visibility) = await AvaloniaSession.DispatchAsync(async () => {
+            var reads = 0;
+            var h = new Harness(Config.Root,
+                visibilityOptions: _ => ++reads == 1
+                    ? Task.FromResult<VisibilityOptionsResponse?>(Offer("private", "private", "public"))
+                    : Task.FromException<VisibilityOptionsResponse?>(new HttpRequestException("down")));
+
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+            h.Vm.Visibility = "public";
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+
+            return (h.Vm.VisibilityOptions.Select(o => o.Value).ToList(), h.Vm.Visibility);
+        });
+
+        await Assert.That(offered).IsEquivalentTo(["private", "project", "org_public", "public"], CollectionOrdering.Matching);
+        await Assert.That(visibility).IsEqualTo("public");
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_local_install_asks_the_server_nothing() {
+        var asked = await AvaloniaSession.DispatchAsync(async () => {
+            var calls = 0;
+            var h = new Harness(Config.Root, local: true, visibilityOptions: _ => { calls++; return Task.FromResult<VisibilityOptionsResponse?>(null); });
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+
+            return calls;
+        });
+
+        await Assert.That(asked).IsEqualTo(0);
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Next_saves_who_can_read_and_the_provider_key_answer_to_the_profile() {
@@ -340,7 +438,10 @@ public class HarnessesStepViewModelTests {
 
     async Task<(Harness, PathFixViewModel)> HarnessWithPathFix(ProcessResult installResult) {
         var dir = Path.GetDirectoryName(ConfigPath)!;
-        var probe = new FakeLoginShellProbe { KcapOnPathBehavior = _ => Task.FromResult<bool?>(true) };
+        var probe = new FakeLoginShellProbe {
+            KcapOnPathBehavior = _ => Task.FromResult<bool?>(true),
+            KcapPathBehavior = _ => Task.FromResult<string?>(Path.Combine(dir, "shim-kcap")),
+        };
         var fix = new PathFixViewModel(
             new PathShimInstaller(new ScriptedProcessRunner(installResult), probe, Path.Combine(dir, "shim-kcap")),
             new WizardFixtures.NoopAppStateStore(), Path.Combine(dir, "bundled-kcap"));

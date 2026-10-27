@@ -73,4 +73,18 @@ public class UninstallFactsSourceTests {
         await Assert.That(facts.OtherInstalls).IsNotNull();
         await Assert.That(facts.OtherInstalls!.Count).IsEqualTo(0);
     }
+    [Test]
+    public async Task Gathers_profile_edits_for_the_confirmation() {
+        var source = Source() with { PathProfiles = () => ["/Users/standard/.zprofile"] };
+        var facts = await source.GatherAsync(CancellationToken.None);
+        await Assert.That(facts.PathProfiles).IsEquivalentTo(["/Users/standard/.zprofile"]);
+    }
+
+    [Test]
+    public async Task Unreadable_profile_facts_keep_the_conservative_disclosure() {
+        var source = Source() with { PathProfiles = () => throw new IOException("unreadable") };
+        var facts = await source.GatherAsync(CancellationToken.None);
+        await Assert.That(UninstallConfirmation.Build(facts).Prompt.Disclosure).Contains("shell profile");
+    }
+
 }

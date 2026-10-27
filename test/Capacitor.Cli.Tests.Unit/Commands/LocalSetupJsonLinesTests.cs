@@ -64,6 +64,18 @@ internal sealed class LocalSetupJsonLinesTests {
             """{"v":1,"event":"embeddings_configured","provider":"ollama","model":"mxbai-embed-large"}""");
         yield return () => (new LocalInstallEvent.EmbeddingsConfigured("nomic-embed-text", "mxbai-embed-large"),
             """{"v":1,"event":"embeddings_configured","provider":"ollama","model":"nomic-embed-text","replaced_model":"mxbai-embed-large"}""");
+        yield return () => (new LocalInstallEvent.EmbeddingBuiltinDownloading(670),
+            """{"v":1,"event":"embeddings_builtin_downloading","bytes":670}""");
+        yield return () => (new LocalInstallEvent.EmbeddingBuiltinProgress(10, 670),
+            """{"v":1,"event":"embeddings_builtin_progress","received":10,"bytes":670}""");
+        yield return () => (new LocalInstallEvent.EmbeddingBuiltinConfigured(),
+            """{"v":1,"event":"embeddings_configured","provider":"builtin"}""");
+        yield return () => (new LocalInstallEvent.EmbeddingBuiltinConfigured("mxbai-embed-large"),
+            """{"v":1,"event":"embeddings_configured","provider":"builtin","replaced_model":"mxbai-embed-large"}""");
+        yield return () => (new LocalInstallEvent.EmbeddingsSkipped(LocalEmbeddingSkipCode.BuiltinUnavailable, "No model."),
+            """{"v":1,"event":"embeddings_skipped","code":"builtin_unavailable","message":"No model."}""");
+        yield return () => (new LocalInstallEvent.EmbeddingsSkipped(LocalEmbeddingSkipCode.ModelDownloadFailed, "Failed."),
+            """{"v":1,"event":"embeddings_skipped","code":"model_download_failed","message":"Failed."}""");
         yield return () => (new LocalInstallEvent.EmbeddingsSkipped(LocalEmbeddingSkipCode.OllamaNotFound, "No Ollama."),
             """{"v":1,"event":"embeddings_skipped","code":"ollama_not_found","message":"No Ollama."}""");
     }

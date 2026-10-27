@@ -1219,6 +1219,71 @@ public class WorkContextViewModelTests {
         });
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments("u1", "u1", false)]
+    [Arguments("github:5", "u1", false)]
+    [Arguments("u2", "u1", true)]
+    [Arguments(null, "u1", true)]
+    public async Task Who_is_hidden_only_for_a_confirmed_sole_viewer(string? viewer, string contributor, bool visible) {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(ReadyWith(Row("w1", "t"), Item() with { Contributors = [Person(contributor, null)] }) with {
+                Viewer = viewer is null ? null : new ViewerIdentityDto { UserId = viewer, Ids = viewer == "github:5" ? ["u1"] : [] },
+            });
+            try {
+                await h.PushAsync(Dto());
+                await Assert.That(h.Vm.ShowsPeople).IsEqualTo(visible);
+            } finally { await h.Vm.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Who_reappears_when_someone_else_joins_and_hides_when_only_linked_self_ids_remain() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var viewer = new ViewerIdentityDto { UserId = "u1", Ids = ["github:5"] };
+            var read = ReadyWith(Row("w1", "t"), Item() with { Contributors = [Person("u1", "Ada")] }) with { Viewer = viewer };
+            h.Source.Enqueue(read,
+                read with { Item = read.Item! with { Contributors = [Person("u1", "Ada"), Person("u2", "Bob")] } },
+                read with { Item = read.Item! with { Contributors = [Person("u1", "Ada"), Person("github:5", null)] } },
+                read with { Viewer = null });
+            try {
+                await h.PushAsync(Dto());
+                await Assert.That(h.Vm.ShowsPeople).IsFalse();
+                await h.TickAsync();
+                await Assert.That(h.Vm.ShowsPeople).IsTrue();
+                await h.TickAsync();
+                await Assert.That(h.Vm.ShowsPeople).IsFalse();
+                await h.TickAsync();
+                await Assert.That(h.Vm.ShowsPeople).IsTrue();
+            } finally { await h.Vm.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Contributors_resolve_the_viewers_linked_identity_and_drop_it_when_unknown() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            const string mine = "user_01KYZ590AKWBCFFNKM1KZ1HZ2B";
+            var item = Item() with { Contributors = [Person(mine, null), Person("u2", "Ada")] };
+            var read = ReadyWith(Row("w1", "t"), item);
+            h.Source.Enqueue(read with {
+                Viewer = new ViewerIdentityDto { UserId = "github:5", Ids = [mine], AvatarUrl = "https://example.test/me.png" },
+            }, read);
+            try {
+                await h.PushAsync(Dto() with { Requester = "github:5" });
+                await Assert.That(h.Vm.Contributors.Select(c => c.Name)).IsEquivalentTo(new[] { "You", "Ada" }, CollectionOrdering.Matching);
+                await Assert.That(h.Vm.Contributors[0].AvatarUrl).IsEqualTo("https://example.test/me.png");
+                await h.TickAsync();
+                await Assert.That(h.Vm.Contributors[0].Name).IsEqualTo("Someone");
+                await Assert.That(h.Vm.Contributors[0].AvatarUrl).IsNull();
+            } finally { await h.Vm.TeardownAsync(); }
+        });
+    }
+
     /// Every public field of a row takes part in the "same rows" check, or a poll that changes only
     /// that field leaves the bound row stale.
     [Test]
@@ -1516,6 +1581,50 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Vm.RequesterInitial).IsEqualTo("Y");
             await Assert.That(h.Vm.RequesterAvatarUrl).IsNull();
             await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments("user_a", "https://example.test/a.png")]
+    [Arguments("github:5", "https://example.test/a.png")]
+    [Arguments(null, "https://example.test/a.png")]
+    [Arguments("user_b", null)]
+    public async Task The_requester_row_takes_the_viewers_own_avatar_when_the_requester_is_the_viewer(string? requester, string? expected) {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            try {
+                h.Source.Enqueue(Ready() with {
+                    Viewer = new ViewerIdentityDto { UserId = "user_a", AvatarUrl = "https://example.test/a.png", Ids = ["user_a", "github:5"] },
+                });
+                await h.PushAsync(Dto() with { RequesterDisplay = "Ada", Requester = requester });
+                await WaitUntilAsync(() => h.Vm.Phase == WorkContextPhase.NoWorkItem, what: "the read applied");
+
+                await Assert.That(h.Vm.RequesterAvatarUrl).IsEqualTo(expected);
+            } finally {
+                await h.Vm.TeardownAsync();
+            }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_signed_out_read_takes_the_viewers_avatar_off_the_requester_row() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            try {
+                h.Source.Enqueue(Ready() with { Viewer = new ViewerIdentityDto { UserId = "user_a", AvatarUrl = "https://example.test/a.png" } });
+                await h.PushAsync(Dto() with { Requester = "user_a" });
+                await WaitUntilAsync(() => h.Vm.RequesterAvatarUrl is not null, what: "the viewer's avatar");
+
+                h.Source.Enqueue(WorkContextRead.Of(WorkContextReadKind.SignedOut));
+                h.SignIn.OnNext(ReactiveUnit.Default);
+                await WaitUntilAsync(() => h.Vm.Phase == WorkContextPhase.SignedOut, what: "the signed-out read");
+
+                await Assert.That(h.Vm.RequesterAvatarUrl).IsNull();
+            } finally {
+                await h.Vm.TeardownAsync();
+            }
         });
     }
 

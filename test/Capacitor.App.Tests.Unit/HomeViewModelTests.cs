@@ -1,3 +1,4 @@
+using TUnit.Assertions.Enums;
 using System.Collections.Frozen;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -1789,6 +1790,34 @@ public class HomeViewModelTests {
         });
     }
 
+    /// <summary>A machine advertises its repositories most recently used first. The picker lists them by
+    /// name like the local list, and the most recently used one stays the selection. A Windows machine's
+    /// path is named by its last segment on any desktop.</summary>
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task RemoteMachineRepositoriesAreListedByName() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var remote = new FakeRemoteAgents();
+            remote.DaemonsSubject.OnNext([
+                new DaemonInfo {
+                    Name = "home-pc", OwnerUserId = "u1", Connected = true,
+                    RepoPaths = ["/w/widgets", @"Z:\x\Engine", "/w/api"], SupportedVendors = ["codex"],
+                },
+            ]);
+            using var vm = new HomeViewModel(
+                new FakeDaemonClientService(), new AppStateStore(path), new RecordingLaunchClient(), Known(),
+                TimeProvider.System, daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"));
+
+            await vm.SelectMachineAsync("home-pc", isLocal: false);
+
+            var repos = await vm.ListRepositoriesAsync();
+            await Assert.That(repos.Select(r => r.RepoPath).ToArray())
+                .IsEquivalentTo(["/w/api", @"Z:\x\Engine", "/w/widgets"], CollectionOrdering.Matching);
+            await Assert.That(vm.SelectedRepoPath).IsEqualTo("/w/widgets");
+        });
+    }
+
     /// Pins the remote repository menu to the registry as it stands at menu open: a path the machine
     /// advertises after it was selected (its first launch there) is offered without re-selecting it.
     [Test]
@@ -2732,6 +2761,7 @@ public class HomeViewModelTests {
             Observable.Return((IReadOnlyDictionary<string, string>)FrozenDictionary<string, string>.Empty);
         public string? VendorOfSession(string sessionId) => null;
         public bool IsProvenLocalTwin(string agentId) => false;
+        public bool IsHostedNow(AgentRow row) => false;
         public void AddPlaceholder(string agentId, string vendor, string repoPath, string? title, string? model) { }
         public void RemovePlaceholder(string agentId) { }
 
