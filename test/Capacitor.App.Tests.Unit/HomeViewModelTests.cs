@@ -1824,7 +1824,7 @@ public class HomeViewModelTests {
     [NotInParallel("AvaloniaSession")]
     public async Task RemoteRepositoryMenuReadsTheMachinesCurrentAdvertisement() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var path = Tmp.PathTo("app-state.json");
             var remote = new FakeRemoteAgents();
             remote.DaemonsSubject.OnNext([
                 new DaemonInfo { Name = "home-pc", OwnerUserId = "u1", Connected = true, RepoPaths = ["/w/repo"] },
@@ -1850,7 +1850,7 @@ public class HomeViewModelTests {
     [NotInParallel("AvaloniaSession")]
     public async Task EnteringARemoteRepositorySelectsAFullPathAndRefusesARelativeOne() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var path = Tmp.PathTo("app-state.json");
             var store = new AppStateStore(path);
             var remote = new FakeRemoteAgents();
             remote.DaemonsSubject.OnNext([
@@ -1887,7 +1887,7 @@ public class HomeViewModelTests {
     [NotInParallel("AvaloniaSession")]
     public async Task ATypedRemotePathDifferingOnlyInCaseIsItsOwnRow() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var path = Tmp.PathTo("app-state.json");
             var remote = new FakeRemoteAgents();
             remote.DaemonsSubject.OnNext([
                 new DaemonInfo { Name = "home-pc", OwnerUserId = "u1", Connected = true, RepoPaths = ["/w/Repo"] },
@@ -1911,7 +1911,7 @@ public class HomeViewModelTests {
     [NotInParallel("AvaloniaSession")]
     public async Task RemoteRepositoryMenuNeverOffersAVanishedRemoteOrALocalTwinsPaths() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var path = Tmp.PathTo("app-state.json");
             var daemon = new FakeDaemonClientService();
             var remote = new FakeRemoteAgents();
             remote.DaemonsSubject.OnNext([
@@ -1959,6 +1959,42 @@ public class HomeViewModelTests {
             await vm.StartCommand.Execute();
 
             await Assert.That(launch.Last!.DaemonName).IsEqualTo("home-pc");
+        });
+    }
+
+    /// Pins remote failure matching to the remote's case rules: a refusal for /w/Repo does not land
+    /// on /w/repo, which a Linux remote holds as a different repository, while one for the path
+    /// still selected does.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task ARemoteLaunchFailureDoesNotLandOnAPathDifferingOnlyInCase() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var daemon = new FakeDaemonClientService();
+            Connect(daemon);
+            var launch = new RecordingLaunchClient { Next = new LaunchOutcome(true, "agent-9", null) };
+            var failures = new Subject<LaunchFailure>();
+            var remote = new FakeRemoteAgents();
+            remote.DaemonsSubject.OnNext([
+                new DaemonInfo { Name = "home-pc", OwnerUserId = "u1", Connected = true, RepoPaths = ["/w/Repo"] },
+            ]);
+            var lane = new FakeServerLane();
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
+            using var directory = new FakeAgentDirectory();
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(Tmp.PathTo("app-state.json")), launch, Known(), TimeProvider.System,
+                launchFailures: failures, directory: directory,
+                daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"), laneStatus: lane.Status);
+            await vm.SelectMachineAsync("home-pc", isLocal: false);
+
+            await vm.StartCommand.Execute();
+            await vm.EnterRemoteRepositoryAsync("/w/repo");
+            failures.OnNext(new LaunchFailure("agent-9", "launch_denied_by_owner: default"));
+            await Assert.That(vm.StartError).IsNull();
+
+            launch.Next = new LaunchOutcome(true, "agent-10", null);
+            await vm.StartCommand.Execute();
+            failures.OnNext(new LaunchFailure("agent-10", "launch_denied_by_owner: default"));
+            await Assert.That(vm.StartError).Contains("consent policy denied");
         });
     }
 

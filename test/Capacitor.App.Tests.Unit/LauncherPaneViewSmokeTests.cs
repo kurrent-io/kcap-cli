@@ -750,7 +750,7 @@ public class LauncherPaneViewSmokeTests {
     [NotInParallel("AvaloniaSession")]
     public async Task A_remote_machine_takes_a_typed_repository_path() {
         await AvaloniaSession.RunOnUiAsync(async () => {
-            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var path = Tmp.PathTo("app-state.json");
             var service = new FakeDaemonClientService();
             service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));

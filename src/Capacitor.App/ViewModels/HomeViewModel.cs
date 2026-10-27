@@ -129,8 +129,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     public string SelectedRepoPath {
         get => _selectedRepoPath;
         set {
-            // PathComparer, not ordinal: SameLaunchTarget and the picker already treat casings as one folder.
-            var changed = !PathComparer.Equals(_selectedRepoPath, value);
+            // Same rule as SameLaunchTarget and the picker, so a refusal clears exactly when they see a new folder.
+            var changed = !PathComparerFor(RemoteMachineSelected).Equals(_selectedRepoPath, value);
             this.RaiseAndSetIfChanged(ref _selectedRepoPath, value);
             _selectedRepoPathChanges.OnNext(value);
             // A launch refusal describes the folder that failed. A later pick is a different attempt.
@@ -1436,7 +1436,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         var machine = AccountMachine(sel.Name, sel.Remote);
         _applyingAccountInputs = true;
         try {
-            if (_accountTarget is not { } last || !PathComparer.Equals(last.RepoPath, repoPath)
+            if (_accountTarget is not { } last || !PathComparerFor(sel.Remote).Equals(last.RepoPath, repoPath)
              || last.Vendor != vendor || last.Machine != machine || last.Remote != sel.Remote) {
                 _accountTarget = (repoPath, vendor, machine, sel.Remote);
                 _accountChooser.EnterTarget(repoPath, vendor);
@@ -1805,7 +1805,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     /// Local and remote can share a daemon name and path; RemoteMachineSelected separates them.
     bool SameLaunchTarget(string repoPath, string machine, bool remote) =>
-        PathComparer.Equals(SelectedRepoPath, repoPath)
+        PathComparerFor(remote).Equals(SelectedRepoPath, repoPath)
         && string.Equals(SelectedMachine, machine, StringComparison.Ordinal)
         && RemoteMachineSelected == remote;
 
@@ -1928,6 +1928,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     static readonly StringComparer PathComparer = PlatformPaths.Comparer;
     // This host's case rules are not the remote machine's: a Linux remote keeps /w/Repo and /w/repo apart.
     static readonly StringComparer RemotePathComparer = StringComparer.Ordinal;
+    static StringComparer PathComparerFor(bool remote) => remote ? RemotePathComparer : PathComparer;
 
     static string? Lookup(IReadOnlyDictionary<string, string>? byRepo, string repoPath) {
         if (byRepo is null) return null;
