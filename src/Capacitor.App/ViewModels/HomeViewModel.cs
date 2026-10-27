@@ -1457,16 +1457,17 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             && _accountTarget is { } target ? (target.Vendor, chooser.SelectedAccountId!) : null);
     }
 
-    /// Written off the UI thread in call order: the chooser also forgets an entry from inside its recompute.
+    /// Written in call order: the chooser also forgets an entry from inside its recompute.
     void RememberAccount(string hostId, string vendor, string repoPath, string? accountId) {
         _accountMemory = AccountMemory.With(_accountMemory, hostId, vendor, repoPath, accountId);
-        var previous = _accountMemoryWrites;
-        _accountMemoryWrites = Task.Run(async () => {
-            await previous;
+        _accountMemoryWrites = WriteAfterAsync(_accountMemoryWrites);
+
+        async Task WriteAfterAsync(Task previous) {
+            await previous.ConfigureAwait(false);
             await _state.UpdateAsync(s => s with {
                 AccountByRepo = AccountMemory.With(s.AccountByRepo, hostId, vendor, repoPath, accountId),
-            });
-        });
+            }).ConfigureAwait(false);
+        }
     }
 
     /// The Default-badged row follows the daemon's default rather than pinning its account. Any
