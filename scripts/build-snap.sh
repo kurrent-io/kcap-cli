@@ -7,10 +7,10 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 version="${1:-0.0.0-local}"
 [[ "$version" =~ ^[0-9A-Za-z.+~-]{1,32}$ ]] || { echo "invalid snap version: $version" >&2; exit 1; }
 
+# x64 only, like the Linux desktop release: snapcraft.yaml packs amd64 alone.
 case "$(uname -m)" in
-  x86_64)  rid=linux-x64 ;;
-  aarch64) rid=linux-arm64 ;;
-  *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+  x86_64) rid=linux-x64 ;;
+  *) echo "unsupported architecture: $(uname -m); the snap is built for x86_64 only" >&2; exit 1 ;;
 esac
 
 stage="$root/.publish/snap"
