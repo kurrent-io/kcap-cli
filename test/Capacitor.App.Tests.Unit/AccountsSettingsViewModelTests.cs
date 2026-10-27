@@ -308,4 +308,17 @@ public class AccountsSettingsViewModelTests {
         await Assert.That(rig.Discoveries).IsEqualTo(2);
         await Assert.That(rig.DiscoveredOnUiThread).IsFalse();
     });
+
+    [Test]
+    public Task A_listed_account_hides_only_its_own_vendor_in_a_shared_folder() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var rig = new Rig(Snapshot);
+        var vm = rig.Vm;
+        var codexBeside = new AccountCandidate(HarnessId.Codex, "/u/.claude-work", "home directory");
+
+        rig.Found = [new AccountCandidate(HarnessId.Claude, "/u/.claude-work", "home directory"), codexBeside];
+        vm.RefreshCandidates();
+        await WaitUntilAsync(() => rig.Discoveries == 1 && vm.Candidates.Count > 0);
+
+        await Assert.That(vm.Candidates.Single()).IsEqualTo(codexBeside);
+    });
 }
