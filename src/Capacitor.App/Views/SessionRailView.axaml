@@ -58,6 +58,9 @@
             <Setter Property="Padding" Value="9,3" />
             <Setter Property="FontSize" Value="12" />
         </Style>
+        <Style Selector="Border.railScopeSegment:disabled">
+            <Setter Property="Opacity" Value="0.55" />
+        </Style>
         <Style Selector="Button.railPicker">
             <Setter Property="Padding" Value="6,4" />
             <Setter Property="FontSize" Value="12" />
@@ -164,7 +167,8 @@
                 <StackPanel x:Name="RailControls" DataContext="{Binding Rail}" x:DataType="vm:SessionRailViewModel"
                             Margin="10,0,10,8" Spacing="6" IsVisible="{Binding Converter={x:Static ObjectConverters.IsNotNull}}">
                     <Grid ColumnDefinitions="Auto,*,Auto">
-                        <Border Classes="kcapSegment" HorizontalAlignment="Left">
+                        <Border x:Name="RailScopeSegment" Classes="kcapSegment railScopeSegment" HorizontalAlignment="Left"
+                                IsEnabled="{Binding CanChangeScope}" ToolTip.Tip="{Binding ScopeTip}" ToolTip.ShowOnDisabled="True">
                             <StackPanel Orientation="Horizontal" Spacing="2">
                                 <Button x:Name="RailScopeMineButton" Content="Mine" Classes="kcapSegmentItem railSegmentItem"
                                         Classes.active="{Binding IsMine}" Command="{Binding SetScopeCommand}"

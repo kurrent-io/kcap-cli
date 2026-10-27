@@ -1702,7 +1702,8 @@ public partial class App : Application {
             agentsAwaitingAnswer: agentsAwaitingAnswer, agentsRunningCommands: agentsRunningCommands,
             pullRequests: pullRequestSummaries, openPullRequest: (agentId, origin, subject) => vm?.OpenSessionPullRequest(agentId, origin, subject),
             openServerSession: sessionId => vm?.OpenSession(sessionId, AgentOrigin.Server),
-            sessions: sessions, preferences: initialRail, persistPreferences: persistRail, bindUserPreferences: bindRailUser);
+            sessions: sessions, preferences: initialRail, persistPreferences: persistRail,
+            scopeLocked: localServer?.IsLocalServer == true, bindUserPreferences: bindRailUser);
         vm = new MainWindowViewModel(
             service, shutdownToken, activity, time, startAction, lifecycleStatus, home: home,
             navigation: navigation, trackWorkspaceTeardown: trackWorkspaceTeardown, workspaceFactory: workspaceFactory,
