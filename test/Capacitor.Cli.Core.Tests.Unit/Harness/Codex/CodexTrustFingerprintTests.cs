@@ -14,7 +14,7 @@ public class CodexTrustFingerprintTests {
             if (text is null) File.Delete(path);
             else File.WriteAllText(path, text);
         }
-        return CodexTrustFingerprint.Of(Paths);
+        return CodexTrustFingerprint.Of(Paths)!;
     }
 
     [Test]
@@ -36,4 +36,20 @@ public class CodexTrustFingerprintTests {
     [Test]
     public async Task Moving_bytes_between_the_two_files_changes_it() =>
         await Assert.That(Fingerprint("ab", "c")).IsNotEqualTo(Fingerprint("a", "bc"));
+
+    [Test, ExcludeOn(TUnit.Core.Enums.OS.Windows), System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public async Task An_unreadable_file_yields_no_fingerprint() {
+        if (Environment.UserName == "root") {
+            Skip.Test("root reads a mode-000 file");
+        }
+
+        Fingerprint("{}", "a = 1");
+        var config = Home.PathTo(".codex", "config.toml");
+        File.SetUnixFileMode(config, UnixFileMode.None);
+        try {
+            await Assert.That(CodexTrustFingerprint.Of(Paths)).IsNull();
+        } finally {
+            File.SetUnixFileMode(config, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
 }

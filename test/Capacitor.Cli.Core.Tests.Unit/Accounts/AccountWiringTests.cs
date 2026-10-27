@@ -441,4 +441,28 @@ public class AccountWiringTests {
 
         await Assert.That(AccountWiring.State(account, Home)).IsEqualTo(RecordingState.NotWired);
     }
+
+    [Test]
+    public async Task Codex_trusted_without_a_fingerprint_stays_installed() {
+        var account = WiredCodex(null) with { HookTrust = HookTrustStates.Trusted };
+
+        await Assert.That(AccountWiring.State(account, Home)).IsEqualTo(RecordingState.Installed);
+    }
+
+    [Test, ExcludeOn(TUnit.Core.Enums.OS.Windows), System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public async Task Codex_trusted_with_an_unreadable_file_stays_installed() {
+        if (Environment.UserName == "root") {
+            Skip.Test("root reads a mode-000 file");
+        }
+
+        var account = WiredCodex(HookTrustStates.Trusted);
+        var config  = Home.CreateFile(".codex/config.toml", "a = 1");
+        account = account with { HookTrustFingerprint = CodexTrustFingerprint.Of(AccountLayouts.Codex(Home, account.Directory)) };
+        File.SetUnixFileMode(config, UnixFileMode.None);
+        try {
+            await Assert.That(AccountWiring.State(account, Home)).IsEqualTo(RecordingState.Installed);
+        } finally {
+            File.SetUnixFileMode(config, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
 }

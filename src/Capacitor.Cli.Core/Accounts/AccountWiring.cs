@@ -96,10 +96,9 @@ public static class AccountWiring {
         var state = State(account.Vendor, account.Directory, home);
         if (state != RecordingState.Installed || account.Vendor != HarnessId.Codex) return state;
 
-        return account.HookTrust == HookTrustStates.Trusted
-         && account.HookTrustFingerprint == CodexTrustFingerprint.Of(AccountLayouts.Codex(home, account.Directory))
-                ? RecordingState.Recording
-                : state;
+        if (account.HookTrust != HookTrustStates.Trusted || account.HookTrustFingerprint is not { } stored) return state;
+
+        return CodexTrustFingerprint.Of(AccountLayouts.Codex(home, account.Directory)) == stored ? RecordingState.Recording : state;
     }
 
     public static RecordingState State(HarnessId vendor, string directory, UserHome home) {
