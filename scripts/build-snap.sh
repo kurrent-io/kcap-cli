@@ -19,8 +19,10 @@ mkdir -p "$stage/bin"
 
 publish() { dotnet publish "$root/$1" -c Release -r "$rid" -p:MinVerVersionOverride="$version" -o "$2" "${@:3}"; }
 publish src/Capacitor.App/Capacitor.App.csproj "$stage" --self-contained
-publish src/Capacitor.Cli/Capacitor.Cli.csproj "$stage/bin"
+# The daemon first: the CLI embeds its SHA-256 and refuses a daemon that does not match, as release builds do.
 publish src/Capacitor.Cli.Daemon/Capacitor.Cli.Daemon.csproj "$stage/bin"
+daemon_digest="$(sha256sum "$stage/bin/kcap-daemon" | cut -d' ' -f1)"
+publish src/Capacitor.Cli/Capacitor.Cli.csproj "$stage/bin" -p:KcapDaemonDigest="$daemon_digest"
 find "$stage" -type f \( -name '*.dbg' -o -name '*.xml' -o -name '*.pdb' \) -delete
 
 bash "$root/scripts/bundle-app-plugin.sh" "$stage" "$version"
