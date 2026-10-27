@@ -109,7 +109,7 @@
                                                       ToolTip.Tip="{Binding Label, StringFormat='Give {0} kcap tools'}"
                                                       AutomationProperties.Name="{Binding Label, StringFormat='Give {0} kcap tools'}" />
                                             <TextBlock Grid.Row="0" Grid.Column="3" Text="BUNDLED" HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                       FontFamily="{StaticResource OnboardingMonoFont}" FontSize="9" LetterSpacing="0.6"
+                                                       FontSize="9.5" FontWeight="SemiBold" LetterSpacing="0.6"
                                                        Foreground="{StaticResource OnboardingDimBrush}" IsVisible="{Binding ToolsBundled}" />
                                         </Grid>
                                         <TextBlock Classes="onboardingDetail" Text="{Binding ConsentNote}" Margin="0,0,152,0"

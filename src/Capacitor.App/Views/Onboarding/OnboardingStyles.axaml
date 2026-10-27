@@ -51,8 +51,8 @@
         <Setter Property="Foreground" Value="{StaticResource OnboardingTextBrush}" />
     </Style>
     <Style Selector="TextBlock.onboardingSignal">
-        <Setter Property="FontFamily" Value="{StaticResource OnboardingMonoFont}" />
-        <Setter Property="FontSize" Value="10.5" />
+        <Setter Property="FontSize" Value="11.5" />
+        <Setter Property="FontWeight" Value="Medium" />
         <Setter Property="Foreground" Value="{StaticResource OnboardingDimBrush}" />
     </Style>
     <Style Selector="TextBlock.onboardingNote">
@@ -117,18 +117,6 @@
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="4" />
         <Setter Property="Padding" Value="14,12" />
-    </Style>
-    <Style Selector="Border.onboardingChip">
-        <Setter Property="BorderBrush" Value="{StaticResource OnboardingPanelBorderBrush}" />
-        <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="CornerRadius" Value="2" />
-        <Setter Property="Padding" Value="6,2" />
-    </Style>
-    <Style Selector="Border.onboardingChip TextBlock">
-        <Setter Property="FontFamily" Value="{StaticResource OnboardingMonoFont}" />
-        <Setter Property="FontSize" Value="9" />
-        <Setter Property="LetterSpacing" Value="0.8" />
-        <Setter Property="Foreground" Value="{StaticResource OnboardingDimBrush}" />
     </Style>
 
     <!-- Buttons: Primary, Secondary (a real alternative), Quiet (a costless dismissal), Link. Fluent
