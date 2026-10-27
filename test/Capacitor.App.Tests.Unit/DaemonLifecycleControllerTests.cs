@@ -669,6 +669,25 @@ public class DaemonLifecycleControllerTests {
     }
 
     [Test]
+    public async Task A_later_passive_read_without_the_marker_withdraws_the_offer() {
+        await using var h = new Harness();
+        var markerLeft = true;
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(
+            Snap(unitPresent: true, state: "running", jobPid: 7, daemonPid: 7, txnMarker: markerLeft));
+        h.Start();
+        h.PushConnected();
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count == 1, what: "the stale-marker attention");
+        var message = h.Surface.AttentionMessages[0];
+
+        markerLeft = false;
+        h.PushConnecting();
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Surface.Withdrawn.Contains(message), what: "the withdrawn stale-marker line");
+        await Assert.That(h.RepairOffer()).IsNull();
+    }
+
+    [Test]
     public async Task Repair_declined_changes_nothing_and_keeps_the_offer() {
         await using var h = new Harness();
         h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(

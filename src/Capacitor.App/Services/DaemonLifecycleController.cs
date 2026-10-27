@@ -305,6 +305,9 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
     void NoteSnapshot(ServiceSnapshot? snap, long readStart) {
         if (snap is null) return;
+        // Every read, not only Reconcile's: later attaches read passively, and a marker `status` or
+        // `ensure` settled would otherwise keep its Repair offer up.
+        if (!snap.TxnMarker) WithdrawStaleMarker();
         var changedBackground = false;
         var clear = false;
         lock (_lock) {
