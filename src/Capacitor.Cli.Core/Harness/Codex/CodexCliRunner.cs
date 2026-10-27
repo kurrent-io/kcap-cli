@@ -146,23 +146,31 @@ static class CodexCliRunner {
 
             await process.WaitForExitAsync(linkedCts.Token);
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
-            ProcessTree.Kill(process);
+            KillQuietly(process);
 
             throw;
         } catch (OperationCanceledException) {
             log($"Codex process timed out ({timeout.TotalSeconds:0}s), killing");
-            ProcessTree.Kill(process);
+            KillQuietly(process);
 
             return new(null, ClaudeCliFailure.Timeout, await UsageAfterKillAsync(stdoutTask, events, time));
         } catch (Exception ex) {
             log($"Failed to stream prompt to codex stdin: {ex.Message}");
-            ProcessTree.Kill(process);
+            KillQuietly(process);
 
             return new(null, ClaudeCliFailure.ProcessFailure, await UsageAfterKillAsync(stdoutTask, events, time));
         }
 
-        await stdoutTask;
-        var stderr = await stderrTask;
+        try {
+            await Task.WhenAll(stdoutTask, stderrTask).WaitAsync(linkedCts.Token);
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            throw;
+        } catch (OperationCanceledException) {
+            // A descendant that outlived codex holds the pipe; codex itself has written all it will.
+            log("Codex exited but its output stayed open to the deadline; using what was read");
+        }
+
+        var stderr = stderrTask.IsCompletedSuccessfully ? stderrTask.Result : "";
 
         if (process.ExitCode != 0 || events.TurnFailed) {
             // Codex prints a multi-line session header first, so the useful part of stderr is its tail.
@@ -278,6 +286,13 @@ static class CodexCliRunner {
             return events.Usage;
         } catch {
             return null;
+        }
+    }
+
+    /// <summary>The process can exit between the kill's liveness check and its signal.</summary>
+    static void KillQuietly(Process process) {
+        try { ProcessTree.Kill(process); } catch {
+            /* already gone */
         }
     }
 

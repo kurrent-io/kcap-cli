@@ -1,8 +1,40 @@
 using Capacitor.Cli.Core.Harness.Codex;
+using Capacitor.Cli.Core.Setup;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Harness.Codex;
 
 public class CodexCliRunnerTests {
+    [TempHome] public required TempHome Home { get; init; }
+
+    /// <summary>A background child keeps stdout open after codex exits; the run must still end at its
+    /// deadline with the result codex wrote.</summary>
+    [Test]
+    public async Task A_descendant_holding_stdout_open_does_not_outlast_the_deadline() {
+        Skip.When(OperatingSystem.IsWindows(), "the fake codex is a POSIX shell script");
+
+        using var bin = new TempDir();
+        bin.CreateExecutable("codex", """
+            #!/bin/sh
+            while [ $# -gt 0 ]; do
+              if [ "$1" = "--output-last-message" ]; then out="$2"; fi
+              shift
+            done
+            cat > /dev/null
+            printf 'ok' > "$out"
+            echo '{"type":"turn.completed","usage":{"input_tokens":5,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":2}}'
+            sleep 5 &
+            exit 0
+            """);
+
+        var started = Environment.TickCount64;
+        var outcome = await CodexCliRunner.RunDetailedAsync("irrelevant", TimeSpan.FromSeconds(1), TimeProvider.System, _ => { }, null,
+            TestHarnesses.Under(Home, BinaryProbe.Searching(bin.Path)));
+
+        await Assert.That(Environment.TickCount64 - started).IsLessThan(4000);
+        await Assert.That(outcome.Result!.Result).IsEqualTo("ok");
+        await Assert.That(outcome.Result.OutputTokens).IsEqualTo(2);
+    }
+
     [Test]
     public async Task BuildCodexArgs_locks_the_run_down_and_reads_the_prompt_from_stdin() {
         var args = CodexCliRunner.BuildCodexArgs("/w/last.txt", null, null, "low");
