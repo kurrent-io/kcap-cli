@@ -203,23 +203,28 @@ public class PullRequestToneCacheTests {
         Repo = new() { Hash = "h", Owner = "kurrent-io", Name = "kcap-cli" },
     }, hostedPresentation: false) with { OwnerIsViewer = true };
 
-    /// A teammate's session is not this app's to poll: under Team the listing holds hundreds, and
-    /// each read costs the server a visibility check and, per PR, a GitHub-backed admission. Its
-    /// PRs show when the session opens. A row whose owner the server has not named yet waits too.
+    /// A teammate's session is not this app's to poll, whichever lane shows it: under Team the
+    /// listing holds hundreds, and each read costs the server a visibility check and, per PR, a
+    /// GitHub-backed admission. Its PRs show when the session opens. A listed row whose owner the
+    /// server has not named yet waits too; a daemon row it has not named is presumed the viewer's.
     [Test]
-    public async Task Only_the_viewers_own_server_rows_are_read() {
+    public async Task A_row_the_server_names_as_a_teammates_is_not_read() {
         var (directory, source, _, cache) = Build();
         using var _c = cache;
         using var _d = directory;
         directory.Rows.AddOrUpdate(ServerRow("mine", "active"));
         directory.Rows.AddOrUpdate(ServerRow("theirs", "active") with { OwnerIsViewer = false });
         directory.Rows.AddOrUpdate(ServerRow("unknown", "ended") with { OwnerIsViewer = null });
+        directory.Rows.AddOrUpdate(Row("a1", "local-theirs") with { OwnerIsViewer = false });
+        directory.Rows.AddOrUpdate(AgentRow.FromRemote(new AgentInstanceDto {
+            AgentId = "b1", Status = "Running", DaemonName = "work-mac", OwnerUserId = "u2",
+            Vendor = "claude", RepoOwner = "o", RepoName = "r", SessionId = "remote-theirs",
+        }) with { OwnerIsViewer = false });
 
         await WaitUntilAsync(() => cache.CurrentSummaries.ContainsKey("mine"), "own row read");
         await Task.Delay(100);
         await Assert.That(source.Lists).IsEqualTo(1);
-        await Assert.That(cache.CurrentSummaries.ContainsKey("theirs")).IsFalse();
-        await Assert.That(cache.CurrentSummaries.ContainsKey("unknown")).IsFalse();
+        await Assert.That(cache.CurrentSummaries.Keys).IsEquivalentTo(new[] { "mine" });
 
         directory.Rows.AddOrUpdate(ServerRow("unknown", "ended"));
 

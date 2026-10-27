@@ -24,8 +24,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
     public const int OffsetCap = 500;
     static readonly TimeSpan DefaultPushDebounce = TimeSpan.FromMilliseconds(250);
     /// The server pushes every live session of the tenant to every client, and a live re-read is
-    /// up to six listing pages; a quarter-second window turned a busy org into a steady stream of
-    /// listing queries from each open app.
+    /// up to six listing pages, so a busy org gets one re-read per window from each open app.
     static readonly TimeSpan DefaultLiveSample = TimeSpan.FromSeconds(5);
     static readonly TimeSpan DefaultReconcileEvery = TimeSpan.FromSeconds(60);
 
