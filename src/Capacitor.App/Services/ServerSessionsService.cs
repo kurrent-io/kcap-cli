@@ -23,6 +23,10 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
     public const int LivePageSize = 100;
     public const int OffsetCap = 500;
     static readonly TimeSpan DefaultPushDebounce = TimeSpan.FromMilliseconds(250);
+    /// The server pushes every live session of the tenant to every client, and a live re-read is
+    /// up to six listing pages; a quarter-second window turned a busy org into a steady stream of
+    /// listing queries from each open app.
+    static readonly TimeSpan DefaultLiveSample = TimeSpan.FromSeconds(5);
     static readonly TimeSpan DefaultReconcileEvery = TimeSpan.FromSeconds(60);
 
     /// A null Ended is a live-only read: the prefix held from the last full one stands.
@@ -119,12 +123,13 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
                 }
             }).DisposeWith(_subscriptions);
         var window = pushDebounce ?? DefaultPushDebounce;
+        var liveWindow = pushDebounce ?? DefaultLiveSample;
         var scheduler = pushScheduler ?? DefaultScheduler.Instance;
         // A live session changes its summary often; only an ending or a deletion can move the ended
         // prefix. Sample, not Throttle, for the frequent kind: a debounce waits for a quiet an active
         // org never gives. Zero is the tests' pass-through, which Sample cannot take as a period.
         var livePushes = lane.SessionPushes.Where(push => push.Kind is SessionPushKind.ActiveAdded or SessionPushKind.ActiveChanged);
-        (window == TimeSpan.Zero ? livePushes.Throttle(window, scheduler) : livePushes.Sample(window, scheduler))
+        (liveWindow == TimeSpan.Zero ? livePushes.Throttle(liveWindow, scheduler) : livePushes.Sample(liveWindow, scheduler))
             .Subscribe(_ => RequestIfConnected(full: false)).DisposeWith(_subscriptions);
         lane.SessionPushes
             .Where(push => push.Kind is SessionPushKind.ActiveRemoved or SessionPushKind.TitleChanged or SessionPushKind.Deleted)
