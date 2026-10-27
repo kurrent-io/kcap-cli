@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Avalonia.Threading;
@@ -11,6 +12,7 @@ using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests;
+using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Core.Plans;
 using Capacitor.Cli.Core.WorkItems;
 using Capacitor.Remote.Models;
@@ -30,7 +32,7 @@ static partial class DocsShotScenes {
         "desktop-wizard-edition", "desktop-wizard-sign-in", "desktop-wizard-history", "desktop-local-recovery",
         "desktop-launcher", "desktop-pull-request", "desktop-work-context", "desktop-rail-grouped",
         "desktop-settings-notifications", "desktop-settings-accounts", "desktop-settings-profiles", "desktop-settings-search",
-        "desktop-launch-approvals", "desktop-consent-prompt"];
+        "desktop-launch-approvals", "desktop-consent-prompt", "desktop-wizard-agents", "desktop-wizard-visibility"];
 
     const string ServerUrl = "https://northwind.kcap.ai";
     const string PaymentsRepo = "/Users/maya/dev/northwind/payments-api";
@@ -295,7 +297,27 @@ static partial class DocsShotScenes {
         var cli = new FakeKcapCli { DiscoverBehavior = _ => Task.FromResult<ImportDiscoveryReport?>(NorthwindHistory()) };
         var history = new HistoryStepViewModel(cli, () => [HarnessId.Claude, HarnessId.Codex], action => action(),
             "maya-mbp", new FakeTimeProvider(Now));
-        return WizardAsync(config, WizardStepId.Import, history);
+        return WizardAsync(config, WizardStepId.Import, history, () => history.Discovery);
+    }
+
+    /// The wizard on its harnesses step for Maya's machine, with Claude Code, Codex and Cursor found,
+    /// all three recording, Cursor without the tools and new sessions readable only by her. The
+    /// graph's own step names this host, so the scene puts one naming hers in its place. On the local
+    /// edition the step asks no audience, so the table sits under the step counter.
+    public static Task<DocsShotScene> WizardHarnessesAsync(TempConfigRoot config, bool localEdition = false) {
+        IReadOnlyDictionary<HarnessId, DetectedAgent> found = new Dictionary<HarnessId, DetectedAgent> {
+            [HarnessId.Claude] = new(true, true),
+            [HarnessId.Codex] = new(true, true),
+            [HarnessId.Cursor] = new(true, true),
+        };
+        var harnesses = new HarnessesStepViewModel(new FakeKcapCli(), _ => Task.FromResult(found),
+            declined: () => FrozenSet<HarnessId>.Empty, stampOffered: _ => { }, config.Root, pathFix: null,
+            providerKeys: _ => Task.FromResult<IReadOnlySet<string>?>(null), "maya-mbp", onLocalPath: () => localEdition);
+        return WizardAsync(config, WizardStepId.Harnesses, harnesses, () => {
+            harnesses.Rows.Single(r => r.Label == "Cursor").Tools = false;
+            harnesses.Visibility = "private";
+            return Task.CompletedTask;
+        });
     }
 
     static ImportDiscoveryReport NorthwindHistory() {
@@ -312,17 +334,20 @@ static partial class DocsShotScenes {
         ], 0, [new(d30, 13), new(d90, 31), new(null, 42)]);
     }
 
-    static async Task<DocsShotScene> WizardAsync(TempConfigRoot config, WizardStepId startAt, HistoryStepViewModel? history) {
+    /// `replacement` takes the place of the graph's step with the same id; `arrange` runs once the
+    /// wizard has entered `startAt`.
+    static async Task<DocsShotScene> WizardAsync(TempConfigRoot config, WizardStepId startAt, IWizardStep? replacement,
+            Func<Task>? arrange = null) {
         var scene = new DocsShotScene();
         try {
             var harness = scene.Own(new WizardFixtures.GraphHarness(config.Root));
             var graph = WizardComposition.BuildGraph(harness.Options());
-            IReadOnlyList<IWizardStep> steps = history is null
+            IReadOnlyList<IWizardStep> steps = replacement is null
                 ? graph.Steps
-                : [.. graph.Steps.Select(s => s.Id == history.Id ? history : s)];
+                : [.. graph.Steps.Select(s => s.Id == replacement.Id ? replacement : s)];
             var vm = new OnboardingViewModel(steps, startAt: startAt);
             await vm.PendingEnterForTesting;
-            if (history is not null) await history.Discovery;
+            if (arrange is not null) await arrange();
             scene.Present(new Views.MainWindow { Onboarding = vm, Width = 760, Height = 760 });
             return scene;
         } catch {

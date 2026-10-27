@@ -88,7 +88,7 @@ public sealed class DocsShots {
             "desktop-wizard-edition", "desktop-wizard-sign-in", "desktop-wizard-history", "desktop-local-recovery",
             "desktop-launcher", "desktop-pull-request", "desktop-work-context", "desktop-rail-grouped",
             "desktop-settings-notifications", "desktop-settings-accounts", "desktop-settings-profiles", "desktop-settings-search",
-            "desktop-launch-approvals", "desktop-consent-prompt"]);
+            "desktop-launch-approvals", "desktop-consent-prompt", "desktop-wizard-agents", "desktop-wizard-visibility"]);
     }
 
     [Test]
@@ -136,6 +136,16 @@ public sealed class DocsShots {
     [Test, DocsShot("desktop-wizard-history")]
     public async Task The_setup_wizard_offers_to_import_the_history_it_found() {
         await CaptureAsync(() => DocsShotScenes.WizardHistoryAsync(Config), "FoundLineText");
+    }
+
+    [Test, DocsShot("desktop-wizard-agents")]
+    public async Task The_setup_wizard_lists_the_agents_it_found_with_record_and_tools() {
+        await CaptureAsync(() => DocsShotScenes.WizardHarnessesAsync(Config, localEdition: true), "HarnessLabelText");
+    }
+
+    [Test, DocsShot("desktop-wizard-visibility")]
+    public async Task The_setup_wizard_asks_who_can_read_new_sessions() {
+        await CaptureAsync(() => DocsShotScenes.WizardHarnessesAsync(Config), "PrivacyCard");
     }
 
     [Test, DocsShot("desktop-local-recovery")]
