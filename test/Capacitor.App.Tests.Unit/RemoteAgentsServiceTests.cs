@@ -646,6 +646,7 @@ public class RemoteAgentsServiceTests {
         lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
         await Assert.That(seen[^1]).IsFalse();
     }
+
     static readonly DateTime FirstConnect = new(2026, 10, 27, 9, 0, 0, DateTimeKind.Utc);
 
     static DaemonInfo Host(string name, string machine = "m1", DateTime? connectedAt = null) =>
@@ -659,8 +660,9 @@ public class RemoteAgentsServiceTests {
         public readonly RemoteAgentsService Service;
         public volatile IReadOnlyList<DaemonInfo>? Listing;
         public volatile IReadOnlyList<DaemonAccountsDto>? Accounts;
-        public Func<Task<IReadOnlyList<DaemonInfo>?>>? ListingOverride;
-        public Func<Task<IReadOnlyList<DaemonAccountsDto>?>>? AccountsOverride;
+        public volatile Func<Task<IReadOnlyList<DaemonInfo>?>>? ListingOverride;
+        public volatile Func<Task<IReadOnlyList<DaemonAccountsDto>?>>? AccountsOverride;
+        public readonly FakeTimeProvider Time = new();
         public int ListingCalls;
         public int AccountCalls;
         readonly List<IReadOnlyList<DaemonAccountsDto>> _drawable = [];
@@ -679,7 +681,7 @@ public class RemoteAgentsServiceTests {
                 Interlocked.Increment(ref AccountCalls);
                 return AccountsOverride?.Invoke() ?? Task.FromResult<IReadOnlyList<DaemonAccountsDto>?>(Accounts);
             };
-            Service = new RemoteAgentsService(Lane, NoAgents, TimeSpan.Zero, time: new FakeTimeProvider());
+            Service = new RemoteAgentsService(Lane, NoAgents, TimeSpan.Zero, time: Time);
             _subs = new System.Reactive.Disposables.CompositeDisposable(
                 Record(Service.DrawableDaemonAccounts, _drawable),
                 Record(Service.DaemonAccounts, _retained),
@@ -692,6 +694,11 @@ public class RemoteAgentsServiceTests {
         public int ListingsSeen() => Seen(_listings).Length;
 
         public void Connect() => Lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u1"));
+
+        /// Waits until the failed accounts fetch numbered `call` has been handled: only then is its retry
+        /// scheduled, so the retry's call proves it.
+        public async Task FailedFetchHandledAsync(int call) =>
+            await Eventually(() => { Time.Advance(TimeSpan.FromSeconds(30)); return Volatile.Read(ref AccountCalls) > call; });
 
         /// Pushes DaemonsChanged and waits until that listing has answered.
         public async Task RelistAsync() {
@@ -737,6 +744,28 @@ public class RemoteAgentsServiceTests {
         secondAccounts.SetResult(rig.Accounts);
         await Eventually(() => rig.Drawable().Length == 1);
         await Assert.That(rig.Drawable()).IsEquivalentTo(["work-mac"]);
+    }
+
+    [Test]
+    public async Task An_accounts_fetch_in_flight_when_the_daemon_appears_does_not_open_its_gate() {
+        var listingGate = new TaskCompletionSource<IReadOnlyList<DaemonInfo>?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var inFlight = new TaskCompletionSource<IReadOnlyList<DaemonAccountsDto>?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var rerun = new TaskCompletionSource<IReadOnlyList<DaemonAccountsDto>?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var rig = new GateRig("work-mac");
+        rig.ListingOverride = () => listingGate.Task;
+        rig.AccountsOverride = () => Volatile.Read(ref rig.AccountCalls) == 1 ? inFlight.Task : rerun.Task;
+
+        rig.Connect();
+        listingGate.SetResult(rig.Listing);
+        await Eventually(() => rig.LastListing().Daemons is not null);
+
+        inFlight.SetResult(rig.Accounts);
+        await Eventually(() => Volatile.Read(ref rig.AccountCalls) == 2);
+        await Assert.That(rig.Retained()).IsEquivalentTo(["work-mac"]);
+        await Assert.That(rig.Drawable()).IsEmpty();
+
+        rerun.SetResult(rig.Accounts);
+        await Eventually(() => rig.Drawable().Length == 1);
     }
 
     [Test]
@@ -797,7 +826,7 @@ public class RemoteAgentsServiceTests {
         rig.Listing = [Host("work-mac")];
         await rig.RelistAsync();
 
-        await Eventually(() => Volatile.Read(ref rig.AccountCalls) == calls + 1);
+        await rig.FailedFetchHandledAsync(calls + 1);
         await Assert.That(rig.Drawable()).IsEmpty();
         await Assert.That(rig.Retained()).IsEquivalentTo(["work-mac"]);
     }
@@ -830,7 +859,7 @@ public class RemoteAgentsServiceTests {
         rig.Listing = [Host("work-mac", machine: "m2")];
         await rig.RelistAsync();
 
-        await Eventually(() => Volatile.Read(ref rig.AccountCalls) == calls + 1);
+        await rig.FailedFetchHandledAsync(calls + 1);
         await Assert.That(rig.Drawable()).IsEmpty();
         await Assert.That(rig.Retained()).IsEquivalentTo(["work-mac"]);
     }
