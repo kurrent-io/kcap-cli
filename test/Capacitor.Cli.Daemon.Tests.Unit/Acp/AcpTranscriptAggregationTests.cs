@@ -181,6 +181,124 @@ public class AcpTranscriptAggregationTests {
         await Assert.That(finalMessage.Text).IsEqualTo("done");
     }
 
+    /// <summary>A call announced before its arguments are known, the way OpenCode streams a shell call, is recorded with
+    /// the input its first update carries, and still ahead of its result.</summary>
+    [Test]
+    public async Task A_pending_tool_call_is_recorded_with_the_input_its_first_update_carries() {
+        await using var h = new Harness();
+
+        var pending = Update(FakeAcpAgent.BuildToolCallUpdate("call-1", "bash", "execute", "pending", rawInputJson: """{"cwd":"/w"}"""));
+        var running = Update(FakeAcpAgent.BuildToolCallStatusUpdate("call-1", "in_progress", rawInputJson: """{"command":"git commit -m x","cwd":"/w"}"""));
+        var done    = Update(FakeAcpAgent.BuildToolCallStatusUpdate("call-1", "completed", resultText: "[main 1a2b3c4] x"));
+        h.Fake.EnqueuePromptScript(new[] { pending, running, done }, EndTurnResult);
+
+        h.StartFakeAgentLoop();
+        await h.Runtime.StartAsync("/abs/worktree", "commit", h.Cts.Token).WaitAsync(HangGuard);
+
+        await ReadEnvelopeAsync(h.Runtime); // UserMessage
+
+        var call = await ReadEnvelopeAsync(h.Runtime);
+        await Assert.That(call.Kind).IsEqualTo(AcpEventKind.ToolCall);
+        await Assert.That(call.ToolInputJson).IsEqualTo("""{"command":"git commit -m x","cwd":"/w"}""");
+
+        var result = await ReadEnvelopeAsync(h.Runtime);
+        await Assert.That(result.Kind).IsEqualTo(AcpEventKind.ToolResult);
+        await Assert.That(result.ToolResult).IsEqualTo("[main 1a2b3c4] x");
+    }
+
+    /// <summary>Parallel pending calls each wait for their own input, and are recorded in the order announced.</summary>
+    [Test]
+    public async Task Parallel_pending_tool_calls_each_take_their_own_input_in_announced_order() {
+        await using var h = new Harness();
+
+        var script = new[] {
+            Update(FakeAcpAgent.BuildToolCallUpdate("call-a", "bash", "execute", "pending")),
+            Update(FakeAcpAgent.BuildToolCallUpdate("call-b", "bash", "execute", "pending")),
+            Update(FakeAcpAgent.BuildToolCallStatusUpdate("call-a", "in_progress", rawInputJson: """{"command":"a"}""")),
+            Update(FakeAcpAgent.BuildToolCallStatusUpdate("call-b", "in_progress", rawInputJson: """{"command":"b"}"""))
+        };
+        h.Fake.EnqueuePromptScript(script, EndTurnResult);
+
+        h.StartFakeAgentLoop();
+        await h.Runtime.StartAsync("/abs/worktree", "both", h.Cts.Token).WaitAsync(HangGuard);
+
+        await ReadEnvelopeAsync(h.Runtime); // UserMessage
+
+        var first  = await ReadEnvelopeAsync(h.Runtime);
+        var second = await ReadEnvelopeAsync(h.Runtime);
+        await Assert.That((first.ToolCallId, first.ToolInputJson)).IsEqualTo(("call-a", """{"command":"a"}"""));
+        await Assert.That((second.ToolCallId, second.ToolInputJson)).IsEqualTo(("call-b", """{"command":"b"}"""));
+    }
+
+    /// <summary>A call waiting for its input is still recorded when none comes: ahead of the next text, or at the
+    /// turn's end.</summary>
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task A_pending_tool_call_no_input_follows_is_still_recorded(bool textFollows) {
+        await using var h = new Harness();
+
+        var pending = Update(FakeAcpAgent.BuildToolCallUpdate("call-1", "bash", "execute", "pending", rawInputJson: """{"cwd":"/w"}"""));
+        var status  = Update(FakeAcpAgent.BuildToolCallStatusUpdate("call-1", "pending"));
+        var text    = Update(FakeAcpAgent.BuildAgentMessageChunkUpdate("done"));
+        h.Fake.EnqueuePromptScript(textFollows ? new[] { pending, status, text } : new[] { pending, status }, EndTurnResult);
+
+        h.StartFakeAgentLoop();
+        await h.Runtime.StartAsync("/abs/worktree", "list", h.Cts.Token).WaitAsync(HangGuard);
+
+        await ReadEnvelopeAsync(h.Runtime); // UserMessage
+
+        var call = await ReadEnvelopeAsync(h.Runtime);
+        await Assert.That((call.Kind, call.ToolInputJson)).IsEqualTo((AcpEventKind.ToolCall, """{"cwd":"/w"}"""));
+        if (textFollows) await Assert.That((await ReadEnvelopeAsync(h.Runtime)).Text).IsEqualTo("done");
+    }
+
+    /// <summary>A pending call that already carries its input is recorded at once, as any other call.</summary>
+    [Test]
+    public async Task A_pending_tool_call_with_its_input_is_recorded_without_waiting() {
+        await using var h = new Harness();
+
+        var pending = Update(FakeAcpAgent.BuildToolCallUpdate("call-1", "bash", "execute", "pending", rawInputJson: """{"command":"ls"}"""));
+        var running = Update(FakeAcpAgent.BuildToolCallStatusUpdate("call-1", "in_progress", rawInputJson: "{}"));
+        h.Fake.EnqueuePromptScript(new[] { pending, running }, EndTurnResult);
+
+        h.StartFakeAgentLoop();
+        await h.Runtime.StartAsync("/abs/worktree", "list", h.Cts.Token).WaitAsync(HangGuard);
+
+        await ReadEnvelopeAsync(h.Runtime); // UserMessage
+
+        await Assert.That((await ReadEnvelopeAsync(h.Runtime)).ToolInputJson).IsEqualTo("""{"command":"ls"}""");
+    }
+
+    /// <summary>A held call keeps waiting through updates that do not supply its input: a later call's input, a
+    /// placeholder of its own, another call's progress. Each is then recorded with its own input, in announced order.</summary>
+    [Test]
+    public async Task A_held_call_waits_until_its_own_input_arrives() {
+        await using var h = new Harness();
+
+        var script = new[] {
+            Update(FakeAcpAgent.BuildToolCallUpdate("call-a", "bash", "execute", "pending")),
+            Update(FakeAcpAgent.BuildToolCallUpdate("call-b", "bash", "execute", "pending")),
+            Update(FakeAcpAgent.BuildToolCallStatusUpdate("call-b", "in_progress", rawInputJson: """{"command":"b"}""")),
+            Update(FakeAcpAgent.BuildToolCallStatusUpdate("call-a", "in_progress", rawInputJson: """{"cwd":"/w"}""")),
+            Update(FakeAcpAgent.BuildToolCallStatusUpdate("call-other", "in_progress")),
+            Update(FakeAcpAgent.BuildToolCallStatusUpdate("call-a", "in_progress", rawInputJson: """{"command":"a"}"""))
+        };
+        h.Fake.EnqueuePromptScript(script, EndTurnResult);
+
+        h.StartFakeAgentLoop();
+        await h.Runtime.StartAsync("/abs/worktree", "both", h.Cts.Token).WaitAsync(HangGuard);
+
+        await ReadEnvelopeAsync(h.Runtime); // UserMessage
+
+        var first  = await ReadEnvelopeAsync(h.Runtime);
+        var second = await ReadEnvelopeAsync(h.Runtime);
+        await Assert.That((first.ToolCallId, first.ToolInputJson)).IsEqualTo(("call-a", """{"command":"a"}"""));
+        await Assert.That((second.ToolCallId, second.ToolInputJson)).IsEqualTo(("call-b", """{"command":"b"}"""));
+    }
+
+    static JsonElement Update(JsonElement update) => FakeAcpAgent.BuildSessionUpdateNotification(FakeAcpAgent.FixedSessionId, update);
+
     [Test]
     public async Task A_session_info_update_mid_run_does_not_split_the_message_run() {
         // A native session-title update (session_info_update) interleaved between two message
@@ -395,7 +513,7 @@ public class AcpTranscriptAggregationTests {
         var toolCalls = Enumerable.Range(1, 5)
             .Select(i => FakeAcpAgent.BuildSessionUpdateNotification(
                 FakeAcpAgent.FixedSessionId,
-                FakeAcpAgent.BuildToolCallUpdate($"call-{i}", $"Tool {i}", "execute", "pending")))
+                FakeAcpAgent.BuildToolCallUpdate($"call-{i}", $"Tool {i}", "execute", "pending", rawInputJson: """{"command":"x"}""")))
             .ToArray();
         h.Fake.EnqueuePromptScript(toolCalls, EndTurnResult);
 
