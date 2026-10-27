@@ -1,6 +1,6 @@
-using Capacitor.Cli.Core.Harness.Codex;
+using System.Text.Json;
 
-namespace Capacitor.Cli.Daemon.Harness.Codex;
+namespace Capacitor.Cli.Core.Harness.Codex;
 
 /// <summary>One hook as reported by the <c>codex app-server</c> <c>hooks/list</c> response.</summary>
 /// <param name="Key">The opaque per-hook key (<c>&lt;hooks.json path&gt;:&lt;event&gt;:i:j</c>), used verbatim
@@ -10,11 +10,11 @@ namespace Capacitor.Cli.Daemon.Harness.Codex;
 /// <param name="CurrentHash">The hook's current content hash (<c>sha256:…</c>), or null if the
 /// response omitted it (then the hook cannot be seeded).</param>
 /// <param name="TrustStatus">The reported trust state (<c>trusted</c> / <c>untrusted</c>).</param>
-internal readonly record struct CodexHookEntry(
+public readonly record struct CodexHookEntry(
     string Key, string EventName, string Command, string? CurrentHash, string TrustStatus);
 
 /// <summary>The classifier's verdict for one launch's <c>hooks/list</c> snapshot.</summary>
-internal abstract record CodexHookTrustDecision {
+public abstract record CodexHookTrustDecision {
     /// <summary>Every required critical event has a trusted kcap-owned hook — launch as-is.</summary>
     public sealed record Proceed : CodexHookTrustDecision;
 
@@ -47,13 +47,35 @@ internal abstract record CodexHookTrustDecision {
 /// path-shaped keys (the same clap/TOML limitation the <c>mcp_servers</c> override hits), so the
 /// override is emitted as ONE full-table value, exactly like the MCP-isolation table.</para>
 /// </summary>
-internal static class CodexHookTrust {
+public static class CodexHookTrust {
     /// <summary>The critical events a hosted launch requires a kcap hook for — single-sourced to
-    /// match <see cref="CodexLauncher"/>'s hooks.json preflight. Compared case-insensitively so the
+    /// match the daemon launcher's hooks.json preflight. Compared case-insensitively so the
     /// protocol's camelCase <c>eventName</c> matches these hooks.json-style names.</summary>
     static readonly string[] CriticalEvents = ["SessionStart", "Stop", "PermissionRequest"];
 
     const string TrustedStatus = "trusted";
+
+    /// <summary>Reads the <c>data[].hooks[]</c> groups of a <c>hooks/list</c> result; a missing field
+    /// becomes <c>""</c> (<c>CurrentHash</c> stays null), and a result without <c>data</c> yields none.</summary>
+    public static IReadOnlyList<CodexHookEntry> ParseHooksList(JsonElement result) {
+        var entries = new List<CodexHookEntry>();
+        if (result.Arr("data") is not { } data) return entries;
+
+        foreach (var group in data.EnumerateArray()) {
+            if (group.Arr("hooks") is not { } hooks) continue;
+
+            foreach (var h in hooks.EnumerateArray()) {
+                entries.Add(new CodexHookEntry(
+                    Key:         h.Str("key") ?? "",
+                    EventName:   h.Str("eventName") ?? "",
+                    Command:     h.Str("command") ?? "",
+                    CurrentHash: h.Str("currentHash"),
+                    TrustStatus: h.Str("trustStatus") ?? ""));
+            }
+        }
+
+        return entries;
+    }
 
     public static CodexHookTrustDecision Classify(IReadOnlyList<CodexHookEntry> hooks) {
         var kcapHooks = hooks.Where(h => CodexHooksParser.IsCapacitorCodexHookCommand(h.Command)).ToArray();
@@ -85,7 +107,7 @@ internal static class CodexHookTrust {
     /// full-table override value for the given (untrusted, seedable) kcap hooks.</summary>
     static string BuildStateOverride(IReadOnlyList<CodexHookEntry> untrusted) {
         var entries = untrusted.Select(h =>
-            $"{CodexToml.String(h.Key)}={{trusted_hash={CodexToml.String(h.CurrentHash!)}}}");
+            $"{CodexToml.Quote(h.Key)}={{trusted_hash={CodexToml.Quote(h.CurrentHash!)}}}");
 
         return $"hooks.state={{{string.Join(",", entries)}}}";
     }
