@@ -378,6 +378,15 @@ public class FeedbackCommandTests : IDisposable {
     }
 
     [Test, NotInParallel]
+    public async Task An_opened_draft_with_no_clipboard_still_prints_the_report() {
+        var (exitCode, stdout, _) = await RunAsync(() =>
+            FeedbackCommand.HandleMail(Mail(opened: true, cutShort: false, copied: false), FeedbackCategory.Bug, "It broke."));
+
+        await Assert.That(exitCode).IsEqualTo(0);
+        await Assert.That(stdout).Contains("It broke.");
+    }
+
+    [Test, NotInParallel]
     public async Task A_draft_cut_short_with_no_clipboard_prints_the_full_report() {
         var (exitCode, stdout, stderr) = await RunAsync(() =>
             FeedbackCommand.HandleMail(Mail(opened: true, cutShort: true, copied: false), FeedbackCategory.Bug, "It broke."));

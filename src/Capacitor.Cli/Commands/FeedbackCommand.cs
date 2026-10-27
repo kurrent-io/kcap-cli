@@ -81,7 +81,7 @@ public sealed class FeedbackCommand(IFeedbackApi feedbackApi, Func<FeedbackSubmi
         var (opened, cutShort, copied) = (outcome.Opened, outcome.Draft.CutShort, outcome.Copied);
 
         await Console.Error.WriteLineAsync((opened, cutShort, copied) switch {
-            (true, false, false) => $"Opened an email to {FeedbackMail.Address} in your mail app. Send it from there.",
+            (true, false, false) => $"Opened an email to {FeedbackMail.Address} in your mail app. Send it from there; the report is below in case no draft appeared:",
             (true, false, true)  => $"Opened an email to {FeedbackMail.Address} in your mail app. Send it from there; a copy is on your clipboard.",
             (true, true, true)   => $"Opened an email to {FeedbackMail.Address}, cut short to fit a mail link. The full report is on your clipboard: paste it over the draft's text.",
             (true, true, false)  => $"Opened an email to {FeedbackMail.Address}, cut short to fit a mail link. Paste the full report below over the draft's text:",
@@ -89,8 +89,9 @@ public sealed class FeedbackCommand(IFeedbackApi feedbackApi, Func<FeedbackSubmi
             (false, _, false)    => $"Couldn't open a mail app. Email the report below to {FeedbackMail.Address}:",
         });
 
-        // Nowhere else holds the full text, so the terminal does.
-        if (!copied && (!opened || cutShort)) {
+        // A launched handler is no proof a draft appeared (xdg-open returns before it finds one), so
+        // without the clipboard the terminal is the one copy of the report that is sure to exist.
+        if (!copied) {
             await Console.Out.WriteLineAsync();
             await Console.Out.WriteLineAsync(FeedbackMail.Body(submission));
         }
