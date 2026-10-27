@@ -64,11 +64,9 @@ public sealed class PullRequestToneCache : IDisposable {
         _time = time;
         _refreshEvery = refreshEvery ?? DefaultRefreshEvery;
         _endedRefreshEvery = endedRefreshEvery ?? DefaultEndedRefreshEvery;
-        // A local row's session id names a session on whatever server the daemon reports; only
-        // while that is the app's own server can it be read here (the directory's own rule).
         directory.Rows.Connect().ToCollection()
             .CombineLatest(directory.LocalDaemonOnAppServer, (rows, localOnAppServer) => rows
-                .Where(r => r.SessionId is { Length: > 0 } && (localOnAppServer || r.Origin != AgentOrigin.Local))
+                .Where(r => r.SessionId is { Length: > 0 } && Polled(r, localOnAppServer))
                 .ToList())
             .Subscribe(rows => {
                 lock (_lock) {
@@ -85,6 +83,17 @@ public sealed class PullRequestToneCache : IDisposable {
             .DisposeWith(_subscriptions);
         _timer = time.CreateTimer(_ => Tick(), null, TickEvery, TickEvery);
     }
+
+    /// A local row's session id names a session on whatever server the daemon reports; only while
+    /// that is the app's own server can it be read here (the directory's own rule). A listed row is
+    /// read only when the viewer owns it: a teammate's session costs the server a visibility check
+    /// per read and a GitHub-backed admission per PR every access window, and under Team there are
+    /// hundreds. Its PRs show when it opens. A row whose owner the server has not named yet waits.
+    static bool Polled(AgentRow row, bool localOnAppServer) => row.Origin switch {
+        AgentOrigin.Local => localOnAppServer,
+        AgentOrigin.Server => row.OwnerIsViewer == true,
+        _ => true,
+    };
 
     public IObservable<IReadOnlyDictionary<string, PullRequestTone>> Tones => _published.DistinctUntilChanged(new MapEquality());
 

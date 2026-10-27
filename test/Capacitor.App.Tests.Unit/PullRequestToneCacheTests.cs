@@ -194,13 +194,38 @@ public class PullRequestToneCacheTests {
 
     static AgentRow Ended(string sessionId) => ServerRow(sessionId, "ended");
 
+    /// The viewer's own listed session, as the directory marks it once the owners read has landed.
     static AgentRow ServerRow(string sessionId, string status) => AgentRow.FromServer(new Capacitor.Remote.Models.RepoSessionDto {
         SessionId = sessionId, Status = status, AccessLevel = "full", Vendor = "claude", Title = "Session",
         Owner = new() { UserId = "u1", DisplayName = "Alexey" },
         StartedAt = DateTimeOffset.UnixEpoch, LastActivityAt = DateTimeOffset.UnixEpoch.AddHours(1),
         EndedAt = status == "ended" ? DateTimeOffset.UnixEpoch.AddHours(1) : null,
         Repo = new() { Hash = "h", Owner = "kurrent-io", Name = "kcap-cli" },
-    }, hostedPresentation: false);
+    }, hostedPresentation: false) with { OwnerIsViewer = true };
+
+    /// A teammate's session is not this app's to poll: under Team the listing holds hundreds, and
+    /// each read costs the server a visibility check and, per PR, a GitHub-backed admission. Its
+    /// PRs show when the session opens. A row whose owner the server has not named yet waits too.
+    [Test]
+    public async Task Only_the_viewers_own_server_rows_are_read() {
+        var (directory, source, _, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        directory.Rows.AddOrUpdate(ServerRow("mine", "active"));
+        directory.Rows.AddOrUpdate(ServerRow("theirs", "active") with { OwnerIsViewer = false });
+        directory.Rows.AddOrUpdate(ServerRow("unknown", "ended") with { OwnerIsViewer = null });
+
+        await WaitUntilAsync(() => cache.CurrentSummaries.ContainsKey("mine"), "own row read");
+        await Task.Delay(100);
+        await Assert.That(source.Lists).IsEqualTo(1);
+        await Assert.That(cache.CurrentSummaries.ContainsKey("theirs")).IsFalse();
+        await Assert.That(cache.CurrentSummaries.ContainsKey("unknown")).IsFalse();
+
+        directory.Rows.AddOrUpdate(ServerRow("unknown", "ended"));
+
+        await WaitUntilAsync(() => cache.CurrentSummaries.ContainsKey("unknown"), "row read once its owner is known");
+        await Assert.That(source.Lists).IsEqualTo(2);
+    }
 
     static (FakeAgentDirectory Directory, FakePullRequestSource Source, FakeTimeProvider Time, PullRequestToneCache Cache) Build() {
         var directory = new FakeAgentDirectory();
