@@ -495,7 +495,8 @@ public class RemoteAgentsServiceTests {
         await Assert.That(Seen(listings)[^1]).IsEqualTo(new DaemonListing(fresh, 2, false));
         await Assert.That(Volatile.Read(ref daemonCalls)).IsEqualTo(2);
         await Assert.That(Seen(accounts)[^1][0].Revision).IsEqualTo(2L);
-        await Assert.That(Volatile.Read(ref accountCalls)).IsEqualTo(2);
+        // The fresh listing's new incarnation adds a fetch unless it coalesces into the one in flight.
+        await Assert.That(Volatile.Read(ref accountCalls)).IsBetween(2, 3);
     }
 
     [Test]
@@ -644,5 +645,209 @@ public class RemoteAgentsServiceTests {
         await Eventually(() => seen.Contains(true));
         lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
         await Assert.That(seen[^1]).IsFalse();
+    }
+    static readonly DateTime FirstConnect = new(2026, 10, 27, 9, 0, 0, DateTimeKind.Utc);
+
+    static DaemonInfo Host(string name, string machine = "m1", DateTime? connectedAt = null) =>
+        new() { Name = name, OwnerUserId = "u1", MachineId = machine, ConnectedAt = connectedAt ?? FirstConnect, Connected = true };
+
+    static DaemonAccountsDto AccountsOf(string name) => new() { DaemonName = name, HostId = "h-" + name, Revision = 1 };
+
+    /// A lane whose listing and accounts answers the test swaps between steps; a null answer is a failed fetch.
+    sealed class GateRig : IDisposable {
+        public readonly FakeServerLane Lane = new();
+        public readonly RemoteAgentsService Service;
+        public volatile IReadOnlyList<DaemonInfo>? Listing;
+        public volatile IReadOnlyList<DaemonAccountsDto>? Accounts;
+        public Func<Task<IReadOnlyList<DaemonInfo>?>>? ListingOverride;
+        public Func<Task<IReadOnlyList<DaemonAccountsDto>?>>? AccountsOverride;
+        public int ListingCalls;
+        public int AccountCalls;
+        readonly List<IReadOnlyList<DaemonAccountsDto>> _drawable = [];
+        readonly List<IReadOnlyList<DaemonAccountsDto>> _retained = [];
+        readonly List<DaemonListing> _listings = [];
+        readonly IDisposable _subs;
+
+        public GateRig(params string[] names) {
+            Listing = [.. names.Select(n => Host(n))];
+            Accounts = [.. names.Select(AccountsOf)];
+            Lane.DaemonsHandler = () => {
+                Interlocked.Increment(ref ListingCalls);
+                return ListingOverride?.Invoke() ?? Task.FromResult<IReadOnlyList<DaemonInfo>?>(Listing);
+            };
+            Lane.DaemonAccountsHandler = () => {
+                Interlocked.Increment(ref AccountCalls);
+                return AccountsOverride?.Invoke() ?? Task.FromResult<IReadOnlyList<DaemonAccountsDto>?>(Accounts);
+            };
+            Service = new RemoteAgentsService(Lane, NoAgents, TimeSpan.Zero, time: new FakeTimeProvider());
+            _subs = new System.Reactive.Disposables.CompositeDisposable(
+                Record(Service.DrawableDaemonAccounts, _drawable),
+                Record(Service.DaemonAccounts, _retained),
+                Record(Service.Listing, _listings));
+        }
+
+        public string[] Drawable() => [.. Seen(_drawable)[^1].Select(d => d.DaemonName)];
+        public string[] Retained() => [.. Seen(_retained)[^1].Select(d => d.DaemonName)];
+        public DaemonListing LastListing() => Seen(_listings)[^1];
+        public int ListingsSeen() => Seen(_listings).Length;
+
+        public void Connect() => Lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u1"));
+
+        /// Pushes DaemonsChanged and waits until that listing has answered.
+        public async Task RelistAsync() {
+            var before = ListingsSeen();
+            Lane.DaemonsChangedSubject.OnNext(System.Reactive.Unit.Default);
+            await Eventually(() => ListingsSeen() > before);
+        }
+
+        public void Dispose() { _subs.Dispose(); Service.Dispose(); }
+    }
+
+    [Test]
+    public async Task Accounts_become_drawable_after_listing_then_accounts() {
+        var accountsGate = new TaskCompletionSource<IReadOnlyList<DaemonAccountsDto>?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var rig = new GateRig("work-mac");
+        rig.AccountsOverride = () => accountsGate.Task;
+
+        rig.Connect();
+        await Assert.That(rig.LastListing().Daemons).IsNotNull();
+        await Assert.That(rig.Drawable()).IsEmpty();
+
+        accountsGate.SetResult(rig.Accounts);
+        await Eventually(() => rig.Drawable().Length == 1);
+        await Assert.That(rig.Drawable()).IsEquivalentTo(["work-mac"]);
+    }
+
+    [Test]
+    public async Task Accounts_become_drawable_when_the_accounts_fetch_finishes_before_the_listing() {
+        var listingGate = new TaskCompletionSource<IReadOnlyList<DaemonInfo>?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondAccounts = new TaskCompletionSource<IReadOnlyList<DaemonAccountsDto>?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var rig = new GateRig("work-mac");
+        rig.ListingOverride = () => listingGate.Task;
+        rig.AccountsOverride = () => Volatile.Read(ref rig.AccountCalls) == 1 ? Task.FromResult<IReadOnlyList<DaemonAccountsDto>?>(rig.Accounts) : secondAccounts.Task;
+
+        rig.Connect();
+        await Assert.That(rig.Retained()).IsEquivalentTo(["work-mac"]);
+        await Assert.That(rig.Drawable()).IsEmpty();
+
+        listingGate.SetResult(rig.Listing);
+        await Eventually(() => Volatile.Read(ref rig.AccountCalls) == 2);
+        await Assert.That(rig.Drawable()).IsEmpty();
+
+        secondAccounts.SetResult(rig.Accounts);
+        await Eventually(() => rig.Drawable().Length == 1);
+        await Assert.That(rig.Drawable()).IsEquivalentTo(["work-mac"]);
+    }
+
+    [Test]
+    public async Task Lane_loss_closes_the_gate_but_keeps_the_accounts() {
+        using var rig = new GateRig("work-mac");
+        rig.Connect();
+        await Eventually(() => rig.Drawable().Length == 1);
+
+        rig.Lane.StatusSubject.OnNext(new(ServerLaneState.Retrying));
+
+        await Assert.That(rig.Drawable()).IsEmpty();
+        await Assert.That(rig.Retained()).IsEquivalentTo(["work-mac"]);
+    }
+
+    [Test]
+    public async Task A_daemon_leaving_the_listing_closes_its_gate() {
+        using var rig = new GateRig("work-mac", "home-mac");
+        rig.Connect();
+        await Eventually(() => rig.Drawable().Length == 2);
+
+        rig.Listing = [Host("home-mac")];
+        await rig.RelistAsync();
+
+        await Assert.That(rig.Drawable()).IsEquivalentTo(["home-mac"]);
+        await Assert.That(rig.Retained()).IsEquivalentTo(["work-mac", "home-mac"], CollectionOrdering.Any);
+    }
+
+    [Test]
+    public async Task Reconnect_closes_the_gate_until_a_fresh_accounts_fetch() {
+        var accountsGate = new TaskCompletionSource<IReadOnlyList<DaemonAccountsDto>?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var rig = new GateRig("work-mac");
+        rig.Connect();
+        await Eventually(() => rig.Drawable().Length == 1);
+
+        rig.AccountsOverride = () => accountsGate.Task;
+        rig.Lane.StatusSubject.OnNext(new(ServerLaneState.Retrying));
+        rig.Connect();
+        await Assert.That(rig.LastListing().Daemons).IsNotNull();
+        await Assert.That(rig.Drawable()).IsEmpty();
+        await Assert.That(rig.Retained()).IsEquivalentTo(["work-mac"]);
+
+        accountsGate.SetResult(rig.Accounts);
+        await Eventually(() => rig.Drawable().Length == 1);
+    }
+
+    [Test]
+    public async Task Leave_and_rejoin_with_a_failed_refetch_stays_closed() {
+        using var rig = new GateRig("work-mac");
+        rig.Connect();
+        await Eventually(() => rig.Drawable().Length == 1);
+
+        rig.Listing = [];
+        await rig.RelistAsync();
+        await Assert.That(rig.Drawable()).IsEmpty();
+
+        var calls = Volatile.Read(ref rig.AccountCalls);
+        rig.Accounts = null;
+        rig.Listing = [Host("work-mac")];
+        await rig.RelistAsync();
+
+        await Eventually(() => Volatile.Read(ref rig.AccountCalls) == calls + 1);
+        await Assert.That(rig.Drawable()).IsEmpty();
+        await Assert.That(rig.Retained()).IsEquivalentTo(["work-mac"]);
+    }
+
+    [Test]
+    public async Task Leave_and_rejoin_reopens_after_a_successful_fetch() {
+        using var rig = new GateRig("work-mac");
+        rig.Connect();
+        await Eventually(() => rig.Drawable().Length == 1);
+
+        rig.Listing = [];
+        await rig.RelistAsync();
+        await Assert.That(rig.Drawable()).IsEmpty();
+
+        rig.Listing = [Host("work-mac", connectedAt: FirstConnect.AddMinutes(5))];
+        await rig.RelistAsync();
+
+        await Eventually(() => rig.Drawable().Length == 1);
+        await Assert.That(rig.Drawable()).IsEquivalentTo(["work-mac"]);
+    }
+
+    [Test]
+    public async Task Another_host_taking_the_name_with_a_failed_refetch_stays_closed() {
+        using var rig = new GateRig("work-mac");
+        rig.Connect();
+        await Eventually(() => rig.Drawable().Length == 1);
+
+        var calls = Volatile.Read(ref rig.AccountCalls);
+        rig.Accounts = null;
+        rig.Listing = [Host("work-mac", machine: "m2")];
+        await rig.RelistAsync();
+
+        await Eventually(() => Volatile.Read(ref rig.AccountCalls) == calls + 1);
+        await Assert.That(rig.Drawable()).IsEmpty();
+        await Assert.That(rig.Retained()).IsEquivalentTo(["work-mac"]);
+    }
+
+    [Test]
+    public async Task A_new_incarnation_schedules_an_accounts_fetch() {
+        using var rig = new GateRig("work-mac");
+        rig.Connect();
+        await Eventually(() => rig.Drawable().Length == 1);
+        var calls = Volatile.Read(ref rig.AccountCalls);
+
+        await rig.RelistAsync();
+        await Assert.That(Volatile.Read(ref rig.AccountCalls)).IsEqualTo(calls);
+
+        rig.Listing = [Host("work-mac", connectedAt: FirstConnect.AddMinutes(5))];
+        await rig.RelistAsync();
+        await Eventually(() => Volatile.Read(ref rig.AccountCalls) == calls + 1);
+        await Eventually(() => rig.Drawable().Length == 1);
     }
 }

@@ -18,6 +18,10 @@ public interface IRemoteAgentsService {
     IObservable<DaemonListing> Listing { get; }
     /// Replay-1, seeded with an empty list.
     IObservable<IReadOnlyList<DaemonAccountsDto>> DaemonAccounts { get; }
+    /// Replay-1, seeded with an empty list. The DaemonAccounts rows whose reading may be drawn: the lane
+    /// is Connected, the daemon is in the current listing, and its accounts were fetched successfully by
+    /// a fetch that started after its current incarnation was first seen.
+    IObservable<IReadOnlyList<DaemonAccountsDto>> DrawableDaemonAccounts { get; }
     /// Replay-1. True once a fetch in the lane's current connection returned rows; false while the
     /// lane is not Connected and after a fetch that returned none, when Agents is retained history.
     IObservable<bool> Current { get; }
@@ -40,6 +44,7 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
     readonly BehaviorSubject<IReadOnlyList<DaemonInfo>> _daemons = new([]);
     readonly BehaviorSubject<DaemonListing> _listing = new(new(null, 0, false));
     readonly BehaviorSubject<IReadOnlyList<DaemonAccountsDto>> _daemonAccounts = new([]);
+    readonly BehaviorSubject<IReadOnlyList<DaemonAccountsDto>> _drawableDaemonAccounts = new([]);
     readonly BehaviorSubject<bool> _current = new(false);
     readonly IDisposable _subscriptions;
     static readonly TimeSpan DaemonsRefreshTimeout = TimeSpan.FromSeconds(5);
@@ -76,6 +81,12 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
     bool _daemonAccountsBusy;
     bool _daemonAccountsRerun;
     TaskCompletionSource? _daemonsInFlight;
+    // The drawable gate. A fetch that starts takes the next _accountsFetchSeq; a daemon's gate opens
+    // only on a successful fetch whose seq is above the one current when its incarnation was seen,
+    // so a fetch already in flight at that moment cannot vouch for it.
+    int _accountsFetchSeq;
+    bool _listingAnswered;
+    readonly Dictionary<string, DaemonGate> _gates = new(StringComparer.Ordinal);
     readonly RetryBackoff _listingRetry;
     readonly RetryBackoff _accountsRetry;
     readonly IServerLane _lane;
@@ -114,9 +125,12 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
                 _connected = s.State == ServerLaneState.Connected;
                 _listingRetry.Reset();
                 _accountsRetry.Reset();
+                _gates.Clear();
+                _listingAnswered = false;
                 if (!_connected) {
                     _generation++;
                     _current.OnNext(false);
+                    PublishDrawable();
                     return;
                 }
                 if (s.Subject is not null) {
@@ -131,6 +145,7 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
                 _listingGeneration++;
                 _listing.OnNext(new(null, _listingGeneration, false));
                 _lastLaneEpoch = s.Epoch;
+                PublishDrawable();
             }
         });
 
@@ -159,6 +174,7 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
     public IObservable<IReadOnlyList<DaemonInfo>> Daemons => _daemons.AsObservable();
     public IObservable<DaemonListing> Listing => _listing.AsObservable();
     public IObservable<IReadOnlyList<DaemonAccountsDto>> DaemonAccounts => _daemonAccounts.AsObservable();
+    public IObservable<IReadOnlyList<DaemonAccountsDto>> DrawableDaemonAccounts => _drawableDaemonAccounts.AsObservable();
     public IObservable<bool> Current => _current.AsObservable();
 
     async Task RefreshAgentsAsync(Func<CancellationToken, Task<RemoteFetch>> fetch) {
@@ -226,7 +242,8 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
                 result = await _lane.GetConnectedDaemonsAsync(cts.Token).WaitAsync(cts.Token).ConfigureAwait(false);
             } catch (Exception) {
             }
-            TaskCompletionSource? completed;
+            TaskCompletionSource? completed = null;
+            bool rerun, newIncarnation = false;
             lock (_lock) {
                 // Dispose takes this lock before disposing the subjects and has already released the in-flight waiter.
                 if (_disposed) { _daemonsBusy = false; return; }
@@ -236,20 +253,60 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
                     if (result is not null) {
                         _listingRetry.Reset();
                         _listing.OnNext(new(result, listingGeneration, false));
+                        newIncarnation = TrackIncarnations(result);
+                        _listingAnswered = true;
                     } else {
                         _listing.OnNext(new(null, listingGeneration, true));
+                        _listingAnswered = false;
                         if (!_daemonsRerun) ScheduleRetry(_listingRetry, RefreshListingAsync);
                     }
+                    PublishDrawable();
                 }
-                if (_daemonsRerun) { _daemonsRerun = false; continue; }
-                _daemonsBusy = false;
-                completed = _daemonsInFlight;
-                _daemonsInFlight = null;
+                rerun = _daemonsRerun;
+                if (rerun) _daemonsRerun = false;
+                else {
+                    _daemonsBusy = false;
+                    completed = _daemonsInFlight;
+                    _daemonsInFlight = null;
+                }
             }
+            // Accounts otherwise refresh only on a connect or a push, neither of which has to follow
+            // this listing, so a new incarnation would stay closed with nothing left to open it.
+            if (newIncarnation) _ = RefreshDaemonAccountsAsync();
+            if (rerun) continue;
             completed?.TrySetResult();
             return;
         }
     }
+
+    // Runs under _lock. True when any daemon's incarnation is new or changed.
+    bool TrackIncarnations(IReadOnlyList<DaemonInfo> listing) {
+        var incarnations = listing
+            .GroupBy(d => d.Name, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => string.Join('\n', g
+                .Select(d => $"{d.OwnerUserId}\t{d.ConnectedAt?.ToString("O", System.Globalization.CultureInfo.InvariantCulture)}\t{d.MachineId}")
+                .Order(StringComparer.Ordinal)), StringComparer.Ordinal);
+        foreach (var name in _gates.Keys.Where(n => !incarnations.ContainsKey(n)).ToList())
+            _gates.Remove(name);
+        var changed = false;
+        foreach (var (name, incarnation) in incarnations) {
+            if (_gates.TryGetValue(name, out var gate) && gate.Incarnation == incarnation) continue;
+            _gates[name] = new(incarnation, _accountsFetchSeq, Fetched: false);
+            changed = true;
+        }
+        return changed;
+    }
+
+    // Runs under _lock.
+    void PublishDrawable() {
+        if (_disposed) return;
+        IReadOnlyList<DaemonAccountsDto> drawable = _connected && _listingAnswered
+            ? [.. _daemonAccounts.Value.Where(d => _gates.TryGetValue(d.DaemonName, out var gate) && gate.Fetched)]
+            : [];
+        if (!drawable.SequenceEqual(_drawableDaemonAccounts.Value)) _drawableDaemonAccounts.OnNext(drawable);
+    }
+
+    readonly record struct DaemonGate(string Incarnation, int SeenAtSeq, bool Fetched);
 
     // Runs under _lock. Nothing is pending while the lane is down or after Dispose: both reset every backoff.
     void ScheduleRetry(RetryBackoff backoff, Func<Task> refresh) {
@@ -269,8 +326,8 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
             _daemonAccountsBusy = true;
         }
         while (true) {
-            int generation;
-            lock (_lock) generation = _generation;
+            int generation, seq;
+            lock (_lock) { generation = _generation; seq = ++_accountsFetchSeq; }
             IReadOnlyList<DaemonAccountsDto>? result = null;
             using var cts = new CancellationTokenSource(DaemonsRefreshTimeout, _time);
             try {
@@ -282,7 +339,12 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
                 if (_disposed) { _daemonAccountsBusy = false; return; }
                 if (result is not null) {
                     _accountsRetry.Reset();
-                    if (generation == _generation) _daemonAccounts.OnNext(result);
+                    if (generation == _generation) {
+                        _daemonAccounts.OnNext(result);
+                        foreach (var (name, gate) in _gates.Where(g => g.Value.SeenAtSeq < seq).ToList())
+                            _gates[name] = gate with { Fetched = true };
+                        PublishDrawable();
+                    }
                 } else if (!_daemonAccountsRerun) {
                     ScheduleRetry(_accountsRetry, RefreshDaemonAccountsAsync);
                 }
@@ -337,6 +399,7 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
         _daemons.Dispose();
         _listing.Dispose();
         _daemonAccounts.Dispose();
+        _drawableDaemonAccounts.Dispose();
         _current.Dispose();
     }
 }
