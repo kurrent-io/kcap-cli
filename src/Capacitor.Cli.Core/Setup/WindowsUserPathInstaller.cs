@@ -9,7 +9,7 @@ public sealed class WindowsUserPathInstaller(IUserPathStore store, ILoginShellPr
 
     public Task<IReadOnlyList<DisclosureSpan>> DescribeAsync(string target, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<DisclosureSpan>>(CliDirectory(target) is { } dir
-            ? [new("It adds "), new(dir, Code: true), new(" to your user PATH. No administrator rights are needed.")]
+            ? [new("It puts "), new(dir, Code: true), new(" on your user PATH. No administrator rights are needed.")]
             : [new(Disclosure)]);
 
     public ShimPreflight Preflight(string target) =>

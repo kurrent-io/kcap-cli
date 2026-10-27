@@ -35,16 +35,30 @@ public sealed partial class PathShimInstaller(
     /// when this user can write it, since the real install would try a link there first.
     public async Task<IReadOnlyList<DisclosureSpan>> DescribeAsync(string target, CancellationToken ct) {
         if (await WritableFolderOnTerminalPathAsync(target, ct).ConfigureAwait(false) is { } folder) return LinkedInto(folder, ".");
+        if (!UserOwned && profile is not null && home is not null && !await MayElevateAsync(ct).ConfigureAwait(false))
+            return DescribeProfileRoute(target, profile, home);
+        if (Preflight(destination, target) == ShimPreflight.Conflict) return Untouched(destination);
         var admin = Path.GetDirectoryName(destination)!;
-        if (UserOwned) return LinkedInto(admin, ".");
-        if (profile is { ProfilePath: { } file, Disclosure: not null } && home is not null && !await MayElevateAsync(ct).ConfigureAwait(false))
-            return [.. LinkedInto(ShellProfile.Folder(home), ", and "), new(ShellProfile.Tilde(home, file), Code: true),
-                new(" gets one marked line adding that folder to PATH. Uninstalling kcap removes it.")];
-        return LinkedInto(admin, ". macOS asks once for your admin password.");
+        return LinkedInto(admin, UserOwned ? "." : ". macOS asks once for your admin password.");
+    }
+
+    DisclosureSpan[] DescribeProfileRoute(string target, ShellProfile profile, UserHome home) {
+        var folder = ShellProfile.Folder(home);
+        if (profile is not { ProfilePath: { } file, Disclosure: not null })
+            return [new("kcap can't set PATH for this shell, so you'll need to add "), new(ShellProfile.Tilde(home, folder), Code: true),
+                new(" to it yourself.")];
+        if (Preflight(Path.Combine(folder, "kcap"), target) == ShimPreflight.Conflict) return Untouched(Path.Combine(folder, "kcap"));
+        return [.. LinkedInto(folder, ", and "), new(ShellProfile.Tilde(home, file), Code: true),
+            new(" gets one marked line adding that folder to PATH. Uninstalling kcap removes it.")];
     }
 
     DisclosureSpan[] LinkedInto(string folder, string rest) =>
-        [new("It's linked into "), new(home is null ? folder : ShellProfile.Tilde(home, folder), Code: true), new(rest)];
+        [new("It's linked into "), new(Display(folder), Code: true), new(rest)];
+
+    DisclosureSpan[] Untouched(string link) =>
+        [new(Display(link), Code: true), new(" belongs to another install, so kcap leaves it alone and can't link there.")];
+
+    string Display(string path) => home is null ? path : ShellProfile.Tilde(home, path);
 
     async Task<string?> WritableFolderOnTerminalPathAsync(string target, CancellationToken ct) {
         var path = await probe.TerminalPathAsync(ct).ConfigureAwait(false);

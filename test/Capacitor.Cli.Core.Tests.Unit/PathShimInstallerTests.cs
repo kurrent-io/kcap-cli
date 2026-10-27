@@ -620,13 +620,14 @@ public class PathShimInstallerTests {
     public async Task DescribeAsync_warns_an_admin_of_the_password_prompt() {
         Skip.When(OperatingSystem.IsWindows(), "POSIX shell profile paths");
         using var tmp = new TempDir();
+        using var system = new TempDir();
         var home = new UserHome(tmp.Path);
-        var installer = new PathShimInstaller(new FakeProcessRunner(), new FakeLoginShellProbe(), home: home,
-            profile: new ShellProfile(home, "/bin/zsh"), mayElevate: _ => Task.FromResult(true));
+        var installer = new PathShimInstaller(new FakeProcessRunner(), new FakeLoginShellProbe(), system.PathTo("kcap"), home,
+            new ShellProfile(home, "/bin/zsh"), mayElevate: _ => Task.FromResult(true));
 
         var spans = await installer.DescribeAsync(tmp.PathTo("target-cli"), CancellationToken.None);
 
-        await Assert.That(spans.Where(s => s.Code).Select(s => s.Text)).IsEquivalentTo(["/usr/local/bin"]);
+        await Assert.That(spans.Where(s => s.Code).Select(s => s.Text)).IsEquivalentTo([system.Path]);
         await Assert.That(Text(spans)).Contains("admin password");
         await Assert.That(Text(spans)).DoesNotContain(".zprofile");
     }
@@ -645,6 +646,51 @@ public class PathShimInstallerTests {
         await Assert.That(spans.Where(s => s.Code).Select(s => s.Text)).IsEquivalentTo([$"~{sep}.local{sep}bin", $"~{sep}.zprofile"]);
         await Assert.That(Text(spans)).DoesNotContain("admin");
         await Assert.That(File.Exists(tmp.PathTo(".zprofile"))).IsFalse();
+    }
+
+    [Test]
+    public async Task DescribeAsync_names_an_admin_link_it_would_leave_alone() {
+        Skip.When(OperatingSystem.IsWindows(), "macOS lstat semantics");
+        using var tmp = new TempDir();
+        var home = new UserHome(tmp.Path);
+        var adminLink = tmp.CreateFile(["admin", "kcap"], "someone else's");
+        var installer = new PathShimInstaller(new FakeProcessRunner(), new FakeLoginShellProbe(), adminLink, home,
+            new ShellProfile(home, "/bin/zsh"), mayElevate: _ => Task.FromResult(true));
+
+        var spans = await installer.DescribeAsync(tmp.PathTo("target-cli"), CancellationToken.None);
+
+        await Assert.That(Text(spans)).Contains("belongs to another install");
+        await Assert.That(Text(spans)).DoesNotContain("admin password");
+    }
+
+    [Test]
+    public async Task DescribeAsync_without_admin_names_a_local_link_it_would_leave_alone() {
+        Skip.When(OperatingSystem.IsWindows(), "macOS lstat semantics");
+        using var tmp = new TempDir();
+        var home = new UserHome(tmp.Path);
+        tmp.CreateFile([".local", "bin", "kcap"], "someone else's");
+        var installer = new PathShimInstaller(new FakeProcessRunner(), new FakeLoginShellProbe(), home: home,
+            profile: new ShellProfile(home, "/bin/zsh"), mayElevate: _ => Task.FromResult(false));
+
+        var spans = await installer.DescribeAsync(tmp.PathTo("target-cli"), CancellationToken.None);
+
+        var sep = Path.DirectorySeparatorChar;
+        await Assert.That(spans.Where(s => s.Code).Select(s => s.Text)).IsEquivalentTo([$"~{sep}.local{sep}bin{sep}kcap"]);
+        await Assert.That(Text(spans)).DoesNotContain(".zprofile");
+    }
+
+    [Test]
+    public async Task DescribeAsync_without_admin_on_an_unsupported_shell_promises_no_prompt() {
+        Skip.When(OperatingSystem.IsWindows(), "POSIX shell profile paths");
+        using var tmp = new TempDir();
+        var home = new UserHome(tmp.Path);
+        var installer = new PathShimInstaller(new FakeProcessRunner(), new FakeLoginShellProbe(), home: home,
+            profile: new ShellProfile(home, "/opt/homebrew/bin/fish"), mayElevate: _ => Task.FromResult(false));
+
+        var spans = await installer.DescribeAsync(tmp.PathTo("target-cli"), CancellationToken.None);
+
+        await Assert.That(Text(spans)).Contains("can't set PATH for this shell");
+        await Assert.That(Text(spans)).DoesNotContain("admin password");
     }
 
     static string Text(IEnumerable<DisclosureSpan> spans) => string.Concat(spans.Select(s => s.Text));
