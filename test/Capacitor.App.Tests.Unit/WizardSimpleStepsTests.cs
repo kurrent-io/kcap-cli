@@ -46,7 +46,7 @@ public class WizardSimpleStepsTests {
         var (fixedPath, disclosure, message) = await AvaloniaSession.DispatchAsync(async () => {
             var vm = new PathFixViewModel(windows, store, target);
             await vm.InstallAsync();
-            return (vm.Fixed, vm.Disclosure, vm.Message);
+            return (vm.Fixed, string.Concat(vm.Plan.Select(s => s.Text)), vm.Message);
         });
 
         await Assert.That(fixedPath).IsEqualTo(verified);

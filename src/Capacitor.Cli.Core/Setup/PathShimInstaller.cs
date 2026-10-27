@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+
 namespace Capacitor.Cli.Core.Setup;
 
 public enum ShimPreflight { Installable, AlreadyInstalled, Conflict }
@@ -13,7 +15,7 @@ public sealed record ShimResult(ShimOutcome Outcome, string? Detail, string? Sud
 /// `profile` instead. Mechanics only — the once-ever offer and tray-menu wiring live in the desktop
 /// app's ShimOfferCoordinator. `destination` is a parameter so tests drive the real filesystem
 /// taxonomy against a temp path instead of the actual /usr/local/bin/kcap.
-public sealed class PathShimInstaller(
+public sealed partial class PathShimInstaller(
         IProcessRunner runner, ILoginShellProbe probe, string destination = PathShimInstaller.Destination, UserHome? home = null,
         ShellProfile? profile = null, Func<CancellationToken, Task<bool>>? mayElevate = null)
     : ICliPathInstaller {
@@ -28,6 +30,44 @@ public sealed class PathShimInstaller(
           (profile?.Disclosure is { } line
               ? $" Without admin rights, kcap links it into ~/.local/bin instead and adds {line}, a marked line that uninstalling kcap removes."
               : "");
+
+    /// Follows InstallAsync's choice of folder without creating anything; a folder on PATH counts
+    /// when this user can write it, since the real install would try a link there first.
+    public async Task<IReadOnlyList<DisclosureSpan>> DescribeAsync(string target, CancellationToken ct) {
+        if (await WritableFolderOnTerminalPathAsync(target, ct).ConfigureAwait(false) is { } folder) return LinkedInto(folder, ".");
+        var admin = Path.GetDirectoryName(destination)!;
+        if (UserOwned) return LinkedInto(admin, ".");
+        if (profile is { ProfilePath: { } file, Disclosure: not null } && home is not null && !await MayElevateAsync(ct).ConfigureAwait(false))
+            return [.. LinkedInto(ShellProfile.Folder(home), ", and "), new(ShellProfile.Tilde(home, file), Code: true),
+                new(" gets one marked line adding that folder to PATH. Uninstalling kcap removes it.")];
+        return LinkedInto(admin, ". macOS asks once for your admin password.");
+    }
+
+    DisclosureSpan[] LinkedInto(string folder, string rest) =>
+        [new("It's linked into "), new(home is null ? folder : ShellProfile.Tilde(home, folder), Code: true), new(rest)];
+
+    async Task<string?> WritableFolderOnTerminalPathAsync(string target, CancellationToken ct) {
+        var path = await probe.TerminalPathAsync(ct).ConfigureAwait(false);
+        if (path is null) return null;
+
+        var stable = StableFolders();
+        foreach (var entry in path.Split(':', StringSplitOptions.RemoveEmptyEntries)) {
+            var dir = Path.TrimEndingDirectorySeparator(entry);
+            if (!Path.IsPathFullyQualified(dir) || !stable.Contains(dir)) continue;
+            switch (Preflight(Path.Combine(dir, "kcap"), target)) {
+                case ShimPreflight.AlreadyInstalled: return dir;
+                case ShimPreflight.Installable when Writable(dir): return dir;
+            }
+        }
+        return null;
+    }
+
+    const int W_OK = 2;
+
+    [LibraryImport("libc", EntryPoint = "access", StringMarshalling = StringMarshalling.Utf8)]
+    private static partial int Access(string path, int mode);
+
+    static bool Writable(string dir) => !OperatingSystem.IsWindows() && Directory.Exists(dir) && Access(dir, W_OK) == 0;
 
     bool UserOwned => home is not null
         && Path.GetFullPath(destination).StartsWith(Path.TrimEndingDirectorySeparator(home.Path) + Path.DirectorySeparatorChar, StringComparison.Ordinal);

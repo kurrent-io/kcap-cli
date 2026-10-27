@@ -112,13 +112,6 @@
         <Setter Property="CornerRadius" Value="8" />
         <Setter Property="Padding" Value="14,12" />
     </Style>
-    <Style Selector="Border.onboardingResolved">
-        <Setter Property="Background" Value="{StaticResource OnboardingResolvedFillBrush}" />
-        <Setter Property="BorderBrush" Value="{StaticResource OnboardingResolvedBorderBrush}" />
-        <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="CornerRadius" Value="8" />
-        <Setter Property="Padding" Value="14,12" />
-    </Style>
     <Style Selector="Border.onboardingCallout">
         <Setter Property="BorderBrush" Value="{StaticResource OnboardingControlBorderBrush}" />
         <Setter Property="BorderThickness" Value="1" />
@@ -261,10 +254,8 @@
         <Setter Property="Margin" Value="0,16,0,0" />
     </Style>
     <Style Selector="Button.onboardingCompact">
-        <Setter Property="Padding" Value="14,9" />
-        <Setter Property="FontFamily" Value="{StaticResource OnboardingMonoFont}" />
-        <Setter Property="FontSize" Value="10.5" />
-        <Setter Property="LetterSpacing" Value="0.8" />
+        <Setter Property="Padding" Value="14,7" />
+        <Setter Property="FontSize" Value="12.5" />
     </Style>
 
     <!-- Fields inside the pane keep the app's kcapField chrome, on the card's own surface. -->
