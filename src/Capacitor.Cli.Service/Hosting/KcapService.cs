@@ -22,8 +22,9 @@ sealed class KcapService : ServiceBase {
         CanShutdown = true;
         CanHandleSessionChangeEvent = true;
         _log = log;
-        _supervisor = new Supervisor(new WindowsDaemonHost(), TimeProvider.System, log);
-        var dispatcher = new ControlDispatcher(_supervisor, new RegistryEnrollmentIndex(), RemoveSelf, version, log);
+        ControlDispatcher? dispatcher = null;
+        _supervisor = new Supervisor(new WindowsDaemonHost(), TimeProvider.System, log, sid => dispatcher?.Supervised(sid));
+        dispatcher = new ControlDispatcher(_supervisor, new RegistryEnrollmentIndex(), RemoveSelf, version, log);
         _pipe = new ControlPipeServer(dispatcher, TimeProvider.System, log);
         _log.Write($"kcap-service {version}");
     }

@@ -8,9 +8,13 @@ namespace Capacitor.Cli.Service.Windows;
 sealed class RegistryEnrollmentIndex : IEnrollmentIndex {
     const string ProfileList = @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList";
 
-    public void Add(string sid) {
+    public bool Add(string sid) {
         using var index = Registry.LocalMachine.CreateSubKey(ServiceIdentity.IndexKey);
+        using (var existing = index.OpenSubKey(sid)) {
+            if (existing is not null) return false;
+        }
         index.CreateSubKey(sid).Dispose();
+        return true;
     }
 
     public void Remove(string sid) {

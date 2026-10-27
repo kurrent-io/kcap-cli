@@ -96,7 +96,7 @@ public class SupervisorTests {
         _host.StopRequestEndsDaemon = true;
         var supervisor = NewSupervisor();
         supervisor.Start();
-        await supervisor.StopAsync(Alice, CancellationToken.None);
+        await supervisor.StopAsync(Alice);
 
         supervisor.OnUnlock(1);
         await Assert.That(_host.LaunchCount).IsEqualTo(1);
@@ -112,7 +112,7 @@ public class SupervisorTests {
         var supervisor = NewSupervisor();
         supervisor.Start();
 
-        var status = await supervisor.StopAsync(Alice, CancellationToken.None);
+        var status = await supervisor.StopAsync(Alice);
 
         await Assert.That(_host.StopRequests).IsEquivalentTo([Alice]);
         await Assert.That(_host.Launched[0].Terminations).IsEqualTo(0);
@@ -125,7 +125,7 @@ public class SupervisorTests {
         var supervisor = NewSupervisor();
         supervisor.Start();
 
-        var stopping = supervisor.StopAsync(Alice, CancellationToken.None);
+        var stopping = supervisor.StopAsync(Alice);
         await WaitUntilAsync(() => _host.StopRequests.Count == 1, "the stop request");
         _time.Advance(Supervisor.GracefulStopWait);
         var status = await stopping;
@@ -135,6 +135,63 @@ public class SupervisorTests {
         _time.Advance(Supervisor.RelaunchPause * 4);
         await Task.Delay(50);
         await Assert.That(_host.LaunchCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_stop_during_the_relaunch_pause_cancels_the_relaunch() {
+        _host.SignIn(1, Alice);
+        var supervisor = NewSupervisor();
+        supervisor.Start();
+        _host.Launched[0].Exit(-1);
+        await WaitUntilAsync(() => supervisor.Status(Alice).State == DaemonState.Relaunching, "the relaunching state");
+
+        var status = await supervisor.StopAsync(Alice);
+        _time.Advance(Supervisor.RelaunchPause * 4);
+        await Task.Delay(50);
+
+        await Assert.That(status.State).IsEqualTo(DaemonState.Stopped);
+        await Assert.That(_host.LaunchCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Enrolling_a_changed_enrollment_replaces_the_running_daemon() {
+        _host.SignIn(1, Alice);
+        _host.StopRequestEndsDaemon = true;
+        var supervisor = NewSupervisor();
+        supervisor.Start();
+        _host.Enrollments[Alice] = _host.Enrollments[Alice] with { Name = "renamed" };
+
+        var status = await supervisor.EnrollAsync(Alice);
+
+        await Assert.That(_host.StopRequests).IsEquivalentTo([Alice]);
+        await Assert.That(_host.LaunchCount).IsEqualTo(2);
+        await Assert.That(status.Name).IsEqualTo("renamed");
+    }
+
+    [Test]
+    public async Task Enrolling_the_same_enrollment_leaves_the_running_daemon_alone() {
+        _host.SignIn(1, Alice);
+        var supervisor = NewSupervisor();
+        supervisor.Start();
+
+        var status = await supervisor.EnrollAsync(Alice);
+
+        await Assert.That(_host.StopRequests).IsEmpty();
+        await Assert.That(_host.LaunchCount).IsEqualTo(1);
+        await Assert.That(status.State).IsEqualTo(DaemonState.Running);
+    }
+
+    [Test]
+    public async Task Every_launched_or_adopted_user_is_reported_as_supervised() {
+        _host.SignIn(1, Alice);
+        _host.SignIn(2, Bob);
+        _host.Running = new FakeRunningDaemon(777);
+        var supervised = new List<string>();
+        var supervisor = new Supervisor(_host, _time, _log, supervised.Add);
+
+        supervisor.Start();
+
+        await Assert.That(supervised).IsEquivalentTo([Alice, Bob]);
     }
 
     [Test]

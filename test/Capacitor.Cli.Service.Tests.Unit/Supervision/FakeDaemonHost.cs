@@ -14,6 +14,8 @@ sealed class FakeDaemonHost : IDaemonHost {
     public readonly List<string> StopRequests = [];
     public FakeRunningDaemon? Running;
     public bool StopRequestEndsDaemon;
+    public bool LaunchFails;
+    public Action<SessionUser>? BeforeLaunch;
 
     public SessionUser SignIn(int sessionId, string sid, string name = "laptop") {
         var user = new SessionUser(sessionId, sid, $@"C:\Users\{sid}");
@@ -38,6 +40,8 @@ sealed class FakeDaemonHost : IDaemonHost {
     }
 
     public IRunningDaemon Launch(SessionUser user, Enrollment enrollment) {
+        BeforeLaunch?.Invoke(user);
+        if (LaunchFails) throw new InvalidOperationException("CreateProcessAsUser failed");
         lock (_gate) {
             var daemon = new FakeRunningDaemon(_nextPid++);
             Launched.Add(daemon);

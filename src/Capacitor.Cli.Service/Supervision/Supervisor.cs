@@ -9,7 +9,8 @@ namespace Capacitor.Cli.Service.Supervision;
 /// every daemon running, so a service restart or upgrade does not take users' agents down; the next
 /// start adopts them before it launches anything
 /// </summary>
-public sealed class Supervisor(IDaemonHost host, TimeProvider time, IServiceLog log) {
+/// <param name="supervising">Told each user whose daemon the supervisor launched or adopted</param>
+public sealed class Supervisor(IDaemonHost host, TimeProvider time, IServiceLog log, Action<string>? supervising = null) {
     public static readonly TimeSpan RelaunchPause    = TimeSpan.FromSeconds(5);
     public static readonly TimeSpan GracefulStopWait = TimeSpan.FromSeconds(15);
 
@@ -68,12 +69,38 @@ public sealed class Supervisor(IDaemonHost host, TimeProvider time, IServiceLog 
         return Status(sid);
     }
 
-    public async Task<DaemonStatus> StopAsync(string sid, CancellationToken ct) {
+    /// <summary>A new or changed enrollment: a daemon still running under the previous one is stopped
+    /// first, since a running daemon is otherwise left as it is</summary>
+    public async Task<DaemonStatus> EnrollAsync(string sid) {
+        if (SessionOf(sid) is { } user) {
+            Enrollment? current;
+            try {
+                current = host.EnrollmentOf(user, out _);
+            } catch (Exception) {
+                current = null;
+            }
+            bool replaced;
+            lock (_gate) replaced = current is not null && _entries.TryGetValue(sid, out var entry) && entry.Daemon is not null && entry.Enrollment != current;
+            if (replaced) {
+                log.Write($"enroll: {current!.Name} replaces the running daemon's enrollment");
+                await StopAsync(sid).ConfigureAwait(false);
+            }
+        }
+        return Start(sid);
+    }
+
+    /// <summary>The graceful wait runs its course even while the service stops: cutting it short would end
+    /// the job, and the agents a keep-agents stop was saving with it</summary>
+    public async Task<DaemonStatus> StopAsync(string sid) {
         Entry? entry;
         IRunningDaemon? daemon;
         lock (_gate) {
-            if (!_entries.TryGetValue(sid, out entry) || entry.Daemon is null) return Status(sid);
+            if (!_entries.TryGetValue(sid, out entry)) return Status(sid);
             entry.WantRunning = false;
+            if (entry.Daemon is null) {
+                if (entry.State is DaemonState.Relaunching or DaemonState.Failed) entry.State = DaemonState.Stopped;
+                return Describe(entry);
+            }
             entry.State = DaemonState.Stopping;
             daemon = entry.Daemon;
         }
@@ -84,7 +111,7 @@ public sealed class Supervisor(IDaemonHost host, TimeProvider time, IServiceLog 
             log.Write($"graceful stop of {entry.Enrollment.Name} could not be requested: {ex.Message}");
         }
 
-        var finished = await Task.WhenAny(daemon.Exited, Task.Delay(GracefulStopWait, time, ct)).ConfigureAwait(false);
+        var finished = await Task.WhenAny(daemon.Exited, Task.Delay(GracefulStopWait, time)).ConfigureAwait(false);
         if (finished != daemon.Exited) {
             log.Write($"{entry.Enrollment.Name} (pid {daemon.Pid}) did not stop within {GracefulStopWait.TotalSeconds:0}s; ending it");
             daemon.Terminate();
@@ -164,6 +191,7 @@ public sealed class Supervisor(IDaemonHost host, TimeProvider time, IServiceLog 
             }
         }
 
+        supervising?.Invoke(user.Sid);
         _ = WatchAsync(user.Sid, daemon);
         return null;
     }

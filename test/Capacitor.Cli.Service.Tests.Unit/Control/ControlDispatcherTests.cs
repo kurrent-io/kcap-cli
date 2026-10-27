@@ -154,6 +154,64 @@ public class ControlDispatcherTests {
     }
 
     [Test]
+    public async Task Enroll_indexes_the_user_before_their_daemon_starts() {
+        _host.SignIn(1, Alice);
+        var indexedAtLaunch = false;
+        _host.BeforeLaunch = _ => indexedAtLaunch = _index.Sids.Contains(Alice);
+        var dispatcher = NewDispatcher(out _);
+
+        await dispatcher.HandleAsync(Alice, """{"verb":"enroll"}""", CancellationToken.None);
+
+        await Assert.That(indexedAtLaunch).IsTrue();
+    }
+
+    [Test]
+    public async Task A_refused_enroll_keeps_a_user_who_was_already_indexed() {
+        _host.SignIn(1, Alice);
+        _host.Enrollments.Remove(Alice);
+        _index.Add(Alice);
+        var dispatcher = NewDispatcher(out _);
+
+        var response = Parse(await dispatcher.HandleAsync(Alice, """{"verb":"enroll"}""", CancellationToken.None));
+
+        await Assert.That(response.Ok).IsFalse();
+        await Assert.That(_index.Sids).Contains(Alice);
+    }
+
+    /// The service has dropped the user whatever state their daemon was in; a failure here would leave their
+    /// enrollment behind for a retry the service may no longer be there to answer
+    [Test]
+    public async Task Unenroll_succeeds_for_a_user_whose_daemon_failed_to_launch() {
+        _host.SignIn(1, Alice);
+        _host.LaunchFails = true;
+        var dispatcher = NewDispatcher(out _);
+        await dispatcher.HandleAsync(Alice, """{"verb":"enroll"}""", CancellationToken.None);
+
+        var response = Parse(await dispatcher.HandleAsync(Alice, """{"verb":"unenroll"}""", CancellationToken.None));
+
+        await Assert.That(response.Ok).IsTrue();
+        await Assert.That(response.Status!.State).IsEqualTo("stopped");
+        await Assert.That(_lastUserGone).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_supervised_user_is_indexed_until_the_service_starts_removing_itself() {
+        _host.SignIn(1, Alice);
+        _host.StopRequestEndsDaemon = true;
+        var dispatcher = NewDispatcher(out _);
+
+        dispatcher.Supervised(Bob);
+        await Assert.That(_index.Sids).Contains(Bob);
+
+        _index.Remove(Bob);
+        await dispatcher.HandleAsync(Alice, """{"verb":"enroll"}""", CancellationToken.None);
+        await dispatcher.HandleAsync(Alice, """{"verb":"unenroll"}""", CancellationToken.None);
+        dispatcher.Supervised(Bob);
+
+        await Assert.That(_index.IsEmpty).IsTrue();
+    }
+
+    [Test]
     [Arguments("""{"verb":"format-c"}""", "unknown verb 'format-c'")]
     [Arguments("not json", "the request is not a JSON object with a verb")]
     public async Task A_bad_request_gets_an_error_response(string line, string error) {
