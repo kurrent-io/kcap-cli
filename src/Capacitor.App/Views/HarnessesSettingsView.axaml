@@ -52,6 +52,7 @@
                                                 <CheckBox Classes="settingsHarnessCheck" Margin="0,0,20,0"
                                                           IsChecked="{Binding IsConfigured, Mode=OneWay}"
                                                           AutomationProperties.Name="{Binding RecordName}"
+                                                          ToolTip.Tip="{Binding RecordTip}"
                                                           Command="{Binding $parent[ItemsControl].((vm:HarnessesSettingsViewModel)DataContext).ToggleConnectionCommand}"
                                                           CommandParameter="{Binding}">
                                                     <TextBlock Classes="kcapHint" Text="{Binding RecordLabel}" Foreground="{StaticResource KcapTextBrush}" />
@@ -59,10 +60,10 @@
                                                 <CheckBox Classes="settingsHarnessCheck" IsVisible="{Binding OffersTools}"
                                                           IsChecked="{Binding Tools, Mode=OneWay}"
                                                           AutomationProperties.Name="{Binding ToolsName}"
-                                                          ToolTip.Tip="kcap's MCP servers and skills, so the agent can search your sessions and use kcap"
+                                                          ToolTip.Tip="{x:Static vm:HarnessSettingsRow.ToolsTip}"
                                                           Command="{Binding $parent[ItemsControl].((vm:HarnessesSettingsViewModel)DataContext).ToggleToolsCommand}"
                                                           CommandParameter="{Binding}">
-                                                    <TextBlock Classes="kcapHint" Text="kcap tools" Foreground="{StaticResource KcapTextBrush}" />
+                                                    <TextBlock Classes="kcapHint" Text="Agent tools" Foreground="{StaticResource KcapTextBrush}" />
                                                 </CheckBox>
                                             </WrapPanel>
                                             <StackPanel Spacing="8">

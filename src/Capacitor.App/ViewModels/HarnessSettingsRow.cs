@@ -51,12 +51,18 @@ public sealed class HarnessSettingsRow : ReactiveObject {
     public string? ConnectionTip => _wired switch {
         true => "kcap records this tool's sessions; each one goes to the profile its repository resolves to",
         null => "kcap could not read this tool's settings to tell whether it records",
-        _ => ToolsOnly ? "kcap's tools are installed, but sessions are not recorded" : null,
+        _ => ToolsOnly ? "The agent has kcap's tools, but its sessions are not recorded" : null,
     };
 
-    public string RecordLabel => ToolsBundled ? "Record sessions and kcap tools" : "Record sessions";
-    public string RecordName => $"Record {Label} sessions";
-    public string ToolsName => $"Install kcap tools for {Label}";
+    public string RecordLabel => ToolsBundled ? "Session recording and agent tools" : "Session recording";
+    public string RecordName => $"Session recording for {Label}";
+    public string RecordTip => ToolsBundled
+        ? $"kcap records {Label}'s sessions and gives it kcap's agent tools; {Label} installs the two together. The tools let the agent search your recorded sessions and use kcap from its chat."
+        : $"kcap records each {Label} session through hooks in its settings.";
+    public string ToolsName => $"Agent tools for {Label}";
+
+    public const string ToolsTip =
+        "kcap's MCP servers and skills: they let the agent search your recorded sessions and use kcap from its chat.";
 
     internal void SetWired(bool? wired) {
         _wired = wired;
