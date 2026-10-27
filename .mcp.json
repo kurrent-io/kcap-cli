@@ -3,10 +3,6 @@
     "avalonia-docs": {
       "type": "http",
       "url": "https://docs-mcp.avaloniaui.net/mcp"
-    },
-    "granola": {
-      "type": "http",
-      "url": "https://mcp.granola.ai/mcp"
     }
   }
 }
