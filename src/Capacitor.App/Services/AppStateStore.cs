@@ -46,10 +46,12 @@ public interface IAppStateStore {
 public sealed partial class AppStateStore(string path) : IAppStateStore {
     readonly SemaphoreSlim _gate = new(1, 1);
 
+    // An uncontended gate completes synchronously, so the file I/O is pushed to the pool explicitly:
+    // callers await these from the UI thread.
     public async Task<AppState> LoadAsync() {
         await _gate.WaitAsync().ConfigureAwait(false);
         try {
-            return Read();
+            return await Task.Run(Read).ConfigureAwait(false);
         } finally {
             _gate.Release();
         }
@@ -58,8 +60,7 @@ public sealed partial class AppStateStore(string path) : IAppStateStore {
     public async Task<bool> UpdateAsync(Func<AppState, AppState> mutate) {
         await _gate.WaitAsync().ConfigureAwait(false);
         try {
-            var next = mutate(Read());
-            if (Write(next)) return true;
+            if (await Task.Run(() => Write(mutate(Read()))).ConfigureAwait(false)) return true;
 
             Console.Error.WriteLine($"kcap: failed to persist app state to {path}");
             return false;

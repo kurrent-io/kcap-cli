@@ -809,6 +809,7 @@ public class LauncherPaneViewSmokeTests {
             }], 1, false));
 
         public async Task ResolveAsync() {
+            await Vm.AccountMemoryLoadedForTesting;
             AnswerListing();
             await Vm.SelectRepositoryAsync("/repos/kcap-cli");
             Snapshots.OnNext(AccountsSnapshot(1, HomeAccount, WorkAccount));

@@ -1418,7 +1418,7 @@ public partial class App : Application {
             // A pending setup reopens a fresh wizard, so this one is not left beside it.
             if (_shutdown.IsCancellationRequested || LocalSetupState.Pending(_localRoot)) window.Close();
             else {
-                var state = await Task.Run(_appState.LoadAsync);
+                var state = await _appState.LoadAsync();
                 if (_shutdown.IsCancellationRequested) window.Close();
                 else if (window.IsVisible) _adoptableWindow = (window, state);
             }
