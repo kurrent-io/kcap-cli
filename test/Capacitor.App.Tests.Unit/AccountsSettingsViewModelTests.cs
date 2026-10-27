@@ -325,4 +325,20 @@ public class AccountsSettingsViewModelTests {
 
         await Assert.That(vm.Candidates.Single()).IsEqualTo(codexBeside);
     });
+
+    [Test]
+    public Task A_failure_after_the_daemon_drops_shows_without_a_card() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var rig = new Rig(Snapshot);
+        var vm = rig.Vm;
+        var pending = new TaskCompletionSource<MutationOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.Outcome = _ => pending.Task;
+
+        var removing = vm.RemoveCommand.Execute(rig.Row("work")).ToTask();
+        rig.Accounts.SnapshotSubject.OnNext(null);
+        await WaitUntilAsync(() => vm.Groups.Count == 0);
+        pending.SetResult(new MutationOutcome.Failed(1, "daemon went away", RecoverySurface.Attention));
+        await removing;
+
+        await Assert.That(vm.UnplacedNotice).IsEqualTo(new AccountsNotice("Could not remove work", "daemon went away"));
+    });
 }

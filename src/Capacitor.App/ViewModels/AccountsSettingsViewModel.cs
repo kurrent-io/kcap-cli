@@ -80,7 +80,10 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
 
     public IReadOnlyList<AccountVendorGroup> Groups {
         get => _groups;
-        private set => this.RaiseAndSetIfChanged(ref _groups, value);
+        private set {
+            this.RaiseAndSetIfChanged(ref _groups, value);
+            this.RaisePropertyChanged(nameof(UnplacedNotice));
+        }
     }
 
     public bool CanManage {
@@ -100,6 +103,9 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
             Groups = WithNotice(Groups);
         }
     }
+
+    /// A notice whose tool card is not on the page, such as after the daemon dropped mid-action.
+    public AccountsNotice? UnplacedNotice => Groups.Any(g => g.Notice is not null) ? null : _notice;
 
     void Report(string? vendor, AccountsNotice? notice) {
         _noticeVendor = vendor;

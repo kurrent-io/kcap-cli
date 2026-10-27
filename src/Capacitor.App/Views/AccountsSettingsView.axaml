@@ -147,6 +147,23 @@
                 </ItemsControl.ItemTemplate>
             </ItemsControl>
 
+            <Border Classes="settingsError" Classes.warning="{Binding UnplacedNotice.IsWarning, FallbackValue=False}"
+                    IsVisible="{Binding UnplacedNotice, Converter={x:Static ObjectConverters.IsNotNull}}">
+                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+                    <Panel VerticalAlignment="Top" Margin="0,2,0,0">
+                        <views:AppIcon Kind="CircleAlert" Size="14" Foreground="{StaticResource KcapDangerBrush}"
+                                       IsVisible="{Binding !UnplacedNotice.IsWarning, FallbackValue=False}" />
+                        <views:AppIcon Kind="TriangleAlert" Size="14" Foreground="{StaticResource KcapWarningBrush}"
+                                       IsVisible="{Binding UnplacedNotice.IsWarning, FallbackValue=False}" />
+                    </Panel>
+                    <StackPanel Grid.Column="1" Spacing="2">
+                        <TextBlock Classes="settingsErrorTitle" Text="{Binding UnplacedNotice.Title, FallbackValue={x:Null}}" />
+                        <SelectableTextBlock Classes="settingsErrorDetail" Text="{Binding UnplacedNotice.Detail, FallbackValue={x:Null}}"
+                                             IsVisible="{Binding UnplacedNotice.Detail, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+
             <Button x:Name="AddAccountButton" Classes="kcapChip" Content="Add account…" HorizontalAlignment="Left"
                     IsVisible="{Binding CanManage}" IsEnabled="{Binding !IsBusy}">
                 <Button.Flyout>
