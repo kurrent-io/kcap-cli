@@ -60,6 +60,26 @@ public class ExperimentalSettingsViewModelTests {
     });
 
     [Test]
+    [Arguments(false, "")]
+    [Arguments(true, ExperimentalFeatureRowViewModel.WaitingForServerText)]
+    public Task An_unregistered_daemon_reads_as_no_change_until_the_switch_is_flipped(bool on, string expected) =>
+        AvaloniaSession.RunOnUiAsync(async () => {
+            var store = new ExperimentalSettingsStore(Config.Root);
+            if (on) await store.SetAsync("work", Id, true, CancellationToken.None);
+            var service = Connected();
+            using var vm = new ExperimentalSettingsViewModel(store, "work", service);
+            await vm.Loaded;
+            var row = vm.Features.Single();
+
+            service.SnapshotsSubject.OnNext(Reporting(resolved: on, active: on, acknowledged: false, failed: true));
+            await Until(() => row.StatusText == expected, "an unprompted registration failure");
+
+            row.IsEnabled = !on;
+            service.SnapshotsSubject.OnNext(Reporting(resolved: !on, active: !on, acknowledged: false, failed: true));
+            await Until(() => row.StatusText == ExperimentalFeatureRowViewModel.AppliedLocallyText, "a flipped switch");
+        });
+
+    [Test]
     public Task Status_text_follows_each_snapshot() => AvaloniaSession.RunOnUiAsync(async () => {
         var store = new ExperimentalSettingsStore(Config.Root);
         var service = Connected();
