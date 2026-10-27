@@ -50,6 +50,7 @@ public class UninstallWindowTests {
                 await Assert.That(settings.IsVisible).IsFalse();
                 await Assert.That(progress.IsVisible).IsTrue();
                 await Assert.That(progress.IsActive).IsTrue();
+                await Assert.That(progress.Topmost).IsTrue();
                 await Assert.That(run.State).IsEqualTo(UninstallRunState.Preparing);
                 await Assert.That(progress.FindControl<ProgressBar>("Progress")!.IsVisible).IsTrue();
                 await Assert.That(progress.FindControl<ProgressBar>("Progress")!.IsIndeterminate).IsTrue();
@@ -64,6 +65,7 @@ public class UninstallWindowTests {
                 await Assert.That(quits).IsEqualTo(0);
                 await Assert.That(progress.IsVisible).IsTrue();
                 await Assert.That(progress.Title).IsEqualTo("kcap is uninstalled");
+                await Assert.That(progress.Topmost).IsFalse();
                 await Assert.That(progress.FindControl<TextBlock>("RestartAdvice")!.IsVisible).IsTrue();
                 await Assert.That(progress.FindControl<ProgressBar>("Progress")!.IsVisible).IsFalse();
                 await Assert.That(progress.Width).IsEqualTo(480);
@@ -107,6 +109,7 @@ public class UninstallWindowTests {
                 await run.RunAsync();
                 Dispatcher.UIThread.RunJobs();
                 await Assert.That(run.IsFinished).IsFalse();
+                await Assert.That(window.Topmost).IsFalse();
                 await Assert.That(window.Title).IsEqualTo("kcap was not fully uninstalled");
                 await Assert.That(window.FindControl<TextBlock>("RestartAdvice")!.IsVisible).IsFalse();
                 await Assert.That(window.FindControl<Control>("HistoryPanel")!.IsVisible).IsTrue();
