@@ -27,9 +27,16 @@ sealed class DocsShotScene : IAsyncDisposable {
     }
 
     public async ValueTask DisposeAsync() {
+        List<Exception>? failures = null;
         while (_teardown.TryPop(out var step)) {
-            await step();
-            Dispatcher.UIThread.RunJobs();
+            try {
+                await step();
+                Dispatcher.UIThread.RunJobs();
+            } catch (Exception e) {
+                (failures ??= []).Add(e);
+            }
         }
+        if (failures is not null)
+            throw failures.Count == 1 ? failures[0] : new AggregateException("Scene teardown failed", failures);
     }
 }

@@ -157,15 +157,16 @@ static class DocsShotScenes {
             rail: rail, home: home, tenantName: localServerDown ? "local" : "northwind", laneStatus: lane,
             openFeedback: openFeedback, requestSetup: requestSetup) { Web = web };
         scene.Present(new Views.MainWindow { DataContext = vm });
+        Task? pendingRead = null;
         scene.Defer(async () => {
             vm.CloseWorkspace();
             Dispatcher.UIThread.RunJobs();
             await Task.WhenAll(workspaceTeardowns);
+            await (pendingRead ?? Task.CompletedTask);
         });
 
         if (transcript is not null) {
-            var transcriptPath = transcript.PathTo("transcript.jsonl");
-            await File.WriteAllLinesAsync(transcriptPath, Transcript);
+            var transcriptPath = transcript.CreateFile("transcript.jsonl", string.Join('\n', Transcript));
             vm.OpenSession("a1");
             Dispatcher.UIThread.RunJobs();
             service.Agents.AddOrUpdate(service.Agents.Lookup("a1").Value with { TranscriptPath = transcriptPath });
@@ -173,6 +174,7 @@ static class DocsShotScenes {
             var workspace = (WorkspaceViewModel)vm.CurrentWorkspace!;
             await (workspace.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
             await (workspace.Chat!.PendingReadForTesting ?? Task.CompletedTask);
+            pendingRead = workspace.Chat.PendingReadForTesting;
             Dispatcher.UIThread.RunJobs();
             await attach.Created[^1].TriggerAttached([]);
             Dispatcher.UIThread.RunJobs();

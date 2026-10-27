@@ -24,7 +24,7 @@ public sealed class DocsShots {
             var dir = Environment.GetEnvironmentVariable(DocsShotScenes.OutEnvVar);
             Skip.When(dir is null,
                 $"Docs screenshot harness: set {DocsShotScenes.OutEnvVar} to the absolute path of an existing directory to render the figures");
-            if (!Path.IsPathRooted(dir) || !Directory.Exists(dir))
+            if (!Path.IsPathFullyQualified(dir) || !Directory.Exists(dir))
                 throw new InvalidOperationException(
                     $"{DocsShotScenes.OutEnvVar} is '{dir}', which is not the absolute path of an existing directory");
             return dir;
