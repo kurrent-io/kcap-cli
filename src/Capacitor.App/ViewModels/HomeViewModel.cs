@@ -343,6 +343,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     (string RepoPath, string Vendor, string Machine, bool Remote)? _accountTarget;
     bool _applyingAccountInputs;
     IReadOnlyDictionary<string, string>? _accountMemory;
+    readonly TaskCompletionSource _accountMemoryLoaded = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// Completes once the remembered accounts have been read, which happens off the UI thread.
+    internal Task AccountMemoryLoadedForTesting => _accountMemoryLoaded.Task;
     Task _accountMemoryWrites = Task.CompletedTask;
     // Live mirrors of the account inputs, read by StartAsync against its captured draft.
     DaemonListing _currentListing = new(null, 0, false);
@@ -676,6 +680,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
                 .Subscribe(state => {
                     _accountMemory = state.AccountByRepo;
                     _accountChooser.SetMemoryLoaded(true);
+                    _accountMemoryLoaded.TrySetResult();
                 })
                 .DisposeWith(_disposables);
         }

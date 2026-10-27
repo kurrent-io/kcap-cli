@@ -91,6 +91,7 @@ public class HomeViewModelAccountTests {
                 localMachineId: localMachineId,
                 listing: listings.Listing, daemonAccounts: listings.DaemonAccounts, localAccounts: LocalAccounts,
                 retryListing: () => OnRetry());
+            await Vm.AccountMemoryLoadedForTesting;
             return Vm;
         }
 
