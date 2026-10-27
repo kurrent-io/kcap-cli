@@ -14,7 +14,10 @@ public sealed record DaemonStatusDto(DaemonInfoDto Daemon, List<AgentStatusDto> 
     // Whether any agent is running or starting, admitted launches included, observed at once: the two lists, read one
     // after the other, cannot promise that. A yes, not a count, since one launch can be admitted and published at
     // once. Null from an older daemon, which a client reads as unknown.
-    bool? Busy = null);
+    bool? Busy = null,
+    // Each experimental feature as the daemon resolved it. Null from an older daemon, which a client reads as
+    // unknown, never as "all off".
+    List<ExperimentalFeatureStatusDto>? Experimental = null);
 
 /// <summary>
 /// <see cref="Connection"/> ∈ connected|connecting|reconnecting|disconnected (lowercase).
@@ -189,4 +192,5 @@ public sealed class UsageLimitNoticeDto : IEquatable<UsageLimitNoticeDto> {
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
 [JsonSerializable(typeof(DaemonStatusDto))]
+[JsonSerializable(typeof(ExperimentalFeatureStatusDto))]
 public partial class StatusIpcJsonContext : JsonSerializerContext;

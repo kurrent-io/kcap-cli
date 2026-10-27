@@ -2388,6 +2388,15 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// <summary>One poll that reads what is on disk now. A tick that lands while an earlier read is still
+    /// in flight starts nothing, and that earlier read may have missed the newest line, so it is drained
+    /// first.</summary>
+    static async Task PollAsync(ChatTabViewModel chat, FakeTimeProvider time) {
+        await (chat.PendingReadForTesting ?? Task.CompletedTask);
+        time.Advance(ChatTabViewModel.PollInterval);
+        await (chat.PendingReadForTesting ?? Task.CompletedTask);
+    }
+
     static string User(string text) => UserLine.Replace("hello", text);
 
     static async Task AssertRecallOrder(ChatTabViewModel chat, params string[] newestFirst) {
@@ -4020,8 +4029,7 @@ public class ChatTabViewModelTests {
             await chat.DiscardQueuedCommand.Execute(retry);
 
             File.AppendAllText(path, User("same prompt") + "\n");
-            time.Advance(ChatTabViewModel.PollInterval);
-            await (chat.PendingReadForTesting ?? Task.CompletedTask);
+            await PollAsync(chat, time);
             await Assert.That(original.Acknowledged).IsTrue();
             await Assert.That(input.Hint).IsEqualTo(warning);
             await Assert.That(chat.ComposerText).IsEqualTo("keep my draft");
@@ -4107,8 +4115,7 @@ public class ChatTabViewModelTests {
                 await Assert.That(original.DispatchId).IsEqualTo(first.DispatchId);
             } else {
                 File.AppendAllText(path, User("same prompt") + "\n");
-                time.Advance(ChatTabViewModel.PollInterval);
-                await (chat.PendingReadForTesting ?? Task.CompletedTask);
+                await PollAsync(chat, time);
                 await Assert.That(original.Acknowledged).IsTrue();
                 await Assert.That(later.Acknowledged).IsFalse();
                 await Assert.That(chat.QueuedMessages.Single()).IsSameReferenceAs(later);
@@ -4158,14 +4165,12 @@ public class ChatTabViewModelTests {
                 await Assert.That(original.CanSendNow || retry.CanSendNow).IsFalse();
 
                 File.AppendAllText(path, User("do it") + "\n");
-                time.Advance(ChatTabViewModel.PollInterval);
-                await (chat.PendingReadForTesting ?? Task.CompletedTask);
+                await PollAsync(chat, time);
                 queue.OnNext([second]);
                 await Assert.That(chat.QueuedMessages.Single()).IsSameReferenceAs(retry);
                 queue.OnNext([]);
                 File.AppendAllText(path, User("do it") + "\n");
-                time.Advance(ChatTabViewModel.PollInterval);
-                await (chat.PendingReadForTesting ?? Task.CompletedTask);
+                await PollAsync(chat, time);
                 await Assert.That(chat.HasQueuedMessages).IsFalse();
             } finally { await chat.TeardownAsync(); }
         });
@@ -4205,14 +4210,12 @@ public class ChatTabViewModelTests {
             var retry = chat.QueuedMessages.Single();
             queue.OnNext([Item("look", Guid.NewGuid())]);
             File.AppendAllText(path, User("look") + "\n");
-            time.Advance(ChatTabViewModel.PollInterval);
-            await (chat.PendingReadForTesting ?? Task.CompletedTask);
+            await PollAsync(chat, time);
             await Assert.That(chat.QueuedMessages.Single()).IsSameReferenceAs(retry);
             await Assert.That(retry.CanSendNow).IsFalse();
             queue.OnNext([]);
             File.AppendAllText(path, User("look") + "\n");
-            time.Advance(ChatTabViewModel.PollInterval);
-            await (chat.PendingReadForTesting ?? Task.CompletedTask);
+            await PollAsync(chat, time);
             await Assert.That(chat.HasQueuedMessages).IsFalse();
         } finally { await chat.TeardownAsync(); }
     });
@@ -4351,8 +4354,7 @@ public class ChatTabViewModelTests {
 
             await (chat.PendingReadForTesting ?? Task.CompletedTask);
             feed.ResetNext = true;
-            time.Advance(ChatTabViewModel.PollInterval);
-            await (chat.PendingReadForTesting ?? Task.CompletedTask);
+            await PollAsync(chat, time);
             await Assert.That(chat.QueuedMessages.Single(q => q.IsForeign)).IsSameReferenceAs(foreign);
             await Assert.That(foreign.IsUnconfirmed).IsFalse();
             await chat.TeardownAsync();
@@ -4381,8 +4383,7 @@ public class ChatTabViewModelTests {
             await Assert.That(await chat.SendCommand.CanExecute.FirstAsync()).IsEqualTo(beforeSeed);
 
             feed.ResetNext = true;
-            time.Advance(ChatTabViewModel.PollInterval);
-            await (chat.PendingReadForTesting ?? Task.CompletedTask);
+            await PollAsync(chat, time);
             await Assert.That(await chat.SendCommand.CanExecute.FirstAsync()).IsTrue();
             await chat.TeardownAsync();
         });
@@ -4431,8 +4432,7 @@ public class ChatTabViewModelTests {
             await Assert.That(chat.ActivityNote).IsEqualTo("");
 
             // How long a refusal stands is the feed's to say: a read that is not one clears it.
-            time.Advance(ChatTabViewModel.PollInterval);
-            await (chat.PendingReadForTesting ?? Task.CompletedTask);
+            await PollAsync(chat, time);
             await Assert.That(chat.Phase).IsEqualTo(ChatTabPhase.Reading);
             await Assert.That(chat.PhaseNote).IsEqualTo("Waiting for chat…");
             await chat.TeardownAsync();

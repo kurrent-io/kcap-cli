@@ -19,10 +19,7 @@ static class ServiceEnvironment {
     /// rest stay uncaptured until someone asks.</para></summary>
     static readonly string[] Keys =
         ["PATH", ProfileOverrides.ProfileVar, ProfileOverrides.UrlVar, HarnessId.Claude.PathEnvVar, HarnessId.Codex.PathEnvVar,
-         "KCAP_CONSENT_SEED_DEFAULT", "KCAP_EXPECT_SERVER_URL",
-         // Codex transport selection + interactive opt-in: the daemon reads both from its own
-         // environment and nowhere else, so the install has to carry them into the unit.
-         "KCAP_CODEX_TRANSPORT", "KCAP_CODEX_APPSERVER_INTERACTIVE"];
+         "KCAP_CONSENT_SEED_DEFAULT", "KCAP_EXPECT_SERVER_URL"];
 
     /// <summary>
     /// The unattended reviewers' opt-OUT switches. Carried on every platform: these are booleans, not

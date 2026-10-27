@@ -15,7 +15,15 @@
         <Border Height="32" VerticalAlignment="Top" Background="Transparent"
                 PointerPressed="OnChromePointerPressed" />
 
-        <Grid Margin="36,44,36,28" RowDefinitions="Auto,*,Auto">
+        <StackPanel x:Name="HandoffContent" IsVisible="False" Margin="36,44,36,28" Spacing="18">
+            <TextBlock Text="Uninstalling kcap…" FontSize="19" FontWeight="SemiBold" LineHeight="26"
+                       LetterSpacing="-0.2" Foreground="{StaticResource KcapTextBrush}" />
+            <TextBlock Text="Closing kcap before removing its background services and app."
+                       TextWrapping="Wrap" Foreground="{StaticResource KcapMutedBrush}" />
+            <ProgressBar IsIndeterminate="True" Height="4" />
+        </StackPanel>
+
+        <Grid x:Name="RunContent" Margin="36,44,36,28" RowDefinitions="Auto,*,Auto">
             <TextBlock Grid.Row="0" Text="{Binding Heading}"
                        FontSize="19" FontWeight="SemiBold" LineHeight="26" LetterSpacing="-0.2"
                        Foreground="{StaticResource KcapTextBrush}" />

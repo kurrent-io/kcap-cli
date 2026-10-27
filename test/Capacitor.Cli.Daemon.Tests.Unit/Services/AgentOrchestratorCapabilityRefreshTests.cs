@@ -1,9 +1,11 @@
 using System.Runtime.Versioning;
 using System.Text.Json;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Pty;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
@@ -197,6 +199,30 @@ public class AgentOrchestratorCapabilityRefreshTests {
         await Assert.That(stub.ProbeCalls).IsEqualTo(0);
         await Assert.That(config.VendorModels!["pi"].Single().Value).IsEqualTo("p/a");
         await Assert.That(server.RegisterDaemonCalls).IsEqualTo(1);
+    }
+
+    /// <summary>A switch flip says nothing about any vendor's models, so the refresh it triggers re-resolves
+    /// Codex without spawning a catalog probe.</summary>
+    [Test]
+    public async Task An_experimental_settings_change_spawns_no_catalog_probe() {
+        var stub = new StubCatalogFactory("pi", [new("p/b", "B · p")]);
+        var (orch, _, config) = BuildWithCatalog(stub, Catalog(new VendorModelOption("p/a", "A · p")));
+        await using var _ = orch;
+        config.CodexPath = "/definitely/missing/codex";
+        using var watcher = new ExperimentalSettingsWatcher(
+            config, orch, NullLogger<ExperimentalSettingsWatcher>.Instance, TimeProvider.System);
+        await watcher.StartAsync(CancellationToken.None);
+        await watcher.Watching.WaitAsync(TimeSpan.FromSeconds(30));
+
+        await new ExperimentalSettingsStore(config.ConfigRoot)
+            .SetAsync(config.Profiles.Name, ExperimentalFeatures.CodexAppServer.Id, true, CancellationToken.None);
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (!config.CodexResolution.SwitchOn && DateTime.UtcNow < deadline) await Task.Delay(20);
+        await orch.CapabilityRefreshForTest;
+        await watcher.StopAsync(CancellationToken.None);
+
+        await Assert.That(config.CodexResolution.SwitchOn).IsTrue();
+        await Assert.That(stub.ProbeCalls).IsEqualTo(0);
     }
 
     [Test]

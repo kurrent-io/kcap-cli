@@ -451,6 +451,7 @@ public partial class App : Application {
         window.Closed += (_, _) => Quit(0);
         desktop.MainWindow = window;
         window.Show();
+        window.Activate();
         _ = run.RunAsync();
     }
 
@@ -1036,6 +1037,7 @@ public partial class App : Application {
                 return;
             }
             var start = Program.Host.NewCopy([.. request.RelaunchArgs]);
+            UninstallWindow.ShowHandoff(desktop.Windows);
             desktop.Exit += (_, _) => {
                 try { Process.Start(start); }
                 catch (Exception ex) { Console.Error.WriteLine($"kcap: could not start the uninstall: {ex.Message}"); }
@@ -1099,6 +1101,7 @@ public partial class App : Application {
                 Appearance = new AppearanceSettingsViewModel(_uiScale),
                 Privacy    = new PrivacySettingsViewModel(_telemetry, _config, _usageNotice),
                 Search     = _localStack?.Search,
+                Experimental = new ExperimentalSettingsViewModel(new ExperimentalSettingsStore(_config), settings.ProfileName, service),
             };
         } catch (Exception ex) {
             notifier.Notify($"Could not open settings: {ex.Message}");

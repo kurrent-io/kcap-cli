@@ -1746,7 +1746,10 @@ public readonly record struct LaunchAgentCommand(
         string?           Title        = null,
         bool              TitleDerived = false,
         // Registry id of the account to run under; null runs under the vendor's default directory.
-        string?           AccountId = null
+        string?           AccountId = null,
+        // The transport the server will validate this launch's registration against: "app-server" or
+        // "pty". Null from an older server, which leaves the daemon's own routing to decide.
+        string?           ExpectedRuntimeTransport = null
     );
 
 /// <summary>Caller-selected Codex launch posture. Valid ONLY for interactive, daemon-owned-worktree
