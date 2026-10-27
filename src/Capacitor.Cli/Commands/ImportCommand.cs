@@ -1969,6 +1969,8 @@ class ImportCommand(
             }
         }
 
+        await RecordImportedRepositoriesAsync(classifications, importedSessionIds, selectedIds, sessionCwds, display);
+
         // --- An explicit visibility for everything this run touched ---
         //
         // Both stops need one, and for the same reason: the profile default cannot express either.
@@ -2138,6 +2140,27 @@ class ImportCommand(
         onFinished?.Invoke(new ImportRunOutcome(final, visibilityFailures, partition));
 
         return 0;
+    }
+
+    /// <summary>A session the server already holds counts too: a re-run of import, or setup after a
+    /// lost <c>repos.json</c>, must still fill the launcher's repository list.</summary>
+    async Task RecordImportedRepositoriesAsync(
+            IReadOnlyList<SessionClassification> classifications,
+            IEnumerable<string>                  importedSessionIds,
+            HashSet<string>?                     selectedIds,
+            IReadOnlyDictionary<string, string>  sessionCwds,
+            ImportDisplay                        display
+        ) {
+        var imported = importedSessionIds.ToHashSet(StringComparer.Ordinal);
+        var captured = classifications.Where(c => imported.Contains(c.SessionId)
+                                               || c.Status == ClassificationStatus.AlreadyLoaded
+                                               && (selectedIds is null || selectedIds.Contains(c.SessionId)));
+
+        try {
+            await new RepoPathStore(config, time).RecordAsync(ImportedRepositories.Collect(captured, sessionCwds));
+        } catch (Exception e) when (e is IOException or UnauthorizedAccessException or TimeoutException) {
+            display.Line($"Could not record imported repositories: {e.Message}");
+        }
     }
 
     /// <summary>
