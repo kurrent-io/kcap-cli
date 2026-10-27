@@ -13,14 +13,17 @@ public sealed class UpdateCommand(
     internal const string BundledMessage =
         "This kcap is bundled with the kcap desktop app; updates arrive through the app (\"Check for Updates…\" in the menu bar).";
 
-    /// <summary>Printed by `kcap update` in the desktop app's snap, where snapd owns updates.</summary>
-    internal static string SnapMessage(string? snapName) =>
-        $"This kcap is part of the Kurrent Capacitor snap; snapd keeps it up to date. To update now: sudo snap refresh{(snapName is null ? "" : " " + snapName)}";
+    /// <summary>Printed by `kcap update` in the desktop app's snap. snapd refreshes a Store install, but never a
+    /// local one (`snap install --dangerous`, revisions x1, x2, …), so that one is pointed at a new .snap file.</summary>
+    internal static string SnapMessage(SnapLayout? snap) =>
+        snap is not null && snap.Revision.StartsWith('x')
+            ? $"This kcap is a locally installed snap (revision {snap.Revision}); snapd does not update it. Install a newer one with: sudo snap install --dangerous --classic <file>.snap"
+            : $"This kcap is part of the kcap snap; snapd keeps it up to date. To update now: sudo snap refresh{(snap is null ? "" : " " + snap.Name)}";
 
     readonly InstallKind _kind = kind ?? InstallProvenance.Kind();
 
-    /// <summary>The snap to name in <see cref="SnapMessage"/>. A seam: production reads the running binary's.</summary>
-    internal string? SnapName { get; init; } = SnapLayout.OfRunningBinary()?.Name;
+    /// <summary>The snap <see cref="SnapMessage"/> describes. A seam: production reads the running binary's.</summary>
+    internal SnapLayout? Snap { get; init; } = SnapLayout.OfRunningBinary();
 
     bool AppBundled => _kind == InstallKind.App;
 
@@ -91,7 +94,7 @@ public sealed class UpdateCommand(
         }
 
         if (_kind == InstallKind.Snap) {
-            await Console.Out.WriteLineAsync(checkOnly ? BundledCheckJson(GetCurrentVersion(), channel, "snap") : SnapMessage(SnapName));
+            await Console.Out.WriteLineAsync(checkOnly ? BundledCheckJson(GetCurrentVersion(), channel, "snap") : SnapMessage(Snap));
 
             return 0;
         }

@@ -2834,6 +2834,8 @@ kcap feedback --feedback                               # send feedback; prompts 
 > **The snap** ships `kcap` with the desktop app, and snapd keeps both up to date:
 > there `kcap update` changes nothing and names `sudo snap refresh kcap` to update
 > now, and `kcap update --check` reports `newer: false` with `install_tag: "snap"`.
+> A snap installed from a file (`snap install --dangerous`) is never refreshed by
+> snapd, so `kcap update` points it at a newer `.snap` file instead.
 > The paths kcap writes — the daemon service unit, MCP registrations, git hooks
 > and the Claude Code plugin — name `/snap/kcap/current/…`, so they follow each
 > refresh.

@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core.Install;
 
 namespace Capacitor.Cli.Tests.Unit;
 
@@ -31,7 +32,17 @@ public class UpdateCommandBundledTests {
 
     [Test]
     public async Task Snap_message_points_at_snap_refresh() {
-        await Assert.That(UpdateCommand.SnapMessage("kurrent-capacitor")).EndsWith("sudo snap refresh kurrent-capacitor");
+        await Assert.That(UpdateCommand.SnapMessage(new SnapLayout("kcap", "42"))).EndsWith("sudo snap refresh kcap");
         await Assert.That(UpdateCommand.SnapMessage(null)).EndsWith("sudo snap refresh");
+    }
+
+    /// <summary>snapd never refreshes a `--dangerous` install, so pointing it at `snap refresh` would be wrong.</summary>
+    [Test]
+    public async Task A_local_snap_is_pointed_at_a_new_snap_file() {
+        var message = UpdateCommand.SnapMessage(new SnapLayout("kcap", "x3"));
+
+        await Assert.That(message).Contains("revision x3");
+        await Assert.That(message).Contains("sudo snap install --dangerous --classic");
+        await Assert.That(message).DoesNotContain("snap refresh");
     }
 }
