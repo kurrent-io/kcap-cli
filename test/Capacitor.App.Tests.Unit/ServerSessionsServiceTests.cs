@@ -26,6 +26,10 @@ public class ServerSessionsServiceTests {
             lock (_lock) _answers[(state, owner, offset)] = new(null, 0);
         }
 
+        public void Refuse(string state, string? owner, int offset, TimeSpan retryAfter) {
+            lock (_lock) _answers[(state, owner, offset)] = new(null, 0, RetryAfter: retryAfter);
+        }
+
         public async Task<ServerSessionsFetch> Fetch(ServerSessionsQuery query, CancellationToken ct) {
             lock (_lock) _calls.Add(query);
             if (Gate is { } gate) await gate(query);
@@ -143,6 +147,73 @@ public class ServerSessionsServiceTests {
         await Assert.That(service.Ended.Count).IsEqualTo(40);
         await Assert.That(service.Ended.Keys.OrderBy(k => k, StringComparer.Ordinal))
             .IsEquivalentTo(fresh[..40].Select(r => r.SessionId).OrderBy(k => k, StringComparer.Ordinal).ToList());
+    }
+
+    /// One failed page keeps what the reconcile read before it, and does not take the rows of the
+    /// pages it never reached off the rail.
+    [Test]
+    public async Task A_reconcile_that_fails_a_page_keeps_the_pages_it_read() {
+        var (lane, listing, _, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        Connect(lane);
+        await Eventually(() => service.Ended.Count == 20, "first page");
+        await service.ShowMoreAsync();
+        await Eventually(() => service.Ended.Count == 40, "second page");
+
+        listing.Answer("ended", "me", 0, 213, [Row("n1"), .. Rows("s", 1, 19)]);
+        listing.Fail("ended", "me", 20);
+        await service.ReconcileAsync();
+
+        await Assert.That(service.Ended.Lookup("n1").HasValue).IsTrue();
+        await Assert.That(Enumerable.Range(21, 20).All(i => service.Ended.Lookup($"s{i}").HasValue)).IsTrue();
+    }
+
+    /// The server refuses a read past the user's budget and says when to come back: nothing is
+    /// re-requested before then, and the requests in between fold into one read after.
+    [Test]
+    public async Task A_refused_read_holds_every_read_until_the_servers_retry_time() {
+        var (lane, listing, time, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        // Yields, so a read that re-requests without holding spins off the test's thread.
+        listing.Gate = async _ => await Task.Yield();
+        listing.Refuse("ended", "me", 0, TimeSpan.FromSeconds(30));
+        Connect(lane);
+        await Eventually(() => listing.Count("ended", "me", 0) == 1, "refused page");
+        await Eventually(() => service.Live.Count == 2, "live rows kept from the refused reconcile");
+
+        var calls = listing.Calls.Count;
+        lane.SessionPushesSubject.OnNext(new SessionPush(SessionPushKind.ActiveChanged, "live-me"));
+        lane.SessionPushesSubject.OnNext(new SessionPush(SessionPushKind.ActiveChanged, "live-other"));
+        time.Advance(TimeSpan.FromSeconds(29));
+        await Task.Delay(100);
+        await Assert.That(listing.Calls.Count).IsEqualTo(calls);
+
+        listing.Answer("ended", "me", 0, 212, Rows("s", 1, 20));
+        time.Advance(TimeSpan.FromSeconds(2));
+        await Eventually(() => service.Ended.Count == 20, "the held reconcile");
+        await Task.Delay(100);
+        await Assert.That(listing.Count("active", "me", 0)).IsEqualTo(2);
+    }
+
+    /// A refused reconcile goes again after its hold, so a zero Retry-After still waits a second
+    /// rather than re-requesting at once.
+    [Test]
+    public async Task A_zero_retry_time_still_holds_for_a_second() {
+        var (lane, listing, time, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        // Yields, so a read that re-requests without holding spins off the test's thread.
+        listing.Gate = async _ => await Task.Yield();
+        listing.Refuse("ended", "me", 0, TimeSpan.Zero);
+        Connect(lane);
+        await Eventually(() => listing.Count("ended", "me", 0) == 1, "refused page");
+        await Task.Delay(100);
+        await Assert.That(listing.Count("ended", "me", 0)).IsEqualTo(1);
+
+        time.Advance(TimeSpan.FromSeconds(1));
+        await Eventually(() => listing.Count("ended", "me", 0) == 2, "the held reconcile");
     }
 
     [Test]

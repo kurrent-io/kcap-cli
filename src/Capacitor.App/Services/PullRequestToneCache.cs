@@ -19,8 +19,9 @@ public sealed class PullRequestToneCache : IDisposable {
     static readonly TimeSpan DefaultRefreshEvery = TimeSpan.FromMinutes(2);
     static readonly TimeSpan DefaultEndedRefreshEvery = TimeSpan.FromMinutes(10);
     static readonly TimeSpan TickEvery = TimeSpan.FromSeconds(1);
-    /// Every listed session comes due at once after a connect or a scope switch.
-    const int MaxConcurrentReads = 8;
+    /// Every listed session comes due at once after a connect or a scope switch, and the server
+    /// refuses a fifth concurrent PR read from one user.
+    const int MaxConcurrentReads = 4;
 
     /// What the cache holds for one listed session. The version is reissued on every invalidation, so
     /// a read started before it recognises its result as stale.
@@ -61,6 +62,9 @@ public sealed class PullRequestToneCache : IDisposable {
     /// Sessions no daemon here hosts — ended, a terminal's, a teammate's: none is this app's to poll
     /// every two minutes, and under Team there can be hundreds.
     IReadOnlySet<string> _slowSessions = FrozenSet<string>.Empty;
+    /// The server's read budget is the user's, not a session's: once it refuses one read, no read
+    /// starts before the time it gave.
+    DateTime _heldUntil = DateTime.MinValue;
     bool _disposed;
 
     public PullRequestToneCache(
@@ -185,7 +189,7 @@ public sealed class PullRequestToneCache : IDisposable {
             }
             if (tonesChanged) Publish();
             if (summariesChanged) PublishSummaries();
-            due = _sessions
+            due = _time.GetUtcNow().UtcDateTime < _heldUntil ? [] : _sessions
                 .Select(s => (Session: s, Entry: _entries[s]))
                 .Where(e => !_inFlight.Contains(e.Session)
                     && (e.Entry.ReadAt is not { } at || _time.GetElapsedTime(at) >= (e.Entry.RefreshAfter ?? CadenceFor(e.Session))))
@@ -256,6 +260,17 @@ public sealed class PullRequestToneCache : IDisposable {
         || read.AccessFailure is "denied" or "invalid"
         || read.Reason is "identity_changed" or "integration_changed" or "no_reader";
 
+    static DateTime? Refused<T>(PullRequestRead<T> read) where T : class => read.StatusCode == 429 ? read.RetryAt : null;
+
+    /// The refused read keeps the last tone, as any miss does, and goes again once the hold lapses
+    /// rather than on its session's cadence.
+    void Hold(string session, long version, DateTime until) {
+        lock (_lock) {
+            if (until > _heldUntil) _heldUntil = until;
+            if (LiveEntry(session, version) is { } entry) entry.ReadAt = null;
+        }
+    }
+
     async Task ReadAsync(string session, long version, CancellationToken ct) {
         try {
             // Only a successfully renewed summary earns the faster access-window cadence.
@@ -271,7 +286,8 @@ public sealed class PullRequestToneCache : IDisposable {
             }
             var links = await _source.ListAsync(session, ct).ConfigureAwait(false);
             if (links.Kind != PullRequestReadKind.Ready || links.Data is null) {
-                if (Revokes(links)) Clear(session, version);
+                if (Refused(links) is { } until) Hold(session, version, until);
+                else if (Revokes(links)) Clear(session, version);
                 return;
             }
             var revealed = new List<(PullRequestLinkDto Link, PullRequestRead<PullRequestOverviewDto> Read)>();
@@ -279,6 +295,10 @@ public sealed class PullRequestToneCache : IDisposable {
             var missed = false;
             foreach (var link in links.Data.Items.DistinctBy(PullRequestWire.Subject)) {
                 var read = await _source.OverviewAsync(session, PullRequestWire.Subject(link), ct).ConfigureAwait(false);
+                if (Refused(read) is { } until) {
+                    Hold(session, version, until);
+                    return;
+                }
                 // The same gate the reader applies: a read past its access window reveals nothing.
                 if (read.CanReveal(_time)) revealed.Add((link, read));
                 else if (Revokes(read)) denied = true;

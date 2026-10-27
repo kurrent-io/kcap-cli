@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Net;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
+using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.Cli.Core.PullRequests;
 
@@ -130,7 +131,8 @@ public sealed class PullRequestClient(HttpClient http, string serverUrl, TimePro
             if (status == 401) return new(PullRequestReadKind.SignedOut, Subject: subject, AccessFailure: "invalid", StatusCode: status);
             if (status == 404) return new(PullRequestReadKind.SubjectUnavailable, Subject: subject, AccessFailure: "invalid", StatusCode: status);
             if (status is >= 300 and < 400) return Invalid<T>("unexpected_origin");
-            if (status is >= 500 or 429) return new(PullRequestReadKind.Unavailable, Subject: subject, Reason: "server_unavailable", AccessFailure: "transient", StatusCode: status);
+            if (status is >= 500 or 429) return new(PullRequestReadKind.Unavailable, Subject: subject, Reason: "server_unavailable", AccessFailure: "transient",
+                RetryAt: status == 429 && RetryAfterHeader.Read(response, _time) is { } wait ? (_time.GetUtcNow() + wait).UtcDateTime : null, StatusCode: status);
             using var document = await ReadDocumentAsync(response, linked.Token).ConfigureAwait(false);
             if (!PullRequestWire.ValidJson(document.RootElement)) return Invalid<T>();
             if (status == 409) {

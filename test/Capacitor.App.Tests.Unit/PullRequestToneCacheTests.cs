@@ -425,22 +425,54 @@ public class PullRequestToneCacheTests {
         await WaitUntilAsync(() => source.Lists == 2, what: "read on the fast cadence");
     }
 
-    /// Every listed session comes due at once after a connect or a scope switch; the reads go out a
-    /// few at a time, not all together.
+    /// Every listed session comes due at once after a connect or a scope switch; the reads go out no
+    /// more at once than the server admits from one user.
     [Test]
-    public async Task A_tick_starts_at_most_eight_reads_at_once() {
+    public async Task A_tick_starts_at_most_four_reads_at_once() {
         var (directory, source, _, cache) = Build();
         using var _c = cache;
         using var _d = directory;
         source.ListGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         directory.Rows.Edit(rows => { for (var i = 0; i < 20; i++) rows.AddOrUpdate(Ended($"s{i}")); });
 
-        await WaitUntilAsync(() => source.Lists >= 8, what: "the first reads");
+        await WaitUntilAsync(() => source.Lists >= 4, what: "the first reads");
         await Task.Delay(100);
-        await Assert.That(source.Lists).IsEqualTo(8);
+        await Assert.That(source.Lists).IsEqualTo(4);
 
         source.ListGate.SetResult();
         await WaitUntilAsync(() => source.Lists == 20, what: "the rest follow");
+    }
+
+    /// A refused read holds every read until the server's retry time, then goes again at once
+    /// rather than on its session's two-minute cadence; the tone it had stands meanwhile.
+    [Test]
+    [Arguments("links")]
+    [Arguments("overview")]
+    public async Task A_refused_read_holds_all_reads_until_the_servers_retry_time(string route) {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        source.AccessSeconds = 3600;
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+        await WaitUntilAsync(() => cache.Current.ContainsKey("s1"), what: "tone for s1");
+
+        var refusedAt = time.GetUtcNow().UtcDateTime.AddMinutes(2);
+        if (route == "links")
+            source.ListResponses.Enqueue(new(PullRequestReadKind.Unavailable, Reason: "server_unavailable", AccessFailure: "transient",
+                RetryAt: refusedAt.AddSeconds(30), StatusCode: 429));
+        else
+            source.OverviewResponses.Enqueue((subject, _) => Task.FromResult(new PullRequestRead<PullRequestOverviewDto>(PullRequestReadKind.Unavailable,
+                Subject: subject, Reason: "server_unavailable", AccessFailure: "transient", RetryAt: refusedAt.AddSeconds(30), StatusCode: 429)));
+        time.Advance(TimeSpan.FromMinutes(2));
+        await WaitUntilAsync(() => source.Lists == 2, what: "the refused read");
+        directory.Rows.AddOrUpdate(Row("a2", "s2"));
+        time.Advance(TimeSpan.FromSeconds(29));
+        await Task.Delay(50);
+        await Assert.That(source.Lists).IsEqualTo(2);
+        await Assert.That(cache.Current["s1"]).IsEqualTo(PullRequestTone.Ready);
+
+        time.Advance(TimeSpan.FromSeconds(2));
+        await WaitUntilAsync(() => source.Lists == 4, what: "both read once the hold lapses");
     }
 
     [Test]
