@@ -160,7 +160,7 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
         ? "Keeps kcap storing sessions when the app is closed"
         : $"Keeps kcap storing sessions when the app is closed, and lets you start agents on {ThisDevice} from anywhere";
 
-    public string ServicePill => ServiceState switch {
+    public string ServiceStatus => ServiceState switch {
         BackgroundServiceState.Running    => "Running",
         BackgroundServiceState.NotRunning => "Not running",
         _                                 => "Installing…",

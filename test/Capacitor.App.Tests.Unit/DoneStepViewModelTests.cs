@@ -212,7 +212,7 @@ public class DoneStepViewModelTests {
         });
 
         await Assert.That(vm.Eyebrow).IsEqualTo(eyebrow);
-        await Assert.That(vm.ServicePill).IsEqualTo(pill);
+        await Assert.That(vm.ServiceStatus).IsEqualTo(pill);
         await Assert.That(vm.OffersFinishLater).IsEqualTo(finishLater);
         await Assert.That(vm.ServiceFailed).IsEqualTo(finishLater);
     }

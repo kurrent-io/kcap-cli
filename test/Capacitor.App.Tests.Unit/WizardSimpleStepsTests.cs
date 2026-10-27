@@ -390,7 +390,7 @@ public class WizardSimpleStepsTests {
 
             var texts    = window.GetVisualDescendants().OfType<TextBlock>().ToList();
             var title    = texts.FirstOrDefault(t => t.Name == "StepTitleText")?.Text;
-            var daemon   = texts.FirstOrDefault(t => t.Name == "ServicePillText")?.Text;
+            var daemon   = texts.FirstOrDefault(t => t.Name == "ServiceStatusText")?.Text;
             var capture  = window.GetVisualDescendants().OfType<ItemsControl>().FirstOrDefault(i => i.Name == "CaptureItems")?.ItemCount;
 
             window.Close();
