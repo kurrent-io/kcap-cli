@@ -70,7 +70,8 @@ sealed class TranscriptBatchBuffer {
         TranscriptBatch Slice(int from, int to) => batch with {
             Lines = batch.Lines[from..to],
             LineNumbers = numbers[from..to],
-            Repository = from == 0 ? batch.Repository : null
+            Repository = from == 0 ? batch.Repository : null,
+            MoreFollows = to < batch.Lines.Length
         };
     }
 }

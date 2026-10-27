@@ -29,6 +29,8 @@ public sealed record AgentRow(
         string? OwnerUserId = null,
         // The owner's display name or username from the listing, for the initials on another user's row.
         string? OwnerName = null,
+        // The owner's picture from the listing, drawn over the initials once it loads.
+        string? OwnerAvatarUrl = null,
         // Whether the owner is the signed-in account; null while the server has not said.
         bool? OwnerIsViewer = null,
         DateTime? LastActivityAt = null,
@@ -87,6 +89,7 @@ public sealed record AgentRow(
             MachineBadge: null, RepoGroupKey: repo.Key, RepoGroupLabel: repo.Label,
             CheckoutKey: "@server", CheckoutLabel: "",
             OwnerUserId: dto.Owner?.UserId, OwnerName: dto.Owner?.DisplayName ?? dto.Owner?.Username,
+            OwnerAvatarUrl: dto.Owner?.AvatarUrl,
             LastActivityAt: dto.LastActivityAt.UtcDateTime, EndedAt: dto.EndedAt?.UtcDateTime,
             IsStale: dto.Stale, IsTerminalSession: active && !hostedPresentation, AccessLevel: dto.AccessLevel);
     }

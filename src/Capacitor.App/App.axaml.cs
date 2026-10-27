@@ -451,6 +451,7 @@ public partial class App : Application {
         window.Closed += (_, _) => Quit(0);
         desktop.MainWindow = window;
         window.Show();
+        window.Activate();
         _ = run.RunAsync();
     }
 
@@ -1017,7 +1018,10 @@ public partial class App : Application {
         BundleRoot: bundleRoot,
         TerminalPathTimeout: UninstallTerminalPathTimeout,
         Time: _time,
-        Log: Console.Error);
+        Log: Console.Error,
+        PathProfiles: () => OperatingSystem.IsMacOS()
+            ? ShellProfile.Removable(_userHome, new KcapLinkRemover(KcapLinkFolders.For(_userHome), Path.Combine(bundleRoot, "Contents", "MacOS", "kcap")).Find())
+            : []);
 
     // The relaunched copy runs the uninstall: this process must be gone before the bundle is.
     async Task RelaunchForUninstallAsync(IClassicDesktopStyleApplicationLifetime desktop, UninstallFactsSource source) {
@@ -1033,6 +1037,7 @@ public partial class App : Application {
                 return;
             }
             var start = Program.Host.NewCopy([.. request.RelaunchArgs]);
+            UninstallWindow.ShowHandoff(desktop.Windows);
             desktop.Exit += (_, _) => {
                 try { Process.Start(start); }
                 catch (Exception ex) { Console.Error.WriteLine($"kcap: could not start the uninstall: {ex.Message}"); }
@@ -1096,6 +1101,7 @@ public partial class App : Application {
                 Appearance = new AppearanceSettingsViewModel(_uiScale),
                 Privacy    = new PrivacySettingsViewModel(_telemetry, _config, _usageNotice),
                 Search     = _localStack?.Search,
+                Experimental = new ExperimentalSettingsViewModel(new ExperimentalSettingsStore(_config), settings.ProfileName, service),
             };
         } catch (Exception ex) {
             notifier.Notify($"Could not open settings: {ex.Message}");
@@ -1326,6 +1332,8 @@ public partial class App : Application {
             graph.Auth, graph.Install, () => DaemonThenLaneQuiescedAsync(graph.Daemon, lane), QuiesceShutdownCap, channel, _time);
 
         _wizardAuth = null;
+        if (QuitsAfterWizardClose(graph.ViewModel, windowClosed: !window.IsVisible) && !_shutdown.IsCancellationRequested)
+            desktop.TryShutdown();
         // A finished onboarding leaves its window up for the main surface to take over; a window the
         // user closed is gone, and the main surface builds its own.
         if (window.IsVisible) {
@@ -1385,8 +1393,7 @@ public partial class App : Application {
 
     // The main window, with the onboarding pane where the rail and launcher go. ShutdownMode is
     // deliberately untouched (OnExplicitShutdown, pinned in OnFrameworkInitializationCompleted):
-    // closing the window mid-onboarding abandons it and hands over to the normal graph, it never
-    // exits the app.
+    // closing the window never exits the app by itself; QuitsAfterWizardClose decides after the handoff.
     internal static MainWindow ShowWizardWindow(
             IClassicDesktopStyleApplicationLifetime desktop, OnboardingViewModel wizard,
             LocalInstallController? install = null, Func<bool>? shuttingDown = null, UiScaleSetting? uiScale = null) {
@@ -1426,6 +1433,12 @@ public partial class App : Application {
         wizard.RequestClose();
         return false;
     }
+
+    /// Before a server is connected the main window has nothing to show, so closing setup's window quits
+    /// rather than handing over; the next launch resumes setup. Read after the handoff, so a sign-in it
+    /// lets commit still opens the app.
+    internal static bool QuitsAfterWizardClose(OnboardingViewModel wizard, bool windowClosed) =>
+        windowClosed && !wizard.Deferrable;
 
     // One logical close (the Done step's finish and the window's own Closing both route through
     // RequestClose, which is idempotent). Shutdown ends the wait too — a quit must never sit

@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.WorkItems;
 using Capacitor.Remote.Models;
 using ReactiveUI.Reactive;
 
@@ -11,6 +12,7 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
     public const string AwaitingPickupNote = "The agent reads it when its current step ends";
     public const string AttachmentsOnlyText = "Attachments only";
     public const string IdlePickupNote = "The agent is not in a step";
+    public const string UnknownPickupNote = "Waiting for delivery confirmation from the agent";
 
     public string Text { get; } = text;
     /// The server's queue item carries no attachments, so a prompt that was only files arrives
@@ -22,6 +24,10 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
     /// Own sends are numbered in the order they were handed to the channel. The file offset
     /// stays put until the transcript grows, so two sends can share a baseline.
     internal int SendOrder { get; set; }
+    internal bool SentIdle { get; set; }
+    internal bool IsSlashCommand =>
+        AttachmentIds.Count == 0 && Normalize(Text) is ['/', ..] command && !command.Contains('\n');
+    internal ViewerIdentityDto? SenderIdentity { get; init; }
     int _generation = generation;
     long? _offset = offset;
     internal bool HasBaseline => _offset.HasValue;
@@ -39,8 +45,17 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
         }
     }
 
-    bool _agentIdle;
+    bool? _agentIdle;
     bool _canSendNow;
+    bool _canDiscard;
+    public bool CanDiscard {
+        get => _canDiscard;
+        private set {
+            if (_canDiscard == value) return;
+            _canDiscard = value;
+            this.RaisePropertyChanged();
+        }
+    }
     /// The agent is idle and the channel can take text, so this row can be delivered instead of waiting.
     public bool CanSendNow {
         get => _canSendNow;
@@ -52,20 +67,30 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
     }
 
     /// Which wait the row describes. A channel that is still delivering the last paste is not a step.
-    public string? PickupNote => !IsAwaitingPickup ? null : _agentIdle ? IdlePickupNote : AwaitingPickupNote;
+    public string? PickupNote => !IsAwaitingPickup ? null : _agentIdle switch {
+        true => IdlePickupNote,
+        false => AwaitingPickupNote,
+        null => UnknownPickupNote,
+    };
 
-    internal void SetPickup(bool agentIdle, bool canSend) {
+    /// <param name="canDiscard">Whether a row no server holds can be dropped from the strip.</param>
+    /// <param name="canDiscardHeld">Whether the channel can ask the server to drop a row it holds.</param>
+    internal void SetPickup(bool? agentIdle, bool canSend, bool canDiscard, bool canDiscardHeld) {
         var idleChanged = _agentIdle != agentIdle;
         _agentIdle = agentIdle;
-        // A server-listed prompt is already a live dispatch: offering Send would submit another.
-        CanSendNow = canSend && !IsForeign && !Acknowledged && AttachmentIds.Count == 0 && DispatchId is null;
+        // The server retires the oldest pending dispatch an echo matches, so a second copy of a
+        // held prompt would be the one left pending. A held row can only be discarded.
+        CanSendNow = canSend && !IsForeign && !Acknowledged && AttachmentIds.Count == 0 && !IsServerHeld;
+        CanDiscard = !Acknowledged && (IsServerHeld ? canDiscardHeld : canDiscard);
         if (idleChanged) this.RaisePropertyChanged(nameof(PickupNote));
     }
 
     /// An own send the channel accepted but the transcript has not echoed: the runtime reads a
-    /// prompt queued behind its current turn only when that turn's step ends. A dispatch the server
-    /// has stopped listing was delivered or withdrawn, and only the echo can say which.
-    public bool IsAwaitingPickup => !IsForeign && !IsUnconfirmed && (DispatchId is null || _serverListed);
+    /// prompt queued behind its current turn only when that turn's step ends.
+    public bool IsAwaitingPickup => !IsForeign && !IsUnconfirmed;
+
+    /// In the server's queue now, so only the server can retire it.
+    internal bool IsServerHeld => IsForeign || DispatchId is not null && _serverListed;
 
     internal void MarkUnconfirmed() => IsUnconfirmed = true;
 
@@ -73,19 +98,21 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
     internal Guid? DispatchId { get; private set; }
     bool _serverListed;
 
+    /// The server dropped it because the agent echoed it, the daemon refused it, someone discarded
+    /// it or the run ended. Only an echo here can tell delivery from the rest.
     internal void MarkUnlisted() {
         if (!_serverListed) return;
         _serverListed = false;
-        this.RaisePropertyChanged(nameof(IsAwaitingPickup));
-        this.RaisePropertyChanged(nameof(PickupNote));
+        MarkUnconfirmed();
     }
-    /// Queued by another client: shown, never acknowledged here, retired when the server drops it.
+    /// A server entry unmatched to this pane's sends. Its originating client is unknown.
     public bool IsForeign { get; private init; }
 
     internal static QueuedChatMessage FromServer(QueuedInputItem item) =>
         new(item.Text, composerEdits: -1, generation: -1, offset: null, attachmentIds: []) { DispatchId = item.DispatchId, IsForeign = true };
 
     internal void MarkQueued(Guid dispatchId) {
+        if (DispatchId == dispatchId && _serverListed && !IsUnconfirmed) return;
         DispatchId = dispatchId;
         _serverListed = true;
         IsUnconfirmed = false;
@@ -100,6 +127,7 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
     internal void Rebase(int generation, long? offset) {
         _generation = generation;
         _offset = offset;
+        SentIdle = false;
         MarkUnconfirmed();
     }
 

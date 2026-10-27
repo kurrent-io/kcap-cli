@@ -91,24 +91,24 @@
                 </Border>
                 <!-- Read-only: the keys the daemon accepts are the only input that crosses. -->
                 <Border Grid.Row="1" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,1,0,0" Padding="20,8">
-                    <Grid ColumnDefinitions="*,Auto">
-                        <ItemsControl Grid.Column="0" ItemsSource="{Binding Terminal.Keys}">
+                    <StackPanel Spacing="6">
+                        <ItemsControl ItemsSource="{Binding Terminal.Keys}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
-                                    <StackPanel Orientation="Horizontal" Spacing="6" />
+                                    <WrapPanel ItemSpacing="6" LineSpacing="6" />
                                 </ItemsPanelTemplate>
                             </ItemsControl.ItemsPanel>
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate x:DataType="services:SpecialKeyChoice">
-                                    <Button Classes="specialKey" Content="{Binding Label}" Click="OnTerminalKeyClick" Padding="10,4" FontSize="12" CornerRadius="7"
+                                    <Button Classes="specialKey kcapChip" Content="{Binding Label}" Click="OnTerminalKeyClick" Padding="10,4" FontSize="12" CornerRadius="7"
                                             Command="{Binding $parent[views:RemoteSessionView].((vm:RemoteSessionViewModel)DataContext).Terminal.SendKeyCommand}"
                                             CommandParameter="{Binding Key}" />
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                        <TextBlock Grid.Column="1" Text="{Binding Terminal.SizeNote}" FontSize="11.5" VerticalAlignment="Center"
+                        <TextBlock Text="{Binding Terminal.SizeNote}" FontSize="11.5" TextWrapping="Wrap"
                                    Foreground="{StaticResource KcapFaintBrush}" />
-                    </Grid>
+                    </StackPanel>
                 </Border>
             </Grid>
             <ContentControl x:Name="PullRequestPane" IsVisible="{Binding ShowsPullRequestPane}" />

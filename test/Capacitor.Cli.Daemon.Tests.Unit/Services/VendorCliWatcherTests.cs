@@ -15,6 +15,19 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 /// reviewer launch.
 /// </summary>
 public class VendorCliWatcherTests {
+    sealed class ArmedClock(FakeTimeProvider inner) : TimeProvider {
+        readonly TaskCompletionSource _armed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Armed => _armed.Task;
+        public override DateTimeOffset GetUtcNow() => inner.GetUtcNow();
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) {
+            var timer = inner.CreateTimer(callback, state, dueTime, period);
+            _armed.TrySetResult();
+            return timer;
+        }
+    }
+
     /// <summary>Every path here is rooted, which resolves without a search path.</summary>
     static BinaryProbe Binaries => TestBinaries.None;
 
@@ -287,18 +300,26 @@ public class VendorCliWatcherTests {
         return account;
     }
 
-    /// Driven through the real publisher and orchestrator: the announcement both re-probes, which puts
-    /// the new account in the map, and rebuilds the watch set from the fingerprint taken before that
-    /// probe, so a write to the account's auth file between the probe and the rebuilding tick still
-    /// asks for a refresh.
+    /// A startup snapshot can overlap an account announcement. Once startup and the rebuilding tick
+    /// settle, changes to the added account's auth file must still ask for a refresh.
     [Test]
     public async Task Adding_an_account_probes_it_and_extends_the_watch_set() {
         using var home = new TempHome();
         var store = new AccountStore(home.PathTo("accounts"));
         AddCodexAccount(store, home.PathTo(".codex-work"));
+        var startupPaths = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseStartup = new ManualResetEventSlim();
+        var firstPaths = 0;
         var codex = new StubCatalogFactory("codex", [new("gpt-default", "Default")], paths: [home.PathTo(".codex", "auth.json")]) {
             ProbeDirectory = dir => Task.FromResult<IReadOnlyList<VendorModelOption>?>([new(Path.GetFileName(dir), Path.GetFileName(dir))]),
-            PathsFor       = dir => [Path.Combine(dir, "auth.json")],
+            PathsFor = dir => {
+                if (Interlocked.Exchange(ref firstPaths, 0) == 1) {
+                    startupPaths.TrySetResult();
+                    if (!releaseStartup.Wait(WaitHarness.Bounded)) throw new TimeoutException("Watcher startup was not released");
+                }
+
+                return [Path.Combine(dir, "auth.json")];
+            },
         };
         DaemonConfig? config = null;
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
@@ -315,16 +336,35 @@ public class VendorCliWatcherTests {
         await publisher.StartAsync(CancellationToken.None);
         orch.AccountsSnapshot = () => publisher.Current;
         var factories = new Dictionary<string, IHostedAgentRuntimeFactory>(StringComparer.Ordinal) { ["codex"] = codex };
-        using var watcher = new VendorCliWatcher(config!, orch, factories, publisher, NullLogger<VendorCliWatcher>.Instance, new FakeTimeProvider());
+        var clock = new ArmedClock(new FakeTimeProvider());
+        using var watcher = new VendorCliWatcher(config!, orch, factories, publisher, NullLogger<VendorCliWatcher>.Instance, clock);
         watcher.StatBinary = _ => null;
+        Volatile.Write(ref firstPaths, 1);
         await watcher.StartAsync(CancellationToken.None);
+        Task? tick = null;
         try {
+            await startupPaths.Task.WaitAsync(WaitHarness.Bounded);
             var spare = AddCodexAccount(store, home.PathTo(".codex-spare"));
             await publisher.RebuildAsync(CancellationToken.None);
             await orch.CapabilityRefreshForTest.WaitAsync(TimeSpan.FromSeconds(10));
 
             await Assert.That(codex.ProbedDirectories).Contains(spare.Directory);
             await Assert.That(config!.VendorModelsByAccount![spare.Id].Single().Value).IsEqualTo(".codex-spare");
+
+            Thread? tickThread = null;
+            var tickStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            tick = Task.Run(() => {
+                tickThread = Thread.CurrentThread;
+                tickStarted.TrySetResult();
+                watcher.Tick();
+            });
+            await tickStarted.Task.WaitAsync(WaitHarness.Bounded);
+            // Startup stays parked until the concurrent tick has completed or is waiting on its gate.
+            await WaitHarness.PollUntilAsync(() => tick.IsCompleted
+                || (tickThread!.ThreadState & ThreadState.WaitSleepJoin) != 0);
+            releaseStartup.Set();
+            await tick.WaitAsync(WaitHarness.Bounded);
+            await clock.Armed.WaitAsync(WaitHarness.Bounded);
 
             var refreshes = new List<string>();
             watcher.Refresh = refreshes.Add;
@@ -338,6 +378,8 @@ public class VendorCliWatcherTests {
             watcher.Tick();
             await Assert.That(refreshes.Count).IsEqualTo(1);
         } finally {
+            releaseStartup.Set();
+            if (tick is not null) await tick.WaitAsync(WaitHarness.Bounded);
             await watcher.StopAsync(CancellationToken.None);
             await publisher.StopAsync(CancellationToken.None);
         }

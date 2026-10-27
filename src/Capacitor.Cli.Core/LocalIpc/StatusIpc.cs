@@ -14,7 +14,10 @@ public sealed record DaemonStatusDto(DaemonInfoDto Daemon, List<AgentStatusDto> 
     // Whether any agent is running or starting, admitted launches included, observed at once: the two lists, read one
     // after the other, cannot promise that. A yes, not a count, since one launch can be admitted and published at
     // once. Null from an older daemon, which a client reads as unknown.
-    bool? Busy = null);
+    bool? Busy = null,
+    // Each experimental feature as the daemon resolved it. Null from an older daemon, which a client reads as
+    // unknown, never as "all off".
+    List<ExperimentalFeatureStatusDto>? Experimental = null);
 
 /// <summary>
 /// <see cref="Connection"/> ∈ connected|connecting|reconnecting|disconnected (lowercase).
@@ -117,7 +120,12 @@ public sealed record AgentStatusDto(
     // The account the agent runs under. Null from an older daemon.
     string? AccountDirectory = null,
     string? AccountId = null,
-    string? AccountLabel = null);
+    string? AccountLabel = null,
+    // The daemon has positive evidence that a turn is running: an ACP turn gate, or a PTY vendor's
+    // relayed prompt submit or tool call since its last turn end. AwaitingInput == false is not
+    // that evidence; an idle PTY prompt reports it too. False and null (an older daemon) both mean
+    // unproven, so a client must not send a keystroke that is safe only mid-turn.
+    bool? TurnAttested = null);
 
 /// Wire tokens for <see cref="AgentStatusDto.WorkLocation"/>, compared literally by every
 /// client, so they never change.
@@ -184,4 +192,5 @@ public sealed class UsageLimitNoticeDto : IEquatable<UsageLimitNoticeDto> {
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
 [JsonSerializable(typeof(DaemonStatusDto))]
+[JsonSerializable(typeof(ExperimentalFeatureStatusDto))]
 public partial class StatusIpcJsonContext : JsonSerializerContext;

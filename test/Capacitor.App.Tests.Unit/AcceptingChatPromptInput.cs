@@ -3,8 +3,9 @@ using Capacitor.App.ViewModels;
 
 namespace Capacitor.App.Tests.Unit;
 
-sealed class AcceptingChatPromptInput : ChatInput {
+sealed class AcceptingChatPromptInput(string senderUserId = "u2") : ChatInput {
     public int Sends { get; private set; }
+    public override string? SenderUserId => senderUserId;
     public override SendAvailability Availability => SendAvailability.Ready;
     public override bool CanAcceptText => true;
     public override string Hint => "";

@@ -27,6 +27,19 @@ public class TranscriptSpoolTests {
     }
 
     [Test]
+    [Arguments(30, false)]
+    [Arguments(20, true)]
+    public async Task Append_refuses_a_batch_that_leaves_no_room_for_the_one_it_reserves(int reserved, bool appended) {
+        using var tmp = new TempDir();
+        var spool = new TranscriptSpool(tmp.Path, capBytes: 64, time: TimeProvider.System);
+
+        var r = spool.Append(Sid, """{"lines":["first"],"line_numbers":[0]}""", reserving: new string('x', reserved));
+
+        await Assert.That(r == TranscriptSpool.AppendResult.Appended).IsEqualTo(appended);
+        await Assert.That(spool.HasBacklog(Sid)).IsEqualTo(appended);
+    }
+
+    [Test]
     public async Task Append_marks_needs_import_when_the_live_write_fails() {
         using var tmp = new TempDir();
         // Make the live spool path a DIRECTORY so File.AppendAllText throws, while the spool

@@ -66,7 +66,7 @@ internal record AgentInstance(
     ) {
     public string?              SessionId         { get; set; }
 
-    /// The vendor's own session id, the one a resume hands back to the vendor CLI.
+    /// The vendor's resume id, which can be reserved before a transcript confirms SessionId.
     public string?              VendorSession     { get; set; }
 
     /// Set when this agent stops to be resumed by a successor daemon: teardown then keeps its
@@ -1582,27 +1582,32 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     }
 
     /// <summary>
-    /// Re-probes the vendors advertised at startup and re-registers when the advertisement changed
-    /// — the one path through which a running daemon updates what the server knows about its CLI
-    /// versions and vendor model catalogs. Returns at once; the work is single-flighted off the caller's stack so a burst of
-    /// requests coalesces and the last publication is always the newest probe.
+    /// Re-resolves the Codex switch, re-probes the vendors advertised at startup and re-registers when
+    /// the advertisement changed or the server has not yet seen the committed Codex resolution — the one
+    /// path through which a running daemon updates what the server knows about its CLI versions, vendor
+    /// model catalogs and Codex transport. Returns at once; the work is single-flighted off the caller's
+    /// stack so a burst of requests coalesces and the last publication is always the newest probe.
     /// </summary>
     /// <param name="republishUnchanged">Re-register even when the local advertisement already
     /// reads the same, for a caller that knows the server's copy differs.</param>
-    internal void RefreshAdvertisedCapabilities(string reason, bool republishUnchanged = false) {
+    /// <param name="probeCatalogs">False for a caller with no reason to think a model catalog changed,
+    /// which then spawns no catalog probe.</param>
+    internal void RefreshAdvertisedCapabilities(string reason, bool republishUnchanged = false, bool probeCatalogs = true) {
         // Sticky rather than captured by the delegate: a request folded into a running pass reruns
         // THAT pass's delegate, which would otherwise carry the earlier caller's answer.
         if (republishUnchanged) Interlocked.Exchange(ref _republishRequested, 1);
-        // A republish-only caller has no reason to think a catalog changed, so it spawns no probe.
-        else Interlocked.Exchange(ref _catalogProbeRequested, 1);
+        else if (probeCatalogs) Interlocked.Exchange(ref _catalogProbeRequested, 1);
 
         _capabilityRefresh.Trigger(
             async () => {
                 var republish    = Interlocked.Exchange(ref _republishRequested, 0) == 1;
                 var probeCatalog = Interlocked.Exchange(ref _catalogProbeRequested, 0) == 1;
+
+                var codex = CommitCodexResolution();
+
                 var current   = _config.UnattendedVendorCapabilities;
                 var fresh     = DaemonRunner.RetainAdvertisedVersions(current,
-                    DaemonRunner.ComputeUnattendedVendorCapabilities(_runtimeFactories.Values, _config, _config.UnattendedVendors));
+                    DaemonRunner.ComputeUnattendedVendorCapabilities(_runtimeFactories.Values, _config, codex, _config.UnattendedVendors), codex);
 
                 var previousCatalog   = _config.VendorModels;
                 var previousByAccount = _config.VendorModelsByAccount;
@@ -1636,10 +1641,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     previousByAccount, accountProbe is null ? new Dictionary<string, VendorModelOption[]>() : await accountProbe, live);
                 var catalogChanged  = !VendorModelCatalogs.Equal(previousCatalog, mergedCatalog)
                                    || !VendorModelCatalogs.Equal(previousByAccount, mergedByAccount);
+                var unacknowledged = _config.AcknowledgedCodexResolution.Generation != codex.Generation;
 
-                if (!republish && !catalogChanged && current is not null && current.SequenceEqual(fresh)) return;
+                if (!republish && !catalogChanged && !unacknowledged && current is not null && current.SequenceEqual(fresh)) return;
 
-                _config.UnattendedVendorCapabilities = fresh;
+                _config.Advertise(fresh, codex);
                 // One reference swap: status serializers on other threads may be enumerating the old one.
                 // Pulsed before the re-register so a failed one cannot keep the change from local subscribers.
                 if (catalogChanged) {
@@ -1655,6 +1661,25 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 "Capability refresh ({Reason}) failed; the next registration or launch re-evaluates it.", reason));
     }
 
+    /// <summary>Resolves the Codex switch and commits the result when it differs from the committed
+    /// one, under the next generation. New launches route on it from the moment it is swapped in.</summary>
+    CodexTransportResolution CommitCodexResolution() {
+        var committed  = _config.CodexResolution;
+        string? problem = null;
+        var resolved   = CodexTransportResolution.Read(
+            committed.Generation + 1, _config.ReadExperimentalSettings, () => DaemonRunner.ProbeCliVersion(_config.CodexPath),
+            unreadable => { problem = unreadable; return committed; });
+
+        if (problem is not null && problem != _config.ExperimentalSettingsProblem) LogUnreadableSettings(_logger, problem);
+        _config.ExperimentalSettingsProblem = problem;
+        if (resolved.SameStateAs(committed)) return committed;
+
+        _config.CodexResolution = resolved;
+        LogCodexResolution(_logger, resolved.Generation, resolved.SwitchOn, resolved.Active, resolved.InactiveReason ?? "");
+        _statusNotifier.Pulse();
+        return resolved;
+    }
+
     /// <summary>Test seam: the most recently scheduled capability refresh, for awaiting quiescence.</summary>
     internal Task CapabilityRefreshForTest => _capabilityRefresh.Current;
 
@@ -1668,6 +1693,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// </summary>
     internal void RepublishRegistration(string reason) => RefreshAdvertisedCapabilities(reason, republishUnchanged: true);
 
+    /// <summary>Re-resolves the experimental switches and re-advertises what they change, without
+    /// re-probing any model catalog.</summary>
+    internal void RefreshExperimentalSettings(string reason) => RefreshAdvertisedCapabilities(reason, probeCatalogs: false);
+
     internal AgentLiveness ReadLiveness(string agentId) {
         // Order matters: check _agents first (Live/Quarantined-by-status), then _quarantine, then Dead.
         // The add-to-quarantine-before-remove-from-_agents invariant makes this ordering false-Dead-free.
@@ -1677,10 +1706,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         return AgentLiveness.Dead;
     }
 
-    /// <summary>Phase B (D4 §6.4(2a)): the kill-quarantine snapshot for the status report.</summary>
+    /// <summary>The kill-quarantine snapshot for the status report.</summary>
     internal IReadOnlyList<QuarantinedAgentInfo> QuarantineSnapshot() => _quarantine?.Snapshot() ?? [];
 
-    /// <summary>Phase B (D4 §6.4(2a)): the daemon's admission gate — EVERY live registry entry
+    /// <summary>The daemon's admission gate — EVERY live registry entry
     /// (not just Starting/Running — a Completed/Failed agent still mid-teardown holds its slot until
     /// CleanupAgentAsync's count-preserving remove) PLUS unconfirmed-death quarantined ones. Using the
     /// full <c>_agents.Count</c> (rather than <see cref="ActiveCount"/>, whose Starting/Running meaning is
@@ -2232,6 +2261,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 _statusNotifier.Pulse();
                 RescheduleQuietTurn();
             },
+            OnTurnAttestedChanged  = _statusNotifier.Pulse,
         };
 
     /// <summary>Test-only seam — insert a minimal <see cref="AgentInstance"/> (Noop
@@ -2494,6 +2524,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     async Task<CommandOutcome> LaunchAdmittedAsync(
             LaunchAgentCommand cmd, LaunchConsentOutcome consent, LaunchHold hold, ResumeLaunch? resume = null,
             CancellationToken cancel = default, Action<AgentInstance>? onPublished = null) {
+        if (cmd.ResumeSessionId is "") cmd = cmd with { ResumeSessionId = null };
         var agentId       = cmd.AgentId;
         var isPrivate     = resume?.IsPrivate ?? false;
         var prompt        = cmd.Prompt;
@@ -2581,6 +2612,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
         }
 
+        if (CodexTransportDecision.ExpectedTransportRejection(cmd.Vendor, cmd.ExpectedRuntimeTransport) is { } transportRejection) {
+            await LaunchFailedUnlessPrivateAsync(isPrivate, cmd.AgentId, transportRejection);
+
+            return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
+        }
+
         if (isReviewFlow && cmd.ReviewerCertification is { } certification) {
             var version = string.Equals(cmd.Vendor, "claude", StringComparison.Ordinal)
                 ? DaemonRunner.ProbeCliVersionForLaunch(_config.ClaudePath)
@@ -2588,12 +2625,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             var certificationCheck = EvaluateReviewerCertification(
                 cmd.Vendor, version, _server.CurrentConnectionId, certification);
             if (!certificationCheck.Ok) {
-                // Codex review round 2 (P1): tell the caller FIRST. Recomputing capabilities re-runs
-                // the REGISTRATION probe — three 10s attempts plus backoff — so doing it before the
-                // notification meant a failed launch probe cost ~10s here and then ~30.75s more
-                // before the caller heard anything. The single-attempt launch probe did not bound the
-                // launch path at all while this sat in front of the rejection; my claim that it did
-                // was wrong.
+                // Tell the caller first: the refresh below re-runs the registration probe (three 10s
+                // attempts plus backoff), which would otherwise hold the rejection back for ~30s.
                 await LaunchFailedUnlessPrivateAsync(isPrivate, cmd.AgentId,
                     $"{(certificationCheck.Transient ? "reviewer_certification_transient" : "reviewer_certification_changed")}: {certificationCheck.Reason}.");
 
@@ -2920,7 +2953,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             journal = TranscriptJournal.ForAgent(_pidRecordRoot, agentId, _logger, _time);
 
-            var pinnedSessionId = resume is null ? MintPinnedSessionId(cmd) : null;
+            var pinnedSessionId = cmd.ResumeSessionId is null ? MintPinnedSessionId(cmd) : null;
 
             var runtimeCtx = new RuntimeStartContext(
                 AgentId: agentId,
@@ -2974,6 +3007,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 IsPrivate: isPrivate,
                 PinnedSessionId: pinnedSessionId,
                 RequestedTransport: resume?.Entry.Transport,
+                ExpectedRuntimeTransport: cmd.ExpectedRuntimeTransport,
                 PersistenceProbe: () => _agents.TryGetValue(agentId, out var bound) ? bound.AcpForwarder?.Forwarder : null,
                 Account: account
             );
@@ -3084,13 +3118,17 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // and LastOutputAt anchors the stuck-in-Starting window while CreatedAt is the age the
             // server and the rail report.
             var startedAtUtc = _time.GetUtcNow().UtcDateTime;
+            var resumedSessionId = resume?.Entry.SessionId;
+            if (string.Equals(cmd.Vendor, "claude", StringComparison.OrdinalIgnoreCase) && cmd.ResumeSessionId is { } requestedSession
+             && SessionIds.Canonical(resumedSessionId) != SessionIds.Canonical(requestedSession))
+                resumedSessionId = null;
 
             var agent = new AgentInstance(agentId, prompt, registeredModel, effort, repoPath, cmd.Vendor, runtime, worktree, cts, account) {
                 CreatedAt = startedAtUtc, LastOutputAt = startedAtUtc,
                 // Set in the initializer, not after: PublishAgent below is the first snapshot anyone
                 // reads, and RegisterAgentAsync after it can stall on a server outage.
-                SessionId           = start.Transcript is { } t ? SessionIds.Canonical(t.AcpSessionId) : pinnedSessionId ?? resume?.Entry.SessionId,
-                VendorSession       = start.Runtime.VendorResumeToken ?? start.Transcript?.AcpSessionId ?? pinnedSessionId ?? resume?.Entry.VendorSession,
+                SessionId           = start.Transcript is { } t ? SessionIds.Canonical(t.AcpSessionId) : resumedSessionId,
+                VendorSession       = start.Runtime.VendorResumeToken ?? start.Transcript?.AcpSessionId ?? pinnedSessionId ?? cmd.ResumeSessionId ?? resume?.Entry.VendorSession,
                 TranscriptPath      = start.Transcript is null ? null : journal.IsOpen ? journal.Path : null,
                 Journal             = start.Transcript is null ? null : journal,
                 ActivityClock       = activityClock,
@@ -5834,16 +5872,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     static readonly TimeSpan CodexTurnObserveInterval = TimeSpan.FromSeconds(2);
     static readonly TimeSpan CodexTurnObserveTimeout  = TimeSpan.FromMinutes(2);
 
-    /// Locates the transcript a freshly spawned agent writes — Claude's per-worktree
-    /// project dir (a symlink onto the source repo's, shared with the user's own sessions,
-    /// so the locator disambiguates by cwd), Codex's rollout tree (disambiguated by cwd and
-    /// spawn time), Muse's log from its runtime's session or the launch's hosted-session marker. A vendor without a
-    /// locator is a no-op. Best-effort background work, cancelled with the agent; it never blocks
-    /// a launch.
+    /// Locates the transcript a freshly spawned agent writes — Claude's project dir (by the session
+    /// id the agent holds, else by cwd), Codex's rollout tree (by cwd and spawn time), Muse's log from
+    /// its runtime's session or the launch's hosted-session marker. A vendor without a locator, or a
+    /// launch whose transcript it could not tell apart from another session's, is a no-op.
+    /// Best-effort background work, cancelled with the agent; it never blocks a launch.
     Task DetectSessionIdAsync(AgentInstance agent, string vendor, DateTime spawnedAtUtc) {
         Func<ISet<string>, (string SessionId, string Path)?>? locate = vendor.ToLowerInvariant() switch {
-            "claude" => ruledOut => SessionTranscriptLocator.TryLocateWinner(
-                ClaudePathsFor(agent.Account).ProjectDir(agent.Worktree.Path), agent.Worktree.Path, spawnedAtUtc, ruledOut),
+            "claude" => ClaudeTranscriptLocator(agent, spawnedAtUtc),
             "codex"  => ruledOut => CodexSessionRolloutLocator.TryLocateWinner(
                 CodexPathsFor(agent.Account).Sessions, agent.Worktree.Path, spawnedAtUtc, ruledOut),
             "muse"   => _ => MuseHostedSessionLocator.TryLocate(
@@ -5858,6 +5894,25 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         agent.DiscoveryTask = task;
         return task;
     }
+
+    /// Null for an in-place agent with no session id: every Claude session in a borrowed folder
+    /// shares its cwd, so a cwd match there could be the user's own session.
+    Func<ISet<string>, (string SessionId, string Path)?>? ClaudeTranscriptLocator(AgentInstance agent, DateTime spawnedAtUtc) {
+        var projectDir = ClaudePathsFor(agent.Account).ProjectDir(agent.Worktree.Path);
+
+        if ((agent.VendorSession ?? agent.SessionId) is { } known)
+            return _ => SessionTranscriptLocator.TryLocateSession(projectDir, known);
+
+        if (agent.Work == WorkLocation.BorrowedCwd) {
+            LogSessionIdUndiscoverable(agent.Id);
+
+            return null;
+        }
+
+        return ruledOut => SessionTranscriptLocator.TryLocateWinner(projectDir, agent.Worktree.Path, spawnedAtUtc, ruledOut);
+    }
+
+    internal Task DetectSessionIdForTest(AgentInstance agent, DateTime spawnedAtUtc) => DetectSessionIdAsync(agent, agent.Vendor, spawnedAtUtc);
 
     internal Task RunDiscoveryForTest(AgentInstance agent, Func<ISet<string>, (string SessionId, string Path)?> locate) {
         var task = RunDiscoveryAsync(agent, locate);
@@ -5875,7 +5930,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             var       warnTask = WarnIfStillUnlinkedAsync(agent, warnCts.Token);
 
             try {
-                await discovery.RunAsync(locate, async winner => {
+                await discovery.RunAsync(ruledOut => OwnTranscript(agent, locate(ruledOut), ruledOut), async winner => {
                     if (cts.IsCancellationRequested || agent.Status is "Completed" or "Failed") return;
 
                     // Mutation first, pulse second — and the pulse before any server call, which can
@@ -5901,9 +5956,22 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         }
     }
 
+    /// <summary>Null for a transcript under a session other than the one the agent already holds: that is
+    /// another session's file, and linking it would report that session as this agent's. Ruled out by
+    /// path, so a locator that caches by path moves past it.</summary>
+    (string SessionId, string Path)? OwnTranscript(AgentInstance agent, (string SessionId, string Path)? found, ISet<string> ruledOut) {
+        if (found is not { } candidate || agent.SessionId is not { } own
+         || SessionIds.Canonical(candidate.SessionId) == SessionIds.Canonical(own))
+            return found;
+
+        if (ruledOut.Add(candidate.Path)) LogForeignTranscriptSkipped(agent.Id, candidate.SessionId, own);
+
+        return null;
+    }
+
     /// <summary>Says, once and early, what the operator is otherwise left to infer from silence.
     /// Never cancels or reaps the launch — detection keeps running while the agent is alive, and
-    /// a slow first turn or startup prompt still links once the transcript records its cwd.</summary>
+    /// a slow first turn or startup prompt still links once its transcript turns up.</summary>
     async Task WarnIfStillUnlinkedAsync(AgentInstance agent, CancellationToken ct) {
         try {
             await Task.Delay(SessionIdSlowWarnAfter, _time, ct).ConfigureAwait(false);
@@ -5911,7 +5979,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return;
         }
 
-        if (agent.SessionId is null)
+        if (agent.TranscriptPath is null)
             LogSessionIdSlow(agent.Id, SessionIdSlowWarnAfter.TotalSeconds);
     }
 
@@ -6402,6 +6470,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     [LoggerMessage(Level = LogLevel.Information, Message = "Re-advertising unattended vendor capabilities ({Reason}): {Versions}")]
     static partial void LogReAdvertising(ILogger logger, string reason, string versions);
 
+    [LoggerMessage(Level = LogLevel.Information, Message = "Codex transport resolution {Generation}: switch {SwitchOn}, app-server {Active} {InactiveReason}")]
+    static partial void LogCodexResolution(ILogger logger, long generation, bool switchOn, bool active, string inactiveReason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Experimental settings unreadable ({Problem}); keeping the committed Codex transport")]
+    static partial void LogUnreadableSettings(ILogger logger, string problem);
+
     [LoggerMessage(Level = LogLevel.Information, Message = "Launching agent {AgentId} for {Repo} (vendor={Vendor}, effort={Effort}, model={Model})")]
     partial void LogLaunching(string agentId, string repo, string vendor, string effort, string? model);
 
@@ -6740,8 +6814,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     [LoggerMessage(Level = LogLevel.Warning, Message = "Transcript-based session-id detection failed for agent {AgentId}; nothing else assigns one, so this agent stays unlinked")]
     partial void LogSessionIdDetectFailed(Exception ex, string agentId);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Agent {AgentId} still has no session id {Seconds:F0}s after spawn; the surface is showing 'waiting for session to start'. Detection continues while the agent is running.")]
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Agent {AgentId} still has no transcript {Seconds:F0}s after spawn; the surface is showing 'waiting for session to start'. Detection continues while the agent is running.")]
     partial void LogSessionIdSlow(string agentId, double seconds);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Agent {AgentId} found transcript of session {Found}, not its own session {Own}; not linking it")]
+    partial void LogForeignTranscriptSkipped(string agentId, string found, string own);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Agent {AgentId} runs in place with no known session id; its transcript is not discovered, since another session in the same folder would match")]
+    partial void LogSessionIdUndiscoverable(string agentId);
 
     [GeneratedRegex(@"\x1B\[[0-9;]*[A-Za-z]|\x1B\].*?\x07|\x1B[()][AB012]|\x1B\[[\?]?[0-9;]*[hlm]")]
     private static partial Regex StripAnsiRegex();

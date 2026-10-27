@@ -23,7 +23,7 @@ namespace Capacitor.App.ViewModels;
 /// ONE ObserveOn at the top of the pipeline: nested group caches are mutated by this outer
 /// pipeline, so every inner Connect() below already fires on the UI thread.
 public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
-    public const string CapNote = "Search or narrow the scope for older sessions";
+    public const string CapNote = "Loading limit reached · search or narrow the scope for older sessions";
     public const string ScopeLockedTip = "Local version only stores your sessions. Upgrade to work with your team.";
 
     readonly CompositeDisposable _disposables = new();
@@ -51,6 +51,9 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     public string? SelectedSessionKey {
         get => _selectedSessionKey;
         set {
+            // The window's close and the app's quit clear the selection after the app has
+            // disposed the rail.
+            if (_disposables.IsDisposed) return;
             this.RaiseAndSetIfChanged(ref _selectedSessionKey, value);
             _selectedSessionKeyChanges.OnNext(value);
             _stateFilter.OnNext(StateFilter());
@@ -167,7 +170,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     public bool IsEmpty => _isEmpty.Value;
 
     readonly ObservableAsPropertyHelper<string> _loadedText;
-    /// "12 of 212": loaded ended rows of the scope's total; empty without a server lane.
+    /// Ended-session loading progress; hidden for live-only or fully loaded listings.
     public string LoadedText => _loadedText.Value;
     readonly ObservableAsPropertyHelper<bool> _showsShowMore;
     public bool ShowsShowMore => _showsShowMore.Value;
@@ -248,18 +251,22 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
 
         var paging = (sessions?.Paging ?? Observable.Return(new ServerSessionsPaging(0, 0, 1, false, false)))
             .ObserveOn(RxSchedulers.MainThreadScheduler).Replay(1).RefCount();
-        _loadedText = paging.Select(p => p.Total == 0 && p.Loaded == 0 ? "" : $"{p.Loaded} of {p.Total}")
+        var endedPaging = paging.CombineLatest(_stateFilter.Select(_ => State).DistinctUntilChanged(),
+                (p, state) => (Page: p, Visible: state != RailState.Live))
+            .Replay(1).RefCount();
+        _loadedText = endedPaging.Select(p => p.Visible && p.Page.Loaded < p.Page.Total
+                ? $"{p.Page.Loaded} of {p.Page.Total} ended sessions loaded" : "")
             .ToProperty(this, x => x.LoadedText, initialValue: "").DisposeWith(_disposables);
-        _showsShowMore = paging.Select(p => p.CanShowMore)
+        _showsShowMore = endedPaging.Select(p => p.Visible && p.Page.CanShowMore)
             .ToProperty(this, x => x.ShowsShowMore, initialValue: false).DisposeWith(_disposables);
-        _atCap = paging.Select(p => p.AtCap)
+        _atCap = endedPaging.Select(p => p.Visible && p.Page.AtCap && p.Page.Loaded < p.Page.Total)
             .ToProperty(this, x => x.AtCap, initialValue: false).DisposeWith(_disposables);
         _liveNotShownText = (sessions?.LiveNotShown ?? Observable.Return(0))
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Select(n => n > 0 ? $"{n} more live sessions · narrow the scope" : null)
             .ToProperty(this, x => x.LiveNotShownText, initialValue: null).DisposeWith(_disposables);
         ShowMoreCommand = ReactiveCommand.CreateFromTask(
-            () => sessions?.ShowMoreAsync() ?? Task.CompletedTask, paging.Select(p => p.CanShowMore)).DisposeWith(_disposables);
+            () => sessions?.ShowMoreAsync() ?? Task.CompletedTask, endedPaging.Select(p => p.Visible && p.Page.CanShowMore)).DisposeWith(_disposables);
 
         // The lane names the viewer after the rail has opened in the last user's shape; a read that
         // fails keeps the shape already showing.

@@ -270,6 +270,54 @@
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
+
+            <TabItem x:Name="ExperimentalTab" Classes="kcapSettingsTab" Header="Experimental"
+                     IsVisible="{Binding Experimental, Converter={x:Static ObjectConverters.IsNotNull}}">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,18,0,0">
+                    <StackPanel Spacing="16">
+                        <StackPanel Spacing="10">
+                            <TextBlock Classes="kcapTitle" Text="Experimental" LineHeight="22" />
+                            <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
+                                       Text="Features still being proven. Saved for this profile and shared with the kcap command line." />
+                            <TextBlock x:Name="ExperimentalProblem" Classes="kcapHint" TextWrapping="Wrap"
+                                       Text="{Binding Experimental.Problem, FallbackValue={x:Null}}"
+                                       IsVisible="{Binding Experimental.Problem, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}" />
+                        </StackPanel>
+
+                        <ItemsControl ItemsSource="{Binding Experimental.Features, FallbackValue={x:Null}}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate><StackPanel Spacing="16" /></ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:ExperimentalFeatureRowViewModel">
+                                    <Border Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+                                            BorderThickness="1" CornerRadius="12" Padding="20">
+                                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="18">
+                                            <StackPanel Spacing="5">
+                                                <TextBlock Classes="kcapLabel" Text="{Binding DisplayName}" />
+                                                <TextBlock Classes="kcapHint" TextWrapping="Wrap" Text="{Binding Description}" />
+                                                <TextBlock Classes="kcapHint" TextWrapping="Wrap" Text="{Binding StatusText}"
+                                                           Classes.attention="{Binding StatusIsWarning}"
+                                                           IsVisible="{Binding StatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                                    <TextBlock.Styles>
+                                                        <Style Selector="TextBlock.attention">
+                                                            <Setter Property="Foreground" Value="{StaticResource KcapWarningBrush}" />
+                                                        </Style>
+                                                    </TextBlock.Styles>
+                                                </TextBlock>
+                                            </StackPanel>
+                                            <ToggleSwitch Grid.Column="1" Classes="kcapSwitch" VerticalAlignment="Center"
+                                                          AutomationProperties.Name="{Binding DisplayName}"
+                                                          IsEnabled="{Binding CanChange}"
+                                                          IsChecked="{Binding IsEnabled, Mode=TwoWay}" />
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
         </TabControl>
 
         <TextBlock Grid.Row="1" x:Name="MessageText" Classes="kcapHint" Text="{Binding Message}" TextWrapping="Wrap"

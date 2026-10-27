@@ -167,7 +167,8 @@ internal partial class AgentOrchestrator {
                 TerminalDialog: a.Status == "Running" ? a.TerminalDialog : null,
                 WorkingSince: a.Status == "Running" && a.ActivityClock.WorkingFor is { } working
                     ? (_time.GetUtcNow() - working).UtcDateTime : null,
-                AccountDirectory: a.Account?.Directory, AccountId: a.Account?.AccountId, AccountLabel: a.Account?.Label))];
+                AccountDirectory: a.Account?.Directory, AccountId: a.Account?.AccountId, AccountLabel: a.Account?.Label,
+                TurnAttested: a.Status == "Running" && a.ActivityClock.TurnAttested))];
 
     /// The checkout is resolved as the live agent's is, so a row keeps its rail group across the handoff.
     static AgentStatusDto LedgerStatusRow(ResumeLedgerEntry entry, string status) {
@@ -559,10 +560,9 @@ internal partial class AgentOrchestrator {
 
             agent = new AgentInstance(agentId, null, "", null, cwd, vendor, runtime, worktree, new CancellationTokenSource(), resolution.Account) {
                 CreatedAt = startedAtUtc, LastOutputAt = startedAtUtc,
-                // Every launch path must go through CreateActivityClock() so the stage-advance report
-                // wiring is attached by construction. Inert here today (a local spawn is PTY-only and
-                // stamps no stage) — but a hand-built clock is exactly how that wiring goes silently
-                // missing the day this path grows an ACP runtime.
+                VendorSession = built.SessionId,
+                // Every launch path goes through CreateActivityClock(), even this PTY-only one that stamps
+                // no stage: a hand-built clock is how the stage-report wiring goes silently missing.
                 ActivityClock  = CreateActivityClock(),
                 IsPrivate      = isPrivate,
                 StartTitle     = startTitle,

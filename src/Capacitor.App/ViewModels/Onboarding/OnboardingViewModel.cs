@@ -19,6 +19,9 @@ public sealed class OnboardingViewModel : ReactiveObject {
 
     internal bool Closed => _closed;
 
+    /// Whether setup may be left half-done, the gate Finish later shows behind.
+    internal bool Deferrable => _finishLaterAllowed;
+
     public IReadOnlyList<IWizardStep> Steps { get; }
 
     /// Wizard-first mode builds no tray and no main window, so the outcome consumer's Status/

@@ -270,12 +270,12 @@ public class ServiceEnvironmentTests {
             await Assert.That(env.ContainsKey(key)).IsFalse();
     }
 
-    /// <summary>Both Codex transport settings reach a service unit on BOTH platforms. The daemon reads
-    /// them from its own environment and nowhere else, so a unit missing them silently runs PTY.</summary>
+    /// <summary>The daemon reads the Codex switch from <c>experimental.json</c>, so a variable an
+    /// operator still exports must not be baked into a fresh unit.</summary>
     [Test]
     [Arguments(false)]
     [Arguments(true)]
-    public async Task Codex_transport_selection_survives_a_service_install(bool isWindows) {
+    public async Task Removed_codex_variables_are_not_carried_into_the_unit(bool isWindows) {
         var source = new Dictionary<string, string> {
             ["PATH"]                             = "/usr/bin",
             ["KCAP_CODEX_TRANSPORT"]             = "app-server",
@@ -284,8 +284,8 @@ public class ServiceEnvironmentTests {
 
         var env = ServiceEnvironment.Build(profileName: null, source: source, config: Config.Root, isWindows: isWindows);
 
-        await Assert.That(env.TryGetValue("KCAP_CODEX_TRANSPORT", out var t) ? t : null).IsEqualTo("app-server");
-        await Assert.That(env.TryGetValue("KCAP_CODEX_APPSERVER_INTERACTIVE", out var i) ? i : null).IsEqualTo("1");
+        await Assert.That(env.ContainsKey("KCAP_CODEX_TRANSPORT")).IsFalse();
+        await Assert.That(env.ContainsKey("KCAP_CODEX_APPSERVER_INTERACTIVE")).IsFalse();
     }
 
     /// <summary>

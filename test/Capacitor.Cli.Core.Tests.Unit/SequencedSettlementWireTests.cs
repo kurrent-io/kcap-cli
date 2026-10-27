@@ -93,9 +93,10 @@ public class SequencedSettlementWireTests {
         var legacy = new LaunchAgentCommand("a1", "hi", "opus", null, "/repo", null, null, "claude");
         await Assert.That(legacy.Seq).IsNull(); // absent ⇒ legacy lane
 
-        var seqd = legacy with { Epoch = "e1", Seq = 4, CommandId = "cmd" };
+        var seqd = legacy with { Epoch = "e1", Seq = 4, CommandId = "cmd", ExpectedRuntimeTransport = "pty" };
         var rt = JsonSerializer.Deserialize<LaunchAgentCommand>(JsonSerializer.Serialize(seqd, Opts), Opts);
         await Assert.That(rt.Seq).IsEqualTo(4L);
         await Assert.That(rt.CommandId).IsEqualTo("cmd");
+        await Assert.That(rt.ExpectedRuntimeTransport).IsEqualTo("pty");
     }
 }

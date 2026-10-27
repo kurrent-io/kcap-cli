@@ -795,6 +795,13 @@ public class SetupCommandTests {
     }
 
     [Test]
+    public async Task PathShimNotice_names_the_profile_line_a_standard_user_gets() {
+        var notice = SpectreFirstRunFlowProgress.PathShimNotice(macOS: true, "export PATH=\"$PATH:/Users/a/.local/bin\" (in ~/.zprofile)");
+
+        await Assert.That(notice).Contains("without admin rights, kcap adds export PATH=\"$PATH:/Users/a/.local/bin\" (in ~/.zprofile)");
+    }
+
+    [Test]
     public async Task LiveRecordingRestartTip_returns_note_when_any_agent_installed() {
         var result = new CodingAgentsStep.Result(
             ClaudeInstalled:       true,
