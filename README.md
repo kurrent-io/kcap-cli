@@ -2831,6 +2831,13 @@ kcap feedback --feedback                               # send feedback; prompts 
 > running the npm binary: run `kcap daemon service install` again once the
 > script install is on your `PATH`.
 >
+> **The snap** ships `kcap` with the desktop app, and snapd keeps both up to date:
+> there `kcap update` changes nothing and names `sudo snap refresh kcap` to update
+> now, and `kcap update --check` reports `newer: false` with `install_tag: "snap"`.
+> The paths kcap writes — the daemon service unit, MCP registrations, git hooks
+> and the Claude Code plugin — name `/snap/kcap/current/…`, so they follow each
+> refresh.
+>
 > `kcap refresh` is the agent-integration refresh every installer runs: skills,
 > per-vendor hooks and plugins, the Claude Code plugin and installed daemon
 > service units, each only if you installed it before. Run it yourself when an
