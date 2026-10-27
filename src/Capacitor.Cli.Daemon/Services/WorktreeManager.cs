@@ -276,7 +276,8 @@ public partial class WorktreeManager(
                 // locked, leaves the lookup after it to decide; one that times out fails the launch.
                 if (IsAbbreviatedSha(baseRef)) {
                     await RunGitCaptureResult(repoPath, FetchTimeout, time, false,
-                        [new("maintenance.auto", "false"), new("gc.auto", "0"), .. NoSubmoduleRecursion()],
+                        [new("maintenance.auto", "false"), new("gc.auto", "0"), new("remote.origin.prune", "false"),
+                         .. NoSubmoduleRecursion()],
                         "fetch", "--no-write-fetch-head", "origin");
                     if (await ResolveLocalCommitAsync(repoPath, baseRef) is { } pushed)
                         return await AddAtCommitAsync(pushed, "origin branches");
