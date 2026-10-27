@@ -607,7 +607,10 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     /// is discarded: the evidence the dialog disclosed may no longer hold.
     /// <param name="requireIdle">Refuse an accepted consent if agents started while the prompt was open:
     /// snapshots do not move the attach generation, so the stale-consent check cannot see them.</param>
-    async Task ConfirmAndReplaceAsync(LifecyclePrompt prompt, CancellationToken ct, bool requireIdle = false) {
+    /// <param name="stillEligible">Re-checks, after consent, evidence the attach generation does not track.</param>
+    async Task ConfirmAndReplaceAsync(
+            LifecyclePrompt prompt, CancellationToken ct, bool requireIdle = false,
+            Func<CancellationToken, Task<bool>>? stillEligible = null) {
         if (RequireAppRestart()) return;
         var gen0     = CurrentGeneration(); // captured immediately before ConfirmAsync (stale-consent check below)
         var accepted = await _surface.ConfirmAsync(prompt, ct).ConfigureAwait(false);
@@ -623,6 +626,11 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             // Offered again once they finish; the flag goes first so an idle snapshot landing now still finds it.
             lock (_lock) _mismatchWaitsForIdle = true;
             if (!_latestBusy) _ = CheckAttachedIdentityAsync();
+            return;
+        }
+
+        if (stillEligible is not null && !await stillEligible(ct).ConfigureAwait(false)) {
+            _surface.Status(PromptStaleStatus);
             return;
         }
 
@@ -737,8 +745,11 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
                     var terminalPath = await _probe.TerminalPathAsync(lct).ConfigureAwait(false);
                     var prompt = new LifecyclePrompt(
                         LifecyclePrompt.KindRepair, null, null, terminalPath is null, TakeoverDisclosure,
-                        RepairInterruptsWarning(Volatile.Read(ref _latestActiveAgents)));
-                    await ConfirmAndReplaceAsync(prompt, lct).ConfigureAwait(false);
+                        RepairInterruptsWarning(LatestActivity?.ActiveAgents ?? 0));
+                    // The marker can be settled while the prompt is open, which moves no attach generation.
+                    await ConfirmAndReplaceAsync(prompt, lct, stillEligible: async token =>
+                            await QueryStatusForActionAsync(token).ConfigureAwait(false) is { TxnMarker: true, TxnActive: false })
+                        .ConfigureAwait(false);
 
                     snap = await QueryStatusForActionAsync(lct).ConfigureAwait(false);
                     if (snap is null) return;

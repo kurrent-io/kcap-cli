@@ -651,9 +651,10 @@ public class DaemonLifecycleControllerTests {
         var markerLeft = true;
         h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(
             Snap(unitPresent: true, state: "running", jobPid: 7, daemonPid: 7, txnMarker: markerLeft));
-        h.Surface.ConfirmBehavior = (_, _) => {
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
+        h.Lane.Behavior = (_, _) => {
             markerLeft = false;
-            return Task.FromResult(true);
+            return Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded());
         };
         h.Start();
         h.PushConnected();
@@ -728,6 +729,26 @@ public class DaemonLifecycleControllerTests {
 
         await WaitUntilAsync(() => h.Surface.AttentionMessages.Count == 1, what: "the stale-marker attention");
         await Assert.That(h.RepairOffer()).IsEqualTo(h.Surface.AttentionMessages[0]);
+    }
+
+    [Test]
+    public async Task Repair_settled_while_the_prompt_was_open_replaces_nothing() {
+        await using var h = new Harness();
+        var markerLeft = true;
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(
+            Snap(unitPresent: true, state: "running", jobPid: 7, daemonPid: 7, txnMarker: markerLeft));
+        h.Surface.ConfirmBehavior = (_, _) => {
+            markerLeft = false; // `kcap daemon service status` settled it meanwhile
+            return Task.FromResult(true);
+        };
+        h.Start();
+        h.PushConnected();
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count == 1, what: "the stale-marker attention");
+
+        await h.Controller.RepairStaleMarkerAsync(CancellationToken.None);
+
+        await Assert.That(h.Lane.Requests).IsEmpty();
+        await Assert.That(h.RepairOffer()).IsNull();
     }
 
     [Test]
