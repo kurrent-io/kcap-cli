@@ -29,7 +29,7 @@ parts:
   kcap:
     # Prebuilt by scripts/build-snap.sh: the same self-contained publishes the other platforms ship.
     plugin: dump
-    source: build/snap
+    source: .publish/snap
     override-build: |
       craftctl default
       craftctl set version="$(cat "$CRAFT_PART_SRC/VERSION")"

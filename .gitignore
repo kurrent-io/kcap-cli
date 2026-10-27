@@ -30,5 +30,4 @@ __pycache__/
 *.pyc
 
 # Snap packaging (scripts/build-snap.sh)
-/build/
 *.snap

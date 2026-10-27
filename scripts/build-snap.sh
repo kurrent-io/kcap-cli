@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Usage: build-snap.sh [version]
-# Publishes the desktop app, kcap and kcap-daemon for this machine's architecture into build/snap,
+# Publishes the desktop app, kcap and kcap-daemon for this machine's architecture into .publish/snap,
 # adds the Claude Code plugin, and packs the snap. Packing runs in LXD unless snapcraft is told otherwise.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -13,8 +13,8 @@ case "$(uname -m)" in
   *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
-stage="$root/build/snap"
-app="$root/build/snap-app"
+stage="$root/.publish/snap"
+app="$root/.publish/snap-app"
 rm -rf "$stage" "$app"
 mkdir -p "$stage/bin"
 
