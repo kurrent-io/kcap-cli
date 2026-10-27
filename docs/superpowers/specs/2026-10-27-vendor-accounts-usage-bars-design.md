@@ -47,16 +47,30 @@ disagree and all of it is unit-testable without a view. Its rules:
   windows.
 - **Reading age:** "updated 3m ago" from the latest `ConfirmedAt` across windows; a reading with windows
   but no `ConfirmedAt` reads "freshness unknown".
-- **No reading:** a null `Reading`, or one with no windows, is "no reading yet". Never zero, never ready.
+- **No reading:** a null `Reading`, or one with no windows at all, is "no reading yet". Never zero,
+  never ready.
+- **No primary windows:** a reading whose windows are all per-model (Codex can report only those), or
+  one carrying only metadata or a blocked marker, is not "no reading yet". Every surface shows "usage
+  unknown" in place of the bars, followed by "+N per model" when there are per-model windows. A
+  Limit hit pill known from the marker still shows, with no reset invented. Such a reading is not ready.
 - **Blocked** (user decision): only a live constraint on the main limit id, or one with no limit id,
   blocks the account. A live constraint on a per-model limit id does not block; it shows beside the
   per-model count ("+2 per model · 1 hit") and does not affect Ready. "Live" keeps
   `ReadingMerge.IsBlocked`'s rules (a marker blocked after its last clear; a constraint with a null
-  `ResetsAt` never lapses by time); write the account-level predicate as that rule restricted to the
-  main limit, sharing its lapse logic rather than restating it. The blocked windows are those matching a
-  live main-limit constraint's window length; a constraint with no window length blocks the account
-  without colouring a particular bar. The pill reads "Limit hit" plus the latest live main-limit
-  constraint's reset where the surface has room.
+  `ResetsAt` never lapses by time); write the account-level predicate as that rule restricted to
+  main-or-null constraints, sharing its lapse logic rather than restating it. The blocked windows are
+  those matching a live main-limit constraint's window length; a constraint with no window length blocks
+  the account without colouring a particular bar.
+- **Clearing stays as `ReadingMerge` does it** (my call). The marker has one shared `ClearedAt`, and
+  `Clears` needs every observed window below 100%, per-model ones included. So a live main or null-id
+  constraint stays live while a per-model window is exhausted, even if the main windows look healthy.
+  That is conservative: a null-id hit may well be that per-model limit, and the account is shown blocked
+  until a complete response clears it or the constraints lapse. No merge or wire change.
+- **Blocked until** (the pill's reset): the latest `ResetsAt` across the live main-or-null constraints,
+  with an unknown reset dominating, like `ReadingMerge.BlockedUntil` restricted to those constraints. With
+  a finite deadline the pill reads "Limit hit · resets in …"; with an unknown one it reads "Limit hit"
+  alone. Signal order does not matter: a week constraint and a later five-hour one block until the week
+  resets. This is separate from **Next reset**, which stays the earliest window reset.
 - **Ready for a long run** (the first spec's 6.4): Recording, signed in, not blocked, at least one
   primary window, and every primary window confirmed within the last hour, not expired and under 90%.
   Anything unknown is not ready.
@@ -101,15 +115,33 @@ directory only, without "no reading yet".
 ## 4. Only a connected host's reading is drawn
 
 Remote launch targets are already only connected daemons (`GetConnectedDaemonsAsync`), and the server's
-accounts read only covers connected daemons; this stays the rule everywhere, and no surface keeps a last
-reading after its host goes away:
+accounts read only covers connected daemons. The app, though, keeps what it fetched:
+`RemoteAgentsService` retains its daemon accounts across lane loss and failed fetches (a test pins
+that, and the launcher's account choice relies on it), and accounts refresh on `DaemonAccountsChanged`
+while membership refreshes separately on `DaemonsChanged`. So a server that only answers about
+connected daemons does not make the app's copy connected-only. The gate is applied where readings are
+drawn, not by dropping the retained copy:
 
-- **Launcher:** bars appear only on a connected target's rows. A connection lost while the panel is open
-  returns the section to its existing pending or offline state.
-- **Settings:** this machine only, as today; with the daemon down the tab keeps its "listed once the
+- **A remote host's reading is drawable** only while all three hold: the server lane is Connected; the
+  daemon is in the current `DaemonListing` (non-null, fetched after the latest connect); and its
+  `DaemonAccountsDto` was fetched after that same connect. `RemoteAgentsService` already counts
+  connects for the listing reset; tag the published accounts with the connect they were fetched under so
+  the gate can compare them. Lane loss, a listing without the daemon, a reconnect before a fresh accounts
+  fetch, and a failed accounts fetch after the daemon left the listing all make it not drawable at once.
+  None of them waits for the next fetch.
+- **The local host's reading is drawable** only while the local daemon is attached and the accounts
+  subscription has delivered a snapshot since that attach. `AccountsService` already clears its snapshot
+  on detach. Pin that in a test.
+- **Launcher:** bars appear only on rows of a drawable host. When the gate closes while the panel is
+  open, the bars line goes away. The section itself keeps its existing pending or offline behaviour.
+- **Settings:** this machine only, as today. With the daemon down, the tab keeps its "listed once the
   daemon is connected" notice and draws no bars.
-- **Composer strip, remote session whose host is not in the server's accounts read:** glyph, label and
-  directory only — no bars and no "no reading yet", which would claim something unknown.
+- **Composer strip, session whose host is not drawable:** glyph, label and directory only. No bars, and
+  no "no reading yet", which would claim something unknown.
+- Tests drive the transitions through the services' real caches, not an account list that already
+  omits the host: lane loss with accounts retained, daemon leaving the listing with accounts retained,
+  reconnect before the accounts refetch, and a failed accounts fetch after the daemon left. Each
+  transition is tested for both the launcher rows and the composer strip.
 
 ## 5. Codex accounts can read Recording
 
@@ -119,25 +151,51 @@ to `codex app-server`'s `hooks/list`, which today only the hosted launch path as
 account reads "Needs trust", would never be ready and would always need a fix. User decision: publish a
 real Recording for Codex in this slice.
 
-- `CodexAccountProbe` already starts `codex app-server` under the account's `CODEX_HOME` on every
-  refresh. It also asks `hooks/list` and classifies the answer with `CodexHookTrust.Classify` (move the
-  classifier and `CodexHookEntry` from the daemon assembly into `Capacitor.Cli.Core.Harness.Codex` so
-  both the probe and the hosted runtime use it). `Proceed` means trusted. A failed or unsupported
-  `hooks/list` is unknown and changes nothing. The trust step fails independently of identity and limits,
-  like those two already do.
-- The outcome is stored on the registry entry next to the probe's other results, together with a
-  fingerprint of the `hooks.json` it was observed against (its content hash is enough).
-  `AccountWiring.State` returns `Recording` for a Codex account whose hook is present and whose stored
-  trust is "trusted" for the current fingerprint. A rewire or any other edit to `hooks.json` changes the
-  fingerprint, so the account falls back to Needs trust until the next probe says otherwise. A stale
-  "trusted" is never shown.
+- **Asking.** `CodexAccountProbe` already starts `codex app-server` under the account's `CODEX_HOME` on
+  every refresh. After the identity and limits steps, it also asks `hooks/list` and classifies the
+  answer with `CodexHookTrust.Classify`. Move the classifier and `CodexHookEntry` from the daemon
+  assembly into `Capacitor.Cli.Core.Harness.Codex` so both the probe and the hosted runtime use it.
+  `Proceed` is **trusted**. `SeedAndRestart`, `Unseedable` and `MissingRequiredHooks` are **untrusted**.
+  A `hooks/list` that errors, is not supported, times out or does not parse yields **no answer**.
+- **What trust depends on.** Codex trusts a hook by `[hooks.state]` `trusted_hash` entries in its
+  `config.toml`, separately from the hook definitions in `hooks.json`. The fingerprint is therefore a
+  content hash over both files in `CODEX_HOME`, an absent file hashing as absent. The probe takes it
+  **before** starting `codex app-server` and again after `hooks/list` answers. If the two differ, the
+  answer is discarded as no answer, because it may describe either version of the files.
+- **Storing.** A trusted or untrusted answer is stored on the registry entry with its fingerprint, in
+  the same commit as the probe's other results and under the same probe-sequence rule. No answer leaves
+  the stored pair as it is. The fingerprint still guards it, so a kept "trusted" only counts while the
+  files are unchanged. A registry written before these fields reads as no stored answer.
+- **The state.** `AccountWiring.State` gains an account-aware overload, which `AccountSnapshotBuilder`
+  uses. It returns `Recording` for a Codex account whose kcap hook is present and whose stored answer is
+  trusted for the fingerprint of the files as they are now. Anything else that today reads `Installed`
+  stays `Installed` (Needs trust). Editing `hooks.json` or `config.toml` (a rewire, revoking trust,
+  trusting it in Codex) changes the fingerprint, so a trusted answer stops counting.
+- **Propagation.** `AccountsPublisher.PollAsync` rebuilds only when the registry or reading files change
+  their stat. Its change check also covers each Codex account's `hooks.json` and `config.toml` stats.
+  An external edit therefore republishes within one poll (2 s) with no registry mutation, refresh or
+  usage change. On such a change the publisher also calls `AccountRefresher.Request` for that account.
+  Trusting the hook in Codex then turns into Recording once the refresher's cooldown allows a probe
+  (at most 10 minutes later), instead of waiting for a manual Refresh.
+- **Refresh results are unchanged.** Trust is not a mutation step. `AccountRefresh.Steps` keeps its
+  identity and limits steps, so `kcap accounts refresh` output, its exit code, the App lane's evidence
+  rule and the README's description of the two steps do not change. An older Codex without `hooks/list`
+  refreshes exactly as today and simply stays Needs trust. Trust is diagnostic state behind
+  `recording_state`, nothing more.
 - Nothing changes on the wire: the state travels in the existing `recording_state` token, so kcap-server
-  and older apps need no change. A registry written before this field reads as unknown trust.
+  and older apps need no change.
 - Persisting trust is not this slice's job: a hosted launch still seeds trust per launch as it does
   today, and kcap never writes Codex's `[hooks.state]`.
-- Tests: the probe with a trusted, untrusted, missing-hook and failing `hooks/list` (through the
-  existing fake app-server); the state function across fingerprint match and mismatch; a registry
-  without the field.
+- Tests:
+  - the probe with trusted, untrusted, missing-hook, unsupported, timed-out and malformed `hooks/list`,
+    through the existing fake app-server;
+  - a file edited while a probe is in flight;
+  - the state across fingerprint match and mismatch;
+  - trust revoked by an edit to `config.toml` alone;
+  - a registry without the fields;
+  - the published snapshot falling back to Needs trust after an external edit, with no refresh, registry
+    mutation or usage update;
+  - refresh steps and exit code unchanged whatever the trust outcome.
 
 ## 6. Constraints
 
@@ -148,16 +206,20 @@ real Recording for Codex in this slice.
   thread; the tick must not rebuild Settings rows under an open menu or rename (keep the existing
   equality guard in `AccountsSettingsViewModel.ApplyGroups` working with the richer rows, e.g. by keeping
   identity rows stable and projecting reading text separately).
-- No README or help text change: no CLI surface changes (Refresh already exists in the CLI); the
-  Codex trust fix changes only what `kcap accounts` reports for a state, not its flags.
+- No CLI flag, step or exit-code change, so no help text change. The README paragraph describing the
+  Settings Accounts tab, which lists its rows, states and menu, gains the summary cards, bars, reading age
+  and Refresh. Its Needs trust wording ("kcap hooks wait to be trusted") stays true and now applies
+  only until a probe sees the trust.
 
 ## 7. Testing
 
 Headless view-model tests per the first spec's 6.6: window labels; the 75% threshold and danger at 100%
 and on a blocked window; reset text and next reset; reading age and freshness unknown; expired windows;
 "+N per model"; the ready predicate (no reading, one stale window beside a fresh one, blocked, expired
-windows, per-model exhaustion not blocking the account-wide limit); Need a fix; a disconnected host's
-session falling back to the directory; Settings rows not rebuilt by a tick that changes nothing. Smoke
+windows, per-model exhaustion not blocking the account-wide limit); per-model-only and
+blocked-before-any-window readings; blocked-until across both signal orders and mixed known and unknown
+resets; a main constraint kept live by an exhausted per-model window (§2's clearing rule); Need a fix;
+the drawable-host transitions of §4; Settings rows not rebuilt by a tick that changes nothing. Smoke
 tests only for real interactions (Refresh in the row menu). A live look at the three surfaces against a
 daemon publishing readings is owed to the user after merge.
 
