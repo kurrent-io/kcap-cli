@@ -332,6 +332,11 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     public ReactiveCommand<Unit, Unit>? StartDaemonCommand { get; private set; }
     public ReactiveCommand<Unit, Unit>? RetryDaemonCommand { get; private set; }
 
+    ObservableAsPropertyHelper<bool>? _daemonRepairVisible;
+    /// Only while the banner shows the very line the repair answers, never beside another notice.
+    public bool DaemonRepairVisible => _daemonRepairVisible?.Value ?? false;
+    public ReactiveCommand<Unit, Unit>? RepairDaemonCommand { get; private set; }
+
     readonly ObservableAsPropertyHelper<string> _startButtonTip;
     /// Tip when Start is disabled (no repo / connection gate). ToolTip.ShowOnDisabled is required.
     public string StartButtonTip => _startButtonTip.Value;
@@ -903,6 +908,19 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         startMessage
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_daemonStartMessageFeed)
+            .DisposeWith(_disposables);
+    }
+
+    /// The banner's Repair button, offered beside the lifecycle line <paramref name="offer"/> names.
+    public void AttachServiceRepair(Func<CancellationToken, Task> repair, IObservable<string?> offer, CancellationToken ct) {
+        RepairDaemonCommand = ReactiveCommand.CreateFromTask(() => repair(ct));
+        this.RaisePropertyChanged(nameof(RepairDaemonCommand));
+
+        _daemonRepairVisible = offer
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .CombineLatest(this.WhenAnyValue(x => x.BannerMessage),
+                (offered, shown) => offered is not null && shown == offered)
+            .ToProperty(this, x => x.DaemonRepairVisible, initialValue: false)
             .DisposeWith(_disposables);
     }
 

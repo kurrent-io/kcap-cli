@@ -628,14 +628,67 @@ public class DaemonLifecycleControllerTests {
     }
 
     [Test]
-    public async Task Reconciliation_on_connected_stale_txn_marker_is_attention() {
+    public async Task Reconciliation_on_connected_stale_txn_marker_is_attention_with_a_repair_offer() {
         await using var h = new Harness();
-        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(txnMarker: true, txnActive: false));
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(
+            Snap(txnMarker: true, txnActive: false) with { TxnOperation = "replace", TxnPhase = "bootstrapped" });
         h.Start();
 
         h.PushConnected();
 
         await WaitUntilAsync(() => h.Surface.AttentionMessages.Count == 1, what: "the stale-marker attention");
+        var message = h.Surface.AttentionMessages[0];
+        await Assert.That(message).Contains("'daemon-a'");
+        await Assert.That(message).Contains("service replace");
+        await Assert.That(message).Contains("'bootstrapped'");
+        await Assert.That(message).Contains("Repair");
+        await Assert.That(h.RepairOffer()).IsEqualTo(message);
+    }
+
+    [Test]
+    public async Task Repair_confirmed_replaces_the_service_and_withdraws_the_banner() {
+        await using var h = new Harness();
+        var markerLeft = true;
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(
+            Snap(unitPresent: true, state: "running", jobPid: 7, daemonPid: 7, txnMarker: markerLeft));
+        h.Surface.ConfirmBehavior = (_, _) => {
+            markerLeft = false;
+            return Task.FromResult(true);
+        };
+        h.Start();
+        h.PushConnected();
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count == 1, what: "the stale-marker attention");
+        var message = h.Surface.AttentionMessages[0];
+
+        await h.Controller.RepairStaleMarkerAsync(CancellationToken.None);
+
+        await Assert.That(h.Surface.Prompts.Single().Kind).IsEqualTo(LifecyclePrompt.KindRepair);
+        await Assert.That(h.Lane.Requests.Single().Verb).IsEqualTo(MutationVerb.Replace);
+        await Assert.That(h.Surface.Withdrawn).Contains(message);
+        await Assert.That(h.RepairOffer()).IsNull();
+    }
+
+    [Test]
+    public async Task Repair_declined_changes_nothing_and_keeps_the_offer() {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(
+            Snap(unitPresent: true, state: "running", jobPid: 7, daemonPid: 7, txnMarker: true));
+        h.Start();
+        h.PushConnected();
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count == 1, what: "the stale-marker attention");
+
+        await h.Controller.RepairStaleMarkerAsync(CancellationToken.None);
+
+        await Assert.That(h.Surface.Prompts.Count).IsEqualTo(1);
+        await Assert.That(h.Lane.Requests).IsEmpty();
+        await Assert.That(h.Surface.Withdrawn).IsEmpty();
+        await Assert.That(h.RepairOffer()).IsNotNull();
+    }
+
+    [Test]
+    public async Task Repair_warns_when_agents_are_running() {
+        await Assert.That(DaemonLifecycleController.RepairInterruptsWarning(0)).IsNull();
+        await Assert.That(DaemonLifecycleController.RepairInterruptsWarning(2)).Contains("2 running agents");
     }
 
     [Test]
@@ -1793,6 +1846,7 @@ public class DaemonLifecycleControllerTests {
         public bool Background() { bool? v = null; using (Controller.BackgroundPriority.Subscribe(x => v = x)) { } return v ?? false; }
         public ReloadState? Reload() { ReloadState? v = null; using (Controller.ReloadState.Subscribe(x => v = x)) { } return v; }
         public bool Reloading() { bool? v = null; using (Controller.IsReloading.Subscribe(x => v = x)) { } return v ?? false; }
+        public string? RepairOffer() { string? v = null; using (Controller.RepairOffer.Subscribe(x => v = x)) { } return v; }
 
         public ValueTask DisposeAsync() => Controller.DisposeAsync();
     }

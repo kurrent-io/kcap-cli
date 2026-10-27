@@ -103,6 +103,8 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     int  _latestActiveAgents;
     DaemonActivity? _latestActivity;
     readonly BehaviorSubject<string?> _identityReport = new(null);
+    readonly BehaviorSubject<string?> _staleMarkerOffer = new(null);
+    string? _staleMarkerShown; // under _lock: the exact line Attention received, so Withdraw can match it
 
     /// The attached daemon's latest reported activity; null until a snapshot arrives and whenever the attach drops.
     public DaemonActivity? LatestActivity => Volatile.Read(ref _latestActivity);
@@ -110,6 +112,10 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     /// The standing report about the attached daemon's identity, null while it matches. A state, not an event:
     /// a banner that resets on connect returns to it rather than losing it to however the two are ordered.
     public IObservable<string?> IdentityReport => _identityReport;
+
+    /// The banner line <see cref="RepairStaleMarkerAsync"/> answers while a leftover transaction marker
+    /// stands, else null. A Repair button shows only beside this exact line.
+    public IObservable<string?> RepairOffer => _staleMarkerOffer.DistinctUntilChanged();
     // Running or starting, admitted launches included; an older daemon that sends no Busy falls back to the lists.
     volatile bool _latestBusy;
     bool _latestResumes;
@@ -670,6 +676,67 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         PublishReloadState();
     }
 
+    internal static string StaleMarkerMessage(string daemonName, ServiceSnapshot snap) {
+        var what  = snap.TxnOperation is { } op ? $"service {op}" : "service install";
+        var where = snap.TxnPhase is { } phase ? $" at '{phase}'" : "";
+        var when  = snap.TxnMarkedAt is { } at ? $" on {at.ToLocalTime():MMM d, HH:mm}" : "";
+        return $"An earlier daemon {what} for '{daemonName}' did not finish: it stopped{where}{when}. " +
+               "Repair reinstalls the daemon service and restarts the daemon.";
+    }
+
+    internal static string? RepairInterruptsWarning(int activeAgents) => activeAgents == 0
+        ? null
+        : $"{activeAgents} running agent{(activeAgents == 1 ? "" : "s")} on this daemon may be interrupted.";
+
+    void WithdrawStaleMarker() {
+        string? shown;
+        lock (_lock) (shown, _staleMarkerShown) = (_staleMarkerShown, null);
+        if (shown is null) return;
+        _staleMarkerOffer.OnNext(null);
+        _surface.Withdraw(shown);
+    }
+
+    /// The banner's Repair button: a confirmed reinstall, whose transaction recovers the leftover
+    /// marker. Caller-awaited from the UI, so every path is exception-safe.
+    public async Task RepairStaleMarkerAsync(CancellationToken ct) {
+        try {
+            if (RequireAppRestart() || _cli.CliPath is null) return;
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _lifetime.Token);
+            var lct = linked.Token;
+
+            if (!await TryAcquireGateAsync(lct).ConfigureAwait(false)) return;
+            try {
+                var snap = await QueryStatusForActionAsync(lct).ConfigureAwait(false);
+                if (RequireAppRestart() || snap is null) return;
+
+                if (snap.TxnMarker && !snap.TxnActive) {
+                    var missing = await FailingRepairPreconditionAsync(snap).ConfigureAwait(false);
+                    if (missing is not null) {
+                        _surface.Status(missing);
+                        return;
+                    }
+
+                    var terminalPath = await _probe.TerminalPathAsync(lct).ConfigureAwait(false);
+                    var prompt = new LifecyclePrompt(
+                        LifecyclePrompt.KindRepair, null, null, terminalPath is null, TakeoverDisclosure,
+                        RepairInterruptsWarning(Volatile.Read(ref _latestActiveAgents)));
+                    await ConfirmAndReplaceAsync(prompt, lct).ConfigureAwait(false);
+
+                    snap = await QueryStatusForActionAsync(lct).ConfigureAwait(false);
+                    if (snap is null) return;
+                }
+
+                Reconcile(snap, IsCurrentlyAttached(), allowTxnActiveRequery: false);
+            } finally {
+                _gate.Release();
+            }
+        } catch (OperationCanceledException) {
+            // shutdown or caller cancel
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"kcap: daemon service repair failed unexpectedly: {ex.Message}");
+        }
+    }
+
     /// Preconditions every unit rewrite needs short of the silent install's terminal PATH: a repair,
     /// and an install the user asked for, proceed without it. A missing install binary or an
     /// unresolvable profile would make the rewrite a guaranteed coded viability failure.
@@ -699,8 +766,14 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
                 _surface.Attention("The service reports its job running, but no attached-daemon evidence backs it.");
         }
 
-        if (snap.TxnMarker && !snap.TxnActive)
-            _surface.Attention("A previous daemon service operation left a stale transaction marker — repair may be needed.");
+        if (snap.TxnMarker && !snap.TxnActive) {
+            var message = StaleMarkerMessage(_client.DaemonName, snap);
+            lock (_lock) _staleMarkerShown = message;
+            _staleMarkerOffer.OnNext(message);
+            _surface.Attention(message);
+        } else if (!snap.TxnMarker) {
+            WithdrawStaleMarker();
+        }
 
         if (snap.TxnActive && allowTxnActiveRequery)
             _ = RunTxnActiveRequeryAsync();
