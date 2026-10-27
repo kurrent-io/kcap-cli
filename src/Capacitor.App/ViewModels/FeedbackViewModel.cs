@@ -36,6 +36,7 @@ public sealed class FeedbackViewModel : ReactiveObject, IDisposable {
     bool _isSent;
     string? _reporterEmail;
     string? _sentMessage;
+    string? _fullReport;
     string? _outcome;
     bool _signInOffered;
     bool _disposed;
@@ -117,6 +118,9 @@ public sealed class FeedbackViewModel : ReactiveObject, IDisposable {
 
     public string? ReporterEmail { get => _reporterEmail; private set => this.RaiseAndSetIfChanged(ref _reporterEmail, value); }
     public string? SentMessage { get => _sentMessage; private set => this.RaiseAndSetIfChanged(ref _sentMessage, value); }
+
+    /// <summary>The whole report as mailed, trailer included, shown to copy by hand when nothing else holds it.</summary>
+    public string? FullReport { get => _fullReport; private set => this.RaiseAndSetIfChanged(ref _fullReport, value); }
     public string? Outcome { get => _outcome; private set => this.RaiseAndSetIfChanged(ref _outcome, value); }
     public bool SignInOffered { get => _signInOffered; private set => this.RaiseAndSetIfChanged(ref _signInOffered, value); }
     public ReactiveCommand<Unit, Unit> SendCommand { get; }
@@ -153,6 +157,7 @@ public sealed class FeedbackViewModel : ReactiveObject, IDisposable {
         _boundTrailer = null;
         _id = Guid.NewGuid();
         Outcome = null;
+        FullReport = null;
         SignInOffered = false;
     }
 
@@ -164,6 +169,7 @@ public sealed class FeedbackViewModel : ReactiveObject, IDisposable {
         ReporterEmail = null;
         SentMessage = null;
         Outcome = null;
+        FullReport = null;
         SignInOffered = false;
         _category = category; this.RaisePropertyChanged(nameof(Category));
         _message = "";        this.RaisePropertyChanged(nameof(Message));
@@ -181,13 +187,18 @@ public sealed class FeedbackViewModel : ReactiveObject, IDisposable {
 
         IsBusy = true;
         Outcome = null;
+        FullReport = null;
         SignInOffered = false;
         try {
             if (_mail is { } mail) {
                 // The clipboard helper waits on a child process.
                 var mailed = await Task.Run(() => mail(submission), _lifetime.Token);
-                if (MailRefusal(mailed) is { } refusal) Outcome = refusal;
-                else MarkSent(MailSent(mailed));
+                if (MailRefusal(mailed) is { } refusal) {
+                    Outcome = refusal;
+                    if (!mailed.Copied) FullReport = FeedbackMail.Body(submission);
+                } else {
+                    MarkSent(MailSent(mailed));
+                }
                 return;
             }
 
@@ -224,9 +235,9 @@ public sealed class FeedbackViewModel : ReactiveObject, IDisposable {
     static string? MailRefusal(FeedbackMailOutcome mailed) => (mailed.Opened, mailed.Draft.CutShort, mailed.Copied) switch {
         (true, _, true)      => null,
         (false, _, true)     => $"Couldn't open a mail app. The report is on your clipboard: paste it into an email to {FeedbackMail.Address}.",
-        (true, true, false)  => "Draft opened, cut short to fit a mail link, and the report couldn't be copied. Copy the rest of your message from here into the draft.",
-        (true, false, false) => $"Draft opened, but the report couldn't be copied. If no draft appeared, copy your message from here and email it to {FeedbackMail.Address}.",
-        (false, _, false)    => $"Couldn't open a mail app or copy the report. Copy your message and email it to {FeedbackMail.Address}.",
+        (true, true, false)  => "Draft opened, cut short to fit a mail link, and the report couldn't be copied. Copy the full report below into the draft.",
+        (true, false, false) => $"Draft opened, but the report couldn't be copied. If no draft appeared, copy the report below and email it to {FeedbackMail.Address}.",
+        (false, _, false)    => $"Couldn't open a mail app or copy the report. Copy the report below and email it to {FeedbackMail.Address}.",
     };
 
     static string MailSent(FeedbackMailOutcome mailed) => mailed.Draft.CutShort

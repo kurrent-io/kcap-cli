@@ -39,6 +39,9 @@
             <TextBlock x:Name="OutcomeText" Classes="kcapHint" Foreground="{StaticResource KcapWarningBrush}"
                        Text="{Binding Outcome}" TextWrapping="Wrap"
                        IsVisible="{Binding Outcome, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+            <TextBox x:Name="FullReportText" Classes="kcapField" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"
+                     Height="90" Text="{Binding FullReport}"
+                     IsVisible="{Binding FullReport, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
         </StackPanel>
 
         <StackPanel x:Name="SentPanel" Grid.Row="1" Margin="0,18,0,0" Spacing="12" IsVisible="{Binding IsSent}">

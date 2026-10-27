@@ -340,6 +340,7 @@ public class FeedbackViewModelTests {
 
         await Assert.That(vm.IsSent).IsTrue();
         await Assert.That(vm.SentMessage).Contains("on your clipboard");
+        await Assert.That(vm.FullReport).IsNull();
         await Assert.That(api.Sent).IsEmpty();
         await Assert.That(mailed.Single().Message).IsEqualTo("It broke.\n\n" + TrailerA);
         await Assert.That(vm.SendLabel).IsEqualTo("Open email");
@@ -357,6 +358,10 @@ public class FeedbackViewModelTests {
         await Assert.That(vm.IsSent).IsFalse();
         await Assert.That(vm.Message).IsEqualTo("It broke.");
         await Assert.That(vm.Outcome).Contains("cut short");
+        await Assert.That(vm.FullReport).IsEqualTo(FeedbackMail.Body(mailed.Single()));
+
+        vm.Message = "It broke twice.";
+        await Assert.That(vm.FullReport).IsNull();
     }
 
     [Test]
