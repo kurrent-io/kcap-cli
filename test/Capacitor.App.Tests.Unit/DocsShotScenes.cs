@@ -7,12 +7,14 @@ using Capacitor.App.Services.Onboarding;
 using Capacitor.App.ViewModels;
 using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests;
 using Capacitor.Cli.Core.Setup;
+using Capacitor.Cli.Core.Telemetry;
 using Capacitor.Cli.Core.Plans;
 using Capacitor.Cli.Core.WorkItems;
 using Capacitor.Remote.Models;
@@ -32,7 +34,8 @@ static partial class DocsShotScenes {
         "desktop-wizard-edition", "desktop-wizard-sign-in", "desktop-wizard-history", "desktop-local-recovery",
         "desktop-launcher", "desktop-pull-request", "desktop-work-context", "desktop-rail-grouped",
         "desktop-settings-notifications", "desktop-settings-accounts", "desktop-settings-profiles", "desktop-settings-search",
-        "desktop-launch-approvals", "desktop-consent-prompt", "desktop-wizard-agents", "desktop-wizard-visibility"];
+        "desktop-launch-approvals", "desktop-consent-prompt", "desktop-wizard-agents", "desktop-wizard-visibility",
+        "desktop-settings-privacy", "desktop-wizard-usage-data"];
 
     const string ServerUrl = "https://northwind.kcap.ai";
     const string PaymentsRepo = "/Users/maya/dev/northwind/payments-api";
@@ -318,6 +321,17 @@ static partial class DocsShotScenes {
             harnesses.Visibility = "private";
             return Task.CompletedTask;
         });
+    }
+
+    /// The wizard on its usage-data step with Share chosen, as a device that has not yet seen the notice
+    /// meets it.
+    public static Task<DocsShotScene> WizardUsageDataAsync(TempConfigRoot config) {
+        var telemetry = TelemetryProbe.Start(TelemetryStartup.ForDesktopApp(null, AuthEndpoints.DefaultSignupUrl), config.Root).Telemetry;
+        var usage = new UsageDataStepViewModel(new UsageDataNotice(telemetry, config.Root));
+        // The notice reads the process environment, which can leave the step out or the choice hidden.
+        if (!usage.Applicable || !usage.ChoiceVisible || !usage.Share)
+            throw new InvalidOperationException("desktop-wizard-usage-data needs usage data on, the notice due and the choice offered");
+        return WizardAsync(config, WizardStepId.Privacy, usage);
     }
 
     static ImportDiscoveryReport NorthwindHistory() {

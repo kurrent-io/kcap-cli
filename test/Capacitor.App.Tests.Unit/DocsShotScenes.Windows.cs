@@ -13,6 +13,7 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.Telemetry;
 using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.App.Tests.Unit;
@@ -24,9 +25,10 @@ static partial class DocsShotScenes {
 
     /// The settings window over the Northwind profile, not yet shown, open on the tab named `tab`.
     /// Profiles, Accounts and Notifications are always there; Search only with `localSearch`, the
-    /// local edition's built-in embedding model being offered and in use.
+    /// local edition's built-in embedding model being offered and in use; Privacy only with `privacy`,
+    /// usage data being sent.
     public static async Task<DocsShotScene> SettingsAsync(TempConfigRoot config, string tab = "DaemonTab",
-            bool localSearch = false, double height = SettingsHeight) {
+            bool localSearch = false, bool privacy = false, double height = SettingsHeight) {
         var scene = new DocsShotScene();
         try {
             await ConfigMutator.MutateAsync(config.Root, c => c with {
@@ -68,6 +70,7 @@ static partial class DocsShotScenes {
                     (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded()), "maya-mbp", "northwind",
                     () => [], _ => Task.FromResult<string?>(null), service.Status),
                 Search = localSearch ? LocalSearch(scene) : null,
+                Privacy = privacy ? Privacy(scene, config) : null,
             });
             if (vm.Search is { } search) scene.Settled = () => !search.Choice.Checking && (search.Choice.OllamaMissing || search.Choice.OllamaEnabled);
             var window = scene.Present(new SettingsWindow { DataContext = vm, Height = height });
@@ -78,6 +81,15 @@ static partial class DocsShotScenes {
             await scene.DisposeAsync();
             throw;
         }
+    }
+
+    static PrivacySettingsViewModel Privacy(DocsShotScene scene, TempConfigRoot config) {
+        var telemetry = TelemetryProbe.Start(TelemetryStartup.ForDesktopApp(null, AuthEndpoints.DefaultSignupUrl), config.Root).Telemetry;
+        var privacy = scene.Own(new PrivacySettingsViewModel(telemetry, config.Root, new UsageDataNotice(telemetry, config.Root)));
+        // The view model reads the process environment, which a figure must never show.
+        if (privacy.Overridden is not null || !privacy.SendUsageData)
+            throw new InvalidOperationException($"desktop-settings-privacy needs usage data on and the switch free: {privacy.Overridden ?? "it resolved off"}");
+        return privacy;
     }
 
     static LocalSearchViewModel LocalSearch(DocsShotScene scene) {

@@ -88,7 +88,8 @@ public sealed class DocsShots {
             "desktop-wizard-edition", "desktop-wizard-sign-in", "desktop-wizard-history", "desktop-local-recovery",
             "desktop-launcher", "desktop-pull-request", "desktop-work-context", "desktop-rail-grouped",
             "desktop-settings-notifications", "desktop-settings-accounts", "desktop-settings-profiles", "desktop-settings-search",
-            "desktop-launch-approvals", "desktop-consent-prompt", "desktop-wizard-agents", "desktop-wizard-visibility"]);
+            "desktop-launch-approvals", "desktop-consent-prompt", "desktop-wizard-agents", "desktop-wizard-visibility",
+            "desktop-settings-privacy", "desktop-wizard-usage-data"]);
     }
 
     [Test]
@@ -148,6 +149,11 @@ public sealed class DocsShots {
         await CaptureAsync(() => DocsShotScenes.WizardHarnessesAsync(Config), "PrivacyCard");
     }
 
+    [Test, DocsShot("desktop-wizard-usage-data")]
+    public async Task The_setup_wizard_asks_to_share_usage_data() {
+        await CaptureAsync(() => DocsShotScenes.WizardUsageDataAsync(Config), "ShareUsageOption");
+    }
+
     [Test, DocsShot("desktop-local-recovery")]
     public async Task The_launcher_offers_to_start_the_local_server() {
         await CaptureAsync(() => DocsShotScenes.MainWindowAsync(openSession: false, localServerDown: true), "StartLocalServerButton");
@@ -193,6 +199,11 @@ public sealed class DocsShots {
     [Test, DocsShot("desktop-settings-search")]
     public async Task The_settings_window_offers_the_built_in_search_model() {
         await CaptureAsync(() => DocsShotScenes.SettingsAsync(Config, "SearchTab", localSearch: true), "SearchCurrentText");
+    }
+
+    [Test, DocsShot("desktop-settings-privacy")]
+    public async Task The_settings_window_shows_the_usage_data_switch_on() {
+        await CaptureAsync(() => DocsShotScenes.SettingsAsync(Config, "PrivacyTab", privacy: true, height: 340), "UsageDataSwitch");
     }
 
     [Test, DocsShot("desktop-launch-approvals")]
