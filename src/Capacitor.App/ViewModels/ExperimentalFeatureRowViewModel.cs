@@ -71,7 +71,13 @@ public sealed class ExperimentalFeatureRowViewModel : ReactiveObject {
         Recompute();
     }
 
+    /// A failed save puts the old value back, so the switch no longer counts as changed here.
     internal void Revert(bool value) {
+        _changedHere = false;
+        Show(value);
+    }
+
+    void Show(bool value) {
         this.RaiseAndSetIfChanged(ref _enabled, value, nameof(IsEnabled));
         Recompute();
     }
@@ -79,7 +85,9 @@ public sealed class ExperimentalFeatureRowViewModel : ReactiveObject {
     /// Takes the saved value without saving it back.
     internal void Load(bool enabled, bool canChange) {
         CanChange = canChange;
-        Revert(enabled);
+        // Reading back this row's own save is no news; a different value was set elsewhere.
+        if (enabled != _enabled) _changedHere = false;
+        Show(enabled);
     }
 
     void Recompute() {
@@ -95,7 +103,7 @@ public sealed class ExperimentalFeatureRowViewModel : ReactiveObject {
             ExperimentalFeatureStateKind.Applying => "Applying…",
             // Unprompted, an unregistered daemon is the Daemon page's news; a switch left off changes nothing.
             ExperimentalFeatureStateKind.AppliedLocally => _changedHere ? AppliedLocallyText : _enabled ? WaitingForServerText : "",
-            ExperimentalFeatureStateKind.Unknown => "The daemon runs an older version of kcap. Update kcap from About. The daemon then restarts on its own.",
+            ExperimentalFeatureStateKind.Unknown => "The daemon runs an older version of kcap. Update kcap. The daemon then restarts on its own.",
             ExperimentalFeatureStateKind.DaemonNotRunning when _enabled => "Saved. Applies when the daemon starts.",
             _ => "",
         };

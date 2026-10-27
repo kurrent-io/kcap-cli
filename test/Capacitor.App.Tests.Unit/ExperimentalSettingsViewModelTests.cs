@@ -77,6 +77,10 @@ public class ExperimentalSettingsViewModelTests {
             row.IsEnabled = !on;
             service.SnapshotsSubject.OnNext(Reporting(resolved: !on, active: !on, acknowledged: false, failed: true));
             await Until(() => row.StatusText == ExperimentalFeatureRowViewModel.AppliedLocallyText, "a flipped switch");
+
+            row.Load(on, canChange: true);
+            service.SnapshotsSubject.OnNext(Reporting(resolved: on, active: on, acknowledged: false, failed: true));
+            await Until(() => row.StatusText == expected, "a value read back from the store");
         });
 
     [Test]
@@ -89,7 +93,7 @@ public class ExperimentalSettingsViewModelTests {
         await Assert.That(row.StatusText).IsEqualTo("");
 
         service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
-        await Until(() => row.StatusText == "The daemon runs an older version of kcap. Update kcap from About. The daemon then restarts on its own.", "a pre-feature daemon");
+        await Until(() => row.StatusText == "The daemon runs an older version of kcap. Update kcap. The daemon then restarts on its own.", "a pre-feature daemon");
         await Assert.That(row.StatusIsWarning).IsTrue();
 
         service.SnapshotsSubject.OnNext(Reporting(resolved: false, active: false));
