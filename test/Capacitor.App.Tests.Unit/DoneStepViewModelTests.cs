@@ -129,7 +129,7 @@ public class DoneStepViewModelTests {
                          LocalFacts() with { DaemonRunning = false, DaemonProblem = "kcap isn't available on this machine." } }) {
                 var vm = new DoneStepViewModel(() => facts);
                 await vm.OnEnterAsync(CancellationToken.None);
-                all.AddRange([vm.Lede, vm.ImportHint ?? "", vm.ServiceBody, vm.FailedBody]);
+                all.AddRange([vm.Lede, string.Concat(vm.ImportHint?.Select(s => s.Text) ?? []), vm.ServiceBody, vm.FailedBody]);
             }
 
             return all;

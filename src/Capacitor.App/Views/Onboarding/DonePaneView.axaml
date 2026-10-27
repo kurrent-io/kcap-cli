@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:views="clr-namespace:Capacitor.App.Views"
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels.Onboarding"
+             xmlns:onboarding="clr-namespace:Capacitor.App.Views.Onboarding"
              x:Class="Capacitor.App.Views.Onboarding.DonePaneView"
              x:DataType="vm:DoneStepViewModel">
     <UserControl.Styles>
@@ -116,13 +117,14 @@
                 <TextBlock Classes="onboardingNote" IsVisible="{Binding PathHazardVisible}">
                     <Run Text="Nothing is stored until the login shell can find " /><Run Text="kcap" FontFamily="{StaticResource OnboardingMonoFont}" /><Run Text=". Go back to your agents to fix it" />
                 </TextBlock>
-                <TextBlock Classes="onboardingNote" Text="{Binding ImportHint}"
-                           IsVisible="{Binding ImportHint, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                <TextBlock Classes="onboardingNote" onboarding:OnboardingSpans.Spans="{Binding ImportHint}"
+                           IsVisible="{Binding ImportHint, Converter={x:Static ObjectConverters.IsNotNull}}" />
                 <Button x:Name="AddAgentButton" Classes="onboardingLink" HorizontalAlignment="Left"
                         AutomationProperties.Name="{Binding AddAgentLabel}"
                         Command="{Binding AddAgentCommand}" IsVisible="{Binding AddAgentVisible}">
                     <StackPanel Orientation="Horizontal" Spacing="6">
-                        <views:AppIcon Kind="Plus" Size="14" />
+                        <!-- The glyph's own inset would indent it past the text column above. -->
+                        <views:AppIcon Kind="Plus" Size="14" Margin="-3,0,0,0" />
                         <TextBlock Text="{Binding AddAgentLabel}" VerticalAlignment="Center" />
                     </StackPanel>
                 </Button>
@@ -140,7 +142,8 @@
                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
                     <TextBlock Classes="onboardingLabel" FontSize="15" VerticalAlignment="Center"
                                Text="{x:Static vm:DoneStepViewModel.ServiceTitle}" />
-                    <Border Grid.Column="1" x:Name="ServicePill" Classes="servicePill" VerticalAlignment="Center"
+                    <!-- Negative margin: the pill must not make this title row taller than the agents card's. -->
+                    <Border Grid.Column="1" x:Name="ServicePill" Classes="servicePill" VerticalAlignment="Center" Margin="0,-4"
                             Classes.running="{Binding ServiceRunning}" Classes.failed="{Binding ServiceFailed}">
                         <StackPanel Orientation="Horizontal" Spacing="6">
                             <views:AppIcon Kind="LoaderCircle" Size="12" IsVisible="{Binding ServiceInstalling}"
