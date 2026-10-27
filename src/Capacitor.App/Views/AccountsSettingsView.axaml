@@ -37,13 +37,13 @@
                                             <Border Classes="profileRow accountRow settingsListRow">
                                                 <Grid Classes="settingsRow" ColumnDefinitions="*,Auto">
                                                     <StackPanel Classes="settingsRowText">
-                                                        <StackPanel Orientation="Horizontal" Spacing="8">
-                                                            <StackPanel.IsVisible>
+                                                        <WrapPanel ItemSpacing="8" LineSpacing="6">
+                                                            <WrapPanel.IsVisible>
                                                                 <MultiBinding Converter="{x:Static views:SameValueConverter.Different}">
                                                                     <Binding />
                                                                     <Binding Path="$parent[views:AccountsSettingsView].((vm:AccountsSettingsViewModel)DataContext).Renaming" />
                                                                 </MultiBinding>
-                                                            </StackPanel.IsVisible>
+                                                            </WrapPanel.IsVisible>
                                                             <TextBlock Classes="kcapLabel accountLabel" Text="{Binding Label}" VerticalAlignment="Center" MaxWidth="260" TextWrapping="Wrap" />
                                                             <Border Classes="settingsPill accountDefault" IsVisible="{Binding IsDefault}"
                                                                     ToolTip.Tip="The tool's standard folder, used when a session does not pick an account">
@@ -53,12 +53,12 @@
                                                                     ToolTip.Tip="{Binding StateHint}">
                                                                 <StackPanel Orientation="Horizontal" Spacing="5">
                                                                     <views:AppIcon Kind="TriangleAlert" Size="12" IsVisible="{Binding StateIsAttention}" />
-                                                                    <views:AppIcon Kind="CircleCheck" Size="12" IsVisible="{Binding !StateIsAttention}" />
+                                                                    <views:AppIcon Kind="CircleCheck" Size="12" IsVisible="{Binding StateIsHealthy}" />
                                                                     <TextBlock Classes="accountState" Classes.attention="{Binding StateIsAttention}"
                                                                                Text="{Binding StateLabel}" ToolTip.Tip="{Binding StateHint}" />
                                                                 </StackPanel>
                                                             </Border>
-                                                        </StackPanel>
+                                                        </WrapPanel>
                                                         <StackPanel Orientation="Horizontal" Spacing="6">
                                                             <StackPanel.IsVisible>
                                                                 <MultiBinding Converter="{x:Static views:SameValueConverter.Same}">
