@@ -295,6 +295,37 @@ public class PtyHostedAgentRuntimeTests {
         pty.Exit();
     }
 
+    /// <summary>Readiness is the mode as it stands when the quiet window ends: a TUI that turns
+    /// bracketed paste off again is not ready, however quiet it has been since turning it on.</summary>
+    [Test]
+    public async Task Launch_prompt_waits_again_when_the_tui_turns_bracketed_paste_off() {
+        var time    = new FakeTimeProvider();
+        var pty     = new RecordingScriptedPtyProcess();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, time, approvalsDisabled: false);
+
+        runtime.DeliverLaunchPrompt("build it");
+        _ = PumpAsync(runtime);
+        pty.Emit(ReadyBanner);
+        await Task.Delay(100);
+        time.Advance(TimeSpan.FromMilliseconds(250));
+        await Task.Delay(50);
+        pty.Emit("\x1b[?2004l");
+        await Task.Delay(100);
+
+        for (var quiet = TimeSpan.Zero; quiet < PtyHostedAgentRuntime.LaunchPromptQuietWindow * 4; quiet += TimeSpan.FromMilliseconds(250)) {
+            time.Advance(TimeSpan.FromMilliseconds(250));
+            await Task.Delay(10);
+        }
+        await Task.Delay(100);
+        await Assert.That(pty.Writes).IsEmpty();
+
+        pty.Emit(ReadyBanner);
+        await StepAsync(time, PtyHostedAgentRuntime.LaunchPromptQuietWindow, () => pty.Writes.Count >= 1);
+
+        await Assert.That(pty.Writes[0]).IsEqualTo("\x1b[200~build it\x1b[201~");
+        pty.Exit();
+    }
+
     /// <summary>A TUI that never settles still gets its prompt once the startup wait expires.</summary>
     [Test]
     public async Task Launch_prompt_is_pasted_when_the_startup_wait_expires_without_output() {

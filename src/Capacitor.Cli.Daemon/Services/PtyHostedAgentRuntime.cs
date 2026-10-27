@@ -58,14 +58,13 @@ internal sealed partial class PtyHostedAgentRuntime(
     /// <summary>Upper bound on that wait: a TUI that never settles still gets its prompt.</summary>
     internal static readonly TimeSpan LaunchPromptMaxWait = TimeSpan.FromSeconds(10);
 
-    /// <summary>The PTY offers no exit event, so the wait for the TUI to become ready is sliced and
-    /// the exit flag re-read between slices.</summary>
-    static readonly TimeSpan LaunchPromptExitPoll = TimeSpan.FromMilliseconds(250);
+    /// <summary>The PTY offers no exit event and the TUI can turn bracketed paste off again, so the
+    /// wait for readiness is sliced and both re-read between slices.</summary>
+    static readonly TimeSpan LaunchPromptReadinessPoll = TimeSpan.FromMilliseconds(250);
 
     readonly TerminalModeTracker _modes = new();
     readonly ILogger _logger = logger ?? NullLogger.Instance;
     readonly SemaphoreSlim           _lane        = new(1, 1);
-    readonly TaskCompletionSource    _pasteReady  = new(TaskCreationOptions.RunContinuationsAsynchronously);
     readonly CancellationTokenSource _disposal    = new();
     readonly Lock                    _dialogGate  = new();
     long                             _lastOutputAt;
@@ -87,7 +86,6 @@ internal sealed partial class PtyHostedAgentRuntime(
         await foreach (var chunk in pty.ReadOutputAsync(ct).ConfigureAwait(false)) {
             _modes.Feed(chunk);
             Volatile.Write(ref _lastOutputAt, time.GetTimestamp());
-            if (_modes.IsBracketedPasteEnabled) _pasteReady.TrySetResult();
 
             yield return chunk;
         }
@@ -191,10 +189,8 @@ internal sealed partial class PtyHostedAgentRuntime(
             var remaining = LaunchPromptMaxWait - time.GetElapsedTime(started);
             if (remaining <= TimeSpan.Zero) return false;
 
-            if (!_pasteReady.Task.IsCompleted) {
-                try {
-                    await _pasteReady.Task.WaitAsync(remaining < LaunchPromptExitPoll ? remaining : LaunchPromptExitPoll, time, ct);
-                } catch (TimeoutException) { }
+            if (!_modes.IsBracketedPasteEnabled) {
+                await Task.Delay(remaining < LaunchPromptReadinessPoll ? remaining : LaunchPromptReadinessPoll, time, ct);
 
                 continue;
             }
