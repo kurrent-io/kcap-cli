@@ -374,9 +374,6 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     // null = local (daemon.Snapshots governs Harnesses); non-null = the remote machine's own
     // advertised vendors, set by SelectMachineAsync.
     readonly BehaviorSubject<string[]?> _remoteVendorOverride = new(null);
-    // Frozen at selection time; ListRepositoriesAsync falls back to it only when the live registry
-    // no longer lists the machine.
-    MachineOption? _selectedRemoteMachine;
 
     readonly ObservableAsPropertyHelper<bool> _machinePickerVisible;
     /// The machine chip's visibility: hidden until the viewer owns at least one remote daemon.
@@ -998,19 +995,19 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// most recently used known path instead.
     ///
     /// A remote machine selection swaps this entirely: that machine's advertised RepoPaths as the
-    /// registry reports them now, plus a typed path not yet among them (no known-repos merge, no
+    /// registry reports them now (none once it is gone, or only a local twin of the same name is
+    /// left), plus a typed path not yet among them (no known-repos merge, no
     /// scratch adoption — a remote path is never verified locally), each labelled DefaultVendor
     /// since there is no per-repo remembered harness for a machine that is not this one.
     public async Task<IReadOnlyList<RepositoryOption>> ListRepositoriesAsync() {
         if (RemoteMachineSelected) {
             var remoteSelected = SelectedRepoPath;
-            var advertised = FindMachine(_currentDaemons, SelectedMachine, _lastViewerId)?.RepoPaths
-                          ?? _selectedRemoteMachine?.RepoPaths ?? [];
-            var remotePaths = advertised.ToList();
-            if (remoteSelected.Length > 0 && !remotePaths.Contains(remoteSelected, PathComparer))
+            var live = _currentDaemons.Where(d => !IsLocalTwin(d)).ToList();
+            var remotePaths = (FindMachine(live, SelectedMachine, _lastViewerId)?.RepoPaths ?? []).ToList();
+            if (remoteSelected.Length > 0 && !remotePaths.Contains(remoteSelected, RemotePathComparer))
                 remotePaths.Add(remoteSelected);
             return remotePaths
-                .Select(p => new RepositoryOption(p, DefaultVendor, PathComparer.Equals(p, remoteSelected)))
+                .Select(p => new RepositoryOption(p, DefaultVendor, RemotePathComparer.Equals(p, remoteSelected)))
                 .ToList();
         }
 
@@ -1097,7 +1094,6 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         if (isLocal) {
             var wasRemote = RemoteMachineSelected;
             SetMachineSelection(daemonName, remote: false);
-            _selectedRemoteMachine = null;
             _remoteVendorOverride.OnNext(null);
             if (!wasRemote) return; // already local — nothing a remote pick could have left behind
 
@@ -1118,7 +1114,6 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             match.RepoPaths ?? [], match.SupportedVendors, true, match.Version, VendorModelMaps.FromRegistry(match.VendorModels));
 
         SetMachineSelection(daemonName, remote: true);
-        _selectedRemoteMachine = machine;
         _remoteVendorOverride.OnNext(machine.SupportedVendors);
         SelectedRepoPath = machine.RepoPaths.FirstOrDefault() is { Length: > 0 } first ? first : ScratchRepoPath;
         RevalidateVendorAgainst(machine.SupportedVendors);
@@ -1658,6 +1653,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// Applied on READ because System.Text.Json rebuilds the dictionary with a default (ordinal)
     /// comparer on load — a comparer set only at write time would not survive the round-trip.
     static readonly StringComparer PathComparer = PlatformPaths.Comparer;
+    // This host's case rules are not the remote machine's: a Linux remote keeps /w/Repo and /w/repo apart.
+    static readonly StringComparer RemotePathComparer = StringComparer.Ordinal;
 
     static string? Lookup(IReadOnlyDictionary<string, string>? byRepo, string repoPath) {
         if (byRepo is null) return null;
