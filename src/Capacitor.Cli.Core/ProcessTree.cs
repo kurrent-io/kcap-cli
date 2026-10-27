@@ -1,18 +1,18 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using Capacitor.Cli.Daemon.Pty.Unix;
 
-namespace Capacitor.Cli.Daemon.Services;
+namespace Capacitor.Cli.Core;
 
 /// <summary>
 /// SIGKILLs a process and every descendant, children before parents, each verified by start identity.
 /// <para><c>Process.Kill(entireProcessTree: true)</c> SIGSTOPs each process before it looks for children.
-/// A stopped member of the daemon's own process group is what makes the kernel hang up the whole
-/// group, the daemon included, the moment that group becomes orphaned: on macOS a launch agent shares
+/// A stopped member of the caller's own process group is what makes the kernel hang up the whole
+/// group, the caller included, the moment that group becomes orphaned: on macOS a launch agent shares
 /// launchd's session, so the exit of a grandchild that was reparented to launchd orphans the daemon's
 /// group, and every <c>Process.Start</c> child (Pi, Antigravity, ACP agents, git) lives in that group.
-/// The runtime's tree kill is banned in this assembly for that reason; Windows has neither process
+/// The runtime's tree kill is banned in the daemon assembly for that reason; Windows has neither process
 /// groups nor SIGSTOP, so it still uses it.</para>
 /// <para>Nothing is stopped here, so a parent can fork between a listing and its own death, and that
 /// child is reparented out of reach. Killing children first and re-listing the parent until it shows
@@ -20,7 +20,13 @@ namespace Capacitor.Cli.Daemon.Services;
 /// SIGKILL. A pid is signalled only while it still carries the identity captured when it was listed,
 /// and never twice, so a recycled pid is never a target.</para>
 /// </summary>
-internal static partial class ProcessTree {
+public static partial class ProcessTree {
+    const int Sigkill = 9;
+
+    [LibraryImport("libc", EntryPoint = "kill", SetLastError = true)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    private static partial int kill_native(int pid, int sig);
+
     /// <summary>Re-listings of a parent after its known children are dead, before it is killed
     /// regardless; bounds a parent that keeps forking.</summary>
     const int MaxRescans = 3;
@@ -47,7 +53,7 @@ internal static partial class ProcessTree {
             return;
         }
 
-        if (ProcessIdentity.Capture(pid) is { } identity) KillSubtree(pid, identity);
+        if (ProcessStartToken.ForPid(pid) is { } identity) KillSubtree(pid, identity);
     }
 
     /// <summary>Kills only while <paramref name="pid"/> still carries <paramref name="identity"/>. Use
@@ -72,7 +78,7 @@ internal static partial class ProcessTree {
             return;
         }
 
-        if (ProcessIdentity.Matches(pid, identity)) KillSubtree(pid, identity);
+        if (Matches(pid, identity)) KillSubtree(pid, identity);
     }
 
     static void KillSubtree(int pid, string identity) {
@@ -85,22 +91,24 @@ internal static partial class ProcessTree {
             // before it and not proven a different one just after. A root that exited in between leaves
             // its listed children to be killed, not orphaned; a pid proven reused leaves them alone. What
             // remains is a reuse, plus the replacement spawning and exiting, inside one listing.
-            if (!ProcessIdentity.Matches(pid, identity)) break;
+            if (!Matches(pid, identity)) break;
             var children = Children(pid).ToList();
-            if (ProcessIdentity.MatchesTri(pid, identity) == false) return;
+            if (ProcessStartToken.Matches(pid, identity) == false) return;
 
             foreach (var child in children) {
                 if (!seen.Add(child)) continue; // handled on an earlier pass; a zombie stays listed until its parent dies
 
                 fresh = true;
-                if (ProcessIdentity.Capture(child) is { } childIdentity) KillSubtree(child, childIdentity);
+                if (child > 0 && ProcessStartToken.ForPid(child) is { } childIdentity) KillSubtree(child, childIdentity);
             }
 
             if (!fresh) break;
         }
 
-        if (ProcessIdentity.Matches(pid, identity)) UnixPtyInterop.kill(pid, UnixPtyInterop.SIGKILL);
+        if (Matches(pid, identity)) kill_native(pid, Sigkill);
     }
+
+    static bool Matches(int pid, string identity) => pid > 0 && ProcessStartToken.Matches(pid, identity) == true;
 
     static IEnumerable<int> Children(int parent) =>
         OperatingSystem.IsMacOS() ? MacChildren(parent) : LinuxChildren(parent);

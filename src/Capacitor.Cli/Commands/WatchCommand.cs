@@ -489,6 +489,7 @@ partial class WatchCommand(
         state.LastActivityAt = time.GetUtcNow();
 
         var titleStore = HarnessTitleStores.For(vendor, agentId, sessionId, transcriptPath, harnesses, accounts.TryLoad(), home);
+        if (vendor == "codex" && CodexRolloutReadings.For(accounts, transcriptPath, sessionId, home) is { } codexReadings) state.ObserveCodexReadings = lines => codexReadings.Observe(lines);
         if (titleStore is not null) state.TitleTracker = new HarnessTitleTracker(titleStore.RecordsChangeTime);
 
         // Task 11 (D0) — one runtime rewrite-guard instance for this watcher's whole
@@ -2700,6 +2701,8 @@ partial class WatchCommand(
                     UpdateCodexPendingToolCalls(state.PendingCodexToolCalls, line);
                 }
             }
+
+            state.ObserveCodexReadings?.Invoke(drainRead.Lines);
 
             // Capture-loss markers have no tool IDs; local completion tracking needs raw lines.
             if (TracksClaudeToolCalls(vendor, isSessionWatcher: agentId is null)) {

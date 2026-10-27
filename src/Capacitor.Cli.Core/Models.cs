@@ -239,6 +239,9 @@ class WatchState {
     // spun for the parent's whole lifetime. Never observed on any other watcher.
     public CodexSubagentTurnTracker CodexSubagentTurn { get; } = new();
 
+    /// <summary>Set for a Codex watcher whose rollout belongs to a registered account.</summary>
+    public Action<IReadOnlyList<string>>? ObserveCodexReadings { get; set; }
+
     // Highwater mark of the last Antigravity gen_metadata row already streamed as a
     // synthetic USAGE line, so the watcher only sends newly-appended cost rows on each
     // poll (server dedup by deterministic id is the backstop). -1 = none seen yet.

@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
@@ -40,6 +41,100 @@ public class PluginCommandAccountsTests {
             ResolveMcpBinaryPath = () => "/usr/local/bin/kcap",
             Accounts             = new AccountStore(Tmp.PathTo("accounts")),
         };
+    }
+
+    string DefaultSettings => Home.PathTo(".claude", "settings.json");
+
+    void SetDefaultStatusLine(string command) {
+        var root = File.Exists(DefaultSettings) ? JsonNode.Parse(File.ReadAllText(DefaultSettings))!.AsObject() : [];
+        root["statusLine"] = new JsonObject { ["type"] = "command", ["command"] = command };
+        Home.CreateFile([".claude", "settings.json"], root.ToJsonString());
+    }
+
+    string? DefaultStatusLine() =>
+        File.Exists(DefaultSettings) ? JsonNode.Parse(File.ReadAllText(DefaultSettings))!["statusLine"]?["command"]?.GetValue<string>() : null;
+
+    static StatusLineBackup? DefaultBackup(PluginEnvironment env) => AccountAdoption.Of(env.Accounts!, HarnessId.Claude).Single().StatusLine;
+
+    [Test]
+    public async Task Fresh_user_install_adopts_and_wraps_the_default() {
+        var env = Env();
+        SetDefaultStatusLine("echo mine");
+
+        var exit = await new PluginCommand(env, Workdir).HandleAsync(["plugin", "install"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(ClaudeStatusLineCommand.IsOurs(DefaultStatusLine())).IsTrue();
+        await Assert.That(DefaultBackup(env)).IsEqualTo(new StatusLineBackup("echo mine"));
+    }
+
+    [Test]
+    public async Task If_installed_upgrade_of_a_pre_registry_install_adopts_and_wraps_the_default() {
+        var env = Env();
+        SetDefaultStatusLine("echo mine");
+        ClaudePluginWriter.Install(DefaultSettings, PluginDir);
+
+        var exit = await new PluginCommand(env, Workdir).HandleAsync(["plugin", "install", "--if-installed"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(ClaudeStatusLineCommand.IsOurs(DefaultStatusLine())).IsTrue();
+        await Assert.That(DefaultBackup(env)).IsEqualTo(new StatusLineBackup("echo mine"));
+    }
+
+    [Test]
+    public async Task If_installed_with_the_default_not_installed_wraps_nothing() {
+        var env = Env();
+        SetDefaultStatusLine("echo mine");
+
+        await new PluginCommand(env, Workdir).HandleAsync(["plugin", "install", "--if-installed"]);
+
+        await Assert.That(DefaultStatusLine()).IsEqualTo("echo mine");
+        await Assert.That(AccountAdoption.Of(env.Accounts!, HarnessId.Claude).Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Project_scope_install_wraps_nothing() {
+        var env = Env();
+        SetDefaultStatusLine("echo mine");
+
+        var exit = await new PluginCommand(env, Workdir).HandleAsync(["plugin", "install", "--project"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(DefaultStatusLine()).IsEqualTo("echo mine");
+        await Assert.That(File.ReadAllText(Path.Combine(Workdir.Path, ".claude", "settings.local.json"))).DoesNotContain("statusLine");
+    }
+
+    [Test]
+    public async Task Default_directory_gets_the_wrapper_from_setup_and_plugin_refresh() {
+        var env = Env();
+        SetDefaultStatusLine("echo mine");
+        ClaudePluginWriter.Install(DefaultSettings, PluginDir);
+        var setupOptions = new CodingAgentsStep.Options(SkipClaude: false, SkipCodex: true, SkipCursor: true, SkipCopilot: true, NoPrompt: true, InstallAgents: true);
+
+        new AccountSetupStep(env.Accounts!, env, TimeProvider.System).Run(setupOptions, false, _ => false, _ => { });
+
+        await Assert.That(ClaudeStatusLineCommand.IsOurs(DefaultStatusLine())).IsTrue();
+        await Assert.That(DefaultBackup(env)).IsEqualTo(new StatusLineBackup("echo mine"));
+
+        SetDefaultStatusLine("echo changed");
+        await new PluginCommand(env, Workdir).HandleAsync(["plugin", "install", "--if-installed"]);
+
+        await Assert.That(ClaudeStatusLineCommand.IsOurs(DefaultStatusLine())).IsTrue();
+        await Assert.That(DefaultBackup(env)).IsEqualTo(new StatusLineBackup("echo changed"));
+    }
+
+    [Test]
+    public async Task Plugin_remove_and_uninstall_restore_the_default_original() {
+        var env = Env();
+        SetDefaultStatusLine("echo mine");
+        await new PluginCommand(env, Workdir).HandleAsync(["plugin", "install"]);
+        await Assert.That(ClaudeStatusLineCommand.IsOurs(DefaultStatusLine())).IsTrue();
+
+        var exit = await new PluginCommand(env, Workdir).HandleAsync(["plugin", "remove"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(DefaultStatusLine()).IsEqualTo("echo mine");
+        await Assert.That(DefaultBackup(env)).IsNull();
     }
 
     [Test]
@@ -195,7 +290,7 @@ public class PluginCommandAccountsTests {
         Directory.CreateDirectory(Home.PathTo(".claude-work"));
         var work = AccountAdoption.EnsureDefault(env.Accounts!, HarnessId.Claude, Home.PathTo(".claude-work"), TimeProvider.System);
         await new PluginCommand(env, Workdir).HandleAsync(["plugin", "install"]);
-        AccountWiring.Unwire(work, Home);
+        using (env.Accounts!.Lock()) AccountWiring.Unwire(work, Home, env.Accounts!);
         File.WriteAllText(Home.PathTo(".claude", ClaudePluginInstaller.MarkerFileName), "0.0.1");
 
         await new PluginCommand(env, Workdir).HandleAsync(["plugin", "install", "--if-installed"]);

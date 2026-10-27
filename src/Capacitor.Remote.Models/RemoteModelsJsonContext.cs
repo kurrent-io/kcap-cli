@@ -8,6 +8,7 @@ namespace Capacitor.Remote.Models;
 [JsonSerializable(typeof(List<DaemonInfo>))]
 [JsonSerializable(typeof(DaemonAccountsDto))]
 [JsonSerializable(typeof(List<DaemonAccountsDto>))]
+[JsonSerializable(typeof(ListedAccountDto))]
 [JsonSerializable(typeof(AcpInteractionOption))]
 [JsonSerializable(typeof(AcpInteractionOption[]))]
 [JsonSerializable(typeof(PermissionResponsePayload))]

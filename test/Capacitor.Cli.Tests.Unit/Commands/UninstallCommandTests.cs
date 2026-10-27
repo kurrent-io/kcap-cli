@@ -649,7 +649,7 @@ public class UninstallCommandTests {
         var account = new VendorAccount(dirName, HarnessId.Claude, AccountDirectory.Normalize(dir), dirName, DateTimeOffset.UnixEpoch);
 
         accounts.Mutate(r => (r with { Accounts = [.. r.Accounts, account] }, 0));
-        AccountWiring.Wire(account, fixture.UserHome, new WiringOptions(plugin, fixture.Temp.PathTo(".agents", "skills"), () => "/usr/local/bin/kcap", NetworkAllowDomains: null));
+        using (accounts.Lock()) AccountWiring.Wire(account, fixture.UserHome, new WiringOptions(plugin, fixture.Temp.PathTo(".agents", "skills"), () => "/usr/local/bin/kcap", NetworkAllowDomains: null), accounts);
 
         return account;
     }
@@ -1035,6 +1035,21 @@ public class UninstallCommandTests {
             await Assert.That(root["enabledPlugins"]?["kcap@kcap"]).IsNull();
         }
         await Assert.That(Directory.Exists(accounts.Directory)).IsFalse();
+    }
+
+    [Test]
+    public async Task Uninstall_restores_the_default_directory_status_line() {
+        await using var fixture = await Fixture.CreateAsync();
+        var accounts = AccountStore.Beside(Daemons.Store);
+        var settings = fixture.Temp.CreateFile(".claude/settings.json", """{"statusLine":{"type":"command","command":"echo mine"}}""");
+        var adopted  = AccountAdoption.EnsureDefault(accounts, HarnessId.Claude, fixture.Temp.PathTo(".claude"), TimeProvider.System);
+        using (accounts.Lock()) AccountWiring.WireStatusLine(adopted.Id, fixture.UserHome, accounts);
+        await Assert.That(ClaudeStatusLineCommand.IsOurs(JsonNode.Parse(await File.ReadAllTextAsync(settings))!["statusLine"]!["command"]!.GetValue<string>())).IsTrue();
+
+        var exit = await RunUninstall(fixture);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(JsonNode.Parse(await File.ReadAllTextAsync(settings))!["statusLine"]!["command"]!.GetValue<string>()).IsEqualTo("echo mine");
     }
 
     [Test]

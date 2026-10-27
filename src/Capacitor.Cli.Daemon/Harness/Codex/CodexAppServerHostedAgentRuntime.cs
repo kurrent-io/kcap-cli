@@ -3,7 +3,10 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Accounts.Readings;
 using Capacitor.Cli.Core.Acp;
+using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
@@ -152,14 +155,21 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
     // The launch's approval policy, ahead of the card; null for a reviewer or an ungoverned launch.
     readonly CodexHostedPolicySeam? _policy;
 
+    // The launch's resolved account, at its launch generation; its limit updates attribute to it.
+    readonly ResolvedAccount?                              _account;
+    readonly Action<ResolvedAccount?, ReadingObservation>? _postReading;
+
     public CodexAppServerHostedAgentRuntime(
             CodexAppServerSpawn spawn, CodexAppServerLaunch launch, AgentActivityClock? clock,
             ILogger logger, TimeProvider timeProvider, TimeSpan? forwardStallTimeout = null,
             bool emitEnvelopeTranscript = false, bool deferFirstTurn = false,
             string? agentId = null,
             Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>>? requestInteraction = null,
-            TimeSpan? approvalTimeout = null, TranscriptJournal? journal = null, CodexHostedPolicySeam? policy = null) {
-        _policy  = policy;
+            TimeSpan? approvalTimeout = null, TranscriptJournal? journal = null, CodexHostedPolicySeam? policy = null,
+            ResolvedAccount? account = null, Action<ResolvedAccount?, ReadingObservation>? postReading = null) {
+        _policy      = policy;
+        _account     = account;
+        _postReading = postReading;
         _spawn   = spawn;
         _launch  = launch;
         _clock   = clock;
@@ -552,6 +562,13 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
             }
             case "thread/tokenUsage/updated":
                 _usage = ParseUsage(n.Params);
+                _clock?.Advance();
+                break;
+            case "account/rateLimits/updated":
+                // Posting only queues: this is the read loop.
+                if (_postReading is { } post && n.Params?.Obj("rateLimits") is { } snapshot
+                 && CodexRateLimits.FromAppServer(snapshot, _time.GetUtcNow()) is { } observation)
+                    post(_account, observation);
                 _clock?.Advance();
                 break;
             case "model/rerouted":

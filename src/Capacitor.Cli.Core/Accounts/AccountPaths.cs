@@ -13,11 +13,13 @@ public static class AccountPaths {
             .Select(a => AccountLayouts.Claude(home, a.Directory))
             .FirstOrDefault(p => Contains(p.Projects, transcriptPath));
 
-    public static CodexPaths? CodexForRollout(string rolloutPath, AccountRegistry registry, UserHome home) =>
+    public static VendorAccount? CodexAccountForRollout(string rolloutPath, AccountRegistry registry, UserHome home) =>
         string.IsNullOrWhiteSpace(rolloutPath) ? null : registry.Accounts
             .Where(a => a.Vendor == HarnessId.Codex)
-            .Select(a => AccountLayouts.Codex(home, a.Directory))
-            .FirstOrDefault(p => Contains(p.Sessions, rolloutPath));
+            .FirstOrDefault(a => Contains(AccountLayouts.Codex(home, a.Directory).Sessions, rolloutPath));
+
+    public static CodexPaths? CodexForRollout(string rolloutPath, AccountRegistry registry, UserHome home) =>
+        CodexAccountForRollout(rolloutPath, registry, home) is { } account ? AccountLayouts.Codex(home, account.Directory) : null;
 
     // The trailing separator keeps /h/.claude from claiming /h/.claude-work. The second test resolves
     // the transcript's directory the way the stored account directory was resolved, so a symlink
