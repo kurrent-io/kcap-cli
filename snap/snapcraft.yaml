@@ -18,6 +18,7 @@ confinement: classic
 
 platforms:
   amd64:
+  arm64:
 
 apps:
   kcap:
