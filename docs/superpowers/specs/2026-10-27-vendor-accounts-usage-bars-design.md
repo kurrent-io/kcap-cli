@@ -48,8 +48,9 @@ disagree and all of it is unit-testable without a view. Its rules:
 - **Reading age:** "updated 3m ago" from the latest `ConfirmedAt` across windows; a reading with windows
   but no `ConfirmedAt` reads "freshness unknown".
 - **Usage line, by precedence.** The first case that matches decides what replaces or carries the bars.
-  The Limit hit pill comes from the blocked rule below and is independent of the line. None of these
-  states is ready.
+  The Limit hit pill comes from the blocked rule below and is independent of the line. The first four
+  rows, where usage is missing or unknown, are never ready and never draw a bar. In the last row, Ready
+  is decided by the Ready predicate below.
 
   | Reading | Usage line | Pill |
   |---|---|---|
@@ -59,7 +60,8 @@ disagree and all of it is unit-testable without a view. Its rules:
   | windows, none of them primary (per-model only) | "usage unknown · +N per model" | Limit hit if blocked |
   | at least one primary window | the bars, then "+N per model" when there are others | Limit hit if blocked |
 
-  Bars never read as zero.
+  Missing or unknown usage is never drawn as 0%. A window the vendor actually reports at 0% is drawn as
+  0%.
 - **Blocked** (user decision): only a live constraint on the main limit id, or one with no limit id,
   blocks the account. A live constraint on a per-model limit id does not block; it shows beside the
   per-model count ("+2 per model · 1 hit") and does not affect Ready. "Live" keeps
@@ -139,7 +141,12 @@ drawn, not by dropping the retained copy:
   `MachineId` from `DaemonInfo`. Each of these starts a new incarnation and closes that daemon's gate:
   a server reconnect, the daemon leaving the listing, and a listing entry whose `ConnectedAt` or
   `MachineId` changed (a restart, or another host taking the name). The gate reopens only on an accounts
-  fetch that both started and succeeded after that transition. Concretely: per daemon name,
+  fetch that both started and succeeded after that transition. **Observing a new incarnation schedules
+  such a fetch.** Listing and accounts requests run independently, and accounts otherwise refresh only
+  on `DaemonAccountsChanged`. So, without that trigger, an accounts fetch that started before the
+  listing returned, or a rejoin push handled before the listing update, would leave an idle daemon
+  without bars for good. When a fetch is already in flight, one more is coalesced to run after it, and a
+  failed one retries on the existing listing backoff. Concretely: per daemon name,
   `RemoteAgentsService` records the incarnation and a sequence number of the last successful accounts
   fetch, and the gate compares them. The retained accounts themselves stay as they are, so the
   launcher's account choice keeps working. Lane loss, a listing without the daemon, a reconnect before
@@ -159,7 +166,7 @@ drawn, not by dropping the retained copy:
   omits the host: lane loss with accounts retained, daemon leaving the listing with accounts retained,
   reconnect before the accounts refetch, a failed accounts fetch after the daemon left, a leave and
   rejoin within one server connection with a failed refetch, and another host taking the daemon's name
-  (changed `MachineId`) with a failed refetch. Each
+  (changed `MachineId`) with a failed refetch; and the gate reopening after a successful fetch, with the accounts fetch finishing before and after the listing, on first connect and after a leave and rejoin. Each
   transition is tested for both the launcher rows and the composer strip.
 
 ## 5. Codex accounts can read Recording
@@ -235,7 +242,7 @@ real Recording for Codex in this slice.
 Headless view-model tests per the first spec's 6.6: window labels; the 75% threshold and danger at 100%
 and on a blocked window; reset text and next reset; reading age and freshness unknown; expired windows;
 "+N per model"; the ready predicate (no reading, one stale window beside a fresh one, blocked, expired
-windows, per-model exhaustion not blocking the account-wide limit); per-model-only and
+windows, per-model exhaustion not blocking the account-wide limit, and a positive case: Recording, signed in, unblocked, fresh primary windows under 90%); a confirmed 0% window drawn as 0%; per-model-only and
 blocked-before-any-window readings; blocked-until across both signal orders and mixed known and unknown
 resets; a main constraint kept live by an exhausted per-model window (§2's clearing rule); Need a fix;
 the drawable-host transitions of §4; Settings rows not rebuilt by a tick that changes nothing. Smoke
