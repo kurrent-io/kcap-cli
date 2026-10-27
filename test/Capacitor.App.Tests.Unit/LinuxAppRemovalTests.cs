@@ -79,7 +79,7 @@ public class LinuxAppRemovalTests {
         Tmp.CreateFile("data/kcap/desktop/kcap/plugin.json", "{}");
         Tmp.CreateFile("data/kcap/local/registry.json", "{}");
 
-        Removal().DeleteSupportFiles();
+        await Assert.That(Removal().DeleteSupportFiles()).IsTrue();
 
         await Assert.That(Directory.Exists(Staged)).IsFalse();
         await Assert.That(File.Exists(Tmp.PathTo("data", "kcap", "local", "registry.json"))).IsTrue();

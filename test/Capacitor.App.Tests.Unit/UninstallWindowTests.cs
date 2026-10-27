@@ -13,7 +13,7 @@ namespace Capacitor.App.Tests.Unit;
 public class UninstallWindowTests {
     sealed class SuccessfulRemoval : IAppRemoval {
         public Task<IReadOnlyList<string>> RemoveLinksAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>([]);
-        public void DeleteSupportFiles() { }
+        public bool DeleteSupportFiles() => true;
         public Task<bool> TrashBundleAsync(CancellationToken ct) => Task.FromResult(true);
         public void RevealBundle() => throw new InvalidOperationException("Successful removal should not need Finder.");
     }

@@ -5,8 +5,8 @@ public interface IAppRemoval {
     /// The `kcap` links into this bundle that are still there afterwards.
     Task<IReadOnlyList<string>> RemoveLinksAsync(CancellationToken ct);
 
-    /// Logs what it cannot delete: nothing left here keeps kcap running.
-    void DeleteSupportFiles();
+    /// Logs what it cannot delete and returns false: nothing left here keeps kcap running.
+    bool DeleteSupportFiles();
 
     /// False when the bundle is still in place.
     Task<bool> TrashBundleAsync(CancellationToken ct);

@@ -121,9 +121,12 @@ public sealed class UninstallRunViewModel : ReactiveObject {
     async Task RunStepsAsync() {
         StreamingResult result;
         var streamed = 0;
+        var purged = 0;
         try {
             result = await _cli.UninstallAsync(_purgeLocal, line => {
                 Interlocked.Increment(ref streamed);
+                // The CLI's own outcome line: a purge that was asked for may have found no server to purge.
+                if (line.Text.StartsWith("Purged the local server", StringComparison.Ordinal)) Interlocked.Exchange(ref purged, 1);
                 _post(() => Lines.Add(line.Text));
             }, CancellationToken.None);
         } catch (Exception ex) {
@@ -157,7 +160,7 @@ public sealed class UninstallRunViewModel : ReactiveObject {
         var supportFilesLeft = false;
         try {
             Lines.Add("Cleaning up app support files…");
-            _removal.DeleteSupportFiles();
+            supportFilesLeft = !_removal.DeleteSupportFiles();
         } catch (Exception ex) {
             supportFilesLeft = true;
             Lines.Add($"Some app support files could not be removed: {ex.Message}");
@@ -180,15 +183,15 @@ public sealed class UninstallRunViewModel : ReactiveObject {
         }
 
         Lines.Add("Moved the app to the Trash.");
-        FillReceipt(supportFilesLeft);
+        FillReceipt(Volatile.Read(ref purged) == 1, supportFilesLeft);
         State = UninstallRunState.Finished;
     }
 
     /// Claims only what a zero exit from `kcap uninstall` and the steps after it guarantee.
-    void FillReceipt(bool supportFilesLeft) {
-        Receipt.Add(new("Disconnected kcap from your coding agents"));
+    void FillReceipt(bool purgedLocal, bool supportFilesLeft) {
+        Receipt.Add(new("Removed kcap from your coding agents’ user settings"));
         Receipt.Add(new("Removed kcap’s background services"));
-        if (_purgeLocal) Receipt.Add(new("Deleted the local server and every session it recorded"));
+        if (purgedLocal) Receipt.Add(new("Deleted the local server and every session it recorded"));
         Receipt.Add(new("Removed your kcap settings and sign-in"));
         Receipt.Add(new("Removed the kcap command the app installed"));
         Receipt.Add(new(_removal.Trashed));

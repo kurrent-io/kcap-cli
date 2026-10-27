@@ -9,6 +9,7 @@ public class UninstallRunViewModelTests {
     sealed class FakeRemoval(List<string> calls) : IAppRemoval {
         public IReadOnlyList<string> LeftLinks = [];
         public bool Trashed = true;
+        public bool SupportRemoved = true;
         public Exception? SupportFailure;
 
         public Task<IReadOnlyList<string>> RemoveLinksAsync(CancellationToken ct) {
@@ -16,9 +17,10 @@ public class UninstallRunViewModelTests {
             return Task.FromResult(LeftLinks);
         }
 
-        public void DeleteSupportFiles() {
+        public bool DeleteSupportFiles() {
             calls.Add("support");
             if (SupportFailure is not null) throw SupportFailure;
+            return SupportRemoved;
         }
 
         public Task<bool> TrashBundleAsync(CancellationToken ct) {
@@ -162,7 +164,7 @@ public class UninstallRunViewModelTests {
         await Assert.That(string.Join(",", calls)).IsEqualTo("links,support,trash");
         await Assert.That(vm.IsFinished).IsTrue();
         await Assert.That(vm.Receipt.Select(i => i.Text)).IsEquivalentTo([
-            "Disconnected kcap from your coding agents",
+            "Removed kcap from your coding agents’ user settings",
             "Removed kcap’s background services",
             "Removed your kcap settings and sign-in",
             "Removed the kcap command the app installed",
@@ -211,14 +213,29 @@ public class UninstallRunViewModelTests {
     }
 
     [Test]
-    public async Task Receipt_names_the_deleted_local_server_only_when_it_was_purged() {
-        var (kept, _, _, _) = Build(purgeLocal: false);
-        var (purged, _, _, _) = Build(purgeLocal: true);
+    public async Task Support_files_reported_as_left_add_a_note_to_the_receipt() {
+        var (vm, _, removal, _) = Build();
+        removal.SupportRemoved = false;
 
-        await kept.RunAsync();
+        await vm.RunAsync();
+
+        await Assert.That(vm.State).IsEqualTo(UninstallRunState.Finished);
+        await Assert.That(vm.Receipt[^1].Done).IsFalse();
+    }
+
+    [Test]
+    public async Task Receipt_names_the_deleted_local_server_only_when_the_cli_purged_one() {
+        var (nothingFound, _, _, _) = Build(purgeLocal: true);
+        var (purged, cli, _, _) = Build(purgeLocal: true);
+        cli.UninstallBehavior = onLine => {
+            onLine(new StreamedLine(ProcessStreamKind.Stdout, "Purged the local server in /home/me/.local/share/kcap/local."));
+            return Task.FromResult(Exit(0));
+        };
+
+        await nothingFound.RunAsync();
         await purged.RunAsync();
 
-        await Assert.That(kept.Receipt.Any(i => i.Text.Contains("local server"))).IsFalse();
+        await Assert.That(nothingFound.Receipt.Any(i => i.Text.Contains("local server"))).IsFalse();
         await Assert.That(purged.Receipt.Any(i => i.Text.Contains("local server"))).IsTrue();
     }
 
