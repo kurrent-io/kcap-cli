@@ -1038,8 +1038,9 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
 
         new("declare_loose_end",
             "Record a loose end — a concrete piece of work this session leaves unfinished (a missing test, "
-          + "a TODO, a follow-up) — so it appears in the user's next-work ledger. One call per item, in "
-          + "plain text; do not declare 'none'. Requires a session: the current kcap-hooked one by default.",
+          + "a flaky test you hit and did not fix, one that failed and then passed on a rerun, a TODO, a "
+          + "follow-up) — so it appears in the user's next-work ledger. One call per item, in plain text; "
+          + "do not declare 'none'. Requires a session: the current kcap-hooked one by default.",
             new("object", new() {
                 ["text"]       = new("string", "The unfinished work, as one plain-text sentence; the server accepts 12-500 characters after normalizing whitespace and case."),
                 ["subject"]    = new("string", "The issue this loose end is about (PROJ-123, #123, owner/repo#123 or a GitHub issue URL). Name it when the end is a specific issue: the end then sits under that issue's work item, never this session's."),
