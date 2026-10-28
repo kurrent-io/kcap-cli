@@ -119,6 +119,11 @@ sealed class WindowsServiceManager(
             return false;
         }
 
+        // A rename's enrollment replaces the old name's, and nothing reads that name's environment again
+        if (previous?.EnvironmentFile is { } replaced && !string.Equals(replaced, file.Path, StringComparison.OrdinalIgnoreCase)) {
+            try { File.Delete(replaced); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+
         if (!startNow && pipe.Send("stop", Slow) is not { Ok: true }) {
             // Enrolled either way; what is left to say is whether its daemon runs
             var running = pipe.Send("status", Quick)?.Status is not { Running: false };

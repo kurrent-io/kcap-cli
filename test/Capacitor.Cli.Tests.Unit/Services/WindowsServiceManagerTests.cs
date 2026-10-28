@@ -40,6 +40,27 @@ public class WindowsServiceManagerTests {
     }
 
     [Test]
+    public async Task Enrolling_a_new_name_deletes_the_environment_the_old_name_left() {
+        var old = Config.CreateFile("daemon-service-old.env.json", "{}");
+        _store.Current = new ServiceEnrollment("old", Daemon, "work", null, old);
+
+        Manager().Install(Spec(), startNow: true, out _);
+
+        await Assert.That(File.Exists(old)).IsFalse();
+    }
+
+    [Test]
+    public async Task A_refused_enroll_keeps_the_environment_of_the_name_it_would_replace() {
+        var old = Config.CreateFile("daemon-service-old.env.json", "{}");
+        _store.Current = new ServiceEnrollment("old", Daemon, "work", null, old);
+        _pipe.Answer = _ => new ServicePipeResponse(false, "no session");
+
+        Manager().Install(Spec(), startNow: true, out _);
+
+        await Assert.That(File.Exists(old)).IsTrue();
+    }
+
+    [Test]
     public async Task Install_without_start_stops_after_enrolling() {
         Manager().Install(Spec(), startNow: false, out _);
 
