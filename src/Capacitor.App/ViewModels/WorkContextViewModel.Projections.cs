@@ -251,7 +251,6 @@ public sealed partial class WorkContextViewModel {
 
     void ClearServerProjections() {
         ClearCard();
-        ApplySessionFacts(null);
         _summaryPrs.Clear();
         _links.Clear();
         RaiseRelated();

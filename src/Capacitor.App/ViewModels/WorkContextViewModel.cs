@@ -358,6 +358,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
             SessionIdText = "resolving…";
             PrimaryRepository = null;
             ClearServerProjections();
+            ApplySessionFacts(null);
             IsStale = false;
             Phase = WorkContextPhase.WaitingForSession;
             Plan.SwitchSession(null);
@@ -395,6 +396,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         SessionIdText = SessionIds.Canonical(id) ?? id;
         PrimaryRepository = null;
         ClearServerProjections();
+        ApplySessionFacts(null);
         IsStale = false;
         Phase = WorkContextPhase.Loading;
         _reader.Switch(id);
@@ -431,8 +433,10 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         switch (read.Kind) {
             case WorkContextReadKind.SignedOut:      ApplyTerminal(WorkContextPhase.SignedOut);      return;
             case WorkContextReadKind.NotInPlan:
-                ApplyTerminal(WorkContextPhase.NotInPlan);
-                ApplySessionFacts(read.Summary);
+                // The plan gates work items only; a failed summary keeps the last session facts, stale.
+                ApplyTerminal(WorkContextPhase.NotInPlan, keepSessionFacts: true);
+                if (!read.SummaryFailed) ApplySessionFacts(read.Summary);
+                else IsStale = _hasSessionFacts;
                 return;
             case WorkContextReadKind.SessionUnknown: ApplyTerminal(WorkContextPhase.SessionUnknown); return;
             case WorkContextReadKind.Unreachable:
@@ -450,9 +454,10 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         }
     }
 
-    /// The server has just said the viewer may not have this data, so nothing of it stays visible.
-    void ApplyTerminal(WorkContextPhase phase) {
+    /// The server has just said the viewer may not have this data, so nothing it gates stays visible.
+    void ApplyTerminal(WorkContextPhase phase, bool keepSessionFacts = false) {
         ClearServerProjections();
+        if (!keepSessionFacts) ApplySessionFacts(null);
         ForgetViewer();
         Phase = phase;
         IsStale = false;

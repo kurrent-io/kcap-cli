@@ -149,6 +149,16 @@ public class WorkContextReaderTests {
     }
 
     [Test]
+    public async Task A_plan_gated_read_reports_a_failed_summary() {
+        var channel = new ScriptedChannel {
+            Assignments = new(200, [Row("w1", primary: true)], null), Item = PlanGate<WorkItemDto>(), Summary = new(500, null, null),
+        };
+        var read = await Read(channel);
+        await Assert.That(read.Kind).IsEqualTo(WorkContextReadKind.NotInPlan);
+        await Assert.That(read.SummaryFailed).IsTrue();
+    }
+
+    [Test]
     public async Task Item_failures_degrade_the_section() {
         var non2xx = new ScriptedChannel { Assignments = new(200, [Row("w1", primary: true)], null), Item = new(500, null, null) };
         var gone   = new ScriptedChannel { Assignments = new(200, [Row("w1", primary: true)], null), Item = new(404, null, null) };

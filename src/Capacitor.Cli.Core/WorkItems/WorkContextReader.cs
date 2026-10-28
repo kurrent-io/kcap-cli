@@ -85,7 +85,9 @@ public static class WorkContextReader {
     /// leave the pane ready on retained data. The summary is not gated, so it rides along.
     static WorkContextRead? PlanGated<T>(WorkContextOutcome<T> outcome, WorkContextOutcome<SessionSummaryDto> summary) where T : class =>
         IsPlanGate(outcome.StatusCode, outcome.Error)
-            ? WorkContextRead.Of(WorkContextReadKind.NotInPlan, outcome.Error!.Message) with { Summary = summary.Succeeded ? summary.Body : null }
+            ? WorkContextRead.Of(WorkContextReadKind.NotInPlan, outcome.Error!.Message) with {
+                Summary = summary.Succeeded ? summary.Body : null, SummaryFailed = !summary.Succeeded,
+            }
             : null;
 
     /// <summary>Whether a work-item route refused the call because the tenant's plan lacks Work Items.</summary>
