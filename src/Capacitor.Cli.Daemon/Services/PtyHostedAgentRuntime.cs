@@ -19,10 +19,14 @@ namespace Capacitor.Cli.Daemon.Services;
 ///
 /// Input writes take the input lane, so a paste and its submit are never interleaved by another
 /// writer; the graceful stop only tries for it (see <see cref="RequestGracefulStopAsync"/>).
+///
+/// <paramref name="readyOnBracketedPaste"/> makes the launch prompt wait for the TUI to enable
+/// bracketed paste rather than for any output. The factory sets it on Windows, where ConPTY writes
+/// its own preamble before the agent starts; see <see cref="DeliverLaunchPrompt"/>.
 /// </summary>
 internal sealed partial class PtyHostedAgentRuntime(
         string vendor, IPtyProcess pty, TimeProvider time, bool approvalsDisabled = false,
-        ILogger? logger = null) : IHostedAgentRuntime {
+        ILogger? logger = null, bool readyOnBracketedPaste = false) : IHostedAgentRuntime {
     /// <summary>
     /// Delays (relative to the previous write) before each carriage return on the spray submit path.
     /// A single CR right after a paste is unreliable: codex's TUI suppresses Enter-as-submit for a
@@ -49,9 +53,9 @@ internal sealed partial class PtyHostedAgentRuntime(
     internal static readonly TimeSpan GracefulStopLaneWait = TimeSpan.FromSeconds(1);
 
     /// <summary>
-    /// How long output must have been silent, once the TUI has enabled bracketed paste, before the
-    /// launch prompt is pasted: a TUI still drawing its banner or startup spinner is not reading its
-    /// composer yet. Codex's spinner redraws every 100 ms, so the window has to outlast that gap.
+    /// How long output must have been silent, once the TUI looks ready, before the launch prompt is
+    /// pasted: a TUI still drawing its banner or startup spinner is not reading its composer yet.
+    /// Codex's spinner redraws every 100 ms, so the window has to outlast that gap.
     /// </summary>
     internal static readonly TimeSpan LaunchPromptQuietWindow = TimeSpan.FromMilliseconds(500);
 
@@ -59,8 +63,8 @@ internal sealed partial class PtyHostedAgentRuntime(
     internal static readonly TimeSpan LaunchPromptMaxWait = TimeSpan.FromSeconds(10);
 
     /// <summary>The PTY offers no exit event and the TUI can turn bracketed paste off again, so the
-    /// wait for readiness is sliced and both re-read between slices.</summary>
-    static readonly TimeSpan LaunchPromptReadinessPoll = TimeSpan.FromMilliseconds(250);
+    /// launch prompt's waits are sliced and both re-read between slices.</summary>
+    static readonly TimeSpan LaunchPromptPoll = TimeSpan.FromMilliseconds(250);
 
     readonly TerminalModeTracker _modes = new();
     readonly ILogger _logger = logger ?? NullLogger.Instance;
@@ -68,6 +72,7 @@ internal sealed partial class PtyHostedAgentRuntime(
     readonly CancellationTokenSource _disposal    = new();
     readonly Lock                    _dialogGate  = new();
     long                             _lastOutputAt;
+    volatile bool                    _sawOutput;
     volatile bool                    _stopRequested;
     bool                             _deliveryHoldsLane;
     TaskCompletionSource?            _dialogGone;
@@ -84,12 +89,16 @@ internal sealed partial class PtyHostedAgentRuntime(
 
     public async IAsyncEnumerable<byte[]> ReadOutputAsync([EnumeratorCancellation] CancellationToken ct = default) {
         await foreach (var chunk in pty.ReadOutputAsync(ct).ConfigureAwait(false)) {
-            _modes.Feed(chunk);
+            // Stamped first: a reader that sees bracketed paste turn on must also see this chunk's time.
             Volatile.Write(ref _lastOutputAt, time.GetTimestamp());
+            _modes.Feed(chunk);
+            _sawOutput = true;
 
             yield return chunk;
         }
     }
+
+    bool LooksReadyForInput => readyOnBracketedPaste ? _modes.IsBracketedPasteEnabled : _sawOutput;
 
     public void NoteTerminalDialog(bool showing) {
         lock (_dialogGate) {
@@ -108,7 +117,7 @@ internal sealed partial class PtyHostedAgentRuntime(
 
     /// <summary>
     /// Makes <paramref name="prompt"/> the agent's first message without putting it on the command
-    /// line: pastes it once the TUI has enabled bracketed paste and output has then been quiet for
+    /// line: pastes it once the TUI looks ready and output has then been quiet for
     /// <see cref="LaunchPromptQuietWindow"/>, or <see cref="LaunchPromptMaxWait"/> has passed. A text
     /// follow-up sent meanwhile lands after it; raw and special keys do not wait, so a viewer can
     /// answer a startup dialog themselves. A dialog on screen is not a settled startup and has no
@@ -116,9 +125,9 @@ internal sealed partial class PtyHostedAgentRuntime(
     /// composer.
     /// </summary>
     /// <remarks>
-    /// Output alone is no sign of readiness: ConPTY writes its own preamble before the agent starts,
-    /// and a paste sent while the agent is still booting reaches its composer but the submitting CR
-    /// is lost, leaving the prompt unsent.
+    /// Under ConPTY output alone is no sign of readiness: it writes its own preamble before the agent
+    /// starts, and a paste sent while the agent is still booting reaches its composer but the
+    /// submitting CR is lost, leaving the prompt unsent.
     /// </remarks>
     internal void DeliverLaunchPrompt(string prompt) {
         if (LaunchPromptDelivery is not null) throw new InvalidOperationException("The launch prompt is already queued.");
@@ -189,8 +198,8 @@ internal sealed partial class PtyHostedAgentRuntime(
             var remaining = LaunchPromptMaxWait - time.GetElapsedTime(started);
             if (remaining <= TimeSpan.Zero) return false;
 
-            if (!_modes.IsBracketedPasteEnabled) {
-                await Task.Delay(remaining < LaunchPromptReadinessPoll ? remaining : LaunchPromptReadinessPoll, time, ct);
+            if (!LooksReadyForInput) {
+                await Task.Delay(remaining < LaunchPromptPoll ? remaining : LaunchPromptPoll, time, ct);
 
                 continue;
             }
@@ -223,7 +232,7 @@ internal sealed partial class PtyHostedAgentRuntime(
     async Task WaitWhileDialogShowsAsync(CancellationToken ct) {
         while (DialogGone is { } gone && !pty.HasExited && !_stopRequested) {
             try {
-                await gone.WaitAsync(LaunchPromptExitPoll, time, ct);
+                await gone.WaitAsync(LaunchPromptPoll, time, ct);
             } catch (TimeoutException) { }
         }
     }

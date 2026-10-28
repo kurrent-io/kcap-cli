@@ -154,7 +154,8 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
         var disablesApprovalPrompts = launcher.DisablesApprovalPrompts(launcherCtx);
 
         var pty     = ptyFactory.Spawn(launcher.CliPath, args, ctx.Worktree.Path, env, ctx.Cols, ctx.Rows, removeEnv);
-        var runtime = new PtyHostedAgentRuntime(ctx.Vendor, pty, time, disablesApprovalPrompts, logger);
+        var runtime = new PtyHostedAgentRuntime(ctx.Vendor, pty, time, disablesApprovalPrompts, logger,
+            readyOnBracketedPaste: OperatingSystem.IsWindows());
 
         if (launchPrompt is not null) {
             runtime.DeliverLaunchPrompt(launchPrompt);
