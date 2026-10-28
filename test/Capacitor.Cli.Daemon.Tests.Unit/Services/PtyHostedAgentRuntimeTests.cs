@@ -327,6 +327,101 @@ public class PtyHostedAgentRuntimeTests {
         pty.Exit();
     }
 
+    /// <summary>A dialog that opens while the delivery waits for the input lane, behind a viewer's
+    /// keystroke, must not get the paste: the delivery checks again once it holds the lane.</summary>
+    [Test]
+    public async Task Launch_prompt_is_held_for_a_dialog_that_opens_while_it_waits_for_the_lane() {
+        var time    = new FakeTimeProvider();
+        var pty     = new GatedRawPty();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, time, approvalsDisabled: false);
+
+        runtime.DeliverLaunchPrompt("build it");
+        _ = PumpAsync(runtime);
+        pty.Inner.Emit("banner");
+        await Task.Delay(100);
+
+        var key = runtime.SendRawInputAsync([0x1b]);
+        await pty.RawWriteEntered.WaitAsync(TimeSpan.FromSeconds(5));
+        await StepAsync(time, PtyHostedAgentRuntime.LaunchPromptQuietWindow * 2, () => false);
+
+        runtime.NoteTerminalDialog(true);
+        pty.ReleaseRawWrites();
+        await key.WaitAsync(TimeSpan.FromSeconds(5));
+        await StepAsync(time, PtyHostedAgentRuntime.LaunchPromptMaxWait * 2, () => pty.Inner.Writes.Count > 1);
+        await Assert.That(string.Join("|", pty.Inner.Writes)).IsEqualTo("\x1b");
+
+        pty.Inner.Emit("composer");
+        await Task.Delay(100);
+        runtime.NoteTerminalDialog(false);
+        await StepAsync(time, PtyHostedAgentRuntime.LaunchPromptQuietWindow + PtyHostedAgentRuntime.SingleSubmitDelay,
+            () => runtime.LaunchPromptDelivery!.IsCompleted);
+
+        await Assert.That(await runtime.LaunchPromptDelivery!).IsEqualTo(LaunchPromptOutcome.Delivered);
+        await Assert.That(string.Join("|", pty.Inner.Writes)).IsEqualTo("\x1b|\x1b[200~build it\x1b[201~|\r");
+        pty.Inner.Exit();
+    }
+
+    /// <summary>A second dialog can open while the submit waits to retake the lane after the first:
+    /// the submit holds for every dialog, not only the one it first saw.</summary>
+    [Test]
+    public async Task Launch_prompt_submit_waits_for_a_dialog_that_follows_another() {
+        var time    = new FakeTimeProvider();
+        var pty     = new GatedRawPty();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, time, approvalsDisabled: false);
+
+        runtime.DeliverLaunchPrompt("build it");
+        _ = PumpAsync(runtime);
+        pty.Inner.Emit("banner");
+        await StepAsync(time, PtyHostedAgentRuntime.LaunchPromptQuietWindow, () => pty.Inner.Writes.Count >= 1);
+        runtime.NoteTerminalDialog(true);
+        await StepAsync(time, PtyHostedAgentRuntime.SingleSubmitDelay * 2, () => false);
+
+        var answer = runtime.SendRawInputAsync([0x1b]);
+        await pty.RawWriteEntered.WaitAsync(TimeSpan.FromSeconds(5));
+        runtime.NoteTerminalDialog(false);
+        await Task.Delay(100);
+        runtime.NoteTerminalDialog(true);
+        pty.ReleaseRawWrites();
+        await answer.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await StepAsync(time, PtyHostedAgentRuntime.SingleSubmitDelay * 4, () => pty.Inner.Writes.Count > 2);
+        await Assert.That(string.Join("|", pty.Inner.Writes)).IsEqualTo("\x1b[200~build it\x1b[201~|\x1b");
+
+        runtime.NoteTerminalDialog(false);
+        await StepAsync(time, PtyHostedAgentRuntime.SingleSubmitDelay, () => runtime.LaunchPromptDelivery!.IsCompleted);
+        await Assert.That(string.Join("|", pty.Inner.Writes)).IsEqualTo("\x1b[200~build it\x1b[201~|\x1b|\r");
+        pty.Inner.Exit();
+    }
+
+    /// <summary>Holds raw writes until released, so a test can keep the input lane busy.</summary>
+    sealed class GatedRawPty : IPtyProcess {
+        readonly TaskCompletionSource _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public RecordingScriptedPtyProcess Inner { get; } = new();
+        public Task RawWriteEntered => _entered.Task;
+        public void ReleaseRawWrites() => _release.TrySetResult();
+
+        public int  Pid       => Inner.Pid;
+        public bool HasExited => Inner.HasExited;
+        public int? ExitCode  => Inner.ExitCode;
+
+        public IAsyncEnumerable<byte[]> ReadOutputAsync(CancellationToken ct = default) => Inner.ReadOutputAsync(ct);
+        public Task WriteAsync(string input) => Inner.WriteAsync(input);
+
+        public async Task WriteAsync(byte[] data) {
+            _entered.TrySetResult();
+            await _release.Task;
+            await Inner.WriteAsync(data);
+        }
+
+        public ValueTask DisposeAsync() => Inner.DisposeAsync();
+        public Task WaitForExitAsync(TimeSpan? timeout = null) => Inner.WaitForExitAsync(timeout);
+        public Task TerminateAsync(TimeSpan?   timeout = null) => Inner.TerminateAsync(timeout);
+        public void Resize(ushort cols, ushort rows) => Inner.Resize(cols, rows);
+        public void SendInterrupt() => Inner.SendInterrupt();
+    }
+
     [Test]
     public async Task Launch_prompt_is_dropped_when_a_graceful_stop_is_requested_while_a_dialog_shows() {
         var pty     = new RecordingScriptedPtyProcess();

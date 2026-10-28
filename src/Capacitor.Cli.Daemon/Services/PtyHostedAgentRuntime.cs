@@ -123,11 +123,21 @@ internal sealed partial class PtyHostedAgentRuntime(
 
     async Task<LaunchPromptOutcome> DeliverLaunchPromptAsync(string prompt) {
         try {
-            var settled = await WaitForStartupToSettleAsync(_disposal.Token);
-            if (pty.HasExited) return LaunchPromptOutcome.AgentExited;
-            if (_stopRequested) return LaunchPromptOutcome.StopRequested;
+            bool settled;
 
-            await _lane.WaitAsync(_disposal.Token);
+            // A dialog can open while the delivery waits for the lane, so it is checked again once the
+            // lane is held, and the wait starts over.
+            while (true) {
+                settled = await WaitForStartupToSettleAsync(_disposal.Token);
+                if (pty.HasExited) return LaunchPromptOutcome.AgentExited;
+                if (_stopRequested) return LaunchPromptOutcome.StopRequested;
+
+                await _lane.WaitAsync(_disposal.Token);
+                if (DialogGone is null) break;
+
+                _lane.Release();
+            }
+
             var holdsLane = true;
 
             try {
@@ -141,8 +151,8 @@ internal sealed partial class PtyHostedAgentRuntime(
                     await Task.Delay(SingleSubmitDelay, time, _disposal.Token);
 
                     // Answering a dialog that came up after the paste takes the lane, so the submit
-                    // waits for it without holding the lane.
-                    if (DialogGone is not null) {
+                    // waits for each one without holding the lane.
+                    while (DialogGone is not null && !pty.HasExited) {
                         _lane.Release();
                         holdsLane = false;
                         await WaitWhileDialogShowsAsync(_disposal.Token);
