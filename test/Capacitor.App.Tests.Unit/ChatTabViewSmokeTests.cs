@@ -366,6 +366,33 @@ public class ChatTabViewSmokeTests {
         });
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_strip_shows_an_exhausted_model_limit_beside_healthy_bars() {
+        await RunOnUiAsync(async () => {
+            var modelHit = new Capacitor.Cli.Core.Accounts.Readings.AccountReadingDto(1,
+                [StripReadings.Window(300, 20, TimeSpan.FromHours(2)), new("claude_opus", 10080, 100, StripReadings.Now + TimeSpan.FromDays(2), StripReadings.Now)],
+                null, null,
+                new(StripReadings.Now.AddMinutes(-5), null, [new("claude_opus", 10080, StripReadings.Now + TimeSpan.FromDays(2), StripReadings.Now.AddMinutes(-5))]));
+            var readings = new BehaviorSubject<Capacitor.Cli.Core.Accounts.AccountsSnapshotDto?>(
+                StripReadings.Snapshot(StripReadings.Account("acc1", modelHit)));
+            var host = new Host(accountReadings: readings);
+            var path = Tmp.CreateFile("model-hit.jsonl", [UserLine]);
+            try {
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
+                    TranscriptPath = path, AccountDirectory = StripReadings.Directory, AccountId = "acc1", AccountLabel = "work",
+                });
+                await (host.Chat.PendingReadForTesting ?? Task.CompletedTask);
+                await WaitUntilAsync(() => { host.Settle(); return host.Chat.ShowsAccountUsage; }, what: "the bars");
+
+                var perModel = host.View.FindControl<TextBlock>("AccountStripPerModel")!;
+                await Assert.That(perModel.IsEffectivelyVisible).IsTrue();
+                await Assert.That(perModel.Text).IsEqualTo("+1 per model · 1 hit");
+                await Assert.That(host.View.FindControl<Border>("AccountStripBlocked")!.IsEffectivelyVisible).IsFalse();
+            } finally { await host.CloseAsync(); }
+        });
+    }
+
     /// Pins the two costs a long transcript could impose on the UI thread: one collection
     /// notification for the whole initial load, and containers for the viewport only.
     [Test]

@@ -595,6 +595,9 @@
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
+                            <TextBlock x:Name="AccountStripPerModel" Text="{Binding AccountStripUsage.PerModelText}" FontSize="11.5"
+                                       VerticalAlignment="Center" Foreground="{StaticResource KcapFaintBrush}"
+                                       IsVisible="{Binding AccountStripUsage.PerModelText, Converter={x:Static ObjectConverters.IsNotNull}}" />
                             <TextBlock Text="{Binding AccountStripUsage.LineText}" FontSize="11.5" VerticalAlignment="Center"
                                        Foreground="{StaticResource KcapFaintBrush}"
                                        IsVisible="{Binding AccountStripUsage.LineText, Converter={x:Static ObjectConverters.IsNotNull}}" />
