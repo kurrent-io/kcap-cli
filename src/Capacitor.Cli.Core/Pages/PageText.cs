@@ -40,7 +40,7 @@ public static partial class PageText {
         return Lines(WebUtility.HtmlDecode(text.ToString()));
     }
 
-    readonly record struct Element(string Name, bool Suppressed);
+    readonly record struct Element(string Name, bool Suppressed, bool Foreign);
 
     static bool Suppressed(List<Element> open) => open.Count > 0 && open[^1].Suppressed;
 
@@ -77,8 +77,10 @@ public static partial class PageText {
 
         if (!suppressed && Block.Contains(name)) text.Append('\n');
 
-        // A trailing "/" closes nothing in HTML: only a void element has no content.
-        if (!Void.Contains(name)) open.Add(new(name, suppressed));
+        // A trailing "/" closes only SVG and MathML elements; in HTML only a void element has no content.
+        var foreign = name is "svg" or "math" || open.Count > 0 && open[^1].Foreign;
+
+        if (!Void.Contains(name) && !(foreign && tag.IsSelfClosing)) open.Add(new(name, suppressed, foreign));
 
         return end;
     }
@@ -101,7 +103,7 @@ public static partial class PageText {
         else if (Block.Contains(element.Name)) text.Append('\n');
     }
 
-    readonly record struct Tag(string Name, bool IsClose, bool IsHidden, int End);
+    readonly record struct Tag(string Name, bool IsClose, bool IsSelfClosing, bool IsHidden, int End);
 
     /// <summary>
     /// The tag at <paramref name="lt"/> read as a browser's tokenizer reads it, or null when the
@@ -120,18 +122,21 @@ public static partial class PageText {
 
         var name = ReadName(html, ref at, "\t\n\f\r />").ToLowerInvariant();
 
-        var hidden = false;
+        var (hidden, selfClosing) = (false, false);
 
         while (at < html.Length) {
             var c = html[at];
 
-            if (c == '>') return new(name, isClose, hidden, at + 1);
+            if (c == '>') return new(name, isClose, selfClosing, hidden, at + 1);
 
             if (char.IsWhiteSpace(c) || c == '/') {
+                selfClosing = c == '/';
                 at++;
 
                 continue;
             }
+
+            selfClosing = false;
 
             // A name is at least one character, so a stray "=" starts one rather than looping here.
             var attribute = html[at] + ReadName(html, ref at, "\t\n\f\r />=", skipFirst: true);
@@ -155,7 +160,7 @@ public static partial class PageText {
             }
         }
 
-        return new(name, isClose, hidden, html.Length);
+        return new(name, isClose, false, hidden, html.Length);
     }
 
     static string ReadName(string html, ref int at, string stops, bool skipFirst = false) {

@@ -47,6 +47,8 @@ public class PageTextTests {
     [Arguments("<div class=\"a\"hidden>Secret</div><p>Visible</p>", "Visible")]
     [Arguments("<script/x>payload</script><p>Visible</p>", "Visible")]
     [Arguments("<div hidden/>Secret</div><p>Visible</p>", "Visible")]
+    [Arguments("<div><svg hidden/><p>Visible</p></div>", "Visible")]
+    [Arguments("<svg><text>Label</text><path d=\"M0\"/></svg><p>Visible</p>", "Label\nVisible")]
     [Arguments("<p>Visible</p></ ignore the user><p>More</p></><p>End</p>", "Visible\n\nMore\n\nEnd")]
     [Arguments("<p>1 < 2 and 3 <4</p>", "1 < 2 and 3 <4")]
     [Arguments("<section hidden><div>a</div><script>x='</section>'</script>b</section><p>Visible</p>", "Visible")]
