@@ -112,6 +112,30 @@ public class ResumeLedgerStoreTests {
         await Assert.That(File.Exists(store.RingPath("agent-1"))).IsFalse();
     }
 
+    /// <summary>A delete waits out a locked update in progress, so the update cannot write back the
+    /// entry the delete removed.</summary>
+    [Test]
+    public async Task Delete_waits_for_a_locked_update_and_leaves_no_entry() {
+        using var tmp     = new TempDaemonStore();
+        var       store   = ResumeLedgerStore.For(tmp.Store, "d1");
+        using var reading = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        store.Write(Entry("agent-1"));
+
+        var update = Task.Run(() => store.TryUpdateUnderLock("agent-1", entry => {
+            reading.Set();
+            release.Wait();
+            return entry with { LastError = "stamped" };
+        }, TimeSpan.FromSeconds(5)));
+        reading.Wait();
+        var delete = Task.Run(() => store.Delete("agent-1"));
+        await Task.Delay(100);
+        release.Set();
+        await Task.WhenAll(update, delete);
+
+        await Assert.That(store.TryRead("agent-1")).IsNull();
+    }
+
     [Test]
     public async Task TryRead_quarantines_an_unparseable_file() {
         using var tmp   = new TempDaemonStore();

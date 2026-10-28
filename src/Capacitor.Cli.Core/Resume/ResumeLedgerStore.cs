@@ -50,14 +50,28 @@ public sealed class ResumeLedgerStore(string resumeDirectory, TimeProvider? time
         File.Move(tempPath, finalPath, overwrite: true);
     }
 
+    static readonly TimeSpan DeleteLockWait = TimeSpan.FromSeconds(1);
+
+    /// <summary>Removes the entry under its <see cref="ResumeEntryLock"/>, so a locked update cannot write it
+    /// back. A holder that keeps the lock past the wait does not stop the delete.</summary>
     public bool Delete(string agentId) {
-        var existed = false;
+        var entryPath = EntryPath(agentId);
+        var existed   = false;
 
-        foreach (var path in new[] { EntryPath(agentId), RingPath(agentId), ResumeEntryLock.PathFor(EntryPath(agentId)) }) {
-            if (!File.Exists(path)) continue;
+        using (ResumeEntryLock.TryAcquire(entryPath, DeleteLockWait)) {
+            foreach (var path in new[] { entryPath, RingPath(agentId) }) {
+                if (!File.Exists(path)) continue;
 
-            File.Delete(path);
-            existed = true;
+                File.Delete(path);
+                existed = true;
+            }
+        }
+
+        // After the release: Windows refuses to delete a file a handle still holds.
+        try {
+            File.Delete(ResumeEntryLock.PathFor(entryPath));
+        } catch (IOException) {
+            // Held again already; the next delete removes it.
         }
 
         return existed;
