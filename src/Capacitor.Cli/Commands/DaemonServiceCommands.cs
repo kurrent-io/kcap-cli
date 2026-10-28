@@ -761,23 +761,40 @@ sealed class DaemonServiceCommands(
     }
 
     async Task<int> Status() {
+        await StaleTxnMarker.SettleAsync(store, manager, id, time);
         var status = manager.Status(id);
         await Console.Out.WriteLineAsync($"Service '{id}': {status.State} ({manager.Describe()})");
         if (status.BinaryPath is { } bin) await Console.Out.WriteLineAsync($"  binary: {bin}");
+        if (ServiceTxnMarker.Exists(store, id) && !ServiceTxnLock.IsHeld(store, id))
+            await Console.Out.WriteLineAsync(UnfinishedTxnLines(
+                id, ServiceTxnMarker.Read(store, id), ServiceTxnMarker.WrittenAt(store, id)));
         return 0;
     }
 
+    /// <summary>The human status lines for a marker no running operation holds.</summary>
+    internal static string UnfinishedTxnLines(string id, TxnMarker? marker, DateTimeOffset? writtenAt) {
+        var what = marker is null ? "operation" : marker.Operation;
+        var where = marker is null ? "" : $" at '{marker.Phase}'";
+        var when = writtenAt is { } at ? $" ({at.ToLocalTime():yyyy-MM-dd HH:mm})" : "";
+        return $"  An earlier service {what} did not finish: it stopped{where}{when}.\n"
+             + $"  Repair it with: kcap daemon service install --replace --verify --name {id}";
+    }
+
     async Task<int> StatusJson() {
+        await StaleTxnMarker.SettleAsync(store, manager, id, time);
         var query           = manager.Query(id);
         var installBinary   = UnitIdentity.ResolveDaemonBinary();
         var daemonPid       = DaemonPidProbe.ValidatedPid(store, id);
         var txnActive       = ServiceTxnLock.IsHeld(store, id);
         var txnMarker       = ServiceTxnMarker.Exists(store, id);
+        var marker          = txnMarker ? ServiceTxnMarker.Read(store, id) : null;
+        var markedAt        = txnMarker ? ServiceTxnMarker.WrittenAt(store, id) : null;
         var (unitProfile, unitServerUrl, unitExpectedServer, unitConsentSeed) = UnitEnvEvidence(query.UnitPresent);
 
         var (json, exitCode) = ServiceStatusRender.Render(
             query, id, installBinary, daemonPid, txnMarker, txnActive,
-            unitProfile, unitServerUrl, unitExpectedServer, unitConsentSeed);
+            unitProfile, unitServerUrl, unitExpectedServer, unitConsentSeed,
+            marker, markedAt);
 
         if (json is null) {
             await Console.Error.WriteLineAsync($"Could not determine service status for '{id}' ({manager.Describe()}).");
@@ -825,6 +842,7 @@ sealed class DaemonServiceCommands(
     /// <param name="retireServiceId">Retired by the install arm's transaction; the start arms never retire.</param>
     internal async Task<(ServiceEnsureJson Result, int Exit)> EvaluateEnsureAsync(
             string? profileName, string? retireServiceId = null) {
+        await StaleTxnMarker.SettleAsync(store, manager, id, time);
         var query     = manager.Query(id);
         var daemonPid = DaemonPidProbe.ValidatedPid(store, id);
         var txnActive = ServiceTxnLock.IsHeld(store, id);

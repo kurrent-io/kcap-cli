@@ -313,6 +313,8 @@ public sealed partial class WorkContextViewModel {
     void ApplyReady(WorkContextRead read) {
         ViewerIdentity = read.Viewer;
         ResolveRequesterAvatar();
+        // A failed summary keeps the last figures, marked stale with the rest of the pane.
+        if (!read.SummaryFailed) ApplySessionFacts(read.Summary);
         if (read.Primary is null) {
             ClearCard();
             ApplyLinks(read);
@@ -342,6 +344,17 @@ public sealed partial class WorkContextViewModel {
         ApplyLinks(read);
         Phase = WorkContextPhase.Ready;
         IsStale = read.ItemFailed || read.TopologyFailed || read.SummaryFailed;
+    }
+
+    bool _hasSessionFacts;
+
+    void ApplySessionFacts(SessionSummaryDto? summary) {
+        _hasSessionFacts = summary is not null;
+        Tokens = SessionFactText.Tokens(summary?.Stats);
+        Cost = SessionFactText.Cost(summary?.Stats);
+        ContextUse = SessionFactText.Context(summary?.Stats);
+        SessionSharing = summary is null ? SessionFactText.Unknown : SessionFactText.SessionSharing(summary);
+        AgentSharing = SessionFactText.AgentSharing(summary?.AgentVisibility);
     }
 
     static bool Same(string a, string? b) => string.Equals(a, b, StringComparison.Ordinal);

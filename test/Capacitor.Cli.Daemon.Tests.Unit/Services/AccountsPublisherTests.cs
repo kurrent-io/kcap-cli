@@ -452,7 +452,9 @@ public class AccountsPublisherTests {
         var time    = new FakeTimeProvider();
         using var publisher = Publisher(store, time);
         var requested = new List<string>();
-        publisher.RequestRefresh = id => { lock (requested) requested.Add(id); };
+        var cooled    = 0;
+        publisher.RequestWiringRefresh = id => { lock (requested) requested.Add(id); };
+        publisher.RequestRefresh       = _ => Interlocked.Increment(ref cooled);
         await publisher.StartAsync(CancellationToken.None);
         try {
             var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -468,6 +470,7 @@ public class AccountsPublisherTests {
             string[] seen;
             lock (requested) seen = [.. requested];
             await Assert.That(seen).IsEquivalentTo([account.Id]);
+            await Assert.That(Volatile.Read(ref cooled)).IsEqualTo(0);
         } finally {
             await publisher.StopAsync(CancellationToken.None);
         }
@@ -480,7 +483,7 @@ public class AccountsPublisherTests {
         var time = new FakeTimeProvider();
         using var publisher = Publisher(store, time);
         var requested = 0;
-        publisher.RequestRefresh = _ => Interlocked.Increment(ref requested);
+        publisher.RequestWiringRefresh = _ => Interlocked.Increment(ref requested);
         await publisher.StartAsync(CancellationToken.None);
         try {
             time.Advance(Poll);
@@ -498,7 +501,7 @@ public class AccountsPublisherTests {
         var time = new FakeTimeProvider();
         using var publisher = Publisher(store, time);
         var requested = 0;
-        publisher.RequestRefresh = _ => Interlocked.Increment(ref requested);
+        publisher.RequestWiringRefresh = _ => Interlocked.Increment(ref requested);
         await publisher.StartAsync(CancellationToken.None);
         try {
             var settings = AccountLayouts.Claude(Home, publisher.Current!.Accounts.Single().Directory).UserSettings;

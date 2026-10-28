@@ -60,6 +60,11 @@ internal sealed partial class AccountsPublisher(
     /// block, so a refresh never triggers another. Called under the rebuild gate; it must not block.</summary>
     public Action<string>? RequestRefresh { get; set; }
 
+    /// <summary>Asks for a prompt refresh of a Codex account whose <c>hooks.json</c> or <c>config.toml</c> changed: its
+    /// trust answer is bound to those files, so the account reads Needs approval until a probe asks again. Called
+    /// under the rebuild gate; it must not block.</summary>
+    public Action<string>? RequestWiringRefresh { get; set; }
+
     public long Version => _notifier.Version;
 
     public Task WaitBeyondAsync(long seen, CancellationToken ct) => _notifier.WaitBeyondAsync(seen, ct);
@@ -211,8 +216,7 @@ internal sealed partial class AccountsPublisher(
         _blockedSeen = seen;
     }
 
-    // Codex's trust answer is bound to these two files, so an edit to either outdates a Recording state
-    // until a refresh asks again. Accounts new to the stat, and the first stat, are baselines.
+    // Accounts new to the stat, and the first stat, are baselines.
     void RequestWiringRefreshes(
         (string AccountId, string Path, long Length, long Ticks)[] previous,
         (string AccountId, string Path, long Length, long Ticks)[] current,
@@ -226,7 +230,7 @@ internal sealed partial class AccountsPublisher(
 
         foreach (var id in changed) {
             try {
-                RequestRefresh?.Invoke(id);
+                RequestWiringRefresh?.Invoke(id);
             } catch (Exception ex) {
                 LogHandlerFailed(logger, ex);
             }

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Threading.Channels;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -462,6 +463,20 @@ sealed class CaptureServerConnection : ServerConnection {
     public override Task ReportAgentCommandsAsync(string agentId, IReadOnlyList<HostedAgentCommand> commands) {
         lock (CommandReports) CommandReports.Add(agentId);
         return Task.CompletedTask;
+    }
+
+    public List<(string AgentId, TerminalDialogDto? Dialog)> TerminalDialogReports { get; } = [];
+
+    /// <summary>Runs as each dialog report is sent, before the next one can be.</summary>
+    public Action<string, TerminalDialogDto?>? OnTerminalDialogReport { get; set; }
+
+    /// <summary>When set, each dialog report stays in flight until this completes.</summary>
+    public TaskCompletionSource? TerminalDialogReportHold { get; set; }
+
+    public override Task ReportAgentTerminalDialogAsync(string agentId, TerminalDialogDto? dialog) {
+        lock (TerminalDialogReports) TerminalDialogReports.Add((agentId, dialog));
+        OnTerminalDialogReport?.Invoke(agentId, dialog);
+        return TerminalDialogReportHold?.Task ?? Task.CompletedTask;
     }
 
     public override Task ReportAgentResolvedModelAsync(string agentId, string model) {
