@@ -25,6 +25,7 @@ public class PollingServiceVerifyTests {
         public int? OldJobPid = OldDaemonPid;
         public bool OldUninstallFails;
         public bool InstallEndsOldDaemon;
+        public bool InstallEndsReplacedDaemon { get; init; }
         public IReadOnlyDictionary<string, string>? OldEnv;
         public Exception? OldEnvFailure;
         public readonly List<string> Calls = [];
@@ -361,7 +362,7 @@ public class PollingServiceVerifyTests {
     /// The Windows service's install stops the old daemon itself, which closes the fence before its commit
     [Test]
     public async Task A_rename_retires_the_old_name_when_the_install_already_ended_its_daemon() {
-        var manager = new FakeManager { OldRegistered = true, OldRunning = true, InstallEndsOldDaemon = true };
+        var manager = new FakeManager { OldRegistered = true, OldRunning = true, InstallEndsOldDaemon = true, InstallEndsReplacedDaemon = true };
         var fence   = new FakeFence(manager) { CommitAnswers = false };
 
         var exit = await Verify(manager, retired: Retired("work"), fence: fence)
@@ -371,6 +372,19 @@ public class PollingServiceVerifyTests {
         await Assert.That(manager.Calls).IsEquivalentTo(
             ["fence-acquire:old-name", "install", "fence-commit", "uninstall:old-name", "fence-close"],
             TUnit.Assertions.Enums.CollectionOrdering.Matching);
+    }
+
+    /// An old daemon that vanished under a manager that did not end it may be its supervisor's relaunch on the way
+    [Test]
+    public async Task A_rename_keeps_refusing_an_unanswered_commit_when_the_manager_did_not_end_the_old_daemon() {
+        var manager = new FakeManager { OldRegistered = true, OldRunning = true, InstallEndsOldDaemon = true };
+        var fence   = new FakeFence(manager) { CommitAnswers = false };
+
+        var exit = await Verify(manager, retired: Retired("work"), fence: fence)
+            .InstallVerifiedAsync(Spec(), replace: true, expectedVersion: null, retireServiceId: "old-name");
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.RetireRefused);
+        await Assert.That(manager.Calls).DoesNotContain("uninstall:old-name");
     }
 
     /// A failed uninstall leaves the old daemon running, so the fence it committed is undone.

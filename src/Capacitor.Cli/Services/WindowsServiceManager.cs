@@ -31,6 +31,8 @@ sealed class WindowsServiceManager(
 
     public string UnitDirectory => config.Directory;
 
+    public bool InstallEndsReplacedDaemon => true;
+
     public static string EnvironmentFilePath(ConfigRoot config, string id) => config.Path($"daemon-service-{id}.env.json");
 
     public IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec) =>
