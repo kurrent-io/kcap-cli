@@ -174,6 +174,117 @@ public class WorkContextViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task A_hyphenated_session_id_shows_dashless_and_reads_as_reported() {
+        await RunOnUiAsync(async () => {
+            const string dashed = "0f8fad5b-d9cb-469f-a165-70867728950e";
+            var h = new Harness();
+            h.Source.Enqueue(Ready());
+
+            await h.PushAsync(Dto(sessionId: dashed));
+
+            await Assert.That(h.Source.Requested).IsEquivalentTo(new[] { dashed });
+            await Assert.That(h.Vm.SessionIdText).IsEqualTo("0f8fad5bd9cb469fa16570867728950e");
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    static SessionSummaryDto UsageSummary() => new() {
+        SessionId = SessionA,
+        Stats = new SessionStatsDto {
+            TokenUsageByModel = [new SessionModelTokensDto { Model = "opus", InputTokens = 1_000_000, OutputTokens = 200_000, CacheReadTokens = 300_000 }],
+            PeakContextTokens = 142_000, ContextWindow = 200_000, EstimatedCostUsd = 3.456,
+        },
+        DefaultVisibility = "org_public", DetailLevel = "activity", AgentVisibility = "scoped",
+    };
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_summary_fills_the_usage_and_sharing_facts() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(ReadyWith(null, summary: UsageSummary()));
+
+            await h.PushAsync(Dto());
+
+            await Assert.That(h.Vm.Tokens).IsEqualTo("1.5M");
+            await Assert.That(h.Vm.Cost).IsEqualTo("≈ $3.46");
+            await Assert.That(h.Vm.ContextUse).IsEqualTo("142k / 200k (71%)");
+            await Assert.That(h.Vm.SessionSharing).IsEqualTo("Org members · Activity");
+            await Assert.That(h.Vm.AgentSharing).IsEqualTo("People & teams");
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// Usage is session data, not work-item data, so a workspace without Work Items still shows it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_plan_gated_read_keeps_the_usage_facts() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(WorkContextRead.Of(WorkContextReadKind.NotInPlan) with { Summary = UsageSummary() });
+
+            await h.PushAsync(Dto());
+
+            await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.NotInPlan);
+            await Assert.That(h.Vm.Tokens).IsEqualTo("1.5M");
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_unreachable_poll_after_a_plan_gated_read_marks_its_facts_stale() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(WorkContextRead.Of(WorkContextReadKind.NotInPlan) with { Summary = UsageSummary() });
+            await h.PushAsync(Dto());
+            h.Source.Enqueue(WorkContextRead.Of(WorkContextReadKind.Unreachable));
+
+            await h.TickAsync();
+
+            await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.NotInPlan);
+            await Assert.That(h.Vm.IsStale).IsTrue();
+            await Assert.That(h.Vm.Tokens).IsEqualTo("1.5M");
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_plan_gated_read_with_a_failed_summary_keeps_the_last_figures_stale() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(WorkContextRead.Of(WorkContextReadKind.NotInPlan) with { Summary = UsageSummary() });
+            await h.PushAsync(Dto());
+            h.Source.Enqueue(WorkContextRead.Of(WorkContextReadKind.NotInPlan) with { SummaryFailed = true });
+
+            await h.TickAsync();
+
+            await Assert.That(h.Vm.IsStale).IsTrue();
+            await Assert.That(h.Vm.Tokens).IsEqualTo("1.5M");
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_failed_summary_keeps_the_last_figures() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(ReadyWith(null, summary: UsageSummary()));
+            await h.PushAsync(Dto());
+            h.Source.Enqueue(ReadyWith(null, summaryFailed: true));
+
+            await h.TickAsync();
+
+            await Assert.That(h.Vm.IsStale).IsTrue();
+            await Assert.That(h.Vm.Cost).IsEqualTo("≈ $3.46");
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Each_read_kind_maps_to_its_phase() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
