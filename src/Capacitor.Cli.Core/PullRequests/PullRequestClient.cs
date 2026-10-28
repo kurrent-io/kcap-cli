@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Net;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
+using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.Cli.Core.PullRequests;
 
@@ -130,7 +131,9 @@ public sealed class PullRequestClient(HttpClient http, string serverUrl, TimePro
             if (status == 401) return new(PullRequestReadKind.SignedOut, Subject: subject, AccessFailure: "invalid", StatusCode: status);
             if (status == 404) return new(PullRequestReadKind.SubjectUnavailable, Subject: subject, AccessFailure: "invalid", StatusCode: status);
             if (status is >= 300 and < 400) return Invalid<T>("unexpected_origin");
-            if (status is >= 500 or 429) return new(PullRequestReadKind.Unavailable, Subject: subject, Reason: "server_unavailable", AccessFailure: "transient", StatusCode: status);
+            if (status is >= 500 or 429) return new(PullRequestReadKind.Unavailable, Subject: subject, Reason: "server_unavailable", AccessFailure: "transient",
+                RetryAt: status == 429 ? (_time.GetUtcNow() + RefusalWait(response)).UtcDateTime : null,
+                StatusCode: status);
             using var document = await ReadDocumentAsync(response, linked.Token).ConfigureAwait(false);
             if (!PullRequestWire.ValidJson(document.RootElement)) return Invalid<T>();
             if (status == 409) {
@@ -152,6 +155,10 @@ public sealed class PullRequestClient(HttpClient http, string serverUrl, TimePro
         catch (Exception exception) when (exception is HttpRequestException or IOException) { return new(PullRequestReadKind.TransportFailure, Subject: subject, AccessFailure: "transient"); }
         catch (Exception exception) when (exception is JsonException or NotSupportedException) { return Invalid<T>(); }
     }
+    /// At least the server-wide cap's one second: a missing, zero or already-due Retry-After would
+    /// otherwise let the refused read go again at once.
+    TimeSpan RefusalWait(HttpResponseMessage response) =>
+        RetryAfterHeader.Read(response, _time) is { } wait && wait > TimeSpan.FromSeconds(1) ? wait : TimeSpan.FromSeconds(1);
     bool SameOrigin(HttpResponseMessage response) => response.RequestMessage?.RequestUri is { } actual
         && actual.Scheme == _base.Scheme && actual.IdnHost == _base.IdnHost && actual.Port == _base.Port && actual.UserInfo.Length == 0;
     static Uri ServerOrigin(string url) {
