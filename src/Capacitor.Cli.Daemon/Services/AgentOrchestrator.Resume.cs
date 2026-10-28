@@ -775,6 +775,15 @@ internal partial class AgentOrchestrator {
 
         foreach (var entry in _resumeCandidates.Values.Where(e => e.Participant is not null).ToList()) {
             var discard = DiscardResumeEntry(entry.AgentId);
+
+            // Published, but its registration or readiness has not settled: a candidate is removed once it does.
+            if (discard.Live is { } late) {
+                WithdrawAttempt(entry.AgentId);
+                if (!entry.Launch.IsPrivate) await ReportResumeFailedAsync(entry, "recovery_deadline", null, ct);
+                await StopAgentCoreAsync(late);
+                continue;
+            }
+
             if (!discard.Discarded) continue;
 
             if (!entry.Launch.IsPrivate) await ReportResumeFailedAsync(entry, "recovery_deadline", null, ct);
@@ -782,6 +791,17 @@ internal partial class AgentOrchestrator {
         }
 
         _statusNotifier.Pulse();
+    }
+
+    void WithdrawAttempt(string agentId) {
+        ResumeAttempt? attempt;
+
+        lock (_ledgerLock) {
+            if (!_resumeAttempts.TryGetValue(agentId, out attempt)) return;
+            attempt.Withdrawn = true;
+        }
+
+        attempt.Cancel();
     }
 
     /// <summary>True when the input was held for a participant still resuming, false when its queue is
@@ -836,6 +856,7 @@ internal partial class AgentOrchestrator {
     /// kept as a tombstone that holds its worktree until the reaper resolves it.</summary>
     async Task FailParticipantAsync(ResumeLedgerEntry entry, string reason, int? exitCode, CancellationToken ct) {
         LogParticipantNotResumed(entry.AgentId, LastErrorOf(reason, exitCode));
+        await DropHeldInputAsync(entry.AgentId);
 
         if (!entry.Launch.IsPrivate) await ReportResumeFailedAsync(entry, reason, exitCode, ct);
 

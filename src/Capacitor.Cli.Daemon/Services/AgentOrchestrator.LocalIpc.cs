@@ -22,7 +22,7 @@ internal partial class AgentOrchestrator {
 
         if (withState) {
             lines = lines.Concat(LedgerOnlyAgents().Select(l => ListRow(
-                l.Entry.AgentId, l.Status, l.Entry.Launch.RepoPath, KindText(LaunchKind.Default), l.Entry.Launch.FlowRunId,
+                l.Entry.AgentId, l.Status, l.Entry.Launch.RepoPath, KindText(l.Entry.Participant?.Kind ?? LaunchKind.Default), l.Entry.Launch.FlowRunId,
                 l.Entry.Launch.FlowRole, l.Entry.Launch.Title, l.State)));
         }
 

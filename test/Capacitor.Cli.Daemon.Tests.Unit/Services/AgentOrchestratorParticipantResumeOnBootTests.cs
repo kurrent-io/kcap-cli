@@ -352,7 +352,9 @@ public class AgentOrchestratorParticipantResumeOnBootTests {
     public async Task Startup_is_incomplete_while_a_participant_is_unpublished_and_complete_after() {
         var f = Build(new ReviewerFactory { Gate = new TaskCompletionSource() });
         await using var _ = f.Orch;
+        await f.Orch.ReapOrphansOnceAsync();
         var baseline = f.Orch.ComputeStartupReapComplete();
+        await Assert.That(baseline).IsTrue();
         Participant(f, "reviewer-1");
         f.Orch.LoadResumeLedger();
         var lane = f.Orch.ResumeOnBootAsync(CancellationToken.None);
@@ -372,7 +374,9 @@ public class AgentOrchestratorParticipantResumeOnBootTests {
         var f = Build(new ReviewerFactory { Gate = new TaskCompletionSource() });
         await using var _ = f.Orch;
         f.Orch.ParticipantRecoveryDeadline = TimeSpan.FromMilliseconds(200);
+        await f.Orch.ReapOrphansOnceAsync();
         var baseline = f.Orch.ComputeStartupReapComplete();
+        await Assert.That(baseline).IsTrue();
         Participant(f, "reviewer-1");
         f.Orch.LoadResumeLedger();
         var lane = f.Orch.ResumeOnBootAsync(CancellationToken.None);
@@ -387,10 +391,29 @@ public class AgentOrchestratorParticipantResumeOnBootTests {
         await Assert.That(f.Orch.ComputeStartupReapComplete()).IsEqualTo(baseline);
     }
 
+    /// <summary>The deadline also covers a participant that has published but whose registration or
+    /// readiness has not settled: it is stopped and reported failed, so it cannot hold the lane.</summary>
+    [Test]
+    public async Task The_deadline_stops_a_published_participant_whose_resume_has_not_settled() {
+        var f = Build(configure: c => c.ResumeReadinessWindow = TimeSpan.FromMinutes(5));
+        await using var _ = f.Orch;
+        f.Orch.ParticipantRecoveryDeadline = TimeSpan.FromMilliseconds(300);
+        Participant(f, "reviewer-1");
+        f.Orch.LoadResumeLedger();
+        var lane = f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
+        await WaitHarness.PollUntilAsync(() => f.Orch.GetAgentForTest("reviewer-1") is null);
+
+        await Assert.That(f.Server.ShutdownReports.Select(r => r.Reason)).Contains("resume_failed:recovery_deadline");
+        await Assert.That(f.Orch.ParticipantLedger!.TryRead("reviewer-1")).IsNull();
+    }
+
     [Test]
     public async Task No_snapshot_reports_complete_while_a_participant_is_in_neither_list() {
         var f = Build(new ReviewerFactory { Gate = new TaskCompletionSource() });
         await using var _ = f.Orch;
+        await f.Orch.ReapOrphansOnceAsync();
         Participant(f, "reviewer-1");
         f.Orch.LoadResumeLedger();
         var lane = f.Orch.ResumeOnBootAsync(CancellationToken.None);
@@ -413,6 +436,7 @@ public class AgentOrchestratorParticipantResumeOnBootTests {
         await reader;
 
         await Assert.That(torn).IsEqualTo(0);
+        await Assert.That(f.Orch.TakeRecoverySnapshot().StartupReapComplete).IsTrue();
     }
 
     static async Task<LocalFrame> LocalStop(AgentOrchestrator orch, bool force, string agentId) {
@@ -431,6 +455,21 @@ public class AgentOrchestratorParticipantResumeOnBootTests {
         var row = f.Orch.SnapshotAgentsForStatus().Single(r => r.Id == "reviewer-1");
 
         await Assert.That(row.Kind).IsEqualTo("review-flow");
+        f.Factory.Gate!.SetResult();
+        await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
+    }
+
+    [Test]
+    public async Task A_resuming_participant_is_listed_by_kcap_agent_ls_as_a_flow_agent() {
+        var (f, lane) = await StartHandshake();
+        await using var _ = f.Orch;
+
+        using var client = new DuplexTestStream(new MemoryStream(), new MemoryStream());
+        await f.Orch.HandleLocalListAsync(withTitles: false, withState: true, client, default);
+        client.WrittenStream.Position = 0;
+        var reply = await FrameCodec.ReadAsync(client.WrittenStream, default);
+
+        await Assert.That(reply!.Text.Split('\n').Select(l => l.Split('\t')).Single(r => r[0] == "reviewer-1")[3]).IsEqualTo("review-flow");
         f.Factory.Gate!.SetResult();
         await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
     }
