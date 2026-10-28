@@ -39,6 +39,9 @@ public class PageTextTests {
     [Arguments("<table><tbody hidden><tr><td>Secret</td></tr><tbody><tr><td>Visible</td></tr></tbody></table>", "Visible")]
     [Arguments("<table><tr hidden><td>Secret<tbody><tr><td>Visible</table>", "Visible")]
     [Arguments("<div><p hidden>Secret <b>bold</b> still secret</div><p>Visible</p>", "Visible")]
+    [Arguments("<div hidden>Secret</span>Still secret</div><p>Visible</p>", "Visible")]
+    [Arguments("<template><template>inner</template>Secret</template><p>Visible</p>", "Visible")]
+    [Arguments("<a title=\"1 > 0\">Visible</a>", "Visible")]
     [Arguments("<section hidden><div>a</div><script>x='</section>'</script>b</section><p>Visible</p>", "Visible")]
     public async Task Hidden_is_read_from_the_attribute_and_ends_where_a_browser_closes_the_element(string html, string expected) =>
         await Assert.That(PageText.FromHtml(html)).IsEqualTo(expected);

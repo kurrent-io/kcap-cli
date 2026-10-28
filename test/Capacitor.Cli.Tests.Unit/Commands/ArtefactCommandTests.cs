@@ -112,6 +112,11 @@ public class ArtefactCommandTests {
         await Assert.That(console.GetCapturedError()).Contains("not visible to this profile");
     }
 
+    [Test]
+    public async Task A_terminal_is_shown_a_pages_control_characters_rather_than_sent_them() =>
+        await Assert.That(ArtefactCommand.ForTerminal("ok\u001b[2Jcleared\r\nnext\tcell"))
+                    .IsEqualTo("ok\\u001b[2Jcleared\\u000d\nnext\tcell");
+
     sealed class RecordingArtefactsApi : IArtefactsApi {
         public const string SharedHtml = "<h1>Shared plan</h1><script>steal()</script>";
 

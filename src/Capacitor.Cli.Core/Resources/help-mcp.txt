@@ -312,7 +312,7 @@ mcp pages:
   (tallies, never names or free text), or named. Who answered is always the
   authenticated viewer, resolved server-side.
 
-  Reading, version history and takedown live in the web UI. Requires
+  Version history and takedown live in the web UI. Requires
   `kcap login` and a kcap-server with the /api/artefacts endpoints.
 
 mcp knowledge:
