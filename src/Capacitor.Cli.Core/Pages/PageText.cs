@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -11,11 +12,14 @@ namespace Capacitor.Cli.Core.Pages;
 /// </summary>
 public static partial class PageText {
     // A private-use character, so the whitespace collapse leaves it alone; it becomes a tab after.
-    const char CellBreak = '';
+    const char CellBreak = '\uE000';
 
     public static string FromHtml(string html) {
+        // Scripts go first: a tag inside one is text, and must not open or close a hidden element.
+        var visible = WithoutHiddenElements(NonContent().Replace(html, " "));
+
         // Source line breaks are layout, as they are to a browser; only block elements break a line.
-        var text = Spaces().Replace(NonContent().Replace(WithoutHiddenElements(html), " "), " ");
+        var text = Spaces().Replace(visible, " ");
         text = Cell().Replace(text, CellBreak.ToString());
         text = Block().Replace(text, "\n");
         text = Tag().Replace(text, "");
@@ -42,41 +46,84 @@ public static partial class PageText {
         return result.ToString().Trim();
     }
 
-    /// <summary>Each element carrying the <c>hidden</c> attribute, up to its matching close tag, so
-    /// what nests inside goes with it. One whose close is missing loses only its own tag.</summary>
     static string WithoutHiddenElements(string html) {
         var result = new StringBuilder(html.Length);
         var from   = 0;
 
-        for (var open = HiddenOpen().Match(html); open.Success; open = HiddenOpen().Match(html, from)) {
-            result.Append(html, from, open.Index - from);
+        foreach (Match tag in AnyTag().Matches(html)) {
+            if (tag.Index < from || tag.Groups["close"].Success || !IsHidden(tag)) continue;
 
-            var name  = open.Groups[1].Value;
-            var depth = 1;
-            var end   = open.Index + open.Length;
-
-            foreach (Match tag in SameTag(name).Matches(html, end)) {
-                depth += tag.Value[1] == '/' ? -1 : 1;
-
-                if (depth != 0) continue;
-
-                end = tag.Index + tag.Length;
-
-                break;
-            }
-
-            result.Append(' ');
-            from = end;
+            result.Append(html, from, tag.Index - from).Append(' ');
+            from = EndOf(html, tag);
         }
 
         return result.Append(html, from, html.Length - from).ToString();
     }
 
-    static Regex SameTag(string name) =>
-        new($@"</?{Regex.Escape(name)}\b[^>]*>", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    /// <summary>Read from the attribute names, so <c>hidden</c> inside a quoted value — a class name,
+    /// a title — hides nothing.</summary>
+    static bool IsHidden(Match open) =>
+        open.Groups["attr"].Captures.Any(a => a.Value.Equals("hidden", StringComparison.OrdinalIgnoreCase));
 
-    [GeneratedRegex(@"<([a-z][a-z0-9-]*)\b[^>]*?\shidden(?=[\s=/>])[^>]*>", RegexOptions.IgnoreCase)]
-    private static partial Regex HiddenOpen();
+    /// <summary>
+    /// Where the element <paramref name="open"/> starts really ends, the way a browser closes it: at
+    /// its own close tag, at the close of an element it sits in, or — for an element whose end tag is
+    /// optional — at the start of one that closes it implicitly, as a new <c>p</c> closes an open one.
+    /// An element still open at the end of the page runs to the end.
+    /// </summary>
+    static int EndOf(string html, Match open) {
+        var name = open.Groups["name"].Value.ToLowerInvariant();
+
+        if (open.Groups["self"].Value == "/" || Void.Contains(name)) return open.Index + open.Length;
+
+        var inside = new List<string>();
+
+        foreach (Match tag in AnyTag().Matches(html, open.Index + open.Length)) {
+            var tagName = tag.Groups["name"].Value.ToLowerInvariant();
+
+            if (!tag.Groups["close"].Success) {
+                if (inside.Count == 0 && ClosedBy.TryGetValue(name, out var closers) && closers.Contains(tagName)) return tag.Index;
+
+                if (tag.Groups["self"].Value != "/" && !Void.Contains(tagName)) inside.Add(tagName);
+
+                continue;
+            }
+
+            var opened = inside.LastIndexOf(tagName);
+
+            if (opened >= 0) {
+                inside.RemoveRange(opened, inside.Count - opened);
+
+                continue;
+            }
+
+            return tagName == name ? tag.Index + tag.Length : tag.Index;
+        }
+
+        return html.Length;
+    }
+
+    static readonly FrozenSet<string> Void = FrozenSet.ToFrozenSet(
+        ["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
+
+    static readonly FrozenSet<string> ParagraphClosers = FrozenSet.ToFrozenSet(
+        ["address", "article", "aside", "blockquote", "details", "div", "dl", "fieldset", "figcaption", "figure", "footer",
+         "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "main", "nav", "ol", "p", "pre", "section", "table", "ul"]);
+
+    static readonly FrozenDictionary<string, FrozenSet<string>> ClosedBy = new Dictionary<string, FrozenSet<string>> {
+        ["p"]      = ParagraphClosers,
+        ["li"]     = FrozenSet.ToFrozenSet(["li"]),
+        ["dt"]     = FrozenSet.ToFrozenSet(["dt", "dd"]),
+        ["dd"]     = FrozenSet.ToFrozenSet(["dt", "dd"]),
+        ["option"] = FrozenSet.ToFrozenSet(["option", "optgroup"]),
+        ["tr"]     = FrozenSet.ToFrozenSet(["tr"]),
+        ["td"]     = FrozenSet.ToFrozenSet(["td", "th", "tr"]),
+        ["th"]     = FrozenSet.ToFrozenSet(["td", "th", "tr"])
+    }.ToFrozenDictionary();
+
+    [GeneratedRegex(@"<(?<close>/)?(?<name>[a-z][a-z0-9-]*)(?:\s+(?<attr>[^\s""'=<>/]+)(?:\s*=\s*(?:""[^""]*""|'[^']*'|[^\s""'=<>`]+))?)*\s*(?<self>/?)>",
+                    RegexOptions.IgnoreCase)]
+    private static partial Regex AnyTag();
 
     [GeneratedRegex(@"<(script|style|template|noscript|head)\b[^>]*>.*?</\1\s*>|<!--.*?-->",
                     RegexOptions.IgnoreCase | RegexOptions.Singleline)]
@@ -89,9 +136,10 @@ public static partial class PageText {
                     RegexOptions.IgnoreCase)]
     private static partial Regex Block();
 
+    // Looser than AnyTag, so a malformed tag or a doctype is still dropped rather than read as text.
     [GeneratedRegex(@"<[^>]*>")]
     private static partial Regex Tag();
 
-    [GeneratedRegex(@"[\s ]+")]
+    [GeneratedRegex(@"[\s\u00a0]+")]
     private static partial Regex Spaces();
 }

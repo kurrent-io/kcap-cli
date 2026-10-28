@@ -33,6 +33,15 @@ public class PageTextTests {
                     .IsEqualTo("shown\n\nVisible");
 
     [Test]
+    [Arguments("<div class=\"foo hidden bar\" title='is hidden'>Visible</div>", "Visible")]
+    [Arguments("<p hidden>Secret<p>Visible</p>", "Visible")]
+    [Arguments("<ul><li hidden>Secret<li>Visible</ul>", "Visible")]
+    [Arguments("<div><p hidden>Secret <b>bold</b> still secret</div><p>Visible</p>", "Visible")]
+    [Arguments("<section hidden><div>a</div><script>x='</section>'</script>b</section><p>Visible</p>", "Visible")]
+    public async Task Hidden_is_read_from_the_attribute_and_ends_where_a_browser_closes_the_element(string html, string expected) =>
+        await Assert.That(PageText.FromHtml(html)).IsEqualTo(expected);
+
+    [Test]
     public async Task What_a_script_draws_is_not_text() =>
         await Assert.That(PageText.FromHtml("<div id=\"root\"></div><script>root.textContent = 'drawn'</script>")).IsEmpty();
 
