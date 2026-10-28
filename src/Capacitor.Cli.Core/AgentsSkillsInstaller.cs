@@ -39,7 +39,8 @@ public static class AgentsSkillsInstaller {
         "eval-watch",
         "start-agents",
         "connect-kcap",
-        "pages"
+        "pages",
+        "worktrees",
     ];
 
     /// <summary>Skills this installer once shipped. Their <c>kcap-</c> folders are deleted on install and remove,
