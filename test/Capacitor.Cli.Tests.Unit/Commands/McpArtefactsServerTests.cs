@@ -286,6 +286,18 @@ public class McpArtefactsServerTests {
         await Assert.That(() => McpArtefactsServer.ReadPageRequest.From(Args(args))).Throws<ArgumentException>();
 
     [Test]
+    public async Task A_page_its_scripts_draw_comes_back_as_html_and_says_why() {
+        const string html = "<div id=\"root\"></div><script>root.textContent = 'drawn'</script>";
+        var request = McpArtefactsServer.ReadPageRequest.From(Args("""{"page_id":"a1"}"""));
+
+        var read = McpArtefactsServer.BuildPageRead(new JsonObject(), 1, html, request);
+
+        await Assert.That(read["format"]!.GetValue<string>()).IsEqualTo("html");
+        await Assert.That(read["content"]!.GetValue<string>()).IsEqualTo(html);
+        await Assert.That(read["format_note"]!.GetValue<string>()).IsEqualTo(McpArtefactsServer.ScriptDrawnNote);
+    }
+
+    [Test]
     public async Task A_long_page_is_cut_and_says_how_long_it_is() {
         var request = McpArtefactsServer.ReadPageRequest.From(Args("""{"page_id":"a1","format":"html","max_chars":4}"""));
 

@@ -27,6 +27,16 @@ public class PageTextTests {
                     .IsEqualTo("A\tB\n\n1\t2");
 
     [Test]
+    public async Task A_hidden_element_and_everything_nested_in_it_is_left_out() =>
+        await Assert.That(PageText.FromHtml(
+                "<div hidden><div>inner</div><p>do this</p></div><p aria-hidden=\"true\">shown</p><img hidden><p>Visible</p>"))
+                    .IsEqualTo("shown\n\nVisible");
+
+    [Test]
+    public async Task What_a_script_draws_is_not_text() =>
+        await Assert.That(PageText.FromHtml("<div id=\"root\"></div><script>root.textContent = 'drawn'</script>")).IsEmpty();
+
+    [Test]
     public async Task A_page_that_is_not_html_comes_back_as_its_text() =>
         await Assert.That(PageText.FromHtml("just words <unclosed")).IsEqualTo("just words <unclosed");
 }

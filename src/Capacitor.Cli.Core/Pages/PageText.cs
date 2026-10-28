@@ -5,9 +5,9 @@ using System.Text.RegularExpressions;
 namespace Capacitor.Cli.Core.Pages;
 
 /// <summary>
-/// The readable text of a page: what a person sees, without the markup, styles, scripts and inlined
-/// images that make up most of a page's bytes. Not an HTML parser — a malformed page still comes back
-/// as its text, just with less structure.
+/// The readable text of a page: what a person sees, without the markup, styles, scripts, inlined
+/// images and <c>hidden</c> elements that make up most of a page's bytes, and none of what its scripts
+/// draw. Not an HTML parser — a malformed page still comes back as its text, just with less structure.
 /// </summary>
 public static partial class PageText {
     // A private-use character, so the whitespace collapse leaves it alone; it becomes a tab after.
@@ -15,7 +15,7 @@ public static partial class PageText {
 
     public static string FromHtml(string html) {
         // Source line breaks are layout, as they are to a browser; only block elements break a line.
-        var text = Spaces().Replace(Hidden().Replace(html, " "), " ");
+        var text = Spaces().Replace(NonContent().Replace(WithoutHiddenElements(html), " "), " ");
         text = Cell().Replace(text, CellBreak.ToString());
         text = Block().Replace(text, "\n");
         text = Tag().Replace(text, "");
@@ -42,9 +42,45 @@ public static partial class PageText {
         return result.ToString().Trim();
     }
 
+    /// <summary>Each element carrying the <c>hidden</c> attribute, up to its matching close tag, so
+    /// what nests inside goes with it. One whose close is missing loses only its own tag.</summary>
+    static string WithoutHiddenElements(string html) {
+        var result = new StringBuilder(html.Length);
+        var from   = 0;
+
+        for (var open = HiddenOpen().Match(html); open.Success; open = HiddenOpen().Match(html, from)) {
+            result.Append(html, from, open.Index - from);
+
+            var name  = open.Groups[1].Value;
+            var depth = 1;
+            var end   = open.Index + open.Length;
+
+            foreach (Match tag in SameTag(name).Matches(html, end)) {
+                depth += tag.Value[1] == '/' ? -1 : 1;
+
+                if (depth != 0) continue;
+
+                end = tag.Index + tag.Length;
+
+                break;
+            }
+
+            result.Append(' ');
+            from = end;
+        }
+
+        return result.Append(html, from, html.Length - from).ToString();
+    }
+
+    static Regex SameTag(string name) =>
+        new($@"</?{Regex.Escape(name)}\b[^>]*>", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    [GeneratedRegex(@"<([a-z][a-z0-9-]*)\b[^>]*?\shidden(?=[\s=/>])[^>]*>", RegexOptions.IgnoreCase)]
+    private static partial Regex HiddenOpen();
+
     [GeneratedRegex(@"<(script|style|template|noscript|head)\b[^>]*>.*?</\1\s*>|<!--.*?-->",
                     RegexOptions.IgnoreCase | RegexOptions.Singleline)]
-    private static partial Regex Hidden();
+    private static partial Regex NonContent();
 
     [GeneratedRegex(@"</t[dh]\s*>", RegexOptions.IgnoreCase)]
     private static partial Regex Cell();
