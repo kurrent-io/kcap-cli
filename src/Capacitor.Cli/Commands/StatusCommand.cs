@@ -381,14 +381,14 @@ public sealed class StatusCommand(
     async Task<(IReadOnlyList<(string Id, string? Binary)> Units, bool VerifySupported)> InstalledUnitsAsync() {
         IServiceManager manager;
         try {
-            manager = OperatingSystem.IsWindows()
+            manager = ServiceManagerFactory.CurrentPlatform() == ServicePlatform.WindowsScheduledTask
                 ? new WindowsScheduledTaskServiceManager(config, schtasks: BoundedSchtasks(time.GetTimestamp()))
                 : ServiceManagerFactory.ForCurrentOs(config, home, time);
         } catch (PlatformNotSupportedException) {
             return ([], false);
         }
 
-        var verifySupported = manager is LaunchdServiceManager or WindowsScheduledTaskServiceManager;
+        var verifySupported = manager is LaunchdServiceManager or WindowsScheduledTaskServiceManager or WindowsServiceManager;
         try {
             return (await Task.Run(() => ReadUnits(manager)).WaitAsync(UnitsBudget, time), verifySupported);
         } catch (TimeoutException) {

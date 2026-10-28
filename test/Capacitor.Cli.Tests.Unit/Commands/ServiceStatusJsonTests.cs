@@ -23,6 +23,24 @@ public class ServiceStatusJsonTests {
     }
 
     [Test]
+    public async Task The_windows_service_fields_render_when_set_and_are_absent_otherwise() {
+        var q = new ServiceQuery(LabelProbe.Loaded, true, ServiceState.Running, "/u/kcap-daemon", 42);
+
+        var (withFields, _) = ServiceStatusRender.Render(q, "d", null, 42, false, false,
+            supervisor: "windows_service", serviceUpgradeAvailable: true, windowsServiceInstallable: false);
+        var (without, _) = ServiceStatusRender.Render(q, "d", null, 42, false, false);
+
+        using var doc = JsonDocument.Parse(withFields!);
+        await Assert.That(doc.RootElement.GetProperty("supervisor").GetString()).IsEqualTo("windows_service");
+        await Assert.That(doc.RootElement.GetProperty("service_upgrade_available").GetBoolean()).IsTrue();
+        await Assert.That(doc.RootElement.GetProperty("windows_service_installable").GetBoolean()).IsFalse();
+        using var bare = JsonDocument.Parse(without!);
+        await Assert.That(bare.RootElement.TryGetProperty("supervisor", out _)).IsFalse();
+        await Assert.That(bare.RootElement.TryGetProperty("service_upgrade_available", out _)).IsFalse();
+        await Assert.That(bare.RootElement.TryGetProperty("windows_service_installable", out _)).IsFalse();
+    }
+
+    [Test]
     public async Task Render_carries_a_leftover_markers_details() {
         var q = new ServiceQuery(LabelProbe.Loaded, true, ServiceState.Running, "/u/kcap-daemon", 42);
         var marker = new TxnMarker(1, "replace", "bootstrapped", "absent|nounit||pid=", "no-unit", null);

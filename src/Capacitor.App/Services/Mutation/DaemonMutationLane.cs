@@ -298,6 +298,7 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
             MutationVerb.StartVerified => executor.ServiceStartVerifiedAsync(ct),
             MutationVerb.DetachedStart => executor.DetachedStartAsync(attemptId!, ct),
             MutationVerb.Reload        => executor.ServiceReloadAsync(ct),
+            MutationVerb.InstallWindowsService => executor.ServiceInstallWindowsServiceAsync(ct),
             var verb when verb.IsAccountVerb() => executor.AccountsAsync(
                 verb, request.Account ?? throw new ArgumentException("An account verb carries its AccountArgs.", nameof(request)), ct),
             // Fail closed, never permissive: an unnamed enum value must halt, not silently pick a verb.
@@ -362,6 +363,9 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
         if (result.TimedOut) return new MutationOutcome.UnconfirmedNoAttach();
 
         if (result.ExitCode == 0) return await ClassifyServiceSuccessAsync(request, executor, observation, ct).ConfigureAwait(false);
+
+        if (result.ExitCode == VerifyExitCodes.ElevationDeclined)
+            return new MutationOutcome.Refused("elevation_declined", RecoverySurface.Attention);
 
         if (result.ExitCode == VerifyExitCodes.RetireRefused)
             return new MutationOutcome.Failed(result.ExitCode, ReasonLine.TrySingle(result.Stderr, "retire_reason="), RecoverySurface.Attention);

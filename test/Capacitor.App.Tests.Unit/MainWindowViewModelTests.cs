@@ -56,12 +56,14 @@ public class MainWindowViewModelTests {
     /// pieces WorkspaceNavigationTests.NewNav wires, just without its Nav bookkeeping.
     /// A window wired to a launcher pane: the Start/Reconnect buttons live on the pane, so their
     /// visibility is read where LauncherPaneView binds it.
-    static (MainWindowViewModel Vm, HomeViewModel Home, TempDir Tmp) WithLauncher(FakeDaemonClientService service) {
+    static (MainWindowViewModel Vm, HomeViewModel Home, TempDir Tmp) WithLauncher(
+            FakeDaemonClientService service, IObservable<bool>? movingToWindowsService = null) {
         var tmp = TempDir.WithPathTo("app-state.json", out var path);
         var home = new HomeViewModel(
             service, new AppStateStore(path), new UnusedLaunchClient(),
             () => Task.FromResult(Array.Empty<string>()), TimeProvider.System);
-        var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System, home: home);
+        var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System, home: home,
+            movingToWindowsService: movingToWindowsService);
         return (vm, home, tmp);
     }
 
@@ -494,6 +496,25 @@ public class MainWindowViewModelTests {
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_incompatible", null));
             await Assert.That(home.DaemonStartVisible).IsFalse();
             await Assert.That(home.DaemonRetryVisible).IsTrue();
+        });
+    }
+
+    /// The move to the Windows service takes the daemon down and brings it back itself, so Start is not offered
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Start_is_not_offered_while_the_daemon_moves_to_the_windows_service() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var moving = new BehaviorSubject<bool>(true);
+            var (vm, home, tmp) = WithLauncher(service, moving);
+            using var _tmp = tmp;
+            using var _home = home;
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+            await Assert.That(home.DaemonStartVisible).IsFalse();
+
+            moving.OnNext(false);
+            await Assert.That(home.DaemonStartVisible).IsTrue();
         });
     }
 

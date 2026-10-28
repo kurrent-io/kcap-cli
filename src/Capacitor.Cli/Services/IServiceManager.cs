@@ -3,7 +3,7 @@ using System.Text;
 namespace Capacitor.Cli.Services;
 
 /// <summary>Which OS service backend a manager targets.</summary>
-enum ServicePlatform { Launchd, Systemd, WindowsScheduledTask }
+enum ServicePlatform { Launchd, Systemd, WindowsScheduledTask, WindowsService }
 
 /// <summary>Lifecycle state of an installed service for one id.</summary>
 enum ServiceState { NotInstalled, Installed, Running }
@@ -72,6 +72,9 @@ interface IServiceManager {
     /// <summary>False on failure, with the reason in <paramref name="error"/>. The plist is never deleted —
     /// stopping is not uninstalling.</summary>
     bool Stop(string serviceId, out string? error);
+    /// <summary>True when installing a new name itself stops the daemon running under the name it replaces,
+    /// as with one daemon per user, so nothing can relaunch that old name before it is retired.</summary>
+    bool InstallEndsReplacedDaemon => false;
 }
 
 /// <summary>

@@ -27,6 +27,7 @@ public sealed record AppState(
     double? UiScale = null,
     // When setup last sent the user to kcap.ai's sign-up; cleared once a sign-in commits.
     DateTimeOffset? WebSignUpOpenedAt = null,
+    bool WindowsServiceDeclined = false,
     // "host/vendor:repo" -> account id, written by AccountMemory.
     IReadOnlyDictionary<string, string>? AccountByRepo = null,
     // Vendor id -> whether kcap's tools were last installed for it from Settings. Nothing on disk
