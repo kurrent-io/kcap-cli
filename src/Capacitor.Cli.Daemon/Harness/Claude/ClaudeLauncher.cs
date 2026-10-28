@@ -647,7 +647,8 @@ internal sealed partial class ClaudeLauncher(
 
         if (File.Exists(mcpJsonPath)) {
             var existing = JsonNode.Parse(File.ReadAllText(mcpJsonPath));
-            merged = existing?["mcpServers"]?.AsObject() ?? new JsonObject();
+            // Cloned: the parsed node stays parented, and the wrapper below cannot adopt it.
+            merged = existing?["mcpServers"]?.DeepClone().AsObject() ?? new JsonObject();
         } else {
             merged = new JsonObject();
         }
