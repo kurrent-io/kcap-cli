@@ -1379,7 +1379,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// HarnessByRepo store is never consulted. Either way the result is revalidated against the
     /// selected machine's current harnesses.
     public async Task SelectRepositoryAsync(string repoPath) {
-        SelectedRepoPath = repoPath.Length == 0 ? ScratchRepoPath : PlatformPaths.Normalize(repoPath);
+        // This host's separator rules would rewrite a remote path: on Unix, Windows' C:/ trims to C:.
+        SelectedRepoPath = repoPath.Length == 0 ? ScratchRepoPath
+            : RemoteMachineSelected ? repoPath
+            : PlatformPaths.Normalize(repoPath);
         if (RemoteMachineSelected) {
             RevalidateVendor(Harnesses);
             return;

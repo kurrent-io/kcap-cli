@@ -1875,6 +1875,8 @@ public class HomeViewModelTests {
             await Assert.That(vm.SelectedRepoPath).IsEqualTo(@"C:\src\repo");
             await Assert.That(await vm.EnterRemoteRepositoryAsync(@"\\host\share\repo")).IsNull();
             await Assert.That(vm.SelectedRepoPath).IsEqualTo(@"\\host\share\repo");
+            await Assert.That(await vm.EnterRemoteRepositoryAsync("C:/")).IsNull();
+            await Assert.That(vm.SelectedRepoPath).IsEqualTo("C:/");
 
             var saved = await store.LoadAsync();
             await Assert.That(saved.HarnessByRepo is null || saved.HarnessByRepo.Count == 0).IsTrue();
