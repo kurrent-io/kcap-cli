@@ -1,5 +1,4 @@
 using System.Collections.Frozen;
-using System.Globalization;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
@@ -212,7 +211,7 @@ public sealed class PullRequestToneCache : IDisposable {
             var entry = EntryFor(session);
             if (_inFlight.Contains(session)) entry.Version = ++_nextVersion;
             var items = (listed.Items ?? [])
-                .Select(pr => (Subject: ListedSubject(pr), PullRequest: pr))
+                .Select(pr => (Subject: ListedPullRequest.Subject(pr), PullRequest: pr))
                 .Where(pr => PullRequestWire.ValidSubject(pr.Subject))
                 .DistinctBy(pr => pr.Subject).ToList();
             var tone = PullRequestTones.Strongest(items.Select(pr => ListedTone(pr.PullRequest.State)));
@@ -231,18 +230,6 @@ public sealed class PullRequestToneCache : IDisposable {
         if (!changed) return;
         Publish();
         PublishSummaries();
-    }
-
-    /// The listing names no provider or host, so they come from the URL as the server derives them
-    /// for its PR routes: a subject the panel then opens is the one those routes know.
-    static PullRequestSubjectDto ListedSubject(RepoSessionPullRequestDto pr) {
-        var url = PullRequestWire.SafeLink(pr.Url) is { } safe ? new Uri(safe) : null;
-        var owner = pr.Owner.ToLowerInvariant();
-        var repo = pr.RepoName.ToLowerInvariant();
-        var path = $"/{owner}/{repo}/pull/{pr.Number.ToString(CultureInfo.InvariantCulture)}";
-        var github = url?.Host == "github.com" && string.Equals(url.AbsolutePath.TrimEnd('/'), path, StringComparison.OrdinalIgnoreCase);
-        return new() { Provider = github ? "github" : "unknown", Host = url?.IdnHost.ToLowerInvariant() ?? "unknown",
-            RepoHash = pr.RepoHash, Owner = owner, RepoName = repo, Number = pr.Number };
     }
 
     /// The listing carries no checks or mergeability, so an open PR reads as an overview without them does.
