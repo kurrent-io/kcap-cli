@@ -726,8 +726,6 @@ public partial class App : Application {
         var senders = new ServerMessageSenderSource(_config, profiles, _serverEnv, _machineEnv, localRoot: _localRoot);
         var ghRunner = new ProcessRunner(_time);
         var gh = new GitHubCliRunner(ghRunner, OperatingSystem.IsWindows() ? null : new LoginShellProbe(ghRunner, Environment.GetEnvironmentVariable), Environment.GetEnvironmentVariable);
-        // Registration order is precedence: local CLI readers before the server.
-        var readers = new PullRequestReaderRegistry(pullRequests, [_gh = new GitHubCliReaderProvider(gh, _time), new ServerReaderProvider(pullRequests)], _time);
         var serverClients = new ServerClients(serverLane, workContext, pullRequests, plans, planArtifacts, senders);
 
         var machineId = new MachineId(_config).ReadPersisted();
@@ -745,6 +743,9 @@ public partial class App : Application {
         _remoteAgents = remoteAgents;
         _sessions = sessions;
         _directory = directory;
+        // Registration order is precedence: local CLI readers before the server.
+        var readers = new PullRequestReaderRegistry(new ListedPullRequestSource(pullRequests, directory),
+            [_gh = new GitHubCliReaderProvider(gh, _time), new ServerReaderProvider(pullRequests)], _time);
         var railPreferences = new RailPreferencesStore(_appState);
 
         // The launcher's model dropdown, fetched once from the server (same catalog the web UI
