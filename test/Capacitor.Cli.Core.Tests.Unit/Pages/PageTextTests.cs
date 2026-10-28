@@ -36,6 +36,8 @@ public class PageTextTests {
     [Arguments("<div class=\"foo hidden bar\" title='is hidden'>Visible</div>", "Visible")]
     [Arguments("<p hidden>Secret<p>Visible</p>", "Visible")]
     [Arguments("<ul><li hidden>Secret<li>Visible</ul>", "Visible")]
+    [Arguments("<table><tbody hidden><tr><td>Secret</td></tr><tbody><tr><td>Visible</td></tr></tbody></table>", "Visible")]
+    [Arguments("<table><tr hidden><td>Secret<tbody><tr><td>Visible</table>", "Visible")]
     [Arguments("<div><p hidden>Secret <b>bold</b> still secret</div><p>Visible</p>", "Visible")]
     [Arguments("<section hidden><div>a</div><script>x='</section>'</script>b</section><p>Visible</p>", "Visible")]
     public async Task Hidden_is_read_from_the_attribute_and_ends_where_a_browser_closes_the_element(string html, string expected) =>

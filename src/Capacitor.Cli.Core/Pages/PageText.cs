@@ -82,7 +82,9 @@ public static partial class PageText {
             var tagName = tag.Groups["name"].Value.ToLowerInvariant();
 
             if (!tag.Groups["close"].Success) {
-                if (inside.Count == 0 && ClosedBy.TryGetValue(name, out var closers) && closers.Contains(tagName)) return tag.Index;
+                while (inside.Count > 0 && ClosesImplicitly(inside[^1], tagName)) inside.RemoveAt(inside.Count - 1);
+
+                if (inside.Count == 0 && ClosesImplicitly(name, tagName)) return tag.Index;
 
                 if (tag.Groups["self"].Value != "/" && !Void.Contains(tagName)) inside.Add(tagName);
 
@@ -103,6 +105,9 @@ public static partial class PageText {
         return html.Length;
     }
 
+    static bool ClosesImplicitly(string open, string next) =>
+        ClosedBy.TryGetValue(open, out var closers) && closers.Contains(next);
+
     static readonly FrozenSet<string> Void = FrozenSet.ToFrozenSet(
         ["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
 
@@ -110,15 +115,20 @@ public static partial class PageText {
         ["address", "article", "aside", "blockquote", "details", "div", "dl", "fieldset", "figcaption", "figure", "footer",
          "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "main", "nav", "ol", "p", "pre", "section", "table", "ul"]);
 
+    static readonly FrozenSet<string> TableSections = FrozenSet.ToFrozenSet(["thead", "tbody", "tfoot"]);
+
     static readonly FrozenDictionary<string, FrozenSet<string>> ClosedBy = new Dictionary<string, FrozenSet<string>> {
         ["p"]      = ParagraphClosers,
         ["li"]     = FrozenSet.ToFrozenSet(["li"]),
         ["dt"]     = FrozenSet.ToFrozenSet(["dt", "dd"]),
         ["dd"]     = FrozenSet.ToFrozenSet(["dt", "dd"]),
         ["option"] = FrozenSet.ToFrozenSet(["option", "optgroup"]),
-        ["tr"]     = FrozenSet.ToFrozenSet(["tr"]),
-        ["td"]     = FrozenSet.ToFrozenSet(["td", "th", "tr"]),
-        ["th"]     = FrozenSet.ToFrozenSet(["td", "th", "tr"])
+        ["thead"]  = TableSections,
+        ["tbody"]  = TableSections,
+        ["tfoot"]  = TableSections,
+        ["tr"]     = FrozenSet.ToFrozenSet(["tr", .. TableSections]),
+        ["td"]     = FrozenSet.ToFrozenSet(["td", "th", "tr", .. TableSections]),
+        ["th"]     = FrozenSet.ToFrozenSet(["td", "th", "tr", .. TableSections])
     }.ToFrozenDictionary();
 
     [GeneratedRegex(@"<(?<close>/)?(?<name>[a-z][a-z0-9-]*)(?:\s+(?<attr>[^\s""'=<>/]+)(?:\s*=\s*(?:""[^""]*""|'[^']*'|[^\s""'=<>`]+))?)*\s*(?<self>/?)>",
