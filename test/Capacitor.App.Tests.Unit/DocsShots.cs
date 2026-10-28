@@ -89,7 +89,8 @@ public sealed class DocsShots {
             "desktop-launcher", "desktop-pull-request", "desktop-work-context", "desktop-rail-grouped",
             "desktop-settings-notifications", "desktop-settings-accounts", "desktop-settings-profiles", "desktop-settings-search",
             "desktop-launch-approvals", "desktop-consent-prompt", "desktop-wizard-agents", "desktop-wizard-visibility",
-            "desktop-settings-privacy", "desktop-wizard-usage-data"]);
+            "desktop-settings-privacy", "desktop-wizard-usage-data", "desktop-settings-usage-data", "desktop-settings-harnesses",
+            "desktop-settings-about"]);
     }
 
     [Test]
@@ -121,7 +122,7 @@ public sealed class DocsShots {
 
     [Test, DocsShot("desktop-settings")]
     public async Task The_settings_window_shows_the_profile_and_daemon() {
-        await CaptureAsync(() => DocsShotScenes.SettingsAsync(Config), "NameInput");
+        await CaptureAsync(() => DocsShotScenes.SettingsAsync(Config, "DaemonTab", height: 560), "NameInput");
     }
 
     [Test, DocsShot("desktop-wizard-edition")]
@@ -181,29 +182,44 @@ public sealed class DocsShots {
 
     [Test, DocsShot("desktop-settings-notifications")]
     public async Task The_settings_window_shows_the_notification_switches() {
-        await CaptureAsync(() => DocsShotScenes.SettingsAsync(Config, "NotificationsTab"), "PermissionNotificationsToggle");
+        await CaptureAsync(() => DocsShotScenes.SettingsAsync(Config, "NotificationsTab", height: 520), "PermissionNotificationsToggle");
     }
 
     [Test, DocsShot("desktop-settings-accounts")]
     public async Task The_settings_window_lists_accounts_with_a_row_menu_open() {
-        await CaptureAsync(() => DocsShotScenes.SettingsAsync(Config, "AccountsTab"), "AddAccountButton",
+        await CaptureAsync(() => DocsShotScenes.SettingsAsync(Config, "AccountsTab", height: 920, width: 960), "AddAccountButton",
             afterShow: window => OpenFlyoutInsideTheWindow(window, window.GetVisualDescendants().OfType<Button>()
                 .Single(b => b.Classes.Contains("accountMenu") && AutomationProperties.GetName(b) == "Actions for northwind"), "desktop-settings-accounts"));
     }
 
     [Test, DocsShot("desktop-settings-profiles")]
     public async Task The_settings_window_lists_the_profiles() {
-        await CaptureAsync(() => DocsShotScenes.SettingsAsync(Config, "ProfilesTab"), "ProfilesTitleText");
+        await CaptureAsync(() => DocsShotScenes.SettingsAsync(Config, "ProfilesTab", height: 520), "ProfilesTitleText");
     }
 
     [Test, DocsShot("desktop-settings-search")]
     public async Task The_settings_window_offers_the_built_in_search_model() {
-        await CaptureAsync(() => DocsShotScenes.SettingsAsync(Config, "SearchTab", localSearch: true), "SearchCurrentText");
+        await CaptureAsync(() => DocsShotScenes.SettingsAsync(Config, "SearchTab", height: 580, localSearch: true), "SearchCurrentText");
     }
 
     [Test, DocsShot("desktop-settings-privacy")]
+    public async Task The_settings_window_shows_who_reads_new_sessions_and_the_recording_rules() {
+        await CaptureAsync(() => DocsShotScenes.SettingsAsync(Config, "CaptureTab", height: 1060), "AllowedReposInput");
+    }
+
+    [Test, DocsShot("desktop-settings-usage-data")]
     public async Task The_settings_window_shows_the_usage_data_switch_on() {
-        await CaptureAsync(() => DocsShotScenes.SettingsAsync(Config, "PrivacyTab", privacy: true, height: 340), "UsageDataSwitch");
+        await CaptureAsync(() => DocsShotScenes.SettingsAsync(Config, "PrivacyTab", height: 520, usageData: true), "UsageDataSwitch");
+    }
+
+    [Test, DocsShot("desktop-settings-harnesses")]
+    public async Task The_settings_window_lists_the_coding_tools_kcap_records() {
+        await CaptureAsync(() => DocsShotScenes.SettingsAsync(Config, "HarnessesTab", height: 660, harnesses: true), "HarnessSettingsRows");
+    }
+
+    [Test, DocsShot("desktop-settings-about")]
+    public async Task The_settings_window_shows_the_installed_versions() {
+        await CaptureAsync(() => DocsShotScenes.SettingsAsync(Config, "AboutTab", height: 520, about: true), "AboutCliVersionText");
     }
 
     [Test, DocsShot("desktop-launch-approvals")]

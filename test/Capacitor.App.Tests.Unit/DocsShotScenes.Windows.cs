@@ -1,4 +1,5 @@
 using System.Reactive.Concurrency;
+using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Avalonia.Controls;
 using Capacitor.App.Services;
@@ -9,10 +10,15 @@ using Capacitor.App.Services.Onboarding;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Accounts.Readings;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Claude;
+using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Core.Telemetry;
 using Microsoft.Extensions.Time.Testing;
 
@@ -21,20 +27,26 @@ namespace Capacitor.App.Tests.Unit;
 /// The windows other than the main one: Settings, Launch approvals and the launch consent prompt.
 static partial class DocsShotScenes {
     const string LocalServerUrl = "http://localhost:5000";
-    const double SettingsHeight = 760;
+    const double SettingsWidth = 860;
 
-    /// The settings window over the Northwind profile, not yet shown, open on the tab named `tab`.
-    /// Profiles, Accounts and Notifications are always there; Search only with `localSearch`, the
-    /// local edition's built-in embedding model being offered and in use; Privacy only with `privacy`,
-    /// usage data being sent.
-    public static async Task<DocsShotScene> SettingsAsync(TempConfigRoot config, string tab = "DaemonTab",
-            bool localSearch = false, bool privacy = false, double height = SettingsHeight) {
+    /// The settings window over the Northwind profile, not yet shown, open on the page named `tab` and
+    /// sized to fit it. Privacy, Daemon, Notifications, Accounts and Profiles are always there; Search
+    /// only with `localSearch`, the local edition's built-in embedding model being offered and in use; Usage data
+    /// only with `usageData`, usage data being sent; Harnesses only with `harnesses`, Claude Code and
+    /// Codex wired and Cursor found but not; About only with `about`.
+    public static async Task<DocsShotScene> SettingsAsync(TempConfigRoot config, string tab, double height,
+            bool localSearch = false, bool usageData = false, bool harnesses = false, bool about = false,
+            double width = SettingsWidth) {
         var scene = new DocsShotScene();
         try {
             await ConfigMutator.MutateAsync(config.Root, c => c with {
                 ActiveProfile = "northwind",
                 Profiles = new() {
-                    ["northwind"] = new Profile { ServerUrl = ServerUrl, Daemon = new DaemonSettings { Name = "maya-mbp", MaxAgents = 5 } },
+                    ["northwind"] = new Profile {
+                        ServerUrl = ServerUrl, Daemon = new DaemonSettings { Name = "maya-mbp", MaxAgents = 5 },
+                        DefaultVisibility = "private", AllowedRepos = ["northwind/payments-api", "northwind/storefront"],
+                        AllowedPaths = ["~/code"], ExcludedPaths = ["~/code/scratch"],
+                    },
                     ["local"] = new Profile { ServerUrl = LocalServerUrl, AuthProvider = new AuthProviderStamp(AuthProvider.None, LocalServerUrl) },
                 },
             });
@@ -53,29 +65,35 @@ static partial class DocsShotScenes {
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["settings/1", "accounts/1"]));
             var accounts = new FakeAccountsService();
             accounts.Publish(new AccountsSnapshotDto("maya-mbp", 3, [
-                new("acc-1", "claude", "~/.claude", "~/.claude", "personal", "recording"),
-                new("acc-2", "claude", "~/.claude-northwind", "~/.claude-northwind", "northwind", "recording"),
-                new("acc-3", "codex", "~/.codex", "~/.codex", "main", "recording"),
+                Account("acc-1", "claude", "~/.claude", "personal", Usage(ClaudeStatusLineReading.LimitId, 34, 82)),
+                Account("acc-2", "claude", "~/.claude-northwind", "northwind", Usage(ClaudeStatusLineReading.LimitId, 12, 41)),
+                Account("acc-3", "codex", "~/.codex", "main", Usage(CodexRateLimits.DefaultLimitId, 27, 58)),
             ], [new("claude", "~/.claude", "~/.claude"), new("codex", "~/.codex", "~/.codex")]));
             var notifications = scene.Own(new NotificationSettingsService(config.PathTo("notifications.json")));
             await notifications.SaveAsync(new NotificationPreferences(true, true, false));
+            var store = new SettingsProfileStore(config.Root, "northwind", ServerUrl);
+            var harnessPage = harnesses ? await Harnesses(store) : null;
 
-            var vm = scene.Own(new SettingsViewModel(new SettingsProfileStore(config.Root, "northwind", ServerUrl),
+            var vm = scene.Own(new SettingsViewModel(store,
                 service, new ScriptedLocalControlOps(), (_, _) => Task.FromResult(false),
                 (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded()),
                 (_, _) => Task.FromResult(false), _ => Task.FromResult(false), true, Task.CompletedTask, (_, _) => Task.FromResult(true),
                 notificationSettings: notifications, notificationAccess: new FakeDesktopNotificationAccess(DesktopNotificationAccess.Allowed),
-                profiles: profiles) {
+                profiles: profiles, harnesses: harnessPage) {
                 Accounts = new AccountsSettingsViewModel(accounts,
                     (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded()), "maya-mbp", "northwind",
-                    () => [], _ => Task.FromResult<string?>(null), service.Status),
+                    () => [], _ => Task.FromResult<string?>(null), service.Status, usageClock: Observable.Return(Now)),
                 Search = localSearch ? LocalSearch(scene) : null,
-                Privacy = privacy ? Privacy(scene, config) : null,
+                Privacy = usageData ? UsageData(scene, config) : null,
+                About = about ? await About(service) : null,
             });
             if (vm.Search is { } search) scene.Settled = () => !search.Choice.Checking && (search.Choice.OllamaMissing || search.Choice.OllamaEnabled);
-            var window = scene.Present(new SettingsWindow { DataContext = vm, Height = height });
-            window.FindControl<TabControl>("SettingsTabs")!.SelectedItem = window.FindControl<TabItem>(tab)
-                ?? throw new InvalidOperationException($"Settings has no tab named '{tab}'");
+            var window = scene.Present(new SettingsWindow { DataContext = vm, Width = width, Height = height });
+            var page = window.FindControl<TabItem>(tab) ?? throw new InvalidOperationException($"Settings has no page named '{tab}'");
+            var tabs = window.FindControl<TabControl>("SettingsTabs")!;
+            // The Profiles page is a hidden tab, which the tab strip deselects while it builds itself.
+            tabs.SelectedItem = page;
+            window.Opened += (_, _) => tabs.SelectedItem = page;
             return scene;
         } catch {
             await scene.DisposeAsync();
@@ -83,12 +101,44 @@ static partial class DocsShotScenes {
         }
     }
 
-    static PrivacySettingsViewModel Privacy(DocsShotScene scene, TempConfigRoot config) {
+    static AccountViewDto Account(string id, string vendor, string directory, string label, AccountReadingDto reading) =>
+        new(id, vendor, directory, directory, label, "recording", SignIn: SignInStates.SignedIn, Generation: 1, Reading: reading);
+
+    /// A reading taken five minutes ago: the five-hour and weekly windows at the given use, each
+    /// resetting within a day so the figure reads the same in every time zone.
+    static AccountReadingDto Usage(string limitId, double fiveHour, double week) =>
+        new(1, [
+            new(limitId, 300, fiveHour, Now.AddHours(2).AddMinutes(40), Now.AddMinutes(-5)),
+            new(limitId, 10080, week, Now.AddHours(19).AddMinutes(15), Now.AddMinutes(-5)),
+        ], null, null, null);
+
+    /// Owned by the settings view model, which disposes it.
+    static async Task<HarnessesSettingsViewModel> Harnesses(SettingsProfileStore store) {
+        IReadOnlyDictionary<HarnessId, DetectedAgent> found = new Dictionary<HarnessId, DetectedAgent> {
+            [HarnessId.Claude] = new(true, true),
+            [HarnessId.Codex] = new(true, true),
+            [HarnessId.Cursor] = new(true, true),
+        };
+        var harnesses = new HarnessesSettingsViewModel(store, new FakeKcapCli(), _ => Task.FromResult(found),
+            isWired: id => id == HarnessId.Claude || id == HarnessId.Codex);
+        await harnesses.RescanAsync();
+        if (harnesses.Rows.Count != 3)
+            throw new InvalidOperationException($"desktop-settings-harnesses found {harnesses.Rows.Count} tools, not 3: {harnesses.Message}");
+        return harnesses;
+    }
+
+    static async Task<AboutSettingsViewModel> About(FakeDaemonClientService service) {
+        var about = new AboutSettingsViewModel(service, _ => Task.FromResult<string?>("1.4.0"));
+        await about.LoadAsync();
+        return about;
+    }
+
+    static PrivacySettingsViewModel UsageData(DocsShotScene scene, TempConfigRoot config) {
         var telemetry = TelemetryProbe.Start(TelemetryStartup.ForDesktopApp(null, AuthEndpoints.DefaultSignupUrl), config.Root).Telemetry;
         var privacy = scene.Own(new PrivacySettingsViewModel(telemetry, config.Root, new UsageDataNotice(telemetry, config.Root)));
         // The view model reads the process environment, which a figure must never show.
         if (privacy.Overridden is not null || !privacy.SendUsageData)
-            throw new InvalidOperationException($"desktop-settings-privacy needs usage data on and the switch free: {privacy.Overridden ?? "it resolved off"}");
+            throw new InvalidOperationException($"desktop-settings-usage-data needs usage data on and the switch free: {privacy.Overridden ?? "it resolved off"}");
         return privacy;
     }
 

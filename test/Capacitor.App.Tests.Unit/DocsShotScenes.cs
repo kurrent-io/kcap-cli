@@ -35,7 +35,8 @@ static partial class DocsShotScenes {
         "desktop-launcher", "desktop-pull-request", "desktop-work-context", "desktop-rail-grouped",
         "desktop-settings-notifications", "desktop-settings-accounts", "desktop-settings-profiles", "desktop-settings-search",
         "desktop-launch-approvals", "desktop-consent-prompt", "desktop-wizard-agents", "desktop-wizard-visibility",
-        "desktop-settings-privacy", "desktop-wizard-usage-data"];
+        "desktop-settings-privacy", "desktop-wizard-usage-data", "desktop-settings-usage-data", "desktop-settings-harnesses",
+            "desktop-settings-about"];
 
     const string ServerUrl = "https://northwind.kcap.ai";
     const string PaymentsRepo = "/Users/maya/dev/northwind/payments-api";
