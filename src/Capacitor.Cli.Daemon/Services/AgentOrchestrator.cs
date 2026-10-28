@@ -130,6 +130,11 @@ internal record AgentInstance(
     /// The select dialog on this agent's screen, or null. Written only from the PTY read loop.
     public TerminalDialogDto? TerminalDialog { get; set; }
 
+    /// The last dialog report sent to the server, which the next one waits behind; guarded by
+    /// <see cref="TerminalDialogReportGate"/>.
+    public Task TerminalDialogReport { get; set; } = Task.CompletedTask;
+    public readonly Lock TerminalDialogReportGate = new();
+
     /// The agent's own transcript — Claude's project .jsonl or Codex's rollout — resolved once
     /// by discovery and cached: the status payload and the Codex send-path probe both read it,
     /// and neither may scan a directory to do so. Null until discovery lands, and forever for a
@@ -2285,10 +2290,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // CreateActivityClock() gives a real launch, with a controllable time source.
             AgentActivityClock? activityClock = null,
             WorktreeInfo? worktree = null, WorkLocation work = WorkLocation.OwnedWorktree,
+            string vendor = "codex",
             string? borrowedSnapshotSource = null) {
         var agent = new AgentInstance(
-            id, prompt, model, null, "/repo", "codex",
-            new PtyHostedAgentRuntime("codex", pty ?? NoopPtyProcess.Instance, _time),
+            id, prompt, model, null, "/repo", vendor,
+            new PtyHostedAgentRuntime(vendor, pty ?? NoopPtyProcess.Instance, _time),
             worktree ?? new WorktreeInfo("/repo", "b", "/repo"),
             new CancellationTokenSource()) {
             Kind = kind, FlowRunId = flowRunId, FlowRole = flowRole, IsPrivate = isPrivate,
@@ -3684,6 +3690,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         agent.Runtime.NoteTerminalDialog(dialog is not null);
         if (Equals(agent.UsageLimit, usageLimit) && Equals(agent.TerminalDialog, dialog)) return;
         var limitReached = agent.UsageLimit is null && usageLimit is not null;
+        var dialogChanged = !Equals(agent.TerminalDialog, dialog);
         agent.UsageLimit     = usageLimit;
         agent.TerminalDialog = dialog;
         // The menu names no window: the signal constrains every exhausted window, or stands as unknown when none is.
@@ -3692,6 +3699,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 _time.GetUtcNow(), Fresh: false, [], null, null, [new LimitSignal(null, null)],
                 LimitReachedReported: false, LimitStateKnown: false));
         _statusNotifier.Pulse();
+        if (dialogChanged && !agent.IsServerSilent) _ = ReportTerminalDialogAsync(agent, dialog);
+    }
+
+    /// <summary>Sends one agent's dialog reports one at a time, in call order: the server keeps whichever lands
+    /// last, so a close overtaking the open before it would leave a closed dialog showing remotely.</summary>
+    Task ReportTerminalDialogAsync(AgentInstance agent, TerminalDialogDto? dialog) {
+        lock (agent.TerminalDialogReportGate) return agent.TerminalDialogReport = SendAfterAsync(agent.TerminalDialogReport);
+
+        async Task SendAfterAsync(Task previous) {
+            await previous.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+            await _server.ReportAgentTerminalDialogAsync(agent.Id, dialog);
+        }
     }
 
     /// <summary>
@@ -5820,6 +5839,19 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                             await _server.ReportAgentCommandsAsync(agent.Id, commands);
                         } catch (Exception ex) {
                             LogReportCommandsFailed(ex, agent.Id);
+                        }
+                    }
+
+                    // The server holds the open dialog in memory only, like the command list. The read
+                    // loop reports changes meanwhile, and one can land before this replay, so the replay
+                    // repeats until what it last sent is what the screen still shows.
+                    if (agent.TerminalDialog is { } dialog) {
+                        TerminalDialogDto? replayed = dialog;
+                        await ReportTerminalDialogAsync(agent, replayed);
+
+                        while (!Equals(agent.TerminalDialog, replayed)) {
+                            replayed = agent.TerminalDialog;
+                            await ReportTerminalDialogAsync(agent, replayed);
                         }
                     }
 
