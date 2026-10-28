@@ -21,7 +21,7 @@ public static class AccountSnapshotBuilder {
         foreach (var account in registry.Accounts) {
             if (!TryKey(account.Directory, out var key)) continue;
 
-            var state   = AccountWiring.State(account.Vendor, account.Directory, home);
+            var state   = AccountWiring.State(account, home);
             var reading = readings.TryGetValue(account.Id, out var file) && file.Reading.Generation == account.Generation ? file.Reading : null;
 
             accounts.Add(new(

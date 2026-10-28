@@ -317,4 +317,22 @@ public class BlockedMarkerTests {
         await Assert.That(reading.Blocked!.ClearedAt).IsNull();
         await Assert.That(ReadingMerge.IsBlocked(reading, At(61))).IsTrue();
     }
+
+    [Test]
+    public async Task LiveConstraints_drops_lapsed_and_keeps_unknown() {
+        var lapsed  = new BlockConstraintDto("codex", 300, At(300), At(10));
+        var unknown = new BlockConstraintDto(null, null, null, At(10));
+        var future  = new BlockConstraintDto("codex", 10080, At(5000), At(10));
+        var reading = new AccountReadingDto(1, [], null, null, new BlockedMarkerDto(At(10), null, [lapsed, unknown, future]));
+
+        await Assert.That(ReadingMerge.LiveConstraints(reading, At(301))).IsEquivalentTo([unknown, future]);
+    }
+
+    [Test]
+    public async Task LiveConstraints_is_empty_once_cleared() {
+        var future  = new BlockConstraintDto("codex", 10080, At(5000), At(10));
+        var reading = new AccountReadingDto(1, [], null, null, new BlockedMarkerDto(At(10), At(20), [future]));
+
+        await Assert.That(ReadingMerge.LiveConstraints(reading, At(21))).IsEmpty();
+    }
 }

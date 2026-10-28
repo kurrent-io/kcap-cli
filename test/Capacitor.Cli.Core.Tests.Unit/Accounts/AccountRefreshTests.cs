@@ -372,7 +372,7 @@ public class AccountRefreshTests {
     public async Task Limits_step_without_a_chatgpt_login_succeeds_with_the_probe_s_note() {
         Register(Codex("a@example.com", "idA"));
 
-        var outcome = await Refresh(new ProbeResult(SignInStates.SignedOut, null, null, null, null, "not signed in"));
+        var outcome = await Refresh(new ProbeResult(SignInStates.SignedOut, null, null, null, null, LimitsNote: "not signed in"));
 
         var limits = outcome.Steps.Single(s => s.Name == "limits");
         await Assert.That(limits.Succeeded).IsTrue();
@@ -449,5 +449,58 @@ public class AccountRefreshTests {
         await Assert.That(reading.Reading.Generation).IsEqualTo(2L);
         await Assert.That(reading.Reading.Windows.Single().WindowMinutes).IsEqualTo(10080);
         await Assert.That(reading.Sessions).IsEmpty();
+    }
+
+    static ProbeResult WithTrust(ProbeResult result, HookTrustObservation? trust) => result with { HookTrust = trust };
+
+    static readonly HookTrustObservation Trusted = new(HookTrustStates.Trusted, "fp1");
+
+    [Test]
+    public async Task A_trust_answer_is_stored_with_its_fingerprint() {
+        Register(Codex("a@example.com", "idA"));
+
+        await Refresh(WithTrust(Identity("a@example.com", "idA"), Trusted));
+
+        await Assert.That(Account.HookTrust).IsEqualTo(HookTrustStates.Trusted);
+        await Assert.That(Account.HookTrustFingerprint).IsEqualTo("fp1");
+    }
+
+    [Test]
+    public async Task No_trust_answer_keeps_the_stored_pair() {
+        Register(Codex("a@example.com", "idA") with { HookTrust = HookTrustStates.Untrusted, HookTrustFingerprint = "old" });
+
+        await Refresh(Identity("a@example.com", "idA"));
+
+        await Assert.That(Account.HookTrust).IsEqualTo(HookTrustStates.Untrusted);
+        await Assert.That(Account.HookTrustFingerprint).IsEqualTo("old");
+    }
+
+    [Test]
+    public async Task A_trust_answer_commits_beside_an_identity_error() {
+        Register(Codex("a@example.com", "idA"));
+
+        await Refresh(WithTrust(Failed(), Trusted));
+
+        await Assert.That(Account.RefreshError).IsEqualTo("boom");
+        await Assert.That(Account.HookTrust).IsEqualTo(HookTrustStates.Trusted);
+        await Assert.That(Account.HookTrustFingerprint).IsEqualTo("fp1");
+    }
+
+    [Test]
+    public async Task A_superseded_probe_stores_no_trust() {
+        Register(Codex("a@example.com", "idA"));
+
+        await Overlap(older: WithTrust(Identity("a@example.com", "idA"), Trusted), newer: Identity("a@example.com", "idA"));
+
+        await Assert.That(Account.HookTrust).IsNull();
+    }
+
+    [Test]
+    public async Task Codex_refresh_steps_are_still_identity_and_limits() {
+        Register(Codex("a@example.com", "idA"));
+
+        var outcome = await Refresh(WithTrust(Identity("a@example.com", "idA"), Trusted));
+
+        await Assert.That(outcome.Steps.Select(s => s.Name)).IsEquivalentTo(["identity", "limits"]);
     }
 }

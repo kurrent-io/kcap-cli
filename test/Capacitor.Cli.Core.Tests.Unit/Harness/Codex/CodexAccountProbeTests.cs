@@ -17,13 +17,28 @@ public class CodexAccountProbeTests {
 
     const string RateLimits = """{"jsonrpc":"2.0","id":3,"result":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":12,"windowDurationMins":300,"resetsAt":1793449575},"secondary":null,"planType":"pro"},"rateLimitsByLimitId":null,"ordinaryUsageAllowed":true,"accountId":"acct-1"}}""";
 
+    // The stub answers hooks/list with the id it read; the body is the JSON after the id.
+    static string Answer(string rest) => $"printf '%s\\n' \"{{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":$id,{rest.Replace("\"", "\\\"")}}}\"";
+
+    static readonly string HooksError = Answer("""
+        "error":{"code":-32601,"message":"Method not found"}
+        """.Trim());
+
+    static string HooksResult(string status, params string[] events) =>
+        Answer($$"""
+            "result":{"data":[{"cwd":"/x","hooks":[{{string.Join(",", events.Select(e => $$"""{"key":"k:{{e}}","eventName":"{{e}}","command":"kcap hook --codex","currentHash":"sha256:abc","trustStatus":"{{status}}"}"""))}}],"warnings":[],"errors":[]}]}
+            """.Trim());
+
+    static readonly string[] Critical = ["sessionStart", "stop", "permissionRequest"];
+
     string Log     => Tmp.PathTo("requests.log");
     string EnvFile => Tmp.PathTo("env.txt");
 
     /// <summary>A stub app-server answering each request line by its method; <paramref name="onAccountRead"/>
     /// replaces the plain answer to <c>account/read</c>.</summary>
-    CodexAccountProbe Probe(string account = ChatGptAccount, string limits = RateLimits, string? onAccountRead = null, TimeSpan? deadline = null) {
+    CodexAccountProbe Probe(string account = ChatGptAccount, string limits = RateLimits, string? onAccountRead = null, TimeSpan? deadline = null, string? hooksList = null) {
         var accountRead = onAccountRead ?? $"printf '%s\\n' '{account}'";
+        var hooksAnswer = hooksList ?? HooksError;
         Tmp.CreateExecutable("bin/codex", $$"""
             #!/bin/sh
             printf '%s' "${CODEX_HOME-<unset>}" > '{{EnvFile}}'
@@ -34,6 +49,9 @@ public class CodexAccountProbeTests {
                 *'"method":"initialize"'*) printf '%s\n' '{{Initialized}}' ;;
                 *'"method":"account/read"'*) {{accountRead}} ;;
                 *'"method":"account/rateLimits/read"'*) printf '%s\n' '{{limits}}' ;;
+                *'"method":"hooks/list"'*)
+                  id=${line#*'"id":'}; id=${id%%,*}
+                  {{hooksAnswer}} ;;
               esac
             done
             """);
@@ -225,5 +243,86 @@ public class CodexAccountProbeTests {
 
         await Assert.That(result.IdentityError).Contains("codex");
         await Assert.That(result.LimitsError).Contains("codex");
+    }
+
+    string ConfigToml => Home.PathTo(".codex-work/config.toml");
+
+    [Test]
+    public async Task Trusted_hooks_report_trusted_with_the_fingerprint() {
+        Skip.When(OperatingSystem.IsWindows(), "the stub codex is a POSIX shell script");
+        Directory.CreateDirectory(Home.PathTo(".codex-work"));
+        File.WriteAllText(ConfigToml, "model = \"x\"\n");
+
+        var result = await Probe(hooksList: HooksResult("trusted", Critical)).ProbeAsync(Account(), CancellationToken.None);
+
+        var fingerprint = CodexTrustFingerprint.Of(AccountLayouts.Codex(Home, Account().Directory));
+        await Assert.That(fingerprint).IsNotNull();
+        await Assert.That(result.HookTrust).IsEqualTo(new HookTrustObservation(HookTrustStates.Trusted, fingerprint!));
+        await Assert.That(File.ReadAllText(Log)).Contains("\"method\":\"hooks/list\"").And.Contains("\"cwds\"");
+    }
+
+    [Test]
+    public async Task Untrusted_hooks_report_untrusted() {
+        Skip.When(OperatingSystem.IsWindows(), "the stub codex is a POSIX shell script");
+
+        var result = await Probe(hooksList: HooksResult("untrusted", Critical)).ProbeAsync(Account(), CancellationToken.None);
+
+        await Assert.That(result.HookTrust!.Trust).IsEqualTo(HookTrustStates.Untrusted);
+    }
+
+    [Test]
+    public async Task Missing_critical_hook_reports_untrusted() {
+        Skip.When(OperatingSystem.IsWindows(), "the stub codex is a POSIX shell script");
+
+        var result = await Probe(hooksList: HooksResult("trusted", "sessionStart", "stop")).ProbeAsync(Account(), CancellationToken.None);
+
+        await Assert.That(result.HookTrust!.Trust).IsEqualTo(HookTrustStates.Untrusted);
+    }
+
+    [Test]
+    public async Task Unsupported_hooks_list_is_no_answer() {
+        Skip.When(OperatingSystem.IsWindows(), "the stub codex is a POSIX shell script");
+
+        var result = await Probe().ProbeAsync(Account(), CancellationToken.None);
+
+        await Assert.That(result.HookTrust).IsNull();
+        await Assert.That(result.IdentityError).IsNull();
+        await Assert.That(result.LimitsError).IsNull();
+        await Assert.That(result.Limits).IsNotNull();
+    }
+
+    [Test]
+    public async Task Hooks_list_timeout_is_no_answer_and_keeps_identity_and_limits() {
+        Skip.When(OperatingSystem.IsWindows(), "the stub codex is a POSIX shell script");
+        var probe = Probe(hooksList: ":", deadline: TimeSpan.FromSeconds(2));
+
+        var result = await probe.ProbeAsync(Account(), CancellationToken.None);
+
+        await Assert.That(result.HookTrust).IsNull();
+        await Assert.That(result.IdentityError).IsNull();
+        await Assert.That(result.LimitsError).IsNull();
+        await Assert.That(result.Identity!.Email).IsEqualTo("a@example.com");
+        await Assert.That(result.Limits).IsNotNull();
+    }
+
+    [Test]
+    public async Task Malformed_hooks_list_is_no_answer() {
+        Skip.When(OperatingSystem.IsWindows(), "the stub codex is a POSIX shell script");
+
+        var result = await Probe(hooksList: Answer("\"result\":\"nope\"")).ProbeAsync(Account(), CancellationToken.None);
+
+        await Assert.That(result.HookTrust).IsNull();
+    }
+
+    [Test]
+    public async Task A_file_edited_during_the_probe_is_no_answer() {
+        Skip.When(OperatingSystem.IsWindows(), "the stub codex is a POSIX shell script");
+        Directory.CreateDirectory(Home.PathTo(".codex-work"));
+        File.WriteAllText(ConfigToml, "model = \"x\"\n");
+        var probe = Probe(hooksList: $"printf 'edit\\n' >> '{ConfigToml}'; " + HooksResult("trusted", Critical));
+
+        var result = await probe.ProbeAsync(Account(), CancellationToken.None);
+
+        await Assert.That(result.HookTrust).IsNull();
     }
 }

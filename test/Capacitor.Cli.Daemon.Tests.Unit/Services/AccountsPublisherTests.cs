@@ -2,6 +2,7 @@ using System.Collections.Frozen;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Accounts.Readings;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -405,5 +406,108 @@ public class AccountsPublisherTests {
         File.Delete(path);
         await publisher.RebuildAsync(CancellationToken.None);
         await Assert.That(publisher.Current!.Accounts.Single().Reading).IsNull();
+    }
+
+    VendorAccount AddTrustedCodex(AccountStore store) {
+        var dir     = AccountDirectory.Normalize(Home.CreateDir(".codex-work"));
+        var account = new VendorAccount(Guid.NewGuid().ToString("N"), HarnessId.Codex, dir, "work", DateTimeOffset.UnixEpoch);
+        var paths   = AccountLayouts.Codex(Home, dir);
+        CodexHooksWriter.Install(paths.UserHooksJson);
+        account = account with {
+            HookTrust            = HookTrustStates.Trusted,
+            HookTrustFingerprint = CodexTrustFingerprint.Of(paths),
+        };
+        store.Mutate(r => (r with { Accounts = [.. r.Accounts, account] }, 0));
+        return account;
+    }
+
+    static string StateOf(AccountsPublisher publisher) => publisher.Current!.Accounts.Single().RecordingState;
+
+    [Test]
+    public async Task An_edit_to_config_toml_republishes_without_a_registry_change() {
+        var store   = Store();
+        var account = AddTrustedCodex(store);
+        var time    = new FakeTimeProvider();
+        using var publisher = Publisher(store, time);
+        await publisher.StartAsync(CancellationToken.None);
+        try {
+            await Assert.That(StateOf(publisher)).IsEqualTo("recording");
+            var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            publisher.Changed += _ => changed.TrySetResult();
+
+            Home.CreateFile(Path.GetRelativePath(Home.Path, AccountLayouts.Codex(Home, account.Directory).ConfigToml), "a = 1\n");
+            time.Advance(Poll);
+
+            await changed.Task.WaitAsync(Timeout);
+            await Assert.That(StateOf(publisher)).IsEqualTo("installed");
+        } finally {
+            await publisher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task An_edit_to_hooks_json_requests_a_refresh_of_that_account() {
+        var store   = Store();
+        var account = AddTrustedCodex(store);
+        var time    = new FakeTimeProvider();
+        using var publisher = Publisher(store, time);
+        var requested = new List<string>();
+        publisher.RequestRefresh = id => { lock (requested) requested.Add(id); };
+        await publisher.StartAsync(CancellationToken.None);
+        try {
+            var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            publisher.Changed += _ => changed.TrySetResult();
+
+            File.AppendAllText(AccountLayouts.Codex(Home, account.Directory).UserHooksJson, "\n");
+            time.Advance(Poll);
+            await changed.Task.WaitAsync(Timeout);
+
+            await WaitUntil(() => { lock (requested) return requested.Count > 0; });
+            time.Advance(Poll);
+            time.Advance(Poll);
+            string[] seen;
+            lock (requested) seen = [.. requested];
+            await Assert.That(seen).IsEquivalentTo([account.Id]);
+        } finally {
+            await publisher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task The_first_poll_requests_no_refresh() {
+        var store = Store();
+        AddTrustedCodex(store);
+        var time = new FakeTimeProvider();
+        using var publisher = Publisher(store, time);
+        var requested = 0;
+        publisher.RequestRefresh = _ => Interlocked.Increment(ref requested);
+        await publisher.StartAsync(CancellationToken.None);
+        try {
+            time.Advance(Poll);
+            time.Advance(Poll);
+            await Assert.That(Volatile.Read(ref requested)).IsEqualTo(0);
+        } finally {
+            await publisher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task A_claude_account_has_no_wiring_watch() {
+        var store = Store();
+        Add(store, "work");
+        var time = new FakeTimeProvider();
+        using var publisher = Publisher(store, time);
+        var requested = 0;
+        publisher.RequestRefresh = _ => Interlocked.Increment(ref requested);
+        await publisher.StartAsync(CancellationToken.None);
+        try {
+            var settings = AccountLayouts.Claude(Home, publisher.Current!.Accounts.Single().Directory).UserSettings;
+            Home.CreateFile(Path.GetRelativePath(Home.Path, settings), "{}");
+            time.Advance(Poll);
+            time.Advance(Poll);
+            await Assert.That(Volatile.Read(ref requested)).IsEqualTo(0);
+        } finally {
+            await publisher.StopAsync(CancellationToken.None);
+        }
     }
 }

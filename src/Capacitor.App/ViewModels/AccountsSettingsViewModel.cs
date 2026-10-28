@@ -35,12 +35,19 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
     AccountSettingsRow? _renaming;
     string _renameDraft = "";
     int _candidateReads;
+    readonly Dictionary<string, AccountUsageSlot> _slots = new(StringComparer.Ordinal);
+    readonly AccountUsageSlot _defaultSlot = new();
+    readonly TimeZoneInfo _zone = TimeZoneInfo.Local;
+    DateTimeOffset? _now;
+    AccountSummaryCard _readyCard = new("0 of 0", null, false);
+    AccountSummaryCard _nextResetCard = new("—", null, false);
+    AccountSummaryCard _needsFixCard = new("0", null, false);
 
     public AccountsSettingsViewModel(
             IAccountsService accounts, Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation,
             string daemonName, string? profileName, Func<IReadOnlyList<AccountCandidate>> discover,
             Func<CancellationToken, Task<string?>> pickDirectory, IObservable<AttachStatus> daemonStatus,
-            CancellationToken appLifetime = default) {
+            IObservable<DateTimeOffset>? usageClock = null, CancellationToken appLifetime = default) {
         _runMutation = runMutation;
         _daemonName = daemonName;
         _profileName = profileName;
@@ -53,6 +60,7 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
         AddCandidateCommand = ReactiveCommand.CreateFromTask<AccountCandidate>(AddCandidateAsync, idle).DisposeWith(_subscriptions);
         AddFromPickerCommand = ReactiveCommand.CreateFromTask<string>(AddFromPickerAsync, idle).DisposeWith(_subscriptions);
         AddDefaultCommand = ReactiveCommand.CreateFromTask<AccountSettingsRow>(AddDefaultAsync, idle).DisposeWith(_subscriptions);
+        RefreshCommand = ReactiveCommand.CreateFromTask<AccountSettingsRow>(RefreshAsync, idle).DisposeWith(_subscriptions);
         RewireCommand = ReactiveCommand.CreateFromTask<AccountSettingsRow>(RewireAsync, idle).DisposeWith(_subscriptions);
         RemoveCommand = ReactiveCommand.CreateFromTask<AccountSettingsRow>(RemoveAsync, idle).DisposeWith(_subscriptions);
         BeginRenameCommand = ReactiveCommand.Create<AccountSettingsRow>(BeginRename, idle).DisposeWith(_subscriptions);
@@ -74,7 +82,12 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
         accounts.Snapshot.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(snapshot => {
             _snapshot = snapshot;
             ApplyGroups(GroupsFor(snapshot));
+            UpdateUsage();
             Refresh();
+        }).DisposeWith(_subscriptions);
+        usageClock?.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(now => {
+            _now = now;
+            UpdateUsage();
         }).DisposeWith(_subscriptions);
     }
 
@@ -84,6 +97,21 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
             this.RaiseAndSetIfChanged(ref _groups, value);
             this.RaisePropertyChanged(nameof(UnplacedNotice));
         }
+    }
+
+    public AccountSummaryCard ReadyCard {
+        get => _readyCard;
+        private set => this.RaiseAndSetIfChanged(ref _readyCard, value);
+    }
+
+    public AccountSummaryCard NextResetCard {
+        get => _nextResetCard;
+        private set => this.RaiseAndSetIfChanged(ref _nextResetCard, value);
+    }
+
+    public AccountSummaryCard NeedsFixCard {
+        get => _needsFixCard;
+        private set => this.RaiseAndSetIfChanged(ref _needsFixCard, value);
     }
 
     public bool CanManage {
@@ -138,6 +166,7 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
     public ReactiveCommand<AccountCandidate, Unit> AddCandidateCommand { get; }
     public ReactiveCommand<string, Unit> AddFromPickerCommand { get; }
     public ReactiveCommand<AccountSettingsRow, Unit> AddDefaultCommand { get; }
+    public ReactiveCommand<AccountSettingsRow, Unit> RefreshCommand { get; }
     public ReactiveCommand<AccountSettingsRow, Unit> RewireCommand { get; }
     public ReactiveCommand<AccountSettingsRow, Unit> RemoveCommand { get; }
     public ReactiveCommand<AccountSettingsRow, Unit> BeginRenameCommand { get; }
@@ -190,6 +219,7 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
         MutationVerb.AccountRemove => ("Removed", "remove", "Removing"),
         MutationVerb.AccountRename => ("Renamed", "rename", "Renaming"),
         MutationVerb.AccountRewire => ("Re-wired", "re-wire", "Re-wiring"),
+        MutationVerb.AccountRefresh => ("Refreshed", "refresh", "Refreshing"),
         _                          => throw new ArgumentOutOfRangeException(nameof(verb), verb, "not an account verb"),
     };
 
@@ -204,6 +234,9 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
 
     Task RewireAsync(AccountSettingsRow row) =>
         row.Id is { } id ? RunAsync(row.Vendor, MutationVerb.AccountRewire, row.Label, new AccountArgs(null, null, id, null)) : Task.CompletedTask;
+
+    Task RefreshAsync(AccountSettingsRow row) =>
+        row.Id is { } id ? RunAsync(row.Vendor, MutationVerb.AccountRefresh, row.Label, new AccountArgs(null, null, id, null)) : Task.CompletedTask;
 
     Task RemoveAsync(AccountSettingsRow row) =>
         row.Id is { } id ? RunAsync(row.Vendor, MutationVerb.AccountRemove, row.Label, new AccountArgs(null, null, id, null)) : Task.CompletedTask;
@@ -262,13 +295,57 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
         }
     }
 
-    static IReadOnlyList<AccountVendorGroup> GroupsFor(AccountsSnapshotDto? snapshot) =>
-        snapshot is null ? [] : [
+    IReadOnlyList<AccountVendorGroup> GroupsFor(AccountsSnapshotDto? snapshot) {
+        if (snapshot is null) return [];
+
+        var accounts = (snapshot.Accounts ?? []).DistinctBy(a => a.Id).ToDictionary(a => a.Id, StringComparer.Ordinal);
+        foreach (var gone in _slots.Keys.Where(id => !accounts.ContainsKey(id)).ToArray()) _slots.Remove(gone);
+
+        AccountUsageSlot SlotFor(string id) => _slots.TryGetValue(id, out var slot) ? slot : _slots[id] = new AccountUsageSlot();
+
+        return [
             .. Vendors.Select(vendor => new AccountVendorGroup(vendor.VendorId, HarnessRegistry.LabelOf(vendor), [
-                .. AccountRows.For(snapshot, vendor.VendorId)
-                    .Select(r => new AccountSettingsRow(r.Id, r.Vendor, r.Directory, r.Label, r.RecordingState, r.IsDefault)),
+                .. AccountRows.For(snapshot, vendor.VendorId).Select(r => r.Id is { } id && accounts.TryGetValue(id, out var account)
+                    ? new AccountSettingsRow(id, r.Vendor, r.Directory, r.Label, r.RecordingState,
+                        account.Email, account.Plan, account.RefreshError ?? account.LimitsError, SlotFor(id), r.IsDefault)
+                    : new AccountSettingsRow(r.Id, r.Vendor, r.Directory, r.Label, r.RecordingState, null, null, null, _defaultSlot, r.IsDefault)),
             ])),
         ];
+    }
+
+    void UpdateUsage() {
+        var accounts = _snapshot?.Accounts ?? [];
+        if (_now is not { } now) {
+            SetCards(accounts, null);
+            return;
+        }
+
+        foreach (var account in accounts)
+            if (_slots.TryGetValue(account.Id, out var slot)) slot.View = AccountUsage.Project(account, now, _zone);
+
+        SetCards(accounts, now);
+    }
+
+    void SetCards(AccountViewDto[] accounts, DateTimeOffset? now) {
+        var ordered = accounts.OrderBy(a => a.Label, StringComparer.Ordinal).ThenBy(a => a.Directory, StringComparer.Ordinal).ToArray();
+
+        var ready = now is { } at
+            ? ordered.Where(a => AccountUsage.Project(a, at, _zone).Ready).Select(a => a.Label).ToArray()
+            : [];
+        ReadyCard = new($"{ready.Length} of {ordered.Length}", ready.Length == 0 ? null : string.Join(", ", ready), false);
+
+        var next = now is { } n
+            ? ordered.Select(a => (Account: a, Window: AccountUsage.NextResetWindow(a, n))).Where(x => x.Window is not null)
+                .OrderBy(x => x.Window!.ResetsAt).FirstOrDefault()
+            : default;
+        NextResetCard = next.Window is { ResetsAt: { } resets } window
+            ? new(UsageText.Reset(resets, now!.Value, _zone), $"{next.Account.Label} · {UsageText.WindowLabel(window.WindowMinutes)}", false)
+            : new("—", null, false);
+
+        var fixes = ordered.Select(a => (Account: a, Reason: AccountUsage.NeedsFix(a))).Where(x => x.Reason is not null).ToArray();
+        NeedsFixCard = new(fixes.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            fixes.Length == 0 ? null : $"{fixes[0].Account.Label} · {fixes[0].Reason}", fixes.Length > 0);
+    }
 
     // A resent snapshot listing the same rows leaves the list alone, so an open menu or a rename in
     // progress is not rebuilt under the person using it.

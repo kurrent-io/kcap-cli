@@ -7,7 +7,7 @@ namespace Capacitor.Cli.Core.Harness.Codex;
 /// snake_case <c>rate_limits</c>, an app-server camelCase snapshot (<c>account/rateLimits/updated</c>), and a
 /// whole <c>account/rateLimits/read</c> response.</summary>
 public static class CodexRateLimits {
-    const string DefaultLimitId   = "codex";
+    public const string DefaultLimitId = "codex";
     const string RateLimitReached = "rate_limit_reached";
 
     // DateTimeOffset.MinValue and MaxValue in Unix seconds; FromUnixTimeSeconds throws outside them.

@@ -1,6 +1,7 @@
-using Capacitor.Cli.Daemon.Harness.Codex;
+using System.Text.Json;
+using Capacitor.Cli.Core.Harness.Codex;
 
-namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Codex;
+namespace Capacitor.Cli.Core.Tests.Unit.Harness.Codex;
 
 public class CodexHookTrustTests {
     const string KcapCmd = "kcap hook --codex";
@@ -132,5 +133,28 @@ public class CodexHookTrustTests {
         var ov = ((CodexHookTrustDecision.SeedAndRestart) d).StateOverride;
         await Assert.That(ov).Contains("\"C:\\\\codex\\\\hooks.json:s:0:0\"");
         await Assert.That(ov).Contains("trusted_hash=\"sha256:q\\\"x\"");
+    }
+
+    [Test]
+    public async Task ParseHooksList_reads_every_group_and_tolerates_missing_fields() {
+        using var doc = JsonDocument.Parse("""
+            {"data":[
+              {"cwd":"/a","hooks":[
+                {"key":"k1","eventName":"sessionStart","command":"kcap hook --codex","currentHash":"sha256:1","trustStatus":"trusted"},
+                {"key":"k2","eventName":"stop","command":"kcap hook --codex","trustStatus":"untrusted"}]},
+              {"cwd":"/b","hooks":[
+                {"key":"k3","eventName":"permissionRequest","command":"kcap hook --codex","currentHash":"sha256:3"}]}
+            ]}
+            """);
+
+        var entries = CodexHookTrust.ParseHooksList(doc.RootElement);
+
+        await Assert.That(entries.Count).IsEqualTo(3);
+        await Assert.That(entries[0]).IsEqualTo(new CodexHookEntry("k1", "sessionStart", "kcap hook --codex", "sha256:1", "trusted"));
+        await Assert.That(entries[1].CurrentHash).IsNull();
+        await Assert.That(entries[2].TrustStatus).IsEqualTo("");
+
+        using var empty = JsonDocument.Parse("{}");
+        await Assert.That(CodexHookTrust.ParseHooksList(empty.RootElement).Count).IsEqualTo(0);
     }
 }

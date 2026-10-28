@@ -7,7 +7,8 @@ namespace Capacitor.Cli.Core.Harness.Codex;
 
 /// <summary>Asks <c>codex app-server</c>, started under the account's <c>CODEX_HOME</c>, for the signed-in
 /// account (<c>account/read</c>) and its usage (<c>account/rateLimits/read</c>). Codex makes the authenticated
-/// call; kcap never reads Codex's auth files. The two steps fail independently.</summary>
+/// call; kcap never reads Codex's auth files. The two steps fail independently. Afterwards it asks
+/// <c>hooks/list</c> whether Codex trusts kcap's hooks, as a side answer that never fails either step.</summary>
 public sealed class CodexAccountProbe(HarnessRegistry harnesses, UserHome home, TimeProvider time) : IAccountProbe {
     const int MethodNotFound = -32601;
 
@@ -36,6 +37,9 @@ public sealed class CodexAccountProbe(HarnessRegistry harnesses, UserHome home, 
         psi.ArgumentList.Add("app-server");
         VendorProcess.PlanHome(psi, HarnessId.Codex, account.Directory, home);
 
+        var paths             = AccountLayouts.Codex(home, account.Directory);
+        var fingerprintBefore = CodexTrustFingerprint.Of(paths);
+
         string? startError = null;
         using var process = CliProcess.TryStart(psi, message => startError = message);
         if (process is null) return Failed(startError ?? "could not start codex app-server");
@@ -58,6 +62,7 @@ public sealed class CodexAccountProbe(HarnessRegistry harnesses, UserHome home, 
         string?        limitsNote    = null;
         JsonElement?   limits        = null;
         DateTimeOffset limitsAt      = default;
+        HookTrustObservation? hookTrust = null;
 
         try {
             await rpc.RequestAsync("initialize", w => {
@@ -87,6 +92,8 @@ public sealed class CodexAccountProbe(HarnessRegistry harnesses, UserHome home, 
                 }
             }
             limitsDone = true;
+
+            hookTrust = await ReadHookTrustAsync(rpc, psi.WorkingDirectory, paths, fingerprintBefore).ConfigureAwait(false);
         } catch (OperationCanceledException) when (!ct.IsCancellationRequested) {
             var timeout = $"codex app-server did not answer within {Deadline.TotalSeconds:0.#}s";
             if (!identityDone) identityError = timeout;
@@ -114,7 +121,34 @@ public sealed class CodexAccountProbe(HarnessRegistry harnesses, UserHome home, 
             ? new AccountIdentity(a.Str("email"), null, null, a.Str("planType"), routingId ?? usageId)
             : null;
 
-        return new ProbeResult(identityError is null ? signIn : null, identity, identityError, observation, limitsError, limitsNote);
+        return new ProbeResult(identityError is null ? signIn : null, identity, identityError, observation, limitsError, hookTrust, limitsNote);
+    }
+
+    /// <summary>Null when Codex gives no usable answer or either Codex file changed or was unreadable around it:
+    /// a verdict that cannot be tied to the bytes it was given for is no verdict.</summary>
+    static async Task<HookTrustObservation?> ReadHookTrustAsync(Rpc rpc, string cwd, CodexPaths paths, string? before) {
+        if (before is null) return null;
+
+        JsonElement result;
+        try {
+            result = await rpc.RequestAsync("hooks/list", w => {
+                w.WriteStartArray("cwds");
+                w.WriteStringValue(cwd);
+                w.WriteEndArray();
+            }).ConfigureAwait(false);
+        } catch (RpcError) {
+            return null;
+        }
+
+        if (result.ValueKind != JsonValueKind.Object || result.Arr("data") is null) return null;
+
+        var after = CodexTrustFingerprint.Of(paths);
+        if (after is null || after != before) return null;
+
+        var trust = CodexHookTrust.Classify(CodexHookTrust.ParseHooksList(result)) is CodexHookTrustDecision.Proceed
+            ? HookTrustStates.Trusted
+            : HookTrustStates.Untrusted;
+        return new HookTrustObservation(trust, after);
     }
 
     /// <summary>The sign-in, the account object when it is a ChatGPT login (the only kind that names one), and

@@ -1,6 +1,7 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Accounts.Readings;
+using Capacitor.Cli.Core.Harness;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -25,6 +26,8 @@ internal sealed partial class AccountsPublisher(
     string?                    _hostId;
     (long Length, long Ticks)? _stat;
     (string AccountId, long Length, long Ticks)[] _readingsStat = [];
+    (string AccountId, string Path, long Length, long Ticks)[]? _wiringStat;
+    (string AccountId, string Path)[] _wiringPaths = [];
     bool                       _settled;
     bool                       _loadWarned;
     bool                       _hostWarned;
@@ -104,7 +107,8 @@ internal sealed partial class AccountsPublisher(
 
             var stat         = Stat(store.RegistryPath);
             var readingsStat = store.Readings.Stat();
-            var unchanged    = stat == _stat && readingsStat.SequenceEqual(_readingsStat);
+            var wiringStat   = WiringStat(_wiringPaths);
+            var unchanged    = stat == _stat && readingsStat.SequenceEqual(_readingsStat) && _wiringStat is not null && wiringStat.SequenceEqual(_wiringStat);
             if (unchanged && _settled && !force) return;
 
             // Two same-length writes inside one filesystem timestamp tick stat alike, so a stat is
@@ -120,6 +124,14 @@ internal sealed partial class AccountsPublisher(
             } finally {
                 if (!read) _settled = false;
             }
+
+            if (!read) return;
+
+            // A registry change can add or move accounts, so the stats are taken again over the paths it loaded.
+            var previous = _wiringStat;
+            var current  = WiringStat(_wiringPaths);
+            _wiringStat = current;
+            RequestWiringRefreshes(previous ?? wiringStat, current, baseline: previous is null);
         } finally {
             _gate.Release();
         }
@@ -135,6 +147,15 @@ internal sealed partial class AccountsPublisher(
             _loadWarned = true;
             return false;
         }
+
+        _wiringPaths = [
+            .. registry.Accounts
+                .Where(a => a.Vendor == HarnessId.Codex)
+                .SelectMany(a => {
+                    var paths = AccountLayouts.Codex(home, a.Directory);
+                    return new[] { (a.Id, paths.UserHooksJson), (a.Id, paths.ConfigToml) };
+                }),
+        ];
 
         var readings = KeepUnreadable(store.Readings.LoadAll(), readingsStat, registry);
         var next     = AccountSnapshotBuilder.Build(registry, hostId, config.DefaultDirectories, home, readings);
@@ -189,6 +210,36 @@ internal sealed partial class AccountsPublisher(
 
         _blockedSeen = seen;
     }
+
+    // Codex's trust answer is bound to these two files, so an edit to either outdates a Recording state
+    // until a refresh asks again. Accounts new to the stat, and the first stat, are baselines.
+    void RequestWiringRefreshes(
+        (string AccountId, string Path, long Length, long Ticks)[] previous,
+        (string AccountId, string Path, long Length, long Ticks)[] current,
+        bool                                                       baseline
+    ) {
+        if (baseline) return;
+
+        var changed = current.Where(c => previous.Any(p => p.AccountId == c.AccountId && p.Path == c.Path && p != c))
+            .Select(c => c.AccountId)
+            .Distinct(StringComparer.Ordinal);
+
+        foreach (var id in changed) {
+            try {
+                RequestRefresh?.Invoke(id);
+            } catch (Exception ex) {
+                LogHandlerFailed(logger, ex);
+            }
+        }
+    }
+
+    static (string AccountId, string Path, long Length, long Ticks)[] WiringStat((string AccountId, string Path)[] paths) =>
+        [
+            .. paths.Select(p => {
+                var info = new FileInfo(p.Path);
+                return info.Exists ? (p.AccountId, p.Path, info.Length, info.LastWriteTimeUtc.Ticks) : (p.AccountId, p.Path, -1L, 0L);
+            }),
+        ];
 
     void Announce(AccountsSnapshotDto snapshot) {
         if (Changed is not { } changed) return;
