@@ -1006,6 +1006,24 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// Claude Code stores its compaction summary as a user record; the row must not read as the user's.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_compaction_summary_renders_as_a_conversation_compacted_note() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var path = Tmp.CreateFile("t.jsonl", [
+                """{"type":"user","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"content":"This session is being continued from a previous conversation."}}""",
+            ]);
+            await h.PushAsync(Dto(path));
+
+            var note = (SystemNoteItem)h.Chat.Items.Single();
+            await Assert.That(note.Label).IsEqualTo(SystemNoteItem.CompactSummaryLabel);
+            await Assert.That(note.Text).IsEqualTo("This session is being continued from a previous conversation.");
+            await h.TeardownAsync();
+        });
+    }
+
     /// A subagent's hand-back is that agent's report, so its row names the agent rather than the user.
     [Test]
     [NotInParallel("AvaloniaSession")]
