@@ -51,8 +51,6 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     public string? SelectedSessionKey {
         get => _selectedSessionKey;
         set {
-            // The window's close and the app's quit clear the selection after the app has
-            // disposed the rail.
             if (_disposables.IsDisposed) return;
             this.RaiseAndSetIfChanged(ref _selectedSessionKey, value);
             _selectedSessionKeyChanges.OnNext(value);
@@ -65,6 +63,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     public RailScope Scope {
         get => _scope;
         set {
+            if (_disposables.IsDisposed) return;
             if (IsScopeLocked) value = RailScope.Mine;
             if (_scope == value) return;
             this.RaiseAndSetIfChanged(ref _scope, value);
@@ -86,6 +85,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     public RailState State {
         get => _state;
         set {
+            if (_disposables.IsDisposed) return;
             if (_state == value) return;
             this.RaiseAndSetIfChanged(ref _state, value);
             this.RaisePropertyChanged(nameof(IsAll));
@@ -104,6 +104,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     public RailGrouping Grouping {
         get => _grouping;
         set {
+            if (_disposables.IsDisposed) return;
             if (_grouping == value) return;
             this.RaiseAndSetIfChanged(ref _grouping, value);
             this.RaisePropertyChanged(nameof(GroupingLabel));
@@ -127,6 +128,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     public RailSort Sort {
         get => _sort;
         set {
+            if (_disposables.IsDisposed) return;
             if (_sort == value) return;
             this.RaiseAndSetIfChanged(ref _sort, value);
             this.RaisePropertyChanged(nameof(SortLabel));
@@ -147,6 +149,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     public bool Descending {
         get => _descending;
         set {
+            if (_disposables.IsDisposed) return;
             if (_descending == value) return;
             this.RaiseAndSetIfChanged(ref _descending, value);
             this.RaisePropertyChanged(nameof(DirectionLabel));
@@ -307,6 +310,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     /// Another user's remembered shape, or this user's set now that the lane has named them: applied
     /// without writing it back.
     public void ApplyPreferences(RailPreferences preferences) {
+        if (_disposables.IsDisposed) return;
         _applying = true;
         try {
             Scope = preferences.Scope;
@@ -428,5 +432,6 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
 
     internal static string WorktreeKeyFor(AgentRow row) => row.CheckoutKey;
 
+    /// A quit keeps driving the setters and commands after this, so each one ignores a disposed rail.
     public void Dispose() => _disposables.Dispose();
 }

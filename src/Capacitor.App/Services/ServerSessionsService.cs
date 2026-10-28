@@ -169,7 +169,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
         get => _scope.Value;
         set {
             lock (_lock) {
-                if (_scope.Value == value) return;
+                if (_disposed || _scope.Value == value) return;
                 _pages = 1;
                 _ended.Clear();
                 // Under Mine the unfiltered live set is ownership evidence; the previous scope's copy

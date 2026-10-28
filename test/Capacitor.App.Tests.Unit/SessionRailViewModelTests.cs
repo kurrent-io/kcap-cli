@@ -350,6 +350,29 @@ public class SessionRailViewModelTests {
         });
     }
 
+    /// A quit can still drive the rail's controls after the app has disposed it; that must not
+    /// throw, reach the service or persist.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Control_changes_after_dispose_are_ignored() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var (directory, sessions, _, persisted, rail) = BuildWithControls();
+            using (directory) using (sessions) {
+                rail.Dispose();
+                rail.SetScopeCommand.Execute(RailScope.Team).Subscribe();
+                rail.Scope = RailScope.Team;
+                rail.State = RailState.Ended;
+                rail.Grouping = RailGrouping.Date;
+                rail.Sort = RailSort.Title;
+                rail.Descending = !rail.Descending;
+                rail.ApplyPreferences(new RailPreferences(RailScope.Team, RailState.Ended, RailGrouping.Date, RailSort.Title, false, []));
+
+                await Assert.That(sessions.Scope).IsEqualTo(RailScope.Mine);
+                await Assert.That(persisted).IsEmpty();
+            }
+        });
+    }
+
     /// A local checkout and a remote agent on the same GitHub repo land in one repo group — the
     /// remote session carries the machine badge, the local one doesn't.
     [Test]
