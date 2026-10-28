@@ -44,6 +44,32 @@ public class AgentOrchestratorTerminalDialogTests {
         await Assert.That(server.TerminalDialogReports[1].Dialog).IsNull();
     }
 
+    /// <summary>The read loop does not wait for a report, so the closing must queue behind an open still in
+    /// flight rather than race it to the server.</summary>
+    [Test]
+    public async Task A_closing_is_not_sent_until_the_open_before_it_is() {
+        var server = new CaptureServerConnection { TerminalDialogReportHold = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        await using var orch = Build(server);
+
+        var pty   = new ScriptedPtyProcess();
+        var agent = orch.SeedAgentForTest("hosted", pty: pty, vendor: "claude");
+        var loop  = orch.ReadAgentOutputForTest(agent);
+
+        pty.Emit(Dialog);
+        await WaitHarness.PollUntilAsync(() => server.TerminalDialogReports.Count == 1);
+        pty.Emit(Composer);
+        await WaitHarness.PollUntilAsync(() => agent.TerminalDialog is null);
+
+        await Assert.That(server.TerminalDialogReports.Count).IsEqualTo(1);
+
+        server.TerminalDialogReportHold.SetResult();
+        await WaitHarness.PollUntilAsync(() => server.TerminalDialogReports.Count == 2);
+        pty.Exit();
+        await loop.WaitAsync(WaitHarness.Bounded);
+
+        await Assert.That(server.TerminalDialogReports[1].Dialog).IsNull();
+    }
+
     /// <summary>The dialog closing while its replay is on the way must not leave the server holding it.</summary>
     [Test]
     public async Task A_reconnect_replay_ends_on_the_dialog_the_screen_shows() {
