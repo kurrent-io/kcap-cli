@@ -336,7 +336,10 @@ public sealed partial class WorkContextViewModel {
         IsStale = read.ItemFailed || read.TopologyFailed || read.SummaryFailed;
     }
 
+    bool _hasSessionFacts;
+
     void ApplySessionFacts(SessionSummaryDto? summary) {
+        _hasSessionFacts = summary is not null;
         Tokens = SessionFactText.Tokens(summary?.Stats);
         Cost = SessionFactText.Cost(summary?.Stats);
         ContextUse = SessionFactText.Context(summary?.Stats);

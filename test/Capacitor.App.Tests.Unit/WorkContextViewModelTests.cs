@@ -233,6 +233,24 @@ public class WorkContextViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task An_unreachable_poll_after_a_plan_gated_read_marks_its_facts_stale() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(WorkContextRead.Of(WorkContextReadKind.NotInPlan) with { Summary = UsageSummary() });
+            await h.PushAsync(Dto());
+            h.Source.Enqueue(WorkContextRead.Of(WorkContextReadKind.Unreachable));
+
+            await h.TickAsync();
+
+            await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.NotInPlan);
+            await Assert.That(h.Vm.IsStale).IsTrue();
+            await Assert.That(h.Vm.Tokens).IsEqualTo("1.5M");
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task A_failed_summary_keeps_the_last_figures() {
         await RunOnUiAsync(async () => {
             var h = new Harness();

@@ -436,7 +436,9 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
                 return;
             case WorkContextReadKind.SessionUnknown: ApplyTerminal(WorkContextPhase.SessionUnknown); return;
             case WorkContextReadKind.Unreachable:
-                if (Phase is WorkContextPhase.Ready or WorkContextPhase.NoWorkItem) IsStale = true;
+                // A plan-gated pane that holds session facts goes stale rather than blank.
+                if (Phase is WorkContextPhase.Ready or WorkContextPhase.NoWorkItem
+                    || (Phase == WorkContextPhase.NotInPlan && _hasSessionFacts)) IsStale = true;
                 else Phase = WorkContextPhase.Unreachable;
                 return;
             case WorkContextReadKind.Ready:
