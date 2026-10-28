@@ -51,18 +51,15 @@ public static partial class PageText {
 
         if (lt + 1 < html.Length && html[lt + 1] is '!' or '?') return After(html, ">", lt + 2);
 
-        var tag = OpenOrClose().Match(html, lt);
-
-        if (!tag.Success) {
+        if (ReadTag(html, lt) is not { } tag) {
             if (!Suppressed(open)) text.Append('<');
 
             return lt + 1;
         }
 
-        var name = tag.Groups["name"].Value.ToLowerInvariant();
-        var end  = lt + tag.Length;
+        var (name, end) = (tag.Name, tag.End);
 
-        if (tag.Groups["close"].Success) {
+        if (tag.IsClose) {
             Close(name, open, text);
 
             return end;
@@ -73,11 +70,11 @@ public static partial class PageText {
         // Script and style bodies are raw text: a tag inside one is not markup.
         if (RawText.Contains(name)) return Before(html, $"</{name}", end);
 
-        var suppressed = Suppressed(open) || NonContent.Contains(name) || IsHidden(tag);
+        var suppressed = Suppressed(open) || NonContent.Contains(name) || tag.IsHidden;
 
         if (!suppressed && Block.Contains(name)) text.Append('\n');
 
-        if (tag.Groups["self"].Value != "/" && !Void.Contains(name)) open.Add(new(name, suppressed));
+        if (!tag.IsSelfClosing && !Void.Contains(name)) open.Add(new(name, suppressed));
 
         return end;
     }
@@ -100,10 +97,75 @@ public static partial class PageText {
         else if (Block.Contains(element.Name)) text.Append('\n');
     }
 
-    /// <summary>Read from the attribute names, so <c>hidden</c> inside a quoted value — a class name,
-    /// a title — hides nothing.</summary>
-    static bool IsHidden(Match open) =>
-        open.Groups["attr"].Captures.Any(a => a.Value.Equals("hidden", StringComparison.OrdinalIgnoreCase));
+    readonly record struct Tag(string Name, bool IsClose, bool IsSelfClosing, bool IsHidden, int End);
+
+    /// <summary>
+    /// The tag at <paramref name="lt"/> read as a browser's tokenizer reads it, or null when the
+    /// <c>&lt;</c> starts none — only a letter, or <c>/</c> and a letter, starts one. Attributes are
+    /// split on whitespace or <c>/</c>, a quoted value is consumed whole whatever follows it, and
+    /// <c>hidden</c> counts only as an attribute name, never inside a value. A tag the page ends inside
+    /// runs to the end, as the browser drops it.
+    /// </summary>
+    static Tag? ReadTag(string html, int lt) {
+        var at      = lt + 1;
+        var isClose = at < html.Length && html[at] == '/';
+
+        if (isClose) at++;
+
+        if (at >= html.Length || !char.IsAsciiLetter(html[at])) return null;
+
+        var name = ReadName(html, ref at, "\t\n\f\r />").ToLowerInvariant();
+
+        var (hidden, selfClosing) = (false, false);
+
+        while (at < html.Length) {
+            var c = html[at];
+
+            if (c == '>') return new(name, isClose, selfClosing, hidden, at + 1);
+
+            if (char.IsWhiteSpace(c) || c == '/') {
+                selfClosing = c == '/';
+                at++;
+
+                continue;
+            }
+
+            selfClosing = false;
+
+            // A name is at least one character, so a stray "=" starts one rather than looping here.
+            var attribute = html[at] + ReadName(html, ref at, "\t\n\f\r />=", skipFirst: true);
+
+            hidden |= attribute.Equals("hidden", StringComparison.OrdinalIgnoreCase);
+
+            while (at < html.Length && char.IsWhiteSpace(html[at])) at++;
+
+            if (at >= html.Length || html[at] != '=') continue;
+
+            at++;
+
+            while (at < html.Length && char.IsWhiteSpace(html[at])) at++;
+
+            if (at < html.Length && html[at] is '"' or '\'') {
+                var close = html.IndexOf(html[at], at + 1);
+
+                at = close < 0 ? html.Length : close + 1;
+            } else {
+                ReadName(html, ref at, "\t\n\f\r >");
+            }
+        }
+
+        return new(name, isClose, false, hidden, html.Length);
+    }
+
+    static string ReadName(string html, ref int at, string stops, bool skipFirst = false) {
+        var from = at;
+
+        if (skipFirst) at++;
+
+        while (at < html.Length && !stops.Contains(html[at])) at++;
+
+        return html[(skipFirst ? from + 1 : from)..at];
+    }
 
     static int After(string html, string marker, int from) {
         var at = html.IndexOf(marker, from, StringComparison.Ordinal);
@@ -173,12 +235,6 @@ public static partial class PageText {
         ["td"]     = FrozenSet.ToFrozenSet(["td", "th", "tr", .. TableSections]),
         ["th"]     = FrozenSet.ToFrozenSet(["td", "th", "tr", .. TableSections])
     }.ToFrozenDictionary();
-
-    // Anchored where the scan stands. Attribute values, quoted or not, are consumed whole, so a ">"
-    // inside one does not end the tag.
-    [GeneratedRegex(@"\G<(?<close>/)?(?<name>[a-z][a-z0-9-]*)(?:\s+(?<attr>[^\s""'=<>/]+)(?:\s*=\s*(?:""[^""]*""|'[^']*'|[^\s""'=<>`]+))?)*\s*(?<self>/?)>",
-                    RegexOptions.IgnoreCase)]
-    private static partial Regex OpenOrClose();
 
     [GeneratedRegex(@"[\s ]+")]
     private static partial Regex Spaces();

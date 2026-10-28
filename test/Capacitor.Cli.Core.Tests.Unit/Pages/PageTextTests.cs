@@ -42,6 +42,11 @@ public class PageTextTests {
     [Arguments("<div hidden>Secret</span>Still secret</div><p>Visible</p>", "Visible")]
     [Arguments("<template><template>inner</template>Secret</template><p>Visible</p>", "Visible")]
     [Arguments("<a title=\"1 > 0\">Visible</a>", "Visible")]
+    [Arguments("<div hidden class=\"a\"id=\"b\">Secret</div><p>Visible</p>", "Visible")]
+    [Arguments("<div/hidden>Secret</div><p>Visible</p>", "Visible")]
+    [Arguments("<div class=\"a\"hidden>Secret</div><p>Visible</p>", "Visible")]
+    [Arguments("<script/x>payload</script><p>Visible</p>", "Visible")]
+    [Arguments("<p>1 < 2 and 3 <4</p>", "1 < 2 and 3 <4")]
     [Arguments("<section hidden><div>a</div><script>x='</section>'</script>b</section><p>Visible</p>", "Visible")]
     public async Task Hidden_is_read_from_the_attribute_and_ends_where_a_browser_closes_the_element(string html, string expected) =>
         await Assert.That(PageText.FromHtml(html)).IsEqualTo(expected);
@@ -51,6 +56,6 @@ public class PageTextTests {
         await Assert.That(PageText.FromHtml("<div id=\"root\"></div><script>root.textContent = 'drawn'</script>")).IsEmpty();
 
     [Test]
-    public async Task A_page_that_is_not_html_comes_back_as_its_text() =>
-        await Assert.That(PageText.FromHtml("just words <unclosed")).IsEqualTo("just words <unclosed");
+    public async Task A_page_that_is_not_html_comes_back_as_its_text_less_a_tag_it_ends_inside() =>
+        await Assert.That(PageText.FromHtml("just words, 1 < 2 <unclosed")).IsEqualTo("just words, 1 < 2");
 }
