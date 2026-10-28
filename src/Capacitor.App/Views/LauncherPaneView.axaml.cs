@@ -74,7 +74,8 @@ public partial class LauncherPaneView : UserControl {
 
     // Repository picker: one flyout item per ListRepositoriesAsync entry — leaf name over full
     // path, remembered-harness pill on the right. The scratch entry and
-    // the folder-picker affordance sit last, each behind a separator. Built as a kcapPanel Flyout
+    // the add affordance sit last, each behind a separator; for a remote machine the add is a typed
+    // path, since the folder picker only sees this machine. Built as a kcapPanel Flyout
     // (same shape as the agent picker) rather than MenuFlyout — Fluent's radio MenuItem chrome
     // fights the dark palette.
     async void OnRepositoryChipClick(object? sender, RoutedEventArgs e) {
@@ -92,10 +93,16 @@ public partial class LauncherPaneView : UserControl {
             rows.Children.Add(RepositoryRow(vm, option, muted, flyout));
         }
         rows.Children.Add(ChoiceSeparator());
-        rows.Children.Add(ChoiceRow("Add repository…", selected: false, () => {
-            flyout.Hide();
-            _ = AddRepositoryAsync(vm);
-        }));
+        if (vm.RemoteMachineSelected)
+            rows.Children.Add(ChoiceRow($"Enter a path on {vm.SelectedMachine}…", selected: false, () => {
+                flyout.Hide();
+                ShowRemotePathEntry(vm, anchor);
+            }));
+        else
+            rows.Children.Add(ChoiceRow("Add repository…", selected: false, () => {
+                flyout.Hide();
+                _ = AddRepositoryAsync(vm);
+            }));
 
         ShowMenu(flyout, anchor);
     }
@@ -244,6 +251,47 @@ public partial class LauncherPaneView : UserControl {
         if (folder.TryGetLocalPath() is not { } path) return;
 
         await vm.SelectRepositoryAsync(path);
+    }
+
+    void ShowRemotePathEntry(HomeViewModel vm, Control anchor) {
+        var input = new TextBox { PlaceholderText = "/path/to/repository", MinWidth = 320 };
+        input.Classes.Add("kcapField");
+        AutomationProperties.SetName(input, $"Repository path on {vm.SelectedMachine}");
+        var error = new TextBlock {
+            FontSize = 11.5, Foreground = Brush("KcapDangerBrush"), IsVisible = false,
+            TextWrapping = TextWrapping.Wrap, MaxWidth = 320,
+        };
+        var hint = new TextBlock {
+            Text = "Checked on that machine when the session starts.",
+            FontSize = 11.5, Foreground = Brush("KcapMutedBrush"),
+        };
+
+        var body = new StackPanel { Spacing = 6, Margin = new Thickness(10) };
+        body.Children.Add(input);
+        body.Children.Add(error);
+        body.Children.Add(hint);
+        var flyout = PanelFlyout(body, minWidth: 340);
+
+        input.KeyDown += async (_, e) => {
+            if (e.Key == Key.Escape) {
+                e.Handled = true;
+                flyout.Hide();
+                return;
+            }
+            if (e.Key != Key.Enter) return;
+            e.Handled = true;
+            try {
+                var refusal = await vm.EnterRemoteRepositoryAsync(input.Text ?? "");
+                error.Text = refusal;
+                error.IsVisible = refusal is not null;
+                if (refusal is null) flyout.Hide();
+            } catch (Exception ex) {
+                Console.Error.WriteLine($"kcap: enter remote repository failed: {ex}");
+            }
+        };
+        flyout.Opened += (_, _) => input.Focus();
+
+        ShowMenu(flyout, anchor);
     }
 
     // Effort picker over HostedHarnessCatalog.EffortLadder; Default hands the choice back to the
