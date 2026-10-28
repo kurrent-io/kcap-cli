@@ -195,6 +195,16 @@ public class WindowsServiceManagerTests {
         await Assert.That(_pipe.Verbs).IsEmpty();
     }
 
+    /// An invalid cap must reach the install that reports it, not match an uncapped enrollment as current
+    [Test]
+    public async Task EnrolledAs_refuses_an_agent_cap_an_install_would_refuse() {
+        _store.Current = new ServiceEnrollment("laptop", Daemon, "work", null, null);
+        var manager = Manager();
+
+        await Assert.That(manager.EnrolledAs("laptop", "work", null)).IsTrue();
+        await Assert.That(() => manager.EnrolledAs("laptop", "work", "abc")).Throws<ArgumentException>();
+    }
+
     [Test]
     public async Task Query_maps_the_services_answer() {
         _store.Current = new ServiceEnrollment("laptop", Daemon, null, null, null);

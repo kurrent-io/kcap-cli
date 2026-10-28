@@ -47,10 +47,11 @@ sealed class WindowsServiceManager(
 
     /// <summary>Whether the enrollment under <paramref name="serviceId"/> already pins this profile and agent cap,
     /// as an install with these values would write them</summary>
+    /// <exception cref="ArgumentException">The agent cap is not one an install would accept</exception>
     internal bool EnrolledAs(string serviceId, string? profile, string? maxAgents) =>
         Enrolled(serviceId) is { } e
         && string.Equals(e.Profile, string.IsNullOrEmpty(profile) ? null : profile, StringComparison.Ordinal)
-        && e.MaxAgents == MaxAgents(maxAgents is null ? [] : ["--max-agents", maxAgents]);
+        && e.MaxAgents == MaxAgents(DaemonServiceCommands.ExtraArgs(maxAgents));
 
     public ServiceStatus Status(string serviceId) {
         var query = Query(serviceId);
