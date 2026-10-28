@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Pty;
 
@@ -41,6 +42,22 @@ public class AgentOrchestratorTerminalDialogTests {
         await Assert.That(shown!.Heading).IsEqualTo("Allow external CLAUDE.md file imports?");
         await Assert.That(shown.Options).IsEquivalentTo(new[] { "No, disable external imports", "Yes, allow external imports" });
         await Assert.That(server.TerminalDialogReports[1].Dialog).IsNull();
+    }
+
+    /// <summary>The dialog closing while its replay is on the way must not leave the server holding it.</summary>
+    [Test]
+    public async Task A_reconnect_replay_ends_on_the_dialog_the_screen_shows() {
+        var server = new CaptureServerConnection();
+        await using var orch = Build(server);
+
+        var agent = orch.SeedAgentForTest("hosted", vendor: "claude");
+        agent.TerminalDialog = new TerminalDialogDto("Allow?", "", ["No", "Yes"], 0, "");
+        server.OnTerminalDialogReport = (_, sent) => { if (sent is not null) agent.TerminalDialog = null; };
+
+        await orch.ReRegisterAgentsAsync();
+
+        await Assert.That(server.TerminalDialogReports.Select(r => r.Dialog?.Heading)).IsEquivalentTo(
+            new[] { "Allow?", null }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
     }
 
     [Test]

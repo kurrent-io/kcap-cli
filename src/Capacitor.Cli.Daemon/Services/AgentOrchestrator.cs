@@ -5826,8 +5826,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                         }
                     }
 
-                    // The server holds the open dialog in memory only, like the command list.
-                    if (agent.TerminalDialog is { } dialog) await _server.ReportAgentTerminalDialogAsync(agent.Id, dialog);
+                    // The server holds the open dialog in memory only, like the command list. The read
+                    // loop reports changes meanwhile, and one can land before this replay, so the replay
+                    // repeats until what it last sent is what the screen still shows.
+                    if (agent.TerminalDialog is { } dialog) {
+                        TerminalDialogDto? replayed = dialog;
+                        await _server.ReportAgentTerminalDialogAsync(agent.Id, replayed);
+
+                        while (!Equals(agent.TerminalDialog, replayed)) {
+                            replayed = agent.TerminalDialog;
+                            await _server.ReportAgentTerminalDialogAsync(agent.Id, replayed);
+                        }
+                    }
 
                     // No replay from here: the agent's cloud sink was asked to resync above, and
                     // it sends a reset ahead of the ring on the same ordered lane as live output.

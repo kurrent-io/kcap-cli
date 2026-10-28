@@ -467,8 +467,12 @@ sealed class CaptureServerConnection : ServerConnection {
 
     public List<(string AgentId, TerminalDialogDto? Dialog)> TerminalDialogReports { get; } = [];
 
+    /// <summary>Runs as each dialog report is sent, before the next one can be.</summary>
+    public Action<string, TerminalDialogDto?>? OnTerminalDialogReport { get; set; }
+
     public override Task ReportAgentTerminalDialogAsync(string agentId, TerminalDialogDto? dialog) {
         lock (TerminalDialogReports) TerminalDialogReports.Add((agentId, dialog));
+        OnTerminalDialogReport?.Invoke(agentId, dialog);
         return Task.CompletedTask;
     }
 
