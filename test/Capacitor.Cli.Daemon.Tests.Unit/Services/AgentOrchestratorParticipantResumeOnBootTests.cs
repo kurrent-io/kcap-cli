@@ -392,20 +392,26 @@ public class AgentOrchestratorParticipantResumeOnBootTests {
     }
 
     /// <summary>The deadline also covers a participant that has published but whose registration or
-    /// readiness has not settled: it is stopped and reported failed, so it cannot hold the lane.</summary>
+    /// readiness has not settled: it is stopped and reported failed, so it cannot hold the lane. The failure
+    /// goes out after the stop's own status, which would otherwise clear it.</summary>
     [Test]
     public async Task The_deadline_stops_a_published_participant_whose_resume_has_not_settled() {
         var f = Build(configure: c => c.ResumeReadinessWindow = TimeSpan.FromMinutes(5));
         await using var _ = f.Orch;
         f.Orch.ParticipantRecoveryDeadline = TimeSpan.FromMilliseconds(300);
+        f.Server.ShutdownReportGate = new TaskCompletionSource();
         Participant(f, "reviewer-1");
         f.Orch.LoadResumeLedger();
         var lane = f.Orch.ResumeOnBootAsync(CancellationToken.None);
 
+        await WaitHarness.PollUntilAsync(() => f.Server.ShutdownReports.Count == 1);
+        var completedBeforeFailure = f.Server.StatusChangedCalls.Contains(("reviewer-1", "Completed"));
+        f.Server.ShutdownReportGate.SetResult();
         await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
         await WaitHarness.PollUntilAsync(() => f.Orch.GetAgentForTest("reviewer-1") is null);
 
-        await Assert.That(f.Server.ShutdownReports.Select(r => r.Reason)).Contains("resume_failed:recovery_deadline");
+        await Assert.That(f.Server.ShutdownReports.Single().Reason).IsEqualTo("resume_failed:recovery_deadline");
+        await Assert.That(completedBeforeFailure).IsTrue();
         await Assert.That(f.Orch.ParticipantLedger!.TryRead("reviewer-1")).IsNull();
     }
 

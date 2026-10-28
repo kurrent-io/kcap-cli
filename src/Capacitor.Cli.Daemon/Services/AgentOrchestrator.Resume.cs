@@ -779,8 +779,10 @@ internal partial class AgentOrchestrator {
             // Published, but its registration or readiness has not settled: a candidate is removed once it does.
             if (discard.Live is { } late) {
                 WithdrawAttempt(entry.AgentId);
-                if (!entry.Launch.IsPrivate) await ReportResumeFailedAsync(entry, "recovery_deadline", null, ct);
+                await DropHeldInputAsync(entry.AgentId);
                 await StopAgentCoreAsync(late);
+                // After the stop, whose Completed status would clear the failure on the server.
+                if (!entry.Launch.IsPrivate) await ReportResumeFailedAsync(entry, "recovery_deadline", null, ct);
                 continue;
             }
 
