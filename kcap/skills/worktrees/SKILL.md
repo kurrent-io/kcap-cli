@@ -111,4 +111,4 @@ git -C wt/x reset                                 # rebuilds the index from HEAD
 
 Confirm the branch with the user first when the folder name and branch might
 not match, and run it on the side that will use the worktree, or enable
-relative links first so both sides can
+relative links first so both sides can open it
