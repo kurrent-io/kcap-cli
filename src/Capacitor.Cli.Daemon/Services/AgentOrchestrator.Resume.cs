@@ -835,6 +835,8 @@ internal partial class AgentOrchestrator {
     /// records its death and the flow heals, then removed — or, while a process of it may still be running,
     /// kept as a tombstone that holds its worktree until the reaper resolves it.</summary>
     async Task FailParticipantAsync(ResumeLedgerEntry entry, string reason, int? exitCode, CancellationToken ct) {
+        LogParticipantNotResumed(entry.AgentId, LastErrorOf(reason, exitCode));
+
         if (!entry.Launch.IsPrivate) await ReportResumeFailedAsync(entry, reason, exitCode, ct);
 
         if (IsUnresolved(entry.AgentId)) {
@@ -1647,4 +1649,7 @@ internal partial class AgentOrchestrator {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Resume ledger: failed writing the terminal ring for agent {AgentId}")]
     partial void LogResumeRingFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Resume: flow participant {AgentId} was not resumed: {Reason}")]
+    partial void LogParticipantNotResumed(string agentId, string reason);
 }
