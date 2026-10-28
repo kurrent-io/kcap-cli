@@ -14,9 +14,9 @@ description: >-
 # Connect kcap
 
 kcap records a team's coding-agent sessions and serves them back as
-tools: search past sessions, team memory, analytics, work items, plans and
-knowledge. `kcap` is its CLI. This skill installs `kcap` and signs it in; what
-happens after that depends on the machine.
+tools: search past sessions, team memory, analytics, work items, plans,
+knowledge and shareable pages. `kcap` is its CLI. This skill installs `kcap`
+and signs it in; what happens after that depends on the machine.
 
 **Where am I?**
 
@@ -147,6 +147,8 @@ this VM do: spawn the command with its args, speak JSON-RPC 2.0 over
 newline-delimited stdin/stdout, send `initialize` (protocol version
 `2024-11-05`, then `notifications/initialized`), then `tools/list` or
 `tools/call`, with a 60-second timeout and the result printed as JSON.
+If the connector already exists, bring `connector.yaml` and `CONNECTOR.md` up to
+date with the text below; keep a helper that works.
 For tool calls, accept `-` as the third argument and read the JSON arguments
 from stdin with `json.load(sys.stdin)`. Start the MCP server with an argv list
 and `shell=False`; never interpolate JSON values into a shell command.
@@ -158,7 +160,7 @@ field names; these are the servers, commands and args:
 name: kcap
 description: >-
   kcap: the team's recorded coding-agent sessions, team memory,
-  analytics, work items, plans and curated knowledge.
+  analytics, work items, plans, curated knowledge and shareable pages.
 servers:
   kcap-sessions:
     transport: stdio
@@ -184,6 +186,10 @@ servers:
     transport: stdio
     command: /home/hatch/workspace/kcap/node_modules/.bin/kcap
     args: [mcp, knowledge]
+  kcap-pages:
+    transport: stdio
+    command: /home/hatch/workspace/kcap/node_modules/.bin/kcap
+    args: [mcp, pages]
 ```
 
 `CONNECTOR.md`:
@@ -191,7 +197,7 @@ servers:
 ```markdown
 # kcap
 
-Six stdio MCP servers over the team's kcap workspace. Call a tool with
+Seven stdio MCP servers over the team's kcap workspace. Call a tool with
 `python3 mcp_call.py <server> <tool> - < args.json`, where `args.json` contains
 the JSON arguments. Pass JSON through stdin rather than shell quoting it.
 List tools with
@@ -205,9 +211,12 @@ List tools with
 | kcap-workitems | work items, breakdowns, loose ends, next work |
 | kcap-plans | declared plan documents and tasks |
 | kcap-knowledge | curated facts and skills |
+| kcap-pages | `publish_page`, `list_my_pages`, `set_page_visibility`; for a page that collects answers, `get_page_results`, `await_page_responses`, `close_page_responses` |
 
 This VM is not a git checkout: pass `"repo": "all"` to `search_sessions` and
-`list_repo_sessions`, or they search nothing. Sign-in is `kcap`'s own
+`list_repo_sessions`, or they search nothing. A call is cut off after 60
+seconds, so pass `await_page_responses` a `timeout_s` of 50 or less and call it
+again to keep waiting. Sign-in is `kcap`'s own
 (`~/.config/kcap/`); if a call returns 401, run `kcap status` and follow the
 kcap skill's reconnect step.
 ```
@@ -237,11 +246,12 @@ Keep `~/workspace/capacitor` and its logs and recording data in place.
 name: kcap
 description: >-
   Use kcap — the team's recorded coding-agent sessions, team
-  memory, analytics, work items, plans and curated knowledge — through the
-  `kcap` custom connector. Triggers: "what did my team work on", "what did we
-  do last week", "find the session where", "did we ever", "who worked on",
-  "recap session", "what's next", "team memory", "save this for the team",
-  "how much did we spend on agents", and any question about past coding work.
+  memory, analytics, work items, plans, curated knowledge and shareable
+  pages — through the `kcap` custom connector. Triggers: "what did my team
+  work on", "what did we do last week", "find the session where", "did we
+  ever", "who worked on", "recap session", "what's next", "team memory", "save
+  this for the team", "how much did we spend on agents", "make this a kcap
+  page", "share this as a page", and any question about past coding work.
 metadata:
   includeInPrompt: true
 ---
@@ -272,18 +282,24 @@ contents in a shell command. Read `CONNECTOR.md` there for the servers and tools
    names the reason — fix the SQL and retry.
 5. **Memory:** search before saving; save with an explicit `audience` and
    `global: true`, since nothing here is scoped to a repository.
-6. **Never paste `~/.config/kcap/` or any token** into the chat or a file.
-7. **Never start `kcap daemon`**, run `kcap import`, or install hooks. This VM
+6. **Pages:** write one self-contained HTML file under `~/workspace` and pass
+   its `path` to `publish_page`. The page is served with no network access, so
+   inline every style, script and image. It is private to the user until
+   `visibility` says otherwise; set `org` or `scoped` only when the user names
+   who should open it. Give the user the returned link, and publish a revision
+   with `update_id` so the link stays the same.
+7. **Never paste `~/.config/kcap/` or any token** into the chat or a file.
+8. **Never start `kcap daemon`**, run `kcap import`, or install hooks. This VM
    records only the chats the user puts in scope through the
    `kcap-recording` skill: if the user asks to record their chats, copy
    `~/workspace/kcap/node_modules/@kurrent/kcap/kcap/muse-assistant/kcap-recording/SKILL.md`
    to `~/workspace/skills/kcap-recording/SKILL.md` and follow its
    "Granting" section.
-8. **A 401 or "token" error:** run `~/workspace/kcap/node_modules/.bin/kcap
+9. **A 401 or "token" error:** run `~/workspace/kcap/node_modules/.bin/kcap
    status`. If the sign-in has lapsed, tell the user to say "reconnect
    kcap"; the connect-kcap skill runs `kcap login --device` and shows
    them the code.
-9. Cite what you found: session title, date, author, and the `session_id`, so
+10. Cite what you found: session title, date, author, and the `session_id`, so
    the user can open it in kcap.
 ```
 
@@ -332,7 +348,8 @@ section: it reads the consent scope back to the user, runs
 ### B8. Tell the user
 
 - kcap is connected: ask me things like "what did my team work on this
-  week", "find the session where we fixed X", or "save this for the team".
+  week", "find the session where we fixed X", "save this for the team", or
+  "make this a kcap page".
 - Nothing on this VM is recorded until you ask: say "record my chats" and I
   will read the exact scope back to you before anything is sent.
 - Everything lives under your home — `~/workspace/kcap`, `~/.config/kcap`,
