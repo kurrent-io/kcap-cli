@@ -1495,6 +1495,8 @@ internal partial class AgentOrchestrator {
             McpAllowlist          = participant.McpAllowlist,
             Tools                 = participant.Tools,
             CodexPosture          = null,
+            // The resume resolves the account the entry recorded; a review-flow launch naming one is refused.
+            AccountId             = null,
             ReviewerCertification = participant.Certification is { } certification
                 ? certification with { ExpectedDaemonConnectionId = connectionId ?? "" }
                 : null

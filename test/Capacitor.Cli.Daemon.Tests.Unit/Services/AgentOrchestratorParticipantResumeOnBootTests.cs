@@ -62,7 +62,8 @@ public class AgentOrchestratorParticipantResumeOnBootTests {
 
     ResumeLedgerEntry Participant(
             Fixture f, string agentId, ResumeState state = ResumeState.Resuming, DateTimeOffset? resumingAt = null,
-            string? predecessor = "instance-old", string? vendorSession = "vendor-session-1", string? worktree = null) {
+            string? predecessor = "instance-old", string? vendorSession = "vendor-session-1", string? accountId = null,
+            string? worktree = null) {
         var stamp = resumingAt ?? TimeProvider.System.GetUtcNow();
         var launch = new ResumeLaunchDescriptor(
             Prompt: "review this", Model: "default", Effort: null, RepoPath: f.Repo,
@@ -71,7 +72,8 @@ public class AgentOrchestratorParticipantResumeOnBootTests {
             McpConfigPath: null, Title: "review", IsPrivate: false, Origin: "server",
             RequesterUserId: "user-1", RequesterDisplay: "User One", ConsentSource: "default",
             ConsentAt: stamp.ToString("O"), FlowRunId: "flow-1", FlowRole: "reviewer",
-            WorktreeBranch: $"capacitor/{agentId}", WorktreeIsStandalone: true, WorktreeSourceRepo: f.Repo);
+            WorktreeBranch: $"capacitor/{agentId}", WorktreeIsStandalone: true, WorktreeSourceRepo: f.Repo,
+            AccountId: accountId);
         var entry = new ResumeLedgerEntry(
             ResumeLedgerEntry.CurrentSchemaVersion, agentId, "daemon-1", stamp, stamp, "cursor", "pty",
             $"session-{agentId}", vendorSession, launch, state, Attempts: 0, LastError: null,
@@ -218,6 +220,22 @@ public class AgentOrchestratorParticipantResumeOnBootTests {
         var agent = f.Orch.GetAgentForTest("reviewer-1")!;
         await Assert.That(agent.Kind).IsEqualTo(LaunchKind.ReviewFlow);
         await Assert.That(agent.FlowRunId).IsEqualTo("flow-1");
+    }
+
+    /// <summary>A reviewer runs on the default account and its entry records that account; naming it on the
+    /// relaunch would trip the refusal of a review-flow launch that names an account.</summary>
+    [Test]
+    public async Task A_participant_recorded_on_the_default_account_resumes() {
+        var f = Build();
+        await using var _ = f.Orch;
+        Participant(f, "reviewer-1", accountId: "account-default");
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        await Assert.That(f.Factory.Contexts.Single().AgentId).IsEqualTo("reviewer-1");
+        await Assert.That(f.Orch.GetAgentForTest("reviewer-1")).IsNotNull();
+        await Assert.That(f.Server.ShutdownReports).IsEmpty();
     }
 
     [Test]
