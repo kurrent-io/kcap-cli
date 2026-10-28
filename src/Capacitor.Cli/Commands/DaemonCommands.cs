@@ -370,7 +370,8 @@ public sealed class DaemonCommands(
         }
 
         var yes     = args.Contains("--yes") || args.Contains("-y");
-        var direct  = args.Contains("--direct");
+        // Only kcap-service needs it; under launchd or systemd a stop that skips the manager is restarted
+        var direct  = OperatingSystem.IsWindows() && args.Contains("--direct");
         var request = new ShutdownRequestDto(args.Contains("--keep-agents") ? "keep" : "end", "final");
 
         if (name is not null) return await StopByNameAsync(name, request, direct);

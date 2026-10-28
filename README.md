@@ -1259,7 +1259,7 @@ kcap daemon status                  # list all running daemons
 kcap daemon status --name laptop    # show status of a specific daemon (incl. its running version and any resuming/interrupted agents)
 kcap daemon stop --name laptop      # stop just that one, ending its hosted agents
 kcap daemon stop --name laptop --keep-agents   # stop it but keep its agents for the next start to resume
-kcap daemon stop --name laptop --direct        # ask the daemon itself even when a service manages it (the Windows service's own graceful stop; otherwise use `daemon service stop`)
+kcap daemon stop --name laptop --direct        # Windows only: ask the daemon itself even when a service manages it (the Windows service's own graceful stop; otherwise use `daemon service stop`)
 kcap daemon stop --yes              # stop all running daemons unattended (otherwise prompts on multi)
 kcap daemon restart --name laptop              # restart now, stopping its agents and resuming them on the new daemon; refuses while an eval, a launch or a flow round is in progress
 kcap daemon restart --name laptop --when-idle  # queue the restart until the daemon hosts no agents at all and no eval or launch is in progress
