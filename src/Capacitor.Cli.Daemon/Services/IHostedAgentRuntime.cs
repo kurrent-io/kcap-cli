@@ -58,6 +58,10 @@ internal interface IHostedAgentRuntime : IAsyncDisposable {
     /// </summary>
     bool EmitsTerminalOutput { get; }
 
+    /// <summary>Whether a dialog read off the terminal is holding the agent's input. Called on the
+    /// output read loop for the chunk it was read from, before the next chunk is read.</summary>
+    void NoteTerminalDialog(bool showing) { }
+
     /// <summary>
     /// Terminal byte stream consumed by the orchestrator read loop. PTY runtimes yield real
     /// terminal output; the ACP runtime yields an empty stream until a follow-up adds a terminal
