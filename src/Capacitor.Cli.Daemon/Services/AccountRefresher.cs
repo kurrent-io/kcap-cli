@@ -21,7 +21,7 @@ internal sealed partial class AccountRefresher(
     readonly Dictionary<string, ITimer?>        _deferred     = new(StringComparer.Ordinal);
     readonly Dictionary<string, DateTimeOffset> _lastFinished = new(StringComparer.Ordinal);
     readonly Dictionary<string, DateTimeOffset> _lastSoon     = new(StringComparer.Ordinal);
-    readonly HashSet<string>                    _soonDeferred = new(StringComparer.Ordinal);
+    readonly HashSet<string>                    _soonPending  = new(StringComparer.Ordinal);
     string?                                     _running;
     bool                                        _stopped;
     bool                                        _started;
@@ -76,15 +76,13 @@ internal sealed partial class AccountRefresher(
             var now = time.GetUtcNow();
             var due = !_stopped && !_queued.Contains(accountId) && _running != accountId
                    && !(_lastSoon.TryGetValue(accountId, out var last) && now - last < Cooldown);
+            // Whichever probe serves this request spends the budget when it starts.
+            if (!_stopped) _soonPending.Add(accountId);
             if (due) {
-                _lastSoon[accountId] = now;
                 if (_deferred.Remove(accountId, out var timer)) timer?.Dispose();
                 EnqueueHeld(accountId);
                 return;
             }
-
-            // The deferred probe that serves this request spends the budget when it runs.
-            if (!_stopped) _soonDeferred.Add(accountId);
         }
 
         Request(accountId);
@@ -108,7 +106,7 @@ internal sealed partial class AccountRefresher(
                 lock (_lock) {
                     _queued.Remove(id);
                     _running = id;
-                    if (_soonDeferred.Remove(id)) _lastSoon[id] = time.GetUtcNow();
+                    if (_soonPending.Remove(id)) _lastSoon[id] = time.GetUtcNow();
                 }
                 _progress.Pulse();
 

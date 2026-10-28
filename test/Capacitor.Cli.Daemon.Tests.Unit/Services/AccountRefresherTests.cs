@@ -328,6 +328,32 @@ public class AccountRefresherTests {
     }
 
     [Test]
+    public async Task The_soon_budget_runs_from_when_the_probe_starts() {
+        Register(Work);
+        Register(Spare);
+        var probe = new CountingProbe(_time);
+        using var refresher = Refresher(probe);
+        await refresher.StartAsync(CancellationToken.None);
+        try {
+            await Until(refresher, () => refresher.Finished == 2);
+
+            probe.Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            refresher.RequestSoon(Work);
+            refresher.RequestSoon(Spare);
+            _time.Advance(3 * Minute);
+            probe.Gate.SetResult();
+            await Until(refresher, () => refresher.Finished == 4);
+
+            _time.Advance(Cooldown - 2 * Minute);
+            refresher.RequestSoon(Spare);
+            await Idle(refresher);
+            await Assert.That(probe[Spare]).IsEqualTo(2);
+        } finally {
+            await refresher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
     public async Task The_soon_budget_is_per_account() {
         Register(Work);
         Register(Spare);
