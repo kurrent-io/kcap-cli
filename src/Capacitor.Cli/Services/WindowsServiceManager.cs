@@ -26,6 +26,7 @@ sealed class WindowsServiceManager(
 
     readonly UnitFileWriter _write = writeFile ?? ((path, content, encoding) => ServiceFiles.WriteOwnerOnly(path, content, encoding));
     readonly Func<string, bool> _stopDaemon = stopDaemon ?? StopKeepingAgents;
+    (string Over, ServiceEnrollment Enrollment)? _displaced;
 
     public string Describe() => "Windows service kcap-service";
 
@@ -121,10 +122,10 @@ sealed class WindowsServiceManager(
             return false;
         }
 
-        // A rename's enrollment replaces the old name's, and nothing reads that name's environment again
-        if (previous?.EnvironmentFile is { } replaced && !string.Equals(replaced, file.Path, StringComparison.OrdinalIgnoreCase)) {
-            try { File.Delete(replaced); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-        }
+        // One enrollment per user, so a new name displaces the old one; uninstalling the new name puts it back
+        _displaced = previous is not null && !string.Equals(previous.Name, spec.ServiceId, StringComparison.Ordinal)
+            ? (spec.ServiceId, previous)
+            : null;
 
         if (!startNow && pipe.Send("stop", Slow) is not { Ok: true }) {
             // Enrolled either way; what is left to say is whether its daemon runs
@@ -175,6 +176,25 @@ sealed class WindowsServiceManager(
 
     public bool Uninstall(string serviceId, out string? error) {
         if (Enrolled(serviceId) is not { } enrollment) {
+            // A name a rename displaced keeps only the environment file it was installed with
+            try { File.Delete(EnvironmentFilePath(config, serviceId)); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            error = null;
+            return true;
+        }
+
+        // Re-enrolling replaces the daemon in place: an unenroll first could leave the service with no user and
+        // so remove it before the displaced enrollment is back
+        if (_displaced is { } displaced && displaced.Over == serviceId
+            && (displaced.Enrollment.EnvironmentFile is not { } kept || File.Exists(kept))) {
+            _displaced = null;
+            enrollments.Write(displaced.Enrollment);
+            if (pipe.Send("enroll", Slow) is not { Ok: true }) {
+                enrollments.Write(enrollment);
+                error = $"kcap-service did not take back '{displaced.Enrollment.Name}'";
+                return false;
+            }
+            if (enrollment.EnvironmentFile is { } own) File.Delete(own);
             error = null;
             return true;
         }

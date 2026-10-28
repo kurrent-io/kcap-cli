@@ -39,25 +39,50 @@ public class WindowsServiceManagerTests {
         await Assert.That(_pipe.Verbs).IsEquivalentTo(["enroll"]);
     }
 
+    /// A rename keeps the old name's environment until the old name is retired, which happens once the new one is ready
     [Test]
-    public async Task Enrolling_a_new_name_deletes_the_environment_the_old_name_left() {
+    public async Task Retiring_a_displaced_name_deletes_its_environment_file() {
         var old = Config.CreateFile("daemon-service-old.env.json", "{}");
         _store.Current = new ServiceEnrollment("old", Daemon, "work", null, old);
+        var manager = Manager();
 
-        Manager().Install(Spec(), startNow: true, out _);
+        manager.Install(Spec(), startNow: true, out _);
+        var keptThroughInstall = File.Exists(old);
+        var ok = manager.Uninstall("old", out _);
 
+        await Assert.That(keptThroughInstall).IsTrue();
+        await Assert.That(ok).IsTrue();
         await Assert.That(File.Exists(old)).IsFalse();
+        await Assert.That(_store.Current!.Name).IsEqualTo("laptop");
+    }
+
+    /// The verify rollback uninstalls the new name; unenrolling instead could empty the service and remove it
+    [Test]
+    public async Task Uninstalling_a_name_that_displaced_another_enrolls_the_other_again() {
+        var old = Config.CreateFile("daemon-service-old.env.json", "{}");
+        var displaced = new ServiceEnrollment("old", Daemon, "work", null, old);
+        _store.Current = displaced;
+        var manager = Manager();
+        manager.Install(Spec(), startNow: true, out _);
+
+        var ok = manager.Uninstall("laptop", out var error);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(error).IsNull();
+        await Assert.That(_store.Current).IsEqualTo(displaced);
+        await Assert.That(_pipe.Verbs).IsEquivalentTo(["enroll", "enroll"]);
     }
 
     [Test]
-    public async Task A_refused_enroll_keeps_the_environment_of_the_name_it_would_replace() {
-        var old = Config.CreateFile("daemon-service-old.env.json", "{}");
-        _store.Current = new ServiceEnrollment("old", Daemon, "work", null, old);
-        _pipe.Answer = _ => new ServicePipeResponse(false, "no session");
+    public async Task Uninstalling_after_a_same_name_reinstall_unenrolls() {
+        _store.Current = new ServiceEnrollment("laptop", Daemon, "work", null, WindowsServiceManager.EnvironmentFilePath(Config.Root, "laptop"));
+        var manager = Manager();
+        manager.Install(Spec(), startNow: true, out _);
 
-        Manager().Install(Spec(), startNow: true, out _);
+        manager.Uninstall("laptop", out _);
 
-        await Assert.That(File.Exists(old)).IsTrue();
+        await Assert.That(_store.Current).IsNull();
+        await Assert.That(_pipe.Verbs).IsEquivalentTo(["enroll", "unenroll"], CollectionOrdering.Matching);
     }
 
     [Test]
