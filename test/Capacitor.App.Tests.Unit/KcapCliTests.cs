@@ -1,5 +1,6 @@
 using Capacitor.App.Services;
 using Capacitor.App.Services.LocalSetup;
+using Capacitor.App.Services.Mutation;
 using TUnit.Assertions.Enums;
 using Capacitor.Cli.Core;
 
@@ -525,6 +526,56 @@ public class KcapCliTests {
         await Assert.That(runner.SeenOptions!.EnvOverlay![KcapCli.SpawnNoTelemetryVar]).IsEqualTo("1");
         await Assert.That(runner.SeenOptions!.EnvOverlay!.ContainsKey(KcapCli.ConsentSeedDefaultVar)).IsFalse();
         await Assert.That(runner.SeenOptions!.EnvOverlay!.ContainsKey(KcapCli.ExpectServerUrlVar)).IsFalse();
+    }
+
+    [Test]
+    [Arguments(null)]
+    [Arguments("--codex")]
+    [Arguments("--opencode")]
+    public async Task Plugin_remove_targets_the_harness_and_keeps_the_profile_and_terminal_environment(string? flag) {
+        var runner = new FakeProcessRunner();
+        await MakeCli(runner, terminalPath: "/opt/homebrew/bin:/usr/bin:/bin").PluginRemoveAsync(flag, CancellationToken.None);
+        string[] expected = flag is null ? ["plugin", "remove"] : ["plugin", "remove", flag];
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(expected, CollectionOrdering.Matching);
+        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(60));
+        await Assert.That(runner.SeenOptions.EnvOverlay!["KCAP_PROFILE"]).IsEqualTo("work");
+        await Assert.That(runner.SeenOptions.EnvOverlay[KcapCli.SpawnNoTelemetryVar]).IsEqualTo("1");
+        await Assert.That(runner.SeenOptions.EnvOverlay["PATH"]).IsEqualTo("/opt/homebrew/bin:/usr/bin:/bin");
+    }
+
+    public static IEnumerable<Func<(MutationVerb Verb, AccountArgs Args, string[] Expected)>> AccountVerbArgv() {
+        yield return () => (MutationVerb.AccountAdd, new AccountArgs("codex", "/Users/me/.codex-work", null, null),
+            ["accounts", "add", "codex", "/Users/me/.codex-work", "--json"]);
+        yield return () => (MutationVerb.AccountRemove, new AccountArgs(null, null, "abcd1234", null), ["accounts", "remove", "abcd1234", "--json"]);
+        yield return () => (MutationVerb.AccountRename, new AccountArgs(null, null, "abcd1234", "Work account"),
+            ["accounts", "rename", "abcd1234", "Work account", "--json"]);
+        yield return () => (MutationVerb.AccountRewire, new AccountArgs(null, null, "abcd1234", null), ["accounts", "rewire", "abcd1234", "--json"]);
+        yield return () => (MutationVerb.AccountRewire, new AccountArgs(null, null, null, null), ["accounts", "rewire", "--json"]);
+        yield return () => (MutationVerb.AccountRefresh, new AccountArgs(null, null, "abcd1234", null), ["accounts", "refresh", "abcd1234", "--json"]);
+    }
+
+    [Test]
+    [MethodDataSource(nameof(AccountVerbArgv))]
+    public async Task Account_verbs_spell_their_argv_with_json(MutationVerb verb, AccountArgs args, string[] expected) {
+        var runner = new FakeProcessRunner();
+
+        await MakeCli(runner).AccountsAsync(verb, args, CancellationToken.None);
+
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(expected, CollectionOrdering.Matching);
+        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(60));
+    }
+
+    [Test]
+    public async Task Account_verbs_run_without_a_canonical_server() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCli(runner, terminalPath: "/opt/homebrew/bin:/usr/bin:/bin", canonicalServer: null);
+
+        await cli.AccountsAsync(MutationVerb.AccountRewire, new AccountArgs(null, null, null, null), CancellationToken.None);
+
+        await Assert.That(runner.SeenFileName).IsEqualTo("kcap");
+        await Assert.That(runner.SeenOptions!.EnvOverlay!.Keys).IsEquivalentTo(
+            ["KCAP_PROFILE", KcapCli.SpawnNoTelemetryVar, "PATH"], CollectionOrdering.Any);
+        await Assert.That(runner.SeenOptions!.EnvOverlay!["KCAP_PROFILE"]).IsEqualTo("work");
     }
 
     [Test]

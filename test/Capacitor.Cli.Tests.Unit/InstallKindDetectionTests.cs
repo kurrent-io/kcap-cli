@@ -1,3 +1,5 @@
+using Capacitor.Cli.Core.Install;
+
 namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>Which install a binary belongs to decides how it updates; the shapes are the real layouts
@@ -48,5 +50,24 @@ public class InstallKindDetectionTests {
         await Assert.That(InstallProvenance.ReinstallCommand(InstallKind.Script, windows: false)).Contains("/install | bash");
         await Assert.That(InstallProvenance.ReinstallCommand(InstallKind.Script, windows: true)).Contains("install.ps1 | iex");
         await Assert.That(InstallProvenance.ReinstallCommand(InstallKind.Npm, windows: false)).IsEqualTo("npm install -g @kurrent/kcap");
+        await Assert.That(InstallProvenance.ReinstallCommand(InstallKind.Snap, windows: false, new SnapLayout("kcap", "42")))
+            .IsEqualTo("export PATH=\"/snap/bin:$PATH\"  # or reinstall: sudo snap remove kcap && sudo snap install kcap --classic");
+    }
+
+    /// <summary>A file-installed snap is replaced from a file; removing it first would leave nothing when the
+    /// Store has no kcap to install.</summary>
+    [Test]
+    public async Task A_local_snap_is_reinstalled_from_a_file_without_removing_it_first() {
+        var hint = InstallProvenance.ReinstallCommand(InstallKind.Snap, windows: false, new SnapLayout("kcap", "x3"));
+
+        await Assert.That(hint).IsEqualTo("export PATH=\"/snap/bin:$PATH\"  # or reinstall: sudo snap install --dangerous --classic <file>.snap");
+    }
+
+    /// <summary>A snap is known by its mount path alone; nothing under it is probed.</summary>
+    [Test]
+    public async Task A_snap_is_recognised_from_its_revision_mount() {
+        var kind = InstallProvenance.Detect("/snap/kurrent-capacitor/42/bin/kcap", _ => false);
+
+        await Assert.That(kind).IsEqualTo(InstallKind.Snap);
     }
 }

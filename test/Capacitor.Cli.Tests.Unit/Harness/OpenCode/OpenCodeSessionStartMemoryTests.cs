@@ -20,8 +20,7 @@ public class OpenCodeSessionStartMemoryTests {
     static string Render(string? fragment) => OpenCodeHookCommand.RenderMemoryOutput(fragment);
 
     // Byte-identical to the pre-feature behaviour on every path a user gets no index: opt-out,
-    // exclusion, provider failure, budget exhaustion, and (the common case) a repeat start whose lease
-    // is already spent. Load-bearing on this harness specifically, because the plugin treats ANY
+    // exclusion, provider failure, budget exhaustion. Load-bearing on this harness specifically, because the plugin treats ANY
     // non-empty stdout as a fragment — a placeholder would have it append an empty system entry to
     // every model request for the rest of the session.
     [Test]
@@ -57,20 +56,19 @@ public class OpenCodeSessionStartMemoryTests {
         await Assert.That(lifecycle.IsTopLevel).IsTrue();
         await Assert.That(lifecycle.ClassificationAuthoritative).IsTrue();
         await Assert.That(lifecycle.Reason).IsEqualTo(SessionLifecycleReason.RepeatedTurnCallback);
-        // The plugin's start dedupe is per PROCESS: a restart or a resumed session fires it again for
-        // the same id, and only the durable lease makes that a no-op. EligibleOneShot here would
-        // re-inject once per opencode restart.
+        // The plugin holds the fragment only in its process, so a restart or a resumed session starts the
+        // same id with nothing cached and must be served the index again; the plugin dedupes within a process.
         await Assert.That(lifecycle.CallbackMayRepeat).IsTrue();
+        await Assert.That(lifecycle.HostKeepsContext).IsFalse();
 
         var decision = SessionStartMemoryLifecyclePolicy.Decide(lifecycle);
-        await Assert.That(decision).IsEqualTo(SessionMemoryLifecycleDecision.EligibleWithLease);
+        await Assert.That(decision).IsEqualTo(SessionMemoryLifecycleDecision.EligibleEveryStart);
     }
 
     /// <summary>
     /// The cross-runtime negotiation the epic specifies. Absence means contract 0, so a NEW binary
-    /// paired with an already-installed OLDER plugin fetches nothing and spends no lease — that plugin
-    /// discards this command's stdout, and the lease is what makes injection once-per-session, so
-    /// spending it for a caller that cannot deliver is the thing worth negotiating about.
+    /// paired with an already-installed OLDER plugin fetches nothing: that plugin discards this command's
+    /// stdout, and the work-items nudge on the same channel must not reach it as raw text.
     /// </summary>
     [Test]
     [Arguments(new[] { "--event", "session-start" }, 0)]                                    // older plugin
@@ -231,8 +229,8 @@ public class OpenCodeSessionStartMemoryTests {
     }
 
     /// <summary>
-    /// A repeated start that returns nothing must not erase a fragment already cached — the common case
-    /// once the durable lease has been spent, where the CLI legitimately prints zero bytes.
+    /// A repeated start that returns nothing (a failed or opted-out fetch, where the CLI legitimately prints
+    /// zero bytes) must not erase a fragment already cached.
     /// </summary>
     [Test]
     public async Task the_plugin_never_overwrites_a_cached_fragment_with_an_empty_one() {

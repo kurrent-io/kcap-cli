@@ -71,14 +71,11 @@
 
                         <Grid ColumnDefinitions="*,Auto">
                             <WrapPanel ItemSpacing="8" LineSpacing="8" VerticalAlignment="Center">
-                                <Button x:Name="AttachButton"
+                                <Button x:Name="AttachButton" Classes="kcapGhost"
                                         IsEnabled="{Binding CanAttach}" ToolTip.Tip="{Binding AttachHint}"
                                         ToolTip.ShowOnDisabled="True" AutomationProperties.Name="Attach files"
-                                        Width="26" Height="26" Padding="0" FontSize="15" CornerRadius="999" Cursor="Hand"
-                                        HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
-                                        Background="{StaticResource KcapSurfaceRaisedBrush}"
-                                        BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
-                                        Foreground="{StaticResource KcapMutedBrush}">
+                                        Width="26" Height="26" Padding="0" FontSize="15" Cursor="Hand"
+                                        HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
                                     <views:AppIcon Kind="Paperclip" Size="16" />
                                 </Button>
 
@@ -97,6 +94,7 @@
                                                     <Binding Path="SelectedVendor" />
                                                     <Binding Path="SelectedModel" />
                                                     <Binding Path="EffectiveModelCatalog" />
+                                                    <Binding Path="SelectedAccountLabel" />
                                                 </MultiBinding>
                                             </TextBlock.Text>
                                         </TextBlock>
@@ -153,13 +151,16 @@
                             Background="{StaticResource KcapDangerDimBrush}"
                             BorderBrush="{StaticResource KcapDangerBrush}"
                             IsVisible="{Binding StartError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-                        <Grid ColumnDefinitions="Auto,*">
+                        <Grid ColumnDefinitions="Auto,*,Auto">
                             <views:AppIcon Kind="CircleAlert" Size="14" Margin="0,2,8,0" VerticalAlignment="Top"
                                            Foreground="{StaticResource KcapDangerBrush}" />
                             <TextBlock Grid.Column="1" x:Name="StartErrorText" Text="{Binding StartError}"
                                        Foreground="{StaticResource KcapDangerBrush}"
                                        FontSize="13" LineHeight="18" TextWrapping="Wrap" VerticalAlignment="Center"
                                        IsVisible="{Binding StartError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            <Button Grid.Column="2" x:Name="UseDefaultAccountButton" Classes="kcapChip" Content="Use default"
+                                    Command="{Binding UseDefaultAccountCommand}" IsVisible="{Binding StartErrorOffersDefault}"
+                                    VerticalAlignment="Center" Margin="12,0,0,0" Padding="12,4" />
                         </Grid>
                     </Border>
                 </StackPanel>
@@ -274,6 +275,11 @@
                 <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Left">
                     <Button x:Name="StartDaemonButton" Classes="kcapPrimary" Content="Start daemon"
                             Command="{Binding StartDaemonCommand}" IsVisible="{Binding DaemonStartVisible}"
+                            Background="{StaticResource KcapPrimaryBrush}"
+                            Foreground="{StaticResource KcapOnPrimaryBrush}"
+                            FontWeight="SemiBold" CornerRadius="7" Padding="14,6" />
+                    <Button x:Name="RepairDaemonButton" Classes="kcapPrimary" Content="Repair"
+                            Command="{Binding RepairDaemonCommand}" IsVisible="{Binding DaemonRepairVisible}"
                             Background="{StaticResource KcapPrimaryBrush}"
                             Foreground="{StaticResource KcapOnPrimaryBrush}"
                             FontWeight="SemiBold" CornerRadius="7" Padding="14,6" />

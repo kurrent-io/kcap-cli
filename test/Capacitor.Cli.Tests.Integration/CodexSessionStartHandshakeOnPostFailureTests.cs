@@ -10,19 +10,11 @@ using Capacitor.Cli.PrDetection;
 namespace Capacitor.Cli.Tests.Integration;
 
 /// <summary>
-/// Codex BLOCKS on its SessionStart hook's stdout and its parser rejects empty output. So a
-/// permanent lifecycle-POST rejection must still produce the handshake — the recording outcome cannot
-/// be allowed to decide whether the host can proceed.
-///
-/// <para>It used to. An early <c>return 1</c> on <see cref="HookPostOutcome.Failed"/> sat BEFORE the
-/// handshake, so a server 4xx left Codex with zero bytes: no <c>continue</c>, no context, just a wait
-/// for its hook timeout. Verified by hand at the time — a rejected payload produced literally no
-/// stdout. The non-zero exit is still reported (the session genuinely was not recorded), just after
-/// the handshake rather than instead of it.</para>
-///
-/// <para>Same family as the other known hazard where a hook exits before satisfying a stdout-blocking
-/// host — the unguarded auth discovery in the lifecycle poster, tracked separately.</para>
+/// Codex blocks on its SessionStart hook's stdout and its parser rejects empty output, so a permanent
+/// lifecycle-POST rejection must still produce the handshake: the recording outcome cannot decide
+/// whether the host can proceed. The non-zero exit still reports that the session was not recorded.
 /// </summary>
+[ParallelLimiter<SubprocessLimit>]
 public class CodexSessionStartHandshakeOnPostFailureTests : IDisposable {
     [TempHome] public required TempHome Home { get; init; }
 
@@ -32,7 +24,7 @@ public class CodexSessionStartHandshakeOnPostFailureTests : IDisposable {
 
     public void Dispose() => _server.Stop();
 
-    [Test, NotInParallel]
+    [Test]
     public async Task A_rejected_lifecycle_post_still_satisfies_the_blocking_stdout_handshake() {
         var config = new ProfileConfig {
             ActiveProfile = "work",
@@ -40,8 +32,8 @@ public class CodexSessionStartHandshakeOnPostFailureTests : IDisposable {
         };
         await ConfigMutator.MutateAsync(Config.Root, _ => config);
 
-        // A permanent rejection: PostOrSpoolAsync returns Failed for a genuine non-2xx (transport and
-        // auth failures spool instead), which is exactly the case that used to skip the handshake.
+        // A permanent rejection: PostOrSpoolAsync returns Failed for a genuine non-2xx; transport and
+        // auth failures spool instead.
         _server.Given(Request.Create().WithPath("/hooks/session-start/codex").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(400));
 
@@ -56,18 +48,15 @@ public class CodexSessionStartHandshakeOnPostFailureTests : IDisposable {
             }
             """;
 
-        using var capture = ConsoleOutput.StartCapture();
+        var stdout = new StringWriter();
 
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(payload));
+        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory))
+            .Handle(new StringReader(payload), new CodexHookEnvironment(stdout, TextWriter.Null, Skip: false, HostedAppServer: false));
 
-        // The rejection is still reported — this is not "pretend it worked".
         await Assert.That(exit).IsEqualTo(1);
 
-        // ...but Codex still got a parseable handshake rather than nothing at all.
-        var stdout = capture.GetCapturedOutput();
-        await Assert.That(stdout).IsNotEmpty();
-
-        var doc = System.Text.Json.JsonDocument.Parse(stdout);
+        await Assert.That(stdout.ToString()).IsNotEmpty();
+        var doc = System.Text.Json.JsonDocument.Parse(stdout.ToString());
         await Assert.That(doc.RootElement.GetProperty("continue").GetBoolean()).IsTrue();
 
         // And the POST really was attempted and really was rejected, so the assertions above are

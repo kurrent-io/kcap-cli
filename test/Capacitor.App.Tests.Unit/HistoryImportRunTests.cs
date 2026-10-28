@@ -25,4 +25,50 @@ public class HistoryImportRunTests {
         await Assert.That(run.Processed).IsEqualTo(8);
         await Assert.That(run.Imported).IsEqualTo(5);
     }
+
+    /// The count reads against the selection's total only while that total is honest; with none, the bar
+    /// measures passes instead.
+    [Test]
+    [Arguments(100, "25 of 100", 25.0)]
+    [Arguments(0, "25", 0.0)]
+    [Arguments(20, "25", 100.0)]
+    public async Task A_running_import_counts_and_measures_against_the_selection(int expected, string count, double progress) {
+        var gate = new TaskCompletionSource<StreamingResult>();
+        Action<StreamedLine>? emit = null;
+        var cli = new FakeKcapCli {
+            ImportBehavior = (_, onLine, _) => {
+                emit = onLine;
+                return gate.Task;
+            },
+        };
+        var run = new HistoryImportRun(expected, 1, "from the last 90 days", 1, action => action());
+        run.Start(cli, [new ImportRequest(ImportScopeChoice.Repo, null, [], ["a/b"])]);
+        for (var i = 0; i < 25; i++) emit!(new StreamedLine(ProcessStreamKind.Stdout, $"  Loading s{i} (claude)"));
+
+        var (shown, measured) = (run.ProcessedOfExpected, run.Progress);
+        gate.SetResult(new StreamingResult(0, false, []));
+        await run.Completion;
+
+        await Assert.That(shown).IsEqualTo(count);
+        await Assert.That(measured).IsEqualTo(progress);
+    }
+
+    /// With no count to measure against, progress is the share of passes that have completed.
+    [Test]
+    public async Task Without_a_count_progress_follows_completed_passes() {
+        var gate = new TaskCompletionSource<StreamingResult>();
+        var calls = 0;
+        var cli = new FakeKcapCli {
+            ImportBehavior = (_, _, _) => ++calls < 2 ? Task.FromResult(new StreamingResult(0, false, [])) : gate.Task,
+        };
+        var run = new HistoryImportRun(0, 1, "from the last 90 days", 2, action => action());
+        run.Start(cli, [new ImportRequest(ImportScopeChoice.Repo, null, [], ["a/b"]), new ImportRequest(ImportScopeChoice.Repo, null, [], ["c/d"])]);
+
+        var afterFirst = run.Progress;
+        gate.SetResult(new StreamingResult(0, false, []));
+        await run.Completion;
+
+        await Assert.That(afterFirst).IsEqualTo(50.0);
+        await Assert.That(run.Progress).IsEqualTo(100.0);
+    }
 }

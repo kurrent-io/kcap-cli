@@ -51,7 +51,8 @@ running notes file that every PR edits.
   different anchor — `DaemonStoreTests` guards it.
 - **Local control IPC is append-only and capability-gated.** `FrameType` values are never reused or
   renumbered, and `LocalControlCapabilities.Current` is assembled beside the routing switch so
-  nothing can be advertised without a live handler.
+  nothing can be advertised without a live handler, or, for a capability that gates a status field,
+  without the daemon filling that field.
 - **Server-origin launch and stop share one serial lane**, sequenced and un-sequenced alike, so
   arrival order survives. One lock guards handler admission and the processor's single null→live
   transition: there is no second command domain, ever.
@@ -88,6 +89,12 @@ running notes file that every PR edits.
   `Process.Kill(bool)` is banned in the daemon assembly, and a daemon with no terminal on any
   standard stream ignores SIGHUP outright — there is nothing to hang up, and exiting 0 on it is an
   exit launchd never restarts.
+- **Nothing kcap runs prunes worktrees.** Unless `worktree.useRelativePaths` is set, git links a
+  worktree by absolute path, and a sandbox mounting the host's repository sees it at another path:
+  from there every host-made worktree looks dangling, and the other way round. A `git worktree prune`
+  on either side deletes metadata for worktrees that are fine. The SessionStart nudge asks the user
+  to switch the repository to relative links instead; it never converts on its own, because git
+  older than 2.48 then refuses to open the repository at all.
 - **A hosted agent's launch prompt never goes on its command line.** Any local user can read a
   command line through `ps`, and a `pkill -f` from any session matches every agent whose prompt
   contains its pattern. The PTY launch spawns the agent without its prompt and pastes it into the

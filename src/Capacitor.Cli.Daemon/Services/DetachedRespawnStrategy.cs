@@ -38,7 +38,7 @@ internal sealed partial class DetachedRespawnStrategy(
     }
 
     public RestartOutcome Restart() {
-        var exe = Environment.ProcessPath is { } p ? ScriptInstallLayout.Stabilize(p) : null;
+        var exe = Environment.ProcessPath is { } p ? InstallPaths.Stabilize(p) : null;
         if (exe is null) { LogNoProcessPath(logger); return RestartOutcome.Retry; }
 
         var psi = new ProcessStartInfo {

@@ -148,14 +148,9 @@ sealed class OpenCodeHookCommand(
         // Start the memory fetch so it OVERLAPS the lifecycle POST. Never before it, and never awaited
         // before it — the POST is what capture depends on.
         //
-        // Gated on the caller DECLARING it can consume a fragment. Without that, a new binary paired
-        // with an already-installed older plugin would fetch the index and spend the session's
-        // once-only lease on output that plugin discards — it captures stdout only since the version
-        // that added this flag. The lease is what makes injection once-per-session, so spending it for
-        // a caller that cannot deliver is the one thing worth negotiating about.
-        // Whether the installed plugin can consume a stdout fragment at all. The work-items nudge rides
-        // the same channel, so it is gated on this too — a plugin that discards stdout must not be
-        // handed the nudge as raw text.
+        // Gated on the caller DECLARING it can consume a fragment: an older plugin discards stdout, so a
+        // fetch for it is wasted, and the work-items nudge, which rides the same channel, must not reach
+        // it as raw text.
         var canConsumeFragment = MemoryContractOf(args) >= 1;
         var memoryTask = canConsumeFragment
             ? StartMemoryIndexTask(sessionId, scopeRoot,
@@ -173,20 +168,18 @@ sealed class OpenCodeHookCommand(
         var outcome = await _poster.PostOrSpoolAsync("session-start/opencode", enriched, "opencode-hook",
             spool, sessionId, route: "session-start/opencode");
 
-        // BEFORE the watcher gate below, and before any early return: a withheld watcher must not
-        // suppress an injection whose once-per-session lease has already been spent. The plugin reads
-        // stdout regardless of what the watcher did.
+        // BEFORE the watcher gate below, and before any early return: the plugin reads stdout
+        // regardless of what the watcher did, so a withheld watcher must not suppress the injection.
         var fragment = await SessionStartMemoryHookSupport.AwaitBounded(memoryTask, budget);
         var workItemsNudge = canConsumeFragment
             ? HarnessNudgeEmitter.Combine(
-                SessionNudges.Resolve(HarnessId.OpenCode, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience),
+                SessionNudges.Resolve(HarnessId.OpenCode, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience, cwd, home),
                 // Inside the gate, unlike the harness nudge below: resolving takes the one-shot
                 // marker, and an older plugin discards this stdout, so outside it the notice would be
                 // spent on a session that never shows it.
                 FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true || !audience.GetsOnboarding, config, HarnessId.OpenCode, harnesses))
             : null;
-        // The harness nudge is independent of the once-per-session memory lease — it has its own
-        // 6h evaluation throttle, so it can surface even on a re-fired session that can't reconsume.
+        // The harness nudge is outside the contract gate: it has its own 6h evaluation throttle.
         var combinedNudge = HarnessNudgeEmitter.Combine(
             workItemsNudge, HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true || !audience.GetsOnboarding, config, harnesses, clock.Time));
         await WriteMemoryFragment(stdout, fragment, combinedNudge);
@@ -224,10 +217,10 @@ sealed class OpenCodeHookCommand(
             : SessionStartMemoryOutputAdapters.Render(HarnessId.OpenCode, fragment, workItemsNudge);
 
     /// <summary>
-    /// The lifecycle this harness reports. <c>CallbackMayRepeat</c> is true because the plugin's start
-    /// path is per-PROCESS: it dedupes within one <c>opencode</c> run, but a restart or a resumed
-    /// session fires it again for the same session id, and the durable lease is what makes the second
-    /// firing a no-op rather than a second injection.
+    /// The lifecycle this harness reports. <c>CallbackMayRepeat</c> because a restart or a resumed session
+    /// fires the plugin's start again for the same session id; <c>HostKeepsContext</c> is false because
+    /// the plugin holds the fragment only in its own process, so each of those starts needs it again.
+    /// Within one process the plugin keeps the first fragment, so a repeat never injects twice.
     ///
     /// <para><c>IsTopLevel</c>/<c>ClassificationAuthoritative</c> are true because the plugin only ever
     /// invokes this command for a session it has PROVEN top-level — its classifier defers on an
@@ -237,7 +230,7 @@ sealed class OpenCodeHookCommand(
     internal static SessionMemoryLifecycle LifecycleFor(string sessionId) =>
         new(HarnessId.OpenCode, sessionId, LifecycleInstanceId: null,
             IsTopLevel: true, ClassificationAuthoritative: true,
-            SessionLifecycleReason.RepeatedTurnCallback, CallbackMayRepeat: true);
+            SessionLifecycleReason.RepeatedTurnCallback, CallbackMayRepeat: true, HostKeepsContext: false);
 
     /// <summary>
     /// Starts the shared memory fetch so it overlaps the lifecycle POST. Returns a task that never
@@ -248,8 +241,8 @@ sealed class OpenCodeHookCommand(
     /// for OpenCode is wherever the plugin's shell-out inherited, and would inject an unrelated
     /// repository's memories.</para>
     ///
-    /// <para>The URL is checked BEFORE any client is constructed, so an unusable base url spends no
-    /// lease and starts no task.</para>
+    /// <para>The URL is checked BEFORE any client is constructed, so an unusable base url starts no
+    /// task.</para>
     /// </summary>
     internal async Task<string?> StartMemoryIndexTask(
             string     sessionId,
@@ -297,7 +290,7 @@ sealed class OpenCodeHookCommand(
     /// The memory-delivery contract version the CALLER declares, or 0 when it declares none.
     ///
     /// <para>Absence means 0 — an older plugin, which discards this command's stdout — so no fetch
-    /// happens and no lease is spent. An unparseable value is also 0: a caller that cannot state a
+    /// happens. An unparseable value is also 0: a caller that cannot state a
     /// version it understands is not one to hand a fragment to.</para>
     ///
     /// <para>The reverse pairing (new plugin, older binary) needs nothing: this command has always

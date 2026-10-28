@@ -51,8 +51,8 @@
         <Setter Property="Foreground" Value="{StaticResource OnboardingTextBrush}" />
     </Style>
     <Style Selector="TextBlock.onboardingSignal">
-        <Setter Property="FontFamily" Value="{StaticResource OnboardingMonoFont}" />
-        <Setter Property="FontSize" Value="10.5" />
+        <Setter Property="FontSize" Value="11.5" />
+        <Setter Property="FontWeight" Value="Medium" />
         <Setter Property="Foreground" Value="{StaticResource OnboardingDimBrush}" />
     </Style>
     <Style Selector="TextBlock.onboardingNote">
@@ -112,30 +112,11 @@
         <Setter Property="CornerRadius" Value="8" />
         <Setter Property="Padding" Value="14,12" />
     </Style>
-    <Style Selector="Border.onboardingResolved">
-        <Setter Property="Background" Value="{StaticResource OnboardingResolvedFillBrush}" />
-        <Setter Property="BorderBrush" Value="{StaticResource OnboardingResolvedBorderBrush}" />
-        <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="CornerRadius" Value="8" />
-        <Setter Property="Padding" Value="14,12" />
-    </Style>
     <Style Selector="Border.onboardingCallout">
         <Setter Property="BorderBrush" Value="{StaticResource OnboardingControlBorderBrush}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="4" />
         <Setter Property="Padding" Value="14,12" />
-    </Style>
-    <Style Selector="Border.onboardingChip">
-        <Setter Property="BorderBrush" Value="{StaticResource OnboardingPanelBorderBrush}" />
-        <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="CornerRadius" Value="2" />
-        <Setter Property="Padding" Value="6,2" />
-    </Style>
-    <Style Selector="Border.onboardingChip TextBlock">
-        <Setter Property="FontFamily" Value="{StaticResource OnboardingMonoFont}" />
-        <Setter Property="FontSize" Value="9" />
-        <Setter Property="LetterSpacing" Value="0.8" />
-        <Setter Property="Foreground" Value="{StaticResource OnboardingDimBrush}" />
     </Style>
 
     <!-- Buttons: Primary, Secondary (a real alternative), Quiet (a costless dismissal), Link. Fluent
@@ -229,10 +210,10 @@
         <Setter Property="BorderBrush" Value="Transparent" />
         <Setter Property="Foreground" Value="{StaticResource OnboardingAccentHoverBrush}" />
     </Style>
-    <!-- A whole card as one choice: the edition screen's two editions. -->
     <Style Selector="Button.onboardingEditionCard">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="FocusAdorner" Value="{x:Null}" />
         <Setter Property="Padding" Value="20,18" />
         <Setter Property="CornerRadius" Value="8" />
         <Setter Property="BorderThickness" Value="1" />
@@ -261,10 +242,8 @@
         <Setter Property="Margin" Value="0,16,0,0" />
     </Style>
     <Style Selector="Button.onboardingCompact">
-        <Setter Property="Padding" Value="14,9" />
-        <Setter Property="FontFamily" Value="{StaticResource OnboardingMonoFont}" />
-        <Setter Property="FontSize" Value="10.5" />
-        <Setter Property="LetterSpacing" Value="0.8" />
+        <Setter Property="Padding" Value="14,7" />
+        <Setter Property="FontSize" Value="12.5" />
     </Style>
 
     <!-- Fields inside the pane keep the app's kcapField chrome, on the card's own surface. -->
@@ -317,6 +296,11 @@
         <Setter Property="BorderBrush" Value="{StaticResource OnboardingDimBrush}" />
         <Setter Property="Background" Value="Transparent" />
     </Style>
+    <!-- Center the visible square inside the table checkbox's 24px hit area. -->
+    <Style Selector="CheckBox.onboardingTableCheck /template/ Grid#RootGrid">
+        <Setter Property="Width" Value="20" />
+        <Setter Property="HorizontalAlignment" Value="Center" />
+    </Style>
     <Style Selector="CheckBox.onboardingCheck:pointerover /template/ Border#NormalRectangle">
         <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentBrush}" />
         <Setter Property="Background" Value="Transparent" />
@@ -333,11 +317,28 @@
         <Setter Property="VerticalAlignment" Value="Top" />
         <Setter Property="HorizontalAlignment" Value="Left" />
     </Style>
+    <Style Selector="CheckBox.onboardingTableCheck /template/ Border#NormalRectangle,
+                     CheckBox.onboardingTableCheck /template/ Viewbox">
+        <Setter Property="HorizontalAlignment" Value="Center" />
+    </Style>
     <Style Selector="CheckBox.onboardingCheck:checked /template/ Path#CheckGlyph,
                      CheckBox.onboardingCheck:checked:pointerover /template/ Path#CheckGlyph,
                      CheckBox.onboardingCheck:checked:pressed /template/ Path#CheckGlyph">
         <Setter Property="Fill" Value="{StaticResource OnboardingAccentOnBrush}" />
         <Setter Property="Width" Value="10" />
+        <Setter Property="HorizontalAlignment" Value="Center" />
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <!-- Mixed: an owner whose repositories disagree. Filled like checked, with the theme's dash. -->
+    <Style Selector="CheckBox.onboardingCheck:indeterminate /template/ Border#NormalRectangle,
+                     CheckBox.onboardingCheck:indeterminate:pointerover /template/ Border#NormalRectangle">
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentBrush}" />
+        <Setter Property="Background" Value="{StaticResource OnboardingAccentBrush}" />
+    </Style>
+    <Style Selector="CheckBox.onboardingCheck:indeterminate /template/ Path#CheckGlyph,
+                     CheckBox.onboardingCheck:indeterminate:pointerover /template/ Path#CheckGlyph,
+                     CheckBox.onboardingCheck:indeterminate:pressed /template/ Path#CheckGlyph">
+        <Setter Property="Fill" Value="{StaticResource OnboardingAccentOnBrush}" />
         <Setter Property="Opacity" Value="1" />
     </Style>
     <Style Selector="CheckBox.onboardingCheck:disabled">

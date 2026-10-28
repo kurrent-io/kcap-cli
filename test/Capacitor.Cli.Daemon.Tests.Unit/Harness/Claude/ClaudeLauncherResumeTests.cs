@@ -36,12 +36,29 @@ public class ClaudeLauncherResumeTests {
         await Assert.That(args).DoesNotContain("--resume");
     }
 
+    /// <summary>A resume of an agent that was waiting sends no turn: an empty prompt adds no argument.</summary>
+    [Test]
+    public async Task A_resume_with_an_empty_prompt_passes_no_prompt_argument() {
+        var args = NewLauncher().BuildArgs(NewCtx(null, Resume) with { Prompt = "" }).Args;
+
+        await Assert.That(args).DoesNotContain("--");
+        await Assert.That(args).DoesNotContain("");
+    }
+
     [Test]
     public async Task Resume_launch_passes_resume_and_no_session_id() {
         var args = NewLauncher().BuildArgs(NewCtx(null, Resume)).Args;
 
         await Assert.That(args[Array.IndexOf(args, "--resume") + 1]).IsEqualTo(Resume);
         await Assert.That(args).DoesNotContain("--session-id");
+    }
+
+    /// The resume ledger can hold the dashless id transcript discovery records; Claude resumes only a dashed UUID.
+    [Test]
+    public async Task Resume_restores_the_dashes_of_a_dashless_session_id() {
+        var args = NewLauncher().BuildArgs(NewCtx(null, Resume.Replace("-", ""))).Args;
+
+        await Assert.That(args[Array.IndexOf(args, "--resume") + 1]).IsEqualTo(Resume);
     }
 
     [Test]

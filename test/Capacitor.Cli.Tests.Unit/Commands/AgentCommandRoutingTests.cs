@@ -1,5 +1,6 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
@@ -9,9 +10,12 @@ public class AgentCommandRoutingTests {
     [TempConfigRoot]  public required TempConfigRoot  Config  { get; init; }
     [TempHome]        public required TempHome        Home    { get; init; }
 
+    StringWriter Out { get; } = new() { NewLine = "\n" };
+    StringWriter Err { get; } = new() { NewLine = "\n" };
+
     AgentCommand Command() =>
-        new(Daemons.Store, Config.Root, Resolutions.None(Config.Root), Home, TestHarnesses.All(),
-            TestBinaries.None, new WorkingDirectory(Daemons.Root), TimeProvider.System);
+        new(Daemons.Store, AccountStore.Beside(Daemons.Store), Config.Root, Resolutions.None(Config.Root), Home, TestHarnesses.All(),
+            TestBinaries.None, new WorkingDirectory(Daemons.Root), TimeProvider.System, new StandardStreams(Out, Err, TextReader.Null));
 
     [Test]
     public async Task Bare_agent_routes_to_ls() {
@@ -113,7 +117,7 @@ public class AgentCommandRoutingTests {
         await Assert.That(prot).IsEquivalentTo(new[] { "f1", "v1" });
     }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task Ls_accepts_eight_columns_and_shows_state() {
         Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
         var table = string.Join('\n',
@@ -121,13 +125,12 @@ public class AgentCommandRoutingTests {
             "bbbb2222\tResuming\t/r2\tagent\t\t\tComing back\tresuming",
             "cccc3333\tInterrupted\t/r3\tagent\t\t\tGone\tinterrupted (worktree_missing)");
         var received = FakeControlSocket.AnswerOnce(Daemons.Store, "ls", new LocalFrame(FrameType.AgentList) { Text = table });
-        using var console = ConsoleOutput.StartCapture("\n");
 
         var exit = await Command().HandleAsync(["agent", "ls", "--daemon", "ls"], baseUrl: null);
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That((await received.WaitAsync(TimeSpan.FromSeconds(30)))?.Text).IsEqualTo(LocalFrame.ListStateColumn);
-        var lines = console.GetCapturedOutput().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var lines = Out.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries);
         await Assert.That(lines[0]).Contains("STATE");
         await Assert.That(lines.Single(l => l.StartsWith("aaaa1111", StringComparison.Ordinal))).Contains("running");
         await Assert.That(lines.Single(l => l.StartsWith("bbbb2222", StringComparison.Ordinal))).Contains("resuming");
@@ -141,12 +144,11 @@ public class AgentCommandRoutingTests {
         await Assert.That(AgentCommand.FormatAgentTable(agents).First()).DoesNotContain("STATE");
     }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task Resume_routes_to_the_agent_resume_frame() {
         Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
         const string id = "0123456789abcdef0123456789abcdef";
         var received = FakeControlSocket.AnswerOnce(Daemons.Store, "rs", LocalFrame.AgentResumeAck("resuming"));
-        using var console = ConsoleOutput.StartCapture("\n");
 
         var exit = await Command().HandleAsync(["agent", "resume", id, "--daemon", "rs"], baseUrl: null);
 
@@ -154,10 +156,10 @@ public class AgentCommandRoutingTests {
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(frame?.Type).IsEqualTo(FrameType.AgentResume);
         await Assert.That(frame?.Text).IsEqualTo(id);
-        await Assert.That(console.GetCapturedOutput().Trim()).IsEqualTo($"Resuming {id}.");
+        await Assert.That(Out.ToString().Trim()).IsEqualTo($"Resuming {id}.");
     }
 
-    [Test, NotInParallel]
+    [Test]
     [Arguments("not_interrupted", "0123456789abcdef0123456789abcdef is not interrupted.")]
     [Arguments("unknown", "No agent 0123456789abcdef0123456789abcdef.")]
     [Arguments("blocked:predecessor_process_unresolved",
@@ -165,31 +167,29 @@ public class AgentCommandRoutingTests {
     public async Task Resume_that_is_refused_says_why_and_exits_1(string ack, string expected) {
         Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
         _ = FakeControlSocket.AnswerOnce(Daemons.Store, "rs", LocalFrame.AgentResumeAck(ack));
-        using var console = ConsoleOutput.StartFullCapture("\n");
 
         var exit = await Command().HandleAsync(["agent", "resume", "0123456789abcdef0123456789abcdef", "--daemon", "rs"], baseUrl: null);
 
         await Assert.That(exit).IsEqualTo(1);
-        await Assert.That((console.GetCapturedOutput() + console.GetCapturedError()).Trim()).IsEqualTo(expected);
+        await Assert.That((Out.ToString() + Err.ToString()).Trim()).IsEqualTo(expected);
     }
 
     /// A daemon that predates the state column answers its request as a bare List; the titles it
     /// can still give come from asking again in the older form.
-    [Test, NotInParallel]
+    [Test]
     public async Task Ls_against_a_daemon_without_the_state_column_asks_again_for_titles() {
         Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
         var received = FakeControlSocket.AnswerInOrder(Daemons.Store, "old", [
             new LocalFrame(FrameType.AgentList) { Text = "aaaa1111\tRunning\t/r1\tagent\t\t" },
             new LocalFrame(FrameType.AgentList) { Text = "aaaa1111\tRunning\t/r1\tagent\t\t\tFix the login" },
         ]);
-        using var console = ConsoleOutput.StartCapture("\n");
 
         var exit = await Command().HandleAsync(["agent", "ls", "--daemon", "old"], baseUrl: null);
 
         var requests = await received.WaitAsync(TimeSpan.FromSeconds(30));
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(requests.Select(r => r?.Text ?? "")).IsEquivalentTo(new[] { LocalFrame.ListStateColumn, LocalFrame.ListTitleColumn });
-        var lines = console.GetCapturedOutput().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var lines = Out.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries);
         await Assert.That(lines[0]).Contains("TITLE");
         await Assert.That(lines[0]).DoesNotContain("STATE");
         await Assert.That(lines[1]).Contains("Fix the login");

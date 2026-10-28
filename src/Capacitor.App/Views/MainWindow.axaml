@@ -39,13 +39,16 @@
                               IsVisible="{Binding CurrentWorkspace, Converter={x:Static ObjectConverters.IsNull}}">
                             <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Background="Transparent"
                                   PointerPressed="OnChromePointerPressed">
-                                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6" IsVisible="{Binding HistoryImportVisible}"
-                                      VerticalAlignment="Center" Margin="0,0,16,0">
+                                <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" ColumnSpacing="6" RowSpacing="5"
+                                      IsVisible="{Binding HistoryImportVisible}" VerticalAlignment="Center" Margin="0,0,16,0">
                                     <views:AppIcon Kind="LoaderCircle" Size="12" Foreground="{StaticResource KcapMutedBrush}"
                                                    VerticalAlignment="Center" IsVisible="{Binding HistoryImportRunning}"
                                                    Classes.kcapSpinning="{Binding HistoryImportRunning}" />
                                     <TextBlock Grid.Column="1" Text="{Binding HistoryImportStatus}" FontSize="12"
                                                Foreground="{StaticResource KcapMutedBrush}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                                    <ProgressBar x:Name="HistoryImportProgressBar" Grid.Row="1" Grid.Column="1" Height="3" MinHeight="3"
+                                                 Minimum="0" Maximum="100" Value="{Binding HistoryImportProgress}"
+                                                 IsVisible="{Binding HistoryImportRunning}" Foreground="{StaticResource KcapMutedBrush}" />
                                 </Grid>
                                 <!-- Daemon recovery sits in LauncherPaneView's connection banner (same
                                      place as sign-in), not here in the chrome. -->

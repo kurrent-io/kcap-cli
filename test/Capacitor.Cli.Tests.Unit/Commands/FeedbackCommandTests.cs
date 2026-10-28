@@ -358,6 +358,64 @@ public class FeedbackCommandTests : IDisposable {
         await Assert.That(api.Last.ClientRequestId).IsNotEqualTo(Guid.Empty);
     }
 
+    // ── local installation: an email draft instead of a post ─────────────────────────────────────
+
+    static Func<FeedbackSubmission, FeedbackMailOutcome> Mail(bool opened, bool cutShort, bool copied) =>
+        _ => new FeedbackMailOutcome(new FeedbackMailDraft("mailto:team@kcap.ai", cutShort), opened, copied);
+
+    [Test, NotInParallel]
+    public async Task A_local_install_opens_a_draft_and_never_posts() {
+        var api = new RecordingFeedbackApi(new FeedbackResult.Sent("a@b.c"));
+
+        var (exitCode, stdout, stderr) = await RunAsync(() =>
+            new FeedbackCommand(api, Mail(opened: true, cutShort: false, copied: true)).HandleAsync(
+                ["feedback", "--bug", "-m", "It broke."], true, () => null));
+
+        await Assert.That(exitCode).IsEqualTo(0);
+        await Assert.That(api.Last).IsNull();
+        await Assert.That(stderr).Contains("Opened an email to team@kcap.ai");
+        await Assert.That(stdout.Trim()).IsEmpty();
+    }
+
+    [Test, NotInParallel]
+    public async Task An_opened_draft_with_no_clipboard_still_prints_the_report() {
+        var (exitCode, stdout, _) = await RunAsync(() =>
+            FeedbackCommand.HandleMail(Mail(opened: true, cutShort: false, copied: false), FeedbackCategory.Bug, "It broke."));
+
+        await Assert.That(exitCode).IsEqualTo(0);
+        await Assert.That(stdout).Contains("It broke.");
+    }
+
+    [Test, NotInParallel]
+    public async Task A_draft_cut_short_with_no_clipboard_prints_the_full_report() {
+        var (exitCode, stdout, stderr) = await RunAsync(() =>
+            FeedbackCommand.HandleMail(Mail(opened: true, cutShort: true, copied: false), FeedbackCategory.Bug, "It broke."));
+
+        await Assert.That(exitCode).IsEqualTo(0);
+        await Assert.That(stderr).Contains("cut short");
+        await Assert.That(stdout).Contains("It broke.");
+    }
+
+    [Test, NotInParallel]
+    public async Task No_mail_app_succeeds_and_points_at_the_clipboard_when_it_holds_the_report() {
+        var (exitCode, stdout, stderr) = await RunAsync(() =>
+            FeedbackCommand.HandleMail(Mail(opened: false, cutShort: false, copied: true), FeedbackCategory.Bug, "It broke."));
+
+        await Assert.That(exitCode).IsEqualTo(0);
+        await Assert.That(stderr).Contains("on your clipboard");
+        await Assert.That(stdout.Trim()).IsEmpty();
+    }
+
+    [Test, NotInParallel]
+    public async Task No_mail_app_and_no_clipboard_prints_the_report_to_email_by_hand() {
+        var (exitCode, stdout, stderr) = await RunAsync(() =>
+            FeedbackCommand.HandleMail(Mail(opened: false, cutShort: false, copied: false), FeedbackCategory.Bug, "It broke."));
+
+        await Assert.That(exitCode).IsEqualTo(1);
+        await Assert.That(stderr).Contains("team@kcap.ai");
+        await Assert.That(stdout).Contains("It broke.");
+    }
+
     sealed class RecordingFeedbackApi(FeedbackResult result) : IFeedbackApi {
         public FeedbackSubmission? Last { get; private set; }
 

@@ -73,6 +73,13 @@ public sealed record SessionSummaryDto {
     [JsonPropertyName("pr_number")]     public int?                            PrNumber     { get; init; }
     [JsonPropertyName("pr_url")]        public string?                         PrUrl        { get; init; }
     [JsonPropertyName("pr_title")]      public string?                         PrTitle      { get; init; }
+    [JsonPropertyName("stats")]         public SessionStatsDto?                Stats        { get; init; }
+    /// The stored audience override; null means the session follows <see cref="DefaultVisibility"/>.
+    [JsonPropertyName("visibility")]         public string?                    Visibility        { get; init; }
+    [JsonPropertyName("default_visibility")] public string?                    DefaultVisibility { get; init; }
+    [JsonPropertyName("detail_level")]       public string?                    DetailLevel       { get; init; }
+    /// The live hosted agent's sharing level, sent only to that agent's owner.
+    [JsonPropertyName("agent_visibility")]   public string?                    AgentVisibility   { get; init; }
     [JsonPropertyName("repositories")]  public List<SessionRepositoryDto>      Repositories { get => _repositories; init => _repositories = value ?? []; }
     [JsonPropertyName("pull_requests")] public List<SessionPullRequestDto>     PullRequests { get => _pullRequests; init => _pullRequests = value ?? []; }
 }

@@ -526,13 +526,19 @@ jobs:
           repositories: kcap-server
           permission-contents: read
 
+      # The smoke test reads the model pin and its fetch script relative to its own location.
       - name: Fetch the server's smoke test for this tag
         env:
           GH_TOKEN: ${{ steps.server-token.outputs.token }}
-        run: >
-          gh api -H 'Accept: application/vnd.github.raw'
-          "repos/kurrent-io/kcap-server/contents/scripts/smoke-local-bundle.sh?ref=$GITHUB_REF_NAME"
-          > "$RUNNER_TEMP/smoke-local-bundle.sh"
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/server/scripts" "$RUNNER_TEMP/server/eng"
+          for f in scripts/smoke-local-bundle.sh scripts/fetch-embedding-model.sh \
+                   eng/builtin-embedding-model.env eng/builtin-embedding-reference.json; do
+            gh api -H 'Accept: application/vnd.github.raw' \
+              "repos/kurrent-io/kcap-server/contents/$f?ref=$GITHUB_REF_NAME" > "$RUNNER_TEMP/server/$f"
+          done
 
       - name: Download the signed archive
         uses: actions/download-artifact@v8
@@ -542,7 +548,7 @@ jobs:
 
       - name: Smoke-start the signed archive
         shell: bash
-        run: bash "$RUNNER_TEMP/smoke-local-bundle.sh" local/kcap-local-*-osx-arm64.tar.gz
+        run: bash "$RUNNER_TEMP/server/scripts/smoke-local-bundle.sh" local/kcap-local-*-osx-arm64.tar.gz
 
   local-publish:
     name: Publish the local bundle (osx-arm64)
@@ -583,6 +589,13 @@ jobs:
           bash scripts/build-local-manifest.sh "${{ steps.version.outputs.VERSION }}" osx-arm64 "local/$NAME.tar.gz" "$MANIFEST_KEY" > "local/$NAME.json"
           bash scripts/local-manifest-key.sh sign "$MANIFEST_KEY" "local/$NAME.json" "local/$NAME.json.sig"
           cat "local/$NAME.json"
+
+      # Every model object is stored and verified before the manifest that names it is published.
+      # Under local/ rather than local/<rid>/: the model set is shared by every rid.
+      - name: Upload the built-in model set
+        env:
+          DEST: s3://${{ secrets.R2_BUCKET }}/local
+        run: bash scripts/publish-local-model.sh "local/kcap-local-${{ steps.version.outputs.VERSION }}-osx-arm64.tar.gz"
 
       - name: Upload the archive, signature and manifest
         run: bash scripts/publish-local-bundle.sh local "${{ steps.version.outputs.VERSION }}" osx-arm64 "$MANIFEST_KEY"

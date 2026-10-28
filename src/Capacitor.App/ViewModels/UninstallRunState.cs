@@ -1,3 +1,3 @@
 namespace Capacitor.App.ViewModels;
 
-public enum UninstallRunState { Running, Failed, Finished, TrashFailed }
+public enum UninstallRunState { Preparing, Running, Failed, Finished, TrashFailed }

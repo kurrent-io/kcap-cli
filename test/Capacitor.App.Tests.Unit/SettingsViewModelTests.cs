@@ -172,7 +172,7 @@ public class SettingsViewModelTests {
         await vm.RenameCommand.Execute();
         await Assert.That(store.Load().Name).IsEqualTo(concurrentName ? "concurrent" : "daemon-a");
         await Assert.That(store.Load().MaxAgents).IsEqualTo(9);
-        await Assert.That(vm.Message!).Contains("CLI no longer supports");
+        await Assert.That(vm.Message!).Contains("cannot rename the daemon");
     });
 
     /// <summary>The CLI refused before touching either service, so the saved name must not point at
@@ -181,7 +181,7 @@ public class SettingsViewModelTests {
     [Arguments("target_occupied", "already installed")]
     [Arguments("target_unknown", "Could not tell")]
     [Arguments("agents_active", "Wait for it to finish")]
-    [Arguments("fence_unsupported", "Restart the daemon")]
+    [Arguments("fence_unsupported", "Once the daemon has restarted")]
     [Arguments("fence_unavailable", "couple of minutes")]
     public Task A_refusal_that_changed_nothing_restores_the_name_and_says_so(string reason, string message) =>
         AvaloniaSession.RunOnUiAsync(async () => {

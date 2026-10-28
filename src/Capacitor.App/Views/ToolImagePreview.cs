@@ -7,7 +7,7 @@ using Capacitor.App.Services;
 
 namespace Capacitor.App.Views;
 
-/// Thumbnail for a Read of a local image. A click grows it; a missing file draws nothing.
+/// Thumbnail for a local image. A click grows it unless ExpandsOnClick is off; a missing file draws nothing.
 public sealed class ToolImagePreview : Button {
     const double Thumb = 140;
     const double Expanded = 520;
@@ -18,6 +18,20 @@ public sealed class ToolImagePreview : Button {
 
     public static readonly StyledProperty<string?> PathProperty =
         AvaloniaProperty.Register<ToolImagePreview, string?>(nameof(Path));
+
+    public static readonly StyledProperty<bool> ExpandsOnClickProperty =
+        AvaloniaProperty.Register<ToolImagePreview, bool>(nameof(ExpandsOnClick), defaultValue: true);
+
+    public static readonly DirectProperty<ToolImagePreview, bool> UnavailableProperty =
+        AvaloniaProperty.RegisterDirect<ToolImagePreview, bool>(nameof(Unavailable), o => o.Unavailable);
+
+    bool _unavailable = true;
+
+    /// True when there is no path, or its load produced no image; false while a load is pending.
+    public bool Unavailable {
+        get => _unavailable;
+        private set => SetAndRaise(UnavailableProperty, ref _unavailable, value);
+    }
 
     readonly Image _image = new() {
         MaxHeight = Thumb,
@@ -37,10 +51,16 @@ public sealed class ToolImagePreview : Button {
         Cursor = new Cursor(StandardCursorType.Hand);
         Content = _image;
         Click += (_, _) => {
+            if (!ExpandsOnClick) return;
             _expanded = !_expanded;
             _image.MaxHeight = _expanded ? Expanded : Thumb;
             _image.MaxWidth = _expanded ? 720 : 480;
         };
+    }
+
+    public bool ExpandsOnClick {
+        get => GetValue(ExpandsOnClickProperty);
+        set => SetValue(ExpandsOnClickProperty, value);
     }
 
     public string? Path {
@@ -77,6 +97,7 @@ public sealed class ToolImagePreview : Button {
         _expanded = false;
         _image.MaxHeight = Thumb;
         _image.MaxWidth = 480;
+        Unavailable = string.IsNullOrEmpty(path);
         if (string.IsNullOrEmpty(path)) return;
         var loaded = await Task.Run(() => ToolPreviewImages.Acquire(path)).ConfigureAwait(false);
         await Dispatcher.UIThread.InvokeAsync(() => {
@@ -87,6 +108,7 @@ public sealed class ToolImagePreview : Button {
             _loaded = loaded;
             _image.Source = loaded?.Image;
             IsVisible = _image.Source is not null;
+            Unavailable = !IsVisible;
         });
     }
 }
