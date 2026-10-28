@@ -101,7 +101,7 @@
                                                                 <TextBlock Text="{Binding Plan}" FontSize="11" FontWeight="SemiBold"
                                                                            Foreground="{StaticResource KcapMutedBrush}" />
                                                             </Border>
-                                                            <Border Classes="accountBlocked" IsVisible="{Binding Usage.View.BlockedText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                                            <Border Classes="accountBlocked" IsVisible="{Binding Usage.View.BlockedText, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}"
                                                                     Background="{StaticResource KcapDangerDimBrush}" CornerRadius="999" Padding="8,3" VerticalAlignment="Center">
                                                                 <TextBlock Text="{Binding Usage.View.BlockedText}" FontSize="11" FontWeight="SemiBold"
                                                                            Foreground="{StaticResource KcapDangerBrush}" />
