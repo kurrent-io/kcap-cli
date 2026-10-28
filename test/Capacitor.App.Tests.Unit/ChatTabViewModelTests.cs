@@ -6,6 +6,7 @@ using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.WorkItems;
@@ -263,12 +264,14 @@ public class ChatTabViewModelTests {
 
         public Harness(IChatTranscriptProjection? projection, Action<FakePermissionService>? seed = null,
                        ChatInput? input = null, string? unavailableNote = null, IAttachmentUploader? uploader = null,
-                       Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null, LocalTranscripts? transcripts = null) {
+                       Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null, LocalTranscripts? transcripts = null,
+                       IObservable<AccountsSnapshotDto?>? accountReadings = null, IObservable<DateTimeOffset>? usageClock = null) {
             seed?.Invoke(Permissions);
             Runs = new SessionRuns(Time);
             Terminal = new TerminalTabViewModel("a1", Daemon, Factory.Factory, () => new FakeTerminalSurface(), Time);
             Chat = new ChatTabViewModel(
-                "a1", Daemon, input ?? new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), uploader ?? new NoAttachmentUploader(), projection, Opener, Time, Permissions, Runs, unavailableNote, planActivity: Plan, openCard: openCard, drafts: drafts, transcripts: transcripts);
+                "a1", Daemon, input ?? new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), uploader ?? new NoAttachmentUploader(), projection, Opener, Time, Permissions, Runs, unavailableNote, planActivity: Plan, openCard: openCard, drafts: drafts, transcripts: transcripts,
+                accountReadings: accountReadings, usageClock: usageClock);
         }
 
         public async Task PushAsync(AgentStatusDto dto) {
@@ -3740,6 +3743,160 @@ public class ChatTabViewModelTests {
                 session.OnNext(ChatSessionInfo.FromRemote(row with { AccountDirectory = null, AccountId = null, AccountLabel = null }, ended: false));
                 await Assert.That(chat.ShowsAccountStrip).IsFalse();
             } finally { await chat.TeardownAsync(); }
+        });
+    }
+
+    sealed class StripRig {
+        public BehaviorSubject<AccountsSnapshotDto?> Readings { get; } = new(null);
+        public BehaviorSubject<DateTimeOffset> Clock { get; } = new(StripReadings.Now);
+        public Harness H { get; }
+
+        public StripRig() => H = new Harness(TranscriptChat.For("claude"), accountReadings: Readings, usageClock: Clock);
+
+        public Task PushAsync(string? accountId = "acc1") =>
+            H.PushAsync(Dto(null) with { AccountDirectory = StripReadings.Directory, AccountId = accountId, AccountLabel = "work" });
+
+        public ChatTabViewModel Chat => H.Chat;
+    }
+
+    static async Task SettleAsync() {
+        Dispatcher.UIThread.RunJobs();
+        await Task.Yield();
+        Dispatcher.UIThread.RunJobs();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Strip_shows_bars_for_a_drawable_reading() {
+        await RunOnUiAsync(async () => {
+            var rig = new StripRig();
+            try {
+                await rig.PushAsync();
+                rig.Readings.OnNext(StripReadings.Snapshot(StripReadings.Account("acc1", StripReadings.Reading(
+                    StripReadings.Window(300, 42, TimeSpan.FromMinutes(134)), StripReadings.Window(10080, 81, TimeSpan.FromDays(3))))));
+                await WaitUntilAsync(() => rig.Chat.ShowsAccountUsage, what: "the bars");
+
+                var usage = rig.Chat.AccountStripUsage!;
+                await Assert.That(usage.Bars.Select(b => (b.Label, b.PercentText, b.Tone)))
+                    .IsEquivalentTo(new[] { ("5h", "42%", UsageTone.Neutral), ("Week", "81%", UsageTone.Warning) }, CollectionOrdering.Matching);
+                await Assert.That(usage.NextResetText).IsEqualTo("resets in 2h 14m");
+                await Assert.That(rig.Chat.ShowsAccountDirectory).IsFalse();
+                await Assert.That(rig.Chat.AccountReadingNote).IsNull();
+            } finally { await rig.H.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Strip_shows_no_reading_yet_with_the_directory() {
+        await RunOnUiAsync(async () => {
+            var rig = new StripRig();
+            try {
+                await rig.PushAsync();
+                rig.Readings.OnNext(StripReadings.Snapshot(StripReadings.Account("acc1", null)));
+                await WaitUntilAsync(() => rig.Chat.AccountReadingNote is not null, what: "the note");
+
+                await Assert.That(rig.Chat.AccountReadingNote).IsEqualTo("· no reading yet");
+                await Assert.That(rig.Chat.ShowsAccountDirectory).IsTrue();
+                await Assert.That(rig.Chat.ShowsAccountUsage).IsFalse();
+            } finally { await rig.H.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Strip_shows_directory_only_when_the_host_is_not_drawable() {
+        await RunOnUiAsync(async () => {
+            var rig = new StripRig();
+            try {
+                await rig.PushAsync();
+                rig.Readings.OnNext(StripReadings.Snapshot(StripReadings.Account("acc1", StripReadings.Reading(StripReadings.Window(300, 42, TimeSpan.FromHours(2))))));
+                await WaitUntilAsync(() => rig.Chat.ShowsAccountUsage, what: "the bars");
+
+                rig.Readings.OnNext(null);
+                await WaitUntilAsync(() => !rig.Chat.ShowsAccountUsage, what: "the bars to go");
+
+                await Assert.That(rig.Chat.AccountStripUsage).IsNull();
+                await Assert.That(rig.Chat.ShowsAccountDirectory).IsTrue();
+                await Assert.That(rig.Chat.AccountReadingNote).IsNull();
+            } finally { await rig.H.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Strip_shows_directory_only_for_an_unregistered_default() {
+        await RunOnUiAsync(async () => {
+            var rig = new StripRig();
+            try {
+                rig.Readings.OnNext(StripReadings.Snapshot(StripReadings.Account("acc1", StripReadings.Reading(StripReadings.Window(300, 42, TimeSpan.FromHours(2))))));
+                await rig.PushAsync(accountId: null);
+                await SettleAsync();
+
+                await Assert.That(rig.Chat.ShowsAccountStrip).IsTrue();
+                await Assert.That(rig.Chat.AccountStripUsage).IsNull();
+                await Assert.That(rig.Chat.ShowsAccountDirectory).IsTrue();
+                await Assert.That(rig.Chat.AccountReadingNote).IsNull();
+            } finally { await rig.H.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Strip_shows_directory_only_for_an_account_missing_from_the_snapshot() {
+        await RunOnUiAsync(async () => {
+            var rig = new StripRig();
+            try {
+                rig.Readings.OnNext(StripReadings.Snapshot(StripReadings.Account("other", StripReadings.Reading(StripReadings.Window(300, 42, TimeSpan.FromHours(2))))));
+                await rig.PushAsync();
+                await SettleAsync();
+
+                await Assert.That(rig.Chat.AccountStripUsage).IsNull();
+                await Assert.That(rig.Chat.ShowsAccountDirectory).IsTrue();
+                await Assert.That(rig.Chat.AccountReadingNote).IsNull();
+            } finally { await rig.H.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Strip_blocked_shows_limit_hit_with_its_reset() {
+        await RunOnUiAsync(async () => {
+            var rig = new StripRig();
+            try {
+                await rig.PushAsync();
+                rig.Readings.OnNext(StripReadings.Snapshot(StripReadings.Account("acc1", StripReadings.Blocked(TimeSpan.FromMinutes(65),
+                    StripReadings.Window(300, 100, TimeSpan.FromMinutes(65)), StripReadings.Window(10080, 81, TimeSpan.FromDays(3))))));
+                await WaitUntilAsync(() => rig.Chat.ShowsAccountUsage, what: "the bars");
+
+                var usage = rig.Chat.AccountStripUsage!;
+                await Assert.That(usage.BlockedText).IsEqualTo("Limit hit · resets in 1h 05m");
+                await Assert.That(usage.Bars[0].Tone).IsEqualTo(UsageTone.Danger);
+            } finally { await rig.H.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Strip_follows_the_clock() {
+        await RunOnUiAsync(async () => {
+            var rig = new StripRig();
+            try {
+                await rig.PushAsync();
+                rig.Readings.OnNext(StripReadings.Snapshot(StripReadings.Account("acc1", StripReadings.Reading(StripReadings.Window(300, 42, TimeSpan.FromMinutes(134).Add(TimeSpan.FromSeconds(30)))))));
+                await WaitUntilAsync(() => rig.Chat.AccountStripUsage?.NextResetText == "resets in 2h 14m", what: "the first reset");
+                var first = rig.Chat.AccountStripUsage;
+
+                var changes = 0;
+                using var watch = rig.Chat.WhenAnyValue(c => c.AccountStripUsage).Skip(1).Subscribe(_ => changes++);
+                rig.Clock.OnNext(StripReadings.Now.AddSeconds(20));
+                await SettleAsync();
+                await Assert.That(changes).IsEqualTo(0);
+                await Assert.That(rig.Chat.AccountStripUsage).IsSameReferenceAs(first);
+
+                rig.Clock.OnNext(StripReadings.Now.AddMinutes(30));
+                await WaitUntilAsync(() => rig.Chat.AccountStripUsage?.NextResetText == "resets in 1h 44m", what: "the clock's reset");
+            } finally { await rig.H.TeardownAsync(); }
         });
     }
 

@@ -91,7 +91,15 @@ public static class AccountWiring {
             _ => (r with { Accounts = [.. r.Accounts.Select(a => a.Id == accountId ? a with { StatusLine = backup } : a)] }, true),
         }).Result;
 
-    public static RecordingState State(VendorAccount account, UserHome home) => State(account.Vendor, account.Directory, home);
+    /// <summary>A Codex account reads Recording only when its stored trust answer was given for the files on disk now.</summary>
+    public static RecordingState State(VendorAccount account, UserHome home) {
+        var state = State(account.Vendor, account.Directory, home);
+        if (state != RecordingState.Installed || account.Vendor != HarnessId.Codex) return state;
+
+        if (account.HookTrust != HookTrustStates.Trusted || account.HookTrustFingerprint is not { } stored) return state;
+
+        return CodexTrustFingerprint.Of(AccountLayouts.Codex(home, account.Directory)) == stored ? RecordingState.Recording : state;
+    }
 
     public static RecordingState State(HarnessId vendor, string directory, UserHome home) {
         switch (vendor) {

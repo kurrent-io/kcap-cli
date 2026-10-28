@@ -35,6 +35,7 @@ using Capacitor.Cli.Core.PullRequests.Readers;
 using Capacitor.Cli.Core.PullRequests.Readers.GitHubCli;
 using Capacitor.Cli.Core.Resume;
 using Capacitor.Cli.Core.Setup;
+using Capacitor.Remote.Models;
 using Capacitor.Cli.Core.Harness;
 using Microsoft.Extensions.DependencyInjection;
 using Capacitor.App.Platform.Linux;
@@ -174,6 +175,7 @@ public partial class App : Application {
     ConsentService? _consent;
     PermissionService? _permissions;
     AccountsService? _accounts;
+    IObservable<DateTimeOffset>? _usageClock;
     NotificationSettingsService? _notificationSettings;
     IDesktopNotificationSink? _notificationSink;
     IDesktopNotificationAccess? _notificationAccess;
@@ -414,6 +416,7 @@ public partial class App : Application {
             _commands = null;
             _permissions = null;
             _accounts = null;
+            _usageClock = null;
             _sessionAccess = null;
             _pullRequestTones = null;
             _pause = null;
@@ -858,9 +861,13 @@ public partial class App : Application {
         // A resolved server and nothing more — deliberately wider than Settings, which also needs a
         // profile name for its store.
         var feedbackApi = sessionHttp is null ? null : _serverHttp!.GetRequiredService<IFeedbackApi>();
+        // A local installation has no support intake, so its reports go out as email drafts.
+        Func<FeedbackSubmission, FeedbackMailOutcome>? feedbackMail = isLocalServer
+            ? s => FeedbackMail.Send(s, SystemBrowser.Instance, Capacitor.Cli.Core.Auth.Clipboard.TryCopy)
+            : null;
         Action<FeedbackCategory>? openFeedback = feedbackApi is null
             ? null
-            : category => OpenFeedback(feedbackApi, feedbackTrailer, requestSignIn, category);
+            : category => OpenFeedback(feedbackApi, feedbackTrailer, requestSignIn, category, feedbackMail);
         _menuBar?.SetFeedbackAction(openFeedback);
 
         var commands = new BackgroundCommandActivity((key, report, ended, handoff) =>
@@ -875,6 +882,8 @@ public partial class App : Application {
             agentId => _coordinator?.Window?.DataContext is MainWindowViewModel vm && vm.OpenSession(agentId));
         var drafts = new ComposerDrafts();
         var transcripts = new LocalTranscripts();
+        var readings = new AccountReadings(accounts.Snapshot, remoteAgents.DrawableDaemonAccounts, UsageClock.Create(_time));
+        _usageClock = readings.Clock;
         WorkspaceViewModel BuildWorkspace(string agentId) => new(
             agentId, service, actions, attachFactory, () => new XtermTerminalSurface(80, 24, PtyDumpPath), _time, workspaceOpener, permissions,
             workContext, ops, uploader,
@@ -884,7 +893,7 @@ public partial class App : Application {
             commands: commands, drafts: drafts, inputSending: attention.ReplySending,
             resumeLedger: id => ResumeLedgerStore.For(_daemonStore, service.DaemonName).TryRead(id),
             pullRequestSnapshots: pullRequestSnapshots, transcripts: transcripts,
-            pullRequestLinksChanged: pullRequestTones.Refresh, senders: senders);
+            pullRequestLinksChanged: pullRequestTones.Refresh, readings: readings, senders: senders);
         // The origin lookup below and this call are two reads of a cache the directory's own
         // background recompute mutates, so the row can be gone by the time this runs: no row, no
         // host, and the click opens nothing.
@@ -895,7 +904,7 @@ public partial class App : Application {
                     pullRequests: pullRequests, requestSignIn: requestSignIn, linkGitHub: linkGitHub,
                     signInCompleted: serverClients.SignInCompleted, plans: plans, drafts: drafts, inputSending: attention.ReplySending,
                     pullRequestSnapshots: pullRequestSnapshots, pullRequestLinksChanged: pullRequestTones.Refresh, readSubagent: readSubagent,
-                    senders: senders)
+                    readings: readings, senders: senders)
                 : null;
         // A session the server lists with no daemon behind it: read-only, so no terminal surface.
         RemoteSessionViewModel? BuildServer(string sessionId) =>
@@ -904,7 +913,8 @@ public partial class App : Application {
                     surfaceFactory: null, planArtifacts, commands,
                     pullRequests: pullRequests, requestSignIn: requestSignIn, linkGitHub: linkGitHub,
                     signInCompleted: serverClients.SignInCompleted, plans: plans, drafts: drafts, inputSending: attention.ReplySending,
-                    pullRequestSnapshots: pullRequestSnapshots, pullRequestLinksChanged: pullRequestTones.Refresh, readSubagent: readSubagent)
+                    pullRequestSnapshots: pullRequestSnapshots, pullRequestLinksChanged: pullRequestTones.Refresh, readSubagent: readSubagent,
+                    readings: readings)
                 : null;
 
         _coordinator = new MainWindowCoordinator(
@@ -918,7 +928,7 @@ public partial class App : Application {
                 requestSignIn: requestSignIn,
                 lifecycleAttention: lifecycleAttention, identityReport: lifecycle.IdentityReport,
                 pullRequestSummaries: pullRequestTones.Summaries,
-                directory: directory, remoteAgents: remoteAgents, lane: serverLane, localAccounts: accounts.Snapshot,
+                directory: directory, remoteAgents: remoteAgents, lane: serverLane, localAccounts: accounts.Snapshot, readings: readings,
                 viewerId: viewerId, localMachineId: machineId, restartPending: restartPending.Pending,
                 // A row present on both lanes is the local one: the local socket is the richer
                 // workspace, and the directory only keeps both rows when the twin is unproven.
@@ -1170,7 +1180,7 @@ public partial class App : Application {
                     ? new AccountsSettingsViewModel(accounts, lane.RunAsync, service.DaemonName, settings.ProfileName,
                         discover: () => AccountDiscovery.Find(
                             _userHome, AccountStore.Beside(_daemonStore).TryLoad() ?? new AccountRegistry(), Environment.GetEnvironmentVariable),
-                        pickDirectory: PickAccountDirectoryAsync, daemonStatus: service.Status, appLifetime: _shutdown.Token)
+                        pickDirectory: PickAccountDirectoryAsync, daemonStatus: service.Status, usageClock: _usageClock, appLifetime: _shutdown.Token)
                     : null,
                 Appearance = new AppearanceSettingsViewModel(_uiScale),
                 Privacy    = new PrivacySettingsViewModel(_telemetry, _config, _usageNotice),
@@ -1224,7 +1234,8 @@ public partial class App : Application {
                 MainWindowViewModel.StripBuildMetadata(s.Daemon.Version), cliVersion()))
             .StartWith(FeedbackTrailer.Build(appVersion, service.DaemonName, null, cliVersion())));
 
-    internal void OpenFeedback(IFeedbackApi api, IObservable<string> trailer, Action? signIn, FeedbackCategory category) {
+    internal void OpenFeedback(IFeedbackApi api, IObservable<string> trailer, Action? signIn, FeedbackCategory category,
+            Func<FeedbackSubmission, FeedbackMailOutcome>? mail = null) {
         if (_shutdownStarted) return;
         if (_feedbackWindow is { } open) {
             if (open.WindowState == WindowState.Minimized) open.WindowState = WindowState.Normal;
@@ -1234,7 +1245,7 @@ public partial class App : Application {
         }
 
         var vm = new FeedbackViewModel(api, category, trailer, RuntimeInformation.OSDescription,
-            signIn: signIn, appLifetime: _shutdown.Token);
+            signIn: signIn, appLifetime: _shutdown.Token, mail: mail);
 
         var window = new FeedbackWindow { DataContext = vm };
         _feedbackWindow = window;
@@ -1720,7 +1731,7 @@ public partial class App : Application {
             UiScaleSetting? uiScale = null, UsageDataNotice? usageNotice = null,
             WebWorkspaceViewModel? web = null, Action? openLaunchApprovals = null,
             Func<string, RemoteSessionViewModel?>? serverWorkspaceFactory = null, IServerSessionsService? sessions = null,
-            RailPreferencesStore? railPreferences = null,
+            RailPreferencesStore? railPreferences = null, AccountReadings? readings = null,
             Func<CancellationToken, Task>? repairDaemon = null, IObservable<string?>? repairOffer = null,
             string? profileName = null) {
         // Notifier is set on the WINDOW (the toast overlay), not the ViewModel — the toast
@@ -1743,6 +1754,11 @@ public partial class App : Application {
             service, remoteAgents ?? new NoRemoteAgents(), lane ?? new NoServerLane(), new RepoIdentityResolver(),
             GitRepository.ResolveMainRepoRoot, localMachineId, appServerUrl: null, time);
 
+        readings ??= new AccountReadings(
+            localAccounts ?? Observable.Return<AccountsSnapshotDto?>(null),
+            remoteAgents?.DrawableDaemonAccounts ?? Observable.Return<IReadOnlyList<DaemonAccountsDto>>([]),
+            UsageClock.Create(time));
+
         MainWindowViewModel? vm = null;
         var home = new HomeViewModel(
             service, appState,
@@ -1754,7 +1770,7 @@ public partial class App : Application {
             localMachineId: localMachineId, launchFailures: lane?.LaunchFailures, directory: resolvedDirectory,
             modelCatalog: modelCatalog, uploader: uploader, appServerUrl: appServerUrl,
             listing: remoteAgents?.Listing, daemonAccounts: remoteAgents?.DaemonAccounts, localAccounts: localAccounts,
-            retryListing: remoteAgents is null ? null : remoteAgents.RefreshDaemonsAsync,
+            retryListing: remoteAgents is null ? null : remoteAgents.RefreshDaemonsAsync, readings: readings,
             launchFailed: agentId => vm?.CloseFailedLaunch(agentId)) { LocalStack = localStack, UsageNotice = usageNotice };
         if (localServer is not null) home.AttachLocalServerRecovery(localServer);
         if (repairDaemon is not null && repairOffer is not null) home.AttachServiceRepair(repairDaemon, repairOffer, shutdownToken);

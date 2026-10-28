@@ -3,6 +3,7 @@ using System.Text.Json;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Accounts.Readings;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Codex;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Accounts;
 
@@ -39,6 +40,21 @@ public class AccountSnapshotBuilderTests {
             new AccountViewDto("c1", "claude", AccountDirectory.Normalize(claude), DirectoryKey.Of(claude), "Work", "installed"));
         await Assert.That(snapshot.Accounts[1]).IsEqualTo(
             new AccountViewDto("x1", "codex", AccountDirectory.Normalize(codex), DirectoryKey.Of(codex), "Spare", "not_wired"));
+    }
+
+    [Test]
+    public async Task A_trusted_codex_account_publishes_recording() {
+        var codex = Home.CreateDir(".codex-b");
+        CodexHooksWriter.Install(Path.Combine(codex, "hooks.json"));
+        var account = Account("x1", HarnessId.Codex, codex, "Spare");
+        account = account with {
+            HookTrust            = HookTrustStates.Trusted,
+            HookTrustFingerprint = CodexTrustFingerprint.Of(AccountLayouts.Codex(Home, account.Directory)),
+        };
+
+        var snapshot = AccountSnapshotBuilder.Build(Registry(1, account), "host-1", new Dictionary<HarnessId, string>(), Home, NoReadings);
+
+        await Assert.That(snapshot.Accounts.Single().RecordingState).IsEqualTo("recording");
     }
 
     [Test]

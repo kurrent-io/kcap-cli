@@ -122,7 +122,7 @@ public partial class SettingsWindow : Window {
     void OnChromePointerPressed(object? sender, PointerPressedEventArgs e) => WindowChrome.BeginDrag(this, e);
 
     void OnProfileCardClick(object? sender, RoutedEventArgs e) {
-        if (ProfilesTab.IsVisible) SettingsTabs.SelectedItem = ProfilesTab;
+        if ((DataContext as SettingsViewModel)?.Profiles is not null) SettingsTabs.SelectedItem = ProfilesTab;
     }
 
     async void OnCopyVersionInfo(object? sender, RoutedEventArgs e) {

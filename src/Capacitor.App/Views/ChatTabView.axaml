@@ -556,8 +556,61 @@
                                         Content="{Binding AccountVendor, Converter={x:Static views:VendorGlyphConverter.Instance}, ConverterParameter=12}" />
                         <TextBlock Grid.Column="1" Text="{Binding AccountLabel}" FontSize="12" VerticalAlignment="Center"
                                    Foreground="{StaticResource KcapTextBrush}" />
-                        <TextBlock Grid.Column="2" Text="{Binding AccountDirectory}" FontSize="11.5" VerticalAlignment="Center"
-                                   Foreground="{StaticResource KcapMutedBrush}" TextTrimming="CharacterEllipsis" />
+                        <!-- Docked left so the note sits right after the directory until the directory has to trim. -->
+                        <DockPanel Grid.Column="2" HorizontalAlignment="Left" IsVisible="{Binding ShowsAccountDirectory}">
+                            <TextBlock DockPanel.Dock="Right" Text="{Binding AccountReadingNote}" FontSize="11.5" VerticalAlignment="Center"
+                                       Margin="6,0,0,0" Foreground="{StaticResource KcapFaintBrush}"
+                                       IsVisible="{Binding AccountReadingNote, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                            <TextBlock x:Name="AccountStripDirectory" Text="{Binding AccountDirectory}" FontSize="11.5" VerticalAlignment="Center"
+                                       Foreground="{StaticResource KcapMutedBrush}" TextTrimming="CharacterEllipsis" />
+                        </DockPanel>
+                        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" ClipToBounds="True"
+                                    IsVisible="{Binding ShowsAccountUsage}">
+                            <Border x:Name="AccountStripBlocked" Background="{StaticResource KcapDangerDimBrush}" CornerRadius="999"
+                                    Padding="8,2" VerticalAlignment="Center"
+                                    IsVisible="{Binding AccountStripUsage.BlockedText, Converter={x:Static ObjectConverters.IsNotNull}}">
+                                <TextBlock Text="{Binding AccountStripUsage.BlockedText}" FontSize="11" FontWeight="SemiBold"
+                                           Foreground="{StaticResource KcapDangerBrush}" />
+                            </Border>
+                            <ItemsControl ItemsSource="{Binding AccountStripUsage.Bars}" VerticalAlignment="Center">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <StackPanel Orientation="Horizontal" Spacing="8" />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:UsageBar">
+                                        <StackPanel Orientation="Horizontal" Spacing="5">
+                                            <TextBlock Text="{Binding Label}" FontSize="11.5" VerticalAlignment="Center"
+                                                       Foreground="{StaticResource KcapMutedBrush}" />
+                                            <Border Width="56" Height="4" CornerRadius="2" VerticalAlignment="Center"
+                                                    Background="{StaticResource KcapBorderBrush}">
+                                                <Border HorizontalAlignment="Left" CornerRadius="2"
+                                                        Width="{Binding Converter={x:Static views:UsageBarFillConverter.Instance}, ConverterParameter=56}"
+                                                        Background="{Binding Tone, Converter={x:Static views:UsageToneBrushConverter.Instance}}" />
+                                            </Border>
+                                            <TextBlock Text="{Binding PercentText}" FontSize="11.5" VerticalAlignment="Center"
+                                                       Foreground="{Binding Tone, Converter={x:Static views:UsageToneBrushConverter.Instance}, ConverterParameter=Text}" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <TextBlock x:Name="AccountStripPerModel" Text="{Binding AccountStripUsage.PerModelText}" FontSize="11.5"
+                                       VerticalAlignment="Center" Foreground="{StaticResource KcapFaintBrush}"
+                                       IsVisible="{Binding AccountStripUsage.PerModelText, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                            <TextBlock Text="{Binding AccountStripUsage.LineText}" FontSize="11.5" VerticalAlignment="Center"
+                                       Foreground="{StaticResource KcapFaintBrush}"
+                                       IsVisible="{Binding AccountStripUsage.LineText, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                            <TextBlock x:Name="AccountStripReset" Text="{Binding AccountStripUsage.NextResetText}" FontSize="11.5"
+                                       VerticalAlignment="Center" Foreground="{StaticResource KcapFaintBrush}">
+                                <TextBlock.IsVisible>
+                                    <MultiBinding Converter="{x:Static BoolConverters.And}">
+                                        <Binding Path="AccountStripUsage.NextResetText" Converter="{x:Static ObjectConverters.IsNotNull}" />
+                                        <Binding Path="AccountStripUsage.BlockedText" Converter="{x:Static ObjectConverters.IsNull}" />
+                                    </MultiBinding>
+                                </TextBlock.IsVisible>
+                            </TextBlock>
+                        </StackPanel>
                     </Grid>
                 </Border>
             </Grid>

@@ -45,6 +45,17 @@ public class SettingsWindowSmokeTests {
             var alerts = window.FindControl<TabItem>("NotificationsTab")!;
             await Assert.That(window.CanResize).IsTrue();
             await Assert.That(profiles.IsEffectivelyVisible).IsFalse();
+            var card = window.FindControl<Button>("ProfileCard")!;
+            await Assert.That(card.IsEffectivelyEnabled).IsFalse();
+            await Assert.That(ToolTip.GetShowOnDisabled(card)).IsTrue();
+            const string unavailableHint = "Current profile: work\nProfile management is unavailable";
+            await Assert.That(ToolTip.GetTip(card) as string).IsEqualTo(unavailableHint);
+            await Assert.That(AutomationProperties.GetName(card)).IsEqualTo(unavailableHint);
+            var label = card.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("profileManageLabel"));
+            await Assert.That(label.IsEffectivelyVisible).IsTrue();
+            await Assert.That(label.Text).IsEqualTo("Management unavailable");
+            Click(window, card);
+            await Assert.That(tabs.SelectedItem).IsEqualTo(window.FindControl<TabItem>("CaptureTab"));
             var daemonPosition = daemon.TranslatePoint(default, window)!.Value;
             var alertsPosition = alerts.TranslatePoint(default, window)!.Value;
             await Assert.That(alertsPosition.X).IsEqualTo(daemonPosition.X);
@@ -158,9 +169,20 @@ public class SettingsWindowSmokeTests {
             Dispatcher.UIThread.RunJobs();
             var tabs = window.FindControl<TabControl>("SettingsTabs")!;
             var tab  = window.FindControl<TabItem>("ProfilesTab")!;
-            tabs.SelectedItem = tab;
-            Dispatcher.UIThread.RunJobs();
+            var card = window.FindControl<Button>("ProfileCard")!;
             Settle(window);
+            await Assert.That(card.IsEffectivelyEnabled).IsTrue();
+            const string manageHint = "Current profile: work\nSelect to manage profiles";
+            await Assert.That(ToolTip.GetTip(card) as string).IsEqualTo(manageHint);
+            await Assert.That(AutomationProperties.GetName(card)).IsEqualTo(manageHint);
+            Click(window, card);
+            await Assert.That(tabs.SelectedItem).IsEqualTo(tab);
+            var presenter = card.GetVisualDescendants().OfType<Avalonia.Controls.Presenters.ContentPresenter>()
+                .Single(p => p.Name == "PART_ContentPresenter");
+            await Assert.That(presenter.Background).IsEqualTo((Avalonia.Media.IBrush)window.FindResource("KcapSelectionBrush")!);
+            Click(window, window.FindControl<TabItem>("CaptureTab")!);
+            await Assert.That(presenter.Background).IsNotEqualTo((Avalonia.Media.IBrush)window.FindResource("KcapSelectionBrush")!);
+            Click(window, card);
 
             // A TabItem's own visual tree is its header only; the selected tab's content is hosted
             // by the TabControl's PART_SelectedContentHost, so the row content is found from tabs.
@@ -261,10 +283,10 @@ public class SettingsWindowSmokeTests {
             Click(window, menuButton);
             await Assert.That(menu.IsOpen).IsTrue();
             var items = ((Control)menu.Content!).GetVisualDescendants().OfType<Button>().ToList();
-            await Assert.That(string.Join(",", items.Select(b => b.Content))).IsEqualTo("Rename,Reconnect,Remove");
+            await Assert.That(string.Join(",", items.Select(b => b.Content))).IsEqualTo("Refresh,Rename,Reconnect,Remove");
             await Assert.That(items.All(b => b.Classes.Contains("kcapGhost"))).IsTrue();
             await Assert.That(items[0].FindAncestorOfType<FlyoutPresenter>()!.Classes.Contains("kcapPanel")).IsTrue();
-            MainWindowSmokeTests.ClickFlyoutButton(items[0]);
+            MainWindowSmokeTests.ClickFlyoutButton(items[1]);
             Settle(window);
             await Assert.That(menu.IsOpen).IsFalse();
             await Assert.That(accountsVm.Renaming!.Id).IsEqualTo("a2");
@@ -296,6 +318,87 @@ public class SettingsWindowSmokeTests {
             await WaitUntilAsync(() => requests.Count == 2);
             await Assert.That(addMenu.IsOpen).IsFalse();
             await Assert.That(requests[1].Account).IsEqualTo(new AccountArgs("codex", "/u/.codex-alt", null, null));
+        } finally { window.Close(); }
+    });
+
+    [Test]
+    public Task A_row_without_a_usage_projection_draws_no_blocked_pill() => AvaloniaSession.RunOnUiAsync(async () => {
+        ConfigMutator.Mutate(Config.Root, c => c with { Profiles = new() {
+            ["work"] = new Profile { ServerUrl = "https://work.example", Daemon = new DaemonSettings { Name = "daemon-a", MaxAgents = 5 } }
+        } });
+        var service = new FakeDaemonClientService();
+        service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["settings/1", "accounts/1"]));
+        service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
+        var accounts = new FakeAccountsService();
+        accounts.Publish(new AccountsSnapshotDto("host-1", 3, [
+            new("a2", "claude", "/u/.claude-work", "/u/.claude-work", "work", "recording"),
+        ], [new("claude", "/u/.claude", "/u/.claude")]));
+        var requests = new List<MutationRequest>();
+        var accountsVm = new AccountsSettingsViewModel(accounts,
+            (request, _) => { requests.Add(request); return Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded()); },
+            "daemon-a", "work", () => [], _ => Task.FromResult<string?>(null), service.Status);
+        using var vm = new SettingsViewModel(new SettingsProfileStore(Config.Root, "work", "https://work.example"),
+            service, new ScriptedLocalControlOps(), (_, _) => Task.FromResult(false),
+            (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded()),
+            (_, _) => Task.FromResult(false), _ => Task.FromResult(false), true, Task.CompletedTask, (_, _) => Task.FromResult(true)) {
+            Accounts = accountsVm,
+        };
+        var window = new SettingsWindow { DataContext = vm };
+        try {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            var tabs = window.FindControl<TabControl>("SettingsTabs")!;
+            tabs.SelectedItem = window.FindControl<TabItem>("AccountsTab")!;
+            Settle(window);
+
+            var pills = tabs.GetVisualDescendants().OfType<Border>().Where(b => b.Classes.Contains("accountBlocked")).ToArray();
+            await Assert.That(pills).IsNotEmpty();
+            await Assert.That(pills.Any(b => b.IsEffectivelyVisible)).IsFalse();
+        } finally {
+            window.Close();
+        }
+    });
+
+    [Test]
+    public Task Refresh_in_the_row_menu_runs_the_refresh_command() => AvaloniaSession.RunOnUiAsync(async () => {
+        ConfigMutator.Mutate(Config.Root, c => c with { Profiles = new() {
+            ["work"] = new Profile { ServerUrl = "https://work.example", Daemon = new DaemonSettings { Name = "daemon-a", MaxAgents = 5 } }
+        } });
+        var service = new FakeDaemonClientService();
+        service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["settings/1", "accounts/1"]));
+        service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
+        var accounts = new FakeAccountsService();
+        accounts.Publish(new AccountsSnapshotDto("host-1", 3, [
+            new("a2", "claude", "/u/.claude-work", "/u/.claude-work", "work", "recording"),
+        ], [new("claude", "/u/.claude", "/u/.claude")]));
+        var requests = new List<MutationRequest>();
+        var accountsVm = new AccountsSettingsViewModel(accounts,
+            (request, _) => { requests.Add(request); return Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded()); },
+            "daemon-a", "work", () => [], _ => Task.FromResult<string?>(null), service.Status);
+        using var vm = new SettingsViewModel(new SettingsProfileStore(Config.Root, "work", "https://work.example"),
+            service, new ScriptedLocalControlOps(), (_, _) => Task.FromResult(false),
+            (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded()),
+            (_, _) => Task.FromResult(false), _ => Task.FromResult(false), true, Task.CompletedTask, (_, _) => Task.FromResult(true)) {
+            Accounts = accountsVm,
+        };
+        var window = new SettingsWindow { DataContext = vm };
+        try {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            var tabs = window.FindControl<TabControl>("SettingsTabs")!;
+            tabs.SelectedItem = window.FindControl<TabItem>("AccountsTab")!;
+            Settle(window);
+
+            var menuButton = tabs.GetVisualDescendants().OfType<Button>().Single(b => b.Classes.Contains("accountMenu") && b.IsEffectivelyVisible);
+            menuButton.BringIntoView();
+            Click(window, menuButton);
+            var menu = (Flyout)menuButton.Flyout!;
+            await Assert.That(menu.IsOpen).IsTrue();
+            var refresh = ((Control)menu.Content!).GetVisualDescendants().OfType<Button>().First(b => b.Content as string == "Refresh");
+            MainWindowSmokeTests.ClickFlyoutButton(refresh);
+            await WaitUntilAsync(() => requests.Count == 1);
+            await Assert.That(requests[0].Verb).IsEqualTo(MutationVerb.AccountRefresh);
+            await Assert.That(requests[0].Account).IsEqualTo(new AccountArgs(null, null, "a2", null));
         } finally { window.Close(); }
     });
 

@@ -59,10 +59,17 @@ public static class ReadingMerge {
         );
     }
 
-    public static bool IsBlocked(AccountReadingDto reading, DateTimeOffset now) =>
-        reading.Blocked is { BlockedAt: { } blockedAt } marker
-     && blockedAt > (marker.ClearedAt ?? DateTimeOffset.MinValue)
-     && marker.Constraints.Any(c => c.ResetsAt is not { } reset || reset > now);
+    public static bool IsBlocked(AccountReadingDto reading, DateTimeOffset now) => LiveConstraints(reading, now).Count > 0;
+
+    /// <summary>The constraints still holding at <paramref name="now"/>: none unless the marker is blocked after its
+    /// last clear, otherwise every constraint whose reset is unknown or after <paramref name="now"/>.</summary>
+    public static IReadOnlyList<BlockConstraintDto> LiveConstraints(AccountReadingDto reading, DateTimeOffset now) {
+        if (reading.Blocked is not { BlockedAt: { } blockedAt } marker
+         || blockedAt <= (marker.ClearedAt ?? DateTimeOffset.MinValue))
+            return [];
+
+        return marker.Constraints.Where(c => c.ResetsAt is not { } reset || reset > now).ToArray();
+    }
 
     /// <summary>The latest reset among the constraints; null when any constraint is unknown or there
     /// are none. Not the next reset a screen shows, which is the earliest window reset.</summary>

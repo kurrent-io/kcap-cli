@@ -503,6 +503,47 @@ public partial class LauncherPaneView : UserControl {
             RebuildRows();
         }
 
+        IReadOnlyDictionary<string, AccountUsageView> drawnUsage = vm.AccountUsageById;
+
+        Control? UsageLine(AccountUsageView usage) {
+            var line = new WrapPanel {
+                Orientation = Avalonia.Layout.Orientation.Horizontal, Margin = new Thickness(0, 3, 0, 0),
+            };
+            void Add(Control c) {
+                c.Margin = new Thickness(0, 0, 10, 0);
+                c.VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center;
+                line.Children.Add(c);
+            }
+            TextBlock Faint(string t) => new() { Text = t, FontSize = 10.5, Foreground = faint };
+
+            if (usage.Bars.Count == 0) {
+                if (usage.LineText is not null) Add(Faint(usage.LineText));
+            } else {
+                foreach (var bar in usage.Bars) {
+                    var fill = new Border {
+                        Background = Brush(UsageToneBrushConverter.FillKey(bar.Tone)), CornerRadius = new CornerRadius(2),
+                        Width = UsageBarFillConverter.Width(bar, 46),
+                        HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left,
+                    };
+                    var track = new Border {
+                        Width = 46, Height = 4, Background = border, CornerRadius = new CornerRadius(2), Child = fill,
+                    };
+                    var mini = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 5 };
+                    mini.Children.Add(Faint(bar.Label));
+                    mini.Children.Add(track);
+                    mini.Children.Add(new TextBlock {
+                        Text = bar.PercentText, FontSize = 10.5,
+                        Foreground = Brush(UsageToneBrushConverter.TextKey(bar.Tone)),
+                    });
+                    track.VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center;
+                    Add(mini);
+                }
+                if (usage.NextResetText is { } reset) Add(Faint(reset));
+            }
+            if (usage.PerModelText is { } perModel) Add(Faint(perModel));
+            return line.Children.Count == 0 ? null : line;
+        }
+
         Button AccountRow(AccountChoice choice) {
             var account = choice.Row;
             var title = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal };
@@ -522,6 +563,15 @@ public partial class LauncherPaneView : UserControl {
                     VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
                     Child = new TextBlock { Text = "Default", FontSize = 11, FontWeight = FontWeight.SemiBold, Foreground = muted },
                 });
+            var usage = choice.Removed || account.Id is not { } usageId ? null
+                : drawnUsage.TryGetValue(usageId, out var view) ? view : null;
+            if (usage?.BlockedText is { } blockedText)
+                title.Children.Add(new Border {
+                    Background = Brush("KcapDangerDimBrush"), CornerRadius = new CornerRadius(999),
+                    Padding = new Thickness(8, 3), Margin = new Thickness(8, 0, 0, 0),
+                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                    Child = new TextBlock { Text = blockedText, FontSize = 11, FontWeight = FontWeight.SemiBold, Foreground = Brush("KcapDangerBrush") },
+                });
 
             var titles = new StackPanel();
             titles.Children.Add(title);
@@ -537,6 +587,7 @@ public partial class LauncherPaneView : UserControl {
                         Foreground = RecordingStateLabels.IsAttention(account.Vendor, account.RecordingState) ? warning : muted,
                     });
                 titles.Children.Add(sub);
+                if (usage is not null && UsageLine(usage) is { } usageLine) titles.Children.Add(usageLine);
             }
 
             var body = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
@@ -604,6 +655,7 @@ public partial class LauncherPaneView : UserControl {
             rows.Children.Clear();
             var term = searchBox.Text?.Trim() ?? "";
             drawnAccounts = AccountsToDraw();
+            drawnUsage = vm.AccountUsageById;
 
             if (term.Length == 0) {
                 if (drawnAccounts is { } accounts) AddAccountSection(accounts.Pending, accounts.Retry, accounts.Rows);
@@ -667,11 +719,13 @@ public partial class LauncherPaneView : UserControl {
         // and hover, so only a change to what the section draws rebuilds.
         void OnAccountChanged(object? _, PropertyChangedEventArgs e) {
             if (e.PropertyName is not (nameof(HomeViewModel.AccountSection) or nameof(HomeViewModel.AccountRows)
-                    or nameof(HomeViewModel.AccountPendingText) or nameof(HomeViewModel.AccountRetryVisible)))
+                    or nameof(HomeViewModel.AccountPendingText) or nameof(HomeViewModel.AccountRetryVisible)
+                    or nameof(HomeViewModel.AccountUsageById)))
                 return;
             var next = AccountsToDraw();
             var same = drawnAccounts is { } drawn && next is { } now
                 ? drawn.Pending == now.Pending && drawn.Retry == now.Retry && drawn.Rows.SequenceEqual(now.Rows)
+                    && HomeViewModel.DrawnUsageEquals(drawnUsage, vm.AccountUsageById)
                 : drawnAccounts is null && next is null;
             if (!same) RebuildRows();
         }

@@ -170,6 +170,9 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
 
     public ProfilesSettingsViewModel? Profiles { get; }
     public string ProfileName => _settings.ProfileName;
+    public string ProfileCardLabel => Profiles is null ? "Management unavailable" : "Manage profiles";
+    public string ProfileCardHint => $"Current profile: {ProfileName}\n"
+        + (Profiles is null ? "Profile management is unavailable" : "Select to manage profiles");
     public string ServerLabel => Uri.TryCreate(_settings.ServerUrl, UriKind.Absolute, out var url) ? url.Authority : _settings.ServerUrl;
     public CaptureSettingsViewModel Capture { get; }
     public HarnessesSettingsViewModel? Harnesses { get; }

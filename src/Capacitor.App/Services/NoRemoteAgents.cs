@@ -15,6 +15,7 @@ internal sealed class NoRemoteAgents : IRemoteAgentsService {
     public IObservable<IReadOnlyList<DaemonInfo>> Daemons { get; } = Observable.Return<IReadOnlyList<DaemonInfo>>([]);
     public IObservable<DaemonListing> Listing { get; } = Observable.Return(new DaemonListing(null, 0, false));
     public IObservable<IReadOnlyList<DaemonAccountsDto>> DaemonAccounts { get; } = Observable.Return<IReadOnlyList<DaemonAccountsDto>>([]);
+    public IObservable<IReadOnlyList<DaemonAccountsDto>> DrawableDaemonAccounts { get; } = Observable.Return<IReadOnlyList<DaemonAccountsDto>>([]);
     public Task RefreshDaemonsAsync() => Task.CompletedTask;
     public IObservable<bool> Current { get; } = Observable.Return(false);
 }

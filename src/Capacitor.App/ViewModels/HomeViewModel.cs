@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.ComponentModel;
 using System.Reactive;
 using System.Reactive.Concurrency;
@@ -344,6 +345,14 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     public ReactiveCommand<Unit, Unit> SignInCommand { get; }
 
     readonly AccountChooser _accountChooser;
+
+    IReadOnlyDictionary<string, AccountUsageView> _accountUsageById = FrozenDictionary<string, AccountUsageView>.Empty;
+    /// Keyed by registered account id, for the selected host's selected vendor; empty while the host's
+    /// readings may not be drawn.
+    public IReadOnlyDictionary<string, AccountUsageView> AccountUsageById {
+        get => _accountUsageById;
+        private set => this.RaiseAndSetIfChanged(ref _accountUsageById, value);
+    }
     readonly Func<Task>? _retryListing;
     (string RepoPath, string Vendor, string Machine, bool Remote)? _accountTarget;
     bool _applyingAccountInputs;
@@ -548,6 +557,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// <param name="localAccounts">This machine's daemon's own snapshot (IAccountsService.Snapshot).</param>
     /// <param name="retryListing">Fetches the listing and every daemon's accounts again
     /// (IRemoteAgentsService.RefreshDaemonsAsync).</param>
+    /// <param name="readings">The drawable snapshots and clock behind <see cref="AccountUsageById"/>.
+    /// Null ⇒ no usage is shown.</param>
     /// <param name="launchFailed">A tracked launch failed (MainWindowViewModel.CloseFailedLaunch):
     /// its auto-opened workspace would otherwise cover the StartError this view just set.</param>
     public HomeViewModel(
@@ -563,7 +574,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             IAttachmentUploader? uploader = null, string? appServerUrl = null,
             IObservable<DaemonListing>? listing = null, IObservable<IReadOnlyList<DaemonAccountsDto>>? daemonAccounts = null,
             IObservable<AccountsSnapshotDto?>? localAccounts = null, Func<Task>? retryListing = null,
-            Action<string>? launchFailed = null) {
+            AccountReadings? readings = null, Action<string>? launchFailed = null) {
         _launchFailed = launchFailed;
         _daemon = daemon;
         _state = state;
@@ -687,6 +698,16 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
                     _accountChooser.SetMemoryLoaded(true);
                     _accountMemoryLoaded.TrySetResult();
                 })
+                .DisposeWith(_disposables);
+        }
+
+        if (readings is not null) {
+            Observable.Switch(_machineSelectionChanges.DistinctUntilChanged()
+                    .Select(sel => sel.Remote ? readings.Remote(sel.Name) : readings.Local))
+                .CombineLatest(this.WhenAnyValue(x => x.SelectedVendor), readings.Clock, ProjectUsage)
+                .DistinctUntilChanged(EqualityComparer<IReadOnlyDictionary<string, AccountUsageView>>.Create((a, b) => UsageEquals(a!, b!), d => d.Count))
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(usage => AccountUsageById = usage)
                 .DisposeWith(_disposables);
         }
 
@@ -1457,6 +1478,21 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         }
         PublishAccountChoice();
     }
+
+    static IReadOnlyDictionary<string, AccountUsageView> ProjectUsage(AccountsSnapshotDto? snapshot, string vendor, DateTimeOffset now) =>
+        snapshot is null
+            ? FrozenDictionary<string, AccountUsageView>.Empty
+            : (snapshot.Accounts ?? [])
+                .Where(a => string.Equals(a.Vendor, vendor, StringComparison.OrdinalIgnoreCase))
+                .DistinctBy(a => a.Id)
+                .ToFrozenDictionary(a => a.Id, a => AccountUsage.Project(a, now, TimeZoneInfo.Local));
+
+    internal static bool UsageEquals(IReadOnlyDictionary<string, AccountUsageView> a, IReadOnlyDictionary<string, AccountUsageView> b) =>
+        a.Count == b.Count && a.All(p => b.TryGetValue(p.Key, out var other) && p.Value.Equals(other));
+
+    /// Equality over what the launcher draws: age and readiness do not change its rows.
+    internal static bool DrawnUsageEquals(IReadOnlyDictionary<string, AccountUsageView> a, IReadOnlyDictionary<string, AccountUsageView> b) =>
+        a.Count == b.Count && a.All(p => b.TryGetValue(p.Key, out var other) && p.Value.DrawnEquals(other));
 
     string AccountMachine(string name, bool remote) => remote ? name : _daemon.DaemonName;
 

@@ -392,22 +392,7 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
         var listParams = new JsonObject { ["cwds"] = new JsonArray((JsonNode?) _launch.Cwd) };
         var result     = await RequestAsync("hooks/list", listParams, ct).ConfigureAwait(false);
 
-        var entries = new List<CodexHookEntry>();
-        if (result.Arr("data") is { } data) {
-            foreach (var group in data.EnumerateArray()) {
-                if (group.Arr("hooks") is not { } hooks) continue;
-
-                foreach (var h in hooks.EnumerateArray()) {
-                    entries.Add(new CodexHookEntry(
-                        Key:         h.Str("key") ?? "",
-                        EventName:   h.Str("eventName") ?? "",
-                        Command:     h.Str("command") ?? "",
-                        CurrentHash: h.Str("currentHash"),
-                        TrustStatus: h.Str("trustStatus") ?? ""));
-                }
-            }
-        }
-        return entries;
+        return CodexHookTrust.ParseHooksList(result);
     }
 
     // Best-effort: surface Codex's skills as the composer's `/` picker entries. skills/list is not
