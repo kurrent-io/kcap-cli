@@ -226,6 +226,7 @@ public class ServerSessionsServiceTests {
         listing.Refuse("ended", "me", 0, TimeSpan.FromMinutes(10));
         Connect(lane, "u1");
         await Eventually(() => listing.Count("ended", "me", 0) == 1, "refused page");
+        await Eventually(() => service.Live.Count == 2, "the refused read published, its hold set");
 
         listing.Answer("ended", "me", 0, 212, Rows("s", 1, 20));
         Connect(lane, "u2", epoch: 2);
