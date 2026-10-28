@@ -112,6 +112,19 @@ public class ResumeLedgerStoreTests {
         await Assert.That(File.Exists(store.RingPath("agent-1"))).IsFalse();
     }
 
+    /// <summary>Every holder of an entry's lock must lock the same file; a delete that unlinked it would let
+    /// a later opener lock a fresh file while an earlier holder still holds the old one.</summary>
+    [Test]
+    public async Task Delete_keeps_the_entry_lock_file() {
+        using var tmp   = new TempDaemonStore();
+        var       store = ResumeLedgerStore.For(tmp.Store, "d1");
+        store.Write(Entry("agent-1"));
+
+        store.Delete("agent-1");
+
+        await Assert.That(File.Exists(ResumeEntryLock.PathFor(store.EntryPath("agent-1")))).IsTrue();
+    }
+
     /// <summary>A delete waits out a locked update in progress, so the update cannot write back the
     /// entry the delete removed.</summary>
     [Test]
@@ -328,17 +341,5 @@ public class ResumeLedgerStoreTests {
 
         await Assert.That(store.TryUpdateUnderLock("missing", e => e, TimeSpan.FromSeconds(1))).IsEqualTo(LockedUpdate.NoEntry);
         await Assert.That(store.TryUpdateUnderLock("agent-1", _ => null, TimeSpan.FromSeconds(1))).IsEqualTo(LockedUpdate.Unchanged);
-    }
-
-    [Test]
-    public async Task Delete_removes_the_lock_file() {
-        using var tmp   = new TempDaemonStore();
-        var       store = ResumeLedgerStore.For(tmp.Store, "d1");
-        store.Write(Entry("agent-1"));
-        store.TryUpdateUnderLock("agent-1", e => e, TimeSpan.FromSeconds(1));
-
-        store.Delete("agent-1");
-
-        await Assert.That(File.Exists(store.EntryPath("agent-1") + ".lock")).IsFalse();
     }
 }
