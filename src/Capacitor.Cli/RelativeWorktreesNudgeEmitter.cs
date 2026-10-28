@@ -31,7 +31,9 @@ static class RelativeWorktreesNudgeEmitter {
         "> This session appears to be running in a sandbox. Git worktree relative paths need to be enabled in " +
         "this repository for the host to access the session worktree directly. When enabled, the host requires " +
         "git 2.48 or newer to be able to access the repository. Shall I enable it?\n\n" +
-        "On yes, run `git config worktree.useRelativePaths true` and `git worktree repair --relative-paths`; " +
+        "On yes, run `git config worktree.useRelativePaths true`, then `git worktree repair --relative-paths` " +
+        "passing the directory of every worktree as it appears from here, such as each one under " +
+        "`.capacitor/worktrees/`: without paths it skips worktrees the host made; " +
         $"on no, run `git config {RelativeWorktreeLinks.DeclinedKey} {RelativeWorktreeLinks.Declined}` so it is " +
         "not asked again. Never run `git worktree prune` here. The kcap worktrees skill covers undoing it and " +
         "reinstating a pruned worktree.";
