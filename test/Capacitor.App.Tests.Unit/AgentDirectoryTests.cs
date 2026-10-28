@@ -413,6 +413,22 @@ public class AgentDirectoryTests {
         await Assert.That(dir.Rows.Lookup("local:a1").Value.ListedPullRequests).IsEqualTo(prs);
     }
 
+    /// A hosted row from another machine has no worktree here, so the listing's branch is all its
+    /// PR readers have to find a PR opened since the listing.
+    [Test]
+    public async Task A_hosted_row_takes_its_listings_branch() {
+        var (local, _, sessions, _, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        LocalConnected(local);
+        local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "S"));
+        var row = Listed("S", "active") with { Branch = "feature/x" };
+        sessions.LiveCache.AddOrUpdate(row);
+        sessions.MineLiveCache.AddOrUpdate(row);
+
+        await Assert.That(dir.Rows.Lookup("local:a1").Value.Branch).IsEqualTo("feature/x");
+    }
+
     /// A session the server lists with no daemon behind it has no agent here to answer for it: its
     /// permission requests get no card and no pip.
     [Test]
