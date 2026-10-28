@@ -1881,6 +1881,30 @@ public class HomeViewModelTests {
         });
     }
 
+    /// Pins that a local repository discovered after a switch to a remote machine is not selected on
+    /// that machine, where the path means nothing.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task LocalDefaultDiscoveryFinishingAfterARemotePickLeavesItEmpty() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var known = new TaskCompletionSource<string[]>();
+            var remote = new FakeRemoteAgents();
+            remote.DaemonsSubject.OnNext([
+                new DaemonInfo { Name = "home-pc", OwnerUserId = "u1", Connected = true, RepoPaths = [] },
+            ]);
+            using var vm = new HomeViewModel(
+                new FakeDaemonClientService(), new AppStateStore(Tmp.PathTo("app-state.json")), new RecordingLaunchClient(),
+                () => known.Task, TimeProvider.System, daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"));
+            var discovery = vm.EnsureDefaultRepositoryAsync();
+            await vm.SelectMachineAsync("home-pc", isLocal: false);
+
+            known.SetResult(["/local/repo"]);
+            await discovery;
+
+            await Assert.That(vm.SelectedRepoPath).IsEqualTo(HomeViewModel.ScratchRepoPath);
+        });
+    }
+
     /// Pins remote path identity to the remote's rules, not this host's: on a case-insensitive host a
     /// typed /w/repo must not fold into an advertised /w/Repo and mark that row selected.
     [Test]

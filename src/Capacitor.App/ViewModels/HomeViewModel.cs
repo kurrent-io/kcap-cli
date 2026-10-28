@@ -1345,12 +1345,13 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     }
 
     /// When nothing is selected, adopt the most recently used known repository (then a remembered
-    /// harness key, then an agent root). No-op when a selection already exists or nothing is known.
+    /// harness key, then an agent root). No-op when a selection already exists or nothing is known,
+    /// and for a remote machine, which these local paths do not describe.
     public async Task EnsureDefaultRepositoryAsync() {
-        if (SelectedRepoPath.Length > 0) return;
+        if (SelectedRepoPath.Length > 0 || RemoteMachineSelected) return;
         if (await PreferRecentRepositoryAsync() is not { Length: > 0 } recent) return;
-        // PreferRecent can await file I/O — a pick made while that ran must win.
-        if (SelectedRepoPath.Length > 0) return;
+        // PreferRecent can await file I/O — a pick or a machine switch made while that ran must win.
+        if (SelectedRepoPath.Length > 0 || RemoteMachineSelected) return;
         await SelectRepositoryAsync(recent);
     }
 
