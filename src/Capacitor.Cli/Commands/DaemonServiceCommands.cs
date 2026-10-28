@@ -1187,7 +1187,9 @@ sealed class DaemonServiceCommands(
         Console.Error.WriteLine("                          --replace (requires --verify) takes over an existing label/unit/live owner");
         Console.Error.WriteLine("                          --retire ID (requires --replace --verify) also removes unit ID in the same transaction");
         Console.Error.WriteLine("                          --no-start is incompatible with --verify");
+        Console.Error.WriteLine("  install --system [...] Windows: install or update kcap-service (one administrator prompt), then hand the daemon to it");
         Console.Error.WriteLine("  uninstall [--name N]   Stop and remove the service unit");
+        Console.Error.WriteLine("  uninstall --system     Windows: hand the daemon back, then remove kcap-service (one administrator prompt)");
         Console.Error.WriteLine("  uninstall --under DIR  Remove every unit whose daemon binary is inside DIR");
         Console.Error.WriteLine("  start [--name N] [--verify]   Start the installed service now");
         Console.Error.WriteLine("                          --verify polls readiness/ownership and rolls back on failure");
