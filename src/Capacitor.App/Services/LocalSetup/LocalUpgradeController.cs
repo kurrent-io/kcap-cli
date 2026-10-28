@@ -35,10 +35,10 @@ public sealed class LocalUpgradeController(Func<IKcapCli> cli, Action<Action> po
     /// Raised once per run, through <c>post</c>, after <see cref="Outcome"/> is set.
     public event Action<LocalUpgradeOutcome>? Settled;
 
-    /// Runs the upgrade only after the app has relaunched into an update, on a machine whose server
+    /// Runs the upgrade only when this app version still owes its post-update work, on a machine whose server
     /// is its committed local installation and with no local setup pending. True when it started.
-    public async Task<bool> StartAfterUpdateAsync(bool updateRelaunch, bool committedLocal, Func<bool> setupPending, CancellationToken ct) {
-        if (!updateRelaunch || !committedLocal) return false;
+    public async Task<bool> StartAfterUpdateAsync(bool owed, bool committedLocal, Func<bool> setupPending, CancellationToken ct) {
+        if (!owed || !committedLocal) return false;
         // Resumes on the caller's context: StartAsync changes bound properties.
         try {
             if (await Task.Run(setupPending, ct) || ct.IsCancellationRequested) return false;
@@ -46,6 +46,7 @@ public sealed class LocalUpgradeController(Func<IKcapCli> cli, Action<Action> po
             return false;
         }
 
+        if (Running || held?.Invoke() == true || ct.IsCancellationRequested) return false;
         await StartAsync(ct);
         return true;
     }

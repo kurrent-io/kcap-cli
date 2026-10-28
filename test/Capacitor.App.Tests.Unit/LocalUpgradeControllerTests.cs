@@ -210,4 +210,17 @@ public class LocalUpgradeControllerTests {
         await Assert.That(started).IsTrue();
         await Assert.That(cli.LocalUpgradeCallCount).IsEqualTo(1);
     }
+
+    /// A start that another change to the installation holds off is not a start: nothing will settle, so a caller
+    /// waiting on the outcome must hear that instead.
+    [Test]
+    public async Task A_held_upgrade_after_an_update_reports_that_it_did_not_start() {
+        var cli = new FakeKcapCli { LocalUpgradeBehavior = UpgradeScript.Prints(0, UpgradeScript.Upgraded("1.2.0", "1.3.0")) };
+        var controller = new LocalUpgradeController(() => cli, action => action(), held: () => true);
+
+        var started = await controller.StartAfterUpdateAsync(true, true, () => false, CancellationToken.None);
+
+        await Assert.That(started).IsFalse();
+        await Assert.That(controller.Running).IsFalse();
+    }
 }

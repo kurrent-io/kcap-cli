@@ -323,6 +323,7 @@ public class MainWindowViewModelTests {
     [Arguments(AttachState.Connecting, null, "connected", "Connecting…")]
     [Arguments(AttachState.Unreachable, "daemon_unreachable", "connected", "Unreachable")]
     [Arguments(AttachState.Unreachable, "daemon_incompatible", "connected", "Incompatible")]
+    [Arguments(AttachState.Unreachable, ExpectedDaemonRestart.Reason, "connected", "Restarting…")]
     [Arguments(AttachState.Connected, null, "connected", "Connected")]
     [Arguments(AttachState.Connected, null, "connecting", "Connecting…")]
     [Arguments(AttachState.Connected, null, "reconnecting", "Reconnecting…")]

@@ -339,7 +339,7 @@ public class ApplicationsMoverTests {
         var outcome = await mover.MoveAsync(source, CancellationToken.None);
 
         await Assert.That(outcome.Moved).IsFalse();
-        await Assert.That(outcome.Error).Contains("already exists");
+        await Assert.That(outcome.Error).Contains("looks damaged or is not kcap");
         await Assert.That(ditto.Calls).IsEqualTo(0);
     }
 

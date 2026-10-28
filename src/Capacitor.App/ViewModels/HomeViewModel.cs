@@ -78,7 +78,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal const string FinishingSignInNotice =
         "Finishing sign-in. Reconnecting to the server…";
     internal const string DaemonDownNotice     =
-        "The daemon isn't running. The app is starting its service; press Start daemon to try again now.";
+        "The daemon isn't running. The app is starting its service. Press Start daemon to try again now.";
+    internal const string DaemonRestartingNotice =
+        "The daemon is restarting into its new version. It reconnects on its own.";
     internal const string DaemonIncompatibleNotice =
         "App and daemon are incompatible. Update both to matching versions, then press Reconnect.";
     internal const string ServerLostNotice     = "Not connected to the server. Sign in again to reconnect.";
@@ -858,7 +860,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .ToProperty(this, x => x.ConnectionBannerVisible, initialValue: false)
             .DisposeWith(_disposables);
         _bannerBusy = bannerMessages
-            .Select(BusyNotice)
+            .Select(message => BusyNotice(message) || message == DaemonRestartingNotice)
             .ToProperty(this, x => x.BannerBusy, initialValue: true)
             .DisposeWith(_disposables);
         _signInVisible = signInState
@@ -1033,7 +1035,11 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         if (signInExpired) return SignInExpiredNotice;
 
         if (!remoteSelected && status.State == AttachState.Unreachable)
-            return status.Reason == IncompatibleReason ? DaemonIncompatibleNotice : DaemonDownNotice;
+            return status.Reason switch {
+                IncompatibleReason => DaemonIncompatibleNotice,
+                ExpectedDaemonRestart.Reason => DaemonRestartingNotice,
+                _ => DaemonDownNotice,
+            };
 
         if (!remoteSelected && status.State == AttachState.Connected && foreignServerNotice is not null) return foreignServerNotice;
 

@@ -257,12 +257,32 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             case AttachState.Unreachable:
                 // Closed: PhaseClosed still resolves here — only the ensure matrix itself never admits.
                 if (_autoActionsPermanentlyClosed) ClosePhase();
-                else {
-                    lock (_lock) _lastRecovery = _time.GetUtcNow();
-                    _ = RunStartupBranchAsync((status.State, status.Reason));
-                }
+                else _ = RunStartupBranchAfterExpectedRestartAsync((status.State, status.Reason));
                 break;
         }
+    }
+
+    /// Whether the daemon is restarting on its own, as <see cref="ExpectedDaemonRestart"/> judges it. An ensure
+    /// then waits: its start would race the service manager that is already bringing the daemon back.
+    public Func<bool> RestartExpected { get; set; } = () => false;
+
+    async Task RunStartupBranchAfterExpectedRestartAsync((AttachState State, string? Reason) triggering) {
+        if (!await WaitOutExpectedRestartAsync().ConfigureAwait(false)) {
+            ClosePhase();
+            return;
+        }
+        lock (_lock) _lastRecovery = _time.GetUtcNow();
+        await RunStartupBranchAsync(triggering).ConfigureAwait(false);
+    }
+
+    /// False when the daemon came back while this waited, or the app is closing.
+    async Task<bool> WaitOutExpectedRestartAsync() {
+        try {
+            while (RestartExpected()) await Task.Delay(TimeSpan.FromSeconds(1), _time, _lifetime.Token).ConfigureAwait(false);
+        } catch (OperationCanceledException) {
+            return false;
+        }
+        lock (_lock) return _lastObserved.State == AttachState.Unreachable;
     }
 
     void ClosePhase() => _phaseClosed.TrySetResult(true);
@@ -433,6 +453,10 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         try {
             if (wait > TimeSpan.Zero) await Task.Delay(wait, _time, _lifetime.Token).ConfigureAwait(false);
         } catch (OperationCanceledException) {
+            lock (_lock) _recoveryPending = false;
+            return;
+        }
+        if (!await WaitOutExpectedRestartAsync().ConfigureAwait(false)) {
             lock (_lock) _recoveryPending = false;
             return;
         }
