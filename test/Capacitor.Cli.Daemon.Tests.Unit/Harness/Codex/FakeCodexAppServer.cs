@@ -254,6 +254,9 @@ sealed class FakeCodexAppServer : IAsyncDisposable {
             ["turn"]     = new JsonObject { ["id"] = _lastTurnId, ["status"] = status, ["items"] = new JsonArray() },
         }, _cts.Token);
 
+    /// <summary>Pushes a notification no request asked for, as the app-server does for account state.</summary>
+    public Task SendNotificationAsync(string method, JsonNode @params) => NotifyAsync(method, @params, _cts.Token);
+
     int _userItems;
     readonly List<JsonObject> _heldUserMessages = [];
 

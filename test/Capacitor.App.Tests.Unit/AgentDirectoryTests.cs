@@ -397,6 +397,22 @@ public class AgentDirectoryTests {
         await Assert.That(dir.Rows.Lookup("local:a1").Value.LastActivityAt).IsEqualTo(new DateTime(2026, 10, 24, 9, 30, 0, DateTimeKind.Utc));
     }
 
+    /// The tone cache marks a hosted row from its listing, so the daemon row carries the listing's PR links.
+    [Test]
+    public async Task A_hosted_row_takes_its_listings_pull_requests() {
+        var (local, _, sessions, _, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        LocalConnected(local);
+        local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "S"));
+        var prs = new RepoSessionPullRequests([new() { RepoHash = "h", Owner = "o", RepoName = "r", Number = 7, State = "open" }]);
+        var row = Listed("S", "active") with { PullRequests = prs };
+        sessions.LiveCache.AddOrUpdate(row);
+        sessions.MineLiveCache.AddOrUpdate(row);
+
+        await Assert.That(dir.Rows.Lookup("local:a1").Value.ListedPullRequests).IsEqualTo(prs);
+    }
+
     /// A session the server lists with no daemon behind it has no agent here to answer for it: its
     /// permission requests get no card and no pip.
     [Test]

@@ -79,11 +79,33 @@ public class LinuxAppRemovalTests {
         Tmp.CreateFile("data/kcap/desktop/kcap/plugin.json", "{}");
         Tmp.CreateFile("data/kcap/local/registry.json", "{}");
 
-        Removal().DeleteSupportFiles();
+        await Assert.That(Removal().DeleteSupportFiles()).IsTrue();
 
         await Assert.That(Directory.Exists(Staged)).IsFalse();
         await Assert.That(File.Exists(Tmp.PathTo("data", "kcap", "local", "registry.json"))).IsTrue();
     }
+
+    /// An unreadable parent makes `Directory.Exists` read the staged CLI as absent, so only the delete can tell.
+    /// A runner that bypasses permissions (root, CAP_DAC_OVERRIDE) can delete it anyway, so the test skips there.
+    [Test, ExcludeOn(OS.Windows), UnsupportedOSPlatform("windows")]
+    public async Task A_staged_cli_behind_an_unreadable_folder_is_reported_as_left() {
+        Tmp.CreateFile("data/kcap/desktop/bin/kcap", "cli");
+        var parent = Tmp.PathTo("data", "kcap");
+        var mode = File.GetUnixFileMode(parent);
+        try {
+            File.SetUnixFileMode(parent, UnixFileMode.None);
+            Skip.When(Directory.Exists(Staged), "this runner bypasses folder permissions");
+
+            await Assert.That(Removal().DeleteSupportFiles()).IsFalse();
+        } finally {
+            File.SetUnixFileMode(parent, mode);
+        }
+        await Assert.That(File.Exists(Tmp.PathTo("data", "kcap", "desktop", "bin", "kcap"))).IsTrue();
+    }
+
+    [Test]
+    public async Task A_missing_staged_cli_counts_as_removed() =>
+        await Assert.That(Removal().DeleteSupportFiles()).IsTrue();
 
     [Test]
     public async Task The_image_goes_to_the_home_trash_with_its_info_and_a_second_one_takes_a_free_name() {

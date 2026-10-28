@@ -7,6 +7,7 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Eval.Contracts;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.LocalIpc;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -771,6 +772,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             VendorModelsByAccount: _config.VendorModelsByAccount,
             SupportsRawInput: AdvertisesRawInput,
             SupportsBranchBaseRef: true,
+            SupportsAbbreviatedShaBaseRef: true,
             ResumingAgents: GetResumingAgents?.Invoke(),
             ActiveCount: activeCount?.Count,
             ActiveCountVersion: activeCount?.Version,
@@ -843,7 +845,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         if (GetAccountsSnapshot?.Invoke() is not { } current) return Task.CompletedTask;
 
         var sent = _connectAccounts;
-        return sent is not null && sent.HostId == current.HostId && sent.Revision == current.Revision
+        return sent is not null && AccountSnapshotBuilder.Equivalent(sent, current)
             ? Task.CompletedTask
             : AccountsChangedAsync(current);
     }
@@ -1102,6 +1104,19 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             await _hub.SendAsync("ReportAgentCommands", new ReportAgentCommandsArgs(agentId, commands), cancellationToken: _ct);
         } catch (Exception ex) {
             LogReportCommandsFailed(ex, agentId);
+        }
+    }
+
+    /// <summary>
+    /// Best-effort: the dialog a hosted agent's terminal shows, or null once it closed, so a remote
+    /// chat can send its viewer to the terminal. The server keeps it in memory only. Swallowed like
+    /// <see cref="ReportAgentCommandsAsync"/> when the server predates it.
+    /// </summary>
+    public virtual async Task ReportAgentTerminalDialogAsync(string agentId, TerminalDialogDto? dialog) {
+        try {
+            await _hub.SendAsync("ReportAgentTerminalDialog", new ReportAgentTerminalDialogArgs(agentId, dialog), cancellationToken: _ct);
+        } catch (Exception ex) {
+            LogReportTerminalDialogFailed(ex, agentId);
         }
     }
 
@@ -1918,6 +1933,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to report slash commands for agent {AgentId} (server may not support it)")]
     partial void LogReportCommandsFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to report the terminal dialog for agent {AgentId} (server may not support it)")]
+    partial void LogReportTerminalDialogFailed(Exception ex, string agentId);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to send ACP auto-approval audit for agent {AgentId} (server may not support it)")]
     partial void LogNotifyAcpAutoApprovalFailed(Exception ex, string agentId);

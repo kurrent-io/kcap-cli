@@ -9,10 +9,12 @@ namespace Capacitor.App.Services;
 
 /// The subset of Capacitor.Cli.Commands.ServiceStatusJson the app reads; snake_case on the wire.
 /// `LoadedSpawnType` is launchd's word for the loaded job, null when the label is not loaded or the
-/// CLI predates the field; read it through SpawnTypes.
+/// CLI predates the field; read it through SpawnTypes. The `Txn*` details of a leftover marker are
+/// null from a CLI that predates them.
 public sealed record ServiceSnapshot(
     string ServiceId, bool UnitPresent, string State, string? BinaryPath, string? InstallBinaryPath,
-    int? JobPid, int? DaemonPid, bool TxnMarker, bool TxnActive, string? LoadedSpawnType = null);
+    int? JobPid, int? DaemonPid, bool TxnMarker, bool TxnActive, string? LoadedSpawnType = null,
+    string? TxnOperation = null, string? TxnPhase = null, DateTimeOffset? TxnMarkedAt = null);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
 [JsonSerializable(typeof(ServiceSnapshot))]
@@ -77,6 +79,8 @@ public interface IKcapCli {
     /// `plugin install` (+ vendorFlag, when non-null, then <paramref name="options"/>); null = the
     /// flagless Claude default.
     Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct, IReadOnlyList<string>? options = null);
+
+    Task<ProcessResult> PluginRemoveAsync(string? vendorFlag, CancellationToken ct);
 
     /// <c>accounts add|remove|rename|rewire … --json</c>, which prints one AccountActionResultDto line.
     /// No server overlay: the account verbs touch nothing on the server.
@@ -262,12 +266,20 @@ public sealed class KcapCli : IKcapCli {
             new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: MutationTimeout), ct).ConfigureAwait(false);
     }
 
+    public async Task<ProcessResult> PluginRemoveAsync(string? vendorFlag, CancellationToken ct) {
+        if (CliPath is not { } cliPath) return await NoCliResult().ConfigureAwait(false);
+        string[] args = vendorFlag is null ? ["plugin", "remove"] : ["plugin", "remove", vendorFlag];
+        return await Run(cliPath, args,
+            new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: MutationTimeout), ct).ConfigureAwait(false);
+    }
+
     public async Task<ProcessResult> AccountsAsync(MutationVerb verb, AccountArgs args, CancellationToken ct) {
         string[] argv = verb switch {
             MutationVerb.AccountAdd    => ["accounts", "add", Required(args.Vendor), Required(args.Directory), "--json"],
             MutationVerb.AccountRemove => ["accounts", "remove", Required(args.AccountId), "--json"],
             MutationVerb.AccountRename => ["accounts", "rename", Required(args.AccountId), Required(args.Label), "--json"],
             MutationVerb.AccountRewire => args.AccountId is { } id ? ["accounts", "rewire", id, "--json"] : ["accounts", "rewire", "--json"],
+            MutationVerb.AccountRefresh => ["accounts", "refresh", Required(args.AccountId), "--json"],
             _                          => throw new ArgumentOutOfRangeException(nameof(verb), verb, "not an account verb"),
         };
         if (CliPath is not { } cliPath) return await NoCliResult().ConfigureAwait(false);

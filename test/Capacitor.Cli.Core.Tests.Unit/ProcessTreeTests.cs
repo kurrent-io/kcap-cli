@@ -1,11 +1,9 @@
 using System.Diagnostics;
 using System.Globalization;
-using Capacitor.Cli.Daemon.Services;
-
-namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
+namespace Capacitor.Cli.Core.Tests.Unit;
 
 /// <summary>
-/// <see cref="ProcessTree"/>: the daemon's tree kill has to reach every level below a parent that is
+/// <see cref="ProcessTree"/>: the tree kill has to reach every level below a parent that is
 /// killed after its children, with SIGKILL alone. The trees are shells with backgrounded
 /// <c>sleep</c>s; their descendants are located through <c>ps</c>, so the walk under test is checked
 /// against an independent view, and each is pinned by <see cref="PidIdentity"/> so a recycled pid can

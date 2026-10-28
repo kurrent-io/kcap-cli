@@ -83,8 +83,9 @@ not the item itself is a loose end, not this.
 
 ## Loose ends
 
-A loose end is one concrete piece of unfinished work — a missing test, a TODO you left in
-the code, a follow-up the user asked for. Declare each with `declare_loose_end` (`text`,
+A loose end is one concrete piece of unfinished work — a missing test, a flaky test you hit
+and did not fix (one that failed, then passed on a rerun), a TODO you left in the code, a
+follow-up the user asked for. Declare each with `declare_loose_end` (`text`,
 one plain sentence) at the moment you decide to defer it, not in a batch at the end. The
 server keys it on the session, the owner and the normalized text, so declaring the same
 end twice is a no-op (`created: false`). It refuses text shorter than 12 or longer than

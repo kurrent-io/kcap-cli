@@ -56,9 +56,9 @@ public class RemoteSessionViewModelTests {
 
         public RemoteSessionViewModel Build(AgentRow row, IPlanArtifactSource? planArtifacts = null,
                 Capacitor.Cli.Core.PullRequests.IPullRequestSource? pullRequests = null, IPlanSource? plans = null,
-                BackgroundCommandActivity? commands = null, SubagentEventsReader? readSubagent = null) {
+                BackgroundCommandActivity? commands = null, SubagentEventsReader? readSubagent = null, AccountReadings? readings = null) {
             Directory.Rows.AddOrUpdate(row);
-            return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), new RecordingOpener(), Time, WorkSource, () => new FakeTerminalSurface(), planArtifacts, commands, pullRequests: pullRequests, plans: plans, readSubagent: readSubagent);
+            return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), new RecordingOpener(), Time, WorkSource, () => new FakeTerminalSurface(), planArtifacts, commands, pullRequests: pullRequests, plans: plans, readSubagent: readSubagent, readings: readings);
         }
 
         /// One chat poll: the pane reads its feed on the timer this harness owns.
@@ -82,6 +82,67 @@ public class RemoteSessionViewModelTests {
             Permissions.Dispose();
             Directory.Dispose();
         }
+    }
+
+    /// The strip's reading comes through the real gate: the service keeps the daemon's accounts,
+    /// so only the gate can take the bars away.
+    static (RemoteAgentsServiceTests.GateRig Rig, AccountReadings Readings) StripGate() {
+        var rig = new RemoteAgentsServiceTests.GateRig("work-mac");
+        rig.Accounts = [StripReadings.Remote("work-mac", StripReadings.Reading(StripReadings.Window(300, 42, TimeSpan.FromHours(2))))];
+        var readings = new AccountReadings(
+            Observable.Return<Capacitor.Cli.Core.Accounts.AccountsSnapshotDto?>(null), rig.Service.DrawableDaemonAccounts,
+            Observable.Return(StripReadings.Now));
+        return (rig, readings);
+    }
+
+    static AgentRow StripRow() => Harness.Row(vendor: "claude") with {
+        AccountDirectory = StripReadings.Directory, AccountId = "acc1", AccountLabel = "work",
+    };
+
+    [Test]
+    public async Task Remote_strip_drops_bars_on_lane_loss() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var (rig, readings) = StripGate();
+            using var _ = rig;
+            var vm = h.Build(StripRow(), readings: readings);
+            try {
+                rig.Connect();
+                await WaitUntilAsync(() => vm.Chat.ShowsAccountUsage, what: "the bars");
+                await Assert.That(vm.Chat.AccountStripUsage!.Bars[0].PercentText).IsEqualTo("42%");
+
+                rig.Lane.StatusSubject.OnNext(new(ServerLaneState.Retrying));
+                await WaitUntilAsync(() => !vm.Chat.ShowsAccountUsage, what: "the bars to go");
+
+                await Assert.That(rig.Retained()).IsEquivalentTo(["work-mac"]);
+                await Assert.That(vm.Chat.ShowsAccountDirectory).IsTrue();
+                await Assert.That(vm.Chat.AccountReadingNote).IsNull();
+            } finally { await vm.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    public async Task Remote_strip_drops_bars_when_the_daemon_leaves_and_reopens_after_a_fresh_fetch() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var (rig, readings) = StripGate();
+            using var _ = rig;
+            var vm = h.Build(StripRow(), readings: readings);
+            try {
+                rig.Connect();
+                await WaitUntilAsync(() => vm.Chat.ShowsAccountUsage, what: "the bars");
+
+                rig.Listing = [];
+                await rig.RelistAsync();
+                await WaitUntilAsync(() => !vm.Chat.ShowsAccountUsage, what: "the bars to go");
+                await Assert.That(rig.Retained()).IsEquivalentTo(["work-mac"]);
+                await Assert.That(vm.Chat.ShowsAccountDirectory).IsTrue();
+
+                rig.Listing = [RemoteAgentsServiceTests.Host("work-mac", connectedAt: RemoteAgentsServiceTests.FirstConnect.AddMinutes(5))];
+                await rig.RelistAsync();
+                await WaitUntilAsync(() => vm.Chat.ShowsAccountUsage, what: "the bars to return");
+            } finally { await vm.TeardownAsync(); }
+        });
     }
 
     [Test]

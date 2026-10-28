@@ -465,7 +465,10 @@ internal sealed partial class ClaudeLauncher(
                 }
             }
 
-            if (serverNames.Any(known.Add)) {
+            var before = known.Count;
+            known.UnionWith(serverNames);
+
+            if (known.Count > before) {
                 // Rebuild the array via JSON parsing to avoid AOT issues with
                 // JsonArray.Add(string) / JsonValue.Create<string>.
                 var json = "[" + string.Join(",", known.Select(n => $"\"{JsonEncodedText.Encode(n)}\"")) + "]";
@@ -647,7 +650,8 @@ internal sealed partial class ClaudeLauncher(
 
         if (File.Exists(mcpJsonPath)) {
             var existing = JsonNode.Parse(File.ReadAllText(mcpJsonPath));
-            merged = existing?["mcpServers"]?.AsObject() ?? new JsonObject();
+            // Cloned: the parsed node stays parented, and the wrapper below cannot adopt it.
+            merged = existing?["mcpServers"]?.DeepClone().AsObject() ?? new JsonObject();
         } else {
             merged = new JsonObject();
         }

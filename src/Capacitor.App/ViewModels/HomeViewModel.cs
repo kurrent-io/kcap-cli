@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.ComponentModel;
 using System.Reactive;
 using System.Reactive.Concurrency;
@@ -332,6 +333,11 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     public ReactiveCommand<Unit, Unit>? StartDaemonCommand { get; private set; }
     public ReactiveCommand<Unit, Unit>? RetryDaemonCommand { get; private set; }
 
+    ObservableAsPropertyHelper<bool>? _daemonRepairVisible;
+    /// Only while the banner shows the very line the repair answers, never beside another notice.
+    public bool DaemonRepairVisible => _daemonRepairVisible?.Value ?? false;
+    public ReactiveCommand<Unit, Unit>? RepairDaemonCommand { get; private set; }
+
     readonly ObservableAsPropertyHelper<string> _startButtonTip;
     /// Tip when Start is disabled (no repo / connection gate). ToolTip.ShowOnDisabled is required.
     public string StartButtonTip => _startButtonTip.Value;
@@ -339,10 +345,22 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     public ReactiveCommand<Unit, Unit> SignInCommand { get; }
 
     readonly AccountChooser _accountChooser;
+
+    IReadOnlyDictionary<string, AccountUsageView> _accountUsageById = FrozenDictionary<string, AccountUsageView>.Empty;
+    /// Keyed by registered account id, for the selected host's selected vendor; empty while the host's
+    /// readings may not be drawn.
+    public IReadOnlyDictionary<string, AccountUsageView> AccountUsageById {
+        get => _accountUsageById;
+        private set => this.RaiseAndSetIfChanged(ref _accountUsageById, value);
+    }
     readonly Func<Task>? _retryListing;
     (string RepoPath, string Vendor, string Machine, bool Remote)? _accountTarget;
     bool _applyingAccountInputs;
     IReadOnlyDictionary<string, string>? _accountMemory;
+    readonly TaskCompletionSource _accountMemoryLoaded = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// Completes once the remembered accounts have been read, which happens off the UI thread.
+    internal Task AccountMemoryLoadedForTesting => _accountMemoryLoaded.Task;
     Task _accountMemoryWrites = Task.CompletedTask;
     // Live mirrors of the account inputs, read by StartAsync against its captured draft.
     DaemonListing _currentListing = new(null, 0, false);
@@ -539,6 +557,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// <param name="localAccounts">This machine's daemon's own snapshot (IAccountsService.Snapshot).</param>
     /// <param name="retryListing">Fetches the listing and every daemon's accounts again
     /// (IRemoteAgentsService.RefreshDaemonsAsync).</param>
+    /// <param name="readings">The drawable snapshots and clock behind <see cref="AccountUsageById"/>.
+    /// Null ⇒ no usage is shown.</param>
     /// <param name="launchFailed">A tracked launch failed (MainWindowViewModel.CloseFailedLaunch):
     /// its auto-opened workspace would otherwise cover the StartError this view just set.</param>
     public HomeViewModel(
@@ -554,7 +574,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             IAttachmentUploader? uploader = null, string? appServerUrl = null,
             IObservable<DaemonListing>? listing = null, IObservable<IReadOnlyList<DaemonAccountsDto>>? daemonAccounts = null,
             IObservable<AccountsSnapshotDto?>? localAccounts = null, Func<Task>? retryListing = null,
-            Action<string>? launchFailed = null) {
+            AccountReadings? readings = null, Action<string>? launchFailed = null) {
         _launchFailed = launchFailed;
         _daemon = daemon;
         _state = state;
@@ -676,7 +696,18 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
                 .Subscribe(state => {
                     _accountMemory = state.AccountByRepo;
                     _accountChooser.SetMemoryLoaded(true);
+                    _accountMemoryLoaded.TrySetResult();
                 })
+                .DisposeWith(_disposables);
+        }
+
+        if (readings is not null) {
+            Observable.Switch(_machineSelectionChanges.DistinctUntilChanged()
+                    .Select(sel => sel.Remote ? readings.Remote(sel.Name) : readings.Local))
+                .CombineLatest(this.WhenAnyValue(x => x.SelectedVendor), readings.Clock, ProjectUsage)
+                .DistinctUntilChanged(EqualityComparer<IReadOnlyDictionary<string, AccountUsageView>>.Create((a, b) => UsageEquals(a!, b!), d => d.Count))
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(usage => AccountUsageById = usage)
                 .DisposeWith(_disposables);
         }
 
@@ -898,6 +929,19 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         startMessage
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_daemonStartMessageFeed)
+            .DisposeWith(_disposables);
+    }
+
+    /// The banner's Repair button, offered beside the lifecycle line <paramref name="offer"/> names.
+    public void AttachServiceRepair(Func<CancellationToken, Task> repair, IObservable<string?> offer, CancellationToken ct) {
+        RepairDaemonCommand = ReactiveCommand.CreateFromTask(() => repair(ct));
+        this.RaisePropertyChanged(nameof(RepairDaemonCommand));
+
+        _daemonRepairVisible = offer
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .CombineLatest(this.WhenAnyValue(x => x.BannerMessage),
+                (offered, shown) => offered is not null && shown == offered)
+            .ToProperty(this, x => x.DaemonRepairVisible, initialValue: false)
             .DisposeWith(_disposables);
     }
 
@@ -1435,6 +1479,21 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         PublishAccountChoice();
     }
 
+    static IReadOnlyDictionary<string, AccountUsageView> ProjectUsage(AccountsSnapshotDto? snapshot, string vendor, DateTimeOffset now) =>
+        snapshot is null
+            ? FrozenDictionary<string, AccountUsageView>.Empty
+            : (snapshot.Accounts ?? [])
+                .Where(a => string.Equals(a.Vendor, vendor, StringComparison.OrdinalIgnoreCase))
+                .DistinctBy(a => a.Id)
+                .ToFrozenDictionary(a => a.Id, a => AccountUsage.Project(a, now, TimeZoneInfo.Local));
+
+    internal static bool UsageEquals(IReadOnlyDictionary<string, AccountUsageView> a, IReadOnlyDictionary<string, AccountUsageView> b) =>
+        a.Count == b.Count && a.All(p => b.TryGetValue(p.Key, out var other) && p.Value.Equals(other));
+
+    /// Equality over what the launcher draws: age and readiness do not change its rows.
+    internal static bool DrawnUsageEquals(IReadOnlyDictionary<string, AccountUsageView> a, IReadOnlyDictionary<string, AccountUsageView> b) =>
+        a.Count == b.Count && a.All(p => b.TryGetValue(p.Key, out var other) && p.Value.DrawnEquals(other));
+
     string AccountMachine(string name, bool remote) => remote ? name : _daemon.DaemonName;
 
     static AccountsSnapshotDto? AccountsSnapshotFor(
@@ -1457,16 +1516,17 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             && _accountTarget is { } target ? (target.Vendor, chooser.SelectedAccountId!) : null);
     }
 
-    /// Written off the UI thread in call order: the chooser also forgets an entry from inside its recompute.
+    /// Written in call order: the chooser also forgets an entry from inside its recompute.
     void RememberAccount(string hostId, string vendor, string repoPath, string? accountId) {
         _accountMemory = AccountMemory.With(_accountMemory, hostId, vendor, repoPath, accountId);
-        var previous = _accountMemoryWrites;
-        _accountMemoryWrites = Task.Run(async () => {
-            await previous;
+        _accountMemoryWrites = WriteAfterAsync(_accountMemoryWrites);
+
+        async Task WriteAfterAsync(Task previous) {
+            await previous.ConfigureAwait(false);
             await _state.UpdateAsync(s => s with {
                 AccountByRepo = AccountMemory.With(s.AccountByRepo, hostId, vendor, repoPath, accountId),
-            });
-        });
+            }).ConfigureAwait(false);
+        }
     }
 
     /// The Default-badged row follows the daemon's default rather than pinning its account. Any

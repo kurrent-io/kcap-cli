@@ -138,6 +138,9 @@ Hooks (internal — invoked by Claude Code / Codex / Cursor / Copilot / Gemini /
   hook --mistral-vibe              Dispatch a Mistral Vibe hook event (reads payload from stdin)
   hook --muse                      Dispatch a Muse Code hook event (reads payload from stdin)
 
+Status line (internal — installed into each Claude account by kcap accounts wiring):
+  statusline --account <id>        Record the account's usage from the payload on stdin, then run the original status line
+
 Environment:
   KCAP_URL              Server URL (overrides config file)
   KCAP_SESSION_ID       Session ID set by the Claude Code SessionStart hook

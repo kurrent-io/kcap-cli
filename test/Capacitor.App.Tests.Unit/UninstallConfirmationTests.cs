@@ -25,12 +25,12 @@ public class UninstallConfirmationTests {
     }
 
     [Test]
-    public async Task Local_server_sets_the_warning_and_the_purge_arg() {
+    public async Task Local_server_sets_the_warning_and_purge_consent() {
         var r = UninstallConfirmation.Build(Facts(local: "http://localhost:7000"));
 
         await Assert.That(r.Prompt.Warning).Contains("http://localhost:7000");
         await Assert.That(r.Prompt.Warning).Contains("permanently deleted");
-        await Assert.That(r.RelaunchArgs.SequenceEqual(["--uninstall", "--purge-local"])).IsTrue();
+        await Assert.That(r.PurgeLocal).IsTrue();
         await Assert.That(r.Prompt.Kind).IsEqualTo(LifecyclePrompt.KindUninstall);
     }
 
@@ -39,7 +39,7 @@ public class UninstallConfirmationTests {
         var r = UninstallConfirmation.Build(Facts());
 
         await Assert.That(r.Prompt.Warning).IsNull();
-        await Assert.That(r.RelaunchArgs.SequenceEqual(["--uninstall"])).IsTrue();
+        await Assert.That(r.PurgeLocal).IsFalse();
     }
 
     [Test]

@@ -163,6 +163,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public HomeViewModel? Home { get; }
 
     readonly NavigationGate _navigation;
+    bool _shutdownLatched;
     readonly Action<Func<Task>> _trackTeardown;
     readonly Func<string, WorkspaceViewModel>? _workspaceFactory;
     readonly Func<string, AgentOrigin?> _originOf;
@@ -717,9 +718,13 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             CloseWorkspace();
     }
 
-    /// The coordinator's close paths. Bumps unconditionally — a close-to-hide with no workspace
-    /// open must still retire an in-flight launch's captured generation.
-    public void CloseWorkspace() => SwapTo(null);
+    /// The coordinator's close paths. Before shutdown, even a close-to-hide with no workspace
+    /// open must retire an in-flight launch's captured generation. Shutdown already released the
+    /// workspace; its final window-close notification must not touch disposed dependencies.
+    public void CloseWorkspace() {
+        if (_shutdownLatched || _navigation.ShutdownLatched) return;
+        SwapTo(null);
+    }
 
     static IObservable<bool> CanRefreshOpenWork(ISessionWorkspace? workspace) =>
         workspace is { WorkContext: var work }
@@ -737,6 +742,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// seals the tracker, then latch so no later window opens another. A workspace that never
     /// closed would otherwise register teardown after drain against already-disposed deps.
     public void LatchShutdown() {
+        // The confirmed shutdown pass runs after the shared rail has been disposed.
+        // Each window releases its workspace once, even though the app latches on every pass.
+        if (_shutdownLatched) return;
+        _shutdownLatched = true;
         var live = CurrentWorkspace;
         CurrentWorkspace = null;
         _rebind.Disposable = Disposable.Empty;

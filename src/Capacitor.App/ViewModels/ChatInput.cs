@@ -29,5 +29,6 @@ public abstract class ChatInput : ReactiveObject, IDisposable {
     /// Raw keys in one write, not a paste: a terminal menu reads keystrokes, and bracketed paste would
     /// land as text.
     public virtual Task<bool> SendKeysAsync(byte[] keys, CancellationToken ct) => Task.FromResult(false);
+    public virtual bool CanSendKeys => false;
     public abstract void Dispose();
 }

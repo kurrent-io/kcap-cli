@@ -103,7 +103,7 @@ public static class DaemonShimCommands {
             Func<string, ShimPreflight>? preflight = null, bool? installable = null,
             Action<string>? disclose = null, CancellationToken ct = default) {
         var target = (resolveTarget ?? (() => ResolveLinkTarget(
-            () => Environment.ProcessPath is { } exe ? ScriptInstallLayout.Stabilize(exe) : null, File.Exists,
+            () => Environment.ProcessPath is { } exe ? InstallPaths.Stabilize(exe) : null, File.Exists,
             OperatingSystem.IsWindows())))();
 
         if (string.IsNullOrEmpty(target))

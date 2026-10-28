@@ -2945,6 +2945,9 @@ sealed class SetupCommand(
 
         if (exePath is null) return null;
 
+        // A snap's plugin is found through `current`, so the registration survives the snap's later refreshes.
+        exePath = SnapLayout.Stabilize(exePath, File.Exists);
+
         // Through `current`, so the Claude plugin registration follows a script-install update.
         if (ScriptInstallLayout.FromBinary(exePath, File.Exists) is { } script) {
             var stablePlugin = Path.Combine(script.Current, "kcap");

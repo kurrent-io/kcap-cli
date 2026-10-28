@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Daemon.Services;
 

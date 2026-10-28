@@ -239,6 +239,9 @@ class WatchState {
     // spun for the parent's whole lifetime. Never observed on any other watcher.
     public CodexSubagentTurnTracker CodexSubagentTurn { get; } = new();
 
+    /// <summary>Set for a Codex watcher whose rollout belongs to a registered account.</summary>
+    public Action<IReadOnlyList<string>>? ObserveCodexReadings { get; set; }
+
     // Highwater mark of the last Antigravity gen_metadata row already streamed as a
     // synthetic USAGE line, so the watcher only sends newly-appended cost rows on each
     // poll (server dedup by deterministic id is the backstop). -1 = none seen yet.
@@ -1195,6 +1198,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(AgentRegistered))]
 [JsonSerializable(typeof(AgentRegisteredResponse))]
 [JsonSerializable(typeof(AgentStatusChanged))]
+[JsonSerializable(typeof(ReportAgentTerminalDialogArgs))]
 [JsonSerializable(typeof(AgentUnregistered))]
 [JsonSerializable(typeof(LaunchFailed))]
 [JsonSerializable(typeof(TerminalOutput))]
@@ -2281,6 +2285,9 @@ public readonly record struct DaemonConnect(
         // The daemon's ActiveCount and its version, read together, as on a status report.
         int?                                        ActiveCount = null,
         long?                                       ActiveCountVersion = null,
+        // A launch's base ref may be an abbreviated sha, which the daemon resolves among its own commits.
+        // False from a daemon predating it, which would fetch the abbreviation from origin and fail.
+        bool                                        SupportsAbbreviatedShaBaseRef = false,
         // The permission-preset tokens this daemon enforces, for every vendor in AcpPresetVendors.
         // Null from a daemon predating the field, which the server reads as explore and edit only.
         string[]?                                   AcpPresets = null,
@@ -2375,6 +2382,13 @@ public record HostedAgentCommand(string Name, string? Description, string? Argum
 public readonly record struct ReportAgentCommandsArgs(
         string                            AgentId,
         IReadOnlyList<HostedAgentCommand> Commands
+    );
+
+/// <summary>The dialog a hosted agent's terminal shows, or null once it has closed. A later report
+/// replaces the earlier one. JSON mirror of the server's <c>ReportAgentTerminalDialogArgs</c>.</summary>
+public readonly record struct ReportAgentTerminalDialogArgs(
+        string                       AgentId,
+        LocalIpc.TerminalDialogDto?  Dialog
     );
 
 /// <param name="StopReason">The code of the daemon's own termination verdict, when it ended the agent.

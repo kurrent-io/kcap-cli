@@ -8,19 +8,15 @@ using ReactiveUI.Avalonia.Reactive;
 namespace Capacitor.App.Views;
 
 public partial class UninstallWindow : ReactiveWindow<UninstallRunViewModel> {
-    bool _handoff;
+    UninstallRunViewModel? _observed;
 
     public UninstallWindow() {
         InitializeComponent();
     }
 
-    // Shown by the original app before its first shutdown await. Destructive cleanup still
-    // belongs to the relaunched copy, once the original app has released its resources.
-    internal static UninstallWindow ShowHandoff(IEnumerable<Window> appWindows) {
+    internal static UninstallWindow ShowProgress(IEnumerable<Window> appWindows, UninstallRunViewModel run) {
         var previous = appWindows.ToArray();
-        var window = new UninstallWindow { _handoff = true };
-        window.RunContent.IsVisible = false;
-        window.HandoffContent.IsVisible = true;
+        var window = new UninstallWindow { DataContext = run };
         window.Show();
         foreach (var other in previous) other.Hide();
         window.Activate();
@@ -28,13 +24,24 @@ public partial class UninstallWindow : ReactiveWindow<UninstallRunViewModel> {
     }
 
     protected override void OnDataContextChanged(EventArgs e) {
+        StopObserving();
         base.OnDataContextChanged(e);
-        if (ViewModel is { } vm) vm.Lines.CollectionChanged += OnLinesChanged;
+        _observed = ViewModel;
+        if (_observed is { } vm) vm.Lines.CollectionChanged += OnLinesChanged;
     }
 
-    // Closing mid-run would quit with the CLI still removing things.
+    protected override void OnClosed(EventArgs e) {
+        StopObserving();
+        base.OnClosed(e);
+    }
+
+    void StopObserving() {
+        if (_observed is { } vm) vm.Lines.CollectionChanged -= OnLinesChanged;
+        _observed = null;
+    }
+
     protected override void OnClosing(WindowClosingEventArgs e) {
-        if (e.CloseReason == WindowCloseReason.WindowClosing && (_handoff || ViewModel?.State == UninstallRunState.Running)) e.Cancel = true;
+        if (e.CloseReason == WindowCloseReason.WindowClosing && ViewModel?.IsBusy == true) e.Cancel = true;
         base.OnClosing(e);
     }
 

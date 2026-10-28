@@ -150,7 +150,10 @@ public class HomeAttachmentsTests {
     static Task<StagedAttachment> LaunchWithAccountAsync(Rig rig, string statePath, Func<HomeViewModel, Task> duringUpload) {
         rig.Listing = new(LocalListing(accounts: true));
         rig.LocalAccounts.OnNext(HomeAndWork);
-        return LaunchWithDraftAsync(rig, statePath, duringUpload, beforeStart: vm => vm.PickAccountAsync("a2"));
+        return LaunchWithDraftAsync(rig, statePath, duringUpload, beforeStart: async vm => {
+            await vm.AccountMemoryLoadedForTesting;
+            await vm.PickAccountAsync("a2");
+        });
     }
 
     [Test]

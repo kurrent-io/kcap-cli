@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.Cli.Core.FirstRun;
 
@@ -241,17 +242,7 @@ public sealed class FirstRunFlowClient(HttpClient http, TimeProvider time) : IFi
         }
     }
 
-    /// <summary>How long the server asked us to wait, in either header form — a proxy may rewrite
-    /// delta-seconds as an HTTP date, and reading only the delta would report that as no header at
-    /// all. A date is measured against the response's own Date header, so server clock skew cannot
-    /// turn the wait negative.</summary>
-    TimeSpan? RetryAfter(HttpResponseMessage resp) => resp.Headers.RetryAfter switch {
-        { Delta: { } delta } => delta,
-        { Date:  { } date  } => Max(date - (resp.Headers.Date ?? time.GetUtcNow()), TimeSpan.Zero),
-        _                    => null
-    };
-
-    static TimeSpan Max(TimeSpan a, TimeSpan b) => a > b ? a : b;
+    TimeSpan? RetryAfter(HttpResponseMessage resp) => RetryAfterHeader.Read(resp, time);
 
     /// <summary>Guarded separately from the send: an unreadable body must not collapse to status 0,
     /// which the loop reports as "could not reach the server" about a server that just answered.</summary>

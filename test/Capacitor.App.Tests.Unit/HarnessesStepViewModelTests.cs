@@ -557,4 +557,96 @@ public class HarnessesStepViewModelTests {
         await Assert.That(rows).IsEqualTo(3);
         await Assert.That(toolBoxes).IsEqualTo(2); // Claude Code reads "bundled"
     }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Agent_controls_are_centered_under_headings_and_across_name_and_subtitle(bool succeeded) {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var h = new Harness(Config.Root);
+            var vm = new OnboardingViewModel([h.Vm, new DoneStepViewModel(() => DoneFacts.Empty)]);
+            await vm.PendingEnterForTesting;
+            if (succeeded) h.Row("Claude Code").Status = AgentInstallStatus.Succeeded;
+            var window = new MainWindow { Onboarding = vm, Width = 1024, Height = 1100 };
+            window.Show();
+            try {
+                Dispatcher.UIThread.RunJobs();
+                await Task.Delay(100);
+                Avalonia.Headless.AvaloniaHeadlessPlatform.ForceRenderTimerTick(3);
+                Dispatcher.UIThread.RunJobs();
+                using var bitmap = Avalonia.Headless.HeadlessWindowExtensions.CaptureRenderedFrame(window);
+                if (Environment.GetEnvironmentVariable("KCAP_ONBOARDING_PREVIEW") is { Length: > 0 } preview)
+                    bitmap!.Save(preview, Avalonia.Media.Imaging.PngBitmapEncoderOptions.Default);
+                foreach (var check in window.GetVisualDescendants().OfType<CheckBox>()
+                             .Where(c => c.IsVisible && c.Name is "RecordCheckBox" or "ToolsCheckBox")) {
+                    var column = check.Name == "RecordCheckBox" ? "RECORD" : "TOOLS";
+                    var heading = window.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Text == column);
+                    var headingCenter = heading.TranslatePoint(new Point(heading.Bounds.Width / 2, 0), window)!.Value.X;
+                    var square = check.GetVisualDescendants().OfType<Border>().Single(b => b.Name == "NormalRectangle");
+                    var center = square.TranslatePoint(new Point(square.Bounds.Width / 2, square.Bounds.Height / 2), window)!.Value;
+                    var glyph = check.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().Single(p => p.Name == "CheckGlyph");
+                    var glyphCenter = glyph.TranslatePoint(new Point(glyph.Bounds.Width / 2, glyph.Bounds.Height / 2), window)!.Value;
+                    await Assert.That(Math.Abs(glyphCenter.X - center.X) <= 0.5).IsTrue();
+                    await Assert.That(Math.Abs(glyphCenter.Y - center.Y) <= 0.5).IsTrue();
+                    var row = check.GetVisualAncestors().OfType<Grid>().First();
+                    var rowCenter = row.TranslatePoint(new Point(0, row.Bounds.Height / 2), window)!.Value.Y;
+                    await Assert.That(Math.Abs(center.Y - rowCenter) <= 0.5).IsTrue();
+                    await Assert.That(Math.Abs(center.X - headingCenter) <= 0.5).IsTrue();
+                }
+                foreach (var bundled in window.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsVisible && t.Text == "BUNDLED")) {
+                    var row = bundled.GetVisualAncestors().OfType<Grid>().First();
+                    var center = bundled.TranslatePoint(new Point(0, bundled.Bounds.Height / 2), row)!.Value.Y;
+                    await Assert.That(Math.Abs(center - row.Bounds.Height / 2) <= 0.5).IsTrue();
+                }
+            } finally {
+                window.Close();
+            }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Scrolling_hands_the_step_heading_to_the_title_bar_and_navigation_resets_it() =>
+        AvaloniaSession.RunOnUiAsync(async () => {
+            var h = new Harness(Config.Root);
+            var vm = new OnboardingViewModel([h.Vm, new DoneStepViewModel(() => DoneFacts.Empty)]);
+            await vm.PendingEnterForTesting;
+            var window = new MainWindow { Onboarding = vm, Width = 1024, Height = 640 };
+            window.Show();
+            try {
+                Dispatcher.UIThread.RunJobs();
+                var scroll = window.GetVisualDescendants().OfType<ScrollViewer>().Single(s => s.Name == "StepScroll");
+                var compact = window.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "CompactStepTitle");
+                var heading = window.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "StepTitleText");
+                await Assert.That(compact.Opacity).IsEqualTo(0);
+                scroll.Offset = new Vector(0, 400);
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(compact.Opacity).IsEqualTo(1);
+                await Assert.That(heading.Opacity).IsEqualTo(0);
+                await Assert.That(compact.Text).IsEqualTo(vm.Current.Title);
+                if (Environment.GetEnvironmentVariable("KCAP_ONBOARDING_PREVIEW") is { Length: > 0 } preview) {
+                    await Task.Delay(100);
+                    Avalonia.Headless.AvaloniaHeadlessPlatform.ForceRenderTimerTick(3);
+                    using var bitmap = Avalonia.Headless.HeadlessWindowExtensions.CaptureRenderedFrame(window);
+                    bitmap!.Save(preview, Avalonia.Media.Imaging.PngBitmapEncoderOptions.Default);
+                }
+                scroll.Offset = default;
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(compact.Opacity).IsEqualTo(0);
+                await Assert.That(heading.Opacity).IsEqualTo(1);
+                scroll.Offset = new Vector(0, 400);
+                Dispatcher.UIThread.RunJobs();
+                h.Vm.Visibility = "private";
+                await vm.NextCommand.Execute().ToTask();
+                await Assert.That(vm.Current.Id).IsEqualTo(WizardStepId.Done);
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(scroll.Offset.Y).IsEqualTo(0);
+                await Assert.That(compact.Opacity).IsEqualTo(0);
+                await Assert.That(compact.Text).IsEqualTo(vm.Current.Title);
+            } finally {
+                window.Close();
+            }
+        });
+
 }

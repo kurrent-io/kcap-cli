@@ -51,12 +51,15 @@ public class ServerConnectionAdvertisementTests {
     }
 
     [Test]
-    public async Task DaemonConnect_advertises_branch_base_refs() {
+    public async Task DaemonConnect_advertises_branch_and_abbreviated_sha_base_refs() {
         var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1", ConfigRoot = Config.Root };
         await using var conn = new ServerConnection(config, new FixedCredentialSource(), NullLoggerFactory.Instance,
             NullLogger<ServerConnection>.Instance, TimeProvider.System);
 
-        await Assert.That(conn.BuildDaemonConnect("mac", [], [], null, config.Advertisement).SupportsBranchBaseRef).IsTrue();
+        var connect = conn.BuildDaemonConnect("mac", [], [], null, config.Advertisement);
+
+        await Assert.That(connect.SupportsBranchBaseRef).IsTrue();
+        await Assert.That(connect.SupportsAbbreviatedShaBaseRef).IsTrue();
     }
 
     [Test]

@@ -13,7 +13,17 @@ public sealed class UpdateCommand(
     internal const string BundledMessage =
         "This kcap is bundled with the kcap desktop app; updates arrive through the app (\"Check for Updates…\" in the menu bar).";
 
+    /// <summary>Printed by `kcap update` in the desktop app's snap. snapd refreshes a Store install, but never a
+    /// local one (`snap install --dangerous`, revisions x1, x2, …), so that one is pointed at a new .snap file.</summary>
+    internal static string SnapMessage(SnapLayout? snap) =>
+        snap is { IsLocal: true }
+            ? $"This kcap is a locally installed snap (revision {snap.Revision}); snapd does not update it. Install a newer one with: sudo snap install --dangerous --classic <file>.snap"
+            : $"This kcap is part of the kcap snap; snapd keeps it up to date. To update now: sudo snap refresh{(snap is null ? "" : " " + snap.Name)}";
+
     readonly InstallKind _kind = kind ?? InstallProvenance.Kind();
+
+    /// <summary>The snap <see cref="SnapMessage"/> describes. A seam: production reads the running binary's.</summary>
+    internal SnapLayout? Snap { get; init; } = SnapLayout.OfRunningBinary();
 
     bool AppBundled => _kind == InstallKind.App;
 
@@ -79,6 +89,12 @@ public sealed class UpdateCommand(
 
         if (AppBundled) {
             await Console.Out.WriteLineAsync(checkOnly ? BundledCheckJson(GetCurrentVersion(), channel) : BundledMessage);
+
+            return 0;
+        }
+
+        if (_kind == InstallKind.Snap) {
+            await Console.Out.WriteLineAsync(checkOnly ? BundledCheckJson(GetCurrentVersion(), channel, "snap") : SnapMessage(Snap));
 
             return 0;
         }
@@ -460,13 +476,13 @@ public sealed class UpdateCommand(
     /// The `--check` contract for a bundled CLI: the launcher must see "confidently up to date",
     /// and `install_tag` names the channel that owns the install.
     /// </summary>
-    internal static string BundledCheckJson(string? current, string channel) =>
+    internal static string BundledCheckJson(string? current, string channel, string installTag = "app") =>
         new JsonObject {
             ["current"]     = current,
             ["latest"]      = current,
             ["newer"]       = false,
             ["channel"]     = channel,
-            ["install_tag"] = "app",
+            ["install_tag"] = installTag,
         }.ToJsonString();
 
     static string? GetCurrentVersion() {

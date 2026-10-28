@@ -61,11 +61,11 @@ public static class WorkContextReader {
             case { StatusCode: >= 200 and < 300 }: return WorkContextRead.Of(WorkContextReadKind.Unreachable, "malformed response");
             case { StatusCode: 404 }: return WorkContextRead.Of(WorkContextReadKind.SessionUnknown);
             default:
-                return PlanGated(assignments) ?? WorkContextRead.Of(WorkContextReadKind.Unreachable, StatusDetail(assignments.StatusCode));
+                return PlanGated(assignments, summary) ?? WorkContextRead.Of(WorkContextReadKind.Unreachable, StatusDetail(assignments.StatusCode));
         }
 
-        if (item is not null && PlanGated(item) is { } gatedItem) return gatedItem;
-        if (topology is not null && PlanGated(topology) is { } gated) return gated;
+        if (item is not null && PlanGated(item, summary) is { } gatedItem) return gatedItem;
+        if (topology is not null && PlanGated(topology, summary) is { } gated) return gated;
 
         return new WorkContextRead(
             WorkContextReadKind.Ready, rows, primary,
@@ -82,10 +82,12 @@ public static class WorkContextReader {
     }
 
     /// Every work-item route shares the plan gate, and a plan change between the calls must not
-    /// leave the pane ready on retained data.
-    static WorkContextRead? PlanGated<T>(WorkContextOutcome<T> outcome) where T : class =>
+    /// leave the pane ready on retained data. The summary is not gated, so it rides along.
+    static WorkContextRead? PlanGated<T>(WorkContextOutcome<T> outcome, WorkContextOutcome<SessionSummaryDto> summary) where T : class =>
         IsPlanGate(outcome.StatusCode, outcome.Error)
-            ? WorkContextRead.Of(WorkContextReadKind.NotInPlan, outcome.Error!.Message)
+            ? WorkContextRead.Of(WorkContextReadKind.NotInPlan, outcome.Error!.Message) with {
+                Summary = summary.Succeeded ? summary.Body : null, SummaryFailed = !summary.Succeeded,
+            }
             : null;
 
     /// <summary>Whether a work-item route refused the call because the tenant's plan lacks Work Items.</summary>

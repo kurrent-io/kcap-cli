@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Reactive;
 using System.Reactive.Linq;
 using Capacitor.App.Services;
+using Capacitor.Cli.Core.Setup;
 using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels.Onboarding;
@@ -149,9 +150,9 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
     public string AddAgentLabel => _current.Recording.Count > 0 ? "Add another agent" : "Add an agent";
 
     /// The CLI's own import is named only where the machine has a terminal command to offer.
-    public string? ImportHint =>
+    public IReadOnlyList<DisclosureSpan>? ImportHint =>
         !_current.Local && _current.Recording.Count > 0 && Import is null
-            ? "kcap import brings your existing history over whenever you want"
+            ? [new("kcap import", Code: true), new(" brings your existing history over whenever you want")]
             : null;
 
     /// Starting agents remotely goes through a cloud workspace, so the local edition does not offer it.
@@ -159,7 +160,7 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
         ? "Keeps kcap storing sessions when the app is closed"
         : $"Keeps kcap storing sessions when the app is closed, and lets you start agents on {ThisDevice} from anywhere";
 
-    public string ServicePill => ServiceState switch {
+    public string ServiceStatus => ServiceState switch {
         BackgroundServiceState.Running    => "Running",
         BackgroundServiceState.NotRunning => "Not running",
         _                                 => "Installing…",

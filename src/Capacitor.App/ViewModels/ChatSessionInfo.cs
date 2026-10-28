@@ -13,7 +13,7 @@ public sealed record ChatSessionInfo(
         int? LiveSubagents = null,
         // The local daemon's usage-limit notice. Null on the remote lane and from an older daemon.
         UsageLimitNoticeDto? UsageLimit = null,
-        // The select dialog on the local agent's terminal. Null on the remote lane and from an older daemon.
+        // The select dialog on the agent's terminal. Null from an older daemon or server.
         TerminalDialogDto? TerminalDialog = null,
         // Why the local daemon could not resume the agent after a restart. Null on the remote lane.
         string? Interruption = null,
@@ -53,6 +53,7 @@ public sealed record ChatSessionInfo(
     public static ChatSessionInfo FromRemote(AgentRow row, bool ended, string readOnlyNotice = "") => new(
         row.Status, SessionStatusDots.Label(row), row.Vendor, row.Model,
         row.RepoPath, row.AwaitingInput, ended || SessionStatusDots.IsTerminal(row.Status), readOnlyNotice, row.SessionId,
+        TerminalDialog: row.TerminalDialog,
         AccountDirectory: row.AccountDirectory, AccountId: row.AccountId, AccountLabel: row.AccountLabel) {
         WaitsOnUser = SessionStatusDots.WaitsOnUser(row), TakesAttachments = row.Kind == "agent",
     };

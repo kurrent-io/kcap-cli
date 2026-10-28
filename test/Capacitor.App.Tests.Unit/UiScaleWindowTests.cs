@@ -101,7 +101,7 @@ public class UiScaleWindowTests {
     });
 
     [Test]
-    public Task Appearance_tab_steps_resets_and_follows_a_change_made_elsewhere() => AvaloniaSession.RunOnUiAsync(async () => {
+    public Task Appearance_tab_steps_resets_follows_a_change_made_elsewhere_and_scales_its_own_window() => AvaloniaSession.RunOnUiAsync(async () => {
         ConfigMutator.Mutate(Config.Root, c => c with { Profiles = new() { ["work"] = new Profile { ServerUrl = "https://work.example" } } });
         var setting = await NewSetting();
         using var vm = new SettingsViewModel(new SettingsProfileStore(Config.Root, "work", "https://work.example"),
@@ -110,10 +110,12 @@ public class UiScaleWindowTests {
             (_, _) => Task.FromResult(false), _ => Task.FromResult(false), true, Task.CompletedTask, (_, _) => Task.FromResult(true)) {
             Appearance = new AppearanceSettingsViewModel(setting),
         };
-        var window = new SettingsWindow { DataContext = vm };
+        var window = new SettingsWindow { DataContext = vm, ContentScale = setting };
         try {
             window.Show();
             window.FindControl<TabControl>("SettingsTabs")!.SelectedItem = window.FindControl<TabItem>("AppearanceTab");
+            var host = window.FindControl<LayoutTransformControl>("ScaleHost")!;
+            double? Scaled() => (host.LayoutTransform as ScaleTransform)?.ScaleX;
             Dispatcher.UIThread.RunJobs();
             var label   = window.FindControl<TextBlock>("TextSizeText")!;
             var larger  = window.FindControl<Button>("TextLargerButton")!;
@@ -125,6 +127,7 @@ public class UiScaleWindowTests {
             Dispatcher.UIThread.RunJobs();
             await Assert.That(label.Text).IsEqualTo("110%");
             await Assert.That(reset.IsEffectivelyEnabled).IsTrue();
+            await Assert.That(Scaled()).IsEqualTo(1.1);
 
             await setting.SetAsync(UiScale.Max);
             Dispatcher.UIThread.RunJobs();
@@ -135,6 +138,7 @@ public class UiScaleWindowTests {
             Dispatcher.UIThread.RunJobs();
             await Assert.That(setting.Current).IsEqualTo(UiScale.Default);
             await Assert.That(label.Text).IsEqualTo("100%");
+            await Assert.That(Scaled()).IsNull();
         } finally { window.Close(); }
     });
 }

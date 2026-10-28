@@ -350,6 +350,29 @@ public class SessionRailViewModelTests {
         });
     }
 
+    /// A quit can still drive the rail's controls after the app has disposed it; that must not
+    /// throw, reach the service or persist.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Control_changes_after_dispose_are_ignored() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var (directory, sessions, _, persisted, rail) = BuildWithControls();
+            using (directory) using (sessions) {
+                rail.Dispose();
+                rail.SetScopeCommand.Execute(RailScope.Team).Subscribe();
+                rail.Scope = RailScope.Team;
+                rail.State = RailState.Ended;
+                rail.Grouping = RailGrouping.Date;
+                rail.Sort = RailSort.Title;
+                rail.Descending = !rail.Descending;
+                rail.ApplyPreferences(new RailPreferences(RailScope.Team, RailState.Ended, RailGrouping.Date, RailSort.Title, false, []));
+
+                await Assert.That(sessions.Scope).IsEqualTo(RailScope.Mine);
+                await Assert.That(persisted).IsEmpty();
+            }
+        });
+    }
+
     /// A local checkout and a remote agent on the same GitHub repo land in one repo group — the
     /// remote session carries the machine badge, the local one doesn't.
     [Test]
@@ -522,6 +545,33 @@ public class SessionRailViewModelTests {
                 await Assert.That(sessions.Scope).IsEqualTo(RailScope.Team);
                 await Assert.That(bound).IsEquivalentTo(new[] { "u1" });
                 await Assert.That(persisted).IsEmpty();
+            }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_locked_scope_stays_on_mine() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var directory = new FakeAgentDirectory();
+            var sessions = new FakeServerSessionsService();
+            var teams = RailPreferences.Default with { Scope = RailScope.Team, Grouping = RailGrouping.Date };
+            var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System,
+                sessions: sessions, preferences: teams with { Grouping = RailGrouping.Repository },
+                scopeLocked: true, bindUserPreferences: _ => Task.FromResult(teams));
+            using (directory) using (sessions) using (rail) {
+                await Assert.That(rail.Scope).IsEqualTo(RailScope.Mine);
+                await Assert.That(sessions.Scope).IsEqualTo(RailScope.Mine);
+                await Assert.That(rail.CanChangeScope).IsFalse();
+                await Assert.That(rail.ScopeTip).IsEqualTo(SessionRailViewModel.ScopeLockedTip);
+
+                sessions.ViewerUserIdSubject.OnNext("u1");
+                await WorkspaceFixtures.WaitUntilAsync(() => rail.Grouping == RailGrouping.Date, what: "the viewer's shape applied");
+                await Assert.That(rail.Scope).IsEqualTo(RailScope.Mine);
+
+                rail.SetScopeCommand.Execute(RailScope.Team).Subscribe();
+                await Assert.That(rail.Scope).IsEqualTo(RailScope.Mine);
+                await Assert.That(sessions.Scope).IsEqualTo(RailScope.Mine);
             }
         });
     }

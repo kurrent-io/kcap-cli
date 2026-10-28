@@ -58,6 +58,9 @@
             <Setter Property="Padding" Value="9,3" />
             <Setter Property="FontSize" Value="12" />
         </Style>
+        <Style Selector="Border.railScopeSegment:disabled">
+            <Setter Property="Opacity" Value="0.55" />
+        </Style>
         <Style Selector="Button.railPicker">
             <Setter Property="Padding" Value="6,4" />
             <Setter Property="FontSize" Value="12" />
@@ -164,7 +167,8 @@
                 <StackPanel x:Name="RailControls" DataContext="{Binding Rail}" x:DataType="vm:SessionRailViewModel"
                             Margin="10,0,10,8" Spacing="6" IsVisible="{Binding Converter={x:Static ObjectConverters.IsNotNull}}">
                     <Grid ColumnDefinitions="Auto,*,Auto">
-                        <Border Classes="kcapSegment" HorizontalAlignment="Left">
+                        <Border x:Name="RailScopeSegment" Classes="kcapSegment railScopeSegment" HorizontalAlignment="Left"
+                                IsEnabled="{Binding CanChangeScope}" ToolTip.Tip="{Binding ScopeTip}" ToolTip.ShowOnDisabled="True">
                             <StackPanel Orientation="Horizontal" Spacing="2">
                                 <Button x:Name="RailScopeMineButton" Content="Mine" Classes="kcapSegmentItem railSegmentItem"
                                         Classes.active="{Binding IsMine}" Command="{Binding SetScopeCommand}"
@@ -321,30 +325,6 @@
                             <TextBlock x:Name="RailLocalStackStateText" Text="{Binding StateText}" Classes="footerMeta"
                                        Classes.attention="{Binding Attention}"
                                        IsVisible="{Binding StateText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                            <TextBlock Classes="footerDot"
-                                       IsVisible="{Binding Search.StateText, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}" />
-                            <Button x:Name="RailLocalSearchButton" Classes="kcapGhost" Padding="2,0" Margin="-2,0,3,0" MinHeight="0"
-                                    ToolTip.Tip="How the local server searches your sessions. Change it in Settings."
-                                    AutomationProperties.Name="Open search settings for the local server"
-                                    Command="{Binding Search.OpenSettingsCommand, FallbackValue={x:Null}}"
-                                    IsVisible="{Binding Search.ShowsSettingsLink, FallbackValue=False}">
-                                <TextBlock x:Name="RailLocalSearchText" Text="{Binding Search.StateText}" Classes="footerMeta" />
-                            </Button>
-                            <!-- With no Settings window to open (a server reached by URL with no profile), the controls open here. -->
-                            <Button x:Name="RailLocalSearchInlineButton" Classes="kcapGhost" Padding="2,0" Margin="-2,0,3,0" MinHeight="0"
-                                    ToolTip.Tip="How the local server searches your sessions"
-                                    AutomationProperties.Name="Search settings for the local server"
-                                    IsVisible="{Binding Search.ShowsInlineSettings, FallbackValue=False}">
-                                <TextBlock Text="{Binding Search.StateText}" Classes="footerMeta" />
-                                <Button.Flyout>
-                                    <Flyout Placement="TopEdgeAlignedLeft" VerticalOffset="-6" FlyoutPresenterClasses="kcapPanel">
-                                        <ScrollViewer MaxHeight="560" Width="440" Margin="12" VerticalScrollBarVisibility="Auto"
-                                                      HorizontalScrollBarVisibility="Disabled">
-                                            <views:SearchSettingsView x:Name="RailLocalSearchPanel" DataContext="{Binding Search}" />
-                                        </ScrollViewer>
-                                    </Flyout>
-                                </Button.Flyout>
-                            </Button>
                         </WrapPanel>
                     </Panel>
                     <!-- Bottom, not Center: the fragments and the button share the row's
@@ -366,7 +346,7 @@
                         </StackPanel>
                         <TextBlock x:Name="RailVersionText" Text="{Binding VersionDisplay, StringFormat='kcap {0}'}" Classes="footerMeta"
                                    Classes.restartPending="{Binding RestartPending}"
-                                   IsVisible="{Binding VersionDisplay, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                   IsVisible="{Binding RestartPending}">
                             <ToolTip.Tip>
                                 <StackPanel Spacing="2">
                                     <TextBlock Text="{Binding RestartPendingText}" TextWrapping="Wrap"
@@ -436,6 +416,18 @@
                                                 HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
                                                 Padding="10,8" FontSize="13.5"
                                                 AutomationProperties.Name="Sign in" />
+                                        <Button x:Name="LocalSearchSettingsMenuButton" Classes="kcapGhost" Content="Search settings…"
+                                                IsVisible="{Binding LocalStack.Search.ShowsInlineSettings, FallbackValue=False}"
+                                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="10,8" FontSize="13.5">
+                                            <Button.Flyout>
+                                                <Flyout Placement="RightEdgeAlignedBottom" HorizontalOffset="6" FlyoutPresenterClasses="kcapPanel">
+                                                    <ScrollViewer MaxHeight="560" Width="440" Margin="16" VerticalScrollBarVisibility="Auto"
+                                                                  HorizontalScrollBarVisibility="Disabled">
+                                                        <views:SearchSettingsView DataContext="{Binding LocalStack.Search}" />
+                                                    </ScrollViewer>
+                                                </Flyout>
+                                            </Button.Flyout>
+                                        </Button>
                                         <StackPanel x:Name="RailAppMenuItems" Spacing="2" IsVisible="{Binding AppMenuInWindow}">
                                             <Border Height="1" Margin="8,4" Background="{StaticResource KcapBorderBrush}" />
                                             <Button x:Name="RailHelpAboutButton" Classes="kcapGhost" Content="About kcap"

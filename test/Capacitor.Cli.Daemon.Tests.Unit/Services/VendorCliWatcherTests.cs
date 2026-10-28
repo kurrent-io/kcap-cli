@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Accounts.Readings;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Daemon.Services;
@@ -381,6 +382,37 @@ public class VendorCliWatcherTests {
             releaseStartup.Set();
             if (tick is not null) await tick.WaitAsync(WaitHarness.Bounded);
             await watcher.StopAsync(CancellationToken.None);
+            await publisher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task Only_a_change_to_the_accounts_reprobes_not_a_reading_change() {
+        using var home = new TempHome();
+        var store = new AccountStore(home.PathTo("accounts"));
+        var work  = AddCodexAccount(store, home.PathTo(".codex-work"));
+        using var publisher = new AccountsPublisher(
+            new DaemonConfig { Accounts = store }, home, new FakeTimeProvider(), NullLogger<AccountsPublisher>.Instance);
+        var refreshes = new List<string>();
+        using var watcher = VendorCliWatcher.ForTest([], refreshes.Add, _ => null, new FakeTimeProvider());
+        publisher.Changed += watcher.OnAccountsChanged;
+        await publisher.StartAsync(CancellationToken.None);
+        try {
+            await Assert.That(refreshes.Count).IsEqualTo(1);
+
+            var recorded = store.Readings.TryRecord(work.Id, 0, null, f => f with {
+                Reading = f.Reading with { Windows = [new UsageWindowDto("five_hour", 300, 42, null, null)] },
+            });
+            await Assert.That(recorded).IsTrue();
+            var before = publisher.Version;
+            await publisher.RebuildAsync(CancellationToken.None);
+            await Assert.That(publisher.Version).IsGreaterThan(before);
+            await Assert.That(refreshes.Count).IsEqualTo(1);
+
+            AddCodexAccount(store, home.PathTo(".codex-spare"));
+            await publisher.RebuildAsync(CancellationToken.None);
+            await Assert.That(refreshes.Count).IsEqualTo(2);
+        } finally {
             await publisher.StopAsync(CancellationToken.None);
         }
     }

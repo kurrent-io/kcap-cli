@@ -129,7 +129,7 @@ public class DoneStepViewModelTests {
                          LocalFacts() with { DaemonRunning = false, DaemonProblem = "kcap isn't available on this machine." } }) {
                 var vm = new DoneStepViewModel(() => facts);
                 await vm.OnEnterAsync(CancellationToken.None);
-                all.AddRange([vm.Lede, vm.ImportHint ?? "", vm.ServiceBody, vm.FailedBody]);
+                all.AddRange([vm.Lede, string.Concat(vm.ImportHint?.Select(s => s.Text) ?? []), vm.ServiceBody, vm.FailedBody]);
             }
 
             return all;
@@ -212,7 +212,7 @@ public class DoneStepViewModelTests {
         });
 
         await Assert.That(vm.Eyebrow).IsEqualTo(eyebrow);
-        await Assert.That(vm.ServicePill).IsEqualTo(pill);
+        await Assert.That(vm.ServiceStatus).IsEqualTo(pill);
         await Assert.That(vm.OffersFinishLater).IsEqualTo(finishLater);
         await Assert.That(vm.ServiceFailed).IsEqualTo(finishLater);
     }
