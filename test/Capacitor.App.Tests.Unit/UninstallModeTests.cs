@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Reactive.Linq;
 using Capacitor.App.Platform.Linux;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
@@ -27,7 +28,7 @@ public class UninstallModeTests {
     sealed class Removal : IAppRemoval {
         public bool Trashed;
         public Task<IReadOnlyList<string>> RemoveLinksAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>([]);
-        public void DeleteSupportFiles() { }
+        public bool DeleteSupportFiles() => true;
         public Task<bool> TrashBundleAsync(CancellationToken ct) {
             Trashed = true;
             return Task.FromResult(true);
@@ -115,6 +116,8 @@ public class UninstallModeTests {
         await Assert.That(run.State).IsEqualTo(UninstallRunState.Finished);
         await Assert.That(runner.StreamedArgs).Contains("--purge-local");
         await Assert.That(removal.Trashed).IsTrue();
+        await Assert.That(quit).IsFalse();
+        await run.CloseCommand.Execute();
         await Assert.That(quit).IsTrue();
         await Assert.That(Snapshot()).IsEquivalentTo(before);
     }

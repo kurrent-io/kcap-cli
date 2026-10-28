@@ -810,7 +810,7 @@ public sealed class DaemonCommands(
             claude.UserConfigJson, claude.UserSettings,
             McpDoctorSection.DefaultJsonRegistrations(harnesses),
             harnesses.Of<CodexHarness>().Paths.ConfigToml,
-            Environment.ProcessPath is { } exe ? ScriptInstallLayout.Stabilize(exe) : null);
+            Environment.ProcessPath is { } exe ? InstallPaths.Stabilize(exe) : null);
         await console.Out.WriteLineAsync();
 
         store.EnsureDirectory();

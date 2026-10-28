@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace Capacitor.Cli.Core.Auth;
 
@@ -12,7 +13,9 @@ public static class Clipboard {
     public static bool TryCopy(string text) {
         try {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) return RunWithStdin("pbcopy", "", text);
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return RunWithStdin("clip", "", text);
+            // clip reads stdin in the OEM code page unless it starts with a UTF-16LE byte-order mark,
+            // which the redirected stream's Encoding.Unicode writer emits on its own.
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return RunWithStdin("clip", "", text, Encoding.Unicode);
 
             // Linux: prefer Wayland, fall back to X11
             return RunWithStdin("wl-copy", "", text) || RunWithStdin("xclip", "-selection clipboard", text);
@@ -21,10 +24,11 @@ public static class Clipboard {
         }
     }
 
-    static bool RunWithStdin(string fileName, string args, string stdin) {
+    static bool RunWithStdin(string fileName, string args, string stdin, Encoding? encoding = null) {
         try {
             var psi = new ProcessStartInfo(fileName, args) {
                 RedirectStandardInput = true,
+                StandardInputEncoding = encoding,
                 UseShellExecute       = false,
                 CreateNoWindow        = true
             };

@@ -15,6 +15,7 @@ internal sealed class NoRemoteAgents : IRemoteAgentsService {
     public IObservable<IReadOnlyList<DaemonInfo>> Daemons { get; } = Observable.Return<IReadOnlyList<DaemonInfo>>([]);
     public IObservable<DaemonListing> Listing { get; } = Observable.Return(new DaemonListing(null, 0, false));
     public IObservable<IReadOnlyList<DaemonAccountsDto>> DaemonAccounts { get; } = Observable.Return<IReadOnlyList<DaemonAccountsDto>>([]);
+    public IObservable<IReadOnlyList<DaemonAccountsDto>> DrawableDaemonAccounts { get; } = Observable.Return<IReadOnlyList<DaemonAccountsDto>>([]);
     public Task RefreshDaemonsAsync() => Task.CompletedTask;
     public IObservable<bool> Current { get; } = Observable.Return(false);
 }
@@ -54,5 +55,6 @@ internal sealed class NoServerLane : IServerLane {
     public Task<HubCallOutcome> RequestResizeTerminalAsync(string agentId, int cols, int rows, CancellationToken ct) => Task.FromResult(HubCallOutcome.NotConnected);
     public Task<HubCallOutcome> ReleaseResizeTerminalAsync(string agentId, CancellationToken ct) => Task.FromResult(HubCallOutcome.NotConnected);
     public Task<HubCallOutcome> SendUserInputAsync(string agentId, string text, CancellationToken ct) => Task.FromResult(HubCallOutcome.NotConnected);
+    public Task<HubCallOutcome> DiscardQueuedInputAsync(string agentId, Guid dispatchId, CancellationToken ct) => Task.FromResult(HubCallOutcome.NotConnected);
     public Task<HubCallOutcome> SendSpecialKeyAsync(string agentId, string key, CancellationToken ct) => Task.FromResult(HubCallOutcome.NotConnected);
 }

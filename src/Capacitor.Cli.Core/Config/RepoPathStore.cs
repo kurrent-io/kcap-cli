@@ -17,8 +17,8 @@ public sealed class RepoPathStore(ConfigRoot config, TimeProvider time) {
             ? StringComparison.Ordinal
             : StringComparison.OrdinalIgnoreCase;
 
-    static string NormalizePath(string path) =>
-        Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    // A root keeps its separator: trimmed to "" it reads back as a corrupt store.
+    static string NormalizePath(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
 
     /// <summary>The saved repositories; empty when there is no file, or when it cannot be read or parsed.
     /// Writers never act on that empty answer — see <see cref="ReadForWrite"/>.</summary>
@@ -113,6 +113,35 @@ public sealed class RepoPathStore(ConfigRoot config, TimeProvider time) {
             }
 
             return true;
+        });
+    }
+
+    /// <summary>Records repositories seen at the given times, in one write. An entry already present
+    /// keeps the later of its own and the recorded time, so history never demotes a recent use.</summary>
+    public Task<bool> RecordAsync(IEnumerable<RepoEntry> seen) {
+        var latest = new Dictionary<string, DateTimeOffset>(
+            PathComparison == StringComparison.Ordinal ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in seen) {
+            var normalized = NormalizePath(GitRepository.ResolveMainRepoRoot(entry.Path));
+            if (!latest.TryGetValue(normalized, out var at) || entry.LastUsed > at) latest[normalized] = entry.LastUsed;
+        }
+
+        if (latest.Count == 0) return Task.FromResult(false);
+
+        return WriteLocked(entries => {
+            var changed = false;
+            foreach (var (path, at) in latest) {
+                var existing = entries.FindIndex(e => string.Equals(e.Path, path, PathComparison));
+                if (existing < 0) {
+                    entries.Add(new RepoEntry { Path = path, LastUsed = at });
+                    changed = true;
+                } else if (at > entries[existing].LastUsed) {
+                    entries[existing] = entries[existing] with { LastUsed = at };
+                    changed = true;
+                }
+            }
+
+            return changed;
         });
     }
 

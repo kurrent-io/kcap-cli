@@ -23,7 +23,8 @@ namespace Capacitor.App.ViewModels;
 /// ONE ObserveOn at the top of the pipeline: nested group caches are mutated by this outer
 /// pipeline, so every inner Connect() below already fires on the UI thread.
 public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
-    public const string CapNote = "Search or narrow the scope for older sessions";
+    public const string CapNote = "Loading limit reached · search or narrow the scope for older sessions";
+    public const string ScopeLockedTip = "Local version only stores your sessions. Upgrade to work with your team.";
 
     readonly CompositeDisposable _disposables = new();
     readonly IAgentDirectory _directory;
@@ -50,6 +51,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     public string? SelectedSessionKey {
         get => _selectedSessionKey;
         set {
+            if (_disposables.IsDisposed) return;
             this.RaiseAndSetIfChanged(ref _selectedSessionKey, value);
             _selectedSessionKeyChanges.OnNext(value);
             _stateFilter.OnNext(StateFilter());
@@ -61,6 +63,8 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     public RailScope Scope {
         get => _scope;
         set {
+            if (_disposables.IsDisposed) return;
+            if (IsScopeLocked) value = RailScope.Mine;
             if (_scope == value) return;
             this.RaiseAndSetIfChanged(ref _scope, value);
             this.RaisePropertyChanged(nameof(IsMine));
@@ -72,11 +76,16 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
 
     public bool IsMine => _scope == RailScope.Mine;
     public bool IsTeam => _scope == RailScope.Team;
+    /// The local edition holds only the owner's sessions, so Team has nothing to show.
+    public bool IsScopeLocked { get; }
+    public bool CanChangeScope => !IsScopeLocked;
+    public string? ScopeTip => IsScopeLocked ? ScopeLockedTip : null;
 
     RailState _state;
     public RailState State {
         get => _state;
         set {
+            if (_disposables.IsDisposed) return;
             if (_state == value) return;
             this.RaiseAndSetIfChanged(ref _state, value);
             this.RaisePropertyChanged(nameof(IsAll));
@@ -95,6 +104,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     public RailGrouping Grouping {
         get => _grouping;
         set {
+            if (_disposables.IsDisposed) return;
             if (_grouping == value) return;
             this.RaiseAndSetIfChanged(ref _grouping, value);
             this.RaisePropertyChanged(nameof(GroupingLabel));
@@ -118,6 +128,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     public RailSort Sort {
         get => _sort;
         set {
+            if (_disposables.IsDisposed) return;
             if (_sort == value) return;
             this.RaiseAndSetIfChanged(ref _sort, value);
             this.RaisePropertyChanged(nameof(SortLabel));
@@ -138,6 +149,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     public bool Descending {
         get => _descending;
         set {
+            if (_disposables.IsDisposed) return;
             if (_descending == value) return;
             this.RaiseAndSetIfChanged(ref _descending, value);
             this.RaisePropertyChanged(nameof(DirectionLabel));
@@ -161,7 +173,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     public bool IsEmpty => _isEmpty.Value;
 
     readonly ObservableAsPropertyHelper<string> _loadedText;
-    /// "12 of 212": loaded ended rows of the scope's total; empty without a server lane.
+    /// Ended-session loading progress; hidden for live-only or fully loaded listings.
     public string LoadedText => _loadedText.Value;
     readonly ObservableAsPropertyHelper<bool> _showsShowMore;
     public bool ShowsShowMore => _showsShowMore.Value;
@@ -186,13 +198,15 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             IServerSessionsService? sessions = null,
             RailPreferences? preferences = null,
             Action<RailPreferences>? persistPreferences = null,
+            bool scopeLocked = false,
             Func<string, Task<RailPreferences>>? bindUserPreferences = null) {
         _directory = directory;
         _sessions = sessions;
         _persist = persistPreferences;
         _time = time;
         var initial = preferences ?? RailPreferences.Default;
-        _scope = initial.Scope;
+        IsScopeLocked = scopeLocked;
+        _scope = scopeLocked ? RailScope.Mine : initial.Scope;
         _state = initial.State;
         _grouping = initial.Grouping;
         _sort = initial.Sort;
@@ -240,18 +254,22 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
 
         var paging = (sessions?.Paging ?? Observable.Return(new ServerSessionsPaging(0, 0, 1, false, false)))
             .ObserveOn(RxSchedulers.MainThreadScheduler).Replay(1).RefCount();
-        _loadedText = paging.Select(p => p.Total == 0 && p.Loaded == 0 ? "" : $"{p.Loaded} of {p.Total}")
+        var endedPaging = paging.CombineLatest(_stateFilter.Select(_ => State).DistinctUntilChanged(),
+                (p, state) => (Page: p, Visible: state != RailState.Live))
+            .Replay(1).RefCount();
+        _loadedText = endedPaging.Select(p => p.Visible && p.Page.Loaded < p.Page.Total
+                ? $"{p.Page.Loaded} of {p.Page.Total} ended sessions loaded" : "")
             .ToProperty(this, x => x.LoadedText, initialValue: "").DisposeWith(_disposables);
-        _showsShowMore = paging.Select(p => p.CanShowMore)
+        _showsShowMore = endedPaging.Select(p => p.Visible && p.Page.CanShowMore)
             .ToProperty(this, x => x.ShowsShowMore, initialValue: false).DisposeWith(_disposables);
-        _atCap = paging.Select(p => p.AtCap)
+        _atCap = endedPaging.Select(p => p.Visible && p.Page.AtCap && p.Page.Loaded < p.Page.Total)
             .ToProperty(this, x => x.AtCap, initialValue: false).DisposeWith(_disposables);
         _liveNotShownText = (sessions?.LiveNotShown ?? Observable.Return(0))
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Select(n => n > 0 ? $"{n} more live sessions · narrow the scope" : null)
             .ToProperty(this, x => x.LiveNotShownText, initialValue: null).DisposeWith(_disposables);
         ShowMoreCommand = ReactiveCommand.CreateFromTask(
-            () => sessions?.ShowMoreAsync() ?? Task.CompletedTask, paging.Select(p => p.CanShowMore)).DisposeWith(_disposables);
+            () => sessions?.ShowMoreAsync() ?? Task.CompletedTask, endedPaging.Select(p => p.Visible && p.Page.CanShowMore)).DisposeWith(_disposables);
 
         // The lane names the viewer after the rail has opened in the last user's shape; a read that
         // fails keeps the shape already showing.
@@ -292,6 +310,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     /// Another user's remembered shape, or this user's set now that the lane has named them: applied
     /// without writing it back.
     public void ApplyPreferences(RailPreferences preferences) {
+        if (_disposables.IsDisposed) return;
         _applying = true;
         try {
             Scope = preferences.Scope;
@@ -413,5 +432,6 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
 
     internal static string WorktreeKeyFor(AgentRow row) => row.CheckoutKey;
 
+    /// A quit keeps driving the setters and commands after this, so each one ignores a disposed rail.
     public void Dispose() => _disposables.Dispose();
 }

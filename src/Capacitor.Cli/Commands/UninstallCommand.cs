@@ -142,6 +142,11 @@ sealed class UninstallCommand(
         foreach (var link in pathLinks)
             await console.Out.WriteLineAsync($"  • Remove the kcap command link at {link}");
 
+        IReadOnlyList<string> profiles = keepPathLinks || OperatingSystem.IsWindows() ? [] : ShellProfile.Removable(home, pathLinks);
+
+        foreach (var profile in profiles)
+            await console.Out.WriteLineAsync($"  • Remove the PATH line kcap added to {profile}");
+
         if (projectRoot is not null) {
             await console.Out.WriteLineAsync(
                 $"  • Remove kcap entries from {Path.Combine(projectRoot, ".claude", "settings.local.json")}");
@@ -310,6 +315,17 @@ sealed class UninstallCommand(
                 }
             }
 
+            if (profiles.Count > 0) {
+                foreach (var profile in ShellProfile.Removable(home, [])) {
+                    try {
+                        ShellProfile.Remove(profile);
+                    } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                        await console.Error.WriteLineAsync($"Could not remove kcap's PATH line from {profile}: {ex.Message}");
+                        hadFailures = true;
+                    }
+                }
+            }
+
             if (projectRoot is not null) {
                 var claudeProject = Path.Combine(projectRoot, ".claude", "settings.local.json");
                 var codexProject  = Path.Combine(projectRoot, ".codex", "hooks.json");
@@ -411,6 +427,7 @@ sealed class UninstallCommand(
             }
 
             await console.Out.WriteLineAsync("kcap uninstalled.");
+            await console.Out.WriteLineAsync("Restart any coding agents that were open during uninstall to clear their loaded kcap hooks.");
 
             return 0;
         }

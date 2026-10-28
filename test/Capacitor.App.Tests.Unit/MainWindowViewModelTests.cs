@@ -897,6 +897,39 @@ public class MainWindowViewModelTests {
         });
     }
 
+    /// Shutdown releases the live workspace before rail disposal; later latch and close callbacks
+    /// must remain safe after that disposal.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Shutdown_latch_can_repeat_after_the_session_rail_is_disposed() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var directory = new FakeAgentDirectory();
+            using var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System);
+            var service = new FakeDaemonClientService();
+            var tracked = 0;
+            Task? teardown = null;
+            var vm = NewVm(service, workspaceFactory: id => NewWorkspace(service, id), rail: rail,
+                trackWorkspaceTeardown: start => { tracked++; teardown = start(); });
+            vm.OpenSession("session");
+            var workspace = vm.CurrentWorkspace;
+            await Assert.That(workspace).IsNotNull();
+
+            // First shutdown request, UI teardown, then the confirmed shutdown request.
+            vm.LatchShutdown();
+            await Assert.That(vm.CurrentWorkspace).IsNull();
+            await Assert.That(rail.SelectedSessionKey).IsNull();
+            await Assert.That(tracked).IsEqualTo(1);
+            await teardown!;
+            rail.Dispose();
+            vm.LatchShutdown();
+            // MainWindowCoordinator also releases the workspace from the final Closed event.
+            vm.CloseWorkspace();
+
+            await Assert.That(vm.CurrentWorkspace).IsNull();
+            await Assert.That(tracked).IsEqualTo(1);
+        });
+    }
+
     /// The gate is app-lifetime, not per-window: MainWindowCoordinator can build a second window
     /// over the same composition, and a launch captured in the first must read as stale in the
     /// second — which only holds while both read ONE generation.
@@ -906,8 +939,10 @@ public class MainWindowViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
             var gate = new NavigationGate();
+            using var directory = new FakeAgentDirectory();
+            using var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System);
             MainWindowViewModel Build() => new(
-                service, CancellationToken.None, TestActivity.New(), TimeProvider.System, navigation: gate);
+                service, CancellationToken.None, TestActivity.New(), TimeProvider.System, navigation: gate, rail: rail);
 
             var first = Build();
             var second = Build();
@@ -920,6 +955,10 @@ public class MainWindowViewModelTests {
 
             first.LatchShutdown();
             await Assert.That(gate.ShutdownLatched).IsTrue();
+            var shutdownGeneration = gate.Generation;
+            rail.Dispose();
+            second.CloseWorkspace(); // Late close without this window's local shutdown latch.
+            await Assert.That(gate.Generation).IsEqualTo(shutdownGeneration);
         });
     }
 

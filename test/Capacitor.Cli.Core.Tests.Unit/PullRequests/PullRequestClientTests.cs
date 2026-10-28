@@ -172,12 +172,37 @@ public class PullRequestClientTests {
         await Assert.That((await client.LegacyLinksAsync("session", default)).Kind).IsEqualTo(expected);
     }
 
+    /// The server refuses a read burst per user with a 429; the read carries when it may go again.
+    [Test]
+    public async Task A_refused_read_carries_the_servers_retry_time() {
+        var clock = new FakeTimeProvider(new DateTimeOffset(2026, 10, 27, 12, 0, 0, TimeSpan.Zero));
+        using var handler = new Handler { Status = (HttpStatusCode)429, RetryAfter = TimeSpan.FromSeconds(7),
+            Body = """{"error":"read_rate_limited","retry_after_seconds":7}""" };
+        using var http = new HttpClient(handler);
+        using var client = new PullRequestClient(http, "https://tenant.test", clock);
+
+        var refused = await client.ListAsync("session", default);
+        await Assert.That(refused.Kind).IsEqualTo(PullRequestReadKind.Unavailable);
+        await Assert.That(refused.AccessFailure).IsEqualTo("transient");
+        await Assert.That(refused.RetryAt).IsEqualTo(new DateTime(2026, 10, 27, 12, 0, 7, DateTimeKind.Utc));
+
+        handler.RetryAfter = null;
+        await Assert.That((await client.ListAsync("session", default)).RetryAt).IsEqualTo(new DateTime(2026, 10, 27, 12, 0, 1, DateTimeKind.Utc));
+
+        handler.RetryAfter = TimeSpan.Zero;
+        await Assert.That((await client.ListAsync("session", default)).RetryAt).IsEqualTo(new DateTime(2026, 10, 27, 12, 0, 1, DateTimeKind.Utc));
+
+        handler.Status = HttpStatusCode.ServiceUnavailable;
+        await Assert.That((await client.ListAsync("session", default)).RetryAt).IsNull();
+    }
+
     static string FixturePath => Path.Combine(AppContext.BaseDirectory, "fixtures", "pull-request-reads-v1.json");
     sealed class Handler : HttpMessageHandler {
         internal string Discovery = """{"provider":"workos","pull_request_reads_versions":[1]}""";
         internal string Body = "{}";
         internal Func<HttpContent>? Content;
         internal HttpStatusCode Status = HttpStatusCode.OK;
+        internal TimeSpan? RetryAfter;
         internal Action? BeforeBody;
         internal bool Redirect;
         internal List<string> Paths { get; } = [];
@@ -185,10 +210,12 @@ public class PullRequestClientTests {
             Paths.Add(request.RequestUri!.PathAndQuery);
             var discovery = request.RequestUri.AbsolutePath == "/auth/config";
             if (!discovery) BeforeBody?.Invoke();
-            return Task.FromResult(new HttpResponseMessage(discovery ? HttpStatusCode.OK : Status) {
+            var response = new HttpResponseMessage(discovery ? HttpStatusCode.OK : Status) {
                 RequestMessage = Redirect ? new HttpRequestMessage(HttpMethod.Get, "https://foreign.test/result") : request,
                 Content = !discovery && Content is { } content ? content() : new StringContent(discovery ? Discovery : Body, Encoding.UTF8, "application/json")
-            });
+            };
+            if (!discovery && RetryAfter is { } wait) response.Headers.RetryAfter = new(wait);
+            return Task.FromResult(response);
         }
     }
 

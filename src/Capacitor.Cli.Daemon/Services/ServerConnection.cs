@@ -7,6 +7,7 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Eval.Contracts;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.LocalIpc;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -578,6 +579,10 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             var attempt = 0;
 
             while (!ct.IsCancellationRequested) {
+                // What this attempt is marked as failing to deliver: a refresh during it commits a newer
+                // advertisement, which this attempt never carried.
+                var attempted   = _config.Advertisement;
+                var registering = false;
                 try {
                     // Another path may have healed the connection while this call was queued on
                     // the lock or sleeping in backoff — SignalR's automatic reconnect
@@ -606,7 +611,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                     // A connected hub has accepted the bearer, whatever registration then makes of it.
                     if (HubState == HubConnectionState.Connected) CredentialHealth.ObserveConnected();
 
-                    await RegisterDaemonAsync();
+                    registering = true;
+                    await RegisterAndAcknowledgeAsync(attempted);
                     _connectedTimestamp = _time.GetTimestamp();
                     LogConnected(_config.Name);
                     _statusNotifier.Pulse();
@@ -625,6 +631,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                 } catch (Exception ex) {
                     var delay = ConnectRetryDelays[Math.Min(attempt, ConnectRetryDelays.Length - 1)];
                     LogConnectionAttemptFailed(ex, attempt + 1, delay.TotalSeconds);
+                    // A hub that never starts never reaches the registration that would record this.
+                    if (!registering) _config.CodexRegistrationFailed(attempted.Codex);
                     // The failed attempt has returned the hub to Disconnected — pulse so a
                     // subscriber converges to "disconnected" during the backoff instead of a
                     // stale "connecting".
@@ -677,9 +685,11 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// readiness on the heartbeat slot-displacement path (DaemonHeartbeatLoop.cs → ReRegisterAsync),
     /// where the transport stays up and no Reconnecting/Closed event fires.
     /// </summary>
-    internal virtual Task RegisterDaemonAsync() =>
+    /// <param name="attempt">Told which advertisement the payload carries, and accepted as soon as the server
+    /// accepts DaemonConnect: the server dispatches against it from then on, whatever agent recovery does next.</param>
+    internal virtual Task RegisterDaemonAsync(RegistrationAttempt attempt) =>
         _gate.RunRegistrationAsync(
-            daemonConnect: DaemonConnectAsync,
+            daemonConnect: () => DaemonConnectAsync(attempt),
             reRegisterAgents: ReRegisterAgentsAndAcpBindingsAsync,
             // Runs AFTER MarkRegistered, i.e. with IsReady == true, so a re-delivery here actually reaches
             // the server — inside reRegisterAgents it would be silently dropped by the CommandAckAsync
@@ -718,16 +728,17 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// newer bookkeeping is recorded last, leaving the server with state nothing will repair.</summary>
     readonly SemaphoreSlim _registerLock = new(1, 1);
 
-    async Task DaemonConnectAsync() {
+    async Task DaemonConnectAsync(RegistrationAttempt attempt) {
         await _registerLock.WaitAsync().ConfigureAwait(false);
         try {
-            await DaemonConnectCoreAsync().ConfigureAwait(false);
+            await DaemonConnectCoreAsync(attempt).ConfigureAwait(false);
         } finally {
             _registerLock.Release();
         }
     }
 
-    internal DaemonConnect BuildDaemonConnect(string platform, string[] repoPaths, string[] liveIds, LiveAgentInfo[]? liveAgents) {
+    internal DaemonConnect BuildDaemonConnect(
+            string platform, string[] repoPaths, string[] liveIds, LiveAgentInfo[]? liveAgents, UnattendedAdvertisement advertised) {
         var activeCount = GetActiveCount?.Invoke();
 
         return new(
@@ -748,7 +759,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             LastProcessedSeq: GetLastProcessedSeq?.Invoke(),
             SupportsSequencedCommands: true,
             HighestResolutionGeneration: GetHighestResolutionGeneration?.Invoke(),
-            UnattendedVendorCapabilities: _config.UnattendedVendorCapabilities,
+            UnattendedVendorCapabilities: advertised.Capabilities,
             AcpPresetVendors: _config.AcpPresetVendors,
             AcpPresets: Acp.AcpPermissionPresets.Advertised,
             PermissionModeVendors: _config.PermissionModeVendors,
@@ -761,6 +772,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             VendorModelsByAccount: _config.VendorModelsByAccount,
             SupportsRawInput: AdvertisesRawInput,
             SupportsBranchBaseRef: true,
+            SupportsAbbreviatedShaBaseRef: true,
             ResumingAgents: GetResumingAgents?.Invoke(),
             ActiveCount: activeCount?.Count,
             ActiveCountVersion: activeCount?.Version,
@@ -768,18 +780,24 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             Accounts: GetAccountsSnapshot?.Invoke());
     }
 
-    async Task DaemonConnectCoreAsync() {
+    async Task DaemonConnectCoreAsync(RegistrationAttempt attempt) {
         var platform  = $"{RuntimeInformation.OSDescription} {RuntimeInformation.OSArchitecture}";
         var repoStore = FingerprintRepoStore();
         var repoPaths = await MergeRepoPathsAsync();
         var liveIds   = GetLiveAgentIds?.Invoke() ?? [];
         var liveAgents = GetLiveAgents?.Invoke();
-        var connect    = BuildDaemonConnect(platform, repoPaths, liveIds, liveAgents);
+        // Read once, under the register lock: the payload and the acknowledgement are this one value, and
+        // a later send never carries an older advertisement than an earlier one.
+        var advertised = _config.Advertisement;
+        var connect    = BuildDaemonConnect(platform, repoPaths, liveIds, liveAgents, advertised);
+        // Only a built payload carries the advertisement; a build that throws leaves the starting snapshot.
+        attempt.Sending(advertised);
 
         try {
             await InvokeDaemonConnectRawAsync(connect);
             _advertisedRepoStore = repoStore;
             _connectAccounts     = connect.Accounts;
+            attempt.Accept();
         } catch (Exception ex) when (IsNameInUse(ex)) {
             // server refused our (owner, name) slot because another
             // live daemon owns it. Surface to DaemonRunner before re-throwing
@@ -827,7 +845,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         if (GetAccountsSnapshot?.Invoke() is not { } current) return Task.CompletedTask;
 
         var sent = _connectAccounts;
-        return sent is not null && sent.HostId == current.HostId && sent.Revision == current.Revision
+        return sent is not null && AccountSnapshotBuilder.Equivalent(sent, current)
             ? Task.CompletedTask
             : AccountsChangedAsync(current);
     }
@@ -871,7 +889,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         CommitNegotiatedIdentity();
         _statusNotifier.Pulse();
         LogReconnected();
-        await RegisterDaemonAsync();
+        await RegisterAndAcknowledgeAsync(_config.Advertisement);
         _connectedTimestamp = _time.GetTimestamp();
         CredentialHealth.ObserveConnected();
     }
@@ -893,7 +911,22 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// the heartbeat loop when the server reports it doesn't recognise this
     /// connection as a daemon (slot displaced or never registered).
     /// </summary>
-    public Task ReRegisterAsync() => RegisterDaemonAsync();
+    public Task ReRegisterAsync() => RegisterAndAcknowledgeAsync(_config.Advertisement);
+
+    /// <summary>Every registration path ends here, acknowledging exactly the advertisement the server
+    /// accepted. Only a registration that fails before the server accepts it counts as not delivered.</summary>
+    /// <param name="attempted">What a failure before the payload is built is recorded against.</param>
+    async Task RegisterAndAcknowledgeAsync(UnattendedAdvertisement attempted) {
+        var attempt = new RegistrationAttempt(attempted, sent => {
+            if (_config.AcknowledgeCodex(sent.Codex)) _statusNotifier.Pulse();
+        });
+        try {
+            await RegisterDaemonAsync(attempt);
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            if (!attempt.Accepted && _config.CodexRegistrationFailed(attempt.Carried.Codex)) _statusNotifier.Pulse();
+            throw;
+        }
+    }
 
     public async Task<bool> CredentialChangedAsync(CancellationToken ct) =>
         Volatile.Read(ref _negotiatedAs) is { } negotiated
@@ -1071,6 +1104,19 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             await _hub.SendAsync("ReportAgentCommands", new ReportAgentCommandsArgs(agentId, commands), cancellationToken: _ct);
         } catch (Exception ex) {
             LogReportCommandsFailed(ex, agentId);
+        }
+    }
+
+    /// <summary>
+    /// Best-effort: the dialog a hosted agent's terminal shows, or null once it closed, so a remote
+    /// chat can send its viewer to the terminal. The server keeps it in memory only. Swallowed like
+    /// <see cref="ReportAgentCommandsAsync"/> when the server predates it.
+    /// </summary>
+    public virtual async Task ReportAgentTerminalDialogAsync(string agentId, TerminalDialogDto? dialog) {
+        try {
+            await _hub.SendAsync("ReportAgentTerminalDialog", new ReportAgentTerminalDialogArgs(agentId, dialog), cancellationToken: _ct);
+        } catch (Exception ex) {
+            LogReportTerminalDialogFailed(ex, agentId);
         }
     }
 
@@ -1887,6 +1933,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to report slash commands for agent {AgentId} (server may not support it)")]
     partial void LogReportCommandsFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to report the terminal dialog for agent {AgentId} (server may not support it)")]
+    partial void LogReportTerminalDialogFailed(Exception ex, string agentId);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to send ACP auto-approval audit for agent {AgentId} (server may not support it)")]
     partial void LogNotifyAcpAutoApprovalFailed(Exception ex, string agentId);

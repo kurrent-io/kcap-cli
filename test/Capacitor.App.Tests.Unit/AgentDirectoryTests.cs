@@ -332,7 +332,7 @@ public class AgentDirectoryTests {
 
     static RepoSessionDto Listed(string id, string status = "ended", string owner = "me", string ownerName = "Alexey") => new() {
         SessionId = id, Status = status, AccessLevel = "full", Vendor = "claude", Title = id,
-        Owner = new() { UserId = owner, DisplayName = ownerName },
+        Owner = new() { UserId = owner, DisplayName = ownerName, AvatarUrl = $"https://avatars.example/{owner}" },
         StartedAt = DateTimeOffset.UnixEpoch, LastActivityAt = DateTimeOffset.UnixEpoch,
         EndedAt = status == "ended" ? DateTimeOffset.UnixEpoch : null,
     };
@@ -395,6 +395,22 @@ public class AgentDirectoryTests {
         sessions.MineLiveCache.AddOrUpdate(row);
 
         await Assert.That(dir.Rows.Lookup("local:a1").Value.LastActivityAt).IsEqualTo(new DateTime(2026, 10, 24, 9, 30, 0, DateTimeKind.Utc));
+    }
+
+    /// The tone cache marks a hosted row from its listing, so the daemon row carries the listing's PR links.
+    [Test]
+    public async Task A_hosted_row_takes_its_listings_pull_requests() {
+        var (local, _, sessions, _, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        LocalConnected(local);
+        local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "S"));
+        var prs = new RepoSessionPullRequests([new() { RepoHash = "h", Owner = "o", RepoName = "r", Number = 7, State = "open" }]);
+        var row = Listed("S", "active") with { PullRequests = prs };
+        sessions.LiveCache.AddOrUpdate(row);
+        sessions.MineLiveCache.AddOrUpdate(row);
+
+        await Assert.That(dir.Rows.Lookup("local:a1").Value.ListedPullRequests).IsEqualTo(prs);
     }
 
     /// A session the server lists with no daemon behind it has no agent here to answer for it: its
@@ -582,6 +598,7 @@ public class AgentDirectoryTests {
         sessions.Scope = RailScope.Team;
         var theirs = dir.Rows.Lookup("remote:b1").Value;
         await Assert.That(theirs.OwnerName).IsEqualTo("Tony Young");
+        await Assert.That(theirs.OwnerAvatarUrl).IsEqualTo("https://avatars.example/other");
         await Assert.That(theirs.OwnerIsViewer).IsNull();
         sessions.ViewerIdsSubject.OnNext(new HashSet<string>(["me"]));
         await Assert.That(dir.Rows.Lookup("remote:b1").Value.OwnerIsViewer).IsFalse();

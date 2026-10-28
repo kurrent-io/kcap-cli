@@ -137,17 +137,22 @@ sealed class SpectreFirstRunFlowProgress(TimeProvider time, IKeyWatcher? keys = 
         if (capability == FirstRunMachineCapabilities.DaemonService) _wait.Stop();
 
         Say(SetupAuthProgress.Indent(capability switch {
-            FirstRunMachineCapabilities.PathShim => PathShimNotice(OperatingSystem.IsMacOS()),
+            FirstRunMachineCapabilities.PathShim => PathShimNotice(OperatingSystem.IsMacOS(),
+                new ShellProfile(UserHome.FromEnvironment(), Environment.GetEnvironmentVariable("SHELL")).Disclosure),
             FirstRunMachineCapabilities.DaemonService =>
                 "The browser asked to run the agent daemon as a service, so this machine stays reachable.",
             _ => "The browser asked this machine to do something this version of kcap does not know."
         }));
     }
 
-    /// <summary>The password prompt comes from macOS's own dialog; elsewhere the link needs none.</summary>
-    internal static string PathShimNotice(bool macOS) =>
+    /// <summary>The password prompt comes from macOS's own dialog; elsewhere the link needs none. A
+    /// user without admin rights gets <paramref name="profileLine"/> instead, so it is named before
+    /// it is written.</summary>
+    internal static string PathShimNotice(bool macOS, string? profileLine = null) =>
         "The browser asked to put kcap on your terminal PATH."
-      + (macOS ? " [dim]Your Mac will ask for your password.[/]" : "");
+      + (!macOS ? ""
+        : profileLine is null ? " [dim]Your Mac will ask for your admin password.[/]"
+        : $" [dim]Your Mac will ask for your admin password; without admin rights, kcap adds {Markup.Escape(profileLine)} instead.[/]");
 
     public void ActionEnded() => Refresh();
 
@@ -2939,6 +2944,9 @@ sealed class SetupCommand(
         }
 
         if (exePath is null) return null;
+
+        // A snap's plugin is found through `current`, so the registration survives the snap's later refreshes.
+        exePath = SnapLayout.Stabilize(exePath, File.Exists);
 
         // Through `current`, so the Claude plugin registration follows a script-install update.
         if (ScriptInstallLayout.FromBinary(exePath, File.Exists) is { } script) {

@@ -21,7 +21,7 @@ public sealed record AgentRow(
         int? LiveSubagents = null,
         // A usage-limit question or notice from the local daemon. Null on a remote or pending row.
         UsageLimitNoticeDto? UsageLimit = null,
-        // The select dialog on the local agent's terminal. Null on a remote or pending row.
+        // The select dialog on the agent's terminal. Null on a pending or server row, and from an older server.
         TerminalDialogDto? TerminalDialog = null,
         // Why the local daemon could not resume the agent after a restart; null unless Interrupted.
         string? Interruption = null,
@@ -29,6 +29,8 @@ public sealed record AgentRow(
         string? OwnerUserId = null,
         // The owner's display name or username from the listing, for the initials on another user's row.
         string? OwnerName = null,
+        // The owner's picture from the listing, drawn over the initials once it loads.
+        string? OwnerAvatarUrl = null,
         // Whether the owner is the signed-in account; null while the server has not said.
         bool? OwnerIsViewer = null,
         DateTime? LastActivityAt = null,
@@ -39,6 +41,8 @@ public sealed record AgentRow(
         bool IsTerminalSession = false,
         // The listing's access level for the viewer; below "full" the server grants no chat.
         string? AccessLevel = null,
+        // The PR links the listing carried for the session; null while no listing row carried the field.
+        RepoSessionPullRequests? ListedPullRequests = null,
         // The account the session runs under. Null from an older daemon and on a pending row.
         string? AccountDirectory = null,
         string? AccountId = null,
@@ -68,6 +72,9 @@ public sealed record AgentRow(
             WorktreePath: null, WorkLocation: null, BorrowedFrom: null,
             MachineBadge: dto.DaemonName, RepoGroupKey: repo.Key, RepoGroupLabel: repo.Label,
             CheckoutKey: $"@{daemonKey}", CheckoutLabel: $"on {dto.DaemonName}",
+            TerminalDialog: dto.TerminalDialog is { } dialog
+                ? new TerminalDialogDto(dialog.Heading, dialog.Body, dialog.Options, dialog.Selected, dialog.Screen)
+                : null,
             OwnerUserId: dto.OwnerUserId,
             AccountDirectory: dto.AccountDirectory, AccountId: dto.AccountId, AccountLabel: dto.AccountLabel);
     }
@@ -87,8 +94,10 @@ public sealed record AgentRow(
             MachineBadge: null, RepoGroupKey: repo.Key, RepoGroupLabel: repo.Label,
             CheckoutKey: "@server", CheckoutLabel: "",
             OwnerUserId: dto.Owner?.UserId, OwnerName: dto.Owner?.DisplayName ?? dto.Owner?.Username,
+            OwnerAvatarUrl: dto.Owner?.AvatarUrl,
             LastActivityAt: dto.LastActivityAt.UtcDateTime, EndedAt: dto.EndedAt?.UtcDateTime,
-            IsStale: dto.Stale, IsTerminalSession: active && !hostedPresentation, AccessLevel: dto.AccessLevel);
+            IsStale: dto.Stale, IsTerminalSession: active && !hostedPresentation, AccessLevel: dto.AccessLevel,
+            ListedPullRequests: dto.PullRequests);
     }
 
     static string CanonicalRemoteStatus(string status) => status.ToLowerInvariant() switch {

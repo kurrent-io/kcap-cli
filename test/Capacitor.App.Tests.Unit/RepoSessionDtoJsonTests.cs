@@ -30,6 +30,26 @@ public class RepoSessionDtoJsonTests {
         await Assert.That(row.Branch).IsEqualTo("fix/terminal-replay-loh");
     }
 
+    /// An older server omits the field, which is not the same as withholding it from the viewer.
+    [Test]
+    public async Task Pull_requests_tell_absent_from_withheld_from_empty() {
+        static RepoSessionDto Row(string field) => JsonSerializer.Deserialize($$"""
+            {"items":[{"session_id":"s1","status":"ended","access_level":"full","started_at":"2026-10-22T13:04:24Z",
+              "last_activity_at":"2026-10-22T16:56:41Z"{{field}}}],"total":1}
+            """, RemoteModelsJsonContext.Default.RepoSessionsResponseDto)!.Items.Single();
+
+        await Assert.That(Row("").PullRequests).IsNull();
+        await Assert.That(Row(""","pull_requests":null""").PullRequests!.Items).IsNull();
+        await Assert.That(Row(""","pull_requests":[]""").PullRequests!.Items!.Count).IsEqualTo(0);
+
+        const string pr = ""","pull_requests":[{"repo_hash":"h","owner":"kurrent-io","repo_name":"kcap-cli","number":7,"""
+            + """ "url":"https://github.com/kurrent-io/kcap-cli/pull/7","title":"Fix","state":null,"merged_at":null,"closed_at":null}]""";
+        var listed = Row(pr).PullRequests!;
+        await Assert.That(listed.Items!.Single().Number).IsEqualTo(7);
+        await Assert.That(listed.Items!.Single().State).IsNull();
+        await Assert.That(Row(pr)).IsEqualTo(Row(pr));
+    }
+
     [Test]
     public async Task Owners_deserialize_with_is_me_and_ids() {
         const string json = """[{"user_id":"user_01","username":"alexey","display_name":"Alexey","avatar_url":null,"is_me":true,"ids":["user_01","github:2821205"]}]""";

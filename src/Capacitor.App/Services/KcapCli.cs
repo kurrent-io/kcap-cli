@@ -83,6 +83,8 @@ public interface IKcapCli {
     /// flagless Claude default.
     Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct, IReadOnlyList<string>? options = null);
 
+    Task<ProcessResult> PluginRemoveAsync(string? vendorFlag, CancellationToken ct);
+
     /// <c>accounts add|remove|rename|rewire … --json</c>, which prints one AccountActionResultDto line.
     /// No server overlay: the account verbs touch nothing on the server.
     Task<ProcessResult> AccountsAsync(MutationVerb verb, AccountArgs args, CancellationToken ct);
@@ -279,12 +281,20 @@ public sealed class KcapCli : IKcapCli {
             new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: MutationTimeout), ct).ConfigureAwait(false);
     }
 
+    public async Task<ProcessResult> PluginRemoveAsync(string? vendorFlag, CancellationToken ct) {
+        if (CliPath is not { } cliPath) return await NoCliResult().ConfigureAwait(false);
+        string[] args = vendorFlag is null ? ["plugin", "remove"] : ["plugin", "remove", vendorFlag];
+        return await Run(cliPath, args,
+            new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: MutationTimeout), ct).ConfigureAwait(false);
+    }
+
     public async Task<ProcessResult> AccountsAsync(MutationVerb verb, AccountArgs args, CancellationToken ct) {
         string[] argv = verb switch {
             MutationVerb.AccountAdd    => ["accounts", "add", Required(args.Vendor), Required(args.Directory), "--json"],
             MutationVerb.AccountRemove => ["accounts", "remove", Required(args.AccountId), "--json"],
             MutationVerb.AccountRename => ["accounts", "rename", Required(args.AccountId), Required(args.Label), "--json"],
             MutationVerb.AccountRewire => args.AccountId is { } id ? ["accounts", "rewire", id, "--json"] : ["accounts", "rewire", "--json"],
+            MutationVerb.AccountRefresh => ["accounts", "refresh", Required(args.AccountId), "--json"],
             _                          => throw new ArgumentOutOfRangeException(nameof(verb), verb, "not an account verb"),
         };
         if (CliPath is not { } cliPath) return await NoCliResult().ConfigureAwait(false);

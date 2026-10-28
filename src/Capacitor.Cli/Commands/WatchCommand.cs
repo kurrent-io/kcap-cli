@@ -489,6 +489,7 @@ partial class WatchCommand(
         state.LastActivityAt = time.GetUtcNow();
 
         var titleStore = HarnessTitleStores.For(vendor, agentId, sessionId, transcriptPath, harnesses, accounts.TryLoad(), home);
+        if (vendor == "codex" && CodexRolloutReadings.For(accounts, transcriptPath, sessionId, home) is { } codexReadings) state.ObserveCodexReadings = lines => codexReadings.Observe(lines);
         if (titleStore is not null) state.TitleTracker = new HarnessTitleTracker(titleStore.RecordsChangeTime);
 
         // Task 11 (D0) — one runtime rewrite-guard instance for this watcher's whole
@@ -2701,6 +2702,8 @@ partial class WatchCommand(
                 }
             }
 
+            state.ObserveCodexReadings?.Invoke(drainRead.Lines);
+
             // Capture-loss markers have no tool IDs; local completion tracking needs raw lines.
             if (TracksClaudeToolCalls(vendor, isSessionWatcher: agentId is null)) {
                 foreach (var line in drainRead.Lines) {
@@ -3098,7 +3101,8 @@ partial class WatchCommand(
             string                vendor,
             IReadOnlyList<string> lines,
             IReadOnlyList<int>    lineNumbers,
-            ObservedCommit[]?     observedCommits
+            ObservedCommit[]?     observedCommits,
+            bool                  moreFollows = false
         ) => JsonSerializer.Serialize(
             new TranscriptBatch {
                 SessionId       = sessionId,
@@ -3107,6 +3111,7 @@ partial class WatchCommand(
                 LineNumbers     = lineNumbers.ToArray(),
                 Vendor          = vendor,
                 ObservedCommits = observedCommits,
+                MoreFollows     = moreFollows,
             },
             CapacitorJsonContext.Default.TranscriptBatch);
 
@@ -3160,10 +3165,20 @@ partial class WatchCommand(
         };
         var result = TranscriptSpool.AppendResult.Appended;
         if (batch.Lines.Length > 0 || commits.Pending is { Length: > 0 }) {
+            // A chunk with more to follow leaves its later commits to the next, and an import carries no commits, so it
+            // spools only with room left for them on their own.
+            var commitsOnly = commits.Pending is { Length: > 0 } pending ? BuildTranscriptSpoolBatch(sessionId, agentId, vendor, [], [], pending) : null;
+            var spooled     = false;
             foreach (var chunk in TranscriptBatchBuffer.Split(batch)) {
                 result = transcriptSpool.Append(sessionId,
-                    BuildTranscriptSpoolBatch(sessionId, agentId, vendor, chunk.Lines, chunk.LineNumbers!, chunk.ObservedCommits));
-                if (result != TranscriptSpool.AppendResult.Appended) break;
+                    BuildTranscriptSpoolBatch(sessionId, agentId, vendor, chunk.Lines, chunk.LineNumbers!, chunk.ObservedCommits, chunk.MoreFollows),
+                    chunk.MoreFollows ? commitsOnly : null);
+                if (result != TranscriptSpool.AppendResult.Appended) {
+                    if (spooled && commitsOnly is not null && transcriptSpool.Append(sessionId, commitsOnly) != TranscriptSpool.AppendResult.Appended)
+                        Log(time, $"Commits of {sessionId} could not be spooled at shutdown; they are sent again when its watcher resumes");
+                    break;
+                }
+                spooled = true;
             }
         }
 

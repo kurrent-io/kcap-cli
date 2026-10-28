@@ -263,7 +263,7 @@ public class WorkContextViewSmokeTests {
             await host.Vm.TogglePeopleCommand.Execute();
             Dispatcher.UIThread.RunJobs();
             host.Window.UpdateLayout();
-            var rows = Avatars(host.Find<ItemsControl>("ContributorList"));
+            var rows = Avatars(host.Find<ItemsControl>("ContributorStack"));
             await Assert.That(rows.Select(c => c.GetVisualDescendants().OfType<RemoteAvatar>().Single().Url))
                 .IsEquivalentTo(host.Vm.Contributors.Select(c => c.AvatarUrl), CollectionOrdering.Matching);
 
@@ -327,10 +327,31 @@ public class WorkContextViewSmokeTests {
             host.Window.UpdateLayout();
 
             await Assert.That(VisibleChevrons(header)).IsEqualTo(1);
-            await Assert.That(stack.IsEffectivelyVisible).IsFalse();
+            await Assert.That(stack.IsEffectivelyVisible).IsTrue();
             await Assert.That(list.IsEffectivelyVisible).IsTrue();
             var shown = list.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToArray();
             await Assert.That(new[] { "Ada", "Bob", "Cyd", "Dee", "Eve" }.Except(shown)).IsEmpty();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Expanding_people_keeps_every_avatar_in_place(bool requesterOnly) {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            var read = CrowdedWhoRead();
+            await host.ShowAsync(requesterOnly ? read with { Item = read.Item! with { Contributors = [] } } : read);
+            Control avatars = requesterOnly ? host.Find<Grid>("RequesterRow") : host.Find<ItemsControl>("ContributorStack");
+            var chips = Avatars(avatars);
+            var before = chips.Select(c => c.TranslatePoint(default, host.Window)).ToArray();
+            await host.Vm.TogglePeopleCommand.Execute();
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+            await Assert.That(chips.All(c => c.IsEffectivelyVisible)).IsTrue();
+            await Assert.That(chips.Select(c => c.TranslatePoint(default, host.Window)))
+                .IsEquivalentTo(before, CollectionOrdering.Matching);
         });
     }
 

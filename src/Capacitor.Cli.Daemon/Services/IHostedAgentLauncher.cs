@@ -145,4 +145,5 @@ internal sealed record LauncherContext(
     public string? ResumeSessionId { get; init; }
 }
 
-internal readonly record struct LaunchArgs(string[] Args, string? McpConfigPath);
+/// <param name="SessionId">The vendor session a local launch runs under, when its args pin or name one.</param>
+internal readonly record struct LaunchArgs(string[] Args, string? McpConfigPath, string? SessionId = null);

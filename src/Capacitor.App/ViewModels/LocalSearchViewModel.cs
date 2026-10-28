@@ -11,14 +11,14 @@ using ReactiveUI.Reactive;
 namespace Capacitor.App.ViewModels;
 
 /// <summary>
-/// How the local server searches: a word beside its version in the rail, which opens the Settings tab that
-/// changes it by running setup again. An upgrade and a search change cannot run together, so each holds the other off.
+/// How the local server searches, managed in Settings by running setup again.
+/// An upgrade and a search change cannot run together, so each holds the other off.
 /// </summary>
 public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
     public const string BusyText = "Another local setup, upgrade or uninstall is running on this Mac. Try again once it has finished.";
 
     static readonly string[] Derived = [
-        nameof(Running), nameof(StateText), nameof(CurrentText), nameof(CanApply), nameof(ApplyLabel), nameof(Embeddings),
+        nameof(Running), nameof(StateText), nameof(CurrentText), nameof(CanApply), nameof(Embeddings),
         nameof(FailureText), nameof(ShowsSettingsLink), nameof(ShowsInlineSettings),
     ];
 
@@ -101,7 +101,7 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
 
     public LocalEmbeddingProgress Embeddings => _search.Progress.Embeddings;
 
-    /// The rail's word for it; null until the setting has been read.
+    /// The current search mode; null until the setting has been read.
     public string? StateText =>
         Running ? "setting up search"
         : !_loaded ? null
@@ -111,20 +111,13 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
         : (_current switch {
             { Model: { } model }                         => $"Searches by meaning with {model}.",
             { Provider: LocalEmbeddingProvider.Builtin } => "Searches by meaning with the built-in model.",
-            _                                            => "Searches by keyword, unless an embedding provider is set in the server's own settings.",
+            _                                            => "Searches by keyword unless the server's own settings choose a model.",
         })
         + (_current is { Pending: true } ? " The change is not applied yet." : "");
 
     public bool CanApply =>
         _loaded && !Running && !_upgrade.Running && Choice.Valid && !Choice.AwaitingOffer
      && (Differs(Choice.Choice) || _current is null or { Pending: true });
-
-    public string ApplyLabel => Choice.Choice switch {
-        { ByMeaning: false }                         => "Use keyword search",
-        _ when !CurrentByMeaning                     => "Turn on search by meaning",
-        { Provider: LocalEmbeddingProvider.Builtin } => "Use the built-in model",
-        _                                            => "Use this model",
-    };
 
     public string? FailureText => !Running && _search.Outcome is LocalInstallOutcome.Failed failed
         ? failed.Affordance == LocalInstallAffordance.Busy ? BusyText : TerminalAdvice.Strip(failed.Message) ?? "Setup did not finish."
@@ -134,10 +127,10 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
 
     public ReactiveCommand<Unit, Unit> OpenSettingsCommand { get; }
 
-    /// The rail word opens the Settings tab when there is one to open.
+    /// Whether the Search tab can be opened in Settings.
     public bool ShowsSettingsLink => StateText is not null && _canOpenSettings;
 
-    /// Without a Settings window, the rail word opens the same controls in place.
+    /// Without a profile, the support menu offers the search controls directly.
     public bool ShowsInlineSettings => StateText is not null && !_canOpenSettings;
 
     bool CurrentByMeaning => _current is { Model: not null } or { Provider: LocalEmbeddingProvider.Builtin };

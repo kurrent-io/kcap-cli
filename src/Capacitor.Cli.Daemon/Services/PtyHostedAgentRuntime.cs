@@ -67,8 +67,11 @@ internal sealed partial class PtyHostedAgentRuntime(
     readonly SemaphoreSlim           _lane        = new(1, 1);
     readonly TaskCompletionSource    _firstOutput = new(TaskCreationOptions.RunContinuationsAsynchronously);
     readonly CancellationTokenSource _disposal    = new();
+    readonly Lock                    _dialogGate  = new();
     long                             _lastOutputAt;
     volatile bool                    _stopRequested;
+    bool                             _deliveryHoldsLane;
+    TaskCompletionSource?            _dialogGone;
 
     /// <summary>The pending launch-prompt delivery, or null when the launch carried no prompt to paste.</summary>
     internal Task<LaunchPromptOutcome>? LaunchPromptDelivery { get; private set; }
@@ -90,11 +93,28 @@ internal sealed partial class PtyHostedAgentRuntime(
         }
     }
 
+    public void NoteTerminalDialog(bool showing) {
+        lock (_dialogGate) {
+            if (showing) {
+                _dialogGone ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            } else if (_dialogGone is { } gone) {
+                _dialogGone = null;
+                gone.TrySetResult();
+            }
+        }
+    }
+
+    Task? DialogGone {
+        get { lock (_dialogGate) { return _dialogGone?.Task; } }
+    }
+
     /// <summary>
     /// Makes <paramref name="prompt"/> the agent's first message without putting it on the command
     /// line: pastes it once startup output has been quiet for <see cref="LaunchPromptQuietWindow"/>
     /// or <see cref="LaunchPromptMaxWait"/> has passed. A text follow-up sent meanwhile lands after
     /// it; raw and special keys do not wait, so a viewer can answer a startup dialog themselves.
+    /// A dialog on screen is not a settled startup and has no time limit: its default option would
+    /// take the submit Enter and leave the prompt unsent in the composer.
     /// </summary>
     internal void DeliverLaunchPrompt(string prompt) {
         if (LaunchPromptDelivery is not null) throw new InvalidOperationException("The launch prompt is already queued.");
@@ -104,19 +124,33 @@ internal sealed partial class PtyHostedAgentRuntime(
 
     async Task<LaunchPromptOutcome> DeliverLaunchPromptAsync(string prompt) {
         try {
-            var settled = await WaitForStartupToSettleAsync(_disposal.Token);
-            if (pty.HasExited) return LaunchPromptOutcome.AgentExited;
-            if (_stopRequested) return LaunchPromptOutcome.StopRequested;
+            bool settled;
 
-            await _lane.WaitAsync(_disposal.Token);
+            // A dialog can open while the delivery waits for the lane, so it is checked again once the
+            // lane is held, and the wait starts over.
+            while (true) {
+                settled = await WaitForStartupToSettleAsync(_disposal.Token);
+                if (pty.HasExited) return LaunchPromptOutcome.AgentExited;
+                if (_stopRequested) return LaunchPromptOutcome.StopRequested;
+
+                await _lane.WaitAsync(_disposal.Token);
+                if (DialogGone is null) break;
+
+                _lane.Release();
+            }
+
+            _deliveryHoldsLane = true;
 
             try {
                 if (_stopRequested) return LaunchPromptOutcome.StopRequested;
 
                 await pty.WriteAsync(BracketedPaste.Frame(prompt));
-                await SubmitAsync();
+                if (!await SubmitAsync(WaitOutDialogsAsync)) return LaunchPromptOutcome.StopRequested;
             } finally {
-                try { _lane.Release(); } catch (ObjectDisposedException) { }
+                if (_deliveryHoldsLane) {
+                    _deliveryHoldsLane = false;
+                    try { _lane.Release(); } catch (ObjectDisposedException) { }
+                }
             }
 
             return settled ? LaunchPromptOutcome.Delivered : LaunchPromptOutcome.DeliveredAfterMaxWait;
@@ -141,6 +175,13 @@ internal sealed partial class PtyHostedAgentRuntime(
         var started = time.GetTimestamp();
 
         while (!pty.HasExited && !_stopRequested) {
+            if (DialogGone is not null) {
+                await WaitWhileDialogShowsAsync(ct);
+                started = time.GetTimestamp();
+
+                continue;
+            }
+
             var remaining = LaunchPromptMaxWait - time.GetElapsedTime(started);
             if (remaining <= TimeSpan.Zero) return false;
 
@@ -159,6 +200,30 @@ internal sealed partial class PtyHostedAgentRuntime(
         }
 
         return true;
+    }
+
+    /// <summary>Called by the launch delivery holding the input lane, before each submit Enter. A dialog
+    /// that came up after the paste would take the Enter, and answering it takes the lane, so each one is
+    /// waited out with the lane released. Returns holding the lane; false when a stop was asked for.</summary>
+    async Task<bool> WaitOutDialogsAsync() {
+        while (DialogGone is not null && !pty.HasExited && !_stopRequested) {
+            _lane.Release();
+            _deliveryHoldsLane = false;
+            await WaitWhileDialogShowsAsync(_disposal.Token);
+            await _lane.WaitAsync(_disposal.Token);
+            _deliveryHoldsLane = true;
+        }
+
+        return !_stopRequested;
+    }
+
+    /// <summary>Returns once no dialog is on screen, or the agent has exited or been asked to stop.</summary>
+    async Task WaitWhileDialogShowsAsync(CancellationToken ct) {
+        while (DialogGone is { } gone && !pty.HasExited && !_stopRequested) {
+            try {
+                await gone.WaitAsync(LaunchPromptExitPoll, time, ct);
+            } catch (TimeoutException) { }
+        }
     }
 
     /// <summary>
@@ -231,19 +296,25 @@ internal sealed partial class PtyHostedAgentRuntime(
     /// no-ops. Otherwise sends a single CR — in an interactive session a stray Enter must not
     /// answer a live approval prompt.
     /// </summary>
-    async Task SubmitAsync() {
+    /// <param name="beforeCarriageReturn">Runs before each CR; false withholds it and the rest.</param>
+    /// <returns>False when <paramref name="beforeCarriageReturn"/> withheld a CR.</returns>
+    async Task<bool> SubmitAsync(Func<Task<bool>>? beforeCarriageReturn = null) {
         if (approvalsDisabled) {
             foreach (var delay in SubmitCarriageReturnSchedule) {
-                if (pty.HasExited) return;
+                if (pty.HasExited) return true;
                 await Task.Delay(delay, time);
-                if (!await WriteSubmitCarriageReturnAsync()) return; // stop once the reviewer is gone
+                if (beforeCarriageReturn is not null && !await beforeCarriageReturn()) return false;
+                if (!await WriteSubmitCarriageReturnAsync()) return true; // stop once the reviewer is gone
             }
 
-            return;
+            return true;
         }
 
         await Task.Delay(SingleSubmitDelay, time);
+        if (beforeCarriageReturn is not null && !await beforeCarriageReturn()) return false;
         await WriteSubmitCarriageReturnAsync();
+
+        return true;
     }
 
     /// <summary>

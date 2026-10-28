@@ -60,6 +60,14 @@ static partial class NextWorkEmitter {
         "session, declare it at that moment with declare_loose_end (one call per item, never \"none\"). " +
         CompletionInstruction;
 
+    /// <summary>Appended to <see cref="Guidance"/> only when the ack's <c>agent_start</c> says this server
+    /// can start agents: the feature is off by default, and start_agent is listed regardless.</summary>
+    internal const string StartAgentOffer =
+        "If start_agent is among your tools, end that presentation by saying the user can have any listed " +
+        "item handed to a separate hosted agent. Start one only when the user asks, following the " +
+        "start-agents skill: pass the item's target_key from get_next_work as work_item only when it is a wi: " +
+        "or le: key, and for any other item choose work_item as that skill says.";
+
     // Without the explicit "question answered with nothing pending" case, agents present after every reply.
     internal const string CompletionInstruction =
         "Present next work once per piece of work the user framed, when that piece reaches a terminal " +
@@ -81,7 +89,7 @@ static partial class NextWorkEmitter {
     /// <summary><see cref="BuildFragment"/>, falling back to <see cref="InstructionOnly"/> when the ack has
     /// no rows to show. Null only when disabled.</summary>
     public static string? BuildFragmentOrInstruction(JsonNode? responseNode, bool disabled) =>
-        disabled ? null : BuildFragment(responseNode, disabled: false) ?? InstructionOnly;
+        disabled ? null : BuildFragment(responseNode, disabled: false) ?? WithOffer(InstructionOnly, responseNode);
 
     public static string? BuildFragment(JsonNode? responseNode, bool disabled) {
         if (disabled) return null;
@@ -117,7 +125,7 @@ static partial class NextWorkEmitter {
         Line(sb, DataOpen);
         foreach (var l in lines) Line(sb, l);
         Line(sb, DataClose);
-        Line(sb, Guidance);
+        Line(sb, WithOffer(Guidance, responseNode));
 
         var freshness = FreshnessLine(
             asOf: null,
@@ -178,6 +186,14 @@ static partial class NextWorkEmitter {
             : null;
 
     static void Line(StringBuilder sb, string text) => sb.Append(text).Append('\n');
+
+    static string WithOffer(string guidance, JsonNode? responseNode) {
+        bool agentStart;
+        try { agentStart = responseNode?["next_work"]?["agent_start"]?.GetValue<bool>() ?? false; }
+        catch { agentStart = false; }
+
+        return agentStart ? $"{guidance} {StartAgentOffer}" : guidance;
+    }
 
     static string? ReadString(JsonObject obj, string key) {
         try { return obj[key]?.GetValue<string>(); }

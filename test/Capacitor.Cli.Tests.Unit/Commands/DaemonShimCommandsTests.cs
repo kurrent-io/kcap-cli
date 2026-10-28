@@ -29,9 +29,10 @@ public class DaemonShimCommandsTests {
         var exit = await DaemonShimCommands.Ensure(args, TimeProvider.System, resolveTarget: () => target,
             probe: new FakeProbe(onPath), install: install,
             preflight: preflight ?? (_ => ShimPreflight.Installable), installable: installable);
-        var text = capture.GetCapturedOutput() + capture.GetCapturedError();
+        var output = capture.GetCapturedOutput();
+        var text = output + capture.GetCapturedError();
         ShimEnsureJson? json = null;
-        if (text.Contains("{\"capability\"")) json = JsonSerializer.Deserialize<ShimEnsureJson>(text, ShimJsonContext.Default.ShimEnsureJson);
+        if (output.Contains("{\"capability\"")) json = JsonSerializer.Deserialize<ShimEnsureJson>(output, ShimJsonContext.Default.ShimEnsureJson);
         return (exit, json, text);
     }
 
@@ -324,6 +325,28 @@ public class DaemonShimCommandsTests {
             install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.InstalledButNotOnPath, "Add: export PATH=\"/usr/local/bin:$PATH\"", null)));
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(text).Contains("export PATH");
+    }
+
+    /// A standard user's install edits their shell profile, so what it will do is said first.
+    [Test]
+    public async Task Ensure_human_install_prints_the_disclosure_before_installing() {
+        var (_, _, text) = await Run([], onPath: false, installable: true,
+            install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Installed, null, null)));
+
+        await Assert.That(text!.IndexOf("works from any", StringComparison.Ordinal)).IsBetween(0, text.IndexOf("now on your terminal PATH", StringComparison.Ordinal));
+    }
+
+
+    [Test]
+    public async Task Ensure_json_install_keeps_the_disclosure_off_stdout() {
+        using var capture = ConsoleOutput.StartFullCapture();
+        await DaemonShimCommands.Ensure(["--json"], TimeProvider.System, resolveTarget: () => "/usr/local/lib/kcap",
+            probe: new FakeProbe(false), install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Installed, null, null)),
+            preflight: _ => ShimPreflight.Installable, installable: true);
+
+        await Assert.That(capture.GetCapturedError()).Contains("works from any");
+        await Assert.That(JsonSerializer.Deserialize(capture.GetCapturedOutput(), ShimJsonContext.Default.ShimEnsureJson)!.Outcome)
+            .IsEqualTo("installed");
     }
 
     [Test]

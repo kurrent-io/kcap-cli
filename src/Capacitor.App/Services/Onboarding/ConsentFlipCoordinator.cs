@@ -91,7 +91,7 @@ public sealed class ConsentFlipCoordinator(
         if (!ack.Ok) return; // identity_mismatch or any other rejection — claim retained, nothing consumed
 
         // Two-lock conditional clear; a false return leaves the claim pending for the next graph.
-        await Task.Run(() => claims.TryConsume(claim, ResolveCanonical, identity.DaemonName), lifetime).ConfigureAwait(false);
+        claims.TryConsume(claim, ResolveCanonical, identity.DaemonName);
     }
 
     /// Shared with the wizard's Sign-in step so both surfaces disclose the same recovery.

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Resume;
 using Capacitor.Cli.Daemon.Services;
@@ -28,7 +29,7 @@ public class AgentOrchestratorContinueTests : IDisposable {
 
     sealed class ContinueFactory(CaptureServerConnection server) : IHostedAgentRuntimeFactory {
         public string CliPath => "unused";
-        public string Vendor => "cursor";
+        public string Vendor { get; init; } = "cursor";
         public bool SupportsUnattended => false;
         public bool IsAvailable() => true;
         public bool ResumeSupported { get; init; }
@@ -75,10 +76,12 @@ public class AgentOrchestratorContinueTests : IDisposable {
 
     Fixture Build(
             bool resumeSupported = false, bool fails = false, bool ptyStyle = false, TimeSpan? exitsAfter = null,
-            TimeSpan? readinessWindow = null) {
+            TimeSpan? readinessWindow = null, string vendor = "cursor") {
         var repo   = Tmp.CreateDir("repo");
         var server = new CaptureServerConnection();
-        var factory = new ContinueFactory(server) { ResumeSupported = resumeSupported, Fails = fails, PtyStyle = ptyStyle, ExitsAfter = exitsAfter };
+        var factory = new ContinueFactory(server) {
+            Vendor = vendor, ResumeSupported = resumeSupported, Fails = fails, PtyStyle = ptyStyle, ExitsAfter = exitsAfter
+        };
         DaemonConfig? captured = null;
         var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
@@ -96,20 +99,22 @@ public class AgentOrchestratorContinueTests : IDisposable {
         return new Fixture(orch, server, factory, captured!, repo);
     }
 
-    ResumeLedgerEntry Entry(Fixture f, bool isPrivate = false, bool standalone = false, string? vendorSession = null) {
+    ResumeLedgerEntry Entry(
+            Fixture f, bool isPrivate = false, bool standalone = false, string? vendorSession = null,
+            WorkLocation work = WorkLocation.OwnedWorktree) {
         var stamp    = TimeProvider.System.GetUtcNow();
         var worktree = Tmp.CreateDir("wt-old");
         if (standalone) Directory.CreateDirectory(Path.Combine(worktree, ".git"));
         var launch = new ResumeLaunchDescriptor(
             Prompt: "build the thing", Model: "auto", Effort: null, RepoPath: f.Repo,
-            WorktreePath: worktree, Work: WorkLocation.OwnedWorktree,
+            WorktreePath: worktree, Work: work,
             GitRelativeCwd: null, SandboxPolicy: null, ApprovalPolicy: null, PermissionPreset: null,
             McpConfigPath: null, Title: "the thing", IsPrivate: isPrivate, Origin: "server",
             RequesterUserId: "user-1", RequesterDisplay: "User One", ConsentSource: "default",
             ConsentAt: stamp.ToString("O"), FlowRunId: null, FlowRole: null,
             WorktreeBranch: "capacitor/custom-old", WorktreeIsStandalone: standalone, WorktreeSourceRepo: f.Repo);
         var entry = new ResumeLedgerEntry(
-            ResumeLedgerEntry.CurrentSchemaVersion, OldAgent, "daemon-1", stamp, stamp, "cursor", "acp",
+            ResumeLedgerEntry.CurrentSchemaVersion, OldAgent, "daemon-1", stamp, stamp, f.Factory.Vendor, "acp",
             OldSession, vendorSession, launch, ResumeState.Resuming, Attempts: 0, LastError: null,
             PredecessorInstanceId: "instance-old", ResumingAt: stamp, DaemonInstanceId: null);
         f.Orch.ResumeLedger!.Write(entry);
@@ -437,4 +442,41 @@ public class AgentOrchestratorContinueTests : IDisposable {
         await WaitHarness.PollUntilAsync(() => Declares().Count > 0);
         await Assert.That(Declares().Single()["session_id"]!.GetValue<string>()).IsEqualTo(NewSession);
     }
+
+    /// <summary>The successor in a shared folder runs under a session id the daemon pinned, so the user's own
+    /// session there is never taken for it, and the old work moves only once the successor's transcript exists.</summary>
+    [Test]
+    public async Task A_claude_successor_takes_over_under_its_pinned_session_once_its_transcript_exists() {
+        ServeOldSession();
+        var f = Build(ptyStyle: true, vendor: "claude");
+        await using var _ = f.Orch;
+        var entry      = Entry(f, work: WorkLocation.BorrowedCwd);
+        var cwd        = entry.Launch.WorktreePath;
+        var projectDir = new ClaudePaths(f.Config.Home, null).ProjectDir(cwd);
+        Transcript(projectDir, "0f0f0f0f-2222-4222-8222-000000000002", cwd);
+
+        var outcome = await f.Orch.ContinueEntryAsync(entry, "native_resume_unsupported", CancellationToken.None);
+        await Assert.That(outcome).IsEqualTo(ResumeOutcome.Continued);
+
+        var ctx    = f.Factory.Starts.Single().Ctx;
+        var agent  = f.Orch.GetAgentForTest(ctx.AgentId)!;
+        var pinned = ctx.PinnedSessionId;
+        await Assert.That(pinned).IsNotNull();
+        await Assert.That(agent.SessionId).IsNull();
+        await Assert.That(agent.VendorSession).IsEqualTo(pinned);
+        await Assert.That(f.Orch.ResumeLedger!.TryRead(ctx.AgentId)!.VendorSession).IsEqualTo(pinned);
+
+        await Task.Delay(f.Config.ResumeReadinessWindow * 3);
+        await Assert.That(Declares()).IsEmpty();
+        await Assert.That(agent.TranscriptPath).IsNull();
+
+        var own = Transcript(projectDir, pinned!, cwd);
+        await WaitHarness.PollUntilAsync(() => Declares().Count > 0);
+
+        await Assert.That(agent.TranscriptPath).IsEqualTo(own);
+        await Assert.That(Declares().Single()["session_id"]!.GetValue<string>()).IsEqualTo(SessionIds.Canonical(pinned));
+    }
+
+    static string Transcript(string projectDir, string sessionId, string cwd) =>
+        new TempDirHandle(projectDir).CreateFile($"{sessionId}.jsonl", new JsonObject { ["type"] = "user", ["cwd"] = cwd }.ToJsonString() + "\n");
 }

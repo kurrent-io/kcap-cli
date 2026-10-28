@@ -12,23 +12,9 @@ using Capacitor.Cli.Core.Setup;
 namespace Capacitor.Cli.Daemon.Harness.Codex;
 
 /// <summary>
-/// The single <c>codex</c> runtime factory. It routes a launch to one of two transports and is the
-/// ONLY codex entry in the vendor→factory dictionary:
-/// <list type="bullet">
-/// <item>a review-flow (unattended) launch, when this daemon resolved app-server as active
-/// (<see cref="DaemonConfig.CodexAppServerActive"/> — operator selection + version floor, decided
-/// once by <see cref="CodexTransportDecision"/>), goes to
-/// <see cref="CodexAppServerHostedAgentRuntime"/>;</item>
-/// <item>everything else — every interactive launch, and every launch when the transport is PTY —
-/// delegates to the wrapped <see cref="PtyHostedAgentRuntimeFactory"/>, byte-identically to today.</item>
-/// </list>
-///
-/// <para>Capability advertisement (borrowed-review containment, unattended support, model resolver)
-/// is delegated to the PTY factory unchanged: the transport swaps the LAUNCH mechanism, not the
-/// containment story — a reviewer's read boundary stays <c>native-tool-clamp</c> either way. The
-/// launcher-policy version the server certifies against is chosen in <c>DaemonRunner</c> from the
-/// same <see cref="DaemonConfig.CodexAppServerActive"/> field this factory routes on, so the
-/// advertised policy and the transport used are one fact.</para>
+/// The single <c>codex</c> runtime factory, choosing app-server or the wrapped PTY factory per launch
+/// (<see cref="Route"/>). Capability advertisement is delegated to the PTY factory: the transport
+/// changes how a launch is hosted, not its containment.
 /// </summary>
 internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactory {
     readonly TimeProvider _time;
@@ -46,10 +32,16 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     /// <param name="connection">The server connection whose <c>RequestAcpInteractionAsync</c> forwards an
     /// interactive launch's approvals to the user (§2.3). Null in tests that never exercise interactive
     /// approvals; reviewers (approvalPolicy:never) never build an approval bridge regardless.</param>
+    /// <param name="refreshCapabilities">Asks the daemon to re-probe and re-advertise, when a launch finds the
+    /// installed Codex no longer matches what was advertised. Null leaves the advertisement to the next refresh.</param>
+    /// <param name="installedVersion">Test seam only: production probes the Codex at the PTY factory's CLI path.</param>
     public CodexHostedAgentRuntimeFactory(
             CodexLauncher launcher, IHostedAgentRuntimeFactory ptyDelegate, DaemonConfig config,
             ILoggerFactory loggerFactory, TimeProvider time, CodexAppServerSpawnFactory? spawnFactory = null,
-            ServerConnection? connection = null, PolicyJudgeGateway? policyJudge = null) {
+            ServerConnection? connection = null, PolicyJudgeGateway? policyJudge = null,
+            Action<string>? refreshCapabilities = null, Func<string?>? installedVersion = null,
+            AccountReadingSink? readings = null) {
+        _readings      = readings;
         _time          = time;
         _launcher      = launcher;
         _pty           = ptyDelegate;
@@ -60,9 +52,15 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
             ?? ((cli, args, seed, cwd, env, removeEnv, cfg, lf) => DefaultSpawnFactory(cli, args, seed, cwd, env, removeEnv, cfg, lf, time));
         _connection    = connection;
         _policyJudge   = policyJudge;
+        _refreshCapabilities = refreshCapabilities;
+        _installedVersion    = installedVersion ?? (() => DaemonRunner.ProbeCliVersionForLaunch(_pty.CliPath));
     }
 
+    readonly Action<string>? _refreshCapabilities;
+    readonly Func<string?>   _installedVersion;
+
     readonly PolicyJudgeGateway? _policyJudge;
+    readonly AccountReadingSink? _readings;
 
     /// <summary>A governed interactive launch evaluates each approval before it reaches a card; a reviewer
     /// (approvals never raised) and an ungoverned launch take none.</summary>
@@ -124,27 +122,34 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     public AttachmentPlacement AttachmentPlacementFor(LaunchKind kind) =>
         kind == LaunchKind.Default ? AttachmentPlacement.DaemonStore : AttachmentPlacement.Worktree;
 
-    /// <summary>App-server hosts unattended reviewers (review-flow) wherever the daemon resolved it
-    /// active. INTERACTIVE launches join only where the operator opted that daemon in, so one daemon can
-    /// run interactive on app-server while the rest of a fleet stays on PTY.
-    ///
-    /// <para>Interactive is stated positively — neither a review flow nor a PR review — rather than as
-    /// "not a review flow": the launch classes here are review-flow, PR review and interactive, so the
-    /// negative form would sweep PR review along with it and widen the opt-in past what it names. The
-    /// interactive branch reads <see cref="CodexTransportDecision.InteractiveTransport"/>, the same
-    /// function the daemon advertises to the server — which refuses a registration whose transport
-    /// differs from the advertisement.</para>
-    ///
-    /// <para>A resume names the transport its agent ran on and keeps it, whatever the interactive
-    /// setting: a local session was a terminal and must stay attachable.</para></summary>
-    internal bool UsesAppServer(RuntimeStartContext ctx) =>
-        _config.CodexAppServerActive
-     && ctx.RequestedTransport switch {
+    /// <summary>
+    /// A pinned transport wins: the ledger's for a resume, else the one the server will validate the
+    /// registration against. Unpinned, a PR review stays on PTY and anything else follows the resolution
+    /// the server last acknowledged, since that is the advertisement it dispatched against. Every
+    /// app-server launch is checked against the Codex installed now, since the advertised version is
+    /// only as fresh as the last capability refresh. Below the floor the launch is refused, never moved
+    /// to PTY, which the server would refuse at registration, and the daemon is asked to re-advertise.
+    /// </summary>
+    internal CodexRoute Route(RuntimeStartContext ctx) {
+        var pinned = Recognised(ctx.RequestedTransport) ?? Recognised(ctx.ExpectedRuntimeTransport);
+        var appServer = pinned switch {
             CodexTransportDecision.Pty       => false,
             CodexTransportDecision.AppServer => true,
-            _ => ctx.IsReviewFlow
-              || (!ctx.IsReview && CodexTransportDecision.InteractiveTransport(_config) == CodexTransportDecision.AppServer)
+            _ => !(ctx.IsReview && !ctx.IsReviewFlow) && _config.AcknowledgedCodexResolution.Active,
         };
+        if (!appServer) return new(AppServer: false, Refusal: null);
+
+        var version = _installedVersion();
+        if (CodexTransportDecision.MeetsFloor(version)) return new(AppServer: true, Refusal: null);
+
+        _refreshCapabilities?.Invoke("the installed Codex is below the app-server floor");
+        return new(AppServer: false, Refusal:
+            $"codex: this launch must run on app-server, which needs Codex {CodexTransportDecision.VersionFloor} or later; " +
+            $"the installed Codex is {version ?? "of an unreadable version"}.");
+    }
+
+    static string? Recognised(string? transport) =>
+        transport is CodexTransportDecision.AppServer or CodexTransportDecision.Pty ? transport : null;
 
     public bool SupportsRestartResume(string? runtimeTransport) => true;
 
@@ -153,12 +158,16 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
         runtimeTransport == CodexTransportDecision.Pty && _pty.ResumesIdleWithoutPrompt(runtimeTransport);
 
     public Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
+        var route = Route(ctx);
+        if (route.Refusal is { } refusal)
+            return Task.FromException<HostedRuntimeStart>(new InvalidOperationException(refusal));
+
         // A parked reviewer's transcript is envelope-sourced; a PTY resume would fork it.
-        if (ctx.ResumeSessionId is not null && ctx.IsReviewFlow && !UsesAppServer(ctx))
+        if (ctx.ResumeSessionId is not null && ctx.IsReviewFlow && !route.AppServer)
             return Task.FromException<HostedRuntimeStart>(
                 new InvalidOperationException("codex: a reviewer resume requires the app-server route; refusing to start a PTY session."));
 
-        return UsesAppServer(ctx) ? StartAppServerAsync(ctx, ct) : _pty.StartAsync(ctx, ct);
+        return route.AppServer ? StartAppServerAsync(ctx, ct) : _pty.StartAsync(ctx, ct);
     }
 
     async Task<HostedRuntimeStart> StartAppServerAsync(RuntimeStartContext ctx, CancellationToken ct) {
@@ -177,7 +186,7 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
         // The app-server path is envelope-sourced: the daemon emits the transcript and defers the first
         // turn behind a source claim, guard-1 stands the rollout watcher down (the marker), and guard-2
         // backstops server-side. ONE decision drives all four (marker, emission, deferral, forwarder) so
-        // they can never desync. Rollback is codex.transport=pty — this method is not reached then.
+        // they can never desync.
         const bool envelopeSourced = true;
         var env       = BuildEnv(ctx, envelopeSourced);
         var removeEnv = ctx.Account is { } account
@@ -212,7 +221,9 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
             requestInteraction: _connection is { } c ? c.RequestAcpInteractionAsync : null,
             approvalTimeout: TimeSpan.FromSeconds(Math.Max(1, _config.CodexAppServerApprovalTimeoutSeconds)),
             journal: ctx.Journal,
-            policy: PolicySeamFor(ctx, approval));
+            policy: PolicySeamFor(ctx, approval),
+            account: ctx.Account,
+            postReading: _readings is { } readings ? readings.Post : null);
 
         // StartAsync may spawn a child before it throws (a failed hooks/list, thread/start, or initial
         // turn on the fail-closed paths). The orchestrator never receives a runtime it did not get a

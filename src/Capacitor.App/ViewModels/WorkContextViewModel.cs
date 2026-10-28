@@ -339,6 +339,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         _dto = dto;
         UpdateFacts(dto);
         HasAgent = true;
+        this.RaisePropertyChanged(nameof(ShowsPeople));
         if (dto.SessionId is { Length: > 0 } id && !string.Equals(_reader.CurrentState, id, StringComparison.Ordinal))
             SwitchSession(id);
         else if (_isRemote && string.IsNullOrEmpty(dto.SessionId) && HasSession) {
@@ -402,6 +403,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
 
     internal void Reconnected() {
         if (_tornDown) return;
+        ForgetViewer();
         Plan.Refresh();
         Artefacts?.Refresh();
         _reader.Refresh();
@@ -409,6 +411,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
 
     void OnSignInCompleted() {
         if (_tornDown) return;
+        ForgetViewer();
         Plan.Refresh();
         Artefacts?.Refresh();
         _reader.Refresh();

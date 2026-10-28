@@ -1852,6 +1852,18 @@ public class DaemonMutationLaneTests {
     }
 
     [Test]
+    public async Task A_refresh_with_a_failed_step_is_a_failure() {
+        var request = MutationRequestFactory.ForAccount(MutationVerb.AccountRefresh, new AccountArgs(null, null, "abcd1234", null), "daemon-a", "default");
+        var cli = AccountCli(0, ResultLine([Step("limits", succeeded: false, detail: "no reading")], revision: 9));
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli });
+        lane.AccountsRevisionReached = (_, _) => Task.FromResult(true);
+
+        var outcome = await lane.RunAsync(request, CancellationToken.None).WaitAsync(Bounded);
+
+        await Assert.That(outcome).IsTypeOf<MutationOutcome.Failed>();
+    }
+
+    [Test]
     public async Task Stdout_noise_before_the_result_line_is_ignored() {
         var stdout = "Wired claude account work (/Users/me/.claude).\r\n{\"note\":\"not a result\"}\n" +
                      ResultLine([Step("hooks")], revision: 4) + "\r\n";

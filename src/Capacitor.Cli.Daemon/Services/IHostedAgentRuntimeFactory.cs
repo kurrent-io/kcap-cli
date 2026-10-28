@@ -305,6 +305,9 @@ internal sealed record RuntimeStartContext(
         // The transport a resumed or continued agent ran on, from its ledger entry; a factory with
         // more than one transport starts it on that one. Null for a fresh launch.
         string?             RequestedTransport = null,
+        // The transport the server will validate this launch's registration against. Null from an
+        // older server. A ledger transport above outranks it.
+        string?             ExpectedRuntimeTransport = null,
         // Which of the agent's user messages the server has stored, answered by its transcript forwarder once
         // one is bound. Null for constructions predating this field.
         Func<IAcpPersistenceProbe?>? PersistenceProbe = null,

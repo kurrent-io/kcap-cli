@@ -25,6 +25,7 @@ internal sealed partial class VendorCliWatcher : BackgroundService {
     readonly TimeProvider                                              _time;
 
     int _rebuildRequested;
+    IReadOnlyList<(string AccountId, string Directory)>? _actedAccounts;
 
     // Seams (assigned from DI in the production ctor; overridden directly in tests).
     internal Func<string, CliBinaryStat?>   StatBinary;
@@ -59,7 +60,7 @@ internal sealed partial class VendorCliWatcher : BackgroundService {
         Refresh    = reason => orchestrator.RefreshAdvertisedCapabilities(reason);
         StatBinary = path => StatCliBinary(config.Binaries, path);
         Watched    = [];
-        accounts.Changed += _ => OnAccountsChanged();
+        accounts.Changed += OnAccountsChanged;
     }
 
     VendorCliWatcher(IReadOnlyList<(string Vendor, string CliPath, IReadOnlyList<string> CatalogPaths)> watched,
@@ -139,8 +140,12 @@ internal sealed partial class VendorCliWatcher : BackgroundService {
     }
 
     /// <summary>The publisher's handler, which must not block: the watch set is rebuilt by the next tick,
-    /// and the refresh is a trigger.</summary>
-    internal void OnAccountsChanged() {
+    /// and the refresh is a trigger. A snapshot announces reading changes too, and those leave the watched
+    /// accounts as they were, so only a change to the accounts themselves re-probes.</summary>
+    internal void OnAccountsChanged(AccountsSnapshotDto snapshot) {
+        var accounts = VendorModelCatalogs.AccountsIn(snapshot);
+        if (Interlocked.Exchange(ref _actedAccounts, accounts) is { } acted && acted.SequenceEqual(accounts)) return;
+
         Interlocked.Exchange(ref _rebuildRequested, 1);
         Refresh("accounts changed");
     }
@@ -203,11 +208,15 @@ internal sealed partial class VendorCliWatcher : BackgroundService {
     }
 
     protected override async Task ExecuteAsync(CancellationToken ct) {
-        if (_config is not null && _factories is not null) {
-            _recorded = _config.UnattendedVendorBaselines;
-            Watched   = WatchSet(_config, _factories, _accounts());
+        // Runs off the caller's thread, so a tick may already have rebuilt the set: build and assign
+        // under the gate, from the accounts as they are now, or a stale set lands over the rebuilt one.
+        lock (_gate) {
+            if (_config is not null && _factories is not null) {
+                _recorded = _config.UnattendedVendorBaselines;
+                Watched   = WatchSet(_config, _factories, _accounts());
+            }
+            PrimeBaselinesUnlocked();
         }
-        PrimeBaselines();
 
         using var timer = new PeriodicTimer(PollInterval, _time);
         try {

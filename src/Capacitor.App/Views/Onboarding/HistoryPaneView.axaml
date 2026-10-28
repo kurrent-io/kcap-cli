@@ -68,7 +68,7 @@
                                     <DataTemplate x:DataType="x:String">
                                         <StackPanel Orientation="Horizontal" Spacing="4">
                                             <icons:AppIcon Kind="Check" Size="12" Foreground="{StaticResource KcapSuccessBrush}" />
-                                            <TextBlock Text="{Binding}" FontFamily="{StaticResource OnboardingMonoFont}" FontSize="10.5"
+                                            <TextBlock Classes="onboardingSignal" Text="{Binding}"
                                                        Foreground="{StaticResource OnboardingTextBrush}" VerticalAlignment="Center" />
                                         </StackPanel>
                                     </DataTemplate>

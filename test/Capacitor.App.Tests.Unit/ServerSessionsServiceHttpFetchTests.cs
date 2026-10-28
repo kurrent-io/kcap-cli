@@ -32,6 +32,21 @@ public class ServerSessionsServiceHttpFetchTests {
     }
 
     [Test]
+    public async Task Fetch_maps_a_refused_read_to_the_servers_retry_time() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/sessions/listing").UsingGet())
+              .RespondWith(Response.Create().WithStatusCode(429).WithHeader("Retry-After", "12").WithHeader("Content-Type", "application/json")
+                  .WithBody("""{"error":"read_rate_limited","retry_after_seconds":12}"""));
+        var (http, profiles, provider) = await WireMockLane.BuildAsync(server, Config.Root);
+        await using var _ = provider;
+
+        var refused = await ServerSessionsService.HttpFetch(http, profiles)(new ServerSessionsQuery("active", null, 100, 0), CancellationToken.None);
+        await Assert.That(refused.Rows).IsNull();
+        await Assert.That(refused.Unauthorized).IsFalse();
+        await Assert.That(refused.RetryAfter).IsEqualTo(TimeSpan.FromSeconds(12));
+    }
+
+    [Test]
     public async Task Owners_fetch_reads_the_owners_route() {
         using var server = WireMockServer.Start();
         server.Given(Request.Create().WithPath("/api/sessions/owners").UsingGet())

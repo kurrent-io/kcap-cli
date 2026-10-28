@@ -559,6 +559,49 @@ public class MainWindowSmokeTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public Task Rail_pagination_tracks_the_filter_and_disappears_when_fully_loaded() => AvaloniaSession.RunOnUiAsync(async () => {
+        var service = new FakeDaemonClientService();
+        using var directory = new FakeAgentDirectory();
+        using var sessions = new FakeServerSessionsService();
+        using var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System, sessions: sessions);
+        var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System, rail: rail);
+        var window = new MainWindow { DataContext = vm };
+        try {
+            window.Show();
+            sessions.PagingSubject.OnNext(new ServerSessionsPaging(20, 84, 1, true, false));
+            Dispatcher.UIThread.RunJobs();
+            var view = window.FindDescendantOfType<SessionRailView>()!;
+            var more = view.FindControl<Button>("RailShowMoreButton")!;
+            var count = view.FindControl<TextBlock>("RailLoadedText")!;
+            var cap = view.FindControl<TextBlock>("RailCapNote")!;
+            await Assert.That(more.IsVisible).IsTrue();
+            await Assert.That(more.Content).IsEqualTo("Load more ended sessions");
+            await Assert.That(count.Text).IsEqualTo("20 of 84 ended sessions loaded");
+
+            rail.State = RailState.Live;
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(more.IsVisible).IsFalse();
+            await Assert.That(count.IsVisible).IsFalse();
+            await Assert.That(cap.IsVisible).IsFalse();
+
+            rail.State = RailState.Ended;
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(more.IsVisible).IsTrue();
+            await Assert.That(count.IsVisible).IsTrue();
+
+            sessions.PagingSubject.OnNext(new ServerSessionsPaging(4, 4, 1, false, false));
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(more.IsVisible).IsFalse();
+            await Assert.That(count.IsVisible).IsFalse();
+            await Assert.That(cap.IsVisible).IsFalse();
+        } finally {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public Task Clicking_the_team_segment_changes_the_rails_scope_and_persists_it() => AvaloniaSession.RunOnUiAsync(async () => {
         var service = new FakeDaemonClientService();
         service.StatusSubject.OnNext(new(AttachState.Connected, null, null));
@@ -1749,9 +1792,9 @@ public class MainWindowSmokeTests {
         await Assert.That(sharesLine).IsTrue();
     }
 
-    /// Name, then the agent count, then the version. The dot shares the count's parent, so a
-    /// wrap cannot leave it on the line above. Both leave when the attach drops; the snapshot
-    /// stays, so the name and version remain with nothing between them.
+    /// Name, then the agent count; the version shows only while an update waits (Settings › About
+    /// carries it otherwise). The dot shares the count's parent, so a wrap cannot leave it on the
+    /// line above, and leaves with the count when the attach drops.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Rail_daemon_row_separators_leave_with_the_fragment_they_precede() {
@@ -1797,10 +1840,10 @@ public class MainWindowSmokeTests {
         });
 
         await Assert.That(connected).IsEquivalentTo(
-            new[] { "daemon-a", "\u00b7", "1 of 5 agents", "kcap 1.2.3" }, CollectionOrdering.Matching);
+            new[] { "daemon-a", "\u00b7", "1 of 5 agents" }, CollectionOrdering.Matching);
         await Assert.That(dotSharesCountParent).IsTrue();
         await Assert.That(detached).IsEquivalentTo(
-            new[] { "daemon-a", "kcap 1.2.3" }, CollectionOrdering.Matching);
+            new[] { "daemon-a" }, CollectionOrdering.Matching);
     }
 
     /// A queued daemon update is the version's own status: warning paint on the semver, the

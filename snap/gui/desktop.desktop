@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=kcap
+Comment=Run and watch coding agents
+Exec=kcap.desktop
+Icon=${SNAP}/meta/gui/icon.png
+Terminal=false
+Categories=Development;
+StartupWMClass=kcap-desktop

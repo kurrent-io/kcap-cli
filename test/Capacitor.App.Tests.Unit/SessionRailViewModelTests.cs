@@ -333,6 +333,46 @@ public class SessionRailViewModelTests {
         });
     }
 
+    /// The window's close and the app's quit both clear the selection after the app has disposed
+    /// the rail; that must not throw.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Selection_changes_after_dispose_are_ignored() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var (directory, sessions, _, _, rail) = BuildWithControls();
+            using (directory) using (sessions) {
+                rail.SelectedSessionKey = "server:s1";
+                rail.Dispose();
+                rail.SelectedSessionKey = null;
+                rail.SelectedSessionKey = "local:a1";
+                await Assert.That(sessions.Kept).IsEqualTo("s1");
+            }
+        });
+    }
+
+    /// A quit can still drive the rail's controls after the app has disposed it; that must not
+    /// throw, reach the service or persist.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Control_changes_after_dispose_are_ignored() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var (directory, sessions, _, persisted, rail) = BuildWithControls();
+            using (directory) using (sessions) {
+                rail.Dispose();
+                rail.SetScopeCommand.Execute(RailScope.Team).Subscribe();
+                rail.Scope = RailScope.Team;
+                rail.State = RailState.Ended;
+                rail.Grouping = RailGrouping.Date;
+                rail.Sort = RailSort.Title;
+                rail.Descending = !rail.Descending;
+                rail.ApplyPreferences(new RailPreferences(RailScope.Team, RailState.Ended, RailGrouping.Date, RailSort.Title, false, []));
+
+                await Assert.That(sessions.Scope).IsEqualTo(RailScope.Mine);
+                await Assert.That(persisted).IsEmpty();
+            }
+        });
+    }
+
     /// A local checkout and a remote agent on the same GitHub repo land in one repo group — the
     /// remote session carries the machine badge, the local one doesn't.
     [Test]
@@ -511,6 +551,33 @@ public class SessionRailViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task A_locked_scope_stays_on_mine() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var directory = new FakeAgentDirectory();
+            var sessions = new FakeServerSessionsService();
+            var teams = RailPreferences.Default with { Scope = RailScope.Team, Grouping = RailGrouping.Date };
+            var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System,
+                sessions: sessions, preferences: teams with { Grouping = RailGrouping.Repository },
+                scopeLocked: true, bindUserPreferences: _ => Task.FromResult(teams));
+            using (directory) using (sessions) using (rail) {
+                await Assert.That(rail.Scope).IsEqualTo(RailScope.Mine);
+                await Assert.That(sessions.Scope).IsEqualTo(RailScope.Mine);
+                await Assert.That(rail.CanChangeScope).IsFalse();
+                await Assert.That(rail.ScopeTip).IsEqualTo(SessionRailViewModel.ScopeLockedTip);
+
+                sessions.ViewerUserIdSubject.OnNext("u1");
+                await WorkspaceFixtures.WaitUntilAsync(() => rail.Grouping == RailGrouping.Date, what: "the viewer's shape applied");
+                await Assert.That(rail.Scope).IsEqualTo(RailScope.Mine);
+
+                rail.SetScopeCommand.Execute(RailScope.Team).Subscribe();
+                await Assert.That(rail.Scope).IsEqualTo(RailScope.Mine);
+                await Assert.That(sessions.Scope).IsEqualTo(RailScope.Mine);
+            }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Date_grouping_names_today_and_yesterday_and_regroups_at_midnight() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var (directory, sessions, time, _, rail) = BuildWithControls();
@@ -650,12 +717,12 @@ public class SessionRailViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Show_more_forwards_to_the_service_and_the_footer_reads_loaded_of_total() {
+    public async Task Show_more_loads_ended_sessions_and_the_footer_names_what_is_counted() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var (directory, sessions, _, _, rail) = BuildWithControls();
             using (directory) using (sessions) using (rail) {
                 sessions.PagingSubject.OnNext(new ServerSessionsPaging(12, 212, 1, true, false));
-                await Assert.That(rail.LoadedText).IsEqualTo("12 of 212");
+                await Assert.That(rail.LoadedText).IsEqualTo("12 of 212 ended sessions loaded");
                 await Assert.That(rail.ShowsShowMore).IsTrue();
                 await Assert.That(rail.AtCap).IsFalse();
 
@@ -665,7 +732,54 @@ public class SessionRailViewModelTests {
                 sessions.PagingSubject.OnNext(new ServerSessionsPaging(500, 1000, 25, false, true));
                 await Assert.That(rail.ShowsShowMore).IsFalse();
                 await Assert.That(rail.AtCap).IsTrue();
-                await Assert.That(SessionRailViewModel.CapNote).IsEqualTo("Search or narrow the scope for older sessions");
+                await Assert.That(SessionRailViewModel.CapNote).IsEqualTo("Loading limit reached · search or narrow the scope for older sessions");
+            }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Completed_ended_listing_hides_the_count_and_pagination() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var (directory, sessions, _, _, rail) = BuildWithControls();
+            using (directory) using (sessions) using (rail) {
+                sessions.PagingSubject.OnNext(new ServerSessionsPaging(4, 4, 1, false, false));
+                await Assert.That(rail.LoadedText).IsEqualTo("");
+                await Assert.That(rail.ShowsShowMore).IsFalse();
+                await Assert.That(rail.AtCap).IsFalse();
+
+                sessions.PagingSubject.OnNext(new ServerSessionsPaging(500, 500, 25, false, true));
+                await Assert.That(rail.LoadedText).IsEqualTo("");
+                await Assert.That(rail.AtCap).IsFalse();
+            }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Live_filter_hides_ended_pagination_and_switching_back_restores_it() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var (directory, sessions, _, _, rail) = BuildWithControls();
+            using (directory) using (sessions) using (rail) {
+                sessions.PagingSubject.OnNext(new ServerSessionsPaging(20, 84, 1, true, false));
+                rail.State = RailState.Live;
+                await Assert.That(rail.LoadedText).IsEqualTo("");
+                await Assert.That(rail.ShowsShowMore).IsFalse();
+                await Assert.That(await rail.ShowMoreCommand.CanExecute.FirstAsync()).IsFalse();
+
+                rail.State = RailState.Ended;
+                await Assert.That(rail.LoadedText).IsEqualTo("20 of 84 ended sessions loaded");
+                await Assert.That(rail.ShowsShowMore).IsTrue();
+                await Assert.That(await rail.ShowMoreCommand.CanExecute.FirstAsync()).IsTrue();
+
+                sessions.PagingSubject.OnNext(new ServerSessionsPaging(500, 1000, 25, false, true));
+                rail.State = RailState.Live;
+                await Assert.That(rail.LoadedText).IsEqualTo("");
+                await Assert.That(rail.AtCap).IsFalse();
+
+                rail.State = RailState.All;
+                await Assert.That(rail.LoadedText).IsEqualTo("500 of 1000 ended sessions loaded");
+                await Assert.That(rail.AtCap).IsTrue();
             }
         });
     }

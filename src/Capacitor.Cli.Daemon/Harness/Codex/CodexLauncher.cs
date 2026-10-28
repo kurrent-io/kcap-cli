@@ -512,7 +512,7 @@ internal sealed partial class CodexLauncher(
     /// fail the Codex `-c` config parse. Covers Windows paths and arbitrary URLs.
     // Shared with the codex app-server argv builder so the two transports encode -c overrides
     // identically; the implementation lives in CodexToml.
-    static string TomlString(string value) => CodexToml.String(value);
+    static string TomlString(string value) => CodexToml.Quote(value);
 
     /// Local launch: emit the mandatory daemon-level flags Codex always needs, then append
     /// the user's verbatim post-`--` args. A user duplicate of a mandatory flag is rejected

@@ -110,6 +110,7 @@ public class UninstallCommandTests {
 
         var exit = await NewCommand(fixture, workdir: AppContext.BaseDirectory).HandleAsync(["uninstall", "--yes"]);
         await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(fixture.Out.ToString()).Contains("Restart any coding agents that were open during uninstall");
 
         // Claude: kcap entries gone, user entries preserved, marker removed.
         var claudeRoot = JsonNode.Parse(await File.ReadAllTextAsync(claudeSettings))!.AsObject();
@@ -648,7 +649,7 @@ public class UninstallCommandTests {
         var account = new VendorAccount(dirName, HarnessId.Claude, AccountDirectory.Normalize(dir), dirName, DateTimeOffset.UnixEpoch);
 
         accounts.Mutate(r => (r with { Accounts = [.. r.Accounts, account] }, 0));
-        AccountWiring.Wire(account, fixture.UserHome, new WiringOptions(plugin, fixture.Temp.PathTo(".agents", "skills"), () => "/usr/local/bin/kcap", NetworkAllowDomains: null));
+        using (accounts.Lock()) AccountWiring.Wire(account, fixture.UserHome, new WiringOptions(plugin, fixture.Temp.PathTo(".agents", "skills"), () => "/usr/local/bin/kcap", NetworkAllowDomains: null), accounts);
 
         return account;
     }
@@ -696,6 +697,50 @@ public class UninstallCommandTests {
         } finally {
             File.SetUnixFileMode(folder, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }
+    }
+
+    [Test, ExcludeOn(OS.Windows)]
+    public async Task Uninstall_removes_the_profile_line_with_its_link() {
+        await using var fixture = await Fixture.CreateAsync();
+        var (links, link) = LocalBinLinkFixture(fixture);
+        var profile = Path.Combine(fixture.Home, ".zprofile");
+        File.WriteAllText(profile, "export A=1\n");
+        new ShellProfile(fixture.UserHome, "/bin/zsh").Add();
+
+        var exit = await NewCommand(fixture, links: links).HandleAsync(["uninstall", "--yes", "--keep-config"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(new FileInfo(link).LinkTarget).IsNull();
+        await Assert.That(File.ReadAllText(profile)).IsEqualTo("export A=1\n");
+        await Assert.That(fixture.Out.ToString()).Contains($"Remove the PATH line kcap added to {profile}");
+    }
+
+    /// The line also serves a link another install put there.
+    [Test, ExcludeOn(OS.Windows)]
+    public async Task Uninstall_keeps_the_profile_line_while_another_link_needs_it() {
+        await using var fixture = await Fixture.CreateAsync();
+        var (_, link) = LocalBinLinkFixture(fixture);
+        var profile = Path.Combine(fixture.Home, ".zprofile");
+        new ShellProfile(fixture.UserHome, "/bin/zsh").Add();
+        var before = File.ReadAllText(profile);
+
+        var exit = await NewCommand(fixture).HandleAsync(["uninstall", "--yes", "--keep-config"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(new FileInfo(link).LinkTarget).IsNotNull();
+        await Assert.That(File.ReadAllText(profile)).IsEqualTo(before);
+    }
+
+    static (KcapLinkRemover Links, string Link) LocalBinLinkFixture(Fixture f) {
+        f.Temp.CreateFile("kcap-bin", "x");
+        f.Temp.CreateDir(".local", "bin");
+
+        var binary = f.Temp.PathTo("kcap-bin");
+        var folder = ShellProfile.Folder(f.UserHome);
+        var link   = Path.Combine(folder, "kcap");
+        File.CreateSymbolicLink(link, binary);
+
+        return (new KcapLinkRemover([folder], binary), link);
     }
 
     static (KcapLinkRemover Links, string Link, string Binary) LinkFixture(Fixture f) {
@@ -990,6 +1035,21 @@ public class UninstallCommandTests {
             await Assert.That(root["enabledPlugins"]?["kcap@kcap"]).IsNull();
         }
         await Assert.That(Directory.Exists(accounts.Directory)).IsFalse();
+    }
+
+    [Test]
+    public async Task Uninstall_restores_the_default_directory_status_line() {
+        await using var fixture = await Fixture.CreateAsync();
+        var accounts = AccountStore.Beside(Daemons.Store);
+        var settings = fixture.Temp.CreateFile(".claude/settings.json", """{"statusLine":{"type":"command","command":"echo mine"}}""");
+        var adopted  = AccountAdoption.EnsureDefault(accounts, HarnessId.Claude, fixture.Temp.PathTo(".claude"), TimeProvider.System);
+        using (accounts.Lock()) AccountWiring.WireStatusLine(adopted.Id, fixture.UserHome, accounts);
+        await Assert.That(ClaudeStatusLineCommand.IsOurs(JsonNode.Parse(await File.ReadAllTextAsync(settings))!["statusLine"]!["command"]!.GetValue<string>())).IsTrue();
+
+        var exit = await RunUninstall(fixture);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(JsonNode.Parse(await File.ReadAllTextAsync(settings))!["statusLine"]!["command"]!.GetValue<string>()).IsEqualTo("echo mine");
     }
 
     [Test]

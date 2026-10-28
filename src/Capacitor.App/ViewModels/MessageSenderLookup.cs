@@ -5,7 +5,8 @@ namespace Capacitor.App.ViewModels;
 
 /// Names the senders of one chat's user messages, read from the server for the chat's session. UI thread
 /// only: labels are tracked and titled there, and only the read itself leaves it. One read at a time.
-internal sealed class MessageSenderLookup(IMessageSenderSource source, TimeProvider time, CancellationToken lifetime, Action<string> log) {
+internal sealed class MessageSenderLookup(IMessageSenderSource source, TimeProvider time, CancellationToken lifetime, Action<string> log,
+        Action<Guid, SenderLabel>? delivered = null) {
     /// Gaps between asks about one message. A recent message still unnamed is asked again on them, since the
     /// server records a sender a few seconds after the message lands; an older one only after a failed read.
     internal static readonly TimeSpan[] Retry = [TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(15)];
@@ -22,6 +23,7 @@ internal sealed class MessageSenderLookup(IMessageSenderSource source, TimeProvi
     }
 
     readonly Queue<Entry> _due = new();
+    readonly HashSet<Guid> _receipts = [];
     string? _sessionId;
     int _generation;
     bool _reading;
@@ -29,11 +31,15 @@ internal sealed class MessageSenderLookup(IMessageSenderSource source, TimeProvi
     /// The read in flight, or the last one started.
     internal Task? PendingReadForTesting { get; private set; }
 
+    /// A sender attribution exists only after the server has matched a transcript message.
+    public bool HasReceipt(Guid dispatchId) => _receipts.Contains(dispatchId);
+
     /// A title names a sender of the session the chat showed when it was read, so another session starts the
     /// visible messages over.
     public void SetSession(string? sessionId, IEnumerable<SenderLabel> visible) {
         if (_sessionId == sessionId) return;
         _sessionId = sessionId;
+        _receipts.Clear();
         Restart(visible);
     }
 
@@ -77,7 +83,7 @@ internal sealed class MessageSenderLookup(IMessageSenderSource source, TimeProvi
             while (_due.Count > 0 && _sessionId is { } session && IsCurrent(generation, session) && !lifetime.IsCancellationRequested) {
                 var batch = TakeBatch();
                 var read = await source.ReadAsync(session, Request(batch), lifetime);
-                if (!IsCurrent(generation, session)) break;
+                if (!IsCurrent(generation, session) || lifetime.IsCancellationRequested) break;
                 Apply(batch, read, generation, session);
                 // Asking about the rest would get the same answer. They stay on screen untitled, and the next
                 // sign-in or session change asks about them again.
@@ -130,7 +136,11 @@ internal sealed class MessageSenderLookup(IMessageSenderSource source, TimeProvi
                 : keys.EventNumber is { } number && byNumber.TryGetValue(number, out var r2) ? r2
                 : keys.DispatchId is { } dispatch && byDispatch.TryGetValue(dispatch, out var r3) ? r3
                 : null;
-            if (row is not null) entry.Label.Title = TitleOf(row);
+            if (row is not null) {
+                entry.Label.Title = TitleOf(row);
+                if (read.Kind == MessageSendersReadKind.Ready && row.DispatchId is { } receipt
+                    && receipt != Guid.Empty && _receipts.Add(receipt)) delivered?.Invoke(receipt, entry.Label);
+            }
             else if (read.Kind == MessageSendersReadKind.Ready && entry.Unmatched < entry.UnmatchedRetries)
                 retry.Add((entry, Retry[entry.Unmatched++]));
             else if (read.Kind == MessageSendersReadKind.Unreachable && entry.Failed < Retry.Length)
