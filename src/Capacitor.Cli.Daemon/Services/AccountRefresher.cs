@@ -21,6 +21,7 @@ internal sealed partial class AccountRefresher(
     readonly Dictionary<string, ITimer?>        _deferred     = new(StringComparer.Ordinal);
     readonly Dictionary<string, DateTimeOffset> _lastFinished = new(StringComparer.Ordinal);
     readonly Dictionary<string, DateTimeOffset> _lastSoon     = new(StringComparer.Ordinal);
+    readonly HashSet<string>                    _soonDeferred = new(StringComparer.Ordinal);
     string?                                     _running;
     bool                                        _stopped;
     bool                                        _started;
@@ -81,6 +82,9 @@ internal sealed partial class AccountRefresher(
                 EnqueueHeld(accountId);
                 return;
             }
+
+            // The deferred probe that serves this request spends the budget when it runs.
+            if (!_stopped) _soonDeferred.Add(accountId);
         }
 
         Request(accountId);
@@ -104,6 +108,7 @@ internal sealed partial class AccountRefresher(
                 lock (_lock) {
                     _queued.Remove(id);
                     _running = id;
+                    if (_soonDeferred.Remove(id)) _lastSoon[id] = time.GetUtcNow();
                 }
                 _progress.Pulse();
 

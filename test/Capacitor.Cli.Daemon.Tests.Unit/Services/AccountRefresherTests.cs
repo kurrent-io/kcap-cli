@@ -301,6 +301,54 @@ public class AccountRefresherTests {
     }
 
     [Test]
+    public async Task A_deferred_soon_request_spends_the_budget_when_it_runs() {
+        Register(Work);
+        var probe = new CountingProbe(_time);
+        using var refresher = Refresher(probe);
+        await refresher.StartAsync(CancellationToken.None);
+        try {
+            await Until(refresher, () => refresher.Finished == 1);
+            refresher.RequestSoon(Work);
+            await Until(refresher, () => refresher.Finished == 2);
+
+            refresher.RequestSoon(Work);
+            _time.Advance(Cooldown);
+            await Until(refresher, () => refresher.Finished == 3);
+
+            refresher.RequestSoon(Work);
+            _time.Advance(Cooldown - Minute);
+            await Idle(refresher);
+            await Assert.That(probe[Work]).IsEqualTo(3);
+
+            _time.Advance(Minute);
+            await Until(refresher, () => refresher.Finished == 4);
+        } finally {
+            await refresher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task The_soon_budget_is_per_account() {
+        Register(Work);
+        Register(Spare);
+        var probe = new CountingProbe(_time);
+        using var refresher = Refresher(probe);
+        await refresher.StartAsync(CancellationToken.None);
+        try {
+            await Until(refresher, () => refresher.Finished == 2);
+            refresher.RequestSoon(Work);
+            await Until(refresher, () => refresher.Finished == 3);
+
+            _time.Advance(Minute);
+            refresher.RequestSoon(Spare);
+            await Until(refresher, () => refresher.Finished == 4);
+            await Assert.That(probe[Spare]).IsEqualTo(2);
+        } finally {
+            await refresher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
     public async Task A_soon_request_replaces_a_pending_deferral() {
         Register(Work);
         var probe = new CountingProbe(_time);
