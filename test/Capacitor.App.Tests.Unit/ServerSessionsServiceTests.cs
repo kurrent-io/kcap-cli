@@ -166,6 +166,17 @@ public class ServerSessionsServiceTests {
         await Assert.That(listing.Calls.Count).IsEqualTo(calls);
     }
 
+    /// The rail can change scope while the app tears the service down.
+    [Test]
+    public async Task Scope_changes_after_dispose_are_ignored() {
+        var (_, listing, _, service) = Build();
+        service.Dispose();
+
+        service.Scope = RailScope.Team;
+
+        await Assert.That(listing.Calls).IsEmpty();
+    }
+
     [Test]
     public async Task Team_scope_reads_one_live_listing_and_unfiltered_ended_pages() {
         var (lane, listing, _, service) = Build();
