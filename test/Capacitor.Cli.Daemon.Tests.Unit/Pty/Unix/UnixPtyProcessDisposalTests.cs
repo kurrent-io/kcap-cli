@@ -15,7 +15,7 @@ public class UnixPtyProcessDisposalTests {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
 
         using var spawner = new UnixSpawnerThread();
-        var       proc    = Spawn(spawner, "/bin/cat");
+        var       proc    = Spawn(spawner, IdleReader.Command, IdleReader.Args);
         var       fd      = proc.MasterFdForTest;
 
         await proc.DisposeAsync().AsTask().WaitAsync(Bound);
@@ -33,7 +33,7 @@ public class UnixPtyProcessDisposalTests {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
 
         using var spawner = new UnixSpawnerThread();
-        var       proc    = Spawn(spawner, "/bin/cat");
+        var       proc    = Spawn(spawner, IdleReader.Command, IdleReader.Args);
         var       fd      = proc.MasterFdForTest;
 
         using var stop = new CancellationTokenSource();
@@ -55,6 +55,56 @@ public class UnixPtyProcessDisposalTests {
         await writer.WaitAsync(Bound);
 
         await Assert.That(reuse.WrittenBytes).IsEqualTo(0L);
+    }
+
+    /// <summary>A write that took the fd before disposal and reaches write(2) only after the child is
+    /// gone completes quietly, like a write after dispose, and its deferred close still frees the fd
+    /// without a byte reaching the next file to take the number.</summary>
+    [Test]
+    public async Task A_write_held_across_dispose_completes_quietly() {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
+
+        using var spawner = new UnixSpawnerThread();
+        var       proc    = Spawn(spawner, IdleReader.Command, IdleReader.Args);
+        var       fd      = proc.MasterFdForTest;
+
+        var holding = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var disposed = new ManualResetEventSlim();
+        proc.BeforeMasterWriteForTest = () => {
+            holding.TrySetResult();
+            disposed.Wait(Bound);
+        };
+
+        var write = proc.WriteAsync("x");
+        await holding.Task.WaitAsync(Bound);
+
+        await proc.DisposeAsync().AsTask().WaitAsync(Bound);
+        var exited = proc.HasExited;
+        disposed.Set();
+
+        await write.WaitAsync(Bound);
+
+        using var reuse = new FdReuse(fd);
+
+        await Assert.That(exited).IsTrue();
+        await Assert.That(reuse.WrittenBytes).IsEqualTo(0L);
+    }
+
+    /// <summary>Only disposal makes a failed write quiet: on a live PTY the caller still sees it.</summary>
+    [Test]
+    public async Task A_failed_write_on_a_live_pty_still_throws() {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
+
+        using var spawner = new UnixSpawnerThread();
+        var       proc    = Spawn(spawner, IdleReader.Command, IdleReader.Args);
+
+        try {
+            proc.BeforeMasterWriteForTest = () => throw new IOException("injected");
+
+            await Assert.That(() => proc.WriteAsync("x").WaitAsync(Bound)).Throws<IOException>();
+        } finally {
+            await proc.DisposeAsync().AsTask().WaitAsync(Bound);
+        }
     }
 
     /// <summary>When the process cannot be built around a spawned master, the fd is closed once: a

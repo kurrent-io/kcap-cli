@@ -47,10 +47,16 @@ sealed class SystemdServiceManager(
     public ServiceQuery Query(string serviceId) {
         var path = SystemdUnit.UnitPath(home, serviceId);
         var unitPresent = File.Exists(path);
-        var (_, active, _)      = _runProcess("systemctl", SystemdUnit.IsActiveArgs(serviceId));
-        var (enabledExit, _, _) = _runProcess("systemctl", SystemdUnit.IsEnabledArgs(serviceId));
+        // Read from the file, so it stays known when systemd does not answer: `uninstall --under` decides
+        // which units it owns from this.
         var bin = unitPresent ? SystemdUnit.BinaryFromUnit(File.ReadAllText(path)) : null;
-        var state = SystemdUnit.StatusFrom(active, enabledExit);
+        var (_, active, _)      = _runProcess("systemctl", SystemdUnit.IsActiveArgs(serviceId));
+        // is-active prints a state whenever systemd answers. Nothing means the user bus is unreachable
+        // (an SSH login without lingering, a container): reading that as Absent would free a live unit.
+        if (string.IsNullOrWhiteSpace(active)) return new ServiceQuery(LabelProbe.Unknown, unitPresent, ServiceState.NotInstalled, bin, null);
+
+        var (enabledExit, enabledOut, _) = _runProcess("systemctl", SystemdUnit.IsEnabledArgs(serviceId));
+        var state = SystemdUnit.StatusFrom(active, enabledExit, enabledOut, unitPresent);
         var probe = state != ServiceState.NotInstalled ? LabelProbe.Loaded : LabelProbe.Absent;
         var jobPid = state == ServiceState.Running
             ? SystemdUnit.MainPid(_runProcess("systemctl", SystemdUnit.MainPidArgs(serviceId)).StdOut)
@@ -90,6 +96,41 @@ sealed class SystemdServiceManager(
 
         Reload();
         return true;
+    }
+
+    /// <summary>Sets one variable in the unit and reloads systemd's copy; the daemon reads it on its next
+    /// start. Returns the unit as it was, for <see cref="RestoreUnit"/>; null when the unit is absent or
+    /// already carries the value. A line it cannot rewrite safely throws, and a refused reload puts the
+    /// previous unit back before throwing.</summary>
+    public string? SetEnvironment(string serviceId, string key, string value) {
+        var path = SystemdUnit.UnitPath(home, serviceId);
+        if (!File.Exists(path)) return null;
+
+        var previous = File.ReadAllText(path);
+        if (SystemdUnit.EnvFromUnit(previous).TryGetValue(key, out var current) && current == value) return null;
+        if (SystemdUnit.WithEnvironmentValue(previous, key, value) is not { } rewritten)
+            throw new InvalidOperationException($"its {key} line is not one kcap wrote, so it was left unchanged");
+
+        _writeUnit(path, rewritten, null);
+        try {
+            Reload();
+        } catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception
+                                          or IOException or UnauthorizedAccessException) {
+            _writeUnit(path, previous, null);
+            try {
+                Systemctl(SystemdUnit.DaemonReloadArgs());
+            } catch (Exception again) when (again is System.ComponentModel.Win32Exception or IOException) {
+                // The reload that failed is the one to report.
+            }
+            throw;
+        }
+
+        return previous;
+    }
+
+    public void RestoreUnit(string serviceId, string unitText) {
+        _writeUnit(SystemdUnit.UnitPath(home, serviceId), unitText, null);
+        Reload();
     }
 
     void Reload() {

@@ -11,8 +11,8 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Unit.Commands.Harness;
 
 /// The tool-settled relay a daemon-hosted Codex session sends its daemon so a prompt answered in
-/// Codex's terminal is retired. Bare <c>[NotInParallel]</c>: the console capture is process-global,
-/// and the relay drops its own POST once <see cref="DaemonBridgeRelay.Cap"/> is spent and says nothing.
+/// Codex's terminal is retired. On a clock that never moves unless a test ages it, so the relay's cap
+/// cannot run out under a loaded host.
 public class CodexHookToolSettledRelayTests {
     [TempHome] public required TempHome Home { get; init; }
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
@@ -45,15 +45,14 @@ public class CodexHookToolSettledRelayTests {
     }
 
     async Task<int> RunAsync(HostedAgent hosted, string eventName, HookClock? clock = null, string extraFields = "") {
-        using var capture = ConsoleOutput.StartCapture();
         var payload = $$$"""{"hook_event_name":"{{{eventName}}}","session_id":"019e0322-05fc-7570-be65-75719c3ea861","cwd":"/tmp","tool_name":"Bash","tool_input":{"command":"ls"}{{{extraFields}}}}""";
-        return await new CodexHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), clock ?? new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://server.example", Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory))
-            .Handle(new StringReader(payload));
+        return await new CodexHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), clock ?? new HookClock(new FakeTimeProvider()), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://server.example", Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory))
+            .Handle(new StringReader(payload), new CodexHookEnvironment(TextWriter.Null, TextWriter.Null, Skip: false, HostedAppServer: false));
     }
 
     /// Codex's permission prompt carries no tool id, so the notice also carries the call's name and
     /// input, which are what the prompt is matched by, and when the hook sent it.
-    [Test, NotInParallel]
+    [Test]
     public async Task A_finished_tool_relays_its_id_name_and_input() {
         using var bridge = Bridge();
 
@@ -72,7 +71,7 @@ public class CodexHookToolSettledRelayTests {
 
     /// A Codex subagent's tool hooks share the parent's session and name the subagent in a dashed
     /// <c>agent_id</c>; the permission hook hands it to the bridge dashless, and the two must match.
-    [Test, NotInParallel]
+    [Test]
     public async Task A_subagents_finished_tool_relays_its_subagent_dashless() {
         using var bridge = Bridge();
 
@@ -85,7 +84,7 @@ public class CodexHookToolSettledRelayTests {
 
     /// The main agent's turn ending means every prompt of that turn is moot, a terminal deny
     /// included, which no tool completion reports. The input-wait hint still goes.
-    [Test, NotInParallel]
+    [Test]
     public async Task The_main_agents_stop_relays_the_whole_turn() {
         using var bridge = Bridge();
 
@@ -102,7 +101,7 @@ public class CodexHookToolSettledRelayTests {
 
     /// A stop naming a subagent is not the main agent's turn, and withdrawing the main agent's
     /// prompts on it would deny one still on screen.
-    [Test, NotInParallel]
+    [Test]
     public async Task A_stop_naming_a_subagent_relays_no_turn() {
         using var bridge = Bridge();
 
@@ -112,7 +111,7 @@ public class CodexHookToolSettledRelayTests {
         await Assert.That(Relayed(bridge)).IsNull();
     }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task An_unhosted_finished_tool_relays_nothing() {
         using var bridge = Bridge();
         var unhosted = new HostedAgent(null, IsRendered: false, new DaemonBridge.Loopback($"http://127.0.0.1:{bridge.Ports[0]}/tok"));
@@ -124,7 +123,7 @@ public class CodexHookToolSettledRelayTests {
     }
 
     /// The relay spends the hook's own budget, never more.
-    [Test, NotInParallel]
+    [Test]
     public async Task An_exhausted_hook_budget_skips_the_relay() {
         using var bridge = Bridge();
 

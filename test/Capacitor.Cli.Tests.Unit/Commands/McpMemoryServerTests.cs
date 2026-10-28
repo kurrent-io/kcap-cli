@@ -265,11 +265,45 @@ public class McpMemoryServerTests {
     }
 
     [Test]
-    public async Task Tools_list_has_six_tools() {
-        var tools = McpMemoryServer.BuildToolsList();
+    public async Task Tools_list_names_the_memory_and_log_entry_tools() {
+        var names = McpMemoryServer.BuildToolsList().Select(t => t.Name).ToArray();
 
-        await Assert.That(tools.Length).IsEqualTo(6);
-        await Assert.That(tools.Select(t => t.Name).ToArray()).Contains("save_memory");
+        await Assert.That(names).IsEquivalentTo([
+            "search_memories", "get_memory", "save_memory", "update_memory", "rescope_memory", "archive_memory",
+            "append_memory_entry", "settle_memory_entry", "reopen_memory_entry", "list_memory_entries"
+        ]);
+    }
+
+    [Test]
+    [Arguments("""{"audience":"org","slug":"s","description":"d","content":"c","kind":"project","form":"log"}""", "log")]
+    [Arguments("""{"audience":"org","slug":"s","description":"d","content":"c","kind":"project"}""", null)]
+    public async Task Save_body_carries_the_form(string args, string? form) {
+        var body = McpMemoryServer.BuildSaveBody(Args(args), "abc123", "mach-1");
+
+        await Assert.That(body["form"]?.GetValue<string>()).IsEqualTo(form);
+    }
+
+    [Test]
+    public async Task Update_body_carries_the_header() {
+        var body = McpMemoryServer.BuildUpdateBody(Args("""{"id":"m1","header":"h","expected_version":"v1"}"""));
+
+        await Assert.That(body["header"]!.GetValue<string>()).IsEqualTo("h");
+        await Assert.That(body["content"]).IsNull();
+    }
+
+    /// <summary>A server that predates logs ignores <c>form</c> and saves an ordinary memory, whose answer carries no
+    /// <c>form</c>; a newer server always names it, including on a slug conflict that returns another memory.</summary>
+    [Test]
+    [Arguments("""{"form":"log"}""", """{"memory":{"memory_id":"m"},"slug_conflict":false}""", true)]
+    [Arguments("""{"form":"log"}""", """{"memory":{"memory_id":"m","form":"log"},"slug_conflict":false}""", false)]
+    [Arguments("""{"form":"log"}""", """{"memory":{"memory_id":"m","form":"document"},"slug_conflict":true}""", false)]
+    [Arguments("""{"form":"document"}""", """{"memory":{"memory_id":"m"},"slug_conflict":false}""", false)]
+    [Arguments("""{}""", """{"memory":{"memory_id":"m"},"slug_conflict":false}""", false)]
+    public async Task A_log_save_a_server_made_as_an_ordinary_memory_says_so(string args, string body, bool noticed) {
+        var result = McpMemoryServer.WithLogFormNotice(Args(args), body);
+
+        await Assert.That(result.Contains("does not support log memories")).IsEqualTo(noticed);
+        await Assert.That(result.StartsWith(body, StringComparison.Ordinal)).IsTrue();
     }
 
     [Test]

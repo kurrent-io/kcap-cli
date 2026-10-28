@@ -24,7 +24,7 @@ public static class NestedHarness {
     static readonly string[] LauncherVendors = ["codex"];
 
     /// <summary>The process names of the coding agents.</summary>
-    static readonly string[] AgentNames = [..ProcessHelpers.NestableAgents, "muse"];
+    internal static readonly string[] AgentNames = [..ProcessHelpers.NestableAgents, "muse"];
 
     /// <summary>What a daemon puts into a hosted agent's environment to name it as the host.</summary>
     static readonly string[] HostingVars = [

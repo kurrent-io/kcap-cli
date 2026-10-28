@@ -192,6 +192,111 @@ public class PullRequestToneCacheTests {
     static AgentRow Row(string id, string? sessionId) => AgentRow.FromLocal(
         new(id, "agent", "claude", "/repo", "Running", null, null, null, DateTime.UtcNow, null, null, SessionId: sessionId), Repo);
 
+    static AgentRow Ended(string sessionId) => ServerRow(sessionId, "ended");
+
+    /// The viewer's own listed session, as the directory marks it once the owners read has landed.
+    static AgentRow ServerRow(string sessionId, string status) => AgentRow.FromServer(new Capacitor.Remote.Models.RepoSessionDto {
+        SessionId = sessionId, Status = status, AccessLevel = "full", Vendor = "claude", Title = "Session",
+        Owner = new() { UserId = "u1", DisplayName = "Alexey" },
+        StartedAt = DateTimeOffset.UnixEpoch, LastActivityAt = DateTimeOffset.UnixEpoch.AddHours(1),
+        EndedAt = status == "ended" ? DateTimeOffset.UnixEpoch.AddHours(1) : null,
+        Repo = new() { Hash = "h", Owner = "kurrent-io", Name = "kcap-cli" },
+    }, hostedPresentation: false) with { OwnerIsViewer = true };
+
+    /// A teammate's session is not this app's to poll, whichever lane shows it: under Team the
+    /// listing holds hundreds, and each read costs the server a visibility check and, per PR, a
+    /// GitHub-backed admission. Its PRs show when the session opens. A listed row whose owner the
+    /// server has not named yet waits too; a daemon row it has not named is presumed the viewer's.
+    [Test]
+    public async Task A_row_the_server_names_as_a_teammates_is_not_read() {
+        var (directory, source, _, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        directory.Rows.AddOrUpdate(ServerRow("mine", "active"));
+        directory.Rows.AddOrUpdate(ServerRow("theirs", "active") with { OwnerIsViewer = false });
+        directory.Rows.AddOrUpdate(ServerRow("unknown", "ended") with { OwnerIsViewer = null });
+        directory.Rows.AddOrUpdate(Row("a1", "local-theirs") with { OwnerIsViewer = false });
+        directory.Rows.AddOrUpdate(AgentRow.FromRemote(new AgentInstanceDto {
+            AgentId = "b1", Status = "Running", DaemonName = "work-mac", OwnerUserId = "u2",
+            Vendor = "claude", RepoOwner = "o", RepoName = "r", SessionId = "remote-theirs",
+        }) with { OwnerIsViewer = false });
+
+        await WaitUntilAsync(() => cache.CurrentSummaries.ContainsKey("mine"), "own row read");
+        await Task.Delay(100);
+        await Assert.That(source.Lists).IsEqualTo(1);
+        await Assert.That(cache.CurrentSummaries.Keys).IsEquivalentTo(new[] { "mine" });
+
+        directory.Rows.AddOrUpdate(ServerRow("unknown", "ended"));
+
+        await WaitUntilAsync(() => cache.CurrentSummaries.ContainsKey("unknown"), "row read once its owner is known");
+        await Assert.That(source.Lists).IsEqualTo(2);
+    }
+
+    static RepoSessionPullRequestDto ListedPr(int number, string? state) => new() {
+        RepoHash = "h", Owner = "Kurrent-IO", RepoName = "kcap-cli", Number = number,
+        Url = $"https://github.com/kurrent-io/kcap-cli/pull/{number}", Title = $"PR {number}", State = state };
+
+    /// A row whose listing carried its PRs is marked from the row, a teammate's included, and the
+    /// PR routes are not read for it at all.
+    [Test]
+    public async Task A_listed_row_is_marked_from_its_listing_without_a_read() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        directory.Rows.AddOrUpdate(ServerRow("theirs", "active") with {
+            OwnerIsViewer = false, ListedPullRequests = new([ListedPr(7, "draft"), ListedPr(8, "merged")]) });
+        directory.Rows.AddOrUpdate(Row("a1", "mine") with { ListedPullRequests = new([ListedPr(9, null)]) });
+
+        await WaitUntilAsync(() => cache.CurrentSummaries.Count == 2, "both rows marked");
+        var theirs = cache.CurrentSummaries["theirs"];
+        await Assert.That(theirs.MenuItems.Select(i => i.Lifecycle)).IsEquivalentTo(new[] { "Draft", "Merged" });
+        await Assert.That(theirs.MenuItems[0].Subject).IsEqualTo(new PullRequestSubjectDto {
+            Provider = "github", Host = "github.com", RepoHash = "h", Owner = "kurrent-io", RepoName = "kcap-cli", Number = 7 });
+        await Assert.That(cache.Current["theirs"]).IsEqualTo(PullRequestTone.Draft);
+        // No lifecycle recorded, as on a tenant without enrichment: a neutral mark, no tone.
+        await Assert.That(cache.CurrentSummaries["mine"].Status.Text).IsEqualTo("Unknown");
+        await Assert.That(cache.Current.ContainsKey("mine")).IsFalse();
+
+        time.Advance(TimeSpan.FromMinutes(15));
+        await Task.Delay(50);
+        await Assert.That(source.Lists).IsEqualTo(0);
+        await Assert.That(source.Overviews).IsEqualTo(0);
+    }
+
+    /// Withheld below full access, or listed with none: no mark, and no fall back to the PR routes.
+    [Test]
+    public async Task A_listed_row_without_visible_links_shows_no_mark_and_is_not_read() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        directory.Rows.AddOrUpdate(ServerRow("withheld", "active") with { ListedPullRequests = RepoSessionPullRequests.Withheld });
+        directory.Rows.AddOrUpdate(ServerRow("none", "ended") with { ListedPullRequests = new([]) });
+        directory.Rows.AddOrUpdate(ServerRow("older", "ended"));
+
+        await WaitUntilAsync(() => cache.CurrentSummaries.ContainsKey("older"), "row without the field read as before");
+        time.Advance(TimeSpan.FromMinutes(15));
+        await WaitUntilAsync(() => source.Lists == 2, "only the unlisted row read again");
+        await Assert.That(cache.CurrentSummaries.Keys).IsEquivalentTo(new[] { "older" });
+    }
+
+    /// A polled row whose listing starts carrying its PRs drops the read's mark for the listing's,
+    /// and a later change to the listing shows without a read.
+    [Test]
+    public async Task A_row_that_becomes_listed_takes_the_listings_mark() {
+        var (directory, source, _, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        directory.Rows.AddOrUpdate(ServerRow("s1", "active"));
+        await WaitUntilAsync(() => cache.CurrentSummaries.ContainsKey("s1"), "read summary");
+
+        directory.Rows.AddOrUpdate(ServerRow("s1", "active") with { ListedPullRequests = new([ListedPr(7, "open")]) });
+        await WaitUntilAsync(() => cache.CurrentSummaries["s1"].Subject?.Number == 7, "listing summary");
+        directory.Rows.AddOrUpdate(ServerRow("s1", "active") with { ListedPullRequests = new([ListedPr(7, "closed")]) });
+        await WaitUntilAsync(() => cache.CurrentSummaries["s1"].Lifecycle == "Closed", "listing change");
+        await Assert.That(cache.Current["s1"]).IsEqualTo(PullRequestTone.Closed);
+        await Assert.That(source.Lists).IsEqualTo(1);
+    }
+
     static (FakeAgentDirectory Directory, FakePullRequestSource Source, FakeTimeProvider Time, PullRequestToneCache Cache) Build() {
         var directory = new FakeAgentDirectory();
         var time = new FakeTimeProvider();
@@ -265,6 +370,173 @@ public class PullRequestToneCacheTests {
 
         time.Advance(TimeSpan.FromMinutes(2));
         await WaitUntilAsync(() => source.Lists == 2, what: "second read");
+    }
+
+    /// An ended session's pull requests move rarely, so its rows read on the slow cadence while a
+    /// live row keeps the two-minute one.
+    [Test]
+    public async Task An_ended_sessions_pull_requests_refresh_on_the_slow_cadence() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        source.AccessSeconds = 3600;
+        directory.Rows.AddOrUpdate(Ended("s1"));
+        await WaitUntilAsync(() => source.Lists == 1, what: "first read");
+
+        time.Advance(TimeSpan.FromMinutes(2).Add(TimeSpan.FromSeconds(1)));
+        await Assert.That(source.Lists).IsEqualTo(1);
+
+        time.Advance(TimeSpan.FromMinutes(8));
+        await WaitUntilAsync(() => source.Lists == 2, what: "second read");
+    }
+
+    /// A session no daemon hosts is somebody's terminal or a teammate's: under Team there can be
+    /// hundreds, and none of them is this app's to poll every two minutes.
+    [Test]
+    public async Task A_live_server_rows_pull_requests_refresh_on_the_slow_cadence() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        source.AccessSeconds = 3600;
+        directory.Rows.AddOrUpdate(ServerRow("s1", "active"));
+        await WaitUntilAsync(() => source.Lists == 1, what: "first read");
+
+        time.Advance(TimeSpan.FromMinutes(2).Add(TimeSpan.FromSeconds(1)));
+        await Assert.That(source.Lists).IsEqualTo(1);
+
+        time.Advance(TimeSpan.FromMinutes(8));
+        await WaitUntilAsync(() => source.Lists == 2, what: "second read");
+    }
+
+    /// A daemon taking the session up puts it back on the fast cadence at once, not after the slow
+    /// interval it was last given.
+    [Test]
+    public async Task A_session_a_daemon_takes_up_returns_to_the_fast_cadence() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        source.AccessSeconds = 3600;
+        directory.Rows.AddOrUpdate(ServerRow("s1", "active"));
+        await WaitUntilAsync(() => source.Lists == 1, what: "first read");
+
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+        time.Advance(TimeSpan.FromMinutes(2).Add(TimeSpan.FromSeconds(1)));
+
+        await WaitUntilAsync(() => source.Lists == 2, what: "read on the fast cadence");
+    }
+
+    /// Every listed session comes due at once after a connect or a scope switch; the reads go out no
+    /// more at once than the server admits from one user.
+    [Test]
+    public async Task A_tick_starts_at_most_four_reads_at_once() {
+        var (directory, source, _, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        source.ListGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        directory.Rows.Edit(rows => { for (var i = 0; i < 20; i++) rows.AddOrUpdate(Ended($"s{i}")); });
+
+        await WaitUntilAsync(() => source.Lists >= 4, what: "the first reads");
+        await Task.Delay(100);
+        await Assert.That(source.Lists).IsEqualTo(4);
+
+        source.ListGate.SetResult();
+        await WaitUntilAsync(() => source.Lists == 20, what: "the rest follow");
+    }
+
+    /// A refused read holds every read until the server's retry time, then goes again at once
+    /// rather than on its session's two-minute cadence; the tone it had stands meanwhile.
+    [Test]
+    [Arguments("links")]
+    [Arguments("overview")]
+    public async Task A_refused_read_holds_all_reads_until_the_servers_retry_time(string route) {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        source.AccessSeconds = 3600;
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+        await WaitUntilAsync(() => cache.Current.ContainsKey("s1"), what: "tone for s1");
+
+        var refusedAt = time.GetUtcNow().UtcDateTime.AddMinutes(2);
+        if (route == "links")
+            source.ListResponses.Enqueue(new(PullRequestReadKind.Unavailable, Reason: "server_unavailable", AccessFailure: "transient",
+                RetryAt: refusedAt.AddSeconds(30), StatusCode: 429));
+        else
+            source.OverviewResponses.Enqueue((subject, _) => Task.FromResult(new PullRequestRead<PullRequestOverviewDto>(PullRequestReadKind.Unavailable,
+                Subject: subject, Reason: "server_unavailable", AccessFailure: "transient", RetryAt: refusedAt.AddSeconds(30), StatusCode: 429)));
+        time.Advance(TimeSpan.FromMinutes(2));
+        await WaitUntilAsync(() => source.Lists == 2, what: "the refused read");
+        directory.Rows.AddOrUpdate(Row("a2", "s2"));
+        time.Advance(TimeSpan.FromSeconds(29));
+        await Task.Delay(50);
+        await Assert.That(source.Lists).IsEqualTo(2);
+        await Assert.That(cache.Current["s1"]).IsEqualTo(PullRequestTone.Ready);
+
+        time.Advance(TimeSpan.FromSeconds(2));
+        await WaitUntilAsync(() => source.Lists == 4, what: "both read once the hold lapses");
+    }
+
+    static PullRequestRead<PullRequestOverviewDto> RateLimited(PullRequestSubjectDto subject, DateTime retryAt) => new(
+        PullRequestReadKind.Unavailable, Subject: subject, Reason: "server_unavailable", AccessFailure: "transient", RetryAt: retryAt, StatusCode: 429);
+
+    /// The budget is the user's: a read already in flight when another session is refused sends no
+    /// further request before the retry time.
+    [Test]
+    public async Task A_read_in_flight_sends_nothing_more_once_another_is_refused() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        source.OverviewResponses.Enqueue(async (subject, ct) => { await gate.Task.WaitAsync(ct); return source.Overview(subject); });
+        source.OverviewResponses.Enqueue((subject, _) => Task.FromResult(RateLimited(subject, time.GetUtcNow().UtcDateTime.AddSeconds(30))));
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+        directory.Rows.AddOrUpdate(Row("a2", "s2"));
+        await WaitUntilAsync(() => source.Overviews == 2, what: "one read held open, the other refused");
+
+        gate.SetResult();
+        await Task.Delay(100);
+        await Assert.That(source.Overviews).IsEqualTo(2);
+
+        time.Advance(TimeSpan.FromSeconds(31));
+        await WaitUntilAsync(() => cache.Current.Count == 2, what: "both read after the hold");
+    }
+
+    /// A zero Retry-After still waits a second; the refused read would otherwise go again at once.
+    [Test]
+    public async Task A_zero_retry_time_still_holds_for_a_second() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        source.AccessSeconds = 3600;
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+        await WaitUntilAsync(() => cache.Current.ContainsKey("s1"), what: "tone for s1");
+
+        // Refused with a retry time of the moment it is answered.
+        source.ListResponses.Enqueue(new(PullRequestReadKind.Unavailable, Reason: "server_unavailable", AccessFailure: "transient",
+            RetryAt: time.GetUtcNow().UtcDateTime.AddMinutes(2), StatusCode: 429));
+        time.Advance(TimeSpan.FromMinutes(2));
+        await WaitUntilAsync(() => source.Lists == 2, what: "the refused read");
+        await Task.Delay(100);
+        await Assert.That(source.Lists).IsEqualTo(2);
+
+        time.Advance(TimeSpan.FromSeconds(1));
+        await WaitUntilAsync(() => source.Lists == 3, what: "the read after the floor");
+    }
+
+    /// A denial read before a refusal still clears the tone: the refusal only hides the PRs after it.
+    [Test]
+    public async Task A_denial_before_a_refusal_still_drops_the_tone() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+        await WaitUntilAsync(() => cache.Current.ContainsKey("s1"), what: "tone for s1");
+
+        source.OverviewResponses.Enqueue((subject, _) => Task.FromResult(new PullRequestRead<PullRequestOverviewDto>(
+            PullRequestReadKind.Unavailable, Subject: subject, AccessFailure: "denied", Reason: "github_access_denied")));
+        source.OverviewResponses.Enqueue((subject, _) => Task.FromResult(RateLimited(subject, time.GetUtcNow().UtcDateTime.AddMinutes(5))));
+        time.Advance(TimeSpan.FromMinutes(3));
+
+        await WaitUntilAsync(() => !cache.Current.ContainsKey("s1"), what: "tone dropped");
     }
 
     [Test]

@@ -10,7 +10,7 @@ public partial class SearchChoiceView : UserControl {
     public SearchChoiceView() {
         InitializeComponent();
         // A setup pane and the sidebar flyout can share a window without sharing radio groups.
-        SearchKeywordOption.GroupName = SearchMeaningOption.GroupName = $"search-mode-{Guid.NewGuid():N}";
+        SearchKeywordOption.GroupName = SearchBuiltinOption.GroupName = SearchOllamaOption.GroupName = $"search-mode-{Guid.NewGuid():N}";
         SearchDefaultOption.GroupName = SearchOtherOption.GroupName = $"search-model-{Guid.NewGuid():N}";
         Loaded += async (_, _) => {
             _window = TopLevel.GetTopLevel(this) as Window;

@@ -36,7 +36,7 @@ public sealed partial class PullRequestContextViewModel {
     public bool CanReloadEarlier => CanReveal && CurrentSection is { Stopped: false, Evicted: not null };
     public string PageNote {
         get {
-            if (_section == "overview") return "";
+            if (!ReadsRows) return "";
             if (!CanDisplay) return IsSelectionLoading ? "" : "Refresh access to open PR content.";
             if (CurrentSection is not { } state) {
                 if (IsSectionLoading) return "";
@@ -51,7 +51,7 @@ public sealed partial class PullRequestContextViewModel {
     }
     public string EmptyNote {
         get {
-            if (_section == "overview" || !CanDisplayReader || CurrentSection is not { Error: null } state) return "";
+            if (!ReadsRows || !CanDisplayReader || CurrentSection is not { Error: null } state) return "";
             if (state.Pages.Count == 0 || state.Pages.Sum(page => page.Rows.Length) > 0) return "";
             return _section switch {
                 "threads" when state.Excluded is { Kind: "exact", Value: > 0 } => $"No unresolved threads ({state.Excluded.Value} resolved).",
@@ -62,7 +62,7 @@ public sealed partial class PullRequestContextViewModel {
     }
     public bool HasEmptyNote => EmptyNote.Length > 0;
     /// A first load only: a reload keeps the rows it is replacing on screen.
-    public bool IsSectionLoading => _section != "overview" && CanDisplay && CurrentSection is null && (_pageRequests.Contains(SectionKey) || _overviewPending);
+    public bool IsSectionLoading => ReadsRows && CanDisplay && CurrentSection is null && (_pageRequests.Contains(SectionKey) || _overviewPending);
     public string LoadingNote => "Loading " + (IsSelectionLoading ? "pull request" : _section switch {
         "checks" => "checks", "reviewers" => "reviewers", "reviews" => "reviews", "threads" => "threads", "thread_comments" => "replies", _ => "comments"
     }) + "…";
@@ -175,7 +175,8 @@ public sealed partial class PullRequestContextViewModel {
             "not_found" => "This pull request could not be found.",
             "tool_signed_out" => "The local CLI is not signed in for this host. Sign in and refresh.",
             "tool_denied" => "Your account cannot read this pull request.",
-            "tool_failed" => "The local CLI could not read this pull request. Refresh to try again.",
+            "tool_failed" => read.Detail is { } detail ? $"The local CLI could not read this pull request ({detail}). Refresh to try again."
+                : "The local CLI could not read this pull request. Refresh to try again.",
             _ => read.Reader is { } tool ? $"Couldn't read this pull request through {tool}. Refresh to try again."
                 : "Couldn't load pull request context. Retry when the server is reachable."
         }

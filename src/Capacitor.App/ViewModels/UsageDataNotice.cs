@@ -10,11 +10,11 @@ namespace Capacitor.App.ViewModels;
 /// command has already shown it on this device. One instance serves every window that shows it.
 public sealed class UsageDataNotice : ReactiveObject {
     public const string Text =
-        "kcap collects pseudonymous usage data: which screens and features you use and how setup goes, never "
-      + "file paths, prompts or transcript content. It can be associated with your workspace and its creator.";
+        "kcap collects pseudonymous usage data, such as which screens and features you use and how setup goes. "
+      + "It never includes file paths, prompts or transcript content. It can be linked to your workspace and its creator.";
 
     public const string NotSaved =
-        "Usage data is off in this app until it quits, but the choice couldn't be saved, so kcap commands still send it and the app starts again the next time it opens.";
+        "Usage data is off until the app quits. The choice could not be saved, so kcap commands still send it. The app sends it again the next time it opens.";
 
     readonly CliTelemetry _telemetry;
     readonly ConfigRoot   _config;

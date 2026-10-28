@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Daemon.Harness.Codex;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
 
@@ -210,7 +211,7 @@ public class DaemonRunnerCursorAvailabilityTests {
         await Assert.That(withheld.WithheldReason).IsEqualTo("no launcher policy is defined for newvendor");
 
         var capabilities = DaemonRunner.ComputeUnattendedVendorCapabilities(
-            factories, new DaemonConfig { ClaudePath = "/definitely/missing/claude" }, ["claude", "newvendor"]);
+            factories, new DaemonConfig { ClaudePath = "/definitely/missing/claude" }, CodexTransportResolution.Unresolved, ["claude", "newvendor"]);
 
         await Assert.That(capabilities.Select(c => c.Vendor)).IsEquivalentTo(["claude"]);
     }
@@ -259,7 +260,7 @@ public class DaemonRunnerCursorAvailabilityTests {
         // Derive both downstream products from that one classification, as RunAsync does.
         var advertised = DaemonRunner.AdvertisedUnattendedVendors(statuses);
         _ = DaemonRunner.ComputeUnattendedVendorCapabilities(
-            [gemini, cursor], new DaemonConfig(), advertised);
+            [gemini, cursor], new DaemonConfig(), CodexTransportResolution.Unresolved, advertised);
 
         await Assert.That(advertised).IsEquivalentTo(["cursor"]);
         await Assert.That(gemini.Describes).IsEqualTo(1);
@@ -297,7 +298,7 @@ public class DaemonRunnerCursorAvailabilityTests {
         ];
 
         var capabilities = DaemonRunner.ComputeUnattendedVendorCapabilities(
-            factories, new DaemonConfig { ClaudePath = "/definitely/missing/claude" });
+            factories, new DaemonConfig { ClaudePath = "/definitely/missing/claude" }, CodexTransportResolution.Unresolved);
 
         await Assert.That(capabilities).Count().IsEqualTo(2);
         var claude = capabilities.Single(c => c.Vendor == "claude");
@@ -318,41 +319,10 @@ public class DaemonRunnerCursorAvailabilityTests {
             new FakeRuntimeFactory("codex", isAvailable: true, supportsUnattended: true),
         ];
 
-        var capabilities = DaemonRunner.ComputeUnattendedVendorCapabilities(factories, new DaemonConfig());
+        var capabilities = DaemonRunner.ComputeUnattendedVendorCapabilities(factories, new DaemonConfig(), CodexTransportResolution.Unresolved);
 
         await Assert.That(capabilities.Single(c => c.Vendor == "codex").SupportsLaunchPosture).IsTrue();
         await Assert.That(capabilities.Single(c => c.Vendor == "claude").SupportsLaunchPosture).IsFalse();
-    }
-
-    /// <summary>The advertised codex launcher-policy version is selected from
-    /// <see cref="DaemonConfig.CodexAppServerActive"/> — the SAME resolved field the launch router
-    /// reads — so the certified policy and the transport actually launched can never diverge. Active
-    /// app-server advertises the v2 token (server A1 classifies v2 Active, v1 Retired); the
-    /// non-app-server row is unaffected and keeps advertising the vendor-only v1 token.</summary>
-    [Test]
-    public async Task ComputeUnattendedVendorCapabilities_CodexAppServerActive_AdvertisesV2LauncherPolicy() {
-        IHostedAgentRuntimeFactory[] factories = [
-            new FakeRuntimeFactory("codex", isAvailable: true, supportsUnattended: true),
-        ];
-
-        var capabilities = DaemonRunner.ComputeUnattendedVendorCapabilities(
-            factories, new DaemonConfig { CodexAppServerActive = true });
-
-        await Assert.That(capabilities.Single(c => c.Vendor == "codex").LauncherPolicyVersion)
-            .IsEqualTo("codex-appserver-unattended-v2");
-    }
-
-    [Test]
-    public async Task ComputeUnattendedVendorCapabilities_CodexAppServerInactive_AdvertisesV1LauncherPolicy() {
-        IHostedAgentRuntimeFactory[] factories = [
-            new FakeRuntimeFactory("codex", isAvailable: true, supportsUnattended: true),
-        ];
-
-        var capabilities = DaemonRunner.ComputeUnattendedVendorCapabilities(
-            factories, new DaemonConfig { CodexAppServerActive = false });
-
-        await Assert.That(capabilities.Single(c => c.Vendor == "codex").LauncherPolicyVersion)
-            .IsEqualTo(DaemonRunner.CodexLauncherPolicyVersion);
     }
 
     // === Trust-by-default borrowed-review advertisement ===
@@ -376,7 +346,7 @@ public class DaemonRunnerCursorAvailabilityTests {
         ];
 
         var capabilities = DaemonRunner.ComputeUnattendedVendorCapabilities(
-            factories, new DaemonConfig { CursorPath = "/definitely/missing/cursor-agent" });
+            factories, new DaemonConfig { CursorPath = "/definitely/missing/cursor-agent" }, CodexTransportResolution.Unresolved);
 
         await Assert.That(capabilities).Count().IsEqualTo(1);
         await Assert.That(capabilities[0].Vendor).IsEqualTo("cursor");
@@ -401,7 +371,7 @@ public class DaemonRunnerCursorAvailabilityTests {
         ];
 
         var capabilities = DaemonRunner.ComputeUnattendedVendorCapabilities(
-            factories, new DaemonConfig { CursorPath = "/definitely/missing/cursor-agent" });
+            factories, new DaemonConfig { CursorPath = "/definitely/missing/cursor-agent" }, CodexTransportResolution.Unresolved);
 
         await Assert.That(capabilities[0].BorrowedReviewSupported).IsFalse();
         await Assert.That(capabilities[0].BorrowedReviewContainment).IsNull();
@@ -424,7 +394,7 @@ public class DaemonRunnerCursorAvailabilityTests {
                 borrowedReviewContainment: "independent-snapshot"),
         ];
 
-        var capabilities = DaemonRunner.ComputeUnattendedVendorCapabilities(factories, new DaemonConfig());
+        var capabilities = DaemonRunner.ComputeUnattendedVendorCapabilities(factories, new DaemonConfig(), CodexTransportResolution.Unresolved);
 
         await Assert.That(capabilities[0].BorrowedReviewSupported).IsEqualTo(supportsBorrowed);
     }
@@ -462,7 +432,7 @@ public class DaemonRunnerCursorAvailabilityTests {
         ];
 
         var capabilities = DaemonRunner.ComputeUnattendedVendorCapabilities(
-            factories, new DaemonConfig { CursorPath = "/definitely/missing/cursor-agent" });
+            factories, new DaemonConfig { CursorPath = "/definitely/missing/cursor-agent" }, CodexTransportResolution.Unresolved);
 
         await Assert.That(capabilities[0].BorrowedReviewSupported)
             .IsTrue().Because($"borrowed review must be advertised on {host}");
@@ -638,7 +608,7 @@ public class DaemonRunnerCursorAvailabilityTests {
         ];
 
         var capabilities = DaemonRunner.ComputeUnattendedVendorCapabilities(
-            factories, new DaemonConfig { ClaudePath = "/definitely/missing/claude" });
+            factories, new DaemonConfig { ClaudePath = "/definitely/missing/claude" }, CodexTransportResolution.Unresolved);
 
         var claude = capabilities.Single(c => c.Vendor == "claude");
         await Assert.That(claude.SupportsReviewerModelResolution).IsTrue();
@@ -654,7 +624,7 @@ public class DaemonRunnerCursorAvailabilityTests {
         ];
 
         var capabilities = DaemonRunner.ComputeUnattendedVendorCapabilities(
-            factories, new DaemonConfig { CodexPath = "/definitely/missing/codex" });
+            factories, new DaemonConfig { CodexPath = "/definitely/missing/codex" }, CodexTransportResolution.Unresolved);
 
         var codex = capabilities.Single(c => c.Vendor == "codex");
         await Assert.That(codex.SupportsReviewerModelResolution).IsFalse();

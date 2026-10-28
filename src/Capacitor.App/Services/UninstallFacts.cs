@@ -11,4 +11,5 @@ public sealed record UninstallFacts(
     DaemonActivity? Activity,
     IReadOnlyList<string>? LiveDaemons,
     string? HostedServerUrl,
-    IReadOnlyList<OtherKcapInstall>? OtherInstalls);
+    IReadOnlyList<OtherKcapInstall>? OtherInstalls,
+    IReadOnlyList<string>? PathProfiles = null);

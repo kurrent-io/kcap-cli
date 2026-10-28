@@ -40,6 +40,7 @@ public static class KcapToolCatalogue {
         new("declare_work_relation",     ToolCategory.Work,     "Declared work relation",   null),
         new("merge_work_item",           ToolCategory.Work,     "Merged work items",        null),
         new("detach_work_item",          ToolCategory.Work,     "Detached work item",       null),
+        new("declare_work_incomplete",   ToolCategory.Work,     "Declared work incomplete", null),
         new("dismiss_next_work",         ToolCategory.Work,     "Dismissed a suggestion",   null),
         new("get_session_work_items",    ToolCategory.Work,     "Read work items",          null),
         new("request_work_item_eval",    ToolCategory.Work,     "Requested an evaluation",  null),
@@ -83,6 +84,9 @@ public static class KcapToolCatalogue {
         new("list_flow_definitions",     ToolCategory.Flow,     "Listed flow options",      null),
         new("list_reviewer_vendors",     ToolCategory.Flow,     "Listed flow options",      null),
         new("list_start_agent_options",  ToolCategory.Flow,     "Listed flow options",      null),
+        new("schedule_wakeup",           ToolCategory.Flow,     "Scheduled wake-up",        "prompt"),
+        new("list_wakeups",              ToolCategory.Flow,     "Listed wake-ups",          null),
+        new("cancel_wakeup",             ToolCategory.Flow,     "Cancelled wake-up",        null),
     ];
 
     static readonly FrozenDictionary<string, KcapToolEntry> ByTool =

@@ -84,7 +84,7 @@ public class ToolCardsTests {
     }
 
     [Test]
-    public async Task Flow_and_agent_cards_come_from_the_arguments_and_carry_no_link() {
+    public async Task Flow_and_agent_cards_come_from_the_arguments() {
         var flow = ToolCards.Build(ToolCardKind.Flow, """{"kind":"code-review","vendor":"codex"}""", "started")!;
         await Assert.That(flow.Title).IsEqualTo("Started code-review flow");
         await Assert.That(flow.Name).IsEqualTo("code-review");
@@ -96,6 +96,30 @@ public class ToolCardsTests {
         await Assert.That(agent.Name).IsEqualTo("Fix the flaky test");
         await Assert.That(agent.Meta).IsEqualTo("claude");
         await Assert.That(agent.DocumentPath).IsNull();
+        await Assert.That(agent.Url).IsNull();
+    }
+
+    [Test]
+    public async Task An_agent_card_links_to_the_agent_page_the_start_result_names() {
+        const string result = "status: requested\nagent_id: 39163e3b\nurl: https://kurrent.kcap.ai/agents/39163e3b\ndaemon: alexey\n"
+            + "work_item: none (unstated)\nRequested, not confirmed.";
+        var agent = ToolCards.Build(ToolCardKind.Agent, """{"prompt":"Fix it","vendor":"claude"}""", result)!;
+        await Assert.That(agent.Url).IsEqualTo("https://kurrent.kcap.ai/agents/39163e3b");
+    }
+
+    [Test]
+    public async Task An_agent_card_drops_a_link_the_app_would_not_open() {
+        var agent = ToolCards.Build(ToolCardKind.Agent, """{"prompt":"Fix it"}""", "agent_id: a1\nurl: javascript:alert(1)\n")!;
+        await Assert.That(agent.Url).IsNull();
+    }
+
+    [Test]
+    public async Task An_agent_card_reads_the_link_from_a_whole_mcp_result_object() {
+        const string result = """
+            {"content":[{"type":"text","text":"status: requested\nagent_id: a1\nurl: https://kurrent.kcap.ai/agents/a1\n"}]}
+            """;
+        var agent = ToolCards.Build(ToolCardKind.Agent, """{"prompt":"Fix it","vendor":"claude"}""", result)!;
+        await Assert.That(agent.Url).IsEqualTo("https://kurrent.kcap.ai/agents/a1");
     }
 
     [Test]

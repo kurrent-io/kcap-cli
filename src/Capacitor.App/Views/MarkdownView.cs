@@ -230,7 +230,11 @@ public sealed class MarkdownView : ContentControl {
         // After the highlighter, whose code block renderer this one wraps.
         _viewer.Extensions.Add(_codeActions);
         // Only the pipeline change re-renders, so it goes last.
-        _viewer.Pipeline = Flavor == MarkdownFlavor.GitHub ? GitHubPipeline.Instance : ChatPipeline.Instance;
+        _viewer.Pipeline = Flavor switch {
+            MarkdownFlavor.GitHub => GitHubPipeline.Instance,
+            MarkdownFlavor.Prompt => ChatPipeline.Prompt,
+            _                     => ChatPipeline.Instance,
+        };
         _selectionHost?.UpdateSelection(this);
     }
 

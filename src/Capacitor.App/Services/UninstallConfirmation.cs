@@ -8,6 +8,11 @@ public static class UninstallConfirmation {
             "This removes kcap's hooks from your coding agents, every kcap background service, your kcap settings and sign-in, and then the kcap app itself.",
         };
 
+        if (facts.PathProfiles is null)
+            lines.Add("Any marked PATH line kcap added to your shell profile will also be removed.");
+        else foreach (var profile in facts.PathProfiles)
+            lines.Add($"The PATH line kcap added to the shell profile {profile} will be removed.");
+
         var attached = DaemonStore.Sanitize(facts.AttachedDaemon);
 
         if (facts.Activity is { ActiveAgents: > 0 } active)
@@ -44,7 +49,6 @@ public static class UninstallConfirmation {
 
         var prompt = new LifecyclePrompt(
             LifecyclePrompt.KindUninstall, null, null, false, string.Join("\n\n", lines), warning);
-        IReadOnlyList<string> args = facts.LocalServerUrl is null ? [UninstallMode.Arg] : [UninstallMode.Arg, UninstallMode.PurgeLocalArg];
-        return new UninstallRequest(prompt, args);
+        return new UninstallRequest(prompt, facts.LocalServerUrl is not null);
     }
 }

@@ -26,9 +26,17 @@ Options for start:
                           titled after the prompt (the last agent arg, when it is
                           not a flag or a flag's value) until a better title lands.
                           No effect with --private
+  --account <id|dir>, --account=<id|dir>
+                          Run a claude or codex agent under a registered account:
+                          an id prefix (4+ characters) or its directory, as
+                          `kcap accounts` lists them. Refused, with nothing
+                          started, when it matches no account, matches several,
+                          or the daemon is too old to choose one
   -d, --detach            Start without attaching; prints the agent id
   --daemon <name>         Target a specific daemon (defaults to your profile's)
-  --                      Everything after this is passed to the vendor CLI verbatim
+  --                      Everything after this is passed to the vendor CLI verbatim.
+                          Claude also gets a fresh --session-id ahead of it unless
+                          these args choose the session themselves
 
 Options for stop:
   --all                   Stop every agent, including --private ones. Review and

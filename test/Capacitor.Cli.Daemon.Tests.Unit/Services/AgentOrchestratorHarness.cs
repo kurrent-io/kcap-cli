@@ -44,29 +44,29 @@ internal static class AgentOrchestratorHarness {
             IHttpClientFactory?                                 httpClientFactory      = null,
             // The clock behind the subagent-expiry timer and every activity clock a seeded agent
             // gets by default; a test that drives expiry passes its own.
-            TimeProvider?                                       timeProvider           = null
+            TimeProvider?                                       timeProvider           = null,
+            DaemonConfig?                                       sharedConfig           = null,
+            AccountReadingSink?                                 readings               = null
         ) {
         var daemonStore    = new TempDaemonStore();
         var configRoot   = new TempConfigRoot();
         var home         = new TempHome();
         var time         = timeProvider ?? TimeProvider.System;
-        var config = new DaemonConfig {
-            Name                = "test",
-            ServerUrl           = "http://127.0.0.1:1",
-            ClaudePath          = "claude",
-            MaxConcurrentAgents = 5,
-            WorktreeRoot        = daemonStore.CreateDir("worktree"),
-            // Phase B (D4): the PID-record store, consent policy and decision log all hang off this
-            // directory, so each harness gets its own and nothing reaches the real daemons dir.
-            Store               = daemonStore.Store,
-            ConfigRoot          = configRoot.Root,
-            // Set like the entry point sets it, so a test configuring capture scope resolves `~`
-            // against its own temp home rather than throwing on an unset one.
-            Home                = home,
-            // Set like the entry point sets it: the orchestrator's own token reads name a profile,
-            // and an unset one throws rather than reporting "not authenticated".
-            Profiles            = Resolutions.None(configRoot.Root)
-        };
+        // A test whose server must read the orchestrator's config, as the one DI singleton does in
+        // production, passes the instance it built that server over.
+        var config = sharedConfig ?? new DaemonConfig();
+        config.Name                = "test";
+        config.ServerUrl           = "http://127.0.0.1:1";
+        config.ClaudePath          = "claude";
+        config.MaxConcurrentAgents = 5;
+        config.WorktreeRoot        = daemonStore.CreateDir("worktree");
+        // Each harness gets its own daemon store, so nothing reaches the real daemons dir.
+        config.Store               = daemonStore.Store;
+        config.ConfigRoot          = configRoot.Root;
+        // Set like the entry point sets them: a capture scope resolves `~` against this home, and the
+        // orchestrator's own token reads name a profile.
+        config.Home                = home;
+        config.Profiles            = Resolutions.None(configRoot.Root);
 
         if (allowedRepoPath is not null) {
             config.AllowedRepoPaths = [allowedRepoPath];
@@ -90,7 +90,7 @@ internal static class AgentOrchestratorHarness {
         // test that still needs that vendor's launcher registered for the local-spawn path.
         var runtimeFactories = new Dictionary<string, IHostedAgentRuntimeFactory>();
         foreach (var l in launchers.Values)
-            runtimeFactories[l.Vendor] = new PtyHostedAgentRuntimeFactory(l, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
+            runtimeFactories[l.Vendor] = new PtyHostedAgentRuntimeFactory(l, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System, config.Home);
         foreach (var f in extraRuntimeFactories ?? [])
             runtimeFactories[f.Vendor] = f;
 
@@ -118,7 +118,8 @@ internal static class AgentOrchestratorHarness {
             logger ?? NullLogger<AgentOrchestrator>.Instance,
             consentGate,
             deferProcessorPublication,
-            time
+            time,
+            readings
         );
     }
 
@@ -150,7 +151,8 @@ internal static class AgentOrchestratorHarness {
                 ILogger<AgentOrchestrator>                              logger,
                 LaunchConsentGate                                       consentGate,
                 bool                                                    deferProcessorPublication,
-                TimeProvider                                            time
+                TimeProvider                                            time,
+                AccountReadingSink?                                     readings
             ) : base(
             config,
             configRoot.Root,
@@ -173,7 +175,8 @@ internal static class AgentOrchestratorHarness {
             // Wired unconditionally so the launch path builds a snapshot exactly as production does.
             // The scratch config root and a fresh checkout carry no approval documents, so every test
             // that writes none still gets an empty snapshot and no upload.
-            policySnapshots: new PolicySnapshotProvider(configRoot.Root)
+            policySnapshots: new PolicySnapshotProvider(configRoot.Root),
+            readings: readings
         ) {
             _tmp    = tmp;
             _config = configRoot;

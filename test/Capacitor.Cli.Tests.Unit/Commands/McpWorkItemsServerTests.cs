@@ -140,7 +140,7 @@ public class McpWorkItemsServerTests {
             "declare_work_breakdown", "retract_work_breakdown",
             "declare_work_relation", "retract_work_relation",
             "get_work_item_topology",
-            "merge_work_item", "detach_work_item",
+            "merge_work_item", "detach_work_item", "declare_work_incomplete",
             "dismiss_next_work", "restore_next_work", "list_dismissed_next_work",
             "list_loose_ends", "claim_loose_end", "release_loose_end", "close_loose_end", "reopen_loose_end",
             "list_work_item_evals", "get_work_item_eval", "request_work_item_eval", "cancel_work_item_eval"
@@ -178,11 +178,20 @@ public class McpWorkItemsServerTests {
     }
 
     [Test]
-    public async Task Merge_and_detach_declare_their_required_ids() {
+    public async Task Corrections_declare_their_required_ids() {
         var byName = McpWorkItemsServer.BuildToolsList().ToDictionary(t => t.Name);
 
         await Assert.That(byName["merge_work_item"].InputSchema.Required).IsEquivalentTo(new[] { "work_item_id", "into_work_item_id" });
         await Assert.That(byName["detach_work_item"].InputSchema.Required).IsEquivalentTo(new[] { "work_item_id" });
+        await Assert.That(byName["declare_work_incomplete"].InputSchema.Required).IsEquivalentTo(new[] { "work_item_id" });
+    }
+
+
+    [Test]
+    public async Task Incomplete_body_leaves_out_an_absent_reason() {
+        var body = McpWorkItemsServer.BuildDeclareIncompleteBody(Args("""{"work_item_id":"wi-1","session_id":"s1"}"""));
+
+        await Assert.That(body.ToJsonString()).IsEqualTo("""{"session_id":"s1"}""");
     }
 
     [Test]
@@ -437,16 +446,11 @@ public class McpWorkItemsServerTests {
 
     [Test]
     public async Task No_tool_advertises_a_server_owned_source_or_declared_by_argument() {
-        // Named "advertises", not "accepts" (review correction): without additionalProperties:false a
-        // JSON Schema does not forbid a caller supplying these keys, so this test proves only that we
-        // never invite them. The guarantee that they are never FORWARDED is a property of the body
-        // builders, asserted separately below.
+        // The stdio loop refuses a key a tool does not declare, so not advertising these keeps them out of
+        // every call. That the body builders never forward them is asserted separately below.
         var tools = McpWorkItemsServer.BuildToolsList();
 
-        // Non-vacuity only: without this the loop body would never run if BuildToolsList returned
-        // empty and the test would pass having checked nothing. Deliberately NOT an exact count
-        // (review finding) — Tools_list_exposes_the_declare_and_breakdown_surface already pins the
-        // exact set, and duplicating it here would make an unrelated new tool fail this test too.
+        // Non-vacuity only, not an exact count: Tools_list_exposes_the_declare_and_breakdown_surface pins the set.
         await Assert.That(tools.Length).IsGreaterThan(0);
 
         foreach (var tool in tools) {
@@ -750,6 +754,16 @@ public class McpWorkItemsServerTests {
         await Assert.That(h.Method).IsEqualTo(HttpMethod.Get);
         await Assert.That(h.Url).IsEqualTo("http://x/api/work-items/wi-1/topology");
         await Assert.That(h.Body).IsNull();
+    }
+
+    [Test]
+    public async Task Dispatch_declare_work_incomplete_posts_the_session_and_reason_to_the_items_route() {
+        var h = await DispatchAsync("declare_work_incomplete", """{"work_item_id":"wi-1","session_id":"s1","reason":"The migration bug is still open"}""");
+
+        await Assert.That(h.Calls).IsEqualTo(1);
+        await Assert.That(h.Method).IsEqualTo(HttpMethod.Post);
+        await Assert.That(h.Url).IsEqualTo("http://x/api/work-items/wi-1/incomplete");
+        await Assert.That(h.Body).IsEqualTo("""{"session_id":"s1","reason":"The migration bug is still open"}""");
     }
 
     [Test]

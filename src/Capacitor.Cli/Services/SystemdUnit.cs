@@ -66,9 +66,15 @@ static class SystemdUnit {
     /// <summary>Reads <see cref="NeedDaemonReloadArgs"/> output: <c>yes</c> when systemd's copy of the unit is stale.</summary>
     public static bool NeedsDaemonReload(string output) => output.Trim().Equals("yes", StringComparison.OrdinalIgnoreCase);
 
-    public static ServiceState StatusFrom(string activeOut, int enabledExit) {
+    /// <summary>
+    /// <paramref name="enabledOut"/> is <c>is-enabled</c>'s output. A unit someone disabled exits non-zero yet is
+    /// still installed when its file is ours (<paramref name="unitPresent"/>): <c>ensure</c> and the desktop app
+    /// start a present unit, and a verified start must not then call it missing.
+    /// </summary>
+    public static ServiceState StatusFrom(string activeOut, int enabledExit, string enabledOut = "", bool unitPresent = false) {
         if (activeOut.Trim().Equals("active", StringComparison.OrdinalIgnoreCase)) return ServiceState.Running;
-        return enabledExit == 0 ? ServiceState.Installed : ServiceState.NotInstalled;
+        if (enabledExit == 0) return ServiceState.Installed;
+        return unitPresent && enabledOut.Trim() == "disabled" ? ServiceState.Installed : ServiceState.NotInstalled;
     }
 
     /// <summary>
@@ -127,6 +133,37 @@ static class SystemdUnit {
         var rewritten = string.Join('\n', lines);
 
         return BinaryFromUnit(rewritten) == binary ? rewritten : null;
+    }
+
+    /// <summary>
+    /// The unit with its <c>Environment=</c> assignment of <paramref name="key"/> set to
+    /// <paramref name="value"/>, added ahead of <c>ExecStart=</c> when absent; null when it already is that
+    /// or the unit has no <c>ExecStart=</c>.
+    /// </summary>
+    public static string? WithEnvironmentValue(string unitText, string key, string value) {
+        var before = EnvFromUnit(unitText);
+        if (before.TryGetValue(key, out var current) && current == value) return null;
+
+        ServiceText.RequireValidEnvName(key);
+        ServiceText.RequireNoControlCharacters(key, value);
+        var assignment = $"Environment={EnvAssignment(key, ServiceText.SystemdValue(value))}";
+
+        var lines = unitText.Split('\n').ToList();
+        if (current is not null) {
+            // Only the line Unit writes: a hand-written one may carry other assignments the rewrite would drop.
+            var ours  = $"Environment={EnvAssignment(key, ServiceText.SystemdValue(current))}";
+            var index = lines.FindIndex(l => l.Trim() == ours);
+            if (index < 0) return null;
+            lines[index] = assignment;
+        } else {
+            var exec = lines.FindIndex(l => l.StartsWith("ExecStart=", StringComparison.Ordinal));
+            if (exec < 0) return null;
+            lines.Insert(exec, assignment);
+        }
+
+        var rewritten = string.Join('\n', lines);
+
+        return EnvFromUnit(rewritten).TryGetValue(key, out var written) && written == value ? rewritten : null;
     }
 
     static string UnescapeExpansions(string s) => s.Replace("%%", "%").Replace("$$", "$");

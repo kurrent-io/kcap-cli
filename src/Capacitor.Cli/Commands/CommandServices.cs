@@ -1,6 +1,7 @@
 using Capacitor.Cli.Commands.Harness;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
@@ -55,6 +56,8 @@ public static class CommandServices {
             sp.GetRequiredService<UserHome>(), sp.GetRequiredService<BinaryProbe>()));
         services.AddSingleton(sp => LegacySkillsRoots.FromEnvironment(sp.GetRequiredService<UserHome>()));
         services.AddSingleton(sp => AccountStore.Beside(sp.GetRequiredService<DaemonStore>()));
+        // Transient, so each command reads the console as it stands when it is built.
+        services.AddTransient(_ => StandardStreams.FromProcess());
         services.AddSingleton(sp => PluginEnvironment.FromProcess(
                 sp.GetRequiredService<ProfileContext>().Snapshot,
                 sp.GetRequiredService<UserHome>(),
@@ -98,6 +101,7 @@ public static class CommandServices {
         services.AddTransient<AgentCommand>();
         services.AddTransient<CleanupCommand>();
         services.AddTransient<ConfigCommand>();
+        services.AddTransient<ExperimentalCommand>();
         services.AddTransient<CurateCommand>();
         services.AddTransient<MemoriesCommand>();
         services.AddTransient<ArtefactCommand>();
@@ -105,7 +109,11 @@ public static class CommandServices {
         services.AddTransient<ErrorsCommand>();
         services.AddTransient<SetTitleCommand>();
         services.AddTransient<EvalCommand>();
-        services.AddTransient<FeedbackCommand>();
+        services.AddTransient(sp => new FeedbackCommand(
+            sp.GetRequiredService<IFeedbackApi>(),
+            sp.GetRequiredService<CapacitorServer>().IsLocal
+                ? s => FeedbackMail.Send(s, sp.GetRequiredService<IBrowserLauncher>(), Clipboard.TryCopy)
+                : null));
         services.AddTransient<HarnessCommand>();
         services.AddTransient<IgnoreCommand>();
         services.AddTransient<AllowCommand>();

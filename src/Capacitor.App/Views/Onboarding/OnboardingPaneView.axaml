@@ -14,41 +14,54 @@
                 <Border Classes="onboardingCallout" IsVisible="{Binding NoticeVisible}">
                     <TextBlock x:Name="EditionNoticeText" Classes="onboardingBody" Text="{Binding Notice}" />
                 </Border>
-                <Button x:Name="LocalEditionButton" Classes="onboardingEditionCard" Command="{Binding ChooseLocalCommand}"
-                        AutomationProperties.Name="{x:Static vm:EditionStepViewModel.LocalTitle}">
-                    <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" ColumnSpacing="14" RowSpacing="4">
-                        <app:AppIcon Kind="Laptop" Size="20" />
-                        <TextBlock Grid.Column="1" Classes="onboardingLabel" VerticalAlignment="Center"
-                                   Text="{x:Static vm:EditionStepViewModel.LocalTitle}" />
-                        <TextBlock Grid.Row="1" Grid.Column="1" Classes="onboardingDetail" Text="{x:Static vm:EditionStepViewModel.LocalDetail}" />
-                    </Grid>
-                </Button>
-                <Border Classes="onboardingCallout" IsVisible="{Binding LocalUnavailableVisible}">
-                    <TextBlock x:Name="LocalUnavailableText" Classes="onboardingBody"
-                               Text="{Binding LocalUnavailableReason}" />
-                </Border>
+                <StackPanel x:Name="NewWorkspaceChoices" Spacing="12">
+                    <Button x:Name="LocalEditionButton" Classes="onboardingEditionCard" Command="{Binding ChooseLocalCommand}"
+                            AutomationProperties.Name="{x:Static vm:EditionStepViewModel.LocalTitle}"
+                            AutomationProperties.HelpText="{Binding LocalUnavailableReason}">
+                        <StackPanel>
+                            <Grid Classes="onboardingEditionHead" ColumnDefinitions="20,*" RowDefinitions="Auto,Auto" ColumnSpacing="14" RowSpacing="4">
+                                <app:AppIcon Kind="Laptop" Size="20" />
+                                <TextBlock Grid.Column="1" Classes="onboardingLabel" VerticalAlignment="Center"
+                                           Text="{x:Static vm:EditionStepViewModel.LocalTitle}" />
+                                <TextBlock Grid.Row="1" Grid.Column="1" Classes="onboardingDetail" Text="{x:Static vm:EditionStepViewModel.LocalDetail}" />
+                            </Grid>
+                            <StackPanel Classes="onboardingEditionFooter" IsVisible="{Binding LocalUnavailableVisible}">
+                                <Border Classes="onboardingDivider" />
+                                <Grid ColumnDefinitions="20,*" ColumnSpacing="14">
+                                    <app:AppIcon Kind="Info" Size="14" HorizontalAlignment="Center" VerticalAlignment="Top"
+                                                 Margin="0,2,0,0" Foreground="{StaticResource OnboardingDimBrush}" />
+                                    <TextBlock Grid.Column="1" x:Name="LocalUnavailableText" Classes="onboardingNote"
+                                               Foreground="{StaticResource OnboardingMutedBrush}" Text="{Binding LocalUnavailableReason}" />
+                                </Grid>
+                            </StackPanel>
+                        </StackPanel>
+                    </Button>
 
-                <Button x:Name="CloudEditionButton" Classes="onboardingEditionCard" Command="{Binding ChooseCloudCommand}"
-                        AutomationProperties.Name="{x:Static vm:EditionStepViewModel.CloudTitle}">
-                    <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" ColumnSpacing="14" RowSpacing="4">
-                        <app:AppIcon Kind="Users" Size="20" />
-                        <TextBlock Grid.Column="1" Classes="onboardingLabel" VerticalAlignment="Center"
-                                   Text="{x:Static vm:EditionStepViewModel.CloudTitle}" />
-                        <TextBlock Grid.Row="1" Grid.Column="1" Classes="onboardingDetail" Text="{x:Static vm:EditionStepViewModel.CloudDetail}" />
-                    </Grid>
-                </Button>
-
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                    <TextBlock Classes="onboardingBody" Text="Already have a workspace?" VerticalAlignment="Center" />
-                    <Button x:Name="ExistingWorkspaceButton" Classes="onboardingLink" Content="Sign in"
-                            AutomationProperties.Name="Already have a workspace? Sign in"
-                            Command="{Binding SignInCommand}" />
+                    <Button x:Name="CloudEditionButton" Classes="onboardingEditionCard" Command="{Binding ChooseCloudCommand}"
+                            AutomationProperties.Name="{x:Static vm:EditionStepViewModel.CloudTitle}">
+                        <Grid ColumnDefinitions="20,*" RowDefinitions="Auto,Auto" ColumnSpacing="14" RowSpacing="4">
+                            <app:AppIcon Kind="Users" Size="20" />
+                            <TextBlock Grid.Column="1" Classes="onboardingLabel" VerticalAlignment="Center"
+                                       Text="{x:Static vm:EditionStepViewModel.CloudTitle}" />
+                            <TextBlock Grid.Row="1" Grid.Column="1" Classes="onboardingDetail" Text="{x:Static vm:EditionStepViewModel.CloudDetail}" />
+                        </Grid>
+                    </Button>
                 </StackPanel>
 
-                <TextBlock Classes="onboardingNote" Margin="0,6,0,0">
-                    <Run Text="Your settings live in " /><Run Text="~/.config/kcap" FontFamily="{StaticResource OnboardingMonoFont}"
-                        Foreground="{StaticResource OnboardingMutedBrush}" /><Run Text=". Reopen setup anytime from Help and support in kcap." />
-                </TextBlock>
+                <Border Classes="onboardingDivider" Margin="0,4" />
+
+                <Button x:Name="ExistingWorkspaceButton" Classes="onboardingEditionCard"
+                        AutomationProperties.Name="{x:Static vm:EditionStepViewModel.ExistingTitle}"
+                        Command="{Binding SignInCommand}">
+                    <Grid ColumnDefinitions="20,*" RowDefinitions="Auto,Auto" ColumnSpacing="14" RowSpacing="4">
+                        <app:AppIcon Kind="LogIn" Size="20" />
+                        <TextBlock Grid.Column="1" Classes="onboardingLabel" VerticalAlignment="Center"
+                                   Text="{x:Static vm:EditionStepViewModel.ExistingTitle}" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" Classes="onboardingDetail" Text="{x:Static vm:EditionStepViewModel.ExistingDetail}" />
+                    </Grid>
+                </Button>
+
+                <TextBlock Classes="onboardingNote" Margin="0,6,0,0" Text="You can reopen setup anytime from Help and support in kcap." />
             </StackPanel>
         </DataTemplate>
 
@@ -104,11 +117,32 @@
         <Ellipse Width="900" Height="900" HorizontalAlignment="Center" VerticalAlignment="Center"
                  Fill="{StaticResource OnboardingBloomBrush}" IsHitTestVisible="False" />
 
+        <Grid RowDefinitions="44,*">
+        <!-- The compact step title takes over as the large heading scrolls out of view.
+             Symmetric insets keep it centered and clear of the window controls. -->
+        <Border x:Name="TitleBar" Background="{StaticResource OnboardingCanvasBrush}" PointerPressed="OnChromePointerPressed">
+            <Panel>
+            <TextBlock x:Name="CompactStepTitle" Text="{Binding Current.Title}" Margin="96,0"
+                       FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource OnboardingTextBrush}"
+                       TextAlignment="Center" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                       Opacity="0" IsHitTestVisible="False" />
+            <Border x:Name="TitleBarRule" Height="1" VerticalAlignment="Bottom" Opacity="0" IsHitTestVisible="False"
+                    Background="{StaticResource OnboardingDividerBrush}">
+                <Border.Transitions>
+                    <Transitions>
+                        <DoubleTransition Property="Opacity" Duration="0:0:0.14" />
+                    </Transitions>
+                </Border.Transitions>
+            </Border>
+            </Panel>
+        </Border>
+
         <!-- The footer scrolls with the page, so its actions sit below everything the step says; on a short
              step the viewport-high grid still pins it to the bottom. -->
-        <ScrollViewer x:Name="StepScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <ScrollViewer x:Name="StepScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                      ScrollChanged="OnStepScrolled">
         <Grid RowDefinitions="*,Auto" MinHeight="{Binding #StepScroll.Viewport.Height}">
-            <StackPanel MaxWidth="620" HorizontalAlignment="Stretch" Margin="32,60,32,24" Spacing="26">
+            <StackPanel MaxWidth="620" HorizontalAlignment="Stretch" Margin="32,16,32,24" Spacing="26">
                 <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,-8">
                     <app:ProductWordmark HorizontalAlignment="Left" />
                     <Button Grid.Column="1" Classes="onboardingQuiet" Content="Finish later"
@@ -137,6 +171,8 @@
                                 IsVisible="{Binding SkipVisible}" />
                         <Button Grid.Column="2" x:Name="CancelTenantButton" Classes="onboardingSecondary" Content="Cancel"
                                 Command="{Binding CancelTenantCommand}" IsVisible="{Binding TenantActionsVisible}" />
+                        <Button Grid.Column="2" x:Name="OpenInBrowserButton" Classes="onboardingLink" Content="Open in browser"
+                                Command="{Binding OpenInBrowserCommand}" IsVisible="{Binding OpenInBrowserVisible}" />
                         <Button Grid.Column="3" x:Name="ConfirmTenantButton" Classes="onboardingPrimary" Content="Continue"
                                 Command="{Binding ConfirmTenantCommand}" IsVisible="{Binding TenantActionsVisible}" />
                         <Button Grid.Column="3" x:Name="NextButton" Command="{Binding NextCommand}"
@@ -145,19 +181,10 @@
                                 Content="{Binding NextLabel}"
                                 IsVisible="{Binding NextVisible}" />
                     </Grid>
-
-
-                    <!-- Done page only: the daemon is enabled beside the steps, and its outcome lands here. -->
-                    <TextBlock x:Name="LifecycleStatusText" Classes="onboardingNote" Text="{Binding Surface.StatusText}"
-                               IsVisible="{Binding ShowLifecycleStatus}" />
-                    <TextBlock x:Name="LifecycleAttentionText" Classes="onboardingError" Text="{Binding Surface.AttentionText}"
-                               IsVisible="{Binding ShowLifecycleAttention}" />
                 </StackPanel>
         </Border>
         </Grid>
         </ScrollViewer>
-
-        <!-- The pane covers the window's own drag strip. -->
-        <Border Height="40" VerticalAlignment="Top" Background="Transparent" PointerPressed="OnChromePointerPressed" />
+        </Grid>
     </Panel>
 </UserControl>

@@ -49,14 +49,17 @@ public class PluginCommandCursorTests {
             {"version":1,"hooks":{"sessionStart":[{"command":"kcap hook --cursor"}]}}
             """);
 
-        var mcpPath = System.IO.Path.Combine(cursorDir, "mcp.json");
-        await File.WriteAllTextAsync(mcpPath, """
-            {"mcpServers":{
-              "my-tool":{"command":"my-tool","args":["serve"]},
-              "kcap-review":{"command":"kcap","args":["mcp","review"]},
-              "kcap-workitems":{"command":"/opt/homebrew/bin/kcap","args":["mcp","workitems"]}
-            }}
-            """);
+        // A kcap binary that still exists is never taken over, so the stale one must be absent
+        // whatever the machine has installed.
+        var goneBinary = fakeHome.PathTo("uninstalled", "bin", "kcap");
+        var mcpPath    = System.IO.Path.Combine(cursorDir, "mcp.json");
+        await File.WriteAllTextAsync(mcpPath, new JsonObject {
+            ["mcpServers"] = new JsonObject {
+                ["my-tool"]        = new JsonObject { ["command"] = "my-tool",  ["args"] = new JsonArray("serve") },
+                ["kcap-review"]    = new JsonObject { ["command"] = "kcap",     ["args"] = new JsonArray("mcp", "review") },
+                ["kcap-workitems"] = new JsonObject { ["command"] = goneBinary, ["args"] = new JsonArray("mcp", "workitems") },
+            },
+        }.ToJsonString());
 
         var exit = await new PluginCommand(TestEnv(fakeHome.Path), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
             ["plugin", "install", "--cursor", "--if-installed"]);

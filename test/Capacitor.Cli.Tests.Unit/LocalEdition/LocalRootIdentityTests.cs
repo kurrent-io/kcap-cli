@@ -67,13 +67,18 @@ public class LocalRootIdentityTests {
     public async Task Case_only_roots_on_a_case_sensitive_volume_are_different() {
         Skip.When(!OperatingSystem.IsMacOS(), "needs hdiutil");
 
+        // Spotlight and fseventsd read these markers at mount, so the volume never gets a busy holder.
+        var seed = Tmp.CreateDir("seed");
+        seed.CreateFile(".metadata_never_index");
+        seed.CreateFile(".fseventsd/no_log");
+
         var image = Tmp.PathTo("cs.dmg");
         var mount = Tmp.CreateDir("m");
         string? device = null;
 
         try {
-            Skip.When(Run("hdiutil", "create", "-size", "20m", "-fs", "Case-sensitive APFS", "-volname", "kcs", image) != 0, "hdiutil create failed");
-            var (attachExit, attachOutput) = RunWithOutput("hdiutil", "attach", "-nobrowse", "-mountpoint", mount, image);
+            Skip.When(Run("hdiutil", "create", "-srcfolder", seed, "-format", "UDRW", "-size", "20m", "-fs", "Case-sensitive APFS", "-volname", "kcs", image) != 0, "hdiutil create failed");
+            var (attachExit, attachOutput) = RunWithOutput("hdiutil", "attach", "-nobrowse", "-noautoopen", "-owners", "off", "-mountpoint", mount, image);
             Skip.When(attachExit != 0, "hdiutil attach failed");
             // The first device row names the image's whole disk; detaching that releases the image, not just its volume.
             device = attachOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries)

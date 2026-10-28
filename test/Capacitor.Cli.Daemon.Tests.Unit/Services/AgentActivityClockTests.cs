@@ -276,6 +276,56 @@ public class AgentActivityClockTests {
         await Assert.That(notified).IsEqualTo(2);
     }
 
+    /// A fresh launch and a cleared wait both read AwaitingInput false at an idle prompt, so
+    /// neither may attest a turn. Only a relayed submit or tool call does, until a turn end.
+    [Test]
+    public async Task Only_a_relayed_submit_attests_a_PTY_turn_and_a_turn_end_or_quiet_mark_retracts_it() {
+        var time     = new FakeTimeProvider();
+        var clock    = new AgentActivityClock(time);
+        var notified = 0;
+        clock.OnTurnAttestedChanged = () => notified++;
+
+        await Assert.That(clock.AwaitingInput).IsFalse();
+        await Assert.That(clock.TurnAttested).IsFalse();
+
+        clock.SetAwaitingInput(true);
+        clock.ClearAwaitingInputSince(clock.WaitGeneration);
+        clock.Advance();
+        await Assert.That(clock.AwaitingInput).IsFalse();
+        await Assert.That(clock.TurnAttested).IsFalse();
+        await Assert.That(notified).IsEqualTo(0);
+
+        clock.SetAwaitingInput(false);
+        await Assert.That(clock.TurnAttested).IsTrue();
+        clock.SetAwaitingInput(false);
+        await Assert.That(notified).IsEqualTo(1);
+
+        clock.SetAwaitingInput(true);
+        await Assert.That(clock.TurnAttested).IsFalse();
+        await Assert.That(notified).IsEqualTo(2);
+
+        clock.SetAwaitingInput(false);
+        time.Advance(AgentActivityClock.QuietTurn);
+        await Assert.That(clock.TryMarkQuiet(AgentActivityClock.QuietTurn)).IsTrue();
+        await Assert.That(clock.TurnAttested).IsFalse();
+        clock.Advance();
+        await Assert.That(clock.TurnAttested).IsFalse();
+        await Assert.That(notified).IsEqualTo(4);
+    }
+
+    [Test]
+    public async Task An_ACP_turn_gate_attests_a_turn_while_it_is_held() {
+        var clock    = new AgentActivityClock(new FakeTimeProvider());
+        var notified = 0;
+        clock.OnTurnAttestedChanged = () => notified++;
+
+        clock.SetTurnInFlight(true);
+        await Assert.That(clock.TurnAttested).IsTrue();
+        clock.SetTurnInFlight(false);
+        await Assert.That(clock.TurnAttested).IsFalse();
+        await Assert.That(notified).IsEqualTo(2);
+    }
+
     /// A delivery clears the wait it was answering, never one that began while the delivery was
     /// still in flight.
     [Test]

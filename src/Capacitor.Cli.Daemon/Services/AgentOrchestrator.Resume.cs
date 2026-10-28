@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Continuation;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Resume;
@@ -303,6 +304,7 @@ internal partial class AgentOrchestrator {
                         PredecessorInstanceId = _config.InstanceId,
                         ResumingAt            = now,
                         UpdatedAt             = now,
+                        AwaitingInput         = agent.ActivityClock.AwaitingInput,
                         SessionId             = agent.SessionId ?? entry.SessionId,
                         VendorSession         = vendorSession,
                         Participant           = entry.Participant is { } p ? p with { ActivitySeq = clock.ActivitySeq, AgeMs = clock.AgeMs } : null
@@ -366,6 +368,7 @@ internal partial class AgentOrchestrator {
             PermissionPreset: agent.PermissionPreset,
             McpConfigPath:    agent.McpConfigPath,
             Title:            agent.Title,
+            TitleDerived:     agent.StartTitle?.Derived ?? true,
             IsPrivate:        agent.IsPrivate,
             Origin:           origin,
             RequesterUserId:  agent.RequesterUserId ?? cmd?.RequesterUserId,
@@ -379,7 +382,10 @@ internal partial class AgentOrchestrator {
             WorktreeIsStandalone: agent.Worktree.IsStandalone,
             WorktreeSourceRepo:   agent.Worktree.SourceRepo,
             PermissionMode:         cmd?.PermissionMode ?? prior?.Launch.PermissionMode,
-            InactivityBoundSeconds: agent.InactivityBoundSeconds);
+            InactivityBoundSeconds: agent.InactivityBoundSeconds,
+            AccountDirectory:       agent.Account?.Directory,
+            AccountId:              agent.Account?.AccountId,
+            AccountLabel:           agent.Account?.Label);
 
         return NewRunningEntry(agent.Id, agent.Vendor, agent.RuntimeTransport, agent.SessionId, agent.VendorSession, launch, prior) with {
             HasTerminal = agent.Runtime.EmitsTerminalOutput, TranscriptFormat = TranscriptFormatOf(agent),
@@ -419,7 +425,7 @@ internal partial class AgentOrchestrator {
     /// the resolved worktree; no <see cref="AgentInstance"/> exists yet.
     ResumeLedgerEntry BuildPreStartLedgerEntry(
             LaunchAgentCommand cmd, string? prompt, string? model, string? effort, WorktreeInfo worktree,
-            WorkLocation work, LaunchConsentOutcome consent, string? pinnedSessionId) {
+            WorkLocation work, LaunchConsentOutcome consent, string? pinnedSessionId, ResolvedAccount? account) {
         var launch = new ResumeLaunchDescriptor(
             Prompt:           prompt,
             Model:            model,
@@ -433,6 +439,7 @@ internal partial class AgentOrchestrator {
             PermissionPreset: cmd.AcpPermissionPreset,
             McpConfigPath:    null,
             Title:            StartTitleOf(cmd)?.Text ?? AgentStartTitle.Shorten(prompt),
+            TitleDerived:     StartTitleOf(cmd)?.Derived ?? true,
             IsPrivate:        false,
             Origin:           "server",
             RequesterUserId:  cmd.RequesterUserId,
@@ -445,9 +452,12 @@ internal partial class AgentOrchestrator {
             WorktreeIsStandalone: worktree.IsStandalone,
             WorktreeSourceRepo:   worktree.SourceRepo,
             PermissionMode:         cmd.PermissionMode,
-            InactivityBoundSeconds: cmd.InactivityBoundSeconds);
+            InactivityBoundSeconds: cmd.InactivityBoundSeconds,
+            AccountDirectory:       account?.Directory,
+            AccountId:              account?.AccountId,
+            AccountLabel:           account?.Label);
 
-        return NewRunningEntry(cmd.AgentId, cmd.Vendor, PreStartTransport, pinnedSessionId, pinnedSessionId, launch, prior: null);
+        return NewRunningEntry(cmd.AgentId, cmd.Vendor, PreStartTransport, null, pinnedSessionId ?? cmd.ResumeSessionId, launch, prior: null);
     }
 
     ResumeLedgerEntry NewRunningEntry(
@@ -495,13 +505,13 @@ internal partial class AgentOrchestrator {
 
     void WritePreStartLedger(
             LaunchAgentCommand cmd, string? prompt, string? model, string? effort, WorktreeInfo worktree,
-            WorkLocation work, LaunchConsentOutcome consent, string? pinnedSessionId) {
+            WorkLocation work, LaunchConsentOutcome consent, string? pinnedSessionId, ResolvedAccount? account) {
         if (ResumeLedger is null || cmd.Kind != LaunchKind.Default) return;
 
         lock (_ledgerLock) {
             // A live agent under this id owns the entry; a colliding launch must not overwrite it.
             if (_agents.ContainsKey(cmd.AgentId)) return;
-            TryWriteLedger(cmd.AgentId, () => BuildPreStartLedgerEntry(cmd, prompt, model, effort, worktree, work, consent, pinnedSessionId));
+            TryWriteLedger(cmd.AgentId, () => BuildPreStartLedgerEntry(cmd, prompt, model, effort, worktree, work, consent, pinnedSessionId, account));
         }
     }
 
@@ -579,8 +589,15 @@ internal partial class AgentOrchestrator {
         /// <summary>Ends the runtime start with the attempt: a stop during the handshake must not wait for the vendor.</summary>
         public CancellationToken Token { get; init; }
 
+        /// <summary>The agent was waiting when its predecessor stopped it and resumes with no turn: it is published
+        /// waiting, before anything can deliver it input.</summary>
+        public bool StartsWaiting { get; init; }
+
         /// <summary>The server's reason, empty when it gave none, once it refused the registration.</summary>
         public string? RefusedRegistration { get; set; }
+
+        /// <summary>Why the account the entry recorded can no longer be used, once the launch refused it.</summary>
+        public string? AccountRefusal { get; set; }
 
         public WorkLocation Work      => Entry.Launch.Work;
         public bool         IsPrivate => Entry.Launch.IsPrivate;
@@ -1018,6 +1035,7 @@ internal partial class AgentOrchestrator {
 
             resume.Agent = agent;
             ReplayPersistedRing(agent);
+            if (resume.StartsWaiting) agent.ActivityClock.SetAwaitingInput(true);
             capacity.Publish(agent);
             if (!resume.DefersLedger) WriteResumedLedger(agent, resume.Entry);
 
@@ -1181,6 +1199,12 @@ internal partial class AgentOrchestrator {
             if (RecordFailedAttempt(entry, LastErrorOf(reason, exitCode)) is not { } failed) return ResumeOutcome.Stopped;
 
             entry = failed;
+        } else if (ResolveAccount(entry.Vendor, accountId: null, entry.Launch).Refusal is { } refusal) {
+            reason = refusal;
+
+            if (RecordFailedAttempt(entry, reason) is not { } failed) return ResumeOutcome.Stopped;
+
+            entry = failed;
         } else {
             reason = NativeResumeUnsupported;
         }
@@ -1192,9 +1216,12 @@ internal partial class AgentOrchestrator {
             return ResumeOutcome.Interrupted;
         }
 
-        var outcome = await ContinueEntry(entry, reason, ct);
-        if (outcome != ResumeOutcome.Interrupted) return outcome;
-        if (IsWithdrawn(entry.AgentId)) return ResumeOutcome.Stopped;
+        // A continuation resolves the same recorded account, so it would be refused too.
+        if (!reason.StartsWith(AccountResolution.Unavailable, StringComparison.Ordinal)) {
+            var outcome = await ContinueEntry(entry, reason, ct);
+            if (outcome != ResumeOutcome.Interrupted) return outcome;
+            if (IsWithdrawn(entry.AgentId)) return ResumeOutcome.Stopped;
+        }
 
         InterruptEntry(entry.AgentId, LastErrorOf(reason, exitCode));
         if (!entry.Launch.IsPrivate && reason != RegistrationRefusedReason) await ReportResumeFailedAsync(entry, reason, exitCode, ct);
@@ -1220,11 +1247,19 @@ internal partial class AgentOrchestrator {
             entry.Launch.RepoPath, entry.Vendor, entry.Launch.RequesterDisplay);
         var consent = _consentGate.GrantResume(entry.AgentId, input, entry.Launch.ConsentSource ?? "");
 
-        var resume  = new ResumeLaunch(entry, ResumedWorktree(entry)) { Token = ct };
-        var command = BuildResumeCommand(entry, LastAlive(entry, null), _server.CurrentConnectionId);
+        // An agent that was waiting comes back waiting: a nudge would start a turn nobody asked for. A participant
+        // always gets its nudge, which is how it learns it was relaunched mid-flow.
+        var silent  = entry.Participant is null && entry.AwaitingInput == true
+                   && _runtimeFactories.TryGetValue(entry.Vendor, out var factory) && factory.ResumesIdleWithoutPrompt(entry.Transport);
+        var resume  = new ResumeLaunch(entry, ResumedWorktree(entry)) { Token = ct, StartsWaiting = silent };
+        var command = BuildResumeCommand(entry, LastAlive(entry, null), _server.CurrentConnectionId) is var built && silent
+            ? built with { Prompt = "" }
+            : built;
         var outcome = await LaunchAdmittedAsync(command, consent, hold, resume, cancel: CancellationToken.None); // the resume's own token ends its start
 
         if (resume.Agent is null && IsWithdrawn(entry.AgentId)) return (StoppedDuringResume, null);
+
+        if (resume.AccountRefusal is { } refusal) return (refusal, null);
 
         // The server holds no live entry under this id, so the resume goes on under a new one, unless a stop
         // came first: it gave up the worktree, and the teardown has removed it.
@@ -1359,14 +1394,16 @@ internal partial class AgentOrchestrator {
             ? Task.CompletedTask
             : _server.ReportAgentEndedForShutdownAsync(entry.AgentId, entry.SessionId, "Completed", SupersededReason, null, ct);
 
-    /// <summary>Runs the takeover off the lane, once, as soon as the successor has both its own session
-    /// id and the session it continues: either may arrive first, the id at publish or by discovery.</summary>
+    /// <summary>Runs the takeover off the lane, once, as soon as the successor's session exists and the
+    /// session it continues is known: either may come first. A terminal agent's pinned id names no
+    /// session until its transcript is found, so its takeover waits for discovery.</summary>
     void StartContinuationTakeover(AgentInstance agent, string? previousSession = null) {
         string previous, current;
 
         lock (_ledgerLock) {
             if (previousSession is not null) agent.ContinuedFromSessionId = previousSession;
             if (agent.ContinuedFromSessionId is not { } from || agent.SessionId is not { } own) return;
+            if (agent.Runtime is not IAcpTranscriptSource && agent.TranscriptPath is null) return;
 
             agent.ContinuedFromSessionId = null;
             (previous, current) = (from, own);
@@ -1483,7 +1520,10 @@ internal partial class AgentOrchestrator {
             ResumeSessionId:     entry.VendorSession,
             InactivityBoundSeconds: launch.InactivityBoundSeconds,
             PermissionMode:      launch.PermissionMode,
-            Title:               launch.Title);
+            Title:               launch.Title,
+            // A prompt cut re-sent as the caller's title would outrank the one the session has since been given.
+            TitleDerived:        launch.TitleDerived ?? true,
+            AccountId:           launch.AccountId);
     }
 
     /// <summary>The ledger's worktree as the launch path names it.</summary>
@@ -1545,7 +1585,9 @@ internal partial class AgentOrchestrator {
                 RunEpoch              = _daemonEpoch,
                 EndCommittedAt        = null,
                 EndCommittedEpoch     = null,
-                EndCommittedSession   = null
+                EndCommittedSession   = null,
+                // Waiting is a fact about the stop it was recorded at; a crash before the next one proves nothing.
+                AwaitingInput         = null
             }, newRun: true);
         }
     }

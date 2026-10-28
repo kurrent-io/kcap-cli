@@ -138,6 +138,42 @@ public class InputDeliveryCoreTests {
     }
 
     [Test]
+    public async Task A_dispatched_quit_is_journaled_with_its_dispatch() {
+        var server = new CaptureServerConnection();
+        await using var orch = Build(server);
+        var journal = TranscriptJournal.ForAgent(
+            orch.PidRecordRootForTest, "acp-quit-dispatch", Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, TimeProvider.System);
+        await Assert.That(journal.Open("/repo", "default")).IsTrue();
+        var agent = AgentOrchestratorHarness.SeedAcpAgent(orch, "acp-quit-dispatch", new FakeAcpRuntime(), journal: journal);
+        var dispatch = Guid.NewGuid();
+
+        await orch.DeliverInputAsync(agent, "/quit", null, dispatch);
+        await journal.CompleteAsync();
+
+        var userRow = JournalFiles.ReadLines(journal.Path).Single(l => l.Contains("\"kind\":\"user_message\"", StringComparison.Ordinal));
+        await Assert.That(EnvelopeJournalFormat.TryRead(userRow, out var envelope)).IsTrue();
+        await Assert.That(envelope.DispatchId).IsEqualTo(dispatch);
+    }
+
+    /// <summary>The server's dispatch id reaches the runtime, which stamps it on the user message it records.</summary>
+    [Test]
+    public async Task A_server_dispatch_reaches_the_runtimes_user_message() {
+        var server = new CaptureServerConnection();
+        await using var orch = Build(server);
+        await using var rt = AntigravityRuntimeFakes.FakeRuntime();
+        var agent = AgentOrchestratorHarness.SeedAcpAgent(orch, "agy-dispatch", rt);
+        var dispatch = Guid.NewGuid();
+
+        await orch.HandleSendInputForTest(new SendInputCommand(agent.Id, "hello", null, dispatch));
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        AcpEventEnvelope user;
+        do user = await rt.Envelopes.ReadAsync(cts.Token); while (user.Kind != AcpEventKind.UserMessage);
+        await Assert.That(user.Text).IsEqualTo("hello");
+        await Assert.That(user.DispatchId).IsEqualTo(dispatch);
+    }
+
+    [Test]
     public async Task A_runtime_fault_maps_to_delivery_failed_with_the_runtimes_own_message() {
         var server = new CaptureServerConnection();
         await using var orch = Build(server);

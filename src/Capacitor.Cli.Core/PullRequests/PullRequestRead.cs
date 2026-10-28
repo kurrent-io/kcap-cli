@@ -3,6 +3,8 @@ namespace Capacitor.Cli.Core.PullRequests;
 public sealed record PullRequestRead<T>(PullRequestReadKind Kind, T? Data = null, PullRequestSubjectDto? Subject = null,
     DateTime? FetchedAt = null, string? Reason = null, string? AccessFailure = null, DateTime? RetryAt = null,
     int PollAfterSeconds = 30, int AccessValidForSeconds = 0, long RequestStarted = 0, int StatusCode = 0,
+    // What the local tool said when it failed in a way no reason names, shown so the failure can be diagnosed.
+    string? Detail = null,
     // The local tool that served the read, null for the server; failure notices name it.
     string? Reader = null) where T : class {
     public double RemainingSeconds(TimeProvider time) => Math.Max(0, AccessValidForSeconds - time.GetElapsedTime(RequestStarted).TotalSeconds);

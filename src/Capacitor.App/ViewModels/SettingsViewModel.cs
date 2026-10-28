@@ -55,7 +55,10 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
             Task startupSettled, Func<MutationRequest, CancellationToken, Task<bool>> canRetire,
             bool nameOverridden = false, bool needsAppRestart = false, CancellationToken appLifetime = default,
             NotificationSettingsService? notificationSettings = null,
-            IDesktopNotificationAccess? notificationAccess = null, ProfilesSettingsViewModel? profiles = null) {
+            IDesktopNotificationAccess? notificationAccess = null, ProfilesSettingsViewModel? profiles = null,
+            HarnessesSettingsViewModel? harnesses = null, CaptureSettingsViewModel? capture = null) {
+        Capture = capture ?? new CaptureSettingsViewModel(settings, appLifetime);
+        Harnesses = harnesses;
         _settings = settings;
         _ops = ops;
         _runningName = service.DaemonName;
@@ -98,6 +101,9 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
             notificationSettings.Changes.Skip(1).ObserveOn(RxSchedulers.MainThreadScheduler)
                 .Subscribe(ApplyNotificationPreferences).DisposeWith(_subscriptions);
         }
+        Capture.WhenAnyValue(x => x.Busy).Subscribe(_ => Refresh()).DisposeWith(_subscriptions);
+        if (Harnesses is not null)
+            Harnesses.WhenAnyValue(x => x.Busy).Subscribe(_ => Refresh()).DisposeWith(_subscriptions);
         RefreshNotificationAccess();
     }
 
@@ -163,9 +169,22 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     public bool CanManageNotifications => _notificationSettings is not null;
 
     public ProfilesSettingsViewModel? Profiles { get; }
+    public string ProfileName => _settings.ProfileName;
+    public string ProfileCardLabel => Profiles is null ? "Management unavailable" : "Manage profiles";
+    public string ProfileCardHint => $"Current profile: {ProfileName}\n"
+        + (Profiles is null ? "Profile management is unavailable" : "Select to manage profiles");
+    public string ServerLabel => Uri.TryCreate(_settings.ServerUrl, UriKind.Absolute, out var url) ? url.Authority : _settings.ServerUrl;
+    public CaptureSettingsViewModel Capture { get; }
+    public HarnessesSettingsViewModel? Harnesses { get; }
+    public bool HasActiveOperation => IsBusy || Capture.Busy || Harnesses?.Busy == true;
 
+    public AccountsSettingsViewModel? Accounts { get; init; }
     public AppearanceSettingsViewModel? Appearance { get; init; }
     public PrivacySettingsViewModel? Privacy { get; init; }
+    /// <summary>The local server's search, when this app runs one. The app owns it, so closing Settings leaves it running.</summary>
+    public LocalSearchViewModel? Search { get; init; }
+    public ExperimentalSettingsViewModel? Experimental { get; init; }
+    public AboutSettingsViewModel? About { get; init; }
 
     /// What the OS calls the app that holds its notification switches.
     internal static string SystemSettingsName { get; } = OperatingSystem.IsWindows() ? "Windows Settings" : "System Settings";
@@ -211,7 +230,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
         }
     }
 
-    public bool CanEdit => !IsBusy && !_needsAppRestart;
+    public bool CanEdit => !IsBusy && !Capture.Busy && Harnesses?.Busy != true && !_needsAppRestart;
     public bool CanSave => CanEdit && CapacityError is null && Capacity != _savedCapacity;
     public bool CanRename => CanEdit && _canRenameOnPlatform && !_nameOverridden && _startupSettled.IsCompletedSuccessfully &&
         NameError is null && Name != DaemonStore.Sanitize(_runningName) && Idle;
@@ -221,7 +240,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     public string? NameError => string.IsNullOrWhiteSpace(Name) || DaemonStore.Sanitize(Name) != Name
         ? "Use lowercase letters, numbers, dots, hyphens or underscores, with no surrounding spaces or repeated hyphens." : null;
     public string? CapacityError => Capacity is not { } value || value < 0 || value > int.MaxValue || decimal.Truncate(value) != value
-        ? "Enter a whole number (0 = unlimited)." : null;
+        ? "Enter a whole number. 0 means no limit." : null;
     public string? RenameHint => !_canRenameOnPlatform ? "Renaming is available on macOS and Windows."
         : _needsAppRestart ? "Restart this app to manage the renamed daemon."
         : _nameOverridden ? "The name is set by KCAP_DAEMON_NAME. Remove that environment override and restart the app before renaming."
@@ -294,7 +313,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
             }
             if (!await _confirm(new LifecyclePrompt(LifecyclePrompt.KindRename, null, null, false,
                     $"Rename {_runningName} to {name}? The daemon will restart and this app will relaunch. " +
-                    "Only the saved capacity is used; save any capacity change first."), _lifetime.Token)) return;
+                    "Only the saved capacity is used. Save any capacity change first."), _lifetime.Token)) return;
             if (!_startupSettled.IsCompletedSuccessfully || !Idle) {
                 Message = "Wait until startup has finished and the daemon is idle before renaming.";
                 return;
@@ -306,7 +325,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
                 return;
             }
             if (!await _canRetire(request!, _lifetime.Token)) {
-                Message = "Update the kcap command-line tool before renaming; it could not confirm support for retiring the old service. The saved name is unchanged.";
+                Message = "Update kcap before renaming. This version could not confirm it can retire the old service. The saved name is unchanged.";
                 return;
             }
             if (!_startupSettled.IsCompletedSuccessfully || !Idle) {
@@ -323,7 +342,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
             }
             if (outcome is MutationOutcome.Failed { Reason: "cli_unsupported" }) {
                 await _settings.RestoreNameAsync(name, previous, _lifetime.Token);
-                Message = "The CLI no longer supports renaming. Update kcap and try again; the saved name was restored unless another edit changed it.";
+                Message = "This version of kcap cannot rename the daemon. Update kcap and try again. The saved name was restored unless another edit changed it.";
                 return;
             }
             _needsAppRestart = true;
@@ -399,6 +418,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     }
 
     void Refresh() {
+        this.RaisePropertyChanged(nameof(HasActiveOperation));
         this.RaisePropertyChanged(nameof(CanEdit));
         this.RaisePropertyChanged(nameof(CanSave));
         this.RaisePropertyChanged(nameof(CanRename));
@@ -412,9 +432,14 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
 
     public void Dispose() {
         _lifetime.Cancel();
+        Capture.Dispose();
+        Harnesses?.Dispose();
         _subscriptions.Dispose();
+        Accounts?.Dispose();
         Appearance?.Dispose();
         Privacy?.Dispose();
+        Experimental?.Dispose();
+        About?.Dispose();
         _lifetime.Dispose();
     }
 }

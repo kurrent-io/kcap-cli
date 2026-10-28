@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Text;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Daemon.Services;
 

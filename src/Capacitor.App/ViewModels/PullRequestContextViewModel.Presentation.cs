@@ -22,6 +22,20 @@ public sealed partial class PullRequestContextViewModel {
     public bool CanOpenSource => _selected is { IsAvailable: true };
     /// Host exit beside status/repo once the card has settled on an overview or a legacy list.
     public bool ShowsOpenSource => CanOpenSource && (CanDisplay || IsLegacy);
+    /// Overview and conflicts render from the overview read alone; every other section pages rows.
+    bool ReadsRows => _section is not ("overview" or "conflicts");
+    public bool IsConflicts => _section == "conflicts";
+    public bool HasConflicts => CanDisplay && _overview is { Lifecycle: "open" or "draft", Mergeable: false };
+    /// Stays while selected, so the tab under the reader does not vanish when a poll clears the conflict.
+    public bool ShowsConflictsTab => HasConflicts || IsConflicts;
+    public PullRequestStatus ConflictsStatus => HasConflicts ? new("Merge conflicts", "conflict") : new("");
+    /// "No conflicts" only on a displayed overview that says so; an unknown or hidden answer is not a clean one.
+    public string ConflictsNote =>
+        !CanDisplay ? "Refresh access to open PR content."
+        : HasConflicts ? $"This branch has conflicts with {_overview?.BaseRef ?? "the base branch"} that must be resolved before it can merge."
+        : _overview is not { Lifecycle: "open" or "draft" } ? "This pull request is no longer open."
+        : _overview.Mergeable == true ? "This branch has no conflicts with the base branch."
+        : "GitHub has not reported whether this branch merges cleanly.";
     public bool IsChecks => _section == "checks";
     public bool IsReviewers => _section == "reviewers";
     public bool IsReviewSection => _section is "reviewers" or "reviews" or "threads" or "thread_comments";
@@ -31,7 +45,7 @@ public sealed partial class PullRequestContextViewModel {
     public IReadOnlyList<PullRequestRow> DiscussionRows => IsDiscussion ? _discussionRows : [];
     public string FreshnessLabel {
         get {
-            var time = IsOverview || HasStaleOverview ? FetchedLabel : SnapshotLabel;
+            var time = !ReadsRows || HasStaleOverview ? FetchedLabel : SnapshotLabel;
             return HasStaleOverview ? "Earlier snapshot" + (time.Length > 0 ? " · " + time : "") : time;
         }
     }
@@ -39,10 +53,10 @@ public sealed partial class PullRequestContextViewModel {
     public string OverviewFreshnessLabel => HasStaleOverview ? "Earlier snapshot" + (FetchedLabel.Length > 0 ? " · " + FetchedLabel : "") : FetchedLabel;
 
     public int SelectedTabIndex {
-        get => _section switch { "checks" => 1, "reviewers" or "reviews" or "threads" or "thread_comments" => 2, "conversation" => 3, _ => 0 };
+        get => _section switch { "checks" => 1, "reviewers" or "reviews" or "threads" or "thread_comments" => 2, "conversation" => 3, "conflicts" => 4, _ => 0 };
         set {
-            if (value is < 0 or > 3 || value == SelectedTabIndex) return;
-            ShowSection(value switch { 0 => "overview", 1 => "checks", 2 => "reviewers", 3 => "conversation", _ => _section });
+            if (value is < 0 or > 4 || value == SelectedTabIndex) return;
+            ShowSection(value switch { 0 => "overview", 1 => "checks", 2 => "reviewers", 3 => "conversation", 4 => "conflicts", _ => _section });
             this.RaisePropertyChanged();
         }
     }
@@ -141,6 +155,11 @@ public sealed partial class PullRequestContextViewModel {
         NotifyValue(ReferenceBase);
         NotifyValue(CanOpenSource);
         NotifyValue(ShowsOpenSource);
+        NotifyValue(IsConflicts);
+        NotifyValue(HasConflicts);
+        NotifyValue(ShowsConflictsTab);
+        NotifyValue(ConflictsStatus);
+        NotifyValue(ConflictsNote);
         NotifyValue(IsChecks);
         NotifyValue(IsReviewers);
         NotifyValue(IsReviewSection);

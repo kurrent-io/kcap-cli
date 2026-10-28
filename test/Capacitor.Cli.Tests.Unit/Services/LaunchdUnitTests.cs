@@ -409,4 +409,37 @@ public class LaunchdUnitTests {
         await Assert.That(LaunchdUnit.UpgradeProcessType(nestedOnly)).IsNull();
         await Assert.That(LaunchdUnit.UpgradeProcessType("<plist><dict><key>ProcessType</key>")).IsNull();
     }
+
+    static string EnvPlist(Dictionary<string, string> env) =>
+        LaunchdUnit.Plist(new ServiceSpec("test", "/opt/kcap/kcap-daemon", "/tmp/daemon-test.log", env, []));
+
+    [Test]
+    public async Task WithEnvironmentValue_replaces_one_variable_and_keeps_the_others() {
+        var plist = EnvPlist(new() { ["PATH"] = "/usr/bin", ["KCAP_PROFILE"] = "work" });
+
+        var rewritten = LaunchdUnit.WithEnvironmentValue(plist, "PATH", "/usr/bin:/a&b");
+
+        await Assert.That(rewritten).IsNotNull();
+        var env = LaunchdUnit.EnvFromPlist(rewritten!);
+        await Assert.That(env["PATH"]).IsEqualTo("/usr/bin:/a&b");
+        await Assert.That(env["KCAP_PROFILE"]).IsEqualTo("work");
+        await Assert.That(env.Count).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task WithEnvironmentValue_adds_a_variable_the_plist_lacks() {
+        var plist = EnvPlist(new() { ["KCAP_PROFILE"] = "work" });
+
+        var rewritten = LaunchdUnit.WithEnvironmentValue(plist, "PATH", "/usr/bin");
+
+        await Assert.That(LaunchdUnit.EnvFromPlist(rewritten!)["PATH"]).IsEqualTo("/usr/bin");
+        await Assert.That(LaunchdUnit.EnvFromPlist(rewritten!)["KCAP_PROFILE"]).IsEqualTo("work");
+    }
+
+    [Test]
+    public async Task WithEnvironmentValue_is_null_when_the_value_is_already_set() {
+        var plist = EnvPlist(new() { ["PATH"] = "/usr/bin" });
+
+        await Assert.That(LaunchdUnit.WithEnvironmentValue(plist, "PATH", "/usr/bin")).IsNull();
+    }
 }

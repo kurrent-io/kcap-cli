@@ -63,6 +63,7 @@ sealed class PollingServiceVerify(
             return Fail(VerifyExit.Contended, VerifyExit.ContendedToken);
 
         var pre = manager.Query(id);
+        if (pre.Probe == LabelProbe.Unknown) return Unanswered(id);
         if (!replace && (pre.Probe == LabelProbe.Loaded || pre.UnitPresent))
             return Fail(VerifyExit.Contended, VerifyExit.ContendedToken);
 
@@ -121,6 +122,8 @@ sealed class PollingServiceVerify(
             return (RetireRefusal("unit_unknown"), true, null);
         }
 
+        // Its state says nothing when the supervisor did not answer, so it can be neither fenced nor called stopped.
+        if (old.Probe == LabelProbe.Unknown) return (RetireRefusal("unit_unknown"), true, null);
         if (old.Probe != LabelProbe.Loaded && !old.UnitPresent) return (null, false, null);
 
         IReadOnlyDictionary<string, string>? retiredEnv;
@@ -154,7 +157,9 @@ sealed class PollingServiceVerify(
         using var txn = await ServiceTxnLock.TryAcquireAsync(store, id, LockWait, time);
         if (txn is null) return Fail(VerifyExit.Contended, VerifyExit.ContendedToken);
 
-        if (manager.Query(id).Probe != LabelProbe.Loaded) {
+        var probe = manager.Query(id).Probe;
+        if (probe == LabelProbe.Unknown) return Unanswered(id);
+        if (probe != LabelProbe.Loaded) {
             Say($"Service '{id}' is not installed.");
             return 1;
         }
@@ -222,6 +227,12 @@ sealed class PollingServiceVerify(
     static int RetireRefusal(string reason) {
         Say($"retire_reason={reason}");
         return Fail(VerifyExit.RetireRefused, VerifyExit.RetireRefusedToken);
+    }
+
+    // Nothing is known about the unit, so neither installing over it nor starting it is safe to attempt.
+    int Unanswered(string id) {
+        Say($"query: {manager.Describe()} did not report the state of '{id}'");
+        return Fail(VerifyExit.Contended, VerifyExit.ContendedToken);
     }
 
     static int Fail(int exit, string token) {

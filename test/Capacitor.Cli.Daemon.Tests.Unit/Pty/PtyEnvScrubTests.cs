@@ -51,7 +51,7 @@ public class PtyEnvScrubTests {
     public async Task A_pty_child_does_not_inherit_another_harnesss_session(string name) {
         using var inherited = EnvScope.Exclusive(name, "inherited-from-the-daemons-shell");
 
-        var env = UnixPtyProcess.BuildChildEnv(new() { ["KCAP_DAEMON_AGENT_ID"] = "agent-1" }, cols: 80, rows: 24);
+        var env = UnixPtyProcess.BuildChildEnv(new() { ["KCAP_DAEMON_AGENT_ID"] = "agent-1" }, removeEnv: null, cols: 80, rows: 24);
 
         await Assert.That(env.TryGetValue(name, out var value) ? value : null).IsNotEqualTo("inherited-from-the-daemons-shell");
         await Assert.That(env["KCAP_DAEMON_AGENT_ID"]).IsEqualTo("agent-1");

@@ -88,7 +88,7 @@ public class PtyHostedAgentRuntimeFactoryTests {
     [Test]
     public async Task Interactive_launch_hands_the_permission_mode_to_the_launcher() {
         var launcher = new RecordingLauncher("claude", cliPath: "/opt/vendor/claude");
-        var factory  = new PtyHostedAgentRuntimeFactory(launcher, new NullPtyProcessFactory(), NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
+        var factory  = new PtyHostedAgentRuntimeFactory(launcher, new NullPtyProcessFactory(), NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System, Home);
 
         var ctx   = BuildInteractiveContext("claude") with { PermissionMode = "acceptEdits" };
         var start = await factory.StartAsync(ctx, CancellationToken.None);
@@ -105,7 +105,7 @@ public class PtyHostedAgentRuntimeFactoryTests {
         var config   = new DaemonConfig { ClaudePath = "claude", ServerUrl = "", CapacitorPath = "kcap" };
         var launcher = new ClaudeLauncher(config, TestHarnesses.Under(Home), NullLogger<ClaudeLauncher>.Instance);
         var pty      = new SpyPtyProcessFactory();
-        var factory  = new PtyHostedAgentRuntimeFactory(launcher, pty, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
+        var factory  = new PtyHostedAgentRuntimeFactory(launcher, pty, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System, Home);
 
         var start = await factory.StartAsync(BuildClaudeLaunchContext("auto"), CancellationToken.None);
 
@@ -122,8 +122,8 @@ public class PtyHostedAgentRuntimeFactoryTests {
     public async Task Claude_resumes_an_owned_reviewer_but_not_a_borrowed_one() {
         var config  = new DaemonConfig { ClaudePath = "claude", ServerUrl = "", CapacitorPath = "kcap" };
         var claude  = new ClaudeLauncher(config, TestHarnesses.Under(Home), NullLogger<ClaudeLauncher>.Instance);
-        var factory = new PtyHostedAgentRuntimeFactory(claude, new NullPtyProcessFactory(), NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
-        var other   = new PtyHostedAgentRuntimeFactory(new RecordingLauncher("gemini", "/opt/vendor/gemini"), new NullPtyProcessFactory(), NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
+        var factory = new PtyHostedAgentRuntimeFactory(claude, new NullPtyProcessFactory(), NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System, Home);
+        var other   = new PtyHostedAgentRuntimeFactory(new RecordingLauncher("gemini", "/opt/vendor/gemini"), new NullPtyProcessFactory(), NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System, Home);
 
         await Assert.That(factory.SupportsReviewerRestartResume(null, Core.LocalIpc.WorkLocation.OwnedWorktree)).IsTrue();
         await Assert.That(factory.SupportsReviewerRestartResume(null, Core.LocalIpc.WorkLocation.BorrowedCwd)).IsFalse();
@@ -137,7 +137,7 @@ public class PtyHostedAgentRuntimeFactoryTests {
         var config   = new DaemonConfig { ClaudePath = "claude", ServerUrl = "", CapacitorPath = "kcap" };
         var launcher = new ClaudeLauncher(config, TestHarnesses.Under(Home), NullLogger<ClaudeLauncher>.Instance);
         var pty      = new SpyPtyProcessFactory();
-        var factory  = new PtyHostedAgentRuntimeFactory(launcher, pty, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
+        var factory  = new PtyHostedAgentRuntimeFactory(launcher, pty, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System, Home);
 
         var start = await factory.StartAsync(
             BuildClaudeLaunchContext(null) with { IsReviewFlow = true, FlowRole = "reviewer" }, CancellationToken.None);
@@ -156,7 +156,7 @@ public class PtyHostedAgentRuntimeFactoryTests {
         var config   = new DaemonConfig { ClaudePath = "claude", ServerUrl = "", CapacitorPath = "kcap" };
         var launcher = new ClaudeLauncher(config, TestHarnesses.Under(Home), NullLogger<ClaudeLauncher>.Instance);
         var pty      = new SpyPtyProcessFactory();
-        var factory  = new PtyHostedAgentRuntimeFactory(launcher, pty, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
+        var factory  = new PtyHostedAgentRuntimeFactory(launcher, pty, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System, Home);
 
         var start = await factory.StartAsync(BuildClaudeLaunchContext(null), CancellationToken.None);
 
@@ -175,7 +175,7 @@ public class PtyHostedAgentRuntimeFactoryTests {
         var config   = new DaemonConfig { ClaudePath = "claude", ServerUrl = "", CapacitorPath = "kcap" };
         var launcher = new ClaudeLauncher(config, TestHarnesses.Under(Home), NullLogger<ClaudeLauncher>.Instance);
         var pty      = new SpyPtyProcessFactory();
-        var factory  = new PtyHostedAgentRuntimeFactory(launcher, pty, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
+        var factory  = new PtyHostedAgentRuntimeFactory(launcher, pty, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System, Home);
 
         var start = await factory.StartAsync(
             BuildClaudeLaunchContext(null) with { IsPrivate = true, DaemonBridgeUrl = "http://127.0.0.1:9" }, CancellationToken.None);
@@ -205,7 +205,7 @@ public class PtyHostedAgentRuntimeFactoryTests {
         var launcher = new ClaudeLauncher(config, TestHarnesses.Under(Home), NullLogger<ClaudeLauncher>.Instance);
         var process  = new RecordingScriptedPtyProcess();
         var pty      = new SpyPtyProcessFactory(process);
-        var factory  = new PtyHostedAgentRuntimeFactory(launcher, pty, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
+        var factory  = new PtyHostedAgentRuntimeFactory(launcher, pty, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System, Home);
         return (factory, pty, process);
     }
 
@@ -266,7 +266,7 @@ public class PtyHostedAgentRuntimeFactoryTests {
         var launcher = new ClaudeLauncher(config, TestHarnesses.Under(Home), NullLogger<ClaudeLauncher>.Instance);
         var process  = new RecordingScriptedPtyProcess();
         var logger   = new CapturingLogger<PtyHostedAgentRuntimeFactory>();
-        var factory  = new PtyHostedAgentRuntimeFactory(launcher, new SpyPtyProcessFactory(process), logger, TimeProvider.System);
+        var factory  = new PtyHostedAgentRuntimeFactory(launcher, new SpyPtyProcessFactory(process), logger, TimeProvider.System, Home);
 
         var start = await factory.StartAsync(BuildClaudeLaunchContext(null), CancellationToken.None);
 
@@ -327,7 +327,7 @@ public class PtyHostedAgentRuntimeFactoryTests {
     [Test]
     public async Task A_launch_that_does_not_put_the_prompt_on_the_command_line_pastes_nothing() {
         var launcher = new RecordingLauncher("claude", cliPath: "/opt/vendor/claude");
-        var factory  = new PtyHostedAgentRuntimeFactory(launcher, new NullPtyProcessFactory(), NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
+        var factory  = new PtyHostedAgentRuntimeFactory(launcher, new NullPtyProcessFactory(), NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System, Home);
 
         var start = await factory.StartAsync(BuildInteractiveContext("claude") with { Prompt = "build it" }, CancellationToken.None);
 
@@ -343,7 +343,7 @@ public class PtyHostedAgentRuntimeFactoryTests {
     public async Task Review_launch_builds_the_MCP_command_from_CapacitorPath_not_the_agent_CliPath() {
         var launcher   = new RecordingLauncher("claude", cliPath: "/opt/vendor/claude");
         var ptyFactory = new NullPtyProcessFactory();
-        var factory    = new PtyHostedAgentRuntimeFactory(launcher, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
+        var factory    = new PtyHostedAgentRuntimeFactory(launcher, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System, Home);
 
         var ctx = BuildReviewContext("claude", capacitorPath: "/opt/kcap/kcap");
 
@@ -375,7 +375,7 @@ public class PtyHostedAgentRuntimeFactoryTests {
     public async Task Review_launch_for_codex_builds_MCP_command_from_CapacitorPath_not_the_agent_CliPath() {
         var launcher   = new RecordingLauncher("codex", cliPath: "/opt/vendor/codex");
         var ptyFactory = new NullPtyProcessFactory();
-        var factory    = new PtyHostedAgentRuntimeFactory(launcher, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
+        var factory    = new PtyHostedAgentRuntimeFactory(launcher, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System, Home);
 
         var ctx = BuildReviewContext("codex", capacitorPath: "/opt/kcap/kcap");
 
@@ -403,7 +403,7 @@ public class PtyHostedAgentRuntimeFactoryTests {
     public async Task Codex_launch_threads_the_posture_into_the_launcher_context() {
         var launcher   = new RecordingLauncher("codex", cliPath: "/opt/vendor/codex");
         var ptyFactory = new NullPtyProcessFactory();
-        var factory    = new PtyHostedAgentRuntimeFactory(launcher, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
+        var factory    = new PtyHostedAgentRuntimeFactory(launcher, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System, Home);
 
         var ctx = BuildInteractiveContext("codex") with { CodexPosture = new("danger-full-access", "untrusted") };
 
@@ -423,7 +423,7 @@ public class PtyHostedAgentRuntimeFactoryTests {
     public async Task Codex_launch_without_a_posture_threads_null_into_the_launcher_context() {
         var launcher   = new RecordingLauncher("codex", cliPath: "/opt/vendor/codex");
         var ptyFactory = new NullPtyProcessFactory();
-        var factory    = new PtyHostedAgentRuntimeFactory(launcher, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
+        var factory    = new PtyHostedAgentRuntimeFactory(launcher, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System, Home);
 
         var start = await factory.StartAsync(BuildInteractiveContext("codex"), CancellationToken.None);
 
@@ -462,7 +462,8 @@ public class PtyHostedAgentRuntimeFactoryTests {
                 string                      cwd,
                 Dictionary<string, string>? extraEnv = null,
                 ushort                      cols     = 120,
-                ushort                      rows     = 40
+                ushort                      rows     = 40,
+                IReadOnlyCollection<string>? removeEnv = null
             ) => new NoopPty();
 
         sealed class NoopPty : IPtyProcess {

@@ -40,6 +40,19 @@ public class AgentOrchestratorStopForResumeTests {
         }
     }
 
+    /// <summary>Whether the agent was waiting at shutdown is what decides if its successor nudges it.</summary>
+    [Test]
+    public async Task KeepAgents_records_whether_each_agent_was_waiting_for_input() {
+        var orch = Build(new CaptureServerConnection());
+        Seed(orch, "idle").ActivityClock.SetAwaitingInput(true);
+        Seed(orch, "working").ActivityClock.SetAwaitingInput(false);
+
+        await orch.DisposeAsync();
+
+        await Assert.That(Ledger().TryRead("idle")!.AwaitingInput).IsTrue();
+        await Assert.That(Ledger().TryRead("working")!.AwaitingInput).IsFalse();
+    }
+
     [Test]
     public async Task KeepAgents_persists_the_ring_and_keeps_the_worktree_and_pid_record() {
         using var tmp      = new TempDir();

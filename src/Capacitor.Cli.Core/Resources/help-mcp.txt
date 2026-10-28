@@ -13,7 +13,8 @@ Subcommands:
                           review flows, and start separate hosted agents,
                           from within an agent session.
   memory                  Start the MCP memory server (stdio) — team memory
-                          tools (search, get, save, update, rescope, archive).
+                          tools (search, get, save, update, rescope, archive,
+                          and the log-entry tools).
   workitems               Start the MCP workitems server (stdio) — declare and
                           list a session's work-item attachments and structure.
   plans                   Start the MCP plans server (stdio) — declare the plan
@@ -90,6 +91,17 @@ mcp flows:
       get_flow_status        Get status, rounds, and pending messages.
       close_flow             Close a flow run.
 
+    Wake-up tools (a running hosted agent only):
+      schedule_wakeup        Have a prompt delivered to this agent later, by
+                             `delay_minutes` or `at` (1 minute to 7 days), waking
+                             it if idle. A terminal session or flow participant is
+                             refused.
+      list_wakeups           This session's pending wake-ups, and those settled in
+                             the last 24 hours with how they ended.
+      cancel_wakeup          Cancel a pending wake-up by `wakeup_id`.
+    A server without wake-ups (or with `Features:AgentWakeUps` off) is reported
+    as not supporting them.
+
   The reviewer vendor is chosen independently of the driver harness. Pass the
   lowercase canonical token; naming a reviewer is never inferred from the driver.
   The tokens above are the protocol vocabulary — availability is per daemon: the
@@ -110,11 +122,22 @@ mcp flows:
   flow guidance.
 
 mcp memory:
-  Exposes six tools — search_memories, get_memory, save_memory, update_memory,
-  rescope_memory, archive_memory — for agents to access team memories. Memories
-  have an audience (user/team/org/project members) and a home (the cwd repo, a
-  project, or the org), with optional machine context. Agents should search
-  before saving to avoid duplication. Requires `kcap login`.
+  Exposes ten tools — search_memories, get_memory, save_memory, update_memory,
+  rescope_memory, archive_memory, append_memory_entry, settle_memory_entry,
+  reopen_memory_entry, list_memory_entries — for agents to access team
+  memories. Memories have an audience (user/team/org/project members) and a
+  home (the cwd repo, a project, or the org), with optional machine context.
+  Agents should search before saving to avoid duplication. Requires
+  `kcap login`.
+
+  A memory saved with `form: "log"` is a log: its content is a short header,
+  and it grows by entries appended with append_memory_entry (a one-line title
+  of up to 200 characters and a body of up to 16 KiB), which any editor
+  settles or reopens instead of editing. get_memory on a log returns a bounded window of open and recently
+  settled entries; list_memory_entries pages past it. update_memory changes a
+  log's header with `header`; its `content` is refused. A server that predates
+  logs saves `form: "log"` as an ordinary memory, and the entry tools say it
+  does not support logs.
 
   `kcap setup` auto-registers `kcap-memory` for both Claude Code (plugin
   `.mcp.json`) and Codex CLI (`~/.codex/config.toml`), same as sessions/review,
@@ -172,6 +195,10 @@ mcp workitems:
                                 survives (work_item_id, into_work_item_id).
       detach_work_item         Durably detach a session from a work item it
                                 was wrongly attached to.
+      declare_work_incomplete  Declare that the session's work on an item is
+                                not finished (work_item_id, optional
+                                reason), so a tracker close does not mark
+                                it done.
       dismiss_next_work        Record that the user turned down a presented
                                 next-work suggestion (target_key; repo_hash
                                 defaults to this checkout), so it stops being

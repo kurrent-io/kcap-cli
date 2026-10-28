@@ -32,15 +32,18 @@ internal static class CodexJudgeDeclarationReader {
         if (scan.Reason is { } reason) return new(null, reason);
 
         var deadline = time.GetUtcNow() + reReadBudget;
-        int acked;
+        int? known = null;
         while (true) {
-            if (cursor.TryRead(sessionId) is not { } count) return new(null, "no_ack_cursor");
-            acked = count;
+            // A cursor that cannot be read may be mid-replace, so only a missing one means no watcher.
+            if (cursor.TryRead(sessionId, out var missing) is { } count) known = count;
+            else if (missing) return new(null, "no_ack_cursor");
 
             // The newest human line is not yet acknowledged: the watcher is about to send it.
-            if (scan.NewestHuman <= acked || time.GetUtcNow() >= deadline) break;
+            if (scan.NewestHuman <= known || time.GetUtcNow() >= deadline) break;
             await Task.Delay(Poll, time, ct).ConfigureAwait(false);
         }
+
+        if (known is not { } acked) return new(null, "no_ack_cursor");
 
         // A human line appended during the wait may be one the server does not hold yet.
         if (scan.NewestHuman <= acked) {

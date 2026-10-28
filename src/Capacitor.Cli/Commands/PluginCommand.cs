@@ -175,9 +175,13 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
         if (exit != 0 || scope != "user") return exit;
 
+        var defaultHome   = env.Harnesses.Of<ClaudeHarness>().Paths.Home;
         var accountsWired = await WireUserAccountsAsync(
-            HarnessId.Claude, env.Harnesses.Of<ClaudeHarness>().Paths.Home,
+            HarnessId.Claude, defaultHome,
             adoptDefault: !refreshOnly || defaultInstalled, refreshOnly, enableNetwork: false);
+
+        // After adoption, which is what registers the default directory.
+        if (!skipDefault) accountsWired &= await DefaultStatusLineAsync(defaultHome, install: true);
 
         return accountsWired || refreshOnly ? 0 : 1;
     }
@@ -231,12 +235,47 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             ? Path.Combine(workdir.Path, ".claude", "settings.local.json")
             : env.Harnesses.Of<ClaudeHarness>().Paths.UserSettings;
 
+        var defaultHome = env.Harnesses.Of<ClaudeHarness>().Paths.Home;
+
+        // Before the layout goes, while the default directory is still registered.
+        var statusLineRestored = scope != "user" || await DefaultStatusLineAsync(defaultHome, install: false);
+
         var exit = await RemoveClaudeLayout(settingsPath, scope);
 
-        if (scope == "user" && !await UnwireUserAccountsAsync(HarnessId.Claude, env.Harnesses.Of<ClaudeHarness>().Paths.Home))
+        if (scope == "user" && !await UnwireUserAccountsAsync(HarnessId.Claude, defaultHome))
             exit = 1;
 
+        if (!statusLineRestored) exit = 1;
+
         return exit;
+    }
+
+    /// <summary>The registered default directory's status line, which <see cref="UserAccountsAsync"/> leaves out.
+    /// False only for a fatal failure; an unusable registry is the usual warning.</summary>
+    async Task<bool> DefaultStatusLineAsync(string defaultDirectory, bool install) {
+        if (env.Accounts is not { } store) return true;
+
+        WiringStep? step;
+        try {
+            step = await LockedAsync(() =>
+                store.Load().Accounts.FirstOrDefault(a => a.Vendor == HarnessId.Claude && AccountDirectory.Same(a.Directory, defaultDirectory)) is { } account
+                    ? install ? AccountWiring.WireStatusLine(account.Id, env.Home, store) : AccountWiring.UnwireStatusLine(account.Id, env.Home, store)
+                    : new WiringStep("statusline", true, "default directory not registered"));
+        } catch (Exception ex) when (IsRegistryFailure(ex)) {
+            await RegistryUnavailableAsync(ex);
+
+            return true;
+        }
+
+        if (step is null || step.Succeeded) return true;
+
+        var fatal = AccountWiring.HasFatalFailure([step]);
+        _refreshFailed |= fatal;
+        await env.Stderr.WriteLineAsync(fatal
+            ? $"Could not {(install ? "wire" : "restore")} the Claude status line in {defaultDirectory}: {step.Name}: {step.Detail}"
+            : $"Warning: the Claude status line in {defaultDirectory}: {step.Name}: {step.Detail}");
+
+        return !fatal;
     }
 
     async Task<int> RemoveClaudeLayout(string settingsPath, string scope) {
@@ -742,14 +781,14 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             if (account.Vendor != HarnessId.Claude && MarkerIsCurrent(account) && !RefusedByCodex(account)) return [];
         }
 
-        return AccountWiring.Wire(account, env.Home, options);
+        return AccountWiring.Wire(account, env.Home, options, env.Accounts!);
     }
 
     async Task<bool> UnwireUserAccountsAsync(HarnessId vendor, string defaultDirectory) {
         var ok = true;
 
         foreach (var account in await UserAccountsAsync(vendor, defaultDirectory, adoptDefault: false)) {
-            var steps = await LockedAsync(() => AccountWiring.Unwire(account, env.Home));
+            var steps = await LockedAsync(() => AccountWiring.Unwire(account, env.Home, env.Accounts!));
             if (steps is null) break;
 
             ok &= await ReportAsync(account, steps, "Unwired", "unwire");
@@ -1840,7 +1879,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         var hooksFailed = false;
         var hooksCurrent = refreshOnly && File.Exists(agentPath) && KiroHooksInstaller.ReadMarker(agentPath) == CapacitorVersion.Current();
         if (!hooksCurrent) {
-            if (InstallKiroHooks(agentPath, env.Harnesses)) {
+            if (InstallKiroHooks(agentPath, env.Harnesses, env.Stderr)) {
                 var clonedFrom = KiroHooksInstaller.ReadPreviousDefault(agentPath) ?? "your default agent";
                 await env.Stdout.WriteLineAsync(
                     refreshOnly
@@ -2059,7 +2098,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     /// <c>chat.defaultAgent</c> to kcap. The replaced default is recorded in the
     /// marker for <c>plugin remove --kiro</c> to restore. Idempotent.
     /// </summary>
-    public static bool InstallKiroHooks(string agentJsonPath, HarnessRegistry harnesses) {
+    public static bool InstallKiroHooks(string agentJsonPath, HarnessRegistry harnesses, TextWriter stderr) {
         try {
             var settingsPath    = KiroSettingsPathFor(agentJsonPath);
             var currentDefault  = KiroSettings.ReadDefaultAgent(settingsPath) ?? "kiro_default";
@@ -2106,7 +2145,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 // previous default + paths so the user can restore it by hand,
                 // rather than returning the same opaque false as "kiro-cli missing".
                 if (!KiroSettings.SetDefaultAgent(settingsPath, recordedDefault)) {
-                    Console.Error.WriteLine(
+                    stderr.WriteLine(
                         $"[kcap] Kiro install could not be completed OR rolled back. "
                       + $"chat.defaultAgent may still be '{KiroAgentName}' with no install marker. "
                       + $"Your previous default agent was '{recordedDefault}' — restore it manually "
@@ -2771,8 +2810,8 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         return idx >= 0 && idx + 1 < args.Length ? args[idx + 1] : null;
     }
 
-    static int PrintUsage() {
-        Console.Error.WriteLine(
+    int PrintUsage() {
+        env.Stderr.WriteLine(
             "Usage: kcap plugin <install|remove> [--project] [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity|--skills] [--tools-only] [--if-installed]"
         );
 

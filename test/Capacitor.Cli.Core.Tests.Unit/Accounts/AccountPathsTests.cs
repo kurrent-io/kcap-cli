@@ -50,6 +50,16 @@ public class AccountPathsTests {
     }
 
     [Test]
+    public async Task Codex_rollout_resolves_to_its_account() {
+        var b       = Home.CreateDir(".codex-b");
+        var rollout = Home.CreateFile(".codex-b/sessions/2026/10/08/rollout-x.jsonl", "");
+
+        var account = AccountPaths.CodexAccountForRollout(rollout, Registry((HarnessId.Codex, b)), Home);
+
+        await Assert.That(account!.Id).IsEqualTo(b);
+    }
+
+    [Test]
     public async Task A_vendor_mismatch_does_not_resolve() {
         var work       = Home.CreateDir(".claude-work");
         var transcript = Home.CreateFile(".claude-work/projects/-repo/abc.jsonl", "");

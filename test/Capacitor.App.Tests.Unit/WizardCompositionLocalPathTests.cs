@@ -176,15 +176,18 @@ public class WizardCompositionLocalPathTests {
         await Assert.That(setups).IsEqualTo(0);
     }
 
+    /// A web sign-up opened before the local install began does not pull the run onto sign-in.
     [Test]
-    public async Task Pending_setup_starts_at_install() {
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Pending_setup_starts_at_install(bool webSignUpOpened) {
         using var harness = new WizardFixtures.GraphHarness(Config.Root);
         harness.LocalRoot = LocalSetupScript.PendingSetup(Config);
         var exit = new TaskCompletionSource<StreamingResult>();
         harness.Cli.SetupLocalBehavior = (_, _, _) => exit.Task;
 
         var (current, backVisible, setups, requests) = await AvaloniaSession.DispatchAsync(async () => {
-            var graph = WizardComposition.BuildGraph(harness.Options());
+            var graph = WizardComposition.BuildGraph(harness.Options() with { ResumeWebSignUp = webSignUpOpened });
             await graph.ViewModel.PendingEnterForTesting;
 
             return (graph.ViewModel.Current.Id, graph.ViewModel.BackVisible, harness.Cli.SetupLocalCallCount,

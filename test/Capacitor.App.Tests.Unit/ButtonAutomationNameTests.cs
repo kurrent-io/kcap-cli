@@ -306,6 +306,7 @@ public class ButtonAutomationNameTests {
         var vm = new HistoryStepViewModel(cli, () => [HarnessId.Claude], action => action(), "test-mac", TimeProvider.System);
         await vm.OnEnterAsync(CancellationToken.None);
         await vm.Discovery;
+        vm.ToggleCustomizeCommand.Execute().Subscribe();
         var window = new Window { Content = new HistoryPaneView { DataContext = vm }, Width = 800, Height = 900 };
         window.Show();
         Settle(window);

@@ -58,6 +58,10 @@ internal interface IHostedAgentRuntime : IAsyncDisposable {
     /// </summary>
     bool EmitsTerminalOutput { get; }
 
+    /// <summary>Whether a dialog read off the terminal is holding the agent's input. Called on the
+    /// output read loop for the chunk it was read from, before the next chunk is read.</summary>
+    void NoteTerminalDialog(bool showing) { }
+
     /// <summary>
     /// Terminal byte stream consumed by the orchestrator read loop. PTY runtimes yield real
     /// terminal output; the ACP runtime yields an empty stream until a follow-up adds a terminal
@@ -81,6 +85,12 @@ internal interface IHostedAgentRuntime : IAsyncDisposable {
     /// full pending-turn queue, a terminal runtime): thrown synchronously by
     /// <see cref="SendUserInputAsync"/>, carried by the task from this method.</summary>
     Task SendUserInputAndWaitForWriteAsync(string text) => SendUserInputAsync(text);
+
+    /// <summary>Input a server dispatch delivered. A runtime that records the user message it sends stamps
+    /// the dispatch on it, so a viewer of its journal can ask the server who sent the message; the rest
+    /// send it as any other input.</summary>
+    Task SendDispatchedInputAsync(string text, Guid dispatchId, bool waitForWrite) =>
+        waitForWrite ? SendUserInputAndWaitForWriteAsync(text) : SendUserInputAsync(text);
 
     /// <summary>Wait until any prior structured prompt turn has received its terminal response.
     /// PTY runtimes have no structured turn boundary and use the completed default.</summary>
