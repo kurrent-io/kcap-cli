@@ -11,6 +11,7 @@ sealed class FakeAppUpdater : IAppUpdater {
 
     public UpdateCandidate? NextCheck;
     public Exception? CheckFailure;
+    public Exception? DownloadFailure;
     public int CheckCalls;
     public int DownloadCalls;
     public TaskCompletionSource? HoldDownload;
@@ -27,6 +28,7 @@ sealed class FakeAppUpdater : IAppUpdater {
     public async Task DownloadAsync(UpdateCandidate candidate, CancellationToken ct) {
         DownloadCalls++;
         if (HoldDownload is { } hold) await hold.Task.WaitAsync(ct);
+        if (DownloadFailure is { } failure) throw failure;
         PendingRestart = candidate;
     }
 

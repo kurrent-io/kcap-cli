@@ -21,6 +21,17 @@ public sealed class MainWindowCoordinator(Func<MainWindow> windowFactory, Action
     public void ShowMainWindow() {
         if (QuitInProgress) return;
 
+        Prepare();
+
+        if (_window!.WindowState == WindowState.Minimized) _window.WindowState = WindowState.Normal;
+        _window.Show();
+        _window.Activate();
+    }
+
+    /// Builds the window without showing it, for a launch that has something to finish first.
+    public void Prepare() {
+        if (QuitInProgress) return;
+
         if (_window is null) {
             var window = windowFactory();
             window.CloseInterceptor = OnWindowClosing;
@@ -31,10 +42,6 @@ public sealed class MainWindowCoordinator(Func<MainWindow> windowFactory, Action
             };
             _window = window;
         }
-
-        if (_window.WindowState == WindowState.Minimized) _window.WindowState = WindowState.Normal;
-        _window.Show();
-        _window.Activate();
     }
 
     /// Returns true when the close must be cancelled because the window was hidden instead.

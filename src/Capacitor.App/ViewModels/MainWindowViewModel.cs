@@ -425,7 +425,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         var canRetry = service.Status
             .Select(s =>
                 s.State == AttachState.Connecting
-                || (s.State == AttachState.Unreachable && s.Reason != UnreachableReason))
+                || (s.State == AttachState.Unreachable && s.Reason is not (UnreachableReason or ExpectedDaemonRestart.Reason)))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
 
         var start = startAction ?? RunStartAsync;
@@ -950,6 +950,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     static string? ReasonText(AttachStatus status) => status.State switch {
         AttachState.Unreachable when status.Reason == IncompatibleReason => HomeViewModel.DaemonIncompatibleNotice,
+        AttachState.Unreachable when status.Reason == ExpectedDaemonRestart.Reason => HomeViewModel.DaemonRestartingNotice,
         AttachState.Unreachable => HomeViewModel.DaemonDownNotice,
         _ => null,
     };
@@ -994,7 +995,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         if (signInExpired) return SignedOutDisplay;
         if (status.State == AttachState.Connecting) return "Connecting…";
         if (status.State == AttachState.Unreachable)
-            return status.Reason == IncompatibleReason ? "Incompatible" : "Unreachable";
+            return status.Reason switch {
+                IncompatibleReason => "Incompatible",
+                ExpectedDaemonRestart.Reason => "Restarting…",
+                _ => "Unreachable",
+            };
 
         var word = Capitalize(daemonConnection);
         return daemonConnection is "connecting" or "reconnecting" ? word + "…" : word;
@@ -1007,7 +1012,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         if (signInExpired) return Paint(StatusColors.Disrupted);
         if (status.State == AttachState.Connecting) return Paint(StatusColors.InProgress);
         if (status.State == AttachState.Unreachable)
-            return status.Reason == IncompatibleReason ? Paint(StatusColors.Disrupted) : Paint(StatusColors.Unavailable);
+            return status.Reason switch {
+                IncompatibleReason => Paint(StatusColors.Disrupted),
+                ExpectedDaemonRestart.Reason => Paint(StatusColors.InProgress),
+                _ => Paint(StatusColors.Unavailable),
+            };
 
         return daemonConnection switch {
             "connected" => Paint(StatusColors.Connected),

@@ -1532,6 +1532,26 @@ public class HomeViewModelTests {
         });
     }
 
+    /// An update's daemon restart is explained and shown as in progress, and the catch-up timer that turns a long
+    /// connecting line into "sign in again" does not apply to it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_daemon_restarting_after_an_update_is_explained_not_reported_as_down() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var daemon = new FakeDaemonClientService();
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System);
+
+            daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, ExpectedDaemonRestart.Reason, null));
+
+            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.DaemonRestartingNotice);
+            await Assert.That(vm.BannerMessage).IsEqualTo(HomeViewModel.DaemonRestartingNotice);
+            await Assert.That(vm.BannerBusy).IsTrue();
+            await Assert.That(vm.SignInVisible).IsFalse();
+            await Assert.That(HomeViewModel.BusyNotice(HomeViewModel.DaemonRestartingNotice)).IsFalse();
+        });
+    }
+
     /// A remote selection's notices/tooltip/Start-enabled must follow the SELECTED machine's own
     /// availability (RemoteAvailabilityFor), never the local daemon's — a local daemon left down
     /// or disconnected must never leak its own notice into a remote pick, and a lane loss under a

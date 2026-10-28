@@ -33,7 +33,7 @@ public sealed record AppImageInstall(string Image) {
         var target = StagedCliDirectory(root);
         var plugin = BundleLayout.PluginDirectory(root);
         var stamp  = Path.Combine(root, "image.stamp");
-        var identity = ImageIdentity();
+        var identity = ImageIdentity(bundleCli);
 
         try {
             if (identity is not null && Staged(stamp, identity, bundleCli, target, bundlePlugin, plugin)) return target;
@@ -49,10 +49,15 @@ public sealed record AppImageInstall(string Image) {
         return target;
     }
 
-    // The image's size and mtime stand for its contents, so a matching stamp skips hashing the bundle.
-    string? ImageIdentity() {
+    // The image's size and mtime stand for its contents, so a matching stamp skips hashing the bundle. The path can
+    // already hold a newer image than the one this process mounted, as when the updater replaces it while a copy
+    // starts, so the sizes of the CLI this mount carries are part of it: that copy must not vouch for the new image.
+    string? ImageIdentity(string bundleCli) {
         var image = new FileInfo(Image);
-        return image.Exists ? $"{image.Length}:{image.LastWriteTimeUtc.Ticks}" : null;
+        if (!image.Exists) return null;
+        var carried = CliFiles.Select(name => new FileInfo(Path.Combine(bundleCli, name)))
+            .Select(file => file.Exists ? file.Length.ToString(System.Globalization.CultureInfo.InvariantCulture) : "-");
+        return $"{image.Length}:{image.LastWriteTimeUtc.Ticks}:{string.Join(',', carried)}";
     }
 
     static bool Staged(string stamp, string identity, string bundleCli, string target, string bundlePlugin, string plugin) =>

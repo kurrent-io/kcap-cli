@@ -71,4 +71,20 @@ public class AppImageInstallTests {
         TakeCliOutOfMount(image);
         await Assert.That(File.ReadAllText(staged)).IsEqualTo("daemon v3");
     }
+
+    /// A copy started from the old image while the updater replaces it sees the new file at the path; its stamp
+    /// must not let the new version's own launch skip staging the new CLI.
+    [Test]
+    public async Task A_copy_running_the_old_image_does_not_vouch_for_the_new_one_at_its_path() {
+        var image = Tmp.CreateFile("Kcap.AppImage", "image v2 already at the path");
+        Tmp.CreateFile("mount/bin/kcap", "cli v1");
+        Tmp.CreateFile("mount/bin/kcap-daemon", "daemon v1");
+        var staged = Path.Combine(TakeCliOutOfMount(image), "kcap-daemon");
+
+        File.WriteAllText(Tmp.PathTo("mount", "bin", "kcap"), "cli v2 is a different size");
+        File.WriteAllText(Tmp.PathTo("mount", "bin", "kcap-daemon"), "daemon v2 is a different size");
+        TakeCliOutOfMount(image);
+
+        await Assert.That(File.ReadAllText(staged)).IsEqualTo("daemon v2 is a different size");
+    }
 }

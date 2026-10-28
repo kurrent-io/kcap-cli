@@ -53,8 +53,10 @@ public class ApplicationReferencesTests {
             Action<StreamedLine> onLine, CancellationToken ct) => throw new NotSupportedException();
     }
 
+    /// The running copy keeps its bundle while it can still load from it: references move before the installed copy
+    /// opens, and the old bundle is left for the installed copy to remove once this process has exited.
     [Test]
-    public async Task A_user_Applications_copy_moves_real_files_and_references_before_opening_then_is_removed() {
+    public async Task A_user_Applications_copy_moves_real_files_and_references_before_opening_and_is_handed_over() {
         if (!OperatingSystem.IsMacOS()) return;
         var paths = Setup();
         static void Bundle(string root, string version) {
@@ -67,13 +69,14 @@ public class ApplicationReferencesTests {
         var ctl = new Launchctl();
         var runner = new BundleRunner(ctl);
         var activated = false;
+        var retirement = new ApplicationRetirement(new ConfigRoot(Tmp.CreateDir("config")), TimeProvider.System, _ => []);
         var mover = new ApplicationsMover(runner, ApplicationsMover.PromoteExclusive, Path.GetDirectoryName(paths.Target)!,
             ApplicationsMover.SwapAtomic,
-            userApplicationsDir: Path.GetDirectoryName(paths.Old),
+            userApplicationsDir: Path.GetDirectoryName(paths.Old), retirement: retirement,
             migrateReferences: () => new ApplicationReferences(runner, paths.Home, paths.Store, TimeProvider.System,
                 (_, _) => Task.FromResult(true), (_, _) => Task.FromResult(true), "gui/123", [Path.GetDirectoryName(paths.Link)!]),
             activate: (root, _) => {
-                activated = root == paths.Target && ctl.Loaded && !Directory.Exists(paths.Old)
+                activated = root == paths.Target && ctl.Loaded && Directory.Exists(paths.Old)
                     && File.ReadAllText(paths.Unit).Contains(paths.Target, StringComparison.Ordinal)
                     && new FileInfo(paths.Link).LinkTarget == paths.Target + "/Contents/MacOS/kcap";
                 return Task.FromResult(activated);
@@ -84,6 +87,8 @@ public class ApplicationReferencesTests {
         await Assert.That(File.ReadAllText(Path.Combine(paths.Target, "Contents", "MacOS", "kcap-desktop"))).IsEqualTo("1.1.0");
         await Assert.That(Directory.GetDirectories(Path.GetDirectoryName(paths.Target)!).Length).IsEqualTo(1);
         await Assert.That(ctl.Starts).IsEqualTo(1);
+        await Assert.That(await retirement.RunPendingAsync(paths.Target, CancellationToken.None)).IsEqualTo(paths.Old);
+        await Assert.That(Directory.Exists(paths.Old)).IsFalse();
     }
 
     [Test]
