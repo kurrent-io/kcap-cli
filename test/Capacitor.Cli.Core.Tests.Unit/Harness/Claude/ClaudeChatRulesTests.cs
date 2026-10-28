@@ -112,6 +112,15 @@ public class ClaudeChatRulesTests {
         await Assert.That(result.SubmittedInputs).IsEmpty();
     }
 
+    /// Claude Code also flags a message queued while compaction runs; a peer's hand-back keeps its own label.
+    [Test]
+    public async Task A_queued_handback_flagged_as_compact_summary_stays_a_subagent_report() {
+        var note = P("""{"type":"attachment","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"<agent-message from=\"a1\">\n[Subagent hand-back] Preamble. The report follows:\n  **Done.**\n</agent-message>","isMeta":true,"isCompactSummary":true,"origin":{"kind":"peer","from":"a1"}}}""").Single();
+        await Assert.That(note.Kind).IsEqualTo(AcpEventKind.SystemNote);
+        await Assert.That(note.ToolKind).IsEqualTo(ChatDisplayKind.AgentReport);
+        await Assert.That(note.Text).IsEqualTo("**Done.**");
+    }
+
     [Test]
     public async Task A_blank_compaction_summary_projects_to_nothing() =>
         await Assert.That(P("""{"type":"user","isCompactSummary":true,"message":{"content":"  "}}""")).IsEmpty();
