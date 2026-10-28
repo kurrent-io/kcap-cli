@@ -57,8 +57,10 @@ public class AgentOrchestratorTerminalDialogTests {
 
         pty.Emit(Dialog);
         await WaitHarness.PollUntilAsync(() => server.TerminalDialogReports.Count == 1);
+        var open = agent.TerminalDialogReport;
         pty.Emit(Composer);
-        await WaitHarness.PollUntilAsync(() => agent.TerminalDialog is null);
+        // The chain moves only once the closing is queued, so the count below is read after its attempt.
+        await WaitHarness.PollUntilAsync(() => !ReferenceEquals(agent.TerminalDialogReport, open));
 
         await Assert.That(server.TerminalDialogReports.Count).IsEqualTo(1);
 
