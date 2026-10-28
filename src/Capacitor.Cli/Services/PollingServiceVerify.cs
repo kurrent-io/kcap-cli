@@ -97,7 +97,10 @@ sealed class PollingServiceVerify(
 
         if (retireServiceId is null) return VerifyExit.Ok;
 
-        if (fence is not null && !await fence.CommitAsync(FenceWait, CancellationToken.None)) {
+        // The Windows service runs one daemon per user, so its install has already stopped the old one: a
+        // daemon no longer answering to the old name has nothing left to fence.
+        if (fence is not null && !await fence.CommitAsync(FenceWait, CancellationToken.None)
+            && validatedDaemonPid(retireServiceId) is not null) {
             await fence.AbortAsync(FenceWait, CancellationToken.None);
             return RetireRefusal("fence_unavailable");
         }
