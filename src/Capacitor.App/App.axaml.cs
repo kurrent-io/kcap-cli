@@ -902,7 +902,7 @@ public partial class App : Application {
             directory.Rows.Lookup($"remote:{agentId}") is { HasValue: true, Value: var row }
                 ? new RemoteSessionViewModel(row, directory, sessionAccess, permissions, actions, serverLane, readDetail, workspaceOpener, _time, workContext,
                     () => new XtermTerminalSurface(80, 24, PtyDumpPath), planArtifacts, commands,
-                    pullRequests: pullRequests, requestSignIn: requestSignIn, linkGitHub: linkGitHub,
+                    pullRequests: readers, requestSignIn: requestSignIn, linkGitHub: linkGitHub,
                     signInCompleted: serverClients.SignInCompleted, plans: plans, drafts: drafts, inputSending: attention.ReplySending,
                     pullRequestSnapshots: pullRequestSnapshots, pullRequestLinksChanged: pullRequestTones.Refresh, readSubagent: readSubagent,
                     readings: readings, senders: senders)
@@ -912,7 +912,7 @@ public partial class App : Application {
             directory.Rows.Lookup($"server:{sessionId}") is { HasValue: true, Value: var row }
                 ? new RemoteSessionViewModel(row, directory, sessionAccess, permissions, actions, serverLane, readDetail, workspaceOpener, _time, workContext,
                     surfaceFactory: null, planArtifacts, commands,
-                    pullRequests: pullRequests, requestSignIn: requestSignIn, linkGitHub: linkGitHub,
+                    pullRequests: readers, requestSignIn: requestSignIn, linkGitHub: linkGitHub,
                     signInCompleted: serverClients.SignInCompleted, plans: plans, drafts: drafts, inputSending: attention.ReplySending,
                     pullRequestSnapshots: pullRequestSnapshots, pullRequestLinksChanged: pullRequestTones.Refresh, readSubagent: readSubagent,
                     readings: readings)

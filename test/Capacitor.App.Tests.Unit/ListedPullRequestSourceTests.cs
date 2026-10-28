@@ -59,6 +59,19 @@ public class ListedPullRequestSourceTests {
         await Assert.That(server.Lists).IsEqualTo(1);
     }
 
+    [Test]
+    public async Task A_listed_PR_without_a_url_sends_the_session_to_the_server() {
+        using var directory = new FakeAgentDirectory();
+        var server = new FakePullRequestSource(new FakeTimeProvider());
+        var source = new ListedPullRequestSource(server, directory);
+        directory.Rows.AddOrUpdate(ServerRow("s1", new([Listed(7, "open"), Listed(8, "open") with { Url = null }])));
+
+        var read = await source.ListAsync("s1", default);
+
+        await Assert.That(server.Lists).IsEqualTo(1);
+        await Assert.That(read.Data!.Items.Length).IsEqualTo(server.Links.Length);
+    }
+
     static RepoSessionPullRequestDto Listed(int number, string state) => new() {
         RepoHash = "h", Owner = "Kurrent-IO", RepoName = "kcap-cli", Number = number,
         Url = $"https://github.com/kurrent-io/kcap-cli/pull/{number}", Title = $"PR {number}", State = state };

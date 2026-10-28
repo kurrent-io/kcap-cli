@@ -24,7 +24,9 @@ public sealed class ListedPullRequestSource : IPullRequestSource {
     }
 
     public Task<PullRequestRead<PullRequestLinkListDto>> ListAsync(string sessionId, CancellationToken ct) {
-        if (!_listed.TryGetValue(sessionId, out var listed)) return _server.ListAsync(sessionId, ct);
+        // A PR the row names without a URL has no provider or host to route a read to; only the server's list supplies them.
+        if (!_listed.TryGetValue(sessionId, out var listed) || listed.Any(pr => PullRequestWire.SafeLink(pr.Url) is null))
+            return _server.ListAsync(sessionId, ct);
         var items = listed.Select(ListedPullRequest.Link).Where(link => PullRequestWire.ValidSubject(PullRequestWire.Subject(link)))
             .DistinctBy(PullRequestWire.Subject).ToArray();
         return Task.FromResult(new PullRequestRead<PullRequestLinkListDto>(PullRequestReadKind.Ready, new() { Items = items }));
