@@ -175,10 +175,11 @@ internal sealed partial class CodexLauncher(
 
         var args = new List<string>();
 
-        // `codex resume` accepts every flag below, so the subcommand and id simply lead.
+        // `codex resume` accepts every flag below, so the subcommand and id simply lead. Rollout
+        // discovery records the id dashless, and Codex resumes only the dashed form.
         if (ctx.ResumeSessionId is { } resumeId) {
             args.Add("resume");
-            args.Add(resumeId);
+            args.Add(Guid.TryParse(resumeId, out var resumeGuid) ? resumeGuid.ToString("D") : resumeId);
         }
 
         args.AddRange([
