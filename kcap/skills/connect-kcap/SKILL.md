@@ -284,11 +284,13 @@ contents in a shell command. Read `CONNECTOR.md` there for the servers and tools
 5. **Memory:** search before saving; save with an explicit `audience` and
    `global: true`, since nothing here is scoped to a repository.
 6. **Pages:** write one self-contained HTML file under `~/workspace` and pass
-   its `path` to `publish_page`. The page is served with no network access, so
-   inline every style, script and image. It is private to the user until
-   `visibility` says otherwise; set `org` or `scoped` only when the user names
-   who should open it. Give the user the returned link, and publish a revision
-   with `update_id` so the link stays the same.
+   `publish_page` a `title` and the file's `path`. The page is served with no
+   network access, so inline every style, script and image. It is private to
+   the user until `visibility` says otherwise; set `org` or `scoped` only when
+   the user names who should open it. Give the user the returned link. Publish
+   a revision with `update_id` so the link stays the same; a revision refuses
+   `visibility` and `grants`, so change who can open a page with
+   `set_page_visibility`.
 7. **Never paste `~/.config/kcap/` or any token** into the chat or a file.
 8. **Never start `kcap daemon`**, run `kcap import`, or install hooks. This VM
    records only the chats the user puts in scope through the
