@@ -33,7 +33,7 @@ public class InstallLocationWindowTests {
                 button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 Dispatcher.UIThread.RunJobs();
                 await Assert.That(chosen).IsEqualTo(userApps);
-                await Assert.That(window.FindControl<SelectableTextBlock>("ErrorText")!.Text).Contains("cannot write to /Applications");
+                await Assert.That(window.FindControl<SelectableTextBlock>("ErrorText")!.Text).Contains($"cannot write to {Path.GetDirectoryName("/Applications/kcap.app")}");
                 await Assert.That(window.FindControl<TextBlock>("Explanation")!.Text).Contains(userApps + "/kcap.app");
                 await Assert.That(button.Content).IsEqualTo("Install for me only");
                 await Assert.That(button.IsEnabled).IsTrue();
