@@ -769,7 +769,9 @@ public static partial class DaemonRunner {
 
         connection.GetAccountsSnapshot = () => accounts.Current;
         accounts.SendToServer          = connection.AccountsChangedAsync;
-        accounts.RequestRefresh        = host.Services.GetRequiredService<AccountRefresher>().Request;
+        var refresher = host.Services.GetRequiredService<AccountRefresher>();
+        accounts.RequestRefresh        = refresher.Request;
+        accounts.RequestWiringRefresh  = refresher.RequestSoon;
 
         // Death-rattle instrumentation: without these, a daemon dying mid-run
         // (signal, OOM, unobserved-task FailFast, native crash) leaves no trace

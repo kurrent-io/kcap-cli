@@ -1169,6 +1169,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             TerminalMenuHint = "Choose how to handle the usage limit. A message here would be typed into that menu.";
             choices = limit.Options.Where(o => o.Index is >= 1 and <= 9)
                 .Select(o => (o.Label, new[] { (byte)('0' + o.Index) })).ToList();
+        } else if (shown && !_input.CanSendKeys) {
+            // This channel cannot type into the dialog, so the card sends the viewer to the terminal.
+            TerminalMenuTitle = "Waiting for you in Terminal";
+            TerminalMenuHint = "Answer the dialog in the agent's terminal. The chat continues once it closes.";
+            TerminalMenuScreen = dialog!.Screen;
         } else if (shown) {
             TerminalMenuTitle = "Waiting for you in Terminal";
             TerminalMenuHint = "Answer the terminal dialog first. A message here would be typed into it.";

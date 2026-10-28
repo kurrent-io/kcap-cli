@@ -278,6 +278,11 @@
                             Background="{StaticResource KcapPrimaryBrush}"
                             Foreground="{StaticResource KcapOnPrimaryBrush}"
                             FontWeight="SemiBold" CornerRadius="7" Padding="14,6" />
+                    <Button x:Name="RepairDaemonButton" Classes="kcapPrimary" Content="Repair"
+                            Command="{Binding RepairDaemonCommand}" IsVisible="{Binding DaemonRepairVisible}"
+                            Background="{StaticResource KcapPrimaryBrush}"
+                            Foreground="{StaticResource KcapOnPrimaryBrush}"
+                            FontWeight="SemiBold" CornerRadius="7" Padding="14,6" />
                     <Button x:Name="RetryDaemonButton" Classes="kcapChip" Content="Reconnect"
                             Command="{Binding RetryDaemonCommand}" IsVisible="{Binding DaemonRetryVisible}"
                             Background="{StaticResource KcapSurfaceRaisedBrush}"

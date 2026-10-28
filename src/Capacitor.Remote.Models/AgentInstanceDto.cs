@@ -36,6 +36,7 @@ public sealed record AgentInstanceDto {
     [JsonPropertyName("account_directory")] public string? AccountDirectory { get; init; }
     [JsonPropertyName("account_id")]        public string? AccountId { get; init; }
     [JsonPropertyName("account_label")]     public string? AccountLabel { get; init; }
+    [JsonPropertyName("terminal_dialog")]   public AgentTerminalDialog? TerminalDialog { get; init; }
 }
 
 public sealed record AccessGrant {

@@ -3606,6 +3606,7 @@ public class ChatTabViewModelTests {
         public List<string> Writes { get; } = [];
         public bool Accept { get; set; } = true;
         public Task? Gate { get; set; }
+        public override bool CanSendKeys => true;
         public override async Task<bool> SendKeysAsync(byte[] keys, CancellationToken ct) {
             if (Gate is { } gate) await gate;
             if (!Accept) return false;
@@ -3915,6 +3916,42 @@ public class ChatTabViewModelTests {
                 rig.Clock.OnNext(StripReadings.Now.AddMinutes(30));
                 await WaitUntilAsync(() => rig.Chat.AccountStripUsage?.NextResetText == "resets in 1h 44m", what: "the clock's reset");
             } finally { await rig.H.TeardownAsync(); }
+        });
+    }
+
+    /// Pins the remote card: the server relays the dialog a hosted agent shows, and a channel that
+    /// cannot type into it shows the dialog as drawn and sends the viewer to the terminal.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_remote_terminal_dialog_sends_the_viewer_to_the_terminal() {
+        await RunOnUiAsync(async () => {
+            var dto = new AgentInstanceDto {
+                AgentId = "a1", Status = "running", DaemonName = "work-mac", OwnerUserId = "u1", Vendor = "claude",
+                RegisteredAt = DateTime.UtcNow,
+                TerminalDialog = new AgentTerminalDialog {
+                    Heading = "Allow external CLAUDE.md file imports?",
+                    Options = ["No, disable external imports", "Yes, allow external imports"], Selected = 0,
+                    Screen = "Allow external CLAUDE.md file imports?\n❯ No, disable external imports\n  Yes, allow external imports",
+                },
+            };
+            using var session = new BehaviorSubject<ChatSessionInfo>(ChatSessionInfo.FromRemote(AgentRow.FromRemote(dto), ended: false));
+            var time = new FakeTimeProvider();
+            var chat = new ChatTabViewModel("a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null),
+                new AcceptingChatInput(), new NoAttachmentUploader(), null, new RecordingOpener(), time,
+                new FakePermissionService(), new SessionRuns(time));
+            var shown = false;
+            chat.ShowTerminal = () => shown = true;
+            try {
+                await Assert.That(chat.ShowsTerminalMenu).IsTrue();
+                await Assert.That(chat.TerminalMenuTitle).IsEqualTo("Waiting for you in Terminal");
+                await Assert.That(chat.TerminalMenuScreen).IsEqualTo(dto.TerminalDialog.Screen);
+                await Assert.That(chat.TerminalMenuChoices).IsEmpty();
+                await chat.ShowTerminalCommand.Execute().ToTask();
+                await Assert.That(shown).IsTrue();
+
+                session.OnNext(ChatSessionInfo.FromRemote(AgentRow.FromRemote(dto with { TerminalDialog = null }), ended: false));
+                await Assert.That(chat.HasTerminalMenu).IsFalse();
+            } finally { await chat.TeardownAsync(); }
         });
     }
 
