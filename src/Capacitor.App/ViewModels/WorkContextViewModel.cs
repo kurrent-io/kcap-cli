@@ -88,6 +88,16 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     public string Harness { get => _harness; private set => this.RaiseAndSetIfChanged(ref _harness, value); }
     string _transport = "—";
     public string Transport { get => _transport; private set => this.RaiseAndSetIfChanged(ref _transport, value); }
+    string _tokens = SessionFactText.Unknown;
+    public string Tokens { get => _tokens; private set => this.RaiseAndSetIfChanged(ref _tokens, value); }
+    string _cost = SessionFactText.Unknown;
+    public string Cost { get => _cost; private set => this.RaiseAndSetIfChanged(ref _cost, value); }
+    string _contextUse = SessionFactText.Unknown;
+    public string ContextUse { get => _contextUse; private set => this.RaiseAndSetIfChanged(ref _contextUse, value); }
+    string _sessionSharing = SessionFactText.Unknown;
+    public string SessionSharing { get => _sessionSharing; private set => this.RaiseAndSetIfChanged(ref _sessionSharing, value); }
+    string _agentSharing = SessionFactText.Unknown;
+    public string AgentSharing { get => _agentSharing; private set => this.RaiseAndSetIfChanged(ref _agentSharing, value); }
     string _sessionIdText = "resolving…";
     public string SessionIdText {
         get => _sessionIdText;
@@ -376,13 +386,13 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         var vendorLabel = HostedHarnessCatalog.LabelFor(DefaultHarnessOptions, dto.Vendor);
         Harness = $"{vendorLabel} · {HostedHarnessCatalog.ModelLabelFor(dto.Vendor, dto.Model ?? "")}";
         Transport = TransportLabel(HostedHarnessCatalog.EffectiveFamily(dto.HasTerminal, dto.Vendor));
-        if (!_reader.HasCurrent) SessionIdText = dto.SessionId ?? "resolving…";
+        if (!_reader.HasCurrent) SessionIdText = SessionIds.Canonical(dto.SessionId) ?? "resolving…";
         UpdateRequester(dto, vendorLabel);
     }
 
     void SwitchSession(string id) {
         HasSession = true;
-        SessionIdText = id;
+        SessionIdText = SessionIds.Canonical(id) ?? id;
         PrimaryRepository = null;
         ClearServerProjections();
         IsStale = false;
@@ -420,7 +430,10 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     void Apply(WorkContextRead read) {
         switch (read.Kind) {
             case WorkContextReadKind.SignedOut:      ApplyTerminal(WorkContextPhase.SignedOut);      return;
-            case WorkContextReadKind.NotInPlan:      ApplyTerminal(WorkContextPhase.NotInPlan);      return;
+            case WorkContextReadKind.NotInPlan:
+                ApplyTerminal(WorkContextPhase.NotInPlan);
+                ApplySessionFacts(read.Summary);
+                return;
             case WorkContextReadKind.SessionUnknown: ApplyTerminal(WorkContextPhase.SessionUnknown); return;
             case WorkContextReadKind.Unreachable:
                 if (Phase is WorkContextPhase.Ready or WorkContextPhase.NoWorkItem) IsStale = true;
