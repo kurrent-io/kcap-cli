@@ -121,7 +121,8 @@ static unsafe class ServiceInstaller {
         }
         Delete();
         RemoveFiles(InstallDirectory);
-        Registry.LocalMachine.DeleteSubKeyTree(Path.GetDirectoryName(ServiceIdentity.IndexKey)!, throwOnMissingSubKey: false);
+        // The index stays: the users still in it keep their enrollments, and a reinstalled service that could
+        // not see them would remove itself at the next unenroll
         Console.WriteLine("kcap-service is uninstalled; the daemons it started keep running as their users' own processes");
         return 0;
     }
