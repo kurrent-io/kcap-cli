@@ -813,9 +813,15 @@ sealed class DaemonServiceCommands(
         return 0;
     }
 
-    async Task<int> Status() {
+    internal async Task<int> Status() {
         await StaleTxnMarker.SettleAsync(store, manager, id, time);
-        var status = manager.Status(id);
+        ServiceStatus status;
+        try {
+            status = manager.Status(id);
+        } catch (InvalidOperationException ex) {
+            await Console.Error.WriteLineAsync($"Could not read the state of service '{id}' ({manager.Describe()}): {ex.Message}");
+            return 1;
+        }
         await Console.Out.WriteLineAsync($"Service '{id}': {status.State} ({manager.Describe()})");
         if (status.BinaryPath is { } bin) await Console.Out.WriteLineAsync($"  binary: {bin}");
         if (ServiceTxnMarker.Exists(store, id) && !ServiceTxnLock.IsHeld(store, id))

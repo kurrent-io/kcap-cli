@@ -51,6 +51,18 @@ internal sealed class DaemonCommandsServiceInstallTests {
         await Assert.That(manager.InstallCalls).IsEqualTo(0);
     }
 
+    /// <summary>A supervisor that does not answer is reported on stderr with exit 1, never thrown.</summary>
+    [Test, NotInParallel]
+    public async Task Status_reports_a_supervisor_that_does_not_answer() {
+        using var err = ConsoleOutput.StartErrorCapture();
+        var manager = new RecordingServiceManager(new() { ["test-id"] = RecordingServiceManager.Unanswering });
+
+        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), manager, "test-id", Home, TimeProvider.System).Status();
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(err.GetCapturedError()).Contains("kcap-service is not answering on its pipe");
+    }
+
     /// <summary>A refused registration is reported on stderr with exit 1, never thrown.</summary>
     [Test, NotInParallel]
     public async Task Plain_install_reports_a_refused_registration() {
