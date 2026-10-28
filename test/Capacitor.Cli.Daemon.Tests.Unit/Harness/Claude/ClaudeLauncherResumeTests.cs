@@ -53,10 +53,9 @@ public class ClaudeLauncherResumeTests {
         await Assert.That(args).DoesNotContain("--session-id");
     }
 
-    /// <summary>A session id learned from a transcript file name is stored in kcap's dashless form; Claude
-    /// reads anything but its own dashed form as a picker search and resumes nothing.</summary>
+    /// The resume ledger can hold the dashless id transcript discovery records; Claude resumes only a dashed UUID.
     [Test]
-    public async Task Resume_passes_a_dashless_session_id_in_claude_form() {
+    public async Task Resume_restores_the_dashes_of_a_dashless_session_id() {
         var args = NewLauncher().BuildArgs(NewCtx(null, Resume.Replace("-", ""))).Args;
 
         await Assert.That(args[Array.IndexOf(args, "--resume") + 1]).IsEqualTo(Resume);

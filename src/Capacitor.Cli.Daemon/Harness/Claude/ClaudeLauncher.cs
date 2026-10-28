@@ -134,9 +134,10 @@ internal sealed partial class ClaudeLauncher(
             // MCP servers, so the reviewer can't recursively start a nested review flow.
             // Interactive (Default) agents keep prompts + their configured MCP servers.
             if (ctx.ResumeSessionId is { Length: > 0 } resumeId) {
-                // Ledgers can hold kcap's dashless form; Claude takes any other form as a picker search.
+                // Transcript discovery records the id dashless. Claude reads anything but a dashed
+                // UUID as a picker search term, and the pasted prompt then lands in that search box.
                 args.Add("--resume");
-                args.Add(Guid.TryParse(resumeId, out var guid) ? guid.ToString("D") : resumeId);
+                args.Add(Guid.TryParse(resumeId, out var resumeGuid) ? resumeGuid.ToString("D") : resumeId);
             } else if (ctx.PinnedSessionId is { Length: > 0 } pinnedId) {
                 args.Add("--session-id");
                 args.Add(pinnedId);
