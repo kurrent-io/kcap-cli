@@ -70,6 +70,7 @@ internal sealed partial class PtyHostedAgentRuntime(
     readonly Lock                    _dialogGate  = new();
     long                             _lastOutputAt;
     volatile bool                    _stopRequested;
+    bool                             _deliveryHoldsLane;
     TaskCompletionSource?            _dialogGone;
 
     /// <summary>The pending launch-prompt delivery, or null when the launch carried no prompt to paste.</summary>
@@ -138,33 +139,16 @@ internal sealed partial class PtyHostedAgentRuntime(
                 _lane.Release();
             }
 
-            var holdsLane = true;
+            _deliveryHoldsLane = true;
 
             try {
                 if (_stopRequested) return LaunchPromptOutcome.StopRequested;
 
                 await pty.WriteAsync(BracketedPaste.Frame(prompt));
-
-                if (approvalsDisabled) {
-                    await SubmitAsync();
-                } else {
-                    await Task.Delay(SingleSubmitDelay, time, _disposal.Token);
-
-                    // Answering a dialog that came up after the paste takes the lane, so the submit
-                    // waits for each one without holding the lane.
-                    while (DialogGone is not null && !pty.HasExited) {
-                        _lane.Release();
-                        holdsLane = false;
-                        await WaitWhileDialogShowsAsync(_disposal.Token);
-                        await _lane.WaitAsync(_disposal.Token);
-                        holdsLane = true;
-                        if (_stopRequested) return LaunchPromptOutcome.StopRequested;
-                    }
-
-                    await WriteSubmitCarriageReturnAsync();
-                }
+                if (!await SubmitAsync(WaitOutDialogsAsync)) return LaunchPromptOutcome.StopRequested;
             } finally {
-                if (holdsLane) {
+                if (_deliveryHoldsLane) {
+                    _deliveryHoldsLane = false;
                     try { _lane.Release(); } catch (ObjectDisposedException) { }
                 }
             }
@@ -216,6 +200,21 @@ internal sealed partial class PtyHostedAgentRuntime(
         }
 
         return true;
+    }
+
+    /// <summary>Called by the launch delivery holding the input lane, before each submit Enter. A dialog
+    /// that came up after the paste would take the Enter, and answering it takes the lane, so each one is
+    /// waited out with the lane released. Returns holding the lane; false when a stop was asked for.</summary>
+    async Task<bool> WaitOutDialogsAsync() {
+        while (DialogGone is not null && !pty.HasExited && !_stopRequested) {
+            _lane.Release();
+            _deliveryHoldsLane = false;
+            await WaitWhileDialogShowsAsync(_disposal.Token);
+            await _lane.WaitAsync(_disposal.Token);
+            _deliveryHoldsLane = true;
+        }
+
+        return !_stopRequested;
     }
 
     /// <summary>Returns once no dialog is on screen, or the agent has exited or been asked to stop.</summary>
@@ -297,19 +296,25 @@ internal sealed partial class PtyHostedAgentRuntime(
     /// no-ops. Otherwise sends a single CR — in an interactive session a stray Enter must not
     /// answer a live approval prompt.
     /// </summary>
-    async Task SubmitAsync() {
+    /// <param name="beforeCarriageReturn">Runs before each CR; false withholds it and the rest.</param>
+    /// <returns>False when <paramref name="beforeCarriageReturn"/> withheld a CR.</returns>
+    async Task<bool> SubmitAsync(Func<Task<bool>>? beforeCarriageReturn = null) {
         if (approvalsDisabled) {
             foreach (var delay in SubmitCarriageReturnSchedule) {
-                if (pty.HasExited) return;
+                if (pty.HasExited) return true;
                 await Task.Delay(delay, time);
-                if (!await WriteSubmitCarriageReturnAsync()) return; // stop once the reviewer is gone
+                if (beforeCarriageReturn is not null && !await beforeCarriageReturn()) return false;
+                if (!await WriteSubmitCarriageReturnAsync()) return true; // stop once the reviewer is gone
             }
 
-            return;
+            return true;
         }
 
         await Task.Delay(SingleSubmitDelay, time);
+        if (beforeCarriageReturn is not null && !await beforeCarriageReturn()) return false;
         await WriteSubmitCarriageReturnAsync();
+
+        return true;
     }
 
     /// <summary>

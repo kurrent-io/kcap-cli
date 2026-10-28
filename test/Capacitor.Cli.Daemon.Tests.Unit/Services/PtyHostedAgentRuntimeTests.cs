@@ -194,6 +194,15 @@ public class PtyHostedAgentRuntimeTests {
     static Task PumpAsync(PtyHostedAgentRuntime runtime) =>
         Task.Run(async () => { await foreach (var _ in runtime.ReadOutputAsync()) { } });
 
+    /// <summary>Advances the fake clock by <paramref name="span"/> in slices, yielding between them so
+    /// timer continuations run. For a step where nothing is meant to happen.</summary>
+    static async Task AdvanceAsync(FakeTimeProvider time, TimeSpan span) {
+        for (var advanced = TimeSpan.Zero; advanced < span; advanced += TimeSpan.FromMilliseconds(250)) {
+            time.Advance(TimeSpan.FromMilliseconds(250));
+            await Task.Delay(10);
+        }
+    }
+
     /// <summary>Advances the fake clock in slices, yielding between them so timer continuations
     /// run, until <paramref name="done"/> or the span is used up.</summary>
     static async Task StepAsync(FakeTimeProvider time, TimeSpan span, Func<bool> done) {
@@ -285,7 +294,7 @@ public class PtyHostedAgentRuntimeTests {
         await Task.Delay(100);
         runtime.NoteTerminalDialog(true);
 
-        await StepAsync(time, PtyHostedAgentRuntime.LaunchPromptMaxWait * 2, () => pty.Writes.Count >= 1);
+        await AdvanceAsync(time, PtyHostedAgentRuntime.LaunchPromptMaxWait * 2);
         await Assert.That(pty.Writes).IsEmpty();
 
         await runtime.SendRawInputAsync("\r"u8.ToArray()).WaitAsync(TimeSpan.FromSeconds(2));
@@ -315,7 +324,7 @@ public class PtyHostedAgentRuntimeTests {
         await StepAsync(time, PtyHostedAgentRuntime.LaunchPromptQuietWindow, () => pty.Writes.Count >= 1);
         runtime.NoteTerminalDialog(true);
 
-        await StepAsync(time, PtyHostedAgentRuntime.SingleSubmitDelay * 4, () => pty.Writes.Count >= 2);
+        await AdvanceAsync(time, PtyHostedAgentRuntime.SingleSubmitDelay * 4);
         await Assert.That(string.Join("|", pty.Writes)).IsEqualTo("\x1b[200~build it\x1b[201~");
 
         await runtime.SendRawInputAsync([0x1b]).WaitAsync(TimeSpan.FromSeconds(2));
@@ -342,12 +351,12 @@ public class PtyHostedAgentRuntimeTests {
 
         var key = runtime.SendRawInputAsync([0x1b]);
         await pty.RawWriteEntered.WaitAsync(TimeSpan.FromSeconds(5));
-        await StepAsync(time, PtyHostedAgentRuntime.LaunchPromptQuietWindow * 2, () => false);
+        await AdvanceAsync(time, PtyHostedAgentRuntime.LaunchPromptQuietWindow * 2);
 
         runtime.NoteTerminalDialog(true);
         pty.ReleaseRawWrites();
         await key.WaitAsync(TimeSpan.FromSeconds(5));
-        await StepAsync(time, PtyHostedAgentRuntime.LaunchPromptMaxWait * 2, () => pty.Inner.Writes.Count > 1);
+        await AdvanceAsync(time, PtyHostedAgentRuntime.LaunchPromptMaxWait * 2);
         await Assert.That(string.Join("|", pty.Inner.Writes)).IsEqualTo("\x1b");
 
         pty.Inner.Emit("composer");
@@ -374,7 +383,7 @@ public class PtyHostedAgentRuntimeTests {
         pty.Inner.Emit("banner");
         await StepAsync(time, PtyHostedAgentRuntime.LaunchPromptQuietWindow, () => pty.Inner.Writes.Count >= 1);
         runtime.NoteTerminalDialog(true);
-        await StepAsync(time, PtyHostedAgentRuntime.SingleSubmitDelay * 2, () => false);
+        await AdvanceAsync(time, PtyHostedAgentRuntime.SingleSubmitDelay * 2);
 
         var answer = runtime.SendRawInputAsync([0x1b]);
         await pty.RawWriteEntered.WaitAsync(TimeSpan.FromSeconds(5));
@@ -384,13 +393,37 @@ public class PtyHostedAgentRuntimeTests {
         pty.ReleaseRawWrites();
         await answer.WaitAsync(TimeSpan.FromSeconds(5));
 
-        await StepAsync(time, PtyHostedAgentRuntime.SingleSubmitDelay * 4, () => pty.Inner.Writes.Count > 2);
+        await AdvanceAsync(time, PtyHostedAgentRuntime.SingleSubmitDelay * 4);
         await Assert.That(string.Join("|", pty.Inner.Writes)).IsEqualTo("\x1b[200~build it\x1b[201~|\x1b");
 
         runtime.NoteTerminalDialog(false);
         await StepAsync(time, PtyHostedAgentRuntime.SingleSubmitDelay, () => runtime.LaunchPromptDelivery!.IsCompleted);
         await Assert.That(string.Join("|", pty.Inner.Writes)).IsEqualTo("\x1b[200~build it\x1b[201~|\x1b|\r");
         pty.Inner.Exit();
+    }
+
+    /// <summary>An unattended launch submits with a spray of CRs; a dialog that comes up mid-spray holds
+    /// the rest of it, so no CR answers the dialog.</summary>
+    [Test]
+    public async Task An_unattended_launch_holds_its_submit_spray_for_a_dialog() {
+        var time    = new FakeTimeProvider();
+        var pty     = new RecordingScriptedPtyProcess();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, time, approvalsDisabled: true);
+
+        runtime.DeliverLaunchPrompt("review it");
+        _ = PumpAsync(runtime);
+        pty.Emit("banner");
+        await StepAsync(time, PtyHostedAgentRuntime.LaunchPromptQuietWindow, () => pty.Writes.Count >= 1);
+        await StepAsync(time, PtyHostedAgentRuntime.SubmitCarriageReturnSchedule[0], () => pty.Writes.Count >= 2);
+        runtime.NoteTerminalDialog(true);
+
+        await AdvanceAsync(time, TimeSpan.FromSeconds(3));
+        await Assert.That(string.Join("|", pty.Writes)).IsEqualTo("\x1b[200~review it\x1b[201~|\r");
+
+        runtime.NoteTerminalDialog(false);
+        await StepAsync(time, TimeSpan.FromSeconds(3), () => runtime.LaunchPromptDelivery!.IsCompleted);
+        await Assert.That(pty.Writes.Count(w => w == "\r")).IsEqualTo(PtyHostedAgentRuntime.SubmitCarriageReturnSchedule.Length);
+        pty.Exit();
     }
 
     /// <summary>Holds raw writes until released, so a test can keep the input lane busy.</summary>
