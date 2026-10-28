@@ -11,13 +11,16 @@ public class LocalServerServicesTests {
 
     UserHome Home => new(Tmp.PathTo("home"));
 
-    /// <summary>Uninstall and upgrade read this code as "nothing installed".</summary>
+    /// <summary>Uninstall reads an installation it cannot query as installed, so it keeps its data instead of
+    /// deleting it with the config directory.</summary>
     [Test]
-    public async Task Linux_without_systemd_is_an_unsupported_platform() {
-        var ex = await Assert.That(() => LocalServerServices.ForCurrentOs(Home, TimeProvider.System, systemdRunning: () => false))
-            .Throws<LocalInstallFailure>();
+    public async Task Linux_without_systemd_reads_the_unit_as_unknown_and_refuses_to_change_it() {
+        var service = LocalServerServices.ForCurrentOs(Home, TimeProvider.System, systemdRunning: () => false);
+        var unit    = LocalServerUnit.ForInstallation(LocalRoot.Resolve(Tmp.PathTo("local"), Home), 4100);
 
-        await Assert.That(ex!.Code).IsEqualTo(LocalInstallFailureCode.UnsupportedPlatform);
+        await Assert.That(service.Owner(unit).Loaded).IsTypeOf<OwnerReading.Unreadable>();
+        await Assert.That(service.Activity(unit)).IsTypeOf<UnitActivity.Unknown>();
+        await Assert.That(() => service.Start(unit)).Throws<LocalLifecycleException>().WithMessageContaining("systemd is not running");
     }
 
     [Test]
