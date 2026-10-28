@@ -1022,7 +1022,7 @@ public sealed class ClaudeHookCommand(
                         responseNode, coordinationNoticesDisabled);
 
                     // The static nudges, each gated on its server being loaded by this session.
-                    var sessionNudges = SessionNudges.Resolve(HarnessId.Claude, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience);
+                    var sessionNudges = SessionNudges.Resolve(HarnessId.Claude, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience, sessionCwd, home);
                     // Opted out for a hosted session, which leaves the first-run notice armed for a person's next one.
                     var harnessNudge = HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true || !audience.GetsOnboarding, config, harnesses, clock.Time);
                     var firstRunNotice = FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true || !audience.GetsOnboarding, config, HarnessId.Claude, harnesses);
