@@ -91,7 +91,8 @@ public partial class InstallLocationWindow : Window {
         };
         // Coming back from Finder re-checks the folder, so a cleared conflict turns straight back into an install.
         Activated += (_, _) => {
-            if (!_moving && shown?.Action == ApplicationsInstallAction.Blocked && selectDestination is not null && selectedDirectory is not null)
+            if (!_moving && shown?.Action == ApplicationsInstallAction.Blocked && selectDestination is not null && selectedDirectory is not null
+                    && (!DestinationPanel.IsVisible || DestinationPicker.SelectedItem is not null))
                 ShowPlan(selectDestination(selectedDirectory));
         };
         QuitButton.Click += (_, _) => quit();

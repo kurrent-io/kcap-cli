@@ -7,8 +7,8 @@ namespace Capacitor.App.Tests.Unit;
 public class AppImageInstallTests {
     [TempDir] public required TempDir Tmp { get; init; }
 
-    string TakeCliOutOfMount(string image = "/apps/Kcap.AppImage") =>
-        new AppImageInstall(image).TakeCliOutOfMount(_ => null, new UserHome(Tmp.PathTo("home")), Tmp.PathTo("mount"));
+    string TakeCliOutOfMount(string image = "/apps/Kcap.AppImage", string build = "1.4.0") =>
+        new AppImageInstall(image).TakeCliOutOfMount(_ => null, new UserHome(Tmp.PathTo("home")), Tmp.PathTo("mount"), build);
 
     [Test]
     public async Task The_cli_runs_from_bin_when_the_bundle_has_one_and_beside_the_app_otherwise() {
@@ -86,5 +86,24 @@ public class AppImageInstallTests {
         TakeCliOutOfMount(image);
 
         await Assert.That(File.ReadAllText(staged)).IsEqualTo("daemon v2 is a different size");
+    }
+
+    /// The old copy wrote the stamp for the path's new image; the new build's launch must restage even when its CLI
+    /// matches the old one in size and only its plugin changed.
+    [Test]
+    public async Task A_new_build_restages_a_same_size_cli_and_a_changed_plugin() {
+        var image = Tmp.CreateFile("Kcap.AppImage", "image v2 already at the path");
+        Tmp.CreateFile("mount/bin/kcap", "cli v1");
+        Tmp.CreateFile("mount/bin/kcap-daemon", "daemon v1");
+        Tmp.CreateFile("mount/kcap/.claude-plugin/plugin.json", "plugin v1");
+        var staged = Path.Combine(TakeCliOutOfMount(image, build: "1.4.0"), "kcap-daemon");
+        var plugin = Tmp.PathTo("home", ".local", "share", "kcap", "desktop", "kcap", ".claude-plugin", "plugin.json");
+
+        File.WriteAllText(Tmp.PathTo("mount", "bin", "kcap-daemon"), "daemon v2");
+        File.WriteAllText(Tmp.PathTo("mount", "kcap", ".claude-plugin", "plugin.json"), "plugin v2");
+        TakeCliOutOfMount(image, build: "1.4.1");
+
+        await Assert.That(File.ReadAllText(staged)).IsEqualTo("daemon v2");
+        await Assert.That(File.ReadAllText(plugin)).IsEqualTo("plugin v2");
     }
 }

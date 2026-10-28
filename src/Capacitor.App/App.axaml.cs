@@ -722,7 +722,7 @@ public partial class App : Application {
     /// relaunch of one, already updated in place under another name; a first install has nothing to finish.
     void RecordInstallerHandover(ApplicationsInstallPlan plan, string? previous) {
         if (plan.SourceVersion is not { } to) return;
-        var from = previous == to ? null : previous;
+        var from = previous is not null && PrereleaseSemver.IsNewer(to, previous) ? previous : null;
         if (from is null && !Program.Host.UpdateRelaunch) return;
         try {
             AppUpdateTransition.Begin(AppUpdateTransition.Installer, from, to, _time).Save(_config);
