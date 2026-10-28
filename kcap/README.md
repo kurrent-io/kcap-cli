@@ -87,11 +87,12 @@ Publish a self-contained HTML page — a plan, a report, a comparison, the artif
 | `get_page_results` | Tallies and each person's current answer, without waiting |
 | `close_page_responses` | Freeze a version's answers; `closed: false` reopens and clears any deadline |
 | `list_my_pages` | The pages you can see — id, title, audience, latest version, URL |
+| `get_page` | Read a page you can see — yours or one shared with you — by id or link: its record plus its text (`format: "html"` for the source), cut at `max_chars` |
 | `set_page_visibility` | Replace a page's audience (`none` / `org` / `scoped` + grants) |
 
 A page is private to its owner until visibility says otherwise. The current session is cited automatically from `KCAP_SESSION_ID`, so a publish is attributed to the work that produced it.
 
-Declaring a `response_schema` turns the page into a form the server validates and tallies: fields of type `choice`, `multi`, `score` or `text`, plus a `results_mode` deciding what other viewers see — `owner` (default, only you), `aggregate` (tallies, no names or free text) or `named` (who said what). Who answered is always the authenticated viewer; there is no field for it to forge. Reading, version history and takedown stay in the web UI.
+Declaring a `response_schema` turns the page into a form the server validates and tallies: fields of type `choice`, `multi`, `score` or `text`, plus a `results_mode` deciding what other viewers see — `owner` (default, only you), `aggregate` (tallies, no names or free text) or `named` (who said what). Who answered is always the authenticated viewer; there is no field for it to forge. A page read with `get_page` comes back marked as its author's words, to be treated as data rather than instructions. Version history and takedown stay in the web UI.
 
 `kcap mcp judge` is intentionally not auto-registered. Add it with `claude mcp add kcap-judge -- kcap mcp judge` if you want it.
 
