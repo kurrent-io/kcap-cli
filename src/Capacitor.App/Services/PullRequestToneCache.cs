@@ -271,6 +271,16 @@ public sealed class PullRequestToneCache : IDisposable {
         }
     }
 
+    /// A read in flight when another session was refused sends nothing more until the hold lapses,
+    /// and goes again whole after it.
+    bool Held(string session, long version) {
+        lock (_lock) {
+            if (_time.GetUtcNow().UtcDateTime >= _heldUntil) return false;
+            if (LiveEntry(session, version) is { } entry) entry.ReadAt = null;
+            return true;
+        }
+    }
+
     async Task ReadAsync(string session, long version, CancellationToken ct) {
         try {
             // Only a successfully renewed summary earns the faster access-window cadence.
@@ -284,6 +294,7 @@ public sealed class PullRequestToneCache : IDisposable {
                 if (capability.Kind != PullRequestCapabilityKind.Unavailable) Clear(session, version);
                 return;
             }
+            if (Held(session, version)) return;
             var links = await _source.ListAsync(session, ct).ConfigureAwait(false);
             if (links.Kind != PullRequestReadKind.Ready || links.Data is null) {
                 if (Refused(links) is { } until) Hold(session, version, until);
@@ -294,8 +305,14 @@ public sealed class PullRequestToneCache : IDisposable {
             var denied = false;
             var missed = false;
             foreach (var link in links.Data.Items.DistinctBy(PullRequestWire.Subject)) {
+                // A denial already read outranks the PRs this read cannot reach.
+                if (Held(session, version)) {
+                    if (denied) Clear(session, version);
+                    return;
+                }
                 var read = await _source.OverviewAsync(session, PullRequestWire.Subject(link), ct).ConfigureAwait(false);
                 if (Refused(read) is { } until) {
+                    if (denied) Clear(session, version);
                     Hold(session, version, until);
                     return;
                 }

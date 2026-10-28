@@ -475,6 +475,48 @@ public class PullRequestToneCacheTests {
         await WaitUntilAsync(() => source.Lists == 4, what: "both read once the hold lapses");
     }
 
+    static PullRequestRead<PullRequestOverviewDto> RateLimited(PullRequestSubjectDto subject, DateTime retryAt) => new(
+        PullRequestReadKind.Unavailable, Subject: subject, Reason: "server_unavailable", AccessFailure: "transient", RetryAt: retryAt, StatusCode: 429);
+
+    /// The budget is the user's: a read already in flight when another session is refused sends no
+    /// further request before the retry time.
+    [Test]
+    public async Task A_read_in_flight_sends_nothing_more_once_another_is_refused() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        source.OverviewResponses.Enqueue(async (subject, ct) => { await gate.Task.WaitAsync(ct); return source.Overview(subject); });
+        source.OverviewResponses.Enqueue((subject, _) => Task.FromResult(RateLimited(subject, time.GetUtcNow().UtcDateTime.AddSeconds(30))));
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+        directory.Rows.AddOrUpdate(Row("a2", "s2"));
+        await WaitUntilAsync(() => source.Overviews == 2, what: "one read held open, the other refused");
+
+        gate.SetResult();
+        await Task.Delay(100);
+        await Assert.That(source.Overviews).IsEqualTo(2);
+
+        time.Advance(TimeSpan.FromSeconds(31));
+        await WaitUntilAsync(() => cache.Current.Count == 2, what: "both read after the hold");
+    }
+
+    /// A denial read before a refusal still clears the tone: the refusal only hides the PRs after it.
+    [Test]
+    public async Task A_denial_before_a_refusal_still_drops_the_tone() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+        await WaitUntilAsync(() => cache.Current.ContainsKey("s1"), what: "tone for s1");
+
+        source.OverviewResponses.Enqueue((subject, _) => Task.FromResult(new PullRequestRead<PullRequestOverviewDto>(
+            PullRequestReadKind.Unavailable, Subject: subject, AccessFailure: "denied", Reason: "github_access_denied")));
+        source.OverviewResponses.Enqueue((subject, _) => Task.FromResult(RateLimited(subject, time.GetUtcNow().UtcDateTime.AddMinutes(5))));
+        time.Advance(TimeSpan.FromMinutes(3));
+
+        await WaitUntilAsync(() => !cache.Current.ContainsKey("s1"), what: "tone dropped");
+    }
+
     [Test]
     public async Task A_denied_overview_drops_the_tone() {
         var (directory, source, time, cache) = Build();
