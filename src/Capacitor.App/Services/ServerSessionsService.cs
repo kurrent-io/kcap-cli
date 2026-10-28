@@ -67,8 +67,12 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
     bool _ownersBusy;
     /// The owners endpoint answered once this connection; an account with no entry of its own is resolved too.
     bool _ownersResolved;
-    /// No listing read goes out before this: the server refused one for the user's read budget.
+    /// No listing read goes out before this: the server refused one for the user's read budget. It is
+    /// that account's budget, so another account's read neither sets nor waits on it.
     DateTimeOffset _heldUntil = DateTimeOffset.MinValue;
+    int _account;
+    /// Cancelled when the account changes, so a read waiting on the previous account's hold goes at once.
+    CancellationTokenSource _holdWake = new();
     readonly BehaviorSubject<ServerSessionsSnapshot> _snapshots = new(ServerSessionsSnapshot.Empty);
     readonly Subject<string> _dropped = new();
     string? _kept;
@@ -256,21 +260,30 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
     async Task RunAsync() {
         while (true) {
             TimeSpan hold;
-            lock (_lock) hold = _heldUntil - _time.GetUtcNow();
+            CancellationToken wake;
+            lock (_lock) {
+                hold = _heldUntil - _time.GetUtcNow();
+                wake = _holdWake.Token;
+            }
             if (hold > TimeSpan.Zero) {
                 // Still busy while held, so every request in the meantime folds into the one read after.
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(_disposing.Token, wake);
                 try {
-                    await Task.Delay(hold, _time, _disposing.Token).ConfigureAwait(false);
+                    await Task.Delay(hold, _time, linked.Token).ConfigureAwait(false);
+                } catch (OperationCanceledException) when (!_disposing.IsCancellationRequested) {
+                    // Woken by the account change under its lock; the read starts off that thread.
+                    await Task.Yield();
                 } catch (OperationCanceledException) {
                     return;
                 }
             }
-            int generation, laneEpoch, pages;
+            int generation, laneEpoch, pages, account;
             long readSeq;
             RailScope scope;
             bool full;
             lock (_lock) {
                 generation = _generation;
+                account = _account;
                 laneEpoch = _laneEpoch;
                 pages = _pages;
                 scope = _scope.Value;
@@ -301,7 +314,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
                     _current.OnNext(snapshot is { EndedPartial: false });
                     if (unauthorized) notifyUnauthorized = true;
                 }
-                if (refused is { } wait) {
+                if (refused is { } wait && account == _account) {
                     var until = _time.GetUtcNow() + (wait > MinimumHold ? wait : MinimumHold);
                     if (until > _heldUntil) _heldUntil = until;
                     // A refused reconcile goes again once the hold lapses; a live read waits for the next push.
@@ -427,6 +440,11 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
 
     /// Nothing listed under the previous account survives into the next one.
     void ClearForNewAccount() {
+        _account++;
+        _heldUntil = DateTimeOffset.MinValue;
+        _holdWake.Cancel();
+        _holdWake.Dispose();
+        _holdWake = new();
         var gone = _live.Keys.Concat(_mineLive.Keys).Concat(_ended.Keys).Append(_kept)
             .OfType<string>().Distinct(StringComparer.Ordinal).ToList();
         foreach (var id in gone) _dropped.OnNext(id);
@@ -512,5 +530,6 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
         _snapshots.Dispose();
         _dropped.Dispose();
         _disposing.Dispose();
+        _holdWake.Dispose();
     }
 }

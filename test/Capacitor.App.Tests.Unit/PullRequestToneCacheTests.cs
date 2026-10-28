@@ -500,6 +500,28 @@ public class PullRequestToneCacheTests {
         await WaitUntilAsync(() => cache.Current.Count == 2, what: "both read after the hold");
     }
 
+    /// A zero Retry-After still waits a second; the refused read would otherwise go again at once.
+    [Test]
+    public async Task A_zero_retry_time_still_holds_for_a_second() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        source.AccessSeconds = 3600;
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+        await WaitUntilAsync(() => cache.Current.ContainsKey("s1"), what: "tone for s1");
+
+        // Refused with a retry time of the moment it is answered.
+        source.ListResponses.Enqueue(new(PullRequestReadKind.Unavailable, Reason: "server_unavailable", AccessFailure: "transient",
+            RetryAt: time.GetUtcNow().UtcDateTime.AddMinutes(2), StatusCode: 429));
+        time.Advance(TimeSpan.FromMinutes(2));
+        await WaitUntilAsync(() => source.Lists == 2, what: "the refused read");
+        await Task.Delay(100);
+        await Assert.That(source.Lists).IsEqualTo(2);
+
+        time.Advance(TimeSpan.FromSeconds(1));
+        await WaitUntilAsync(() => source.Lists == 3, what: "the read after the floor");
+    }
+
     /// A denial read before a refusal still clears the tone: the refusal only hides the PRs after it.
     [Test]
     public async Task A_denial_before_a_refusal_still_drops_the_tone() {

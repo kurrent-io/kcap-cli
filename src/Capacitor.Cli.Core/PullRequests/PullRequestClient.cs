@@ -132,7 +132,9 @@ public sealed class PullRequestClient(HttpClient http, string serverUrl, TimePro
             if (status == 404) return new(PullRequestReadKind.SubjectUnavailable, Subject: subject, AccessFailure: "invalid", StatusCode: status);
             if (status is >= 300 and < 400) return Invalid<T>("unexpected_origin");
             if (status is >= 500 or 429) return new(PullRequestReadKind.Unavailable, Subject: subject, Reason: "server_unavailable", AccessFailure: "transient",
-                RetryAt: status == 429 && RetryAfterHeader.Read(response, _time) is { } wait ? (_time.GetUtcNow() + wait).UtcDateTime : null, StatusCode: status);
+                // A refusal without a usable Retry-After still waits the server-wide cap's one second.
+                RetryAt: status == 429 ? (_time.GetUtcNow() + (RetryAfterHeader.Read(response, _time) ?? TimeSpan.FromSeconds(1))).UtcDateTime : null,
+                StatusCode: status);
             using var document = await ReadDocumentAsync(response, linked.Token).ConfigureAwait(false);
             if (!PullRequestWire.ValidJson(document.RootElement)) return Invalid<T>();
             if (status == 409) {

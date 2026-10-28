@@ -186,6 +186,9 @@ public class PullRequestClientTests {
         await Assert.That(refused.AccessFailure).IsEqualTo("transient");
         await Assert.That(refused.RetryAt).IsEqualTo(new DateTime(2026, 10, 27, 12, 0, 7, DateTimeKind.Utc));
 
+        handler.RetryAfter = null;
+        await Assert.That((await client.ListAsync("session", default)).RetryAt).IsEqualTo(new DateTime(2026, 10, 27, 12, 0, 1, DateTimeKind.Utc));
+
         handler.Status = HttpStatusCode.ServiceUnavailable;
         await Assert.That((await client.ListAsync("session", default)).RetryAt).IsNull();
     }

@@ -19,6 +19,7 @@ public sealed class PullRequestToneCache : IDisposable {
     static readonly TimeSpan DefaultRefreshEvery = TimeSpan.FromMinutes(2);
     static readonly TimeSpan DefaultEndedRefreshEvery = TimeSpan.FromMinutes(10);
     static readonly TimeSpan TickEvery = TimeSpan.FromSeconds(1);
+    static readonly TimeSpan MinimumHold = TimeSpan.FromSeconds(1);
     /// Every listed session comes due at once after a connect or a scope switch, and the server
     /// refuses a fifth concurrent PR read from one user.
     const int MaxConcurrentReads = 4;
@@ -266,6 +267,9 @@ public sealed class PullRequestToneCache : IDisposable {
     /// rather than on its session's cadence.
     void Hold(string session, long version, DateTime until) {
         lock (_lock) {
+            // A zero Retry-After, or a date already past, would otherwise re-send the refused read at once.
+            var floor = _time.GetUtcNow().UtcDateTime + MinimumHold;
+            if (until < floor) until = floor;
             if (until > _heldUntil) _heldUntil = until;
             if (LiveEntry(session, version) is { } entry) entry.ReadAt = null;
         }

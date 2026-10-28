@@ -216,6 +216,47 @@ public class ServerSessionsServiceTests {
         await Eventually(() => listing.Count("ended", "me", 0) == 2, "the held reconcile");
     }
 
+    /// The hold is the refused account's budget: signing in as another account reads at once.
+    [Test]
+    public async Task Another_account_does_not_wait_on_the_previous_accounts_hold() {
+        var (lane, listing, _, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        listing.Gate = async _ => await Task.Yield();
+        listing.Refuse("ended", "me", 0, TimeSpan.FromMinutes(10));
+        Connect(lane, "u1");
+        await Eventually(() => listing.Count("ended", "me", 0) == 1, "refused page");
+
+        listing.Answer("ended", "me", 0, 212, Rows("s", 1, 20));
+        Connect(lane, "u2", epoch: 2);
+
+        await Eventually(() => service.Ended.Count == 20, "the new account's read");
+    }
+
+    /// A refusal that answers the previous account's read, landing after the switch, holds nothing.
+    [Test]
+    public async Task A_refusal_for_the_previous_account_sets_no_hold() {
+        var (lane, listing, _, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var endedReads = 0;
+        // The first account's read is held open and refused; the new account's is answered.
+        listing.Gate = async query => {
+            if (query.State == "ended" && Interlocked.Increment(ref endedReads) == 1) await release.Task;
+            else if (query.State == "ended") listing.Answer("ended", "me", 0, 212, Rows("s", 1, 20));
+            await Task.Yield();
+        };
+        listing.Refuse("ended", "me", 0, TimeSpan.FromMinutes(10));
+        Connect(lane, "u1");
+        await Eventually(() => listing.Count("ended", "me", 0) == 1, "the first account's read in flight");
+
+        Connect(lane, "u2", epoch: 2);
+        release.SetResult();
+
+        await Eventually(() => service.Ended.Count == 20, "the new account's read");
+    }
+
     [Test]
     public async Task At_cap_show_more_is_refused() {
         var (lane, listing, _, service) = Build();
