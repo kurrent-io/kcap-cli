@@ -9,10 +9,12 @@ namespace Capacitor.App.Services;
 
 /// The subset of Capacitor.Cli.Commands.ServiceStatusJson the app reads; snake_case on the wire.
 /// `LoadedSpawnType` is launchd's word for the loaded job, null when the label is not loaded or the
-/// CLI predates the field; read it through SpawnTypes.
+/// CLI predates the field; read it through SpawnTypes. The `Txn*` details of a leftover marker are
+/// null from a CLI that predates them.
 public sealed record ServiceSnapshot(
     string ServiceId, bool UnitPresent, string State, string? BinaryPath, string? InstallBinaryPath,
     int? JobPid, int? DaemonPid, bool TxnMarker, bool TxnActive, string? LoadedSpawnType = null,
+    string? TxnOperation = null, string? TxnPhase = null, DateTimeOffset? TxnMarkedAt = null,
     string? Supervisor = null, bool? ServiceUpgradeAvailable = null, bool? WindowsServiceInstallable = null);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]

@@ -946,6 +946,7 @@ public partial class App : Application {
                 backgroundPriority: lifecycle.BackgroundPriority, reloadState: lifecycle.ReloadState,
                 isReloading: lifecycle.IsReloading, reloadDaemon: lifecycle.ReloadServiceAsync,
                 movingToWindowsService: lifecycle.IsMovingToWindowsService,
+                repairDaemon: lifecycle.RepairStaleMarkerAsync, repairOffer: lifecycle.RepairOffer,
                 localServer: localServer, localStack: localStack, uiScale: _uiScale, usageNotice: _usageNotice,
                 web: webWorkspace, openLaunchApprovals: launchApprovals.Show)),
             // Both close paths release the workspace: hide-to-tray keeps the window (and its
@@ -1734,7 +1735,9 @@ public partial class App : Application {
             UiScaleSetting? uiScale = null, UsageDataNotice? usageNotice = null,
             WebWorkspaceViewModel? web = null, Action? openLaunchApprovals = null,
             Func<string, RemoteSessionViewModel?>? serverWorkspaceFactory = null, IServerSessionsService? sessions = null,
-            RailPreferencesStore? railPreferences = null, AccountReadings? readings = null, string? profileName = null) {
+            RailPreferencesStore? railPreferences = null, AccountReadings? readings = null,
+            Func<CancellationToken, Task>? repairDaemon = null, IObservable<string?>? repairOffer = null,
+            string? profileName = null) {
         // Notifier is set on the WINDOW (the toast overlay), not the ViewModel — the toast
         // is a View-level concern (WindowNotificationManager lives on MainWindow) independent of
         // the VM's WhenActivated-scoped projections.
@@ -1774,6 +1777,7 @@ public partial class App : Application {
             retryListing: remoteAgents is null ? null : remoteAgents.RefreshDaemonsAsync, readings: readings,
             launchFailed: agentId => vm?.CloseFailedLaunch(agentId)) { LocalStack = localStack, UsageNotice = usageNotice };
         if (localServer is not null) home.AttachLocalServerRecovery(localServer);
+        if (repairDaemon is not null && repairOffer is not null) home.AttachServiceRepair(repairDaemon, repairOffer, shutdownToken);
         // Same knot as home above, over the SAME `service` instance — its callbacks close over
         // `vm`, not a local, so no two-step forward-declaration is needed.
         // Both rail actions route through the one call, each naming the lane of the row that was

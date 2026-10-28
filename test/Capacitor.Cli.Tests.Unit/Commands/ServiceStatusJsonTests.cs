@@ -41,6 +41,27 @@ public class ServiceStatusJsonTests {
     }
 
     [Test]
+    public async Task Render_carries_a_leftover_markers_details() {
+        var q = new ServiceQuery(LabelProbe.Loaded, true, ServiceState.Running, "/u/kcap-daemon", 42);
+        var marker = new TxnMarker(1, "replace", "bootstrapped", "absent|nounit||pid=", "no-unit", null);
+        var at = new DateTimeOffset(2026, 9, 11, 21, 52, 0, TimeSpan.Zero);
+        var (json, _) = ServiceStatusRender.Render(q, "default", null, 42, true, false, marker: marker, markedAt: at);
+        using var doc = JsonDocument.Parse(json!);
+        var r = doc.RootElement;
+        await Assert.That(r.GetProperty("txn_operation").GetString()).IsEqualTo("replace");
+        await Assert.That(r.GetProperty("txn_phase").GetString()).IsEqualTo("bootstrapped");
+        await Assert.That(r.GetProperty("txn_marked_at").GetDateTimeOffset()).IsEqualTo(at);
+    }
+
+    [Test]
+    public async Task Unfinished_marker_lines_name_the_repair_command() {
+        var marker = new TxnMarker(1, "replace", "bootstrapped", "absent|nounit||pid=", "no-unit", null);
+        var lines = DaemonServiceCommands.UnfinishedTxnLines("tony", marker, null);
+        await Assert.That(lines).Contains("service replace did not finish: it stopped at 'bootstrapped'.");
+        await Assert.That(lines).Contains("kcap daemon service install --replace --verify --name tony");
+    }
+
+    [Test]
     public async Task Unknown_probe_fails_nonzero() {
         var q = new ServiceQuery(LabelProbe.Unknown, true, ServiceState.NotInstalled, "/u/kcap-daemon", null);
         var (json, exit) = ServiceStatusRender.Render(q, "default", null, null, false, false);

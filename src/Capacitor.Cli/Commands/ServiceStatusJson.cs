@@ -4,12 +4,13 @@ using Capacitor.Cli.Services;
 
 namespace Capacitor.Cli.Commands;
 
-/// <summary>Machine-readable payload for <c>kcap daemon service status --json</c> (spec §3.4).</summary>
+/// <summary>Machine-readable payload for <c>kcap daemon service status --json</c>.</summary>
 /// <remarks>
 /// The four <c>Unit*</c> members are UX evidence only, re-derived by re-reading the installed unit's
 /// baked environment (see <see cref="ServiceStatusRender.Render"/>) — they are not sourced from
-/// <see cref="ServiceQuery"/> and are null whenever that re-read is ambiguous or fails. Additive-last so
-/// existing consumers of the earlier positional shape are unaffected.
+/// <see cref="ServiceQuery"/> and are null whenever that re-read is ambiguous or fails. The
+/// <c>Txn*</c> details describe a leftover marker and are null when its file cannot be parsed. New
+/// members go last: the app deserializes this positionally-named shape from older and newer CLIs.
 /// </remarks>
 public sealed record ServiceStatusJson(
     string ServiceId, bool UnitPresent, string State, string? BinaryPath,
@@ -17,6 +18,7 @@ public sealed record ServiceStatusJson(
     string? UnitProfile = null, string? UnitServerUrl = null,
     string? UnitExpectedServer = null, string? UnitConsentSeed = null,
     string? LoadedSpawnType = null,
+    string? TxnOperation = null, string? TxnPhase = null, DateTimeOffset? TxnMarkedAt = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Supervisor = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? ServiceUpgradeAvailable = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? WindowsServiceInstallable = null);
@@ -56,6 +58,7 @@ internal static class ServiceStatusRender {
             ServiceQuery q, string serviceId, string? installBinaryPath, int? daemonPid, bool txnMarker, bool txnActive,
             string? unitProfile = null, string? unitServerUrl = null,
             string? unitExpectedServer = null, string? unitConsentSeed = null,
+            TxnMarker? marker = null, DateTimeOffset? markedAt = null,
             string? supervisor = null, bool? serviceUpgradeAvailable = null, bool? windowsServiceInstallable = null) {
         if (q.Probe == LabelProbe.Unknown) return (null, 1);
 
@@ -70,7 +73,9 @@ internal static class ServiceStatusRender {
             serviceId, q.UnitPresent, state, q.BinaryPath,
             installBinaryPath, q.JobPid, daemonPid, txnMarker, txnActive,
             unitProfile, unitServerUrl, unitExpectedServer, unitConsentSeed,
-            q.LoadedSpawnType, supervisor, serviceUpgradeAvailable, windowsServiceInstallable);
+            q.LoadedSpawnType,
+            marker?.Operation, marker?.Phase, txnMarker ? markedAt : null,
+            supervisor, serviceUpgradeAvailable, windowsServiceInstallable);
 
         return (JsonSerializer.Serialize(dto, ServiceJsonContext.Default.ServiceStatusJson), 0);
     }
