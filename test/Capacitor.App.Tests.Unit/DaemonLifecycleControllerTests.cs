@@ -2087,9 +2087,24 @@ public class DaemonLifecycleControllerTests {
 
         h.PushConnected();
 
-        await WaitUntilAsync(() => h.Surface.Prompts.Count == 1, what: "the Windows service offer");
-        await h.Controller.PhaseClosed;
-        await Task.Delay(50);
+        await WaitUntilAsync(() => h.Surface.StatusMessages.Contains(DaemonLifecycleController.PromptBusyStatus), what: "the cancel");
+        await Assert.That(h.Lane.Requests).IsEmpty();
+    }
+
+    /// The consent was for the daemon the prompt described
+    [Test]
+    public async Task A_daemon_that_changed_while_the_prompt_was_open_is_not_moved() {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(TaskSupervised());
+        h.Surface.ConfirmBehavior = (_, _) => {
+            h.PushConnecting();
+            return Task.FromResult(true);
+        };
+        h.Start();
+
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Surface.StatusMessages.Contains(DaemonLifecycleController.PromptStaleStatus), what: "the cancel");
         await Assert.That(h.Lane.Requests).IsEmpty();
     }
 

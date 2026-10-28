@@ -115,6 +115,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
     internal const string StandardPriorityStatus = "Daemon runs at standard priority.";
     internal const string PromptStaleStatus      = "The daemon changed while the prompt was open — canceled, nothing changed.";
+    internal const string PromptBusyStatus       = "Agents started on the daemon while the prompt was open — canceled, nothing changed.";
 
     readonly BehaviorSubject<bool>         _backgroundPriority = new(false);
     readonly BehaviorSubject<ReloadState?> _reloadState        = new(null);
@@ -685,7 +686,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         }
 
         if (requireIdle && _latestBusy) {
-            _surface.Status("Agents started on the daemon while the prompt was open — canceled, nothing changed.");
+            _surface.Status(PromptBusyStatus);
             // Offered again once they finish; the flag goes first so an idle snapshot landing now still finds it.
             lock (_lock) _mismatchWaitsForIdle = true;
             if (!_latestBusy) _ = CheckAttachedIdentityAsync();
@@ -1133,13 +1134,17 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         var prompt = new LifecyclePrompt(
             install ? LifecyclePrompt.KindWindowsService : LifecyclePrompt.KindWindowsServiceUpdate, null, CliVersion, false,
             install ? WindowsServiceDisclosure(_latestActiveAgents, resumes) : WindowsServiceUpdateDisclosure);
+        var gen0 = CurrentGeneration();
         if (!await _surface.ConfirmAsync(prompt, ct).ConfigureAwait(false)) {
             // A prompt closed by the app shutting down was not answered
             if (install && !ct.IsCancellationRequested) await _rememberWindowsServiceDeclined().ConfigureAwait(false);
             return;
         }
-        // Work started while the prompt was open is not what it agreed to end
-        if (install && _latestBusy && !resumes) {
+        // The consent was for the daemon the prompt described, ending none of the work started since. Offered
+        // again on the next connect.
+        var stale = CurrentGeneration() != gen0;
+        if (stale || install && _latestBusy && !resumes) {
+            _surface.Status(stale ? PromptStaleStatus : PromptBusyStatus);
             lock (_lock) _windowsServiceOffered = false;
             return;
         }
