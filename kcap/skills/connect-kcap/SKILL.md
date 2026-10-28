@@ -236,7 +236,8 @@ works.
 
 ### B5. Write the `kcap` skill
 
-Create `~/workspace/skills/kcap/SKILL.md` with this content:
+Create `~/workspace/skills/kcap/SKILL.md` with this content. If it already
+exists, replace it with this content.
 
 When upgrading, replace the former `capacitor` skill rather than keeping both.
 Keep `~/workspace/capacitor` and its logs and recording data in place.
