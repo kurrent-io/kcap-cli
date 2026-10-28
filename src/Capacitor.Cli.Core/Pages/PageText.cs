@@ -71,7 +71,7 @@ public static partial class PageText {
         while (open.Count > 0 && ClosesImplicitly(open[^1].Name, name)) Pop(open, text);
 
         // Script and style bodies are raw text: a tag inside one is not markup.
-        if (RawText.Contains(name)) return Before(html, $"</{name}", end);
+        if (RawText.Contains(name)) return RawTextEnd(html, $"</{name}", end);
 
         var suppressed = Suppressed(open) || NonContent.Contains(name) || tag.IsHidden;
 
@@ -179,10 +179,18 @@ public static partial class PageText {
         return at < 0 ? html.Length : at + marker.Length;
     }
 
-    static int Before(string html, string marker, int from) {
-        var at = html.IndexOf(marker, from, StringComparison.OrdinalIgnoreCase);
+    /// <summary>Where the raw text's own close tag starts: <paramref name="close"/> followed by a tag
+    /// boundary, so <c>&lt;/scripts&gt;</c> inside a script does not end it.</summary>
+    static int RawTextEnd(string html, string close, int from) {
+        for (var at = html.IndexOf(close, from, StringComparison.OrdinalIgnoreCase);
+             at >= 0;
+             at = html.IndexOf(close, at + 1, StringComparison.OrdinalIgnoreCase)) {
+            var next = at + close.Length;
 
-        return at < 0 ? html.Length : at;
+            if (next == html.Length || html[next] is '>' or '/' || char.IsWhiteSpace(html[next])) return at;
+        }
+
+        return html.Length;
     }
 
     static string Lines(string text) {
