@@ -257,4 +257,68 @@ public class AccountRefresherTests {
             await publisher.StopAsync(CancellationToken.None);
         }
     }
+
+    [Test]
+    public async Task A_soon_request_inside_the_cooldown_runs_at_once() {
+        Register(Work);
+        var probe = new CountingProbe(_time);
+        using var refresher = Refresher(probe);
+        await refresher.StartAsync(CancellationToken.None);
+        try {
+            await Until(refresher, () => refresher.Finished == 1);
+
+            _time.Advance(Minute);
+            refresher.RequestSoon(Work);
+            await Until(refresher, () => refresher.Finished == 2);
+            await Assert.That(probe[Work]).IsEqualTo(2);
+        } finally {
+            await refresher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task A_second_soon_request_inside_the_cooldown_waits_for_it() {
+        Register(Work);
+        var probe = new CountingProbe(_time);
+        using var refresher = Refresher(probe);
+        await refresher.StartAsync(CancellationToken.None);
+        try {
+            await Until(refresher, () => refresher.Finished == 1);
+            refresher.RequestSoon(Work);
+            await Until(refresher, () => refresher.Finished == 2);
+
+            _time.Advance(Minute);
+            refresher.RequestSoon(Work);
+            _time.Advance(8 * Minute);
+            await Idle(refresher);
+            await Assert.That(probe[Work]).IsEqualTo(2);
+
+            _time.Advance(Minute);
+            await Until(refresher, () => refresher.Finished == 3);
+        } finally {
+            await refresher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task A_soon_request_replaces_a_pending_deferral() {
+        Register(Work);
+        var probe = new CountingProbe(_time);
+        using var refresher = Refresher(probe);
+        await refresher.StartAsync(CancellationToken.None);
+        try {
+            await Until(refresher, () => refresher.Finished == 1);
+            refresher.Request(Work);
+
+            _time.Advance(Minute);
+            refresher.RequestSoon(Work);
+            await Until(refresher, () => refresher.Finished == 2);
+
+            _time.Advance(Cooldown);
+            await Idle(refresher);
+            await Assert.That(probe[Work]).IsEqualTo(2);
+        } finally {
+            await refresher.StopAsync(CancellationToken.None);
+        }
+    }
 }

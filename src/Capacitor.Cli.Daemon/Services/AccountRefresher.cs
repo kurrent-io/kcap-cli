@@ -20,6 +20,7 @@ internal sealed partial class AccountRefresher(
     readonly HashSet<string>                    _queued       = new(StringComparer.Ordinal);
     readonly Dictionary<string, ITimer?>        _deferred     = new(StringComparer.Ordinal);
     readonly Dictionary<string, DateTimeOffset> _lastFinished = new(StringComparer.Ordinal);
+    readonly Dictionary<string, DateTimeOffset> _lastSoon     = new(StringComparer.Ordinal);
     string?                                     _running;
     bool                                        _stopped;
     bool                                        _started;
@@ -64,6 +65,25 @@ internal sealed partial class AccountRefresher(
 
             EnqueueHeld(accountId);
         }
+    }
+
+    /// <summary>Like <see cref="Request"/>, but skips the cooldown once per cooldown, so an edit to an account's own
+    /// files is looked at within a probe. A probe that itself edits those files still cannot run more often than the
+    /// cooldown. Never blocks and never throws.</summary>
+    public void RequestSoon(string accountId) {
+        lock (_lock) {
+            var now = time.GetUtcNow();
+            var due = !_stopped && !_queued.Contains(accountId) && _running != accountId
+                   && !(_lastSoon.TryGetValue(accountId, out var last) && now - last < Cooldown);
+            if (due) {
+                _lastSoon[accountId] = now;
+                if (_deferred.Remove(accountId, out var timer)) timer?.Dispose();
+                EnqueueHeld(accountId);
+                return;
+            }
+        }
+
+        Request(accountId);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken) {
