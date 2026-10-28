@@ -15,7 +15,7 @@ public partial class InstallLocationWindow : Window {
     internal InstallLocationWindow(string where, Func<Task<MoveOutcome>> move, Action quit,
             ApplicationsInstallPlan? plan = null, IReadOnlyList<string>? destinations = null,
             Func<string, ApplicationsInstallPlan>? selectDestination = null,
-            string? userApplicationsDirectory = null, string? quitLabel = null) : this() {
+            string? userApplicationsDirectory = null, string? quitLabel = null, bool keepOne = false) : this() {
         if (quitLabel is not null) QuitButton.Content = quitLabel;
         var selectedDirectory = Path.GetDirectoryName(plan?.Target);
         var shown = plan;
@@ -40,13 +40,19 @@ public partial class InstallLocationWindow : Window {
         if (destinations is { Count: > 1 }) {
             DestinationPanel.IsVisible = true;
             DestinationPicker.ItemsSource = destinations.Select(directory => new ComboBoxItem {
-                Content = directory == userApplicationsDirectory
-                    ? "Install for me only"
+                Content = keepOne ? $"Keep the copy in {directory}"
+                    : directory == userApplicationsDirectory ? "Install for me only"
                     : directory == "/Applications" ? "Install for all users" : directory,
                 Tag = directory,
             }).ToArray();
-            Heading.Text = "Choose an install location";
-            Explanation.Text = "Choose which Applications folder kcap should use. Unrelated apps will stay untouched.";
+            Heading.Text = keepOne ? "kcap is installed twice" : "Choose an install location";
+            if (keepOne) {
+                DestinationLabel.Text = "Copy to keep";
+                DestinationPicker.PlaceholderText = "Select a copy…";
+            }
+            Explanation.Text = keepOne
+                ? "Choose the copy to keep. The other one is removed, and the daemon and the terminal command use the copy you keep."
+                : "Choose which Applications folder kcap should use. Unrelated apps will stay untouched.";
             _canMove = false;
             MoveButton.IsEnabled = false;
             DestinationPicker.SelectionChanged += (_, _) => {

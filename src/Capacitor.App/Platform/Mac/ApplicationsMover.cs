@@ -36,9 +36,11 @@ public sealed partial class ApplicationsMover(
         }
         if (Conflicts(systemApplicationsDir) || existing.Any(Conflicts))
             return directories;
+        // The running copy's folder owns the install only while it is the one installed: with a copy in the other
+        // folder too, the daemon and terminal command follow only one of them, so the user picks which to keep.
         var home = Path.GetDirectoryName(source);
         if (Path.GetFileName(source) == BundleName && home is not null
-                && existing.Contains(home) && KcapBundle.Read(source) is { Legacy: false })
+                && existing.SequenceEqual([home]) && KcapBundle.Read(source) is { Legacy: false })
             return [home];
         if (existing.Length > 0) return existing;
         return [Path.GetDirectoryName(source) == userApplicationsDir ? userApplicationsDir : systemApplicationsDir];
@@ -60,16 +62,22 @@ public sealed partial class ApplicationsMover(
             Replaces: Predecessors(bundleRoot, target, installing));
     }
 
+    /// Every folder holds a verified kcap.app: the choice is which installed copy to keep, not where to install.
+    public static bool InstalledInEach(IEnumerable<string> directories) =>
+        directories.All(directory => KcapBundle.Read(Path.Combine(directory, BundleName)) is not null);
+
     string[] ApplicationFolders =>
         new[] { systemApplicationsDir, userApplicationsDir, applicationsDir }.OfType<string>().Select(Full).Distinct().ToArray();
 
-    /// The running bundle when it sits in an Applications folder under another name or in the other folder, and a
-    /// pre-rebrand bundle in either folder; never the target, never anything that is not a verified kcap bundle, and
-    /// never one newer than what is being installed: a pre-rebrand path keeps receiving in-place updates.
+    /// The running bundle when it sits in an Applications folder under another name or in the other folder, a
+    /// kcap.app in the other folder, and a pre-rebrand bundle in either folder; never the target, never anything that
+    /// is not a verified kcap bundle, and never one newer than what is being installed: a pre-rebrand path keeps
+    /// receiving in-place updates.
     IReadOnlyList<string> Predecessors(string bundleRoot, string target, string installing) {
         var source = Full(bundleRoot);
         var folders = ApplicationFolders;
-        var candidates = folders.Select(folder => Path.Combine(folder, KcapBundle.LegacyBundleName)).ToList();
+        var candidates = folders.Select(folder => Path.Combine(folder, KcapBundle.LegacyBundleName))
+            .Concat(folders.Select(folder => Path.Combine(folder, BundleName))).ToList();
         if (Path.GetDirectoryName(source) is { } parent && folders.Contains(parent)) candidates.Insert(0, source);
         return candidates.Distinct()
             .Where(root => root != Full(target) && KcapBundle.Read(root) is { } bundle && !PrereleaseSemver.IsNewer(bundle.Version, installing))

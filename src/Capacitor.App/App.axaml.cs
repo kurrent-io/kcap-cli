@@ -661,7 +661,8 @@ public partial class App : Application {
         }
         // Running as the installed copy, only a leftover older bundle prompted: declining goes on with this launch,
         // so a bundle that cannot be removed never locks the user out of the app.
-        var installed = InstallLocation.Passes(kind) && directories.Count == 1 && Path.GetFullPath(root!) == Path.GetFullPath(plan.Target);
+        var installed = InstallLocation.Passes(kind) && Path.GetFileName(root!) == KcapBundle.BundleName
+            && directories.Contains(Path.GetDirectoryName(Path.GetFullPath(root!)));
         void NotNow() {
             if (quitting) return;
             quitting = true;
@@ -691,6 +692,7 @@ public partial class App : Application {
             quit: installed ? NotNow : Quit, plan: plan,
             destinations: directories.Count > 1 ? directories : null,
             userApplicationsDirectory: userApps, quitLabel: installed ? "Not now" : null,
+            keepOne: directories.Count > 1 && ApplicationsMover.InstalledInEach(directories),
             selectDestination: directory => {
                 mover = Mover(directory);
                 plan = mover.Inspect(root!);
@@ -745,7 +747,7 @@ public partial class App : Application {
     internal static InstallLocationWindow BuildInstallLocationWindow(InstallLocationKind kind, Func<Task<MoveOutcome>> move, Action quit,
             ApplicationsInstallPlan? plan = null, IReadOnlyList<string>? destinations = null,
             Func<string, ApplicationsInstallPlan>? selectDestination = null,
-            string? userApplicationsDirectory = null, string? quitLabel = null) {
+            string? userApplicationsDirectory = null, string? quitLabel = null, bool keepOne = false) {
         var where = kind switch {
             InstallLocationKind.DmgVolume   => "kcap is running from the disk image.",
             InstallLocationKind.Translocated => "kcap is running from a temporary location.",
@@ -754,7 +756,7 @@ public partial class App : Application {
             _                                => "kcap is not in your Applications folder.",
         };
         return new InstallLocationWindow(where, move, quit, plan, destinations, selectDestination,
-            userApplicationsDirectory, quitLabel);
+            userApplicationsDirectory, quitLabel, keepOne);
     }
 
     // The ONE resolve+evaluate composition (OnboardingGate.EvaluateAsync), wrapped in the
