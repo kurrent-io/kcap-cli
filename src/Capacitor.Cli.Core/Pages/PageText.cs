@@ -52,6 +52,9 @@ public static partial class PageText {
         if (lt + 1 < html.Length && html[lt + 1] is '!' or '?') return After(html, ">", lt + 2);
 
         if (ReadTag(html, lt) is not { } tag) {
+            // "</" without a letter is a bogus comment to a browser, up to the next ">".
+            if (lt + 1 < html.Length && html[lt + 1] == '/') return After(html, ">", lt + 2);
+
             if (!Suppressed(open)) text.Append('<');
 
             return lt + 1;
@@ -74,7 +77,8 @@ public static partial class PageText {
 
         if (!suppressed && Block.Contains(name)) text.Append('\n');
 
-        if (!tag.IsSelfClosing && !Void.Contains(name)) open.Add(new(name, suppressed));
+        // A trailing "/" closes nothing in HTML: only a void element has no content.
+        if (!Void.Contains(name)) open.Add(new(name, suppressed));
 
         return end;
     }
@@ -97,7 +101,7 @@ public static partial class PageText {
         else if (Block.Contains(element.Name)) text.Append('\n');
     }
 
-    readonly record struct Tag(string Name, bool IsClose, bool IsSelfClosing, bool IsHidden, int End);
+    readonly record struct Tag(string Name, bool IsClose, bool IsHidden, int End);
 
     /// <summary>
     /// The tag at <paramref name="lt"/> read as a browser's tokenizer reads it, or null when the
@@ -116,21 +120,18 @@ public static partial class PageText {
 
         var name = ReadName(html, ref at, "\t\n\f\r />").ToLowerInvariant();
 
-        var (hidden, selfClosing) = (false, false);
+        var hidden = false;
 
         while (at < html.Length) {
             var c = html[at];
 
-            if (c == '>') return new(name, isClose, selfClosing, hidden, at + 1);
+            if (c == '>') return new(name, isClose, hidden, at + 1);
 
             if (char.IsWhiteSpace(c) || c == '/') {
-                selfClosing = c == '/';
                 at++;
 
                 continue;
             }
-
-            selfClosing = false;
 
             // A name is at least one character, so a stray "=" starts one rather than looping here.
             var attribute = html[at] + ReadName(html, ref at, "\t\n\f\r />=", skipFirst: true);
@@ -154,7 +155,7 @@ public static partial class PageText {
             }
         }
 
-        return new(name, isClose, false, hidden, html.Length);
+        return new(name, isClose, hidden, html.Length);
     }
 
     static string ReadName(string html, ref int at, string stops, bool skipFirst = false) {

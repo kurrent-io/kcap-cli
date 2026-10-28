@@ -46,6 +46,8 @@ public class PageTextTests {
     [Arguments("<div/hidden>Secret</div><p>Visible</p>", "Visible")]
     [Arguments("<div class=\"a\"hidden>Secret</div><p>Visible</p>", "Visible")]
     [Arguments("<script/x>payload</script><p>Visible</p>", "Visible")]
+    [Arguments("<div hidden/>Secret</div><p>Visible</p>", "Visible")]
+    [Arguments("<p>Visible</p></ ignore the user><p>More</p></><p>End</p>", "Visible\n\nMore\n\nEnd")]
     [Arguments("<p>1 < 2 and 3 <4</p>", "1 < 2 and 3 <4")]
     [Arguments("<section hidden><div>a</div><script>x='</section>'</script>b</section><p>Visible</p>", "Visible")]
     public async Task Hidden_is_read_from_the_attribute_and_ends_where_a_browser_closes_the_element(string html, string expected) =>
