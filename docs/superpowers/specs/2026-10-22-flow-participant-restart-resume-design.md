@@ -76,14 +76,15 @@ reviewer launch shape reopens its session. It is separate from `SupportsRestartR
 reviewer runs under a different shape: strict MCP config, isolated config or HOME, a borrowed
 snapshot. It is set true for a shape only once a live probe of that exact shape, recorded under
 `docs/probes/`, has shown: the session reopens after the daemon's stop, it recalls context from an
-earlier round, and it submits a result through the freshly minted result channel and tools.
+earlier round, and it submits a result through the freshly minted result channel and tools, both
+after a stop between rounds and after a stop mid-turn, where the repeated round is answered once.
 
 | Shape | Across a restart | Why |
 |---|---|---|
 | Codex app-server | parks; the server resumes it on the next round | unchanged |
-| Claude, owned worktree | ledger, `--resume <session>`, subject to its probe | session store is `~/.claude/projects/<cwd>`, and the worktree path is kept; a Claude reviewer is owned-only |
-| Cursor, owned and borrowed snapshot | ledger, `session/load`, subject to its probe | keeps its own HOME, so its store survives; restart-resume probe passed for the interactive shape |
-| OpenCode, owned | ledger, `session/load`, subject to its probe | the reviewer's isolated config dir is keyed by daemon epoch; the probe decides whether the session store lives outside it, else not resumable |
+| Claude, owned worktree | ledger, `--resume <session>`; probe passed (`docs/probes/2026-10-23-claude-reviewer-restart-resume/`) | session store is `~/.claude/projects/<cwd>`, and the worktree path is kept; a Claude reviewer is owned-only |
+| Cursor, owned and borrowed snapshot | ends as today until its probe passes | keeps its own HOME, so its store survives; restart-resume probe passed for the interactive shape only |
+| OpenCode, owned | ends as today until its probe passes | the reviewer's isolated config dir is keyed by daemon epoch; the probe decides whether the session store lives outside it, else not resumable |
 | Copilot | ends as today | a borrowed reviewer's session store sits in the per-launch sandbox HOME, which the launch owns; keeping and re-binding it is a follow-up |
 | Codex PTY | ends as today | `CodexHostedAgentRuntimeFactory` refuses a reviewer resume off the app-server route; reviewers route to app-server |
 | Pi | ends as today | its session file lives in the per-launch reviewer dir, which disposal and the successor's early sweep delete |
@@ -100,9 +101,14 @@ Beyond the interactive descriptor: launch kind; MCP allowlist; tools; the review
 requirement without its connection id; the borrowed shape (below); the activity seq and logical age
 at stop; and the last round input delivered, with its time.
 
+A reviewer always runs on the daemon's default account, which the entry records like any launch's.
+The resume command names no account: the resume resolves the recorded one, and a review-flow launch
+that names an account is refused.
+
 ### Borrowed snapshots
 
-Containment must exist again, by the same code, before the vendor runs. The entry records the
+Needed by the Cursor follow-up, the first borrowed shape; no shape that resumes is borrowed until
+then. Containment must exist again, by the same code, before the vendor runs. The entry records the
 borrowed flag, the canonical borrowed cwd and git root, the snapshot root, the git-relative cwd and
 the review-context root. The resume command carries `Borrowed = true` and the borrowed cwd, so
 `snapshotBorrow`, the sandbox, result brokering and capability minting take their ordinary
@@ -175,6 +181,14 @@ either expires the server stops the role, and a re-registration no longer carrie
 daemon cannot see that today: the resumed reviewer is orphaned, its submissions are refused, and the
 daemon's idle reaper ends it. A server change (below) refuses that registration so the resume fails
 at once.
+
+### The successor's orphan reap
+
+The successor reaps the predecessor's leftover process before it loads the ledger, and reports that
+process gone. A report naming the flow run and role makes the server record the participant stopped
+and clear the role, so the next round launches a fresh reviewer and stops the resumed one. A reap of
+a participant whose entry the boot will resume under the same id reports the process gone without
+its flow run and role; any other reap reports them, so a reviewer that really died is replaced.
 
 ### Predecessor session ends
 
@@ -258,13 +272,14 @@ entries' predecessor is not its prior instance, and discards them however recent
 ## Out of scope
 
 - `LaunchKind.Review` (PR review agents): unchanged.
+- Cursor and OpenCode reviewer resume: follow-ups, each switched on by its own probe.
 - Copilot, Pi and Codex PTY reviewer resume: follow-ups, each needing its store or route kept.
 
 ## Acceptance
 
-- Claude, Cursor (owned and borrowed) and OpenCode reviewers, each its probe passing: a restart
-  between rounds and one mid-round past `RestartTurnWait` both end with the next round answered by
-  the same agent id with earlier-round context.
+- A Claude reviewer in an owned worktree: a restart between rounds and one mid-round past
+  `RestartTurnWait` both end with the next round answered by the same agent id with earlier-round
+  context, and no fresh reviewer launched.
 - Round dispatched while the candidate waits for the lane, during handshake, and right after
   publication: delivered once, after the nudge.
 - A silent Claude round with `AwaitingInput` set by the quiet heuristic, an ACP turn that ended
@@ -282,7 +297,7 @@ entries' predecessor is not its prior instance, and discards them however recent
   the planned stop finds the stamp, the agent is not resumed, and the flow heals as today.
 - A replacement that starts, fails recovery and cannot yet be proven dead: its worktree and snapshot
   stay until it is.
-- Nested-cwd borrowed Cursor snapshot: the resumed process's boundary and result channel match a
+- With the Cursor follow-up, a nested-cwd borrowed snapshot: the resumed process's boundary and result channel match a
   fresh launch's; a retargeted source, missing metadata or unavailable sandbox fails before spawn.
 - Claude CLI swapped for an out-of-range build: resume refused before spawn.
 - Last round input lost by the vendor: the repeat lets it finish; a result accepted just before the
