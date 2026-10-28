@@ -1,3 +1,4 @@
+using Capacitor.App.Services.LocalSetup;
 using Capacitor.Cli.Core;
 
 namespace Capacitor.App.Services.Update;
@@ -12,6 +13,11 @@ public static class AppComponentStamp {
     public const string FileName = "app-components-version";
 
     public static bool Owed(ConfigRoot config, string version) => Read(config) != version;
+
+    /// A failed upgrade is retried by the next launch, and so is one whose local server build was not published
+    /// yet: the server can be published after the app, and nothing else would upgrade it until the next app update.
+    public static bool SettledBy(LocalUpgradeOutcome outcome) =>
+        outcome is not (LocalUpgradeOutcome.Failed or LocalUpgradeOutcome.NotPublished);
 
     public static string? Read(ConfigRoot config) {
         try {
