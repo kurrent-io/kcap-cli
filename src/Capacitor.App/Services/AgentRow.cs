@@ -46,6 +46,8 @@ public sealed record AgentRow(
         // The account the session runs under. Null from an older daemon and on a pending row.
         string? AccountDirectory = null,
         string? AccountId = null,
+        // The branch the listing reported; null below full access and on a daemon row.
+        string? Branch = null,
         string? AccountLabel = null) {
 
     /// A session the server lists as ended; a daemon row's Completed is not this.
@@ -97,7 +99,7 @@ public sealed record AgentRow(
             OwnerAvatarUrl: dto.Owner?.AvatarUrl,
             LastActivityAt: dto.LastActivityAt.UtcDateTime, EndedAt: dto.EndedAt?.UtcDateTime,
             IsStale: dto.Stale, IsTerminalSession: active && !hostedPresentation, AccessLevel: dto.AccessLevel,
-            ListedPullRequests: dto.PullRequests);
+            ListedPullRequests: dto.PullRequests, Branch: dto.Branch);
     }
 
     static string CanonicalRemoteStatus(string status) => status.ToLowerInvariant() switch {

@@ -130,8 +130,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     public string SelectedRepoPath {
         get => _selectedRepoPath;
         set {
-            // PathComparer, not ordinal: SameLaunchTarget and the picker already treat casings as one folder.
-            var changed = !PathComparer.Equals(_selectedRepoPath, value);
+            // Same rule as SameLaunchTarget and the picker, so a refusal clears exactly when they see a new folder.
+            var changed = !PathComparerFor(RemoteMachineSelected).Equals(_selectedRepoPath, value);
             this.RaiseAndSetIfChanged(ref _selectedRepoPath, value);
             _selectedRepoPathChanges.OnNext(value);
             // A launch refusal describes the folder that failed. A later pick is a different attempt.
@@ -458,9 +458,6 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     // null = local (daemon.Snapshots governs Harnesses); non-null = the remote machine's own
     // advertised vendors, set by SelectMachineAsync.
     readonly BehaviorSubject<string[]?> _remoteVendorOverride = new(null);
-    // Frozen at selection time — ListRepositoriesAsync's remote branch reads it rather than
-    // re-resolving the daemon list on every menu open.
-    MachineOption? _selectedRemoteMachine;
 
     readonly ObservableAsPropertyHelper<bool> _machinePickerVisible;
     /// The machine chip's visibility: hidden until the viewer owns at least one remote daemon.
@@ -682,7 +679,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             localSnapshots.Subscribe(s => _currentLocalAccounts = s).DisposeWith(_disposables);
             _machineSelectionChanges.DistinctUntilChanged()
                 .CombineLatest(
-                    _selectedRepoPathChanges.DistinctUntilChanged(PathComparer), this.WhenAnyValue(x => x.SelectedVendor),
+                    // Ordinal: a case-only change is a new repository on a Linux remote; ApplyAccountInputs
+                    // decides per machine whether it is.
+                    _selectedRepoPathChanges.DistinctUntilChanged(StringComparer.Ordinal), this.WhenAnyValue(x => x.SelectedVendor),
                     listing.StartWith(new DaemonListing(null, 0, false)),
                     remoteAccounts.StartWith((IReadOnlyList<DaemonAccountsDto>) []),
                     localSnapshots.StartWith((AccountsSnapshotDto?) null),
@@ -1159,17 +1158,22 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// offered only when that list is empty — with real repos, an empty selection adopts the
     /// most recently used known path instead.
     ///
-    /// A remote machine selection swaps this entirely: only that machine's own advertised
-    /// RepoPaths are offered (no known-repos merge, no scratch adoption — a remote path is never
-    /// verified locally), each labelled DefaultVendor since there is no per-repo remembered
-    /// harness for a machine that is not this one.
+    /// A remote machine selection swaps this entirely: that machine's advertised RepoPaths as the
+    /// registry reports them now (none once it is gone, or only a local twin of the same name is
+    /// left), plus a typed path not yet among them (no known-repos merge, no
+    /// scratch adoption — a remote path is never verified locally), each labelled DefaultVendor
+    /// since there is no per-repo remembered harness for a machine that is not this one.
     public async Task<IReadOnlyList<RepositoryOption>> ListRepositoriesAsync() {
         if (RemoteMachineSelected) {
             var remoteSelected = SelectedRepoPath;
-            return (_selectedRemoteMachine?.RepoPaths ?? [])
+            var live = _currentDaemons.Where(d => !IsLocalTwin(d)).ToList();
+            var remotePaths = (FindMachine(live, SelectedMachine, _lastViewerId)?.RepoPaths ?? []).ToList();
+            if (remoteSelected.Length > 0 && !remotePaths.Contains(remoteSelected, RemotePathComparer))
+                remotePaths.Add(remoteSelected);
+            return remotePaths
                 .OrderBy(RepoLabel.Leaf, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(p => p, StringComparer.Ordinal)
-                .Select(p => new RepositoryOption(p, DefaultVendor, PathComparer.Equals(p, remoteSelected)))
+                .Select(p => new RepositoryOption(p, DefaultVendor, RemotePathComparer.Equals(p, remoteSelected)))
                 .ToList();
         }
 
@@ -1257,7 +1261,6 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         if (isLocal) {
             var wasRemote = RemoteMachineSelected;
             SetMachineSelection(daemonName, remote: false);
-            _selectedRemoteMachine = null;
             _remoteVendorOverride.OnNext(null);
             if (!wasRemote) return; // already local — nothing a remote pick could have left behind
 
@@ -1279,7 +1282,6 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             VendorModelMaps.FromRegistry(match.VendorModelsByAccount));
 
         SetMachineSelection(daemonName, remote: true);
-        _selectedRemoteMachine = machine;
         _remoteVendorOverride.OnNext(machine.SupportedVendors);
         SelectedRepoPath = machine.RepoPaths.FirstOrDefault() is { Length: > 0 } first ? first : ScratchRepoPath;
         RevalidateVendorAgainst(machine.SupportedVendors);
@@ -1389,12 +1391,13 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     }
 
     /// When nothing is selected, adopt the most recently used known repository (then a remembered
-    /// harness key, then an agent root). No-op when a selection already exists or nothing is known.
+    /// harness key, then an agent root). No-op when a selection already exists or nothing is known,
+    /// and for a remote machine, which these local paths do not describe.
     public async Task EnsureDefaultRepositoryAsync() {
-        if (SelectedRepoPath.Length > 0) return;
+        if (SelectedRepoPath.Length > 0 || RemoteMachineSelected) return;
         if (await PreferRecentRepositoryAsync() is not { Length: > 0 } recent) return;
-        // PreferRecent can await file I/O — a pick made while that ran must win.
-        if (SelectedRepoPath.Length > 0) return;
+        // PreferRecent can await file I/O — a pick or a machine switch made while that ran must win.
+        if (SelectedRepoPath.Length > 0 || RemoteMachineSelected) return;
         await SelectRepositoryAsync(recent);
     }
 
@@ -1420,7 +1423,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// HarnessByRepo store is never consulted. Either way the result is revalidated against the
     /// selected machine's current harnesses.
     public async Task SelectRepositoryAsync(string repoPath) {
-        SelectedRepoPath = repoPath.Length == 0 ? ScratchRepoPath : PlatformPaths.Normalize(repoPath);
+        // This host's separator rules would rewrite a remote path: on Unix, Windows' C:/ trims to C:.
+        SelectedRepoPath = repoPath.Length == 0 ? ScratchRepoPath
+            : RemoteMachineSelected ? repoPath
+            : PlatformPaths.Normalize(repoPath);
         if (RemoteMachineSelected) {
             RevalidateVendor(Harnesses);
             return;
@@ -1430,6 +1436,24 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         SetVendor(Lookup(saved.HarnessByRepo, SelectedRepoPath) ?? DefaultVendor);
         RevalidateVendor(Harnesses);
     }
+
+    /// A remote machine's repository is typed rather than picked: the local folder picker would hand
+    /// it a path from this machine. Returns the reason a path was refused, or null once it is
+    /// selected. Only shape is checked; existence and the daemon's allowed-repo list are judged by
+    /// the daemon at launch.
+    public async Task<string?> EnterRemoteRepositoryAsync(string path) {
+        var trimmed = path.Trim();
+        if (!RemoteMachineSelected) return "Pick a remote machine first.";
+        if (!LooksAbsolute(trimmed)) return $"Enter the full path of the repository on {SelectedMachine}.";
+        await SelectRepositoryAsync(trimmed);
+        return null;
+    }
+
+    /// Absolute on any platform the remote machine might run, which need not be this one's.
+    internal static bool LooksAbsolute(string path) =>
+        path.StartsWith('/')
+     || path.StartsWith(@"\\", StringComparison.Ordinal)
+     || path is [_, ':', '\\' or '/', ..] && char.IsAsciiLetter(path[0]);
 
     /// Read against the draft's machine, not the current selection, which may have moved during an upload.
     string? HarnessErrorFor(LaunchDraft draft) {
@@ -1462,7 +1486,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         var machine = AccountMachine(sel.Name, sel.Remote);
         _applyingAccountInputs = true;
         try {
-            if (_accountTarget is not { } last || !PathComparer.Equals(last.RepoPath, repoPath)
+            if (_accountTarget is not { } last || !PathComparerFor(sel.Remote).Equals(last.RepoPath, repoPath)
              || last.Vendor != vendor || last.Machine != machine || last.Remote != sel.Remote) {
                 _accountTarget = (repoPath, vendor, machine, sel.Remote);
                 _accountChooser.EnterTarget(repoPath, vendor);
@@ -1847,7 +1871,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     /// Local and remote can share a daemon name and path; RemoteMachineSelected separates them.
     bool SameLaunchTarget(string repoPath, string machine, bool remote) =>
-        PathComparer.Equals(SelectedRepoPath, repoPath)
+        PathComparerFor(remote).Equals(SelectedRepoPath, repoPath)
         && string.Equals(SelectedMachine, machine, StringComparison.Ordinal)
         && RemoteMachineSelected == remote;
 
@@ -1968,6 +1992,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// Applied on READ because System.Text.Json rebuilds the dictionary with a default (ordinal)
     /// comparer on load — a comparer set only at write time would not survive the round-trip.
     static readonly StringComparer PathComparer = PlatformPaths.Comparer;
+    // This host's case rules are not the remote machine's: a Linux remote keeps /w/Repo and /w/repo apart.
+    static readonly StringComparer RemotePathComparer = StringComparer.Ordinal;
+    static StringComparer PathComparerFor(bool remote) => remote ? RemotePathComparer : PathComparer;
 
     static string? Lookup(IReadOnlyDictionary<string, string>? byRepo, string repoPath) {
         if (byRepo is null) return null;

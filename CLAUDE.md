@@ -96,6 +96,12 @@ running notes file that every PR edits.
   from a profile it opens while impersonating that user. Its only elevation is the UAC prompt in front of
   `kcap-service.exe install`; a Velopack MSI cannot stand in for it, because its install hook runs
   without admin rights and its silent per-machine install lands in a user-writable folder.
+- **Nothing kcap runs prunes worktrees.** Unless `worktree.useRelativePaths` is set, git links a
+  worktree by absolute path, and a sandbox mounting the host's repository sees it at another path:
+  from there every host-made worktree looks dangling, and the other way round. A `git worktree prune`
+  on either side deletes metadata for worktrees that are fine. The SessionStart nudge asks the user
+  to switch the repository to relative links instead; it never converts on its own, because git
+  older than 2.48 then refuses to open the repository at all.
 - **A hosted agent's launch prompt never goes on its command line.** Any local user can read a
   command line through `ps`, and a `pkill -f` from any session matches every agent whose prompt
   contains its pattern. The PTY launch spawns the agent without its prompt and pastes it into the

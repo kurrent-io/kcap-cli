@@ -1,6 +1,9 @@
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core.Mcp;
+using WireMock.RequestBuilders;
+using WireMock.ResponseBuilders;
+using WireMock.Server;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -207,15 +210,102 @@ public class McpArtefactsServerTests {
     // ── the advertised surface ────────────────────────────────────────────────────────
 
     [Test]
-    public async Task The_tool_list_is_exactly_these_six() {
+    public async Task The_tool_list_is_exactly_these_seven() {
         // Deliberate and worth keeping deliberate: an agent's context pays for every schema it
         // carries whether or not it ever publishes. Widening this is a decision, not a drive-by.
         var names = McpArtefactsServer.BuildToolsList().Select(t => t.Name).ToArray();
 
         await Assert.That(names).IsEquivalentTo(new[] {
             "publish_page", "await_page_responses", "get_page_results",
-            "close_page_responses", "list_my_pages", "set_page_visibility"
+            "close_page_responses", "list_my_pages", "get_page", "set_page_visibility"
         });
+    }
+
+    // ── reading a page ────────────────────────────────────────────────────────────────
+
+    McpArtefactsServer Server() =>
+        new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root),
+            new FixedCapacitorHttpClient(), NoTelemetry.Startup, TimeProvider.System);
+
+    static async Task<(bool IsError, string Text)> CallAsync(McpArtefactsServer server, string baseUrl, JsonObject arguments) {
+        using var client = new HttpClient();
+
+        var request = new JsonObject { ["params"] = new JsonObject { ["name"] = "get_page", ["arguments"] = arguments } };
+        var result  = JsonNode.Parse(await server.HandleToolCallAsync(JsonNode.Parse("1")!, request, client, baseUrl))!["result"]!;
+
+        return (result["isError"]?.GetValue<bool>() ?? false, result["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    const string SharedPageJson = """
+        {"artefact":{"artefact_id":"a1","title":"Plan","owner_user_id":"u2","visibility":"org","latest_version":3,
+         "updated_at":"2026-09-16T10:00:00+00:00","is_owner":false,"url":"https://kcap.test/pages/a1"},"grants":[]}
+        """;
+
+    [Test]
+    public async Task A_shared_page_named_by_its_link_reads_as_its_text_at_the_version_its_record_names() {
+        using var stub = WireMockServer.Start();
+        stub.Given(Request.Create().WithPath("/api/artefacts/a1").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(SharedPageJson));
+        stub.Given(Request.Create().WithPath("/artefacts/a1/content").WithParam("v", "3").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("<h1>Ship it</h1><script>steal()</script>"));
+
+        var (isError, text) = await CallAsync(Server(), stub.Url!, Args("""{"page_id":"https://kcap.test/pages/a1"}"""));
+
+        await Assert.That(isError).IsFalse();
+
+        var read = JsonNode.Parse(text)!.AsObject();
+        await Assert.That(read["page"]!["page_id"]!.GetValue<string>()).IsEqualTo("a1");
+        await Assert.That(read["version"]!.GetValue<int>()).IsEqualTo(3);
+        await Assert.That(read["content"]!.GetValue<string>()).IsEqualTo("Ship it");
+
+        // Read before the content, so the agent meets the warning first.
+        var keys = read.Select(p => p.Key).ToList();
+        await Assert.That(keys.IndexOf("notice")).IsLessThan(keys.IndexOf("content"));
+    }
+
+    [Test]
+    public async Task A_page_the_caller_may_not_open_is_not_found_and_its_content_is_never_asked_for() {
+        using var stub = WireMockServer.Start();
+        stub.Given(Request.Create().WithPath("/api/artefacts/a1").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(404));
+
+        var (isError, text) = await CallAsync(Server(), stub.Url!, Args("""{"page_id":"a1"}"""));
+
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).Contains("no such page");
+        await Assert.That(stub.LogEntries.Any(e => e.RequestMessage.Path.EndsWith("/content", StringComparison.Ordinal))).IsFalse();
+    }
+
+    [Test]
+    [Arguments("""{"page_id":"a/b"}""")]
+    [Arguments("""{"page_id":"https://kcap.test/sessions/s1"}""")]
+    [Arguments("""{"page_id":"a1","format":"markdown"}""")]
+    [Arguments("""{"page_id":"a1","max_chars":0}""")]
+    [Arguments("""{"page_id":"a1","version":0}""")]
+    public async Task A_read_request_that_names_no_page_or_an_unusable_shape_is_refused(string args) =>
+        await Assert.That(() => McpArtefactsServer.ReadPageRequest.From(Args(args))).Throws<ArgumentException>();
+
+    [Test]
+    public async Task A_page_its_scripts_draw_comes_back_as_html_and_says_why() {
+        const string html = "<div id=\"root\"></div><script>root.textContent = 'drawn'</script>";
+        var request = McpArtefactsServer.ReadPageRequest.From(Args("""{"page_id":"a1"}"""));
+
+        var read = McpArtefactsServer.BuildPageRead(new JsonObject(), 1, html, request);
+
+        await Assert.That(read["format"]!.GetValue<string>()).IsEqualTo("html");
+        await Assert.That(read["content"]!.GetValue<string>()).IsEqualTo(html);
+        await Assert.That(read["format_note"]!.GetValue<string>()).IsEqualTo(McpArtefactsServer.ScriptDrawnNote);
+    }
+
+    [Test]
+    public async Task A_long_page_is_cut_and_says_how_long_it_is() {
+        var request = McpArtefactsServer.ReadPageRequest.From(Args("""{"page_id":"a1","format":"html","max_chars":4}"""));
+
+        var read = McpArtefactsServer.BuildPageRead(new JsonObject(), 1, "<p>abcdef</p>", request);
+
+        await Assert.That(read["content"]!.GetValue<string>()).IsEqualTo("<p>a");
+        await Assert.That(read["truncated"]!.GetValue<bool>()).IsTrue();
+        await Assert.That(read["content_length"]!.GetValue<int>()).IsEqualTo(13);
     }
 
     [Test]

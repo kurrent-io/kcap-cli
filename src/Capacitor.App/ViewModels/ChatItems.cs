@@ -76,6 +76,7 @@ public sealed class SystemNoteItem(string text, string label = SystemNoteItem.No
     public const string NoteLabel = "Note";
     public const string AgentReportLabel = "Subagent report";
     public const string AgentMessageLabel = "Agent message";
+    public const string CompactSummaryLabel = "Conversation compacted";
 
     public string Text { get; } = text;
     public string Label { get; } = label;

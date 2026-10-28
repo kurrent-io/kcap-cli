@@ -1679,9 +1679,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                         cursor.OpenGroup = null;
                         cursor.OpenShell = null;
                         cursor.Fresh.Add(new SystemNoteItem(e.Text ?? "", e.ToolKind switch {
-                            ChatDisplayKind.AgentReport  => SystemNoteItem.AgentReportLabel,
-                            ChatDisplayKind.AgentMessage => SystemNoteItem.AgentMessageLabel,
-                            _                            => SystemNoteItem.NoteLabel,
+                            ChatDisplayKind.AgentReport    => SystemNoteItem.AgentReportLabel,
+                            ChatDisplayKind.AgentMessage   => SystemNoteItem.AgentMessageLabel,
+                            ChatDisplayKind.CompactSummary => SystemNoteItem.CompactSummaryLabel,
+                            _                              => SystemNoteItem.NoteLabel,
                         }));
                         break;
                     case AcpEventKind.ToolCall: {

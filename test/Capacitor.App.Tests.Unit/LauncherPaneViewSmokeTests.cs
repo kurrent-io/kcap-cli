@@ -743,6 +743,57 @@ public class LauncherPaneViewSmokeTests {
         });
     }
 
+    /// Pins that a remote machine's repository menu never opens this machine's folder picker: its
+    /// add row opens a focused path field, a relative path is refused in place, and Enter on a full
+    /// path selects it and closes the field.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_remote_machine_takes_a_typed_repository_path() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var path = Tmp.PathTo("app-state.json");
+            var service = new FakeDaemonClientService();
+            service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            var remote = new FakeRemoteAgents();
+            remote.DaemonsSubject.OnNext([
+                new Capacitor.Remote.Models.DaemonInfo { Name = "home-pc", OwnerUserId = "u1", Connected = true, RepoPaths = ["/w/repo"] },
+            ]);
+            var vm = new HomeViewModel(
+                service, new AppStateStore(path), new RecordingLaunchClient(), () => Task.FromResult(Array.Empty<string>()),
+                TimeProvider.System, daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"));
+            await vm.SelectMachineAsync("home-pc", isLocal: false);
+            var view = new LauncherPaneView { DataContext = vm };
+            var window = new Window { Content = view, Width = 900, Height = 700 };
+            window.Show();
+
+            var (menu, _) = OpenMenu(window, view, "RepositoryChip");
+            var rows = ((Control)menu.Content!).GetVisualDescendants().OfType<Button>().ToList();
+            await Assert.That(rows.Any(r => AutomationProperties.GetName(r) == "Add repository…")).IsFalse();
+            Click(window, rows.Single(r => AutomationProperties.GetName(r) == "Enter a path on home-pc…"));
+
+            var entry = view.OpenMenuForTesting!;
+            await Assert.That(entry).IsNotSameReferenceAs(menu);
+            var field = ((Control)entry.Content!).GetVisualDescendants().OfType<TextBox>().Single();
+            await Assert.That(field.IsFocused).IsTrue();
+
+            window.KeyTextInput("git/other");
+            window.KeyPressQwerty(PhysicalKey.Enter, RawInputModifiers.None);
+            Settle(window);
+            await Assert.That(entry.IsOpen).IsTrue();
+            await Assert.That(vm.SelectedRepoPath).IsEqualTo("/w/repo");
+
+            field.Text = "/srv/other";
+            window.KeyPressQwerty(PhysicalKey.Enter, RawInputModifiers.None);
+            Settle(window);
+            await Assert.That(vm.SelectedRepoPath).IsEqualTo("/srv/other");
+            await Assert.That(entry.IsOpen).IsFalse();
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            vm.Dispose();
+        });
+    }
+
     /// Pins that a harness the daemon does not advertise says why on hover; a disabled control
     /// shows no tooltip unless it opts in.
     [Test]

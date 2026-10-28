@@ -394,6 +394,20 @@ public class RemoteSessionViewModelTests {
         });
     }
 
+    /// The branch is what lets the PR readers find a PR opened since the listing was read.
+    [Test]
+    public async Task A_listed_sessions_branch_reaches_the_pr_readers() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var prs = new FakePullRequestSource(h.Time);
+            var vm = h.Build(Harness.ServerRow("s1", "active") with { Branch = "feature/x" }, pullRequests: prs);
+            vm.PullRequests!.SetForeground(true);
+            await WaitUntilAsync(() => prs.Descriptions.Count > 0, what: "session described");
+            await Assert.That(prs.Descriptions[^1].Branch).IsEqualTo("feature/x");
+            await vm.TeardownAsync();
+        });
+    }
+
     [Test]
     [Arguments(false)]
     [Arguments(true)]
