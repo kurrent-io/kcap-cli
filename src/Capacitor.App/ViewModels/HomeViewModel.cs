@@ -659,7 +659,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             localSnapshots.Subscribe(s => _currentLocalAccounts = s).DisposeWith(_disposables);
             _machineSelectionChanges.DistinctUntilChanged()
                 .CombineLatest(
-                    _selectedRepoPathChanges.DistinctUntilChanged(PathComparer), this.WhenAnyValue(x => x.SelectedVendor),
+                    // Ordinal: a case-only change is a new repository on a Linux remote; ApplyAccountInputs
+                    // decides per machine whether it is.
+                    _selectedRepoPathChanges.DistinctUntilChanged(StringComparer.Ordinal), this.WhenAnyValue(x => x.SelectedVendor),
                     listing.StartWith(new DaemonListing(null, 0, false)),
                     remoteAccounts.StartWith((IReadOnlyList<DaemonAccountsDto>) []),
                     localSnapshots.StartWith((AccountsSnapshotDto?) null),
