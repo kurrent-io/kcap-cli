@@ -1138,7 +1138,7 @@ public partial class App : Application {
             () => serverLane.RestartAsync(), _shutdown.Token, searchChange: localSearch) {
             Search = localSearch is null ? null : new LocalSearchViewModel(
                 () => LocalEmbeddingFile.Read(_localRoot), ct => LocalBuiltinOffer.LookupAsync(_localRoot, ct), serverLane.Status, localSearch, localUpgrade, () => serverLane.RestartAsync(),
-                _shutdown.Token, openSettings: _openSearchSettings),
+                _shutdown.Token, openSettings: _openSearchSettings, builtinModelReady: () => LocalBuiltinOffer.InstalledModelReady(_localRoot)),
         };
         _localStack = localStack;
         IObservable<bool>? stackOwnsStart = null;

@@ -2,12 +2,11 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core.Install;
-using Capacitor.Cli.Core.LocalEdition;
 
-namespace Capacitor.Cli.LocalEdition;
+namespace Capacitor.Cli.Core.LocalEdition;
 
 /// <summary>The built-in model sets under <c>models/</c>, each in a directory named by its set id.</summary>
-static class LocalModelSets {
+public static class LocalModelSets {
     public const string PartialPrefix = ".partial-";
     public const string StalePrefix   = ".stale-";
 
@@ -26,7 +25,8 @@ static class LocalModelSets {
                 var info = new FileInfo(path);
                 if (!info.Exists || info.Length != file.Size) return false;
 
-                using var stream = File.OpenRead(path);
+                // Startup verification must not prevent an update from replacing the model set.
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
                 if (!string.Equals(Convert.ToHexStringLower(SHA256.HashData(stream)), file.Sha256, StringComparison.OrdinalIgnoreCase)) return false;
             } catch (IOException) {
                 return false;
@@ -42,7 +42,7 @@ static class LocalModelSets {
     /// it carries none or it cannot be read.</summary>
     public static LocalEmbeddingModelManifest? Bundled(LocalRoot root, string version) {
         try {
-            return LocalEmbeddingModelManifest.Parse(JsonNode.Parse(File.ReadAllBytes(Path.Combine(LocalBin.Directory(root), version, "embedding-model.json"))));
+            return LocalEmbeddingModelManifest.Parse(JsonNode.Parse(File.ReadAllBytes(Path.Combine(root.Directory, "bin", version, "embedding-model.json"))));
         } catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) {
             return null;
         }

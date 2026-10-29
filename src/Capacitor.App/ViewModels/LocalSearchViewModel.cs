@@ -25,6 +25,7 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
     readonly LocalSearchController _search;
     readonly LocalUpgradeController _upgrade;
     readonly Func<LocalEmbeddingSetting?> _readSetting;
+    readonly Func<bool>? _builtinModelReady;
     readonly Func<CancellationToken, Task<LocalEmbeddingModelManifest?>> _builtinOffer;
     readonly Func<Task> _reconnect;
     readonly CancellationToken _shutdown;
@@ -42,14 +43,16 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
     /// <param name="builtinOffer">The built-in model set the installed stack offers, or null; asked again on every reconnect,
     /// which follows an upgrade.</param>
     /// <param name="openSettings">What opens Settings on its Search tab, null while no Settings window can open.</param>
+    /// <param name="builtinModelReady">Validates installed model files on the initial setting read, off the UI thread.</param>
     public LocalSearchViewModel(
             Func<LocalEmbeddingSetting?> readSetting, Func<CancellationToken, Task<LocalEmbeddingModelManifest?>> builtinOffer,
             IObservable<ServerLaneStatus> status, LocalSearchController search,
             LocalUpgradeController upgrade, Func<Task> reconnect, CancellationToken shutdown, IScheduler? readScheduler = null,
-            IObservable<Action?>? openSettings = null) {
+            IObservable<Action?>? openSettings = null, Func<bool>? builtinModelReady = null) {
         _search        = search;
         _upgrade       = upgrade;
         _readSetting   = readSetting;
+        _builtinModelReady = builtinModelReady;
         _builtinOffer  = builtinOffer;
         _reconnect     = reconnect;
         _shutdown      = shutdown;
@@ -163,19 +166,29 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
     void OnUpgradeSettled(LocalUpgradeOutcome outcome) {
         if (outcome is not (LocalUpgradeOutcome.Upgraded or LocalUpgradeOutcome.Failed { Switched: true })) return;
         _builtinNeedsRetry = _upgrade.Progress.Embeddings.Skipped;
+        ReadSetting();
         Refresh();
     }
 
-    void ReadSetting() =>
-        _read.Disposable = Observable.Start(_readSetting, _readScheduler)
+    void ReadSetting() {
+        var initial = !_loaded;
+        _read.Disposable = Observable.Start(() => {
+                var setting = _readSetting();
+                var builtinNeedsRetry = initial && setting is { Provider: LocalEmbeddingProvider.Builtin }
+                    && _builtinModelReady?.Invoke() == false;
+                return (setting, builtinNeedsRetry);
+            }, _readScheduler)
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(setting => {
+            .Subscribe(snapshot => {
+                var (setting, builtinNeedsRetry) = snapshot;
+                if (!_loaded) _builtinNeedsRetry |= builtinNeedsRetry;
                 // An unchanged setting leaves a choice the user is still making alone.
                 if (!_loaded || setting != _current) Choice.Prefill(setting);
                 _current = setting;
                 _loaded  = true;
                 Refresh();
             }, ex => Console.Error.WriteLine($"kcap app: reading the local search setting failed: {ex.Message}"));
+    }
 
     void LookUpOffer() =>
         _offer.Disposable = Observable.FromAsync(_builtinOffer)
