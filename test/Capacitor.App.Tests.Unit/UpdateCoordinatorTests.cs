@@ -217,6 +217,20 @@ public class UpdateCoordinatorTests {
         await Assert.That(h.Menu!.Label).IsEqualTo(UpdateCoordinator.CheckLabel);
     }
 
+    /// A package left ready after the choice changed, with no withdrawal, must not stop checking.
+    [Test]
+    public async Task A_check_drops_a_ready_beta_the_choice_no_longer_allows() {
+        var h = StableOptedIn();
+        await h.Coordinator.RunMenuActionAsync();
+
+        h.Updater.BetaChoice = false;
+        h.Updater.NextCheck = new UpdateCandidate("0.12.1", IsPrerelease: false);
+        await h.Coordinator.CheckForUpdatesAsync();
+
+        await Assert.That(h.Updater.CheckCalls).IsEqualTo(2);
+        await Assert.That(h.Menu!.Label).IsEqualTo("Restart to update to 0.12.1");
+    }
+
     [Test]
     public async Task App_menu_check_while_idle_is_a_manual_check() {
         var h = new Harness();

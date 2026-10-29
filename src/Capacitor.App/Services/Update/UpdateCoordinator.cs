@@ -191,8 +191,12 @@ public sealed class UpdateCoordinator {
         var stage = "check";
         try {
             if (Ready is { } ready) {
-                if (manual) await ReportAsync($"kcap {ready.Version} is ready to install.").ConfigureAwait(false);
-                return;
+                if (IsEligible(_updater, ready)) {
+                    if (manual) await ReportAsync($"kcap {ready.Version} is ready to install.").ConfigureAwait(false);
+                    return;
+                }
+                // The beta choice changed as this package was published, past RecheckAsync's withdrawal.
+                Withdraw(ready);
             }
 
             var candidate = await _updater.CheckAsync(_lifetime).ConfigureAwait(false);
@@ -206,13 +210,14 @@ public sealed class UpdateCoordinator {
             stage = "download";
             await _updater.DownloadAsync(candidate, _lifetime).ConfigureAwait(false);
             _log?.Write("update_downloaded", ("to", candidate.Version));
+            stage = "prompt";
+            Interlocked.Exchange(ref _ready, candidate);
             // The beta choice can change while the package downloads.
             if (!IsEligible(_updater, candidate)) {
+                Withdraw(candidate);
                 ConsumeManual(manual);
                 return;
             }
-            stage = "prompt";
-            Ready = candidate;
             _menu.OnNext(new UpdateMenuItem(true, $"Restart to update to {candidate.Version}"));
 
             await OfferOnceAsync(candidate).ConfigureAwait(false);
