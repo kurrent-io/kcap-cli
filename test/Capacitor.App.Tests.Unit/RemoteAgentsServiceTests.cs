@@ -1043,6 +1043,30 @@ public class RemoteAgentsServiceTests {
         await Assert.That(TitleOf(svc, "a1")).IsEqualTo("First");
     }
 
+    // Two instances of one session: one without a title has not shown the rename, so both keep it.
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task A_rename_holds_while_any_instance_of_the_session_has_no_title(bool untitledFirst) {
+        var lane = new FakeServerLane();
+        var rows = new Rows(Titled("a1", "s1", "Old"), Titled("a2", "s1", "Old"));
+        using var svc = new RemoteAgentsService(lane, rows.Fetch, TimeSpan.Zero, postRename: Applies("New"));
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u1"));
+        await Eventually(() => svc.Agents.Count == 2);
+        await svc.RenameAsync("a1", "s1", "New", CancellationToken.None);
+
+        AgentInstanceDto[] pair = untitledFirst
+            ? [Titled("a1", "s1", null), Titled("a2", "s1", "New")]
+            : [Titled("a1", "s1", "New"), Titled("a2", "s1", null)];
+        await Serve(lane, svc, rows, "z1", pair);
+        await Assert.That(TitleOf(svc, "a1")).IsEqualTo("New");
+        await Assert.That(TitleOf(svc, "a2")).IsEqualTo("New");
+
+        await Serve(lane, svc, rows, "z2", Titled("a1", "s1", null), Titled("a2", "s1", null));
+        await Assert.That(TitleOf(svc, "a1")).IsEqualTo("New");
+        await Assert.That(TitleOf(svc, "a2")).IsEqualTo("New");
+    }
+
     [Test]
     public async Task The_overlay_yields_after_the_hold() {
         var time = new FakeTimeProvider();

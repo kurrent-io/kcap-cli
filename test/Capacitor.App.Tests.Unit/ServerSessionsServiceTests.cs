@@ -910,4 +910,31 @@ public class ServerSessionsServiceTests {
         await Assert.That(TitleIn(service.Live, "live-me")).IsEqualTo("Renamed");
         await Assert.That(TitleIn(service.MineLive, "live-me")).IsEqualTo("Renamed");
     }
+
+    /// A copy with no title has not shown the rename either: the rename holds on every copy.
+    [Test]
+    [Arguments("mine untitled")]
+    [Arguments("unfiltered untitled")]
+    public async Task A_rename_holds_while_any_copy_in_the_read_has_no_title(string untitled) {
+        var (lane, listing, _, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        Connect(lane);
+        await Eventually(() => service.Ended.Count == 20 && service.MineLive.Count == 1, "first read");
+        service.ApplyRename("live-me", "Renamed");
+
+        var blank = Row("live-me", "active") with { Title = null };
+        var renamed = blank with { Title = "Renamed" };
+        listing.Answer("active", "me", 0, 1, untitled == "mine untitled" ? blank : renamed);
+        listing.Answer("active", null, 0, 2, untitled == "mine untitled" ? renamed : blank, Row("live-other", "active", "other"));
+        await service.ReconcileAsync();
+        await Assert.That(TitleIn(service.Live, "live-me")).IsEqualTo("Renamed");
+        await Assert.That(TitleIn(service.MineLive, "live-me")).IsEqualTo("Renamed");
+
+        listing.Answer("active", "me", 0, 1, blank);
+        listing.Answer("active", null, 0, 2, blank, Row("live-other", "active", "other"));
+        await service.ReconcileAsync();
+        await Assert.That(TitleIn(service.Live, "live-me")).IsEqualTo("Renamed");
+        await Assert.That(TitleIn(service.MineLive, "live-me")).IsEqualTo("Renamed");
+    }
 }

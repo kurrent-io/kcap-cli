@@ -3,8 +3,9 @@ using Capacitor.Cli.Core.WorkItems;
 namespace Capacitor.App.Services;
 
 /// Applied renames by canonical session id, shown over a listing that has not caught up yet. Every
-/// title an unsettled rename replaced counts as lag, so only a read started after the latest rename
-/// that carries some other title, or the hold running out, retires an entry. Not thread-safe: the
+/// title an unsettled rename replaced counts as lag, and so does a missing title, so only a read
+/// started after the latest rename whose every copy carries some other title, or the hold running
+/// out, retires an entry. Not thread-safe: the
 /// owner calls it under its own lock.
 public sealed class SessionTitleOverlay(TimeProvider time) {
     /// The server's title sync lags the write by seconds; the bound stops a server that kept an
@@ -20,17 +21,16 @@ public sealed class SessionTitleOverlay(TimeProvider time) {
     public long BeginRead() => ++_readSeq;
 
     /// Applies one decision per session to every row the read numbered <paramref name="readSeq"/>
-    /// returned, whichever set lists it: the entry holds while any copy still carries a title it
-    /// replaced, and a read that settles it retires it for all of them.
+    /// returned, whichever set lists it: the entry holds while any copy has no title or still carries
+    /// a title it replaced, and a read that settles it retires it for all of them.
     public IEnumerable<T> Resolve<T>(IReadOnlyList<T> rows, Func<T, string?> sessionId, Func<T, string?> title,
             Func<T, string, T> retitle, long readSeq) {
         if (_entries.Count == 0) return rows;
         var held = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var group in rows.GroupBy(r => Key(sessionId(r)))) {
             if (group.Key is not { } key || !_entries.TryGetValue(key, out var entry)) continue;
-            var listed = group.Select(title).Where(t => t is { Length: > 0 }).ToList();
-            var settled = readSeq > entry.ReadSeq && listed.Count > 0
-                && listed.All(t => t == entry.Title || !entry.Replaced.Contains(t!));
+            var settled = readSeq > entry.ReadSeq && group.Select(title)
+                .All(t => t is { Length: > 0 } && (t == entry.Title || !entry.Replaced.Contains(t)));
             if (settled || time.GetUtcNow() - entry.RecordedAt >= Hold) _entries.Remove(key);
             else held[key] = entry.Title;
         }
