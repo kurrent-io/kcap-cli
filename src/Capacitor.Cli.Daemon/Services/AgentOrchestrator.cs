@@ -616,6 +616,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     // scan) or explicitly rate-limited by TitleResolveLoop itself.
     readonly PeriodicTimer _titleResolve;
 
+    ITitleServerPort _titleServer;
+    internal ITitleServerPort TitleServerForTest { set => _titleServer = value; }
+
+    /// Null until <see cref="RunTitleResolveLoopAsync"/> builds it.
+    volatile TitleResolveLoop? _titleLoop;
+
     // Refresh once the token is within this much of its expiry. Kept above the 60 s tick plus the
     // reactive 30 s IsExpired margin, so proactive refresh still fires before a hook would hit the
     // margin — but no wider, so a token minted seconds ago at login isn't refreshed on the spot.
@@ -711,6 +717,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _repoMatcher       = repoMatcher;
         _ptyFactory        = ptyFactory;
         _http              = http;
+        _titleServer       = new TitleServerPort(http, config.ServerUrl);
         _permissionBridge  = permissionBridge;
         _permissionBroker  = permissionBroker ?? new();
         _launchers         = launchers;
@@ -5037,6 +5044,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     async Task RunTokenRefreshLoopAsync(CancellationToken ct) {
         var loop = new TokenRefreshLoop(new TokenStoreRefreshPort(_tokens, _config.Profiles.Name, ProactiveRefreshWindow), _logger, ProactiveRefreshMinInterval, _time);
+        await RefreshUserSubjectAsync(ct);
 
         while (await _tokenRefresh.WaitForNextTickAsync(ct)) {
             // Defence in depth: TickAsync is intentionally total, but this runs as an
@@ -5049,6 +5057,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             } catch (Exception ex) {
                 _logger.LogWarning(ex, "Token refresh tick faulted — continuing loop");
             }
+
+            await RefreshUserSubjectAsync(ct);
         }
     }
 
@@ -5081,11 +5091,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         var loop = new TitleResolveLoop(
             SnapshotAgentsForTitles,
             (agentId, title) => { if (_agents.TryGetValue(agentId, out var agent)) SetResolvedTitle(agent, title); },
-            new TitleServerPort(_http, _config.ServerUrl),
+            _titleServer,
             NativeTitleFor,
             GenerateTitleForAsync,
             _time,
             _logger);
+        _titleLoop = loop;
 
         while (await _titleResolve.WaitForNextTickAsync(ct)) {
             // Defence in depth: TickAsync is intentionally total, but this runs as an

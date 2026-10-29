@@ -443,6 +443,35 @@ public class LocalControlOpsTests {
         });
     }
 
+    /// The daemon asks the server before it acks, so a rename outlives the shared reply bound.
+    [Test]
+    public async Task RenameSessionAsync_waits_past_the_shared_reply_timeout() {
+        if (OperatingSystem.IsWindows()) return;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ConnScript late = async (_, s, ct) => {
+            await FrameCodec.ReadAsync(s, ct);
+            await release.Task;
+            await FrameCodec.WriteAsync(s, LocalFrame.RenameJson(FrameType.SessionRenameAck, """{"ok":true,"reason":null,"title":"T"}"""), ct);
+        };
+        await WithOpsAsync([late], async ops => {
+            var pending = ops.RenameSessionAsync(new SessionRenameDto("a", "T", "u"), CancellationToken.None);
+            await Task.Delay(300);
+            await Assert.That(pending.IsCompleted).IsFalse();
+            release.SetResult();
+            await Assert.That((await pending).Ok).IsTrue();
+        }, configure: ops => ops.ReplyTimeout = TimeSpan.FromMilliseconds(50));
+    }
+
+    [Test]
+    public async Task RenameSessionAsync_maps_its_own_timeout_to_transport() {
+        if (OperatingSystem.IsWindows()) return;
+
+        await WithOpsAsync([Stall()], async ops => {
+            var ack = await ops.RenameSessionAsync(new SessionRenameDto("a", "T", "u"), CancellationToken.None);
+            await Assert.That(ack.Reason).IsEqualTo(SessionRenameReasons.Transport);
+        }, configure: ops => ops.RenameReplyTimeout = TimeSpan.FromMilliseconds(100));
+    }
+
     // ---- ResolveConsentAsync ----
 
     [Test]

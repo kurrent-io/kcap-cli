@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalIpc;
 using Microsoft.Extensions.Logging;
@@ -78,7 +79,8 @@ internal partial class AgentOrchestrator {
                 // Only a live agent can wait on the user; a terminal one keeps whatever its clock
                 // last recorded, which must not read as a pending ask.
                 AwaitingInput: a.Status == "Running" && a.ActivityClock.AwaitingInput,
-                TranscriptFormat: a.Runtime is IAcpTranscriptSource ? TranscriptFormats.Envelopes : TranscriptFormats.Vendor))];
+                TranscriptFormat: a.Runtime is IAcpTranscriptSource ? TranscriptFormats.Envelopes : TranscriptFormats.Vendor,
+                IsPrivate: a.IsPrivate))];
 
     /// <summary>
     /// Serves the legacy <c>Stop</c> frame from older clients that predate --force. That frame
@@ -173,6 +175,81 @@ internal partial class AgentOrchestrator {
     /// rather than deliver the text and silently drop the files.</summary>
     public Task HandleLocalSendTextWithAttachmentsAsync(string payload, Stream stream, CancellationToken ct) =>
         WriteSendTextAckAsync(AnswerSendTextWithAttachmentsAsync(payload), stream, ct);
+
+    /// <summary>Renames a hosted agent's recorded session. Every outcome is one ack; each refusal
+    /// is decided before the server is asked, and the status title changes only once the server
+    /// has applied the rename.</summary>
+    public async Task HandleLocalRenameAsync(string payload, Stream stream, CancellationToken ct) {
+        var ack = await AnswerRenameAsync(payload);
+
+        try {
+            var json = JsonSerializer.Serialize(ack, RenameIpcJsonContext.Default.SessionRenameAckDto);
+            await FrameCodec.WriteAsync(stream, LocalFrame.RenameJson(FrameType.SessionRenameAck, json), ct);
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            _logger.LogDebug(ex, "SessionRename: the ack could not be written ({Reason})", ack.Reason ?? "applied");
+        }
+    }
+
+    /// The server call runs on the daemon's lifetime, not the connection's: a client that hangs up
+    /// mid-request must not leave an applied rename unshown.
+    async Task<SessionRenameAckDto> AnswerRenameAsync(string payload) {
+        SessionRenameDto? dto;
+        try { dto = JsonSerializer.Deserialize(payload, RenameIpcJsonContext.Default.SessionRenameDto); }
+        catch (JsonException) { dto = null; }
+
+        if (dto?.AgentId is not { Length: > 0 } agentId || RenameWire.NormalizeTitle(dto.Title) is not { } title)
+            return RefuseRename(SessionRenameReasons.Malformed);
+        if (!_agents.TryGetValue(agentId, out var agent)) return RefuseRename(SessionRenameReasons.UnknownAgent);
+        if (agent.IsPrivate) return RefuseRename(SessionRenameReasons.PrivateAgent);
+        if (dto.ExpectedUserSubject is not { } expected || expected != UserSubject)
+            return RefuseRename(SessionRenameReasons.IdentityMismatch);
+        if ((agent.SessionId ?? (agent.Runtime as IAcpTranscriptSource)?.AcpSessionId) is not { Length: > 0 } sessionId)
+            return RefuseRename(SessionRenameReasons.NoSession);
+
+        TitleRenameOutcome outcome;
+        try {
+            outcome = await _titleServer.RenameAsync(sessionId, title, _shutdownCts.Token);
+        } catch (Exception ex) {
+            _logger.LogDebug(ex, "SessionRename: the server call failed for {AgentId}", agentId);
+            return RefuseRename(SessionRenameReasons.ServerError);
+        }
+
+        if (!outcome.Applied) return new SessionRenameAckDto(false, outcome.Reason ?? SessionRenameReasons.Refused, outcome.Title);
+
+        var shown = outcome.Title ?? title;
+        if (_titleLoop is { } loop) loop.ApplyRename(agent.Id, shown);
+        else SetResolvedTitle(agent, shown);
+
+        return new SessionRenameAckDto(true, null, shown);
+    }
+
+    static SessionRenameAckDto RefuseRename(string reason) => new(false, reason, null);
+
+    string? _userSubject;
+
+    /// The signed-in account's subject, read from the stored token; null when signed out.
+    internal string? UserSubject => Volatile.Read(ref _userSubject);
+
+    internal void SetUserSubjectForTest(string? subject) => SetUserSubject(subject);
+
+    void SetUserSubject(string? subject) {
+        if (Interlocked.Exchange(ref _userSubject, subject) != subject) _statusNotifier.Pulse();
+    }
+
+    internal static string? SubjectOf(string? accessToken) =>
+        accessToken is null ? null : JwtClaims.TryGetString(accessToken, "sub");
+
+    /// A raw read: the subject names the account even on an expired token, and refreshing here
+    /// would spend a rotating credential the refresh loop owns.
+    async Task RefreshUserSubjectAsync(CancellationToken ct) {
+        try {
+            var stored = await _tokens.LoadForProfileAsync(_config.Profiles.Name, ct);
+            var bound  = stored is not null && (stored.ServerUrl is null || ServerIdentity.SameServer(stored.ServerUrl, _config.ServerUrl));
+            SetUserSubject(bound ? SubjectOf(stored!.AccessToken) : null);
+        } catch (Exception ex) {
+            if (!ct.IsCancellationRequested) _logger.LogDebug(ex, "Could not read the signed-in subject; keeping the last one");
+        }
+    }
 
     async Task WriteSendTextAckAsync(Task<SendTextAckDto> answering, Stream stream, CancellationToken ct) {
         var ack = await answering;

@@ -43,6 +43,7 @@ public sealed class LocalControlOps(DaemonStore store, string daemonName, TimePr
     internal TimeSpan ConnectTimeout      = TimeSpan.FromSeconds(5);
     internal TimeSpan ReplyTimeout = TimeSpan.FromSeconds(10);
     internal TimeSpan StopReplyTimeout    = TimeSpan.FromSeconds(40); // StopAck lands only after graceful stop (~25s worst case)
+    internal TimeSpan RenameReplyTimeout  = TimeSpan.FromSeconds(30); // the daemon makes a server round trip before it acks
 
     const string DaemonUnreachable = "daemon_unreachable";
     const string DaemonRejected    = "daemon_rejected";
@@ -192,7 +193,7 @@ public sealed class LocalControlOps(DaemonStore store, string daemonName, TimePr
         var json = JsonSerializer.Serialize(rename, RenameIpcJsonContext.Default.SessionRenameDto);
         LocalFrame reply;
         try {
-            reply = await ExchangeAsync(LocalFrame.RenameJson(FrameType.SessionRename, json), ReplyTimeout, ct);
+            reply = await ExchangeAsync(LocalFrame.RenameJson(FrameType.SessionRename, json), RenameReplyTimeout, ct);
         } catch (LocalControlOpsException) {
             return new SessionRenameAckDto(false, SessionRenameReasons.Transport, null);
         }
