@@ -6,6 +6,9 @@ public interface IAppUpdater {
     bool IsAvailable { get; }
     string? InstalledVersion { get; }
 
+    /// Whether prerelease builds are offered, read at each feed read.
+    bool AllowsPrerelease { get; }
+
     /// A package already downloaded and waiting for a relaunch, or null.
     UpdateCandidate? PendingRestart { get; }
 

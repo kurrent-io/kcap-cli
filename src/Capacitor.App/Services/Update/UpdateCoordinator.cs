@@ -97,14 +97,9 @@ public sealed class UpdateCoordinator {
     internal static bool IsEligible(IAppUpdater updater, UpdateCandidate candidate) {
         var installed = updater.InstalledVersion;
         if (installed is null) return false;
-        if (candidate.IsPrerelease && !IsPrerelease(installed)) return false;
+        if (candidate.IsPrerelease && !updater.AllowsPrerelease) return false;
 
         return PrereleaseSemver.IsNewer(candidate.Version, installed);
-    }
-
-    static bool IsPrerelease(string version) {
-        var core = version.Split('+', 2)[0];
-        return core.Contains('-');
     }
 
     public void Start() {
@@ -121,6 +116,21 @@ public sealed class UpdateCoordinator {
 
         return CheckAsync(manual: true);
     }
+
+    /// The app menu's item, whose label never changes: a manual check while idle, the ready prompt
+    /// again once a package is downloaded.
+    public async Task CheckForUpdatesAsync() {
+        if (Ready is not { } ready) {
+            await CheckAsync(manual: true).ConfigureAwait(false);
+            return;
+        }
+        try {
+            await OfferAsync(ready).ConfigureAwait(false);
+        } catch (OperationCanceledException) { }
+    }
+
+    /// A silent check now, after a change to which builds this install is offered.
+    public Task RecheckAsync() => _updater.IsAvailable ? CheckAsync(manual: false) : Task.CompletedTask;
 
     /// Called by the shutdown sequence immediately before the platform shutdown call, so the
     /// updater's bounded wait only ever covers process exit.
@@ -186,13 +196,8 @@ public sealed class UpdateCoordinator {
             Ready = candidate;
             _menu.OnNext(new UpdateMenuItem(true, $"Restart to update to {candidate.Version}"));
 
-            var prompt = new LifecyclePrompt(
-                LifecyclePrompt.KindUpdateReady, candidate.Version, _updater.InstalledVersion, false,
-                ReadyDisclosure(OperatingSystem.IsWindows()));
-            var accepted = await _surface.ConfirmAsync(prompt, _lifetime).ConfigureAwait(false);
+            await OfferAsync(candidate).ConfigureAwait(false);
             ConsumeManual(manual);
-            _log?.Write(accepted ? "update_accepted" : "update_deferred", ("to", candidate.Version));
-            if (accepted) RequestRestart(candidate);
         } catch (OperationCanceledException) {
         } catch (Exception ex) {
             Console.Error.WriteLine($"kcap: update {stage} failed: {ex.Message}");
@@ -202,6 +207,15 @@ public sealed class UpdateCoordinator {
                     ? "The update could not be downloaded. Try again later."
                     : "Could not check for updates. Try again later.").ConfigureAwait(false);
         }
+    }
+
+    async Task OfferAsync(UpdateCandidate candidate) {
+        var prompt = new LifecyclePrompt(
+            LifecyclePrompt.KindUpdateReady, candidate.Version, _updater.InstalledVersion, false,
+            ReadyDisclosure(OperatingSystem.IsWindows()));
+        var accepted = await _surface.ConfirmAsync(prompt, _lifetime).ConfigureAwait(false);
+        _log?.Write(accepted ? "update_accepted" : "update_deferred", ("to", candidate.Version));
+        if (accepted) RequestRestart(candidate);
     }
 
     bool ConsumeManual(bool manual) {

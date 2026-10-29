@@ -8,6 +8,8 @@ sealed class FakeAppUpdater : IAppUpdater {
     public bool IsAvailable { get; set; } = true;
     public string? InstalledVersion { get; set; } = "0.12.0-beta.2";
     public UpdateCandidate? PendingRestart { get; set; }
+    public bool? BetaChoice;
+    public bool AllowsPrerelease => BetaChoice ?? InstalledVersion?.Contains('-') == true;
 
     public UpdateCandidate? NextCheck;
     public Exception? CheckFailure;
