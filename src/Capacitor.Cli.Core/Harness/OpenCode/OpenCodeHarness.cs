@@ -29,6 +29,7 @@ public sealed class OpenCodeHarness : IHarness<OpenCodeHarness> {
     public HarnessSignals Signals => new() {
         LaunchSignal   = probe => probe.Finds(CliBinary),
         UserDataSignal = Paths.HasUserData,
+        AppSignal      = apps => apps.Finds("OpenCode.app"),
         Wired          = () => OpenCodeExtensionInstaller.IsInstalled(Paths.KcapPlugin),
     };
 }

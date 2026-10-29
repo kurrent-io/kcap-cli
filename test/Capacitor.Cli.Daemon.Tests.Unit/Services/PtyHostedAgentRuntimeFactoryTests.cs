@@ -118,6 +118,18 @@ public class PtyHostedAgentRuntimeFactoryTests {
         }
     }
 
+    [Test]
+    public async Task Claude_resumes_an_owned_reviewer_but_not_a_borrowed_one() {
+        var config  = new DaemonConfig { ClaudePath = "claude", ServerUrl = "", CapacitorPath = "kcap" };
+        var claude  = new ClaudeLauncher(config, TestHarnesses.Under(Home), NullLogger<ClaudeLauncher>.Instance);
+        var factory = new PtyHostedAgentRuntimeFactory(claude, new NullPtyProcessFactory(), NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System, Home);
+        var other   = new PtyHostedAgentRuntimeFactory(new RecordingLauncher("gemini", "/opt/vendor/gemini"), new NullPtyProcessFactory(), NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System, Home);
+
+        await Assert.That(factory.SupportsReviewerRestartResume(null, Core.LocalIpc.WorkLocation.OwnedWorktree)).IsTrue();
+        await Assert.That(factory.SupportsReviewerRestartResume(null, Core.LocalIpc.WorkLocation.BorrowedCwd)).IsFalse();
+        await Assert.That(other.SupportsReviewerRestartResume(null, Core.LocalIpc.WorkLocation.OwnedWorktree)).IsFalse();
+    }
+
     /// <summary>The hook runs as a child of the agent, so the PTY's environment is where it reads the
     /// session kind. The flow agent id stays exclusive to the flow-result server's own config.</summary>
     [Test]

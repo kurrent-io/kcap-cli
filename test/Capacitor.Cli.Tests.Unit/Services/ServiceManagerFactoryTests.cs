@@ -13,6 +13,15 @@ public class ServiceManagerFactoryTests {
         await Assert.That(ServiceManagerFactory.ForPlatform(ServicePlatform.Launchd, Config.Root, Home, TimeProvider.System)).IsTypeOf<LaunchdServiceManager>();
         await Assert.That(ServiceManagerFactory.ForPlatform(ServicePlatform.Systemd, Config.Root, Home, TimeProvider.System)).IsTypeOf<SystemdServiceManager>();
         await Assert.That(ServiceManagerFactory.ForPlatform(ServicePlatform.WindowsScheduledTask, Config.Root, Home, TimeProvider.System)).IsTypeOf<WindowsScheduledTaskServiceManager>();
+        if (OperatingSystem.IsWindows())
+            await Assert.That(ServiceManagerFactory.ForPlatform(ServicePlatform.WindowsService, Config.Root, Home, TimeProvider.System)).IsTypeOf<WindowsServiceManager>();
+    }
+
+    [Test]
+    public async Task The_supervisor_word_names_each_manager() {
+        await Assert.That(ServiceManagerFactory.SupervisorWord(ServiceManagerFactory.ForPlatform(ServicePlatform.Launchd, Config.Root, Home, TimeProvider.System))).IsEqualTo("launchd");
+        await Assert.That(ServiceManagerFactory.SupervisorWord(ServiceManagerFactory.ForPlatform(ServicePlatform.WindowsScheduledTask, Config.Root, Home, TimeProvider.System))).IsEqualTo("windows_scheduled_task");
+        await Assert.That(ServiceManagerFactory.SupervisorWord(new WindowsServiceManager(Config.Root, new FakeServicePipe(), new FakeServiceEnrollmentStore(), null))).IsEqualTo("windows_service");
     }
 
     [Test]

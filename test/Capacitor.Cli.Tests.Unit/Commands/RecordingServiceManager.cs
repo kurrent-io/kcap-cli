@@ -8,6 +8,9 @@ sealed class RecordingServiceManager(Dictionary<string, string?> binaries) : ISe
     /// <summary>A binary value whose status read throws.</summary>
     public const string Unreadable = "<unreadable>";
 
+    /// <summary>A binary value whose supervisor does not answer a status read.</summary>
+    public const string Unanswering = "<unanswering>";
+
     public readonly List<string> Uninstalled = [];
     public readonly List<string> Stopped     = [];
     int _statusReads;
@@ -26,9 +29,11 @@ sealed class RecordingServiceManager(Dictionary<string, string?> binaries) : ISe
 
     public ServiceStatus Status(string serviceId) {
         Interlocked.Increment(ref _statusReads);
-        return binaries[serviceId] == Unreadable
-            ? throw new IOException("unreadable wrapper")
-            : new(ServiceState.Installed, binaries[serviceId]);
+        return binaries[serviceId] switch {
+            Unreadable  => throw new IOException("unreadable wrapper"),
+            Unanswering => throw new InvalidOperationException("kcap-service is not answering on its pipe"),
+            var binary  => new(ServiceState.Installed, binary),
+        };
     }
 
     /// <summary>Units whose supervisor does not answer: their query reads Unknown.</summary>

@@ -36,16 +36,22 @@ Options for stop:
   --yes, -y               Unattended mode: stop all running daemons without
                           prompting. Useful in cleanup scripts.
   --keep-agents           Keep the hosted agents for the next start to resume.
+  --direct                Windows only: ask the daemon itself even when a service
+                          manages it. The Windows service uses it for its own
+                          graceful stop; to stop a supervised daemon, use
+                          `daemon service stop`.
 
 Options for restart:
-  (none)                  Restart now. Interactive agents are stopped and resumed
-                          on the new daemon. Refused while an eval, a launch or a
-                          flow participant's round is in progress.
+  (none)                  Restart now. Interactive agents and Claude flow
+                          reviewers are stopped and resumed on the new daemon.
+                          Refused while an eval, a launch or a flow
+                          participant's round is in progress.
   --when-idle             Queue the restart; it applies once the daemon hosts no
                           agents at all and no eval or launch is in progress.
                           Returns immediately.
   --force                 Restart without waiting for a flow round: a flow
-                          participant mid-round is parked or ended. An eval or a
+                          participant mid-round is resumed with its round (a
+                          Claude reviewer), parked (Codex) or ended. An eval or a
                           launch in progress still holds the restart.
 
 Updating: after `kcap update`, a running daemon on macOS/Linux detects the new
@@ -93,7 +99,14 @@ Subcommands for service (per-user; auto-restarts on crash/SIGKILL, starts at log
                           contended, never taken over.
                           --no-start cannot be combined with --verify (verify
                           proves the STARTED daemon is ready).
+  install --system [...]  Windows: first install or update the machine's
+                          kcap-service (one administrator prompt), then hand
+                          this daemon to it. Needs the desktop app's install,
+                          which carries kcap-service.exe. A declined prompt
+                          exits 1223 and changes nothing.
   uninstall [--name N]    Stop and remove the service unit.
+  uninstall --system      Windows: hand this daemon back, then remove the
+                          machine's kcap-service (one administrator prompt).
   uninstall --under DIR   Stop and remove every unit whose daemon binary is
                           inside DIR, and no other. The desktop app's
                           uninstaller runs this for its own folder.

@@ -1,25 +1,29 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using Capacitor.App.Platform.Mac;
 
 namespace Capacitor.App.Services;
 
 internal static partial class InstalledAppProcesses {
     const string ObjC = "/usr/lib/libobjc.A.dylib";
 
+    /// Processes other than this one whose executable is a kcap app executable inside <paramref name="root"/>,
+    /// pre-rebrand ones included; null when a candidate's executable cannot be read.
     internal static int[]? Find(string root) {
-        const string name = "kcap-desktop";
-        var executable = Path.Combine(root, "Contents", "MacOS", name);
         var matches = new List<int>();
         var unknown = false;
-        foreach (var process in Process.GetProcessesByName(name)) {
-            using (process) {
-                if (process.Id == Environment.ProcessId) continue;
-                try {
-                    if (process.HasExited) continue;
-                    if (process.MainModule?.FileName is not { } path) unknown = true;
-                    else if (path == executable) matches.Add(process.Id);
-                } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException) {
-                    unknown = true;
+        foreach (var name in KcapBundle.ExecutableNames) {
+            var executable = Path.Combine(root, "Contents", "MacOS", name);
+            foreach (var process in Process.GetProcessesByName(name)) {
+                using (process) {
+                    if (process.Id == Environment.ProcessId) continue;
+                    try {
+                        if (process.HasExited) continue;
+                        if (process.MainModule?.FileName is not { } path) unknown = true;
+                        else if (path == executable) matches.Add(process.Id);
+                    } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException) {
+                        unknown = true;
+                    }
                 }
             }
         }

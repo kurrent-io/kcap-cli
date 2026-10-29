@@ -107,6 +107,8 @@ internal sealed partial class ClaudeLauncher(
 
     public bool SupportsResume => true;
 
+    public bool SupportsReviewerResume => true;
+
     public LaunchArgs BuildArgs(LauncherContext ctx) {
         var args = new List<string>();
         string? mcpConfigPath = null;
@@ -647,15 +649,13 @@ internal sealed partial class ClaudeLauncher(
 
         var mcpJsonPath = Path.Combine(worktreePath, ".mcp.json");
 
-        // Read existing .mcp.json if present (e.g. committed to git)
-        JsonObject merged;
+        // Merged into the existing document (e.g. committed to git) so its other keys survive.
+        var wrapper = (File.Exists(mcpJsonPath) ? JsonNode.Parse(File.ReadAllText(mcpJsonPath)) as JsonObject : null)
+                   ?? new JsonObject();
 
-        if (File.Exists(mcpJsonPath)) {
-            var existing = JsonNode.Parse(File.ReadAllText(mcpJsonPath));
-            // Cloned: the parsed node stays parented, and the wrapper below cannot adopt it.
-            merged = existing?["mcpServers"]?.DeepClone().AsObject() ?? new JsonObject();
-        } else {
-            merged = new JsonObject();
+        if (wrapper["mcpServers"] is not JsonObject merged) {
+            merged                = new JsonObject();
+            wrapper["mcpServers"] = merged;
         }
 
         // The kcap Claude plugin already ships its servers session-wide, so a semantically
@@ -685,7 +685,6 @@ internal sealed partial class ClaudeLauncher(
             }
         }
 
-        var wrapper = new JsonObject { ["mcpServers"] = merged };
         File.WriteAllText(mcpJsonPath, wrapper.ToJsonString(IndentedJsonOpts));
     }
 

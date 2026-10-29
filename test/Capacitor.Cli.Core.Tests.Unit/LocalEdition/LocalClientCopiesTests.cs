@@ -1,8 +1,7 @@
 using TUnit.Core.Enums;
-using Capacitor.Cli.Core;
-using Capacitor.Cli.LocalEdition;
+using Capacitor.Cli.Core.LocalEdition;
 
-namespace Capacitor.Cli.Tests.Unit.LocalEdition;
+namespace Capacitor.Cli.Core.Tests.Unit.LocalEdition;
 
 [ExcludeOn(OS.Windows)]
 public class LocalClientCopiesTests {

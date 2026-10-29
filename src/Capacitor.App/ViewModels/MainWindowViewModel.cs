@@ -361,6 +361,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             HistoryImportRun? historyImport = null,
             IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
             IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null, Action? openLaunchApprovals = null,
+            IObservable<bool>? movingToWindowsService = null,
             Func<string, RemoteSessionViewModel?>? serverWorkspaceFactory = null, IServerSessionsService? sessions = null) {
         _service = service;
         _serverFactory = serverWorkspaceFactory;
@@ -419,13 +420,16 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         // commands must exist and be assertable pre-activation — see the class doc comment.
         // One primary action at a time: Start when nothing is listening (spawn/reattach via the
         // lifecycle); Reconnect when Start is not the right next step (skew, or still connecting).
+        // The move to the Windows service takes the daemon down and brings it back itself: a Start offered
+        // in that gap reads as a failure the user must fix.
         var canStart = service.Status
-            .Select(s => s.State == AttachState.Unreachable && s.Reason == UnreachableReason)
+            .CombineLatest(movingToWindowsService ?? Observable.Return(false),
+                (s, moving) => s.State == AttachState.Unreachable && s.Reason == UnreachableReason && !moving)
             .ObserveOn(RxSchedulers.MainThreadScheduler);
         var canRetry = service.Status
             .Select(s =>
                 s.State == AttachState.Connecting
-                || (s.State == AttachState.Unreachable && s.Reason != UnreachableReason))
+                || (s.State == AttachState.Unreachable && s.Reason is not (UnreachableReason or ExpectedDaemonRestart.Reason)))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
 
         var start = startAction ?? RunStartAsync;
@@ -950,6 +954,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     static string? ReasonText(AttachStatus status) => status.State switch {
         AttachState.Unreachable when status.Reason == IncompatibleReason => HomeViewModel.DaemonIncompatibleNotice,
+        AttachState.Unreachable when status.Reason == ExpectedDaemonRestart.Reason => HomeViewModel.DaemonRestartingNotice,
         AttachState.Unreachable => HomeViewModel.DaemonDownNotice,
         _ => null,
     };
@@ -994,7 +999,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         if (signInExpired) return SignedOutDisplay;
         if (status.State == AttachState.Connecting) return "Connecting…";
         if (status.State == AttachState.Unreachable)
-            return status.Reason == IncompatibleReason ? "Incompatible" : "Unreachable";
+            return status.Reason switch {
+                IncompatibleReason => "Incompatible",
+                ExpectedDaemonRestart.Reason => "Restarting…",
+                _ => "Unreachable",
+            };
 
         var word = Capitalize(daemonConnection);
         return daemonConnection is "connecting" or "reconnecting" ? word + "…" : word;
@@ -1007,7 +1016,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         if (signInExpired) return Paint(StatusColors.Disrupted);
         if (status.State == AttachState.Connecting) return Paint(StatusColors.InProgress);
         if (status.State == AttachState.Unreachable)
-            return status.Reason == IncompatibleReason ? Paint(StatusColors.Disrupted) : Paint(StatusColors.Unavailable);
+            return status.Reason switch {
+                IncompatibleReason => Paint(StatusColors.Disrupted),
+                ExpectedDaemonRestart.Reason => Paint(StatusColors.InProgress),
+                _ => Paint(StatusColors.Unavailable),
+            };
 
         return daemonConnection switch {
             "connected" => Paint(StatusColors.Connected),

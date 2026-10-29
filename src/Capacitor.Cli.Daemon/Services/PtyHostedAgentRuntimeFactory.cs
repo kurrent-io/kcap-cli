@@ -33,10 +33,13 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
     public bool   SupportsPrReview   => launcher.SupportsPrReview;
     public bool   SupportsBorrowedReviewFlow => launcher.SupportsBorrowedReviewFlow;
     public bool   SupportsRestartResume(string? runtimeTransport) => launcher.SupportsResume;
+    public bool   SupportsReviewerRestartResume(string? runtimeTransport, Core.LocalIpc.WorkLocation work) =>
+        work == Core.LocalIpc.WorkLocation.OwnedWorktree && launcher.SupportsReviewerResume;
 
     /// <summary>The launcher passes no prompt argument for an empty prompt and nothing is pasted, so the agent
     /// reopens its session and waits.</summary>
     public bool ResumesIdleWithoutPrompt(string? runtimeTransport) => SupportsRestartResume(runtimeTransport);
+
     public string? BorrowedReviewContainment => launcher.BorrowedReviewContainment;
 
     /// <summary>PTY factories delegate reviewer-model resolution to their launcher-owned policy — the

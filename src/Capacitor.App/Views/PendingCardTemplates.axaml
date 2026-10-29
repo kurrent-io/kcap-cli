@@ -5,7 +5,7 @@
     <!-- The three NEEDS YOU card kinds. Every pane that answers a prompt renders them from here,
          so a card looks and behaves the same whether the agent runs on this machine or another. -->
     <DataTemplate x:Key="PermissionCardTemplate" x:DataType="vm:PermissionCardViewModel">
-        <Border Classes="chatPromptCard">
+        <Border x:Name="PermissionCard" Classes="chatPromptCard">
             <StackPanel Spacing="6">
                 <views:ChatKindHeader Label="Permission" IconKind="{x:Static views:ToolCategoryIcons.PermissionIcon}" />
                 <TextBlock Text="{Binding ToolName}" FontSize="13" TextWrapping="Wrap" Foreground="{StaticResource KcapTextBrush}" />

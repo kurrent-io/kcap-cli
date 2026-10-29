@@ -132,6 +132,10 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// <summary>The agents this daemon is about to resume, claimed on <c>DaemonConnect</c>.</summary>
     public Func<ResumingAgentClaim[]>? GetResumingAgents { get; set; }
 
+    /// <summary>Live agents, claims and startup completeness in one read; when wired it supplies all
+    /// four on a connect.</summary>
+    internal Func<RecoverySnapshot>? GetRecoverySnapshot { get; set; }
+
     /// <summary>The host's accounts snapshot, carried on <c>DaemonConnect</c>; between connects a change
     /// goes out through <see cref="AccountsChangedAsync"/>.</summary>
     public Func<AccountsSnapshotDto?>? GetAccountsSnapshot { get; set; }
@@ -738,8 +742,11 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     }
 
     internal DaemonConnect BuildDaemonConnect(
-            string platform, string[] repoPaths, string[] liveIds, LiveAgentInfo[]? liveAgents, UnattendedAdvertisement advertised) {
+            string platform, string[] repoPaths, string[] liveIds, LiveAgentInfo[]? liveAgents, UnattendedAdvertisement advertised,
+            RecoverySnapshot? recovery = null) {
         var activeCount = GetActiveCount?.Invoke();
+
+        if (recovery is not null) (liveIds, liveAgents) = (recovery.LiveIds, recovery.LiveAgents);
 
         return new(
             _config.Name, platform, repoPaths, _config.MaxConcurrentAgents, liveIds,
@@ -748,7 +755,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             // Re-reported on every connect until the server prunes it via AckResolvedCandidates.
             RecordlessSurvivorsImpossible: _config.RecordlessSurvivorsImpossible,
             ResolvedStartupCandidates: GetResolvedStartupCandidates?.Invoke(),
-            StartupReapComplete: GetStartupReapComplete?.Invoke(),
+            StartupReapComplete: recovery?.StartupReapComplete ?? GetStartupReapComplete?.Invoke(),
             UnresolvedStartupCandidates: GetUnresolvedStartupCandidates?.Invoke(),
             StartupDiscovery: GetStartupDiscovery?.Invoke(),
             Quarantined: GetQuarantined?.Invoke(),
@@ -773,7 +780,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             SupportsRawInput: AdvertisesRawInput,
             SupportsBranchBaseRef: true,
             SupportsAbbreviatedShaBaseRef: true,
-            ResumingAgents: GetResumingAgents?.Invoke(),
+            ResumingAgents: recovery?.Claims ?? GetResumingAgents?.Invoke(),
             ActiveCount: activeCount?.Count,
             ActiveCountVersion: activeCount?.Version,
             SupportsAccountLaunches: true,
@@ -784,12 +791,13 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         var platform  = $"{RuntimeInformation.OSDescription} {RuntimeInformation.OSArchitecture}";
         var repoStore = FingerprintRepoStore();
         var repoPaths = await MergeRepoPathsAsync();
-        var liveIds   = GetLiveAgentIds?.Invoke() ?? [];
-        var liveAgents = GetLiveAgents?.Invoke();
+        var recovery   = GetRecoverySnapshot?.Invoke();
+        var liveIds    = recovery?.LiveIds ?? GetLiveAgentIds?.Invoke() ?? [];
+        var liveAgents = recovery?.LiveAgents ?? GetLiveAgents?.Invoke();
         // Read once, under the register lock: the payload and the acknowledgement are this one value, and
         // a later send never carries an older advertisement than an earlier one.
         var advertised = _config.Advertisement;
-        var connect    = BuildDaemonConnect(platform, repoPaths, liveIds, liveAgents, advertised);
+        var connect    = BuildDaemonConnect(platform, repoPaths, liveIds, liveAgents, advertised, recovery);
         // Only a built payload carries the advertisement; a build that throws leaves the starting snapshot.
         attempt.Sending(advertised);
 

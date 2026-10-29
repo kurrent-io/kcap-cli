@@ -12,6 +12,12 @@
     <ItemGroup>
         <AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.txt" Visible="false" />
     </ItemGroup>
+    <!-- Older .NET 10 runtimes segfault at random in CoreCLR's thread-static lookup on macOS arm64 (0/120 crashes on
+         10.0.14, about 1 in 20 runs on 10.0.10): a host on one refuses to start rather than dying mid-run. -->
+    <PropertyGroup Condition="'$(MSBuildProjectName)' != 'Capacitor.Tests.Helpers'
+                          and '$(MSBuildProjectName)' != 'Capacitor.Cli.Tests.Unit.NativeTestHost'">
+        <RuntimeFrameworkVersion>10.0.14</RuntimeFrameworkVersion>
+    </PropertyGroup>
     <!-- One source, compiled into each test assembly rather than referenced from Helpers:
          TUnit finds hooks only in assemblies it has loaded.  -->
     <ItemGroup Condition="'$(MSBuildProjectName)' != 'Capacitor.Tests.Helpers'

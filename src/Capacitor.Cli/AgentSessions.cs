@@ -44,7 +44,8 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
                     var known  = ReadOrigin(agentPid, token);
                     var merged = known is null ? origin : new ClaimOrigin(
                         known.Vendor ?? origin.Vendor, known.Server ?? origin.Server,
-                        known.TranscriptPath ?? origin.TranscriptPath, known.Cwd ?? origin.Cwd);
+                        known.TranscriptPath ?? origin.TranscriptPath, known.Cwd ?? origin.Cwd,
+                        known.AgentId ?? origin.AgentId, known.DaemonEpoch ?? origin.DaemonEpoch);
                     if (merged != known) WriteOrigin(agentPid, token, merged);
                 }
                 return;
@@ -133,7 +134,7 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
         var staging = config.Path("agent-sessions", "deferred-ends-staging");
         Directory.CreateDirectory(staging);
         var temp = Path.Combine(staging, $"{Path.GetFileName(path)}.{Environment.ProcessId}");
-        File.WriteAllText(temp, Fields(session.Value, origin.Vendor, origin.Server, origin.TranscriptPath, origin.Cwd));
+        File.WriteAllText(temp, Fields(session.Value, origin.Vendor, origin.Server, origin.TranscriptPath, origin.Cwd, origin.AgentId, origin.DaemonEpoch));
         File.Move(temp, path, overwrite: true);
     }
 
@@ -146,7 +147,7 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
                 try {
                     var stale = _time.GetUtcNow() - File.GetLastWriteTimeUtc(path) >= ExitRetention;
                     // Named case-folded so one session is set aside once; the id as claimed is inside.
-                    if (ReadFields(path) is not [var id, var vendor, var server, var transcript, var cwd]
+                    if (ReadFields(path) is not [var id, var vendor, var server, var transcript, var cwd, .. var hosted]
                      || SessionId.Parse(id) is not { } session) {
                         File.Delete(path);
                         continue;
@@ -155,7 +156,7 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
 
                     File.Delete(path);
                     if (!stale && LiveClaimant(session) is null)
-                        taken.Add(new ExitedSession(session, new ClaimOrigin(NullIfEmpty(vendor), server, NullIfEmpty(transcript), NullIfEmpty(cwd))));
+                        taken.Add(new ExitedSession(session, OriginOf(vendor, server, transcript, cwd, hosted) with { Server = server }));
                 } catch { }
             }
         } catch { }
@@ -163,6 +164,12 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
     }
 
     static string? NullIfEmpty(string value) => value.Length > 0 ? value : null;
+
+    /// <summary>A file written before the hosted fields existed has none of them.</summary>
+    static ClaimOrigin OriginOf(string vendor, string server, string transcript, string cwd, string[] hosted) =>
+        new(NullIfEmpty(vendor), NullIfEmpty(server), NullIfEmpty(transcript), NullIfEmpty(cwd),
+            hosted is [var agentId, ..] ? NullIfEmpty(agentId) : null,
+            hosted is [_, var epoch, ..] ? NullIfEmpty(epoch) : null);
 
     // One field per line, each escaped: a path may hold a newline, and a missing field is empty.
     static string Fields(params string?[] fields) => string.Join('\n', fields.Select(f => Uri.EscapeDataString(f ?? "")));
@@ -277,7 +284,7 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
 
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var temp = $"{path}.{Environment.ProcessId}";
-        File.WriteAllText(temp, Fields(token, origin.Vendor, origin.Server, origin.TranscriptPath, origin.Cwd));
+        File.WriteAllText(temp, Fields(token, origin.Vendor, origin.Server, origin.TranscriptPath, origin.Cwd, origin.AgentId, origin.DaemonEpoch));
         File.Move(temp, path, overwrite: true);
     }
 
@@ -289,8 +296,8 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
 
     internal ClaimOrigin? ReadOrigin(int pid, string token) {
         try {
-            return ReadFields(Origin(pid)) is [var owner, var vendor, var server, var transcript, var cwd] && owner == token
-                ? new ClaimOrigin(NullIfEmpty(vendor), NullIfEmpty(server), NullIfEmpty(transcript), NullIfEmpty(cwd))
+            return ReadFields(Origin(pid)) is [var owner, var vendor, var server, var transcript, var cwd, .. var hosted] && owner == token
+                ? OriginOf(vendor, server, transcript, cwd, hosted)
                 : null;
         } catch {
             return null;

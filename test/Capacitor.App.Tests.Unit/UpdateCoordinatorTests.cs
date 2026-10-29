@@ -217,7 +217,7 @@ public class UpdateCoordinatorTests {
     /// that agents keep running or that the daemon waits for idle.
     [Test]
     public async Task Ready_disclosure_says_how_agents_are_stopped_and_resumed() {
-        await Assert.That(UpdateCoordinator.ReadyDisclosure(windows: true)).Contains("interrupts any running agents mid-turn");
+        await Assert.That(UpdateCoordinator.ReadyDisclosure(windows: true)).Contains("interrupts running agents mid-turn");
         await Assert.That(UpdateCoordinator.ReadyDisclosure(windows: false)).Contains("once its agents finish their current turn");
         foreach (var windows in new[] { true, false }) {
             await Assert.That(UpdateCoordinator.ReadyDisclosure(windows)).Contains("resumes them");

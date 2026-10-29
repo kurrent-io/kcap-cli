@@ -552,6 +552,20 @@ public class DaemonMutationLaneTests {
     }
 
     [Test]
+    public async Task InstallWindowsService_dispatches_the_elevated_install_and_reads_a_declined_prompt_as_a_refusal() {
+        var cli = new FakeKcapCli {
+            InstallWindowsServiceBehavior = _ => Task.FromResult(new ProcessResult(VerifyExitCodes.ElevationDeclined, "", "declined", false)),
+        };
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli });
+
+        var outcome = await lane.RunAsync(Req(MutationVerb.InstallWindowsService), CancellationToken.None);
+
+        await Assert.That(cli.InstallWindowsServiceCallCount).IsEqualTo(1);
+        await Assert.That(cli.InstallVerifiedCallCount).IsEqualTo(0);
+        await Assert.That(outcome).IsEqualTo(new MutationOutcome.Refused("elevation_declined", RecoverySurface.Attention));
+    }
+
+    [Test]
     public async Task StartVerified_verb_calls_ServiceStartVerifiedAsync() {
         var cli = new FakeKcapCli();
         var factory = new RecordingExecutorFactory { Behavior = (_, _) => cli };

@@ -137,6 +137,10 @@ public class DaemonConfig {
     /// </summary>
     public string? InstanceId { get; set; }
 
+    /// <summary>The instance of the boot just before this one, as the daemon lock witnessed it; null when
+    /// the lock could not tell. A flow participant resumes only from that instance's planned stop.</summary>
+    public string? PriorInstanceId { get; set; }
+
     /// <summary>
     /// Daemon binary version (<c>AssemblyInformationalVersion</c>). Sent
     /// over <c>DaemonConnect</c> and surfaced on the server's

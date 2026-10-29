@@ -29,6 +29,7 @@ public sealed class AntigravityHarness : IHarness<AntigravityHarness> {
     public HarnessSignals Signals => new() {
         LaunchSignal   = probe => probe.Finds(CliBinary) || probe.Finds(IdeBinary),
         UserDataSignal = Paths.HasUserData,
+        AppSignal      = apps => apps.Finds("Antigravity.app", "Antigravity"),
         Wired          = () => AntigravityHooksInstaller.IsInstalled(Paths.GlobalHooksJson),
     };
 }
