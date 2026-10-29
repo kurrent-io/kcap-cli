@@ -49,8 +49,8 @@ public class AcpPromptUsageTests {
 
         var usage = AcpPromptUsage.Read(Result(twoModels), sessionModel: null);
 
-        await Assert.That(usage.Select(u => (u.Model, u.UsageInputTokens, u.UsageOutputTokens)))
-            .IsEquivalentTo([("gemini-3.8-flash", (long?)100, (long?)10), ("gemini-3.1-pro", 200, 20)]);
+        await Assert.That(usage.Select(u => $"{u.Model} {u.UsageInputTokens} {u.UsageOutputTokens}").ToList())
+            .IsEquivalentTo(["gemini-3.8-flash 100 10", "gemini-3.1-pro 200 20"]);
     }
 
     /// <summary>Copilot counts the cached tiers inside inputTokens; OpenCode adds them on top. Both arrive gross.</summary>
