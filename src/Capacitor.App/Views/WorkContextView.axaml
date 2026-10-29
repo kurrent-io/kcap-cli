@@ -310,6 +310,11 @@
                                                VerticalAlignment="Center" Foreground="{StaticResource KcapMutedBrush}" />
                             </Panel>
                         </Button>
+                        <Button x:Name="HideButton" Classes="iconButton" VerticalAlignment="Center" IsVisible="False"
+                                ToolTip.Tip="Hide details" AutomationProperties.Name="Hide details"
+                                Click="OnHideClick">
+                            <views:AppIcon Kind="PanelRightClose" Size="14" Foreground="{StaticResource KcapMutedBrush}" />
+                        </Button>
                     </StackPanel>
                 </Grid>
 

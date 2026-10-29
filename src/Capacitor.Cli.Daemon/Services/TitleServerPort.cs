@@ -1,5 +1,5 @@
-using System.Text;
 using System.Net;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -18,6 +18,8 @@ namespace Capacitor.Cli.Daemon.Services;
 /// loop must distinguish "the server has no title" from "the server couldn't answer", or an
 /// outage would trigger a paid generation for a session the watcher already titled.
 /// </summary>
+// Qodana's usage search misses the construction in AgentOrchestrator
+[UsedImplicitly]
 internal sealed partial class TitleServerPort(ICapacitorHttpClient http, string baseUrl) : ITitleServerPort {
     readonly string _baseUrl = baseUrl.TrimEnd('/');
 

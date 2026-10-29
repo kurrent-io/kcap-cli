@@ -2122,9 +2122,11 @@ public partial class App : Application {
         window.Notifier = notifier;
         window.ContentScale = uiScale;
         window.Onboarding = null;
-        if (adopt is { } handover) WindowSizeMemory.Apply(window, handover.State);
-        else WindowSizeMemory.Restore(window, appState);
+        var savedState = adopt?.State ?? appState.LoadAsync().GetAwaiter().GetResult();
+        WindowSizeMemory.Apply(window, savedState);
         WindowSizeMemory.Attach(window, appState);
+        PaneLayoutMemory.Apply(window.Panes, savedState);
+        PaneLayoutMemory.Attach(window.Panes, appState);
         if (show) window.Show();
         return window;
     }
