@@ -788,7 +788,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             ActiveCount: activeCount?.Count,
             ActiveCountVersion: activeCount?.Version,
             SupportsAccountLaunches: true,
-            Accounts: GetAccountsSnapshot?.Invoke());
+            Accounts: GetAccountsSnapshot?.Invoke(),
+            SupportsScratchWorkspace: true);
     }
 
     async Task DaemonConnectCoreAsync(RegistrationAttempt attempt) {
