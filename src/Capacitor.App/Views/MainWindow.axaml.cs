@@ -42,19 +42,30 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
 
     ColumnDefinition RailColumn => SessionsSurface.ColumnDefinitions[0];
 
-    // A drag resizes the column live; Panes takes the width once, when it ends.
-    void OnRailSplitterDragCompleted(object? sender, VectorEventArgs e) => Panes.RailWidth = RailColumn.ActualWidth;
+    // Wide enough on macOS to hold the window buttons, which overlay the window's top-left corner.
+    static readonly double RailStripWidth = OperatingSystem.IsMacOS() ? 78 : 44;
+
+    void OnRailSplitterDragDelta(object? sender, VectorEventArgs e) =>
+        SessionRail.Opacity = PaneLayout.HidesAt(RailColumn.ActualWidth, PaneLayout.RailMinWidth) ? PaneLayout.HidingOpacity : 1;
+
+    // A drag resizes the column live; Panes takes the width once, when it ends. Released below the
+    // minimum, the rail hides and reopens at the minimum.
+    void OnRailSplitterDragCompleted(object? sender, VectorEventArgs e) {
+        SessionRail.Opacity = 1;
+        var width = RailColumn.ActualWidth;
+        var hides = PaneLayout.HidesAt(width, PaneLayout.RailMinWidth);
+        Panes.RailWidth = hides ? PaneLayout.RailMinWidth : width;
+        if (hides) Panes.RailCollapsed = true;
+    }
 
     void OnRailExpandClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => Panes.RailCollapsed = false;
 
     void ApplyRail() {
         var collapsed = Panes.RailCollapsed;
-        RailColumn.MinWidth = collapsed ? 0 : PaneLayout.RailMinWidth;
-        RailColumn.Width = new GridLength(collapsed ? 0 : Panes.RailWidth);
+        RailColumn.Width = new GridLength(collapsed ? RailStripWidth : Panes.RailWidth);
         SessionRail.IsVisible = !collapsed;
         RailSplitter.IsVisible = !collapsed;
-        RailExpandButton.IsVisible = collapsed;
-        ApplyCaptionInset();
+        RailStrip.IsVisible = collapsed;
     }
 
     WindowNotificationManager? _notifications;
@@ -117,20 +128,12 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
         MinHeight = UiScale.Minimum(onboarding ? WindowSizeMemory.OnboardingMinHeight : WindowSizeMemory.MinHeight, _scale, available?.Height);
     }
 
-    // Tall enough for the expand button, which sits in the band clear of the macOS window buttons.
-    const double CollapsedRailBand = 36;
-
     // The inset is in window units and the pane sits inside the scale, so it is divided back out.
-    void ApplyCaptionInset() {
-        var top = _captionTop / _scale;
-        if (Panes.RailCollapsed) top = Math.Max(top, CollapsedRailBand);
-        ContentPane.Margin = new Thickness(0, top, 0, 0);
-    }
+    void ApplyCaptionInset() => ContentPane.Margin = new Thickness(0, _captionTop / _scale, 0, 0);
 
     public MainWindow() {
         InitializeComponent();
         SessionsSurface.SizeChanged += (_, e) => RailColumn.MaxWidth = e.NewSize.Width * PaneLayout.MaxShare;
-        RailExpandButton.Margin = new Thickness(OperatingSystem.IsMacOS() ? 78 : 8, 6, 0, 0);
         SessionRail.CollapseRequested += (_, _) => Panes.RailCollapsed = true;
         Panes.Changed += (_, _) => ApplyRail();
         ApplyRail();

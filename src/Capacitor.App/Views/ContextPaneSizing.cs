@@ -1,26 +1,24 @@
 using Avalonia.Controls;
 using Capacitor.App.Services;
-using Lucide.Avalonia;
 
 namespace Capacitor.App.Views;
 
 /// Sizes a session view's work-context column from its window's <see cref="PaneLayout"/>. Outside a
-/// <see cref="MainWindow"/> the column keeps its minimum width and the toggle is hidden.
+/// <see cref="MainWindow"/> the column keeps its minimum width and neither button shows, since
+/// nothing could bring a hidden pane back.
 public static class ContextPaneSizing {
-    public static void Attach(Control view, ColumnDefinition column, Control pane, GridSplitter splitter, Button toggle, AppIcon toggleIcon) {
+    public static void Attach(Control view, ColumnDefinition column, Control pane, WorkContextView content,
+            GridSplitter splitter, Button showButton) {
         PaneLayout? panes = null;
 
         void Apply() {
-            toggle.IsVisible = panes is not null;
             var collapsed = panes?.ContextCollapsed ?? false;
-            column.MinWidth = collapsed ? 0 : PaneLayout.ContextMinWidth;
+            column.MinWidth = panes is null ? PaneLayout.ContextMinWidth : 0;
             column.Width = new GridLength(collapsed ? 0 : panes?.ContextWidth ?? PaneLayout.ContextMinWidth);
             pane.IsVisible = !collapsed;
             splitter.IsVisible = !collapsed;
-            toggleIcon.Kind = collapsed ? LucideIconKind.PanelRightOpen : LucideIconKind.PanelRightClose;
-            var label = collapsed ? "Show details" : "Hide details";
-            ToolTip.SetTip(toggle, label);
-            Avalonia.Automation.AutomationProperties.SetName(toggle, label);
+            showButton.IsVisible = collapsed;
+            content.HideButton.IsVisible = panes is not null;
         }
 
         void OnChanged(object? sender, EventArgs e) => Apply();
@@ -35,11 +33,23 @@ public static class ContextPaneSizing {
             panes = null;
         };
         view.SizeChanged += (_, e) => column.MaxWidth = e.NewSize.Width * PaneLayout.MaxShare;
+        splitter.DragDelta += (_, _) =>
+            pane.Opacity = panes is not null && PaneLayout.HidesAt(column.ActualWidth, PaneLayout.ContextMinWidth)
+                ? PaneLayout.HidingOpacity
+                : 1;
+        // Released below the minimum, the pane hides and reopens at the minimum.
         splitter.DragCompleted += (_, _) => {
-            if (panes is not null) panes.ContextWidth = column.ActualWidth;
+            pane.Opacity = 1;
+            if (panes is null) return;
+            var hides = PaneLayout.HidesAt(column.ActualWidth, PaneLayout.ContextMinWidth);
+            panes.ContextWidth = hides ? PaneLayout.ContextMinWidth : column.ActualWidth;
+            if (hides) panes.ContextCollapsed = true;
         };
-        toggle.Click += (_, _) => {
-            if (panes is not null) panes.ContextCollapsed = !panes.ContextCollapsed;
+        content.HideRequested += (_, _) => {
+            if (panes is not null) panes.ContextCollapsed = true;
+        };
+        showButton.Click += (_, _) => {
+            if (panes is not null) panes.ContextCollapsed = false;
         };
         Apply();
     }

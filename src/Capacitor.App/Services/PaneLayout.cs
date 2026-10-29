@@ -9,6 +9,11 @@ public sealed class PaneLayout {
     // Of the space the pane shares, so its splitter stays on screen and can be dragged back.
     public const double MaxShare = 0.9;
 
+    // How a pane dragged below its minimum looks until it is released and hides.
+    public const double HidingOpacity = 0.4;
+
+    public static bool HidesAt(double width, double min) => width < min;
+
     double _railWidth = RailMinWidth;
     bool _railCollapsed;
     double _contextWidth = ContextMinWidth;

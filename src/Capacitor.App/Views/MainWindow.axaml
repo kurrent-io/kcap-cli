@@ -89,17 +89,23 @@
                             <views:StillImage x:Name="SwitchCoverStill" />
                         </Border>
                     </Panel>
-                    <!-- Sits in the band the content pane leaves at the top while the rail is collapsed. -->
-                    <Button x:Name="RailExpandButton" Grid.Column="1" Classes="kcapGhost kcapIcon"
-                            HorizontalAlignment="Left" VerticalAlignment="Top" IsVisible="False"
-                            ToolTip.Tip="Show sidebar" AutomationProperties.Name="Show sidebar"
-                            Click="OnRailExpandClick">
-                        <views:AppIcon Kind="PanelLeftOpen" Size="16" Foreground="{StaticResource KcapMutedBrush}" />
-                    </Button>
+                    <!-- What the rail leaves when collapsed. Its button sits below the title bar, so
+                         neither the window title nor the macOS window buttons cover it. -->
+                    <Border x:Name="RailStrip" Grid.Column="0" IsVisible="False"
+                            Background="{StaticResource KcapSurfaceBrush}"
+                            BorderThickness="0,0,1,0" BorderBrush="{StaticResource KcapBorderBrush}"
+                            PointerPressed="OnChromePointerPressed">
+                        <Button x:Name="RailExpandButton" Classes="kcapGhost kcapIcon" Margin="0,48,0,0"
+                                HorizontalAlignment="Center" VerticalAlignment="Top"
+                                ToolTip.Tip="Show sidebar" AutomationProperties.Name="Show sidebar"
+                                Click="OnRailExpandClick">
+                            <views:AppIcon Kind="PanelLeftOpen" Size="16" Foreground="{StaticResource KcapMutedBrush}" />
+                        </Button>
+                    </Border>
                     <!-- Last child so it hit-tests above the content pane it overhangs. -->
                     <GridSplitter x:Name="RailSplitter" Grid.Column="0" HorizontalAlignment="Right" Width="6"
                                   Margin="0,0,-3,0" Background="Transparent" ResizeDirection="Columns"
-                                  DragCompleted="OnRailSplitterDragCompleted" />
+                                  DragDelta="OnRailSplitterDragDelta" DragCompleted="OnRailSplitterDragCompleted" />
                 </Grid>
             </Panel>
         </LayoutTransformControl>
