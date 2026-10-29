@@ -61,17 +61,27 @@ internal static partial class InstalledAppProcesses {
                 && bundleIdentifier(c.Pid) is { } id && KcapBundle.Identifiers.Contains(id, StringComparer.Ordinal))
             .Select(c => c.Pid).ToArray();
 
+    /// Asked of the system by bundle identifier rather than found by process name: macOS keeps only the first 16
+    /// characters of a process name, which cuts off the legacy "Kurrent Capacitor".
     static List<(int Pid, DateTime Started)> Candidates() {
         var candidates = new List<(int, DateTime)>();
-        foreach (var name in KcapBundle.ExecutableNames) {
-            foreach (var process in Process.GetProcessesByName(name)) {
-                using (process) {
+        if (!OperatingSystem.IsMacOS()) return candidates;
+        var pool = Send(GetClass("NSAutoreleasePool"), Selector("new"));
+        try {
+            foreach (var identifier in KcapBundle.Identifiers) {
+                var name = StringWithUtf8(GetClass("NSString"), Selector("stringWithUTF8String:"), identifier);
+                var apps = SendPointer(GetClass("NSRunningApplication"), Selector("runningApplicationsWithBundleIdentifier:"), name);
+                if (apps == 0) continue;
+                var count = (long)Send(apps, Selector("count"));
+                for (var i = 0L; i < count; i++) {
+                    var pid = ProcessIdentifier(ObjectAtIndex(apps, Selector("objectAtIndex:"), (nuint)i), Selector("processIdentifier"));
                     try {
-                        if (!process.HasExited) candidates.Add((process.Id, process.StartTime));
-                    } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException) { }
+                        using var process = Process.GetProcessById(pid);
+                        if (!process.HasExited) candidates.Add((pid, process.StartTime));
+                    } catch (Exception ex) when (ex is ArgumentException or System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException) { }
                 }
             }
-        }
+        } finally { Send(pool, Selector("drain")); }
         return candidates;
     }
 
@@ -126,4 +136,12 @@ internal static partial class InstalledAppProcesses {
     private static partial nint FindApplication(nint receiver, nint selector, int pid);
     [LibraryImport(ObjC, EntryPoint = "objc_msgSend")]
     private static partial byte Terminate(nint receiver, nint selector);
+    [LibraryImport(ObjC, EntryPoint = "objc_msgSend", StringMarshalling = StringMarshalling.Utf8)]
+    private static partial nint StringWithUtf8(nint receiver, nint selector, string value);
+    [LibraryImport(ObjC, EntryPoint = "objc_msgSend")]
+    private static partial nint SendPointer(nint receiver, nint selector, nint argument);
+    [LibraryImport(ObjC, EntryPoint = "objc_msgSend")]
+    private static partial nint ObjectAtIndex(nint receiver, nint selector, nuint index);
+    [LibraryImport(ObjC, EntryPoint = "objc_msgSend")]
+    private static partial int ProcessIdentifier(nint receiver, nint selector);
 }
