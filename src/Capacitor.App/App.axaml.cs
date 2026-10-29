@@ -524,12 +524,18 @@ public partial class App : Application {
             vm.Dispose();
             _updateHandedOver.TrySetResult();
         }
-        vm.Completed += () => Dispatcher.UIThread.Post(Open);
+        var earlierInstances = OperatingSystem.IsMacOS() ? QuitEarlierInstancesAsync(BringForward) : Task.CompletedTask;
+        vm.Completed += () => _ = CompleteUpdateAsync(earlierInstances, () => Dispatcher.UIThread.Post(Open));
         window.Closed += (_, _) => Open();
         _closeUpdateFinishWindow = Open;
         if (_coordinator is { } holder) holder.ShowInstead = BringForward;
         BringForward();
-        if (OperatingSystem.IsMacOS()) _ = QuitEarlierInstancesAsync(BringForward);
+    }
+
+    /// Automatic handover waits for predecessor shutdown; an explicit early handover calls Open directly.
+    internal static async Task CompleteUpdateAsync(Task earlierInstances, Action open) {
+        await earlierInstances.ConfigureAwait(false);
+        open();
     }
 
     async Task QuitEarlierInstancesAsync(Action afterwards) {
