@@ -102,15 +102,9 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
     readonly Action<int>? _onUnauthorized;
     readonly TimeProvider _time;
     readonly Func<string, string, CancellationToken, Task<SessionRenameResult>>? _postRename;
-    // Applied renames by canonical session id. Only a fetch started after the entry was recorded,
-    // carrying a title other than the one the rename replaced, or the hold running out, retires it.
-    readonly Dictionary<string, (string Title, string? Replaced, long FetchSeq, DateTimeOffset RecordedAt)> _overlay =
-        new(StringComparer.Ordinal);
-    long _fetchSeq;
+    readonly SessionTitleOverlay _overlay;
     // Advances only when the signed-in subject changes, unlike _generation, which a dropped connection also advances.
     long _identity;
-    // The server's title sync lags the write by seconds; the bound stops a server that kept the old title from being masked forever.
-    static readonly TimeSpan OverlayHold = TimeSpan.FromMinutes(2);
 
     public RemoteAgentsService(
             IServerLane lane, Func<CancellationToken, Task<RemoteFetch>> fetchAgents,
@@ -120,6 +114,7 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
         _onUnauthorized = onUnauthorized;
         _postRename = postRename;
         _time = time ?? TimeProvider.System;
+        _overlay = new(_time);
         _listingRetry = new(_time, RetryDelays);
         _accountsRetry = new(_time, RetryDelays);
         var wait = debounce ?? TimeSpan.FromMilliseconds(250);
@@ -208,7 +203,7 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
         while (true) {
             int generation, laneEpoch;
             long seq;
-            lock (_lock) { generation = _generation; laneEpoch = _lastLaneEpoch; seq = ++_fetchSeq; }
+            lock (_lock) { generation = _generation; laneEpoch = _lastLaneEpoch; seq = _overlay.BeginRead(); }
             RemoteFetch? result = null;
             try {
                 result = await fetch(CancellationToken.None).ConfigureAwait(false);
@@ -249,17 +244,8 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
     }
 
     // Caller holds _lock.
-    AgentInstanceDto WithOverlay(AgentInstanceDto row, long fetchSeq) {
-        if (OverlayKey(row.SessionId) is not { } key || !_overlay.TryGetValue(key, out var entry)) return row;
-        var superseded = fetchSeq > entry.FetchSeq && row.Title is { Length: > 0 } && row.Title != entry.Replaced;
-        if (superseded || _time.GetUtcNow() - entry.RecordedAt >= OverlayHold) {
-            _overlay.Remove(key);
-            return row;
-        }
-        return row with { Title = entry.Title };
-    }
-
-    static string? OverlayKey(string? sessionId) => WorkContextIds.CanonicalSessionId(sessionId);
+    AgentInstanceDto WithOverlay(AgentInstanceDto row, long readSeq) =>
+        _overlay.Resolve(row.SessionId, row.Title, readSeq) is var title && title == row.Title ? row : row with { Title = title };
 
     public async Task<SessionRenameResult> RenameAsync(string agentId, string sessionId, string title, CancellationToken ct) {
         if (_postRename is null) return new SessionRenameResult(false, null, SessionRenameReasons.Unauthenticated);
@@ -270,11 +256,10 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
         lock (_lock) {
             if (identity != _identity)
                 return new SessionRenameResult(false, null, SessionRenameReasons.IdentityMismatch);
-            if (OverlayKey(sessionId) is not { } key) return result;
+            if (SessionTitleOverlay.Key(sessionId) is not { } key) return result;
             var shown = result.Title is { Length: > 0 } ? result.Title : RenameWire.NormalizeTitle(title) ?? title;
-            var cached = _agents.Items.Where(a => OverlayKey(a.SessionId) == key).ToList();
-            var replaced = _overlay.TryGetValue(key, out var prior) ? prior.Replaced : cached.FirstOrDefault()?.Title;
-            _overlay[key] = (shown, replaced, _fetchSeq, _time.GetUtcNow());
+            var cached = _agents.Items.Where(a => SessionTitleOverlay.Key(a.SessionId) == key).ToList();
+            _overlay.Record(sessionId, shown, cached.FirstOrDefault()?.Title);
             var affected = cached.Select(a => a with { Title = shown }).ToList();
             if (affected.Count > 0) _agents.AddOrUpdate(affected);
         }

@@ -55,6 +55,7 @@ public class RemoteSessionViewModelTests {
             }, hosted);
 
         public readonly FakeRemoteAgents Remote = new();
+        public readonly FakeServerSessionsService Sessions = new();
         public readonly RecordingNotifier Notifier = new();
 
         public RemoteSessionViewModel Build(AgentRow row, IPlanArtifactSource? planArtifacts = null,
@@ -62,7 +63,7 @@ public class RemoteSessionViewModelTests {
                 BackgroundCommandActivity? commands = null, SubagentEventsReader? readSubagent = null, AccountReadings? readings = null) {
             Directory.Rows.AddOrUpdate(row);
             return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), new RecordingOpener(), Time, WorkSource, () => new FakeTerminalSurface(), planArtifacts, commands, pullRequests: pullRequests, plans: plans, readSubagent: readSubagent, readings: readings,
-                remoteAgents: Remote, notifier: Notifier);
+                remoteAgents: Remote, notifier: Notifier, serverSessions: Sessions);
         }
 
         /// One chat poll: the pane reads its feed on the timer this harness owns.
@@ -86,6 +87,7 @@ public class RemoteSessionViewModelTests {
             Permissions.Dispose();
             Directory.Dispose();
             Remote.Dispose();
+            Sessions.Dispose();
         }
     }
 
@@ -1523,6 +1525,49 @@ public class RemoteSessionViewModelTests {
 
             h.Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: "u2", Epoch: 2));
             await WaitUntilAsync(() => !vm.TitleEditor.ShowsPencil, what: "pencil hidden");
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// The listing's own record of the session: renamable by its owner whether or not it ended, and
+    /// the applied title reaches the listing at once.
+    [Test]
+    [Arguments("ended")]
+    [Arguments("active")]
+    public async Task An_owned_server_row_shows_the_pencil_and_renames_through_the_server(string status) {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var calls = new List<(string, string, string)>();
+            h.Remote.Rename = (agent, session, title) => {
+                calls.Add((agent, session, title));
+                return Task.FromResult(new SessionRenameResult(true, "New name", null));
+            };
+            var vm = h.Build(Harness.ServerRow("s1", status));
+
+            await Assert.That(vm.TitleEditor.ShowsPencil).IsTrue();
+            await vm.TitleEditor.BeginEditCommand.Execute();
+            vm.TitleEditor.Draft = "New name";
+            await vm.TitleEditor.SaveCommand.Execute();
+
+            await Assert.That(calls).IsEquivalentTo(new[] { ("s1", "s1", "New name") });
+            await Assert.That(h.Sessions.Renames).IsEquivalentTo(new[] { ("s1", "New name") });
+            await Assert.That(vm.TitleEditor.Title).IsEqualTo("New name");
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [Arguments("another owner", false)]
+    [Arguments("viewer alias", true)]
+    public async Task A_server_rows_pencil_follows_the_listings_owner(string owner, bool shows) {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var row = owner == "viewer alias"
+                ? Harness.ServerRow("s1") with { OwnerUserId = "legacy-id", OwnerIsViewer = true }
+                : Harness.ServerRow("s1") with { OwnerUserId = "someone-else" };
+            var vm = h.Build(row);
+
+            await Assert.That(vm.TitleEditor.ShowsPencil).IsEqualTo(shows);
             await vm.TeardownAsync();
         });
     }

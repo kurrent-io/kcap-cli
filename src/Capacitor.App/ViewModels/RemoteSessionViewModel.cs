@@ -270,7 +270,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             ComposerDrafts? drafts = null, Func<string, Action>? inputSending = null,
             LastReads<PullRequestSnapshot>? pullRequestSnapshots = null, Action<string>? pullRequestLinksChanged = null,
             SubagentEventsReader? readSubagent = null, AccountReadings? readings = null, IMessageSenderSource? senders = null,
-            IRemoteAgentsService? remoteAgents = null, IAppNotifier? notifier = null, IObservable<string?>? appSubject = null) {
+            IRemoteAgentsService? remoteAgents = null, IAppNotifier? notifier = null, IObservable<string?>? appSubject = null,
+            IServerSessionsService? serverSessions = null) {
         _drafts = drafts;
         _time = time;
         _permissions = permissions;
@@ -353,17 +354,22 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         Apply(row);
 
         // The server re-checks ownership on every write; this only avoids offering a rename that
-        // would be refused.
+        // would be refused. A listed session is the server's own record, so it stays renamable
+        // after it ends; the listing folds the owner through the account's aliases.
         var canRename = remoteAgents is null
             ? Observable.Return(false)
             : _rows.CombineLatest(_sessionEndedChanges, _originChangedChanges, appSubject ?? SignedInSubject.From(lane.Status),
-                (r, ended, movedLocal, viewer) => !ended && !movedLocal && r.SessionId is { Length: > 0 }
-                    && viewer is not null && r.OwnerUserId == viewer)
+                (r, ended, movedLocal, viewer) => (!ended || r.Origin == AgentOrigin.Server) && !movedLocal
+                    && r.SessionId is { Length: > 0 } && viewer is not null
+                    && (r.OwnerUserId == viewer || (r.Origin == AgentOrigin.Server && r.OwnerIsViewer == true)))
                 .ObserveOn(RxSchedulers.MainThreadScheduler);
-        TitleEditor = new SessionTitleEditorViewModel(_titles, canRename, (title, ct) =>
-                remoteAgents is not null && _row.SessionId is { Length: > 0 } sessionId
-                    ? remoteAgents.RenameAsync(row.Id, sessionId, title, ct)
-                    : Task.FromResult(new SessionRenameResult(false, null, SessionRenameReasons.NotFound)),
+        TitleEditor = new SessionTitleEditorViewModel(_titles, canRename, async (title, ct) => {
+                if (remoteAgents is null || _row.SessionId is not { Length: > 0 } sessionId)
+                    return new SessionRenameResult(false, null, SessionRenameReasons.NotFound);
+                var result = await remoteAgents.RenameAsync(row.Id, sessionId, title, ct);
+                if (result.Applied) serverSessions?.ApplyRename(sessionId, result.Title is { Length: > 0 } shown ? shown : title);
+                return result;
+            },
             notifier ?? new AppNotifier());
         _disposables.Add(TitleEditor);
 

@@ -1021,6 +1021,28 @@ public class RemoteAgentsServiceTests {
         await Assert.That(TitleOf(svc, "a1")).IsNull();
     }
 
+    // Every title an unsettled rename replaced is a lagging read, not just the one before the first rename.
+    [Test]
+    public async Task A_lagging_fetch_carrying_any_earlier_title_keeps_the_latest_rename() {
+        var lane = new FakeServerLane();
+        var rows = new Rows(Titled("a1", "s1", "Old"));
+        using var svc = new RemoteAgentsService(lane, rows.Fetch, TimeSpan.Zero,
+            postRename: (_, title, _) => Task.FromResult(new SessionRenameResult(true, title, null)));
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u1"));
+        await Eventually(() => svc.Agents.Count == 1);
+        await svc.RenameAsync("a1", "s1", "First", CancellationToken.None);
+        await svc.RenameAsync("a1", "s1", "Second", CancellationToken.None);
+
+        await Serve(lane, svc, rows, "z1", Titled("a1", "s1", "First"));
+        await Assert.That(TitleOf(svc, "a1")).IsEqualTo("Second");
+        await Serve(lane, svc, rows, "z2", Titled("a1", "s1", "Old"));
+        await Assert.That(TitleOf(svc, "a1")).IsEqualTo("Second");
+
+        await Serve(lane, svc, rows, "z3", Titled("a1", "s1", "Second"));
+        await Serve(lane, svc, rows, "z4", Titled("a1", "s1", "First"));
+        await Assert.That(TitleOf(svc, "a1")).IsEqualTo("First");
+    }
+
     [Test]
     public async Task The_overlay_yields_after_the_hold() {
         var time = new FakeTimeProvider();

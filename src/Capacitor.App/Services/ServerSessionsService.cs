@@ -80,6 +80,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
     /// Deletions by arrival order: a read admitted before one still lists the session.
     long _deleteSeq;
     readonly Dictionary<string, long> _tombstones = new(StringComparer.Ordinal);
+    readonly SessionTitleOverlay _overlay;
     /// Requests awaiting the next admitted read, and those the read in progress answers: a request
     /// is settled by its own read, whatever refreshes queue behind it.
     List<TaskCompletionSource> _waiting = [];
@@ -96,6 +97,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
         _fetch = fetch;
         _fetchOwners = fetchOwners;
         _time = time;
+        _overlay = new(time);
         _onUnauthorized = onUnauthorized;
 
         lane.Status.Subscribe(status => {
@@ -278,7 +280,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
                 }
             }
             int generation, laneEpoch, pages, account;
-            long readSeq;
+            long readSeq, titleSeq;
             RailScope scope;
             bool full;
             lock (_lock) {
@@ -290,6 +292,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
                 full = _fullRequested;
                 _fullRequested = false;
                 readSeq = _deleteSeq;
+                titleSeq = _overlay.BeginRead();
                 // Every request so far is served by this read, those that arrived during a hold too.
                 _rerun = false;
                 _serving = _waiting;
@@ -310,7 +313,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
                 // A read taken under another scope or page count answers a question no longer asked,
                 // and one admitted while the lane is down answers for a lane that is not there.
                 if (generation == _generation && _connected && !_disposed && scope == _scope.Value && pages == _pages) {
-                    if (snapshot is not null) Publish(snapshot, pages, readSeq);
+                    if (snapshot is not null) Publish(snapshot, pages, readSeq, titleSeq);
                     _current.OnNext(snapshot is { EndedPartial: false });
                     if (unauthorized) notifyUnauthorized = true;
                 }
@@ -336,14 +339,16 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
         }
     }
 
-    void Publish(Snapshot snapshot, int pages, long readSeq) {
+    void Publish(Snapshot snapshot, int pages, long readSeq, long titleSeq) {
         // A deletion pushed after this read was admitted outranks what the read still lists.
         bool Standing(RepoSessionDto row) => !(_tombstones.TryGetValue(row.SessionId, out var seq) && seq > readSeq);
-        _live.EditDiff(snapshot.Live.Where(Standing), EqualityComparer<RepoSessionDto>.Default);
-        if (snapshot.MineLive is { } mine) _mineLive.EditDiff(mine.Where(Standing), EqualityComparer<RepoSessionDto>.Default);
+        RepoSessionDto Titled(RepoSessionDto row) =>
+            _overlay.Resolve(row.SessionId, row.Title, titleSeq) is var title && title == row.Title ? row : row with { Title = title };
+        _live.EditDiff(snapshot.Live.Where(Standing).Select(Titled), EqualityComparer<RepoSessionDto>.Default);
+        if (snapshot.MineLive is { } mine) _mineLive.EditDiff(mine.Where(Standing).Select(Titled), EqualityComparer<RepoSessionDto>.Default);
         else _mineLive.Clear();
         if (snapshot.Ended is { } ended) {
-            var rows = ended.Where(Standing).ToList();
+            var rows = ended.Where(Standing).Select(Titled).ToList();
             var total = snapshot.EndedTotal;
             if (snapshot.EndedPartial) {
                 // The pages past the failed one were not read: what they held stands, unless the
@@ -438,9 +443,24 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
         }
     }
 
+    public void ApplyRename(string sessionId, string title) {
+        lock (_lock) {
+            if (_disposed) return;
+            var listed = Listed(sessionId) ?? (_mineLive.Lookup(sessionId) is { HasValue: true, Value: var mine } ? mine : null)
+                ?? (_kept == sessionId ? _keptRow : null);
+            if (listed is null) return;
+            _overlay.Record(sessionId, title, listed.Title);
+            foreach (var cache in new[] { _live, _mineLive, _ended })
+                if (cache.Lookup(sessionId) is { HasValue: true, Value: var row }) cache.AddOrUpdate(row with { Title = title });
+            if (_keptRow?.SessionId == sessionId) _keptRow = _keptRow with { Title = title };
+            EmitSnapshot();
+        }
+    }
+
     /// Nothing listed under the previous account survives into the next one.
     void ClearForNewAccount() {
         _account++;
+        _overlay.Clear();
         _heldUntil = DateTimeOffset.MinValue;
         _holdWake.Cancel();
         _holdWake.Dispose();

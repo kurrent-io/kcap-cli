@@ -836,4 +836,50 @@ public class ServerSessionsServiceTests {
         await Task.Delay(50);
         await Assert.That(listing.Count("ended", "me", 0)).IsEqualTo(reads + 1);
     }
+
+    static string? TitleIn(IObservableCache<RepoSessionDto, string> cache, string id) => cache.Lookup(id).Value.Title;
+
+    [Test]
+    public async Task An_applied_rename_shows_in_every_set_at_once_and_holds_over_a_lagging_read() {
+        var (lane, listing, _, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        Connect(lane);
+        await Eventually(() => service.Ended.Count == 20 && service.MineLive.Count == 1, "first read");
+
+        service.ApplyRename("live-me", "Renamed");
+        service.ApplyRename("s1", "First");
+        service.ApplyRename("s1", "Second");
+
+        await Assert.That(TitleIn(service.Live, "live-me")).IsEqualTo("Renamed");
+        await Assert.That(TitleIn(service.MineLive, "live-me")).IsEqualTo("Renamed");
+        await Assert.That(TitleIn(service.Ended, "s1")).IsEqualTo("Second");
+
+        listing.Answer("ended", "me", 0, 212, [Row("s1") with { Title = "First" }, .. Rows("s", 2, 19)]);
+        await service.ReconcileAsync();
+        await Assert.That(TitleIn(service.Live, "live-me")).IsEqualTo("Renamed");
+        await Assert.That(TitleIn(service.Ended, "s1")).IsEqualTo("Second");
+
+        listing.Answer("active", "me", 0, 1, Row("live-me", "active") with { Title = "Elsewhere" });
+        listing.Answer("active", null, 0, 2, Row("live-me", "active") with { Title = "Elsewhere" }, Row("live-other", "active", "other"));
+        await service.ReconcileAsync();
+        await Assert.That(TitleIn(service.Live, "live-me")).IsEqualTo("Elsewhere");
+        await Assert.That(TitleIn(service.MineLive, "live-me")).IsEqualTo("Elsewhere");
+    }
+
+    [Test]
+    public async Task An_account_change_drops_the_renames() {
+        var (lane, listing, _, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        Connect(lane, "u1", 1);
+        await Eventually(() => service.Ended.Count == 20, "first read");
+        service.ApplyRename("s1", "Renamed");
+
+        Connect(lane, "u2", 2);
+        await service.ReconcileAsync();
+        await Eventually(() => service.Ended.Count == 20, "second account's read");
+
+        await Assert.That(TitleIn(service.Ended, "s1")).IsEqualTo("s1");
+    }
 }
