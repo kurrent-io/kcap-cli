@@ -342,13 +342,19 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
     void Publish(Snapshot snapshot, int pages, long readSeq, long titleSeq) {
         // A deletion pushed after this read was admitted outranks what the read still lists.
         bool Standing(RepoSessionDto row) => !(_tombstones.TryGetValue(row.SessionId, out var seq) && seq > readSeq);
-        RepoSessionDto Titled(RepoSessionDto row) =>
-            _overlay.Resolve(row.SessionId, row.Title, titleSeq) is var title && title == row.Title ? row : row with { Title = title };
-        _live.EditDiff(snapshot.Live.Where(Standing).Select(Titled), EqualityComparer<RepoSessionDto>.Default);
-        if (snapshot.MineLive is { } mine) _mineLive.EditDiff(mine.Where(Standing).Select(Titled), EqualityComparer<RepoSessionDto>.Default);
+        // Tagged by set so one overlay decision covers every copy of a session in this read.
+        var tagged = snapshot.Live.Where(Standing).Select(r => (Set: 0, Row: r))
+            .Concat((snapshot.MineLive ?? []).Where(Standing).Select(r => (Set: 1, Row: r)))
+            .Concat((snapshot.Ended ?? []).Where(Standing).Select(r => (Set: 2, Row: r)))
+            .ToList();
+        var titled = _overlay.Resolve(tagged, t => t.Row.SessionId, t => t.Row.Title,
+            (t, title) => (t.Set, t.Row with { Title = title }), titleSeq).ToList();
+        IEnumerable<RepoSessionDto> InSet(int set) => titled.Where(t => t.Set == set).Select(t => t.Row);
+        _live.EditDiff(InSet(0), EqualityComparer<RepoSessionDto>.Default);
+        if (snapshot.MineLive is not null) _mineLive.EditDiff(InSet(1), EqualityComparer<RepoSessionDto>.Default);
         else _mineLive.Clear();
         if (snapshot.Ended is { } ended) {
-            var rows = ended.Where(Standing).Select(Titled).ToList();
+            var rows = InSet(2).ToList();
             var total = snapshot.EndedTotal;
             if (snapshot.EndedPartial) {
                 // The pages past the failed one were not read: what they held stands, unless the

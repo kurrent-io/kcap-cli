@@ -882,4 +882,32 @@ public class ServerSessionsServiceTests {
 
         await Assert.That(TitleIn(service.Ended, "s1")).IsEqualTo("s1");
     }
+
+    /// One read lists a session in more than one set; a copy still carrying the replaced title is lag,
+    /// whichever set it is in, so the rename holds in every set and survives into the next read.
+    [Test]
+    [Arguments("mine lags")]
+    [Arguments("unfiltered lags")]
+    public async Task A_rename_holds_while_any_copy_in_the_read_still_lags(string lagging) {
+        var (lane, listing, _, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        Connect(lane);
+        await Eventually(() => service.Ended.Count == 20 && service.MineLive.Count == 1, "first read");
+        service.ApplyRename("live-me", "Renamed");
+
+        var old = Row("live-me", "active");
+        var renamed = old with { Title = "Renamed" };
+        listing.Answer("active", "me", 0, 1, lagging == "mine lags" ? old : renamed);
+        listing.Answer("active", null, 0, 2, lagging == "mine lags" ? renamed : old, Row("live-other", "active", "other"));
+        await service.ReconcileAsync();
+        await Assert.That(TitleIn(service.Live, "live-me")).IsEqualTo("Renamed");
+        await Assert.That(TitleIn(service.MineLive, "live-me")).IsEqualTo("Renamed");
+
+        listing.Answer("active", "me", 0, 1, old);
+        listing.Answer("active", null, 0, 2, old, Row("live-other", "active", "other"));
+        await service.ReconcileAsync();
+        await Assert.That(TitleIn(service.Live, "live-me")).IsEqualTo("Renamed");
+        await Assert.That(TitleIn(service.MineLive, "live-me")).IsEqualTo("Renamed");
+    }
 }

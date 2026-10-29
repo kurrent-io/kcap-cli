@@ -226,7 +226,8 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
                 // A refresh admitted after the lane dropped is as stale as one that outlived it.
                 if (generation == _generation && _connected) {
                     if (result?.Rows is { } rows)
-                        _agents.EditDiff(rows.Select(r => WithOverlay(r, seq)), EqualityComparer<AgentInstanceDto>.Default);
+                        _agents.EditDiff(_overlay.Resolve(rows, r => r.SessionId, r => r.Title, (r, title) => r with { Title = title }, seq),
+                            EqualityComparer<AgentInstanceDto>.Default);
                     if (result is { Unauthorized: true }) notifyUnauthorized = true;
                     _current.OnNext(result?.Rows is not null);
                 }
@@ -242,10 +243,6 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
             if (!rerun) return;
         }
     }
-
-    // Caller holds _lock.
-    AgentInstanceDto WithOverlay(AgentInstanceDto row, long readSeq) =>
-        _overlay.Resolve(row.SessionId, row.Title, readSeq) is var title && title == row.Title ? row : row with { Title = title };
 
     public async Task<SessionRenameResult> RenameAsync(string agentId, string sessionId, string title, CancellationToken ct) {
         if (_postRename is null) return new SessionRenameResult(false, null, SessionRenameReasons.Unauthenticated);
