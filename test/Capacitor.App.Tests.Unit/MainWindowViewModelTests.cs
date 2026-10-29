@@ -348,6 +348,22 @@ public class MainWindowViewModelTests {
             .IsEqualTo(MainWindowViewModel.SignedOutDisplay);
     }
 
+    /// A daemon restarting or redialing while an update finishes is the update, not an outage; an expired sign-in still wins.
+    [Test]
+    [Arguments(AttachState.Unreachable, ExpectedDaemonRestart.Reason, "connected")]
+    [Arguments(AttachState.Connected, null, "reconnecting")]
+    [Arguments(AttachState.Connected, null, "disconnected")]
+    public async Task An_update_still_finishing_reads_as_updating_in_the_rail(AttachState state, string? reason, string daemonConnection) {
+        var status = new AttachStatus(state, reason, null);
+
+        await Assert.That(MainWindowViewModel.ConnectionDisplayFor(status, daemonConnection, updating: true))
+            .IsEqualTo(MainWindowViewModel.UpdatingDisplay);
+        await Assert.That(((Avalonia.Media.ISolidColorBrush)MainWindowViewModel.StatusBrushFor(status, daemonConnection, updating: true)).Color)
+            .IsEqualTo(Avalonia.Media.Color.Parse(StatusColors.Updating));
+        await Assert.That(MainWindowViewModel.ConnectionDisplayFor(status, daemonConnection, signInExpired: true, updating: true))
+            .IsEqualTo(MainWindowViewModel.SignedOutDisplay);
+    }
+
     [Test]
     [Arguments(null, "")]
     [Arguments("", "")]
@@ -359,29 +375,71 @@ public class MainWindowViewModelTests {
         await Assert.That(MainWindowViewModel.ProfileLabelForRail(profile)).IsEqualTo(expected);
     }
 
+    /// The rail takes the launcher card's tone: grey while in progress, amber when it needs the user, red once broken.
     [Test]
-    [Arguments(AttachState.Connecting, null, "connected", StatusColors.InProgress)]
-    [Arguments(AttachState.Unreachable, "daemon_unreachable", "connected", StatusColors.Unavailable)]
-    [Arguments(AttachState.Unreachable, "daemon_incompatible", "connected", StatusColors.Disrupted)]
-    [Arguments(AttachState.Connected, null, "connected", StatusColors.Connected)]
-    [Arguments(AttachState.Connected, null, "connecting", StatusColors.InProgress)]
-    [Arguments(AttachState.Connected, null, "reconnecting", StatusColors.InProgress)]
-    [Arguments(AttachState.Connected, null, "disconnected", StatusColors.Disrupted)]
-    public async Task StatusBrushFor_maps_to_the_matching_bucket_color(
-            AttachState state, string? reason, string daemonConnection, string expectedHex) {
+    [Arguments(AttachState.Connecting, null, "connected", false, StatusColors.Pending)]
+    [Arguments(AttachState.Unreachable, "daemon_restarting", "connected", false, StatusColors.Pending)]
+    [Arguments(AttachState.Unreachable, "daemon_unreachable", "connected", false, StatusColors.InProgress)]
+    [Arguments(AttachState.Unreachable, "daemon_unreachable", "connected", true, StatusColors.Disrupted)]
+    [Arguments(AttachState.Unreachable, "daemon_incompatible", "connected", false, StatusColors.Disrupted)]
+    [Arguments(AttachState.Connected, null, "connected", false, StatusColors.Connected)]
+    [Arguments(AttachState.Connected, null, "connecting", false, StatusColors.Pending)]
+    [Arguments(AttachState.Connected, null, "reconnecting", false, StatusColors.Pending)]
+    [Arguments(AttachState.Connected, null, "disconnected", false, StatusColors.InProgress)]
+    public async Task StatusBrushFor_matches_the_launcher_card_tone(
+            AttachState state, string? reason, string daemonConnection, bool failed, string expectedHex) {
         var status = new AttachStatus(state, reason, null);
-        var brush = (ISolidColorBrush)MainWindowViewModel.StatusBrushFor(status, daemonConnection);
+        var brush = (ISolidColorBrush)MainWindowViewModel.StatusBrushFor(status, daemonConnection, failed: failed);
+        await Assert.That(brush.Color).IsEqualTo(Color.Parse(expectedHex));
+    }
+
+    /// An expired sign-in needs the user; only a local server that refused the app, which the card reports as a failure, is red.
+    [Test]
+    [Arguments(false, StatusColors.InProgress)]
+    [Arguments(true, StatusColors.Disrupted)]
+    public async Task StatusBrushFor_signed_out_follows_the_card(bool failed, string expectedHex) {
+        var status = new AttachStatus(AttachState.Connected, null, null);
+        var brush = (ISolidColorBrush)MainWindowViewModel.StatusBrushFor(status, "reconnecting", signInExpired: true, failed: failed);
         await Assert.That(brush.Color).IsEqualTo(Color.Parse(expectedHex));
     }
 
     [Test]
-    [Arguments(AttachState.Connected, null, "reconnecting")]
-    [Arguments(AttachState.Connecting, null, "connected")]
-    public async Task StatusBrushFor_signed_out_uses_the_disrupted_color(
-            AttachState state, string? reason, string daemonConnection) {
-        var status = new AttachStatus(state, reason, null);
-        var brush = (ISolidColorBrush)MainWindowViewModel.StatusBrushFor(status, daemonConnection, signInExpired: true);
-        await Assert.That(brush.Color).IsEqualTo(Color.Parse(StatusColors.Disrupted));
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_local_daemon_failure_stays_red_when_a_healthy_remote_machine_is_selected(bool remoteFirst) {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var service = new FakeDaemonClientService();
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+            var remote = new FakeRemoteAgents();
+            remote.DaemonsSubject.OnNext([
+                new DaemonInfo { Name = "home-pc", OwnerUserId = "u1", Connected = true },
+            ]);
+            var lane = new FakeServerLane();
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
+            using var home = new HomeViewModel(service, new AppStateStore(path), new UnusedLaunchClient(),
+                () => Task.FromResult(Array.Empty<string>()), TimeProvider.System, daemons: remote.Daemons,
+                viewerId: _ => Task.FromResult<string?>("u1"), laneStatus: lane.Status);
+            using var report = new BehaviorSubject<string?>(null);
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                home: home, laneStatus: lane.Status, lifecycleAttention: report);
+            using var activation = vm.Activator.Activate();
+            const string failed = "The daemon didn't start. Press Start daemon to try again.";
+            if (!remoteFirst) {
+                report.OnNext(failed);
+                await Assert.That(((ISolidColorBrush)vm.StatusBrush).Color).IsEqualTo(Color.Parse("#FF7272"));
+            }
+            await home.SelectMachineAsync("home-pc", isLocal: false);
+            if (remoteFirst) report.OnNext(failed);
+
+            await Assert.That(home.BannerFailed).IsFalse();
+            await Assert.That(vm.ConnectionDisplay).IsEqualTo("Unreachable");
+            await Assert.That(((ISolidColorBrush)vm.StatusBrush).Color).IsEqualTo(Color.Parse("#FF7272"));
+
+            report.OnNext(null);
+            await Assert.That(((ISolidColorBrush)vm.StatusBrush).Color).IsEqualTo(Color.Parse("#F4B860"));
+        });
     }
 
     [Test]
@@ -406,8 +464,9 @@ public class MainWindowViewModelTests {
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.SignedOut));
             await Assert.That(home.ConnectionNotice).IsEqualTo(HomeViewModel.SignInExpiredNotice);
             await Assert.That(vm.ConnectionDisplay).IsEqualTo(MainWindowViewModel.SignedOutDisplay);
+            // An expired sign-in needs the user, which is how the launcher's card shows it too.
             var brush = (ISolidColorBrush)vm.StatusBrush;
-            await Assert.That(brush.Color).IsEqualTo(Color.Parse(StatusColors.Disrupted));
+            await Assert.That(brush.Color).IsEqualTo(Color.Parse(StatusColors.InProgress));
         });
     }
 

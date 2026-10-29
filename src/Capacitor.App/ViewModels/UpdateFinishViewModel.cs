@@ -20,18 +20,27 @@ namespace Capacitor.App.ViewModels;
 /// </summary>
 public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
     internal static readonly TimeSpan HandOverDelay = TimeSpan.FromSeconds(1.5);
-    /// The daemon notices its new binary within its 15 s poll and restarts in seconds; past this, one still on
-    /// another version with no restart queued is not going to change while the window waits.
+    /// The daemon notices its new binary within its 15 s poll and restarts in seconds, and redials the server within
+    /// its 30 s backoff; past this, a daemon that has done neither is not going to while the window waits. Counted
+    /// again once a local server upgrade settles, since the daemon cannot reach that server before then.
     internal static readonly TimeSpan DaemonPatience = TimeSpan.FromSeconds(60);
+    internal const string ServerConnected = "connected";
 
     readonly CompositeDisposable _disposables = new();
     readonly BehaviorSubject<bool> _waitedLong = new(false);
+    readonly SerialDisposable _patience = new();
+    // A disposed timer can still run a callback it already queued: the generation tells a stale one to do nothing.
+    readonly Lock _patienceGate = new();
+    int _patienceGeneration;
+    bool _patienceStopped;
+    readonly BehaviorSubject<(bool Finishing, string? Detail)> _progress = new((true, null));
     readonly AppUpdateTransition _transition;
     readonly TimeProvider _time;
     IReadOnlyList<UpdateStep> _steps = [];
     bool _settled;
     bool _clean;
-    bool _closed;
+    bool _handedOver;
+    bool _disposed;
     readonly bool _closing;
 
     /// What the process being replaced shows from the moment the update is accepted until it exits: quitting
@@ -54,15 +63,18 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
     }
 
     public UpdateFinishViewModel(
-            AppUpdateTransition transition, IObservable<AttachStatus> status, IObservable<string?> daemonVersion,
+            AppUpdateTransition transition, IObservable<AttachStatus> status, IObservable<(string? Version, string? Connection)> daemon,
             IObservable<bool> restartPending, IObservable<LocalStepInput?> local, TimeProvider time) {
         _transition = transition;
         _time = time;
-        OpenCommand = ReactiveCommand.Create(Close);
-        time.CreateTimer(_ => _waitedLong.OnNext(true), null, DaemonPatience, Timeout.InfiniteTimeSpan).DisposeWith(_disposables);
+        OpenCommand = ReactiveCommand.Create(RequestOpen);
+        ArmPatience();
+        local.Select(l => l?.Running == true).DistinctUntilChanged().Skip(1).Where(running => !running)
+            .Subscribe(_ => ArmPatience())
+            .DisposeWith(_disposables);
 
-        status.StartWith(new AttachStatus(AttachState.Connecting, null, null)).CombineLatest(daemonVersion.StartWith((string?)null), restartPending.StartWith(false), local.StartWith((LocalStepInput?)null),
-                _waitedLong, (s, v, pending, l, waited) => Project(transition, s, v, pending, l, waited))
+        status.StartWith(new AttachStatus(AttachState.Connecting, null, null)).CombineLatest(daemon.StartWith((null, null)), restartPending.StartWith(false), local.StartWith((LocalStepInput?)null),
+                _waitedLong, (s, d, pending, l, waited) => Project(transition, s, d.Version, d.Connection, pending, l, waited))
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(Apply)
             .DisposeWith(_disposables);
@@ -70,8 +82,8 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
 
     public string To => Display(_transition.To);
 
-    public string Heading => _closing ? $"Updating to kcap {To}"
-        : !_settled ? "Finishing the update" : _clean ? $"kcap {To} is ready" : $"kcap {To} is installed";
+    public string Heading => _closing ? $"Updating to kcap {To}…"
+        : !_settled ? "Finishing the update…" : _clean ? $"kcap {To} is ready" : $"kcap {To} is installed";
 
     public string Description => _closing ? "kcap closes, installs the update and opens again. This usually takes a few seconds."
         : _transition.From is { } from ? $"Updated from {Display(from)}. {Tail}"
@@ -98,8 +110,15 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
     /// Raised once, when the user goes on or every step is done.
     public event Action? Completed;
 
+    /// Whether steps are still running, and the first of them in one line. Kept current after an early hand-over,
+    /// so the main window can hold back what the update is still changing.
+    public IObservable<(bool Finishing, string? Detail)> Progress => _progress.DistinctUntilChanged();
+
+    /// Explicit handover, including while automatic completion is waiting for an earlier app to quit.
+    public event Action? OpenRequested;
+
     void Apply((IReadOnlyList<UpdateStep> Steps, bool Settled, bool Clean) state) {
-        if (_closed) return;
+        if (_disposed) return;
         Steps = state.Steps;
         var cleanNow = state.Clean && !_clean;
         _settled = state.Settled;
@@ -108,7 +127,21 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
         this.RaisePropertyChanged(nameof(Description));
         this.RaisePropertyChanged(nameof(IsSettled));
         this.RaisePropertyChanged(nameof(OpenLabel));
+        _progress.OnNext((!state.Settled, ProgressDetail(state.Steps)));
         if (cleanNow) _ = CloseAfterAsync();
+    }
+
+    void ArmPatience() {
+        lock (_patienceGate) {
+            if (_patienceStopped) return;
+            var generation = ++_patienceGeneration;
+            _waitedLong.OnNext(false);
+            _patience.Disposable = _time.CreateTimer(_ => {
+                lock (_patienceGate) {
+                    if (!_patienceStopped && generation == _patienceGeneration) _waitedLong.OnNext(true);
+                }
+            }, null, DaemonPatience, Timeout.InfiniteTimeSpan);
+        }
     }
 
     async Task CloseAfterAsync() {
@@ -120,42 +153,66 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
         RxSchedulers.MainThreadScheduler.Schedule(() => { if (_clean) Close(); });
     }
 
+    internal static string? ProgressDetail(IReadOnlyList<UpdateStep> steps) =>
+        steps.FirstOrDefault(step => step.State is UpdateStepState.Running or UpdateStepState.Pending) is { } step
+            ? step.Activity ?? step.Detail ?? step.Title
+            : null;
+
+    void RequestOpen() {
+        OpenRequested?.Invoke();
+        Close();
+    }
+
     void Close() {
-        if (_closed) return;
-        _closed = true;
+        if (_handedOver) return;
+        _handedOver = true;
         Completed?.Invoke();
     }
 
     internal static (IReadOnlyList<UpdateStep> Steps, bool Settled, bool Clean) Project(
-            AppUpdateTransition transition, AttachStatus status, string? daemonVersion, bool restartPending, LocalStepInput? local,
-            bool waitedLong = false) {
-        var steps = new List<UpdateStep> { new($"kcap {Display(transition.To)}", null, UpdateStepState.Done) };
-        if (LocalStep(local) is { } localStep) steps.Add(localStep);
-        steps.Add(DaemonStep(status, daemonVersion, restartPending, transition.To, waitedLong));
+            AppUpdateTransition transition, AttachStatus status, string? daemonVersion, string? connection, bool restartPending,
+            LocalStepInput? local, bool waitedLong = false) {
+        var steps = new List<UpdateStep> { new($"kcap {Display(transition.To)}", "Installed", UpdateStepState.Done) };
+        var localStep = LocalStep(local);
+        if (localStep is not null) steps.Add(localStep);
+        var localRunning = localStep?.State is UpdateStepState.Running or UpdateStepState.Pending;
+        steps.Add(DaemonStep(status, daemonVersion, connection, restartPending, transition.To, waitedLong, localRunning));
         var settled = steps.All(step => step.State is not (UpdateStepState.Running or UpdateStepState.Pending));
         return (steps, settled, settled && steps.All(step => step.State == UpdateStepState.Done));
     }
 
-    internal static UpdateStep DaemonStep(AttachStatus status, string? daemonVersion, bool restartPending, string appVersion, bool waitedLong = false) {
+    /// <param name="connection">The daemon's connection to the server: the main window reads anything but
+    /// connected as an outage, so the step is not done before it.</param>
+    /// <param name="localRunning">The local server is still being upgraded. A daemon already on the new version waits for it
+    /// rather than showing done and then dropping back when the server stops.</param>
+    internal static UpdateStep DaemonStep(AttachStatus status, string? daemonVersion, string? connection, bool restartPending, string appVersion,
+            bool waitedLong = false, bool localRunning = false) {
         const string title = "Daemon";
         var app = Display(appVersion);
         var known = daemonVersion is { Length: > 0 };
         var current = known && SameVersion(daemonVersion!, appVersion);
         var newer = known && PrereleaseSemver.IsNewer(Display(daemonVersion!), app);
         return status switch {
-            { State: AttachState.Connected } when current => new($"{title} {app}", null, UpdateStepState.Done),
+            { State: AttachState.Connected } when current && localRunning => new($"{title} {app}", "Waiting for the local server…",
+                UpdateStepState.Running, Activity: "Waiting for the local server…"),
+            { State: AttachState.Connected } when current && connection == ServerConnected => new($"{title} {app}", "Running", UpdateStepState.Done),
+            { State: AttachState.Connected } when current && waitedLong => new($"{title} {app}", "Not connected to the server yet", UpdateStepState.Note),
+            { State: AttachState.Connected } when current => new($"{title} {app}", "Connecting to the server…", UpdateStepState.Running,
+                Activity: "Reconnecting the daemon to the server…"),
             { State: AttachState.Connected } when newer => new(title, $"Running {Display(daemonVersion!)}, newer than this app", UpdateStepState.Note),
             { State: AttachState.Connected } when restartPending => new(title, "Restarts once its agents finish their turn", UpdateStepState.Note),
             { State: AttachState.Connected } when waitedLong && known => new(title,
                 $"Still on {Display(daemonVersion!)}. Moves to {app} on its next restart", UpdateStepState.Note),
-            { State: AttachState.Connected } => new(title, $"Picking up {app}", UpdateStepState.Running),
-            { State: AttachState.Unreachable, Reason: ExpectedDaemonRestart.Reason } => new(title, $"Restarting into {app}", UpdateStepState.Running),
+            { State: AttachState.Connected } => new(title, $"Picking up {app}…", UpdateStepState.Running, Activity: "Waiting for the daemon to restart…"),
+            { State: AttachState.Unreachable, Reason: ExpectedDaemonRestart.Reason } => new(title, $"Restarting into {app}…", UpdateStepState.Running,
+                Activity: "Restarting the daemon…"),
             // The old daemon is incompatible with the new app until it restarts into the new binary.
-            { State: AttachState.Unreachable, Reason: "daemon_incompatible" } when !waitedLong => new(title, $"Picking up {app}", UpdateStepState.Running),
+            { State: AttachState.Unreachable, Reason: "daemon_incompatible" } when !waitedLong => new(title, $"Picking up {app}…", UpdateStepState.Running,
+                Activity: "Waiting for the daemon to restart…"),
             { State: AttachState.Unreachable, Reason: "daemon_incompatible" } => new(title,
                 "Still incompatible with this app. Open kcap and press Reconnect", UpdateStepState.Problem),
             { State: AttachState.Unreachable } => new(title, "Not running. Open kcap and press Start daemon", UpdateStepState.Problem),
-            _ => new(title, "Connecting", UpdateStepState.Running),
+            _ => new(title, "Connecting…", UpdateStepState.Running, Activity: "Connecting to the daemon…"),
         };
     }
 
@@ -169,20 +226,22 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
                 (_, { } to) => $"{title} {to}",
                 _ => title,
             };
-            var (detail, trailing) = local.Phase switch {
-                LocalUpgradePhase.Recovering => ("Finishing an interrupted upgrade", null),
-                LocalUpgradePhase.Downloading => ("Downloading",
-                    local.DownloadFraction is { } f ? $"{(int)Math.Round(f * 100)}%" : null),
-                LocalUpgradePhase.Stopping => ("Stopping the server", null),
-                LocalUpgradePhase.Starting => ("Starting. A migration can take a few minutes", null),
-                LocalUpgradePhase.Restarting => ($"Starting {local.From} again", (string?)null),
-                _ => ("Checking the installation", null),
+            var (detail, trailing, activity) = local.Phase switch {
+                LocalUpgradePhase.Recovering => ("Finishing an interrupted upgrade…", null, "Finishing an interrupted local server upgrade…"),
+                LocalUpgradePhase.Downloading => ("Downloading…",
+                    local.DownloadFraction is { } f ? $"{(int)Math.Round(f * 100)}%" : null, "Downloading the local server…"),
+                LocalUpgradePhase.Stopping => ("Stopping the server…", null, "Stopping the local server…"),
+                LocalUpgradePhase.Starting => ("Starting… A migration can take a few minutes", null,
+                    "Starting the local server… A migration can take a few minutes"),
+                LocalUpgradePhase.Restarting => ($"Starting {local.From} again…", (string?)null, "Starting the previous local server again…"),
+                _ => ("Checking the installation…", null, "Checking the local server…"),
             };
-            return new(heading, detail, UpdateStepState.Running, trailing, hint);
+            return new(heading, detail, UpdateStepState.Running, trailing, hint, activity);
         }
         return local.Outcome switch {
-            LocalUpgradeOutcome.Upgraded { To: { } to } => new($"{title} {to}", null, UpdateStepState.Done),
-            LocalUpgradeOutcome.Upgraded or LocalUpgradeOutcome.NothingToDo => new(title, null, UpdateStepState.Done),
+            LocalUpgradeOutcome.Upgraded { To: { } to } => new($"{title} {to}", "Upgraded", UpdateStepState.Done),
+            LocalUpgradeOutcome.Upgraded => new(title, "Upgraded", UpdateStepState.Done),
+            LocalUpgradeOutcome.NothingToDo => new(title, "Up to date", UpdateStepState.Done),
             LocalUpgradeOutcome.NotPublished => new(title, (local.To, local.From) switch {
                 ({ } to, { } from) => $"{to} is not available yet. Staying on {from}",
                 ({ } to, _) => $"{to} is not available yet",
@@ -196,7 +255,7 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
                 string.Join(". ", new[] { TerminalAdvice.Strip(f.Message) is { } m ? Fragment(m) : "The upgrade did not finish",
                     f.From is { } stays ? $"Staying on {stays}" : null }.Where(part => part is not null)),
                 UpdateStepState.Problem, Hint: hint),
-            _ => new(title, "Not started", UpdateStepState.Pending),
+            _ => new(title, "Not started", UpdateStepState.Pending, Activity: "Getting ready to upgrade the local server…"),
         };
     }
 
@@ -208,8 +267,16 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
     static string Display(string version) => version.Split('+', 2)[0];
 
     public void Dispose() {
-        _closed = true;
+        if (_disposed) return;
+        _disposed = true;
         _disposables.Dispose();
-        _waitedLong.Dispose();
+        lock (_patienceGate) {
+            _patienceStopped = true;
+            _patience.Dispose();
+            _waitedLong.Dispose();
+        }
+        _progress.OnNext((false, null));
+        _progress.OnCompleted();
+        _progress.Dispose();
     }
 }

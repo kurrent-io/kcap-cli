@@ -235,6 +235,7 @@ public partial class App : Application {
     TrayIconManager? _tray;
     DaemonRestartPendingWatcher? _restartPending;
     ExpectedDaemonRestart? _expectedRestart;
+    StaleDaemonNudge? _staleDaemonNudge;
     // Wizard-first mode only: the sign-in driver shutdown cancels and awaits before anything is
     // disposed, and the window that owns dialogs while no main window exists. Both are cleared again
     // by the handoff at the end of RunWizardModeAsync.
@@ -414,7 +415,7 @@ public partial class App : Application {
                 desktop, ex, _service, _shutdown,
                 [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
                     _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _accounts, _sessionAccess,
-                    _pullRequestTones, _launchApprovals, _webWorkspace, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending, _expectedRestart],
+                    _pullRequestTones, _launchApprovals, _webWorkspace, _activity, _home, _localServer, _localStack, _rail, _pause, _staleDaemonNudge, _restartPending, _expectedRestart],
                 _lifecycle, _lane, _localUpgrade, _localSearch, _menuBar, _coordinator);
             await DisposeServerClientsAsync(); // after _home above
             // all already disposed above — never let a later OnShutdownRequested (e.g. Cmd+Q
@@ -480,32 +481,79 @@ public partial class App : Application {
         }
     }
 
+    /// A launch that owes its local server an upgrade finishes an update whatever route installed it. The disk image
+    /// and a copy dragged over the old app leave no record, and the upgrade would otherwise stop and start the server
+    /// under the main window.
+    AppUpdateTransition? InferUpdate(bool localUpgradeOwed) {
+        if (!localUpgradeOwed) return null;
+        var running = CapacitorVersion.CurrentDisplay();
+        if (LocalEndpoints.Read(_localRoot).Active?.Version is not { } local || !PrereleaseSemver.IsNewer(running, local)) return null;
+        LifecycleLog.Write("update_inferred", ("local_server", local), ("to", running));
+        return new AppUpdateTransition("components", AppUpdateTransition.Installer, null, running, _startedAt);
+    }
+
     AppUpdateTransition? _updateNotApplied;
     Action? _closeUpdateFinishWindow;
+    // Completes once no update is being finished: at once on an ordinary launch, else when its steps settle.
+    // The command-line tool offer waits for it, since its prompt would otherwise land in the middle of the update.
+    readonly TaskCompletionSource _updateHandedOver = new(TaskCreationOptions.RunContinuationsAsynchronously);
     bool _holdingMainWindow;
 
-    void ShowUpdateFinishWindow(AppUpdateTransition transition, IObservable<AttachStatus> status, IObservable<string?> daemonVersion,
-            IObservable<bool> restartPending, IObservable<LocalStepInput?> local) {
-        var vm = new UpdateFinishViewModel(transition, status, daemonVersion, restartPending, local, _time);
+    void ShowUpdateFinishWindow(AppUpdateTransition transition, IObservable<AttachStatus> status,
+            IObservable<(string? Version, string? Connection)> daemon, IObservable<bool> restartPending, IObservable<LocalStepInput?> local) {
+        var vm = new UpdateFinishViewModel(transition, status, daemon, restartPending, local, _time);
         var window = new UpdateFinishWindow { DataContext = vm };
+        _home?.AttachUpdateProgress(vm.Progress);
         var opened = false;
+        void BringForward() {
+            if (opened) return;
+            if (window.WindowState == WindowState.Minimized) window.WindowState = WindowState.Normal;
+            window.Show();
+            window.Activate();
+        }
         void Open() {
             if (opened) return;
             opened = true;
             _closeUpdateFinishWindow = null;
             _holdingMainWindow = false;
+            if (_coordinator is { } coordinator) coordinator.ShowInstead = null;
             LifecycleLog.Write("update_finished", ("operation", transition.Id), ("settled", vm.IsSettled ? "true" : "false"),
                 ("steps", string.Join("; ", vm.Steps.Select(step => $"{step.Title}: {step.State}"))),
                 ("seconds", (_time.GetUtcNow() - _startedAt).TotalSeconds.ToString("0.0", CultureInfo.InvariantCulture)));
             if (!_shutdownStarted) _coordinator?.ShowMainWindow();
             window.Close();
-            vm.Dispose();
+            // Opened early, it keeps following the steps for the launcher until they settle.
+            if (vm.IsSettled) Settled();
+            else vm.Progress.Where(p => !p.Finishing).Take(1).Subscribe(_ => Dispatcher.UIThread.Post(Settled));
         }
-        vm.Completed += () => Dispatcher.UIThread.Post(Open);
+        void Settled() {
+            vm.Dispose();
+            _updateHandedOver.TrySetResult();
+        }
+        var earlierInstances = OperatingSystem.IsMacOS() ? QuitEarlierInstancesAsync(BringForward) : Task.CompletedTask;
+        vm.Completed += () => _ = CompleteUpdateAsync(earlierInstances, () => Dispatcher.UIThread.Post(Open));
+        vm.OpenRequested += Open;
         window.Closed += (_, _) => Open();
         _closeUpdateFinishWindow = Open;
-        window.Show();
-        window.Activate();
+        if (_coordinator is { } holder) holder.ShowInstead = BringForward;
+        BringForward();
+    }
+
+    /// Automatic handover waits for predecessor shutdown; an explicit early handover calls Open directly.
+    internal static async Task CompleteUpdateAsync(Task earlierInstances, Action open) {
+        await earlierInstances.ConfigureAwait(false);
+        open();
+    }
+
+    async Task QuitEarlierInstancesAsync(Action afterwards) {
+        try {
+            using var self = Process.GetCurrentProcess();
+            var startedAt = self.StartTime;
+            var (count, exited) = await Task.Run(() => InstalledAppProcesses.QuitEarlierAsync(startedAt, _time, _shutdown.Token));
+            if (count == 0) return;
+            LifecycleLog.Write("earlier_instances_quit", ("count", count.ToString(CultureInfo.InvariantCulture)), ("exited", exited ? "true" : "false"));
+            Dispatcher.UIThread.Post(afterwards);
+        } catch (OperationCanceledException) { }
     }
 
     /// From the moment an update is accepted until this process exits, which quiescing can stretch.
@@ -1160,21 +1208,32 @@ public partial class App : Application {
         // close-protected (BeginShutdownPass's rule 1 is the general defense; this is the
         // by-construction one, and it is why the window below cannot even briefly intercept).
         _coordinator.QuitInProgress = _shutdownStarted;
-        // A relaunch that finishes an update opens on its progress; the main window follows once that settles.
+        var componentsOwed = AppComponentStamp.Owed(_config, CapacitorVersion.CurrentDisplay());
+        _postUpdate ??= InferUpdate(isLocalServer && localUpgrade is not null && componentsOwed);
+        // A launch that finishes an update opens on its progress; the main window follows once that settles.
         _holdingMainWindow = _postUpdate is not null && !_shutdownStarted;
-        if (_holdingMainWindow) _coordinator.Prepare();
-        else _coordinator.ShowMainWindow();
+        if (_holdingMainWindow) {
+            _coordinator.Prepare();
+            // A setup window adopted as the main window is already on screen; it waits for the hand-over too.
+            _coordinator.Window?.Hide();
+        } else {
+            _coordinator.ShowMainWindow();
+            _updateHandedOver.TrySetResult();
+        }
         desktop.MainWindow = _coordinator.Window;
         // BuildAndShowMainWindow constructs Home and the rail itself (over the same `service`), so
         // they are read back off the window's DataContext for disposal.
         _home = (_coordinator.Window?.DataContext as MainWindowViewModel)?.Home;
         _rail = (_coordinator.Window?.DataContext as MainWindowViewModel)?.Rail;
 
-        var componentsOwed = AppComponentStamp.Owed(_config, CapacitorVersion.CurrentDisplay());
         var localSkipped = new BehaviorSubject<bool>(false);
         if (!_shutdownStarted) _ = SettleComponentsAsync(localUpgrade, isLocalServer, () => localSkipped.OnNext(true));
-        if (_holdingMainWindow && _postUpdate is { } finishing)
-            ShowUpdateFinishWindow(finishing, expectedRestart.Status, service.Snapshots.Select(snap => (string?)snap.Daemon.Version),
+        if (_holdingMainWindow && _postUpdate is { } finishing) {
+            _staleDaemonNudge = new StaleDaemonNudge(finishing.To, service.Status, service.Snapshots.Select(snap => (string?)snap.Daemon.Version),
+                restartPending.Pending, ct => ops.RequestRestartAsync(StaleDaemonNudge.Mode, ct),
+                result => LifecycleLog.Write("daemon_restart_requested", ("mode", StaleDaemonNudge.Mode), ("result", result)), _time, _shutdown.Token);
+            ShowUpdateFinishWindow(finishing, expectedRestart.Status,
+                service.Snapshots.Select(snap => ((string?)snap.Daemon.Version, (string?)snap.Daemon.Connection)),
                 restartPending.Pending,
                 localUpgrade is null || localStack is null || !isLocalServer || !componentsOwed
                     ? Observable.Return<LocalStepInput?>(null)
@@ -1183,6 +1242,7 @@ public partial class App : Application {
                             Observable.Switch(localUpgrade.WhenAnyValue(x => x.Progress).Select(p => p.Changed.Select(_ => p).StartWith(p))),
                             (banner, outcome, skipped, p) => (LocalStepInput?)new LocalStepInput(banner.upgrading, outcome, banner.headline,
                                 banner.detail, skipped, p.Phase, p.From, p.To, p.DownloadFraction)));
+        }
 
         if (!_shutdownStarted) {
             var notificationSettings = new NotificationSettingsService(_config.Path("notifications.json"));
@@ -2096,7 +2156,7 @@ public partial class App : Application {
         var shimTarget = ShimTargetFor(cliPath, Program.Host.CliOutlivesApp);
         // autoOfferSuppressed: Start() always runs — Offerable/manual install must keep working in Incomplete mode; only the once-ever auto-offer dialog is skipped.
         var shimOffer = new ShimOfferCoordinator(
-            lifecycle.PhaseClosed, probe, CliPathInstallers.Create(runner, probe, _userHome), _appState, surface, shimTarget,
+            Task.WhenAll(lifecycle.PhaseClosed, _updateHandedOver.Task), probe, CliPathInstallers.Create(runner, probe, _userHome), _appState, surface, shimTarget,
             _shutdown.Token, autoActionsPermanentlyClosed, _wizardPathLink);
 
         // The delegate below and the claims store must share one root: TryConsume takes the config
@@ -2731,7 +2791,7 @@ public partial class App : Application {
                 IDisposable?[] ui = [
                     _tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
                     _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _accounts, _sessionAccess,
-                    _pullRequestTones, _launchApprovals, _webWorkspace, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending, _expectedRestart,
+                    _pullRequestTones, _launchApprovals, _webWorkspace, _activity, _home, _localServer, _localStack, _rail, _pause, _staleDaemonNudge, _restartPending, _expectedRestart,
                 ];
                 if (shutdown) {
                     await DisposeUiThenConfirmShutdownAsync(ui,

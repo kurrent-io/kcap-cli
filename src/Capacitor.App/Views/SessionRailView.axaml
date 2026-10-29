@@ -94,8 +94,8 @@
             <Setter Property="Text" Value="·" />
             <Setter Property="RenderTransform" Value="scale(1.5)" />
         </Style>
-        <Style Selector="TextBlock.footerMeta.attention">
-            <Setter Property="Foreground" Value="{StaticResource KcapWarningBrush}" />
+        <Style Selector="TextBlock.footerMeta.failed">
+            <Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" />
         </Style>
         <Style Selector="WrapPanel#RailLocalStackRow > TextBlock">
             <Setter Property="Margin" Value="0,0,5,0" />
@@ -323,7 +323,7 @@
                             <TextBlock Classes="footerDot"
                                        IsVisible="{Binding StateText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                             <TextBlock x:Name="RailLocalStackStateText" Text="{Binding StateText}" Classes="footerMeta"
-                                       Classes.attention="{Binding Attention}"
+                                       Classes.failed="{Binding Attention}"
                                        IsVisible="{Binding StateText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                         </WrapPanel>
                     </Panel>

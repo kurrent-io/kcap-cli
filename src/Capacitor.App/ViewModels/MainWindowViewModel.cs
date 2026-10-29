@@ -31,6 +31,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     /// Shown the moment Reconnect is pressed. Cleared on Connected; replaced if attach stays unreachable.
     internal const string ReconnectingMessage = "Reconnecting…";
+    internal const string UpdatingDisplay = "Updating…";
 
     internal const string ReconnectFailedMessage =
         "Couldn't reconnect. If the daemon isn't running, press Start daemon.";
@@ -41,12 +42,16 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     static readonly IBrush ConnectedBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Connected));
     static readonly IBrush InProgressBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.InProgress));
+    static readonly IBrush UpdatingBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Updating));
+    static readonly IBrush PendingBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Pending));
     static readonly IBrush DisruptedBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Disrupted));
     static readonly IBrush UnavailableBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Unavailable));
 
     static IBrush Paint(string hex) => hex switch {
         StatusColors.Connected => ConnectedBrush,
         StatusColors.InProgress => InProgressBrush,
+        StatusColors.Updating => UpdatingBrush,
+        StatusColors.Pending => PendingBrush,
         StatusColors.Disrupted => DisruptedBrush,
         _ => UnavailableBrush,
     };
@@ -515,11 +520,22 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .ToProperty(this, x => x.SignInVisible, false)
                 .DisposeWith(disposables);
 
-            _connectionDisplay = status.CombineLatest(daemonConnection, signedOut, ConnectionDisplayFor)
+            // The daemon restarting and redialing is what an update still finishing does, not an outage.
+            var updating = (Home?.UpdateFinishing ?? Observable.Return(false)).StartWith(false).DistinctUntilChanged();
+            _connectionDisplay = status.CombineLatest(daemonConnection, signedOut, updating, ConnectionDisplayFor)
                 .ToProperty(this, x => x.ConnectionDisplay, "")
                 .DisposeWith(disposables);
 
-            _statusBrush = status.CombineLatest(daemonConnection, signedOut, StatusBrushFor)
+            // The rail describes the local daemon even while the launcher targets a remote machine.
+            // Keep its lifecycle failure independent of the selected machine's banner.
+            var localFailed = status.CombineLatest(_startMessageChanges,
+                (st, message) => st.State == AttachState.Unreachable
+                    && HomeViewModel.BannerFailedFor((HomeViewModel.DaemonDownNotice, message)));
+            var failed = localFailed.CombineLatest(
+                    Home is { } home ? home.WhenAnyValue(x => x.BannerFailed) : Observable.Return(false),
+                    (local, banner) => local || banner)
+                .DistinctUntilChanged();
+            _statusBrush = status.CombineLatest(daemonConnection, signedOut, updating, failed, StatusBrushFor)
                 .ToProperty(this, x => x.StatusBrush, Paint(StatusColors.Unavailable))
                 .DisposeWith(disposables);
 
@@ -995,8 +1011,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     // daemonConnection seam comment above); an Unreachable/Connecting attach state always wins
     // regardless of whatever Connection word a stale retained snapshot might carry.
     internal static string ConnectionDisplayFor(
-            AttachStatus status, string daemonConnection, bool signInExpired = false) {
+            AttachStatus status, string daemonConnection, bool signInExpired = false, bool updating = false) {
         if (signInExpired) return SignedOutDisplay;
+        if (updating) return UpdatingDisplay;
         if (status.State == AttachState.Connecting) return "Connecting…";
         if (status.State == AttachState.Unreachable)
             return status.Reason switch {
@@ -1009,23 +1026,27 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         return daemonConnection is "connecting" or "reconnecting" ? word + "…" : word;
     }
 
-    // Same bucketing as ConnectionDisplayFor, kept as a parallel switch (not derived from the text)
-    // so a future wording tweak there can never silently detune the color.
+    /// The launcher's tones: red when something broke, amber when it needs the user, the spinner's grey while
+    /// work is in progress, and purple while an update finishes. Kept as its own switch, not derived from the text,
+    /// so a wording change there cannot retune it.
+    /// <param name="failed">The launcher's card reports a failure: versions that cannot work together, a local
+    /// server that refused the app, or a daemon still down after a start that did not work.</param>
     internal static IBrush StatusBrushFor(
-            AttachStatus status, string daemonConnection, bool signInExpired = false) {
-        if (signInExpired) return Paint(StatusColors.Disrupted);
-        if (status.State == AttachState.Connecting) return Paint(StatusColors.InProgress);
+            AttachStatus status, string daemonConnection, bool signInExpired = false, bool updating = false, bool failed = false) {
+        if (signInExpired) return Paint(failed ? StatusColors.Disrupted : StatusColors.InProgress);
+        if (updating) return Paint(StatusColors.Updating);
+        if (status.State == AttachState.Connecting) return Paint(StatusColors.Pending);
         if (status.State == AttachState.Unreachable)
             return status.Reason switch {
                 IncompatibleReason => Paint(StatusColors.Disrupted),
-                ExpectedDaemonRestart.Reason => Paint(StatusColors.InProgress),
-                _ => Paint(StatusColors.Unavailable),
+                ExpectedDaemonRestart.Reason => Paint(StatusColors.Pending),
+                _ => Paint(failed ? StatusColors.Disrupted : StatusColors.InProgress),
             };
 
         return daemonConnection switch {
             "connected" => Paint(StatusColors.Connected),
-            "connecting" or "reconnecting" => Paint(StatusColors.InProgress),
-            "disconnected" => Paint(StatusColors.Disrupted),
+            "connecting" or "reconnecting" => Paint(StatusColors.Pending),
+            "disconnected" => Paint(StatusColors.InProgress),
             _ => Paint(StatusColors.Unavailable),
         };
     }

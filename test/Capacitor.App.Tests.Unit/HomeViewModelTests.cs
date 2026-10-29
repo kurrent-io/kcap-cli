@@ -877,6 +877,52 @@ public class HomeViewModelTests {
         });
     }
 
+    /// An update the user went on from early holds local launches until its steps settle, then hands Start back.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Start_waits_for_an_update_that_is_still_finishing() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var daemon = new FakeDaemonClientService();
+            using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System);
+            await vm.SelectRepositoryAsync("/repo/a");
+            Connect(daemon);
+            var progress = new BehaviorSubject<(bool, string?)>((true, "Reconnecting the daemon to the server…"));
+            vm.AttachUpdateProgress(progress);
+
+            await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsFalse();
+            await Assert.That(vm.StartButtonTip).IsEqualTo(HomeViewModel.FinishingUpdateNotice);
+            await Assert.That(vm.Notices.ShowUpdate).IsTrue();
+            await Assert.That(vm.UpdateDetail).IsEqualTo("Reconnecting the daemon to the server…");
+
+            progress.OnNext((false, null));
+            await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsTrue();
+            await Assert.That(vm.StartButtonTip).IsEqualTo("Start");
+            await Assert.That(vm.Notices.ShowUpdate).IsFalse();
+        });
+    }
+
+    /// The update changes only this machine, so a remote selection keeps its own notices and launches.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_remote_selection_is_not_held_by_a_local_update() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var daemon = new FakeDaemonClientService();
+            Connect(daemon);
+            var remote = new FakeRemoteAgents();
+            remote.DaemonsSubject.OnNext([Box("u1") with { RepoPaths = ["/w/repo"] }]);
+            using var vm = new HomeViewModel(daemon, new AppStateStore(Tmp.PathTo("app-state.json")), new RecordingLaunchClient(),
+                Known(), TimeProvider.System, daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"),
+                laneStatus: Observable.Return(new ServerLaneStatus(ServerLaneState.Connected)));
+            vm.AttachUpdateProgress(new BehaviorSubject<(bool, string?)>((true, "Starting the local server…")));
+
+            await vm.SelectMachineAsync("box", isLocal: false);
+
+            await Assert.That(vm.Notices.ShowUpdate).IsFalse();
+            await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsTrue();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Start_is_disabled_with_a_notice_when_the_daemon_hosts_no_harness() {
@@ -1622,6 +1668,19 @@ public class HomeViewModelTests {
         await Assert.That(content.Message).IsEqualTo(expectedMessage);
         await Assert.That(content.Detail).IsEqualTo(expectedDetail);
     }
+
+    /// Red is for something that broke. A daemon that is merely down, or a start still in flight,
+    /// needs the user without anything having failed.
+    [Test]
+    [Arguments(HomeViewModel.DaemonDownNotice, null, false)]
+    [Arguments(HomeViewModel.DaemonDownNotice, "Starting the daemon…", false)]
+    [Arguments(HomeViewModel.DaemonDownNotice, "The daemon didn't start. Press Start daemon to try again.", true)]
+    [Arguments(HomeViewModel.DaemonIncompatibleNotice, null, true)]
+    [Arguments(HomeViewModel.LocalServerRefusedNotice, null, true)]
+    [Arguments(HomeViewModel.ServerLostNotice, null, false)]
+    [Arguments(HomeViewModel.SignInExpiredNotice, null, false)]
+    public async Task Only_a_failure_turns_the_banner_red(string message, string? detail, bool failed) =>
+        await Assert.That(HomeViewModel.BannerFailedFor((message, detail))).IsEqualTo(failed);
 
     [Test]
     [NotInParallel("AvaloniaSession")]

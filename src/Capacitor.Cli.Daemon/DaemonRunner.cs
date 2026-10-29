@@ -57,6 +57,7 @@ public static partial class DaemonRunner {
         // before DI exists, so it is threaded by hand until the container is built.
         var time = TimeProvider.System;
         if (TryHandleVersionFlag(args, Console.Out)) return 0;
+        var launchBinary = RestartCoordinator.StatProcessBinary();
 
         string?    logFile     = null;
         string?    stderrFile  = null;
@@ -86,6 +87,7 @@ public static partial class DaemonRunner {
             Binaries     = binaries,
             WorktreeRoot = Path.Combine(userHome.Path, ".capacitor", "worktrees"),
             OriginalArgs = args,
+            LaunchBinary = launchBinary,
         };
         var awaitLock = args.Contains("--await-lock");
 

@@ -9,7 +9,7 @@
                      Title="{Binding Heading}"
                      Icon="avares://kcap-desktop/Assets/kcap-icon.png"
                      Width="480" SizeToContent="Height" MaxHeight="560"
-                     CanResize="False" WindowStartupLocation="CenterScreen"
+                     CanResize="False" Topmost="{Binding !IsSettled}" WindowStartupLocation="CenterScreen"
                      Background="{StaticResource KcapCanvasBrush}"
                      ExtendClientAreaToDecorationsHint="True">
     <Panel>

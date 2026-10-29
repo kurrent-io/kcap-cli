@@ -374,6 +374,35 @@ public class LocalControlOpsTests {
         });
     }
 
+    // ---- RequestRestartAsync ----
+
+    [Test]
+    public async Task A_restart_request_sends_its_mode_and_returns_the_ack() {
+        if (OperatingSystem.IsWindows()) return;
+
+        string? mode = null;
+        ConnScript restart = async (_, s, ct) => {
+            var f = await FrameCodec.ReadAsync(s, ct);
+            if (f?.Type != FrameType.Restart) return;
+            mode = f.Text;
+            await FrameCodec.WriteAsync(s, LocalFrame.RestartAck("queued"), ct);
+        };
+        await WithOpsAsync([restart], async ops =>
+            await Assert.That(await ops.RequestRestartAsync("when-idle", CancellationToken.None)).IsEqualTo("queued"));
+        await Assert.That(mode).IsEqualTo("when-idle");
+    }
+
+    [Test]
+    public async Task A_refused_restart_is_daemon_rejected() {
+        if (OperatingSystem.IsWindows()) return;
+
+        await WithOpsAsync([ErrorThen("foreground daemon — exit and restart it manually")], async ops => {
+            var ex = await Assert.ThrowsAsync<LocalControlOpsException>(
+                async () => await ops.RequestRestartAsync("when-idle", CancellationToken.None));
+            await Assert.That(ex!.Reason).IsEqualTo("daemon_rejected");
+        });
+    }
+
     // ---- PutDaemonSettingsAsync ----
 
     [Test]
