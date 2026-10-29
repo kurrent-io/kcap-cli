@@ -23,6 +23,36 @@ public class UpdateFinishViewModelTests {
     }
 
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Explicit_open_bypasses_predecessor_shutdown_even_after_automatic_completion(bool automaticStarted) {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var clock = new FakeTimeProvider();
+            using var vm = new UpdateFinishViewModel(Update, Observable.Return(Connected),
+                Observable.Return<(string?, string?)>(("1.4.1", "connected")), Observable.Return(false),
+                Observable.Return<LocalStepInput?>(null), clock);
+            var earlier = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var opened = false;
+            Task? automatic = null;
+            vm.Completed += () => automatic = App.CompleteUpdateAsync(earlier.Task, () => opened = true);
+            vm.OpenRequested += () => opened = true;
+            if (automaticStarted) {
+                clock.Advance(UpdateFinishViewModel.HandOverDelay);
+                await WaitUntilAsync(() => automatic is not null);
+            }
+            try {
+                await Assert.That(opened).IsFalse();
+                vm.OpenCommand.Execute().Subscribe();
+                await Assert.That(opened).IsTrue();
+            } finally {
+                earlier.SetResult();
+                if (automatic is not null) await automatic;
+            }
+        });
+    }
+
+    [Test]
     public async Task An_expected_restart_is_progress_and_an_unexpected_outage_is_a_problem() {
         await Assert.That(UpdateFinishViewModel.DaemonStep(Restarting, null, null, true, "1.4.1").State).IsEqualTo(UpdateStepState.Running);
         await Assert.That(UpdateFinishViewModel.DaemonStep(Down, null, null, false, "1.4.1").State).IsEqualTo(UpdateStepState.Problem);
