@@ -52,7 +52,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
     /// Every unit rewrite the app offers carries this disclosure.
     internal const string TakeoverDisclosure =
-        "kcap replaces the daemon service and saves its settings again. If that fails, the service stays uninstalled.";
+        "kcap sets up the daemon service again from scratch, so custom settings such as an agent limit reset. If that fails, the service stays uninstalled.";
 
     /// Status when Start finds a live service and only kicks reattach. MainWindow replaces this
     /// (and its own Retry reconnect copy) if attach lands Unreachable again.
