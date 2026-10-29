@@ -333,21 +333,21 @@
                 <!-- Once per device: the usage-data disclosure, until acknowledged here or in the wizard.
                      A disclosure rather than a problem, so it waits under the composer instead of
                      competing with the notices. -->
-                <Grid x:Name="UsageNoticeBanner" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8" Margin="14,-8,0,0"
+                <Grid x:Name="UsageNoticeBanner" ColumnDefinitions="Auto,*" ColumnSpacing="8" Margin="14,-8,14,0"
                       IsVisible="{Binding UsageNotice.Visible, FallbackValue=False}">
                     <views:AppIcon Kind="Info" Size="14" Margin="0,2,0,0" VerticalAlignment="Top"
                                    Foreground="{StaticResource KcapFaintBrush}" />
-                    <TextBlock Grid.Column="1" x:Name="UsageNoticeText" Text="{Binding UsageNotice.Message, FallbackValue={x:Null}}"
-                               FontSize="12" LineHeight="18" TextWrapping="Wrap" Foreground="{StaticResource KcapMutedBrush}" />
-                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" VerticalAlignment="Top" Margin="0,-3,0,0">
-                        <Button x:Name="UsageNoticeTurnOffButton" Classes="kcapGhost" Content="Turn off" Padding="8,3" FontSize="12"
-                                Command="{Binding UsageNotice.TurnOffCommand, FallbackValue={x:Null}}"
-                                IsVisible="{Binding UsageNotice.CanTurnOff, FallbackValue=False}" />
-                        <Button x:Name="UsageNoticeOkButton" Classes="kcapGhost kcapIcon" Padding="5"
-                                Command="{Binding UsageNotice.AcknowledgeCommand, FallbackValue={x:Null}}"
-                                ToolTip.Tip="Dismiss" AutomationProperties.Name="Dismiss the usage data notice">
-                            <views:AppIcon Kind="X" Size="14" />
-                        </Button>
+                    <StackPanel Grid.Column="1" Spacing="2">
+                        <TextBlock x:Name="UsageNoticeText" Text="{Binding UsageNotice.Message, FallbackValue={x:Null}}"
+                                   FontSize="12" LineHeight="18" TextWrapping="Wrap" Foreground="{StaticResource KcapMutedBrush}" />
+                        <!-- Pulled left by the buttons' own padding, so their labels line up with the text. -->
+                        <StackPanel Orientation="Horizontal" Spacing="2" Margin="-8,0,0,0">
+                            <Button x:Name="UsageNoticeTurnOffButton" Classes="kcapGhost kcapQuiet" Content="Turn off" FontSize="12"
+                                    Command="{Binding UsageNotice.TurnOffCommand, FallbackValue={x:Null}}"
+                                    IsVisible="{Binding UsageNotice.CanTurnOff, FallbackValue=False}" />
+                            <Button x:Name="UsageNoticeOkButton" Classes="kcapGhost kcapQuiet" Content="Dismiss" FontSize="12"
+                                    Command="{Binding UsageNotice.AcknowledgeCommand, FallbackValue={x:Null}}" />
+                        </StackPanel>
                     </StackPanel>
                 </Grid>
             </StackPanel>

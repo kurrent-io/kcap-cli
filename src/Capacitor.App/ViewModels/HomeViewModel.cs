@@ -895,14 +895,14 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         _bannerCommand = bannerCard.Select(card => card.Command)
             .ToProperty(this, x => x.BannerCommand)
             .DisposeWith(_disposables);
-        Notices.TrackConnection(bannerContent.Select(content => content.Message is not null));
+        Notices.TrackConnection(bannerContent.Select(content =>
+            (content.Message is not null, BannerInFlight(content) ? LauncherNotices.Kind.Progress : LauncherNotices.Kind.Problem)));
         _connectionBannerVisible = bannerContent
             .Select(content => content.Message is not null)
             .ToProperty(this, x => x.ConnectionBannerVisible, initialValue: false)
             .DisposeWith(_disposables);
         _bannerBusy = bannerContent
-            .Select(content => content.Detail is { } detail ? InFlight(detail)
-                : BusyNotice(content.Message) || InFlight(content.Message) || content.Message == DaemonRestartingNotice)
+            .Select(BannerInFlight)
             .ToProperty(this, x => x.BannerBusy, initialValue: true)
             .DisposeWith(_disposables);
         var signInVisible = signInState
@@ -1008,7 +1008,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         init {
             _localStack = value;
             if (value is not null)
-                Notices.Track(value.WhenAnyValue(x => x.BannerVisible, x => x.IsNote, (visible, note) => (visible, note)));
+                Notices.TrackStack(value.WhenAnyValue(x => x.BannerVisible, x => x.Upgrading, x => x.IsNote, (visible, upgrading, note) =>
+                    (visible, upgrading ? LauncherNotices.Kind.Progress : note ? LauncherNotices.Kind.Note : LauncherNotices.Kind.Problem)));
         }
     }
     readonly LocalStackViewModel? _localStack;
@@ -1021,7 +1022,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         this.RaisePropertyChanged(nameof(LocalServer));
         _localServer.OnNext(recovery.IsLocalServer);
         recovery.WhenAnyValue(x => x.ServerDown).Subscribe(_localServerDown).DisposeWith(_disposables);
-        Notices.TrackServer(recovery.WhenAnyValue(x => x.Visible));
+        Notices.TrackServer(recovery.WhenAnyValue(x => x.Visible, x => x.IsStarting, (visible, starting) =>
+            (visible, starting ? LauncherNotices.Kind.Progress : LauncherNotices.Kind.Problem)));
     }
 
     /// The explanation first and daemon output below it. An expired sign-in stays the whole message:
@@ -1138,6 +1140,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     internal static bool LaneIsCatchingUp(ServerLaneState lane) =>
         lane is ServerLaneState.Connecting or ServerLaneState.Retrying or ServerLaneState.Connected;
+
+    static bool BannerInFlight((string? Message, string? Detail) content) =>
+        content.Detail is { } detail ? InFlight(detail)
+            : BusyNotice(content.Message) || InFlight(content.Message) || content.Message == DaemonRestartingNotice;
 
     /// A lifecycle status still waiting on something, which the banner shows with a spinner. Every
     /// in-flight status ends in an ellipsis; no failure does.
