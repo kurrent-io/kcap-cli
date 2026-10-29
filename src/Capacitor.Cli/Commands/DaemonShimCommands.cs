@@ -238,7 +238,7 @@ public static class DaemonShimCommands {
                     FirstRunMachineActionReasons.ProbeUnknown =>
                         "Could not determine whether kcap is on your terminal PATH.",
                     FirstRunMachineActionReasons.UnsupportedPlatform =>
-                        "The command-line tool install is only available on macOS and Windows.",
+                        "The command-line tool install is only available on macOS, Linux and Windows.",
                     FirstRunMachineActionReasons.Conflict => Sanitize(dto.Detail),
                     _                                    => "Path fix refused.",
                 });
@@ -259,11 +259,10 @@ public static class DaemonShimCommands {
         Console.Error.WriteLine("Usage: kcap daemon shim <ensure> [--json]");
         Console.Error.WriteLine();
         Console.Error.WriteLine("  ensure [--json]   Probe the terminal PATH; if kcap is absent, link kcap");
-        Console.Error.WriteLine("                    to this CLI in a writable PATH folder, else");
-        Console.Error.WriteLine("                    /usr/local/bin (macOS; prompts once for your admin");
-        Console.Error.WriteLine("                    password, or without admin rights links ~/.local/bin/kcap");
-        Console.Error.WriteLine("                    and adds that folder to PATH in your shell profile), or");
-        Console.Error.WriteLine("                    add its folder to your user PATH (Windows).");
+        Console.Error.WriteLine("                    to this CLI in the first PATH folder you can write to,");
+        Console.Error.WriteLine("                    else in ~/.local/bin (macOS also adds that folder to");
+        Console.Error.WriteLine("                    PATH in your shell profile), or add its folder to your");
+        Console.Error.WriteLine("                    user PATH (Windows). No admin password is asked for.");
         return 1;
     }
 }
