@@ -84,17 +84,81 @@ public partial class WorktreeManager {
     /// <summary>The local branch tip and whether any worktree has it checked out, read together under the
     /// metadata gate so a concurrent <c>worktree add</c> cannot slip between them.</summary>
     async Task<(string? Tip, bool CheckedOut)> ReadLocalBranchAsync(string repoPath, string branch) {
-        string? tip       = null;
-        var     checkedOut = false;
+        (string? Tip, bool CheckedOut) state = default;
+        await WithWorktreeMetadataGate(repoPath, time, async () => state = await ReadLocalBranchUngatedAsync(repoPath, branch));
+
+        return state;
+    }
+
+    async Task<(string? Tip, bool CheckedOut)> ReadLocalBranchUngatedAsync(string repoPath, string branch) {
+        var tip    = await ResolveLocalBranchAsync(repoPath, branch);
+        var listed = await RunGitCapture(repoPath, GitTimeout, time, true, "worktree", "list", "--porcelain");
+
+        return (tip, listed.Split('\n').Any(line => line.Trim() == $"branch refs/heads/{branch}"));
+    }
+
+    /// <summary>Materialises a start from <see cref="ResolveHandoffStartAsync"/>. The local branch is
+    /// re-read first and creation refuses with <c>handoff_start_changed</c> if it moved or was checked out
+    /// since; a pre-existing branch is never owned, so no rollback or removal deletes it.</summary>
+    public async Task<WorktreeInfo> CreateHandoffAsync(string repoPath, HandoffStart start, string? name = null) {
+        name ??= $"agent-{Guid.NewGuid():N}"[..20];
+
+        var worktreeRoot = Path.Combine(repoPath, ".capacitor", "worktrees");
+        var worktreePath = Path.Combine(worktreeRoot, name);
+        var detached     = start.Checkout == HandoffCheckout.Detached;
+        var branch       = detached ? "" : start.Branch ?? "";
+
+        if (!detached && !await IsValidRefNameAsync(repoPath, branch))
+            throw new InvalidOperationException($"invalid_base_ref: {branch}");
+
+        Directory.CreateDirectory(worktreeRoot);
+
+        var created = new WorktreeInfo(worktreePath, branch, repoPath) { OwnsBranch = start.Checkout == HandoffCheckout.CreateBranch };
+        var noHooks = NoBranchHooks();
 
         await WithWorktreeMetadataGate(repoPath, time, async () => {
-            tip = await ResolveLocalBranchAsync(repoPath, branch);
-            var listed = await RunGitCapture(repoPath, GitTimeout, time, true, "worktree", "list", "--porcelain");
-            checkedOut = listed.Split('\n').Any(line => line.Trim() == $"branch refs/heads/{branch}");
+            if (!detached) {
+                var (tip, checkedOut) = await ReadLocalBranchUngatedAsync(repoPath, branch);
+                if (tip != start.LocalBranchSha) throw StartChanged($"{branch} is at {tip ?? "nothing"}, not {start.LocalBranchSha ?? "nothing"}");
+                if (checkedOut) throw StartChanged($"{branch} is checked out in another worktree");
+            }
+
+            switch (start.Checkout) {
+                case HandoffCheckout.CreateBranch:
+                    await RunGit(repoPath, GitTimeout, time, noHooks, "worktree", "add", "--no-checkout", "-b", branch, worktreePath, start.Sha);
+                    break;
+                case HandoffCheckout.FastForwardBranch:
+                    var moved = await RunGitCaptureResult(repoPath, GitTimeout, time, false, [],
+                        "update-ref", $"refs/heads/{branch}", start.Sha, start.LocalBranchSha!);
+                    if (moved.ExitCode != 0) throw StartChanged($"{branch} moved before it could be fast-forwarded");
+                    await RunGit(repoPath, GitTimeout, time, noHooks, "worktree", "add", "--no-checkout", worktreePath, branch);
+                    break;
+                case HandoffCheckout.CheckoutBranch:
+                    await RunGit(repoPath, GitTimeout, time, noHooks, "worktree", "add", "--no-checkout", worktreePath, branch);
+                    break;
+                default:
+                    await RunGit(repoPath, GitTimeout, time, noHooks, "worktree", "add", "--no-checkout", "--detach", worktreePath, start.Sha);
+                    break;
+            }
         });
 
-        return (tip, checkedOut);
+        await StripOrRollBackAsync(created);
+
+        try {
+            if (start.Checkout == HandoffCheckout.CreateBranch)
+                await RunGit(repoPath, GitTimeout, time, "branch", $"--set-upstream-to=origin/{branch}", branch);
+
+            var head = (await RunGitCapture(worktreePath, GitTimeout, time, true, "rev-parse", "HEAD")).Trim();
+            if (head != start.Sha) throw StartChanged($"the worktree is at {head}, not {start.Sha}");
+        } catch {
+            try { await RemoveAsync(created, time, keepUnsavedWork: false); } catch { /* keep the original failure */ }
+            throw;
+        }
+
+        return created;
     }
+
+    static InvalidOperationException StartChanged(string why) => new($"handoff_start_changed: {why}");
 
     static HandoffResolution FetchFailed((int ExitCode, string Stdout, string Stderr) result) =>
         new(null, GitFailureDetail(result.Stderr, result.Stdout) is { Length: > 0 } detail ? detail : $"git exited {result.ExitCode}");

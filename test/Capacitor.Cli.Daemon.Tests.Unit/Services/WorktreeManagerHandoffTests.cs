@@ -214,4 +214,149 @@ public class WorktreeManagerHandoffTests {
                 await Manager().ResolveHandoffStartAsync(f.Clone, new HandoffTarget("--upload-pack=touch x", null, false), CancellationToken.None))
             .Throws<InvalidOperationException>().WithMessageMatching("invalid_base_ref:*");
     }
+
+    static async Task<WorktreeInfo> CreateAsync(Fixture f, HandoffStart start) =>
+        await Manager().CreateHandoffAsync(f.Clone, start, "handoff");
+
+    static string[] LocalBranches(GitRepo repo) =>
+        repo.Do("for-each-ref", "--format=%(refname)", "refs/heads").Text.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
+    [Test]
+    public async Task created_branch_tracks_origin_and_is_owned() {
+        using var f     = Fixture.Create();
+        f.CommitOnOrigin("feature", "b.txt");
+        var       start = await ResolveAsync(f, new HandoffTarget("feature", null, false));
+        var       tree  = await CreateAsync(f, start);
+
+        try {
+            var worktree = GitRepo.At(tree.Path);
+            await Assert.That(worktree.Head).IsEqualTo(start.Sha);
+            await Assert.That(worktree.CurrentBranch).IsEqualTo("feature");
+            await Assert.That(worktree.Do("rev-parse", "--abbrev-ref", "feature@{upstream}").Text).IsEqualTo("origin/feature");
+            await Assert.That(tree.OwnsBranch).IsTrue();
+        } finally {
+            await WorktreeManager.RemoveAsync(tree, TimeProvider.System);
+        }
+    }
+
+    [Test]
+    public async Task checked_out_branch_is_not_owned_and_survives_removal() {
+        using var f = Fixture.Create();
+        f.CommitOnOrigin("feature", "b.txt");
+        f.TrackLocally("feature");
+        var start = await ResolveAsync(f, new HandoffTarget("feature", null, false));
+        var tree  = await CreateAsync(f, start);
+
+        await Assert.That(GitRepo.At(tree.Path).Head).IsEqualTo(start.Sha);
+        await Assert.That(tree.OwnsBranch).IsFalse();
+
+        await WorktreeManager.RemoveAsync(tree, TimeProvider.System);
+
+        await Assert.That(f.Clone.RevParse("refs/heads/feature")).IsEqualTo(start.Sha);
+    }
+
+    [Test]
+    public async Task fast_forward_moves_the_local_branch_to_the_resolved_sha() {
+        using var f = Fixture.Create();
+        f.CommitOnOrigin("feature", "b.txt");
+        f.TrackLocally("feature");
+        f.CommitOnOrigin("feature", "c.txt");
+        var start = await ResolveAsync(f, new HandoffTarget("feature", null, false));
+        var tree  = await CreateAsync(f, start);
+
+        try {
+            await Assert.That(f.Clone.RevParse("refs/heads/feature")).IsEqualTo(start.Sha);
+            await Assert.That(GitRepo.At(tree.Path).CurrentBranch).IsEqualTo("feature");
+            await Assert.That(tree.OwnsBranch).IsFalse();
+        } finally {
+            await WorktreeManager.RemoveAsync(tree, TimeProvider.System);
+        }
+    }
+
+    [Test]
+    [Arguments(HandoffDetachReason.LocalBranchDiverged)]
+    [Arguments(HandoffDetachReason.ForkHead)]
+    [Arguments(HandoffDetachReason.BranchAbsent)]
+    public async Task detached_start_creates_no_branch(HandoffDetachReason reason) {
+        using var f = Fixture.Create();
+        HandoffTarget target;
+
+        switch (reason) {
+            case HandoffDetachReason.LocalBranchDiverged:
+                f.CommitOnOrigin("feature", "b.txt");
+                f.TrackLocally("feature");
+                f.CommitLocally("feature", "local.txt");
+                target = new("feature", null, false);
+                break;
+            case HandoffDetachReason.ForkHead:
+                f.Upstream.Do("update-ref", "refs/pull/3/head", f.CommitOnOrigin("fork-work", "fork.txt"));
+                target = new("fork-work", 3, HeadIsFork: true);
+                break;
+            default:
+                target = new("gone", null, false);
+                break;
+        }
+
+        var start  = await ResolveAsync(f, target);
+        var before = LocalBranches(f.Clone);
+        var tree   = await CreateAsync(f, start);
+
+        try {
+            var worktree = GitRepo.At(tree.Path);
+            await Assert.That(start.DetachReason).IsEqualTo(reason);
+            await Assert.That(worktree.Try("symbolic-ref", "-q", "HEAD").ExitCode).IsNotEqualTo(0);
+            await Assert.That(worktree.Head).IsEqualTo(start.Sha);
+            await Assert.That(LocalBranches(f.Clone)).IsEquivalentTo(before);
+            await Assert.That(tree.Branch).IsEqualTo("");
+        } finally {
+            await WorktreeManager.RemoveAsync(tree, TimeProvider.System);
+        }
+    }
+
+    [Test]
+    public async Task a_local_branch_that_moved_since_resolution_refuses() {
+        using var f = Fixture.Create();
+        f.CommitOnOrigin("feature", "b.txt");
+        f.TrackLocally("feature");
+        var start = await ResolveAsync(f, new HandoffTarget("feature", null, false));
+        var moved = f.CommitLocally("feature", "later.txt");
+
+        await Assert.That(async () => await CreateAsync(f, start))
+            .Throws<InvalidOperationException>().WithMessageMatching("handoff_start_changed:*");
+
+        await Assert.That(Directory.Exists(Path.Combine(f.Clone.Path, ".capacitor", "worktrees", "handoff"))).IsFalse();
+        await Assert.That(f.Clone.RevParse("refs/heads/feature")).IsEqualTo(moved);
+    }
+
+    [Test]
+    public async Task a_branch_checked_out_since_resolution_refuses() {
+        using var f = Fixture.Create();
+        f.CommitOnOrigin("feature", "b.txt");
+        f.TrackLocally("feature");
+        f.CommitOnOrigin("feature", "c.txt");
+        var start = await ResolveAsync(f, new HandoffTarget("feature", null, false));
+        f.Clone.Do("worktree", "add", "-q", Path.Combine(f.Clone.Path, ".capacitor", "worktrees", "other"), "feature");
+
+        await Assert.That(async () => await CreateAsync(f, start))
+            .Throws<InvalidOperationException>().WithMessageMatching("handoff_start_changed:*");
+    }
+
+    /// <summary>A tree entry named <c>.git</c> cannot be checked out, so populating the worktree fails and
+    /// creation rolls back.</summary>
+    [Test]
+    public async Task a_failed_checkout_rolls_back_without_deleting_the_existing_branch() {
+        using var f    = Fixture.Create();
+        var       blob = f.Upstream.DoWithInput("x"u8.ToArray(), "hash-object", "-w", "--stdin").Text;
+        var       tree = f.Upstream.DoWithInput(System.Text.Encoding.UTF8.GetBytes($"100644 blob {blob}\t.git\n"), "mktree").Text;
+        var       bad  = f.Upstream.Do("commit-tree", tree, "-p", "HEAD", "-m", "unreadable").Text;
+        f.Upstream.Do("update-ref", "refs/heads/feature", bad);
+        f.TrackLocally("feature");
+        var start = await ResolveAsync(f, new HandoffTarget("feature", null, false));
+
+        await Assert.That(start.Checkout).IsEqualTo(HandoffCheckout.CheckoutBranch);
+        await Assert.That(async () => await CreateAsync(f, start)).Throws<InvalidOperationException>();
+
+        await Assert.That(f.Clone.RevParse("refs/heads/feature")).IsEqualTo(bad);
+        await Assert.That(Directory.Exists(Path.Combine(f.Clone.Path, ".capacitor", "worktrees", "handoff"))).IsFalse();
+    }
 }
