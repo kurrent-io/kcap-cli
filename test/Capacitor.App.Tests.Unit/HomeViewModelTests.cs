@@ -2906,9 +2906,8 @@ public class HomeViewModelTests {
         });
     }
 
-    /// The daemon lifecycle detail speaks for the LOCAL machine: under a healthy remote pick
-    /// it must yield, and it must
-    /// come back the moment the selection does.
+    /// The daemon lifecycle detail and its Start daemon action speak for the local machine: under a
+    /// healthy remote pick both yield, and both come back the moment the selection does.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task ALocalStartMessageBannerYieldsToARemoteSelection() {
@@ -2939,10 +2938,14 @@ public class HomeViewModelTests {
             await Assert.That(vm.BannerMessage).IsNull();
             await Assert.That(vm.BannerDetail).IsNull();
             await Assert.That(vm.ConnectionBannerVisible).IsFalse();
+            await Assert.That(vm.DaemonStartVisible).IsFalse();
+            await Assert.That(vm.BannerActionsVisible).IsFalse();
 
             await vm.SelectMachineAsync(daemon.DaemonName, isLocal: true);
             await Assert.That(vm.BannerMessage).IsEqualTo(HomeViewModel.DaemonDownNotice);
             await Assert.That(vm.BannerDetail).IsEqualTo(startMessageText);
+            await Assert.That(vm.DaemonStartVisible).IsTrue();
+            await Assert.That(vm.BannerActionsVisible).IsTrue();
         });
     }
 }

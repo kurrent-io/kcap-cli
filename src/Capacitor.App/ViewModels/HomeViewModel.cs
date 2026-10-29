@@ -969,14 +969,18 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         this.RaisePropertyChanged(nameof(StartDaemonCommand));
         this.RaisePropertyChanged(nameof(RetryDaemonCommand));
 
-        _daemonStartVisible = startVisible
+        // Both act on this machine's daemon, so a remote pick's banner must not offer them.
+        var local = _machineSelectionChanges.Select(sel => !sel.Remote);
+        var startShown = startVisible.CombineLatest(local, (visible, isLocal) => visible && isLocal).DistinctUntilChanged();
+        var retryShown = retryVisible.CombineLatest(local, (visible, isLocal) => visible && isLocal).DistinctUntilChanged();
+        _daemonStartVisible = startShown
             .ToProperty(this, x => x.DaemonStartVisible, initialValue: false)
             .DisposeWith(_disposables);
-        _daemonRetryVisible = retryVisible
+        _daemonRetryVisible = retryShown
             .ToProperty(this, x => x.DaemonRetryVisible, initialValue: false)
             .DisposeWith(_disposables);
-        startVisible.Subscribe(_daemonStartVisibleFeed).DisposeWith(_disposables);
-        retryVisible.Subscribe(_daemonRetryVisibleFeed).DisposeWith(_disposables);
+        startShown.Subscribe(_daemonStartVisibleFeed).DisposeWith(_disposables);
+        retryShown.Subscribe(_daemonRetryVisibleFeed).DisposeWith(_disposables);
         startMessage
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_daemonStartMessageFeed)
