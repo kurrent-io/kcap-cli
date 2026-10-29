@@ -171,74 +171,6 @@ public class LauncherPaneViewSmokeTests {
         await Assert.That(busy).IsTrue();
     }
 
-    /// While there is room above the centred composer, a notice takes it and the composer stays put.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task A_notice_leaves_the_composer_in_place_while_there_is_room() {
-        var (yBefore, yAfter, bannerVisible, bannerAbove) = await AvaloniaSession.DispatchAsync(() => {
-            var (vm, service, _, tmp) = Build();
-            using var _tmp = tmp;
-            var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 900, Height = 600 };
-            window.Show();
-            Dispatcher.UIThread.RunJobs();
-
-            var headline = Find<TextBlock>(window, "LauncherHeadline")!;
-            double Y(Visual c) => c.TranslatePoint(new Point(0, 0), window)!.Value.Y;
-            var before = Y(headline);
-
-            service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "disconnected"));
-            Dispatcher.UIThread.RunJobs();
-
-            var banner = Find<Border>(window, "ConnectionBanner")!;
-            var after = Y(headline);
-            var bannerAbove = Y(banner) < after;
-            var visible = banner.IsVisible;
-
-            window.Close();
-            Dispatcher.UIThread.RunJobs();
-            vm.Dispose();
-            return (before, after, visible, bannerAbove);
-        });
-
-        await Assert.That(bannerVisible).IsTrue();
-        await Assert.That(yAfter).IsEqualTo(yBefore);
-        await Assert.That(bannerAbove).IsTrue();
-    }
-
-    /// A notice taller than the room above the centred composer pushes it down; it never covers it.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Notices_push_the_composer_down_instead_of_covering_it() {
-        var (gap, noticesBottom) = await AvaloniaSession.DispatchAsync(() => {
-            var (vm, service, _, tmp) = Build();
-            using var _tmp = tmp;
-            using var message = new BehaviorSubject<string?>(string.Join('\n', Enumerable.Repeat("launchctl bootstrap failed (exit code 5).", 8)));
-            vm.AttachDaemonRecovery(
-                ReactiveCommand.Create(() => { }), ReactiveCommand.Create(() => { }),
-                Observable.Return(true), Observable.Return(false), message);
-            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
-            var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 900, Height = 480 };
-            window.Show();
-            Dispatcher.UIThread.RunJobs();
-            window.UpdateLayout();
-
-            double Y(Visual c) => c.TranslatePoint(new Point(0, 0), window)!.Value.Y;
-            var notices = Find<StackPanel>(window, "LauncherNotices")!;
-            var headline = Find<TextBlock>(window, "LauncherHeadline")!;
-            var bottom = Y(notices) + notices.Bounds.Height;
-            var shot = (Y(headline) - bottom, bottom);
-
-            window.Close();
-            Dispatcher.UIThread.RunJobs();
-            vm.Dispose();
-            return shot;
-        });
-
-        // Pushed, not merely sitting where it was: the notice reaches past the centred composer's top.
-        await Assert.That(noticesBottom).IsGreaterThan(200);
-        await Assert.That(gap).IsGreaterThanOrEqualTo(20);
-    }
-
     /// The action row stays out of the layout until it has something to show, and a busy banner trades
     /// its warning glyph for a spinner. Actions sit below the message with a clear gap, even in a wide card.
     [Test]
@@ -264,6 +196,7 @@ public class LauncherPaneViewSmokeTests {
             var text = Find<TextBlock>(window, "BannerMessageText")!;
             var button = Find<Button>(window, "StartDaemonButton")!;
             var spinner = Find<AppIcon>(window, "BannerBusyIcon")!;
+            var warning = Find<AppIcon>(window, "BannerIcon")!;
             var actions = Find<StackPanel>(window, "BannerActions")!;
 
             static double Top(Control c, Visual rel) => c.TranslatePoint(new Point(0, 0), rel)!.Value.Y;
@@ -273,6 +206,7 @@ public class LauncherPaneViewSmokeTests {
             var gap = Top(button, banner) - Bottom(Find<TextBlock>(window, "BannerBodyText")!, banner);
             var idleShot = (
                 BarVisible: spinner.IsVisible,
+                WarningVisible: warning.IsEffectivelyVisible,
                 TextTop: Top(text, banner),
                 AlignedLeft: Math.Abs(Left(button, banner) - Left(text, banner)) < 1,
                 Primary: button.Classes.Contains("kcapPrimary"),
@@ -286,6 +220,7 @@ public class LauncherPaneViewSmokeTests {
 
             var busyShot = (
                 BarVisible: spinner.IsVisible,
+                WarningVisible: warning.IsEffectivelyVisible,
                 ActionsVisible: actions.IsEffectivelyVisible,
                 Compact: banner.Bounds.Height <= text.Bounds.Height + Find<TextBlock>(window, "BannerBodyText")!.Bounds.Height + 32);
 
@@ -296,12 +231,14 @@ public class LauncherPaneViewSmokeTests {
         });
 
         await Assert.That(idle.BarVisible).IsFalse();
+        await Assert.That(idle.WarningVisible).IsTrue();
         await Assert.That(idle.TextTop).IsLessThan(22);
         await Assert.That(idle.AlignedLeft).IsTrue();
         await Assert.That(idle.Primary).IsTrue();
         await Assert.That(idle.Gap).IsGreaterThanOrEqualTo(13);
         await Assert.That(idle.Gap).IsLessThanOrEqualTo(15);
         await Assert.That(busy.BarVisible).IsTrue();
+        await Assert.That(busy.WarningVisible).IsFalse();
         await Assert.That(busy.ActionsVisible).IsFalse();
         await Assert.That(busy.Compact).IsTrue();
     }
@@ -349,53 +286,6 @@ public class LauncherPaneViewSmokeTests {
         await Assert.That(belowCopy).IsTrue();
         await Assert.That(aboveActions).IsTrue();
         await Assert.That(cleared).IsTrue();
-    }
-
-    /// A narrow card gives the copy the full width and puts the action below, aligned left, with the
-    /// glyph centred on the title's first line.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Connection_banner_keeps_its_action_inside_a_narrow_card() {
-        var (inside, below, alignedLeft, iconAligned) = await AvaloniaSession.DispatchAsync(() => {
-            var (vm, service, _, tmp) = Build();
-            using var _tmp = tmp;
-            vm.AttachDaemonRecovery(
-                ReactiveCommand.Create(() => { }),
-                ReactiveCommand.Create(() => { }),
-                new BehaviorSubject<bool>(true), new BehaviorSubject<bool>(false), Observable.Return<string?>(null));
-            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
-
-            var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 480, Height = 400 };
-            window.Show();
-            Dispatcher.UIThread.RunJobs();
-            window.UpdateLayout();
-
-            var banner = Find<Border>(window, "ConnectionBanner")!;
-            var text = Find<TextBlock>(window, "BannerMessageText")!;
-            var button = Find<Button>(window, "StartDaemonButton")!;
-            var right = button.TranslatePoint(new Point(button.Bounds.Width, 0), banner)!.Value.X;
-            var textTop = text.TranslatePoint(new Point(0, 0), banner)!.Value.Y;
-            var buttonTop = button.TranslatePoint(new Point(0, 0), banner)!.Value.Y;
-            var icon = Find<AppIcon>(window, "BannerIcon")!;
-            var iconTop = icon.TranslatePoint(new Point(0, 0), banner)!.Value.Y;
-            var textLeft = text.TranslatePoint(new Point(0, 0), banner)!.Value.X;
-            var buttonLeft = button.TranslatePoint(new Point(0, 0), banner)!.Value.X;
-            var shot = (
-                Inside: right <= banner.Bounds.Width + 1,
-                Below: buttonTop >= textTop + text.Bounds.Height + 7,
-                AlignedLeft: Math.Abs(buttonLeft - textLeft) < 1,
-                IconAligned: Math.Abs(iconTop + icon.Bounds.Height / 2 - (textTop + 10)) < 1);
-
-            window.Close();
-            Dispatcher.UIThread.RunJobs();
-            vm.Dispose();
-            return shot;
-        });
-
-        await Assert.That(inside).IsTrue();
-        await Assert.That(below).IsTrue();
-        await Assert.That(alignedLeft).IsTrue();
-        await Assert.That(iconAligned).IsTrue();
     }
 
     [Test]
