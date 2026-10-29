@@ -260,6 +260,7 @@ partial class McpFlowsServer(
                 var roundWait = ParseRoundWaitArg(arguments);
                 TimeSpan? roundPollCap = roundWait ? null : TimeSpan.Zero;
                 TimeSpan? sendBudget   = roundWait ? null : ShortCallSendBudget;
+                DateTimeOffset? shortCallDeadline = roundWait ? null : settlementStartedAt + ShortCallBudget;
 
                 var startPatch = toolName is "start_review_flow" or "start_flow"
                     ? await ReadPatchAsync(arguments, CancellationToken.None)
@@ -418,7 +419,7 @@ partial class McpFlowsServer(
 
                     await RecordStartedRunAsync(retryBody, requestingSessionId, cwd, repoRoot);
 
-                    var (retryPayload, retryIsError) = await ResolveRoundResultAsync(client, apiRoot, retryBody, toolName, wasDynamicStart, clock, backoff, settlementStartedAt, roundPollCap);
+                    var (retryPayload, retryIsError) = await ResolveRoundResultAsync(client, apiRoot, retryBody, toolName, wasDynamicStart, clock, backoff, settlementStartedAt, roundPollCap, shortCallDeadline);
 
                     return BuildToolResult(id, $"{PreferenceAppliedPrefix(preference)}\n{retryPayload}", retryIsError);
                 }
@@ -429,15 +430,18 @@ partial class McpFlowsServer(
                 if (toolName is "start_review_flow" or "start_flow")
                     await RecordStartedRunAsync(postBody, requestingSessionId, cwd, repoRoot);
 
-                var (payload, isError) = await ResolveRoundResultAsync(client, apiRoot, postBody, toolName, wasDynamicStart, clock, backoff, settlementStartedAt, roundPollCap);
+                var (payload, isError) = await ResolveRoundResultAsync(client, apiRoot, postBody, toolName, wasDynamicStart, clock, backoff, settlementStartedAt, roundPollCap, shortCallDeadline);
                 return BuildToolResult(id, payload, isError);
             }
 
             // `wait: true` blocks via bounded repeated GETs instead of the single GET below. Absent or
             // false never reaches this branch — that untouched single-GET path IS the backwards-compat
             // contract for every existing caller.
+            // timeout_s bounds the whole status call, the lookup of an omitted flow_run_id included.
+            DateTimeOffset? statusDeadline = null;
             if (toolName is "get_review_flow_status" or "get_flow_status") {
-                var resolution = await ResolveStatusFlowRunIdAsync(client, apiRoot, arguments, requestingSessionId, cwd, repoRoot, clock);
+                statusDeadline = clock.UtcNow + ParseTimeoutArg(arguments);
+                var resolution = await ResolveStatusFlowRunIdAsync(client, apiRoot, arguments, requestingSessionId, cwd, repoRoot, clock, statusDeadline);
                 if (resolution.Error is { } unresolved) return BuildToolResult(id, unresolved, isError: true);
                 arguments = WithFlowRunId(arguments, resolution.FlowRunId!);
             }
@@ -445,7 +449,9 @@ partial class McpFlowsServer(
             if (toolName is "get_review_flow_status" or "get_flow_status" && ParseWaitArg(arguments)) {
                 var waitFlowRunId = arguments?["flow_run_id"]?.GetValue<string>()
                     ?? throw new ArgumentException("Missing required argument: flow_run_id");
-                var waitResult = await PollStatusUntilTerminalAsync(client, apiRoot, waitFlowRunId, toolName, clock, backoff, ParseTimeoutArg(arguments));
+                var waitResult = await PollStatusUntilTerminalAsync(
+                    client, apiRoot, waitFlowRunId, toolName, clock, backoff,
+                    statusDeadline is { } end ? Remaining(end, clock) : null);
                 return BuildToolResult(id, waitResult.Payload, waitResult.IsError);
             }
 
@@ -675,6 +681,9 @@ partial class McpFlowsServer(
     /// short-call client (Muse's helper) allows, process start included. An exhausted budget started
     /// nothing, so the caller can retry the call.</summary>
     internal static readonly TimeSpan ShortCallSendBudget = TimeSpan.FromSeconds(40);
+
+    /// <summary>The whole <c>wait: false</c> call, send and the acknowledgment of what it rendered.</summary>
+    internal static readonly TimeSpan ShortCallBudget = TimeSpan.FromSeconds(50);
 
     /// <summary>The one end-to-end budget for a tool call that sends and then polls, anchored at its
     /// first POST attempt. The settlement lane and the round-poll lane run sequentially, so bounding
@@ -1482,7 +1491,7 @@ partial class McpFlowsServer(
     /// open flows are listed for the driver to choose from, never guessed between.</summary>
     async Task<FlowRunIdResolution> ResolveStatusFlowRunIdAsync(
             HttpClient client, string apiRoot, JsonObject? arguments, string? requestingSessionId,
-            string cwd, string? repoRoot, FlowRetryClock clock) {
+            string cwd, string? repoRoot, FlowRetryClock clock, DateTimeOffset? deadline = null) {
         if (arguments?["flow_run_id"] is { } node) {
             if (node is not JsonValue value || !value.TryGetValue<string>(out var given))
                 throw new ArgumentException("Invalid argument: flow_run_id must be a string");
@@ -1490,10 +1499,10 @@ partial class McpFlowsServer(
         }
 
         if (McpSessionId.TryResolveWithin(arguments, requestingSessionId) is not { } sessionId)
-            return await ResolveFromRunLedgerAsync(client, apiRoot, RunLedgerWorkspace(cwd, repoRoot), clock);
+            return await ResolveFromRunLedgerAsync(client, apiRoot, RunLedgerWorkspace(cwd, repoRoot), clock, deadline);
 
         var url = $"{apiRoot}/api/flows?requesting_session_id={Uri.EscapeDataString(sessionId)}&state=all";
-        var (sent, failure) = await GetForLookupAsync(client, url, "/api/flows", clock);
+        var (sent, failure) = await GetForLookupAsync(client, url, "/api/flows", clock, deadline);
         if (sent is null) return new(null, failure);
         using var resp = sent;
         var body = await resp.Content.ReadAsStringAsync();
@@ -1532,7 +1541,8 @@ partial class McpFlowsServer(
     /// newer settled ones is still found. A run the server no longer knows is skipped — unless it
     /// was recorded within <see cref="NotFoundGrace"/>, when the 404 may only mean the server has
     /// not caught up with the start. The workspace path is never shown to the model.</summary>
-    async Task<FlowRunIdResolution> ResolveFromRunLedgerAsync(HttpClient client, string apiRoot, string workspace, FlowRetryClock clock) {
+    async Task<FlowRunIdResolution> ResolveFromRunLedgerAsync(
+            HttpClient client, string apiRoot, string workspace, FlowRetryClock clock, DateTimeOffset? deadline = null) {
         var recorded = new FlowRunLedger(config, time).Retained(workspace);
         if (recorded.Count == 0)
             return new(null, $"Error: this harness gives kcap no session id, and no flow started from this workspace is recorded on this machine. {PassTheFlowRunId}");
@@ -1540,7 +1550,7 @@ partial class McpFlowsServer(
         var flows = new List<SessionFlow>();
         foreach (var (flowRunId, _, startedAt) in recorded) {
             var route = $"/api/flows/{Uri.EscapeDataString(flowRunId)}";
-            var (sent, failure) = await GetForLookupAsync(client, apiRoot + route, route, clock);
+            var (sent, failure) = await GetForLookupAsync(client, apiRoot + route, route, clock, deadline);
             if (sent is null) return new(null, failure);
             using var resp = sent;
             var body = await resp.Content.ReadAsStringAsync();
@@ -1566,8 +1576,8 @@ partial class McpFlowsServer(
 
     /// <summary>A null response comes with the actionable error text in its place.</summary>
     static async Task<(HttpResponseMessage? Response, string Failure)> GetForLookupAsync(
-            HttpClient client, string url, string route, FlowRetryClock clock) {
-        var (response, how) = await GetBoundedAsync(client, url, clock);
+            HttpClient client, string url, string route, FlowRetryClock clock, DateTimeOffset? deadline = null) {
+        var (response, how) = await GetBoundedAsync(client, url, clock, deadline);
 
         return response is not null
             ? (response, "")
@@ -1576,13 +1586,15 @@ partial class McpFlowsServer(
 
     /// <summary>One GET under <see cref="PerGetTimeout"/>, so a server that stops answering cannot hold the
     /// serial tool loop open; a null response comes with how it failed.</summary>
-    static async Task<(HttpResponseMessage? Response, string How)> GetBoundedAsync(HttpClient client, string url, FlowRetryClock clock) {
-        using var getCts = clock.CreateTimeoutSource(PerGetTimeout);
+    static async Task<(HttpResponseMessage? Response, string How)> GetBoundedAsync(
+            HttpClient client, string url, FlowRetryClock clock, DateTimeOffset? deadline = null) {
+        var timeout = deadline is { } end ? Min(PerGetTimeout, Remaining(end, clock)) : PerGetTimeout;
+        using var getCts = clock.CreateTimeoutSource(timeout);
         try {
             return (await client.GetAsync(url, getCts.Token), "");
         } catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException) {
             // No caller token reaches this lane, so a cancellation here is the lookup's own timeout.
-            return (null, ex is OperationCanceledException ? $"timed out after {(int)PerGetTimeout.TotalSeconds} s" : $"failed: {ex.Message}");
+            return (null, ex is OperationCanceledException ? $"timed out after {(int)timeout.TotalSeconds} s" : $"failed: {ex.Message}");
         }
     }
 
@@ -1869,11 +1881,11 @@ partial class McpFlowsServer(
     /// (the instant before its first POST), so the poll lane shares that budget with the settlement
     /// lane rather than starting fresh. Null from a call site with no settlement lane in front of it,
     /// which then falls back to <see cref="PollCap"/> alone.</summary>
-    async Task<PollResult> ResolveRoundResultAsync(HttpClient client, string apiRoot, string postBody, string toolName, bool wasDynamicStart, FlowRetryClock clock, SettlementBackoff backoff, DateTimeOffset? toolCallStartedAt = null, TimeSpan? pollCap = null) {
+    async Task<PollResult> ResolveRoundResultAsync(HttpClient client, string apiRoot, string postBody, string toolName, bool wasDynamicStart, FlowRetryClock clock, SettlementBackoff backoff, DateTimeOffset? toolCallStartedAt = null, TimeSpan? pollCap = null, DateTimeOffset? ackDeadline = null) {
         if (TryFormatRoundlessStart(postBody, out var roundlessPendingIds) is { } roundless) {
             if (roundlessPendingIds.Count > 0 &&
                 JsonNode.Parse(postBody)?.AsObject()?["flow_run_id"]?.GetValue<string>() is { } roundlessRunId)
-                await AckRenderedMessagesAsync(client, apiRoot, roundlessRunId, roundlessPendingIds, clock);
+                await AckRenderedMessagesAsync(client, apiRoot, roundlessRunId, roundlessPendingIds, clock, ackDeadline);
 
             return new(roundless, false);
         }
@@ -1889,7 +1901,7 @@ partial class McpFlowsServer(
 
             // flowRunId may be null here (unparseable body) — nothing to ack against.
             if (flowRunId is not null)
-                await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, clock);
+                await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, clock, ackDeadline);
 
             return new(formatted, false);
         }
