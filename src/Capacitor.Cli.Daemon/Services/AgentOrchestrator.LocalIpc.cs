@@ -425,22 +425,35 @@ internal partial class AgentOrchestrator {
         if ((agent.SessionId ?? (agent.Runtime as IAcpTranscriptSource)?.AcpSessionId) is not { Length: > 0 } sessionId)
             return RefuseRename(SessionRenameReasons.NoSession);
 
-        TitleRenameOutcome outcome;
+        // Held across the server call and the apply, so a slower answer to an earlier request
+        // cannot overwrite a later rename of the same agent.
+        IDisposable turn;
         try {
-            outcome = await _titleServer.RenameAsync(sessionId, title, _shutdownCts.Token);
-        } catch (Exception ex) {
-            _logger.LogDebug(ex, "SessionRename: the server call failed for {AgentId}", agentId);
+            turn = await _renameGate.EnterAsync(agentId, _shutdownCts.Token);
+        } catch (OperationCanceledException) {
             return RefuseRename(SessionRenameReasons.ServerError);
         }
 
-        if (!outcome.Applied) return new SessionRenameAckDto(false, outcome.Reason ?? SessionRenameReasons.Refused, outcome.Title);
+        using (turn) {
+            TitleRenameOutcome outcome;
+            try {
+                outcome = await _titleServer.RenameAsync(sessionId, title, _shutdownCts.Token);
+            } catch (Exception ex) {
+                _logger.LogDebug(ex, "SessionRename: the server call failed for {AgentId}", agentId);
+                return RefuseRename(SessionRenameReasons.ServerError);
+            }
 
-        var shown = outcome.Title ?? title;
-        if (_titleLoop is { } loop) loop.ApplyRename(agent.Id, shown);
-        else SetResolvedTitle(agent, shown);
+            if (!outcome.Applied) return new SessionRenameAckDto(false, outcome.Reason ?? SessionRenameReasons.Refused, outcome.Title);
 
-        return new SessionRenameAckDto(true, null, shown);
+            var shown = outcome.Title ?? title;
+            if (_titleLoop is { } loop) loop.ApplyRename(agent.Id, shown);
+            else SetResolvedTitle(agent, shown);
+
+            return new SessionRenameAckDto(true, null, shown);
+        }
     }
+
+    readonly KeyedAsyncGate _renameGate = new();
 
     static SessionRenameAckDto RefuseRename(string reason) => new(false, reason, null);
 

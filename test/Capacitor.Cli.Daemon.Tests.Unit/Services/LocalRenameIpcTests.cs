@@ -19,15 +19,22 @@ public class LocalRenameIpcTests {
         public TitleRenameOutcome Outcome { get; set; } = new(true, null, null);
         public Exception? RenameThrows { get; set; }
         public string? ServerTitle { get; set; }
-        public List<(string SessionId, string Title)> Renames { get; } = [];
+        readonly List<(string SessionId, string Title)> _renames = [];
+        public List<(string SessionId, string Title)> Renames { get { lock (_renames) return [.. _renames]; } }
+        /// When set, each rename waits on the gate named by its title, then applies it as shown.
+        public Dictionary<string, TaskCompletionSource>? Gates { get; set; }
 
         public Task<string?> GetTitleAsync(string sessionId, CancellationToken ct) => Task.FromResult(ServerTitle);
         public Task<HarnessTitleOutcome> PushTitleAsync(string sessionId, HarnessTitlePost post, CancellationToken ct) =>
             Task.FromResult(HarnessTitleOutcome.Failed);
 
-        public Task<TitleRenameOutcome> RenameAsync(string sessionId, string title, CancellationToken ct) {
-            Renames.Add((sessionId, title));
-            return RenameThrows is { } ex ? Task.FromException<TitleRenameOutcome>(ex) : Task.FromResult(Outcome);
+        public async Task<TitleRenameOutcome> RenameAsync(string sessionId, string title, CancellationToken ct) {
+            lock (_renames) _renames.Add((sessionId, title));
+            if (Gates?.GetValueOrDefault(title) is { } gate) {
+                await gate.Task;
+                return new TitleRenameOutcome(true, title, null);
+            }
+            return await (RenameThrows is { } ex ? Task.FromException<TitleRenameOutcome>(ex) : Task.FromResult(Outcome));
         }
     }
 
@@ -266,5 +273,54 @@ public class LocalRenameIpcTests {
     static string Jwt(string payload) {
         static string B64(string s) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(s)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
         return $"{B64("""{"alg":"none"}""")}.{B64(payload)}.sig";
+    }
+
+    static Dictionary<string, TaskCompletionSource> GatesFor(params string[] titles) =>
+        titles.ToDictionary(t => t, _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+
+    static async Task Until(Func<bool> condition) {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (!condition()) {
+            if (DateTime.UtcNow > deadline) throw new TimeoutException();
+            await Task.Delay(10);
+        }
+    }
+
+    /// The server answers the first rename after the second; the later request still wins locally.
+    [Test]
+    public async Task Overlapping_renames_of_one_agent_apply_in_request_order() {
+        var (orch, server) = Build();
+        await using var _ = orch;
+        AgentOrchestratorHarness.SeedAcpAgent(orch, "a1", new FakeAcpRuntime { AcpSessionId = "sess-9" });
+        server.Gates = GatesFor("First", "Second");
+
+        var first = Rename(orch, Payload("a1", "First"));
+        await Until(() => server.Renames.Count == 1);
+        var second = Rename(orch, Payload("a1", "Second"));
+        server.Gates["Second"].SetResult();
+        await Task.Delay(50);
+        server.Gates["First"].SetResult();
+        await Task.WhenAll(first, second);
+
+        await Assert.That(server.Renames.Select(r => r.Title)).IsEquivalentTo(["First", "Second"], TUnit.Assertions.Enums.CollectionOrdering.Matching);
+        await Assert.That(StatusTitle(orch, "a1")).IsEqualTo("Second");
+    }
+
+    [Test]
+    public async Task A_held_rename_does_not_hold_another_agents() {
+        var (orch, server) = Build();
+        await using var _ = orch;
+        AgentOrchestratorHarness.SeedAcpAgent(orch, "a1", new FakeAcpRuntime { AcpSessionId = "sess-1" });
+        AgentOrchestratorHarness.SeedAcpAgent(orch, "a2", new FakeAcpRuntime { AcpSessionId = "sess-2" });
+        server.Gates = GatesFor("Held");
+
+        var held = Rename(orch, Payload("a1", "Held"));
+        await Until(() => server.Renames.Count == 1);
+        var other = await Rename(orch, Payload("a2", "Free"));
+
+        await Assert.That(other.Ok).IsTrue();
+        await Assert.That(StatusTitle(orch, "a2")).IsEqualTo("Free");
+        server.Gates["Held"].SetResult();
+        await held;
     }
 }
