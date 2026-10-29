@@ -985,4 +985,34 @@ public class TitleResolveLoopTests {
         await Assert.That(h.Applied.Select(a => a.Title))
             .IsEquivalentTo(["Native A", "New", "Harness rename"], CollectionOrdering.Matching);
     }
+
+    /// The push in flight across the rename committed but its response was lost, so the next tick
+    /// re-sends the same title: still the pre-rename one, and its echo must not retire the rename.
+    [Test]
+    public async Task A_retried_pre_rename_push_keeps_its_provenance() {
+        var h = new Harness();
+        h.Agents.Add(Agent());
+        h.Native = _ => "Native A";
+        h.Server.Get = _ => null;
+        h.Server.PushResult = HarnessTitleOutcome.Failed;
+        var gate = new Gate();
+        h.Server.PushGate = gate;
+        var loop = h.Build();
+
+        var tick = loop.TickAsync(CancellationToken.None);
+        await gate.Entered;
+        loop.ApplyRename("a1", "New");
+        gate.Release();
+        await tick;
+
+        h.Server.PushResult = HarnessTitleOutcome.Posted;
+        h.Server.Get = _ => "New";
+        await loop.TickAsync(CancellationToken.None); // retries "Native A"
+        h.Server.Get = _ => "Native A";
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(h.Server.Pushed.Select(p => p.Post.Title))
+            .IsEquivalentTo(["Native A", "Native A"], CollectionOrdering.Matching);
+        await Assert.That(h.Applied.Last().Title).IsEqualTo("New");
+    }
 }

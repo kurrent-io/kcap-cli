@@ -97,7 +97,8 @@ internal sealed class TitleResolveLoop {
         public bool RenameSeen;
         public DateTimeOffset RenamedAt;
         /// The push attempts made before <see cref="Renamed"/>: a late echo of one is a stale read,
-        /// never a newer title, so it cannot retire the rename.
+        /// never a newer title, so it cannot retire the rename. A retry of one after the rename
+        /// re-sends the same stale title and keeps it here; only a title new since the rename can.
         public HashSet<string> PreRenameAttempts = new(StringComparer.Ordinal);
         /// The tick epoch the state was created in; a removal pass spares a state created after
         /// its snapshot, whose agent the snapshot could not have seen.
@@ -268,9 +269,7 @@ internal sealed class TitleResolveLoop {
             // current title — it is authoritative for what the harness itself calls the session.
             if (native is not null && !native.Equals(state.PushedNative) && agent.SessionId is { } sid) {
                 // A server read comes back display-capped, so the capped form is what an echo of this push looks like.
-                var attempted = Normalize(native.Title)!;
-                state.PushAttempts.Add(attempted);
-                state.PreRenameAttempts.Remove(attempted);
+                state.PushAttempts.Add(Normalize(native.Title)!);
                 nativePush = native;
                 nativeSid  = sid;
             }
