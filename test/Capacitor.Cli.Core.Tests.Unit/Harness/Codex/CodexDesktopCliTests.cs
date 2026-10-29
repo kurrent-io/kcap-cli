@@ -47,6 +47,23 @@ public class CodexDesktopCliTests {
         await Assert.That(CodexDesktopCli.Find(Probe)).IsNull();
     }
 
+    /// <summary>A link inside the package can point anywhere, so neither a linked entrypoint nor a
+    /// linked directory on the way to it is followed.</summary>
+    [Test]
+    public async Task Refuses_an_entrypoint_reached_through_a_symlink() {
+        var outside = Apps.CreateExecutable(Path.Combine("elsewhere", "codex"), "#!/bin/sh\n");
+        Apps.CreateDir(Package, "bin");
+        File.CreateSymbolicLink(Apps.PathTo(Package, "bin", "codex"), outside);
+
+        await Assert.That(CodexDesktopCli.Find(Probe)).IsNull();
+
+        File.Delete(Apps.PathTo(Package, "bin", "codex"));
+        Directory.Delete(Apps.PathTo(Package, "bin"));
+        Directory.CreateSymbolicLink(Apps.PathTo(Package, "bin"), Apps.PathTo("elsewhere"));
+
+        await Assert.That(CodexDesktopCli.Find(Probe)).IsNull();
+    }
+
     [Test]
     public async Task Finds_nothing_when_the_entrypoint_is_missing() {
         Manifest("""{"entrypoint":"bin/codex"}""");

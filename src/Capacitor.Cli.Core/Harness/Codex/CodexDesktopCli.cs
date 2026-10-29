@@ -27,8 +27,25 @@ public static class CodexDesktopCli {
         var root = Path.GetFullPath(package) + Path.DirectorySeparatorChar;
         var full = Path.GetFullPath(Path.Combine(package, relative));
 
-        // The manifest is the app's, but what it names is what the daemon spawns: stay inside the bundle.
-        return full.StartsWith(root, StringComparison.Ordinal) ? Launchable.Resolve(full) : null;
+        // The manifest is the app's, but what it names is what the daemon spawns: stay inside the bundle,
+        // through no link on the way, since GetFullPath folds ".." but follows no symlink.
+        return full.StartsWith(root, StringComparison.Ordinal) && !CrossesLink(root, full) ? Launchable.Resolve(full) : null;
+    }
+
+    static bool CrossesLink(string root, string full) {
+        var path = root.TrimEnd(Path.DirectorySeparatorChar);
+
+        foreach (var part in full[root.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries)) {
+            path = Path.Combine(path, part);
+
+            try {
+                if (new FileInfo(path).LinkTarget is not null) return true;
+            } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     static string? ReadEntrypoint(string manifest) {

@@ -26,6 +26,20 @@ public class HandoffVendorEligibilityTests {
         await Assert.That(HandoffVendorEligibility.Detected(harnesses)).IsEqualTo(2);
     }
 
+    /// <summary>An app-only install is launchable through the CLI its desktop app bundles.</summary>
+    [Test]
+    public async Task A_vendor_whose_desktop_app_bundles_the_cli_is_launchable_off_path() {
+        using var root = new TempDir();
+        InstallShared(root);
+        var codex = new TestHarness(HarnessId.Codex, "Codex",
+            new HarnessSignals { UserDataSignal = () => true, BundledCli = _ => "/Applications/ChatGPT.app/codex" });
+
+        var eligible = HandoffVendorEligibility.Eligible(HarnessRegistry.Over(TestBinaries.None, codex), Paths(root));
+
+        await Assert.That(eligible.Single().Executable).IsEqualTo("/Applications/ChatGPT.app/codex");
+        await Assert.That(eligible.Single().Launchable).IsTrue();
+    }
+
     [Test]
     public async Task Kiro_reads_its_own_skills_directory_not_the_shared_tree() {
         using var root = new TempDir();
