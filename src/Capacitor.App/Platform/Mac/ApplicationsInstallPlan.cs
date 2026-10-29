@@ -16,8 +16,21 @@ public sealed record ApplicationsInstallPlan(
     public bool Migrates => Action != ApplicationsInstallAction.Blocked
         && Replaces.Any(root => Path.GetFileName(root) == KcapBundle.LegacyBundleName);
 
+    /// The installed copy opens and replaces another installed copy of kcap, not a pre-rebrand one.
+    bool KeepsOne => Action == ApplicationsInstallAction.OpenInstalled && Replaces.Count > 0 && !Migrates
+        && Replaces.All(root => Path.GetFileName(root) == KcapBundle.BundleName);
+
+    /// Keeping <see cref="Target"/> removes the kcap.app in every other one of <paramref name="directories"/>; it
+    /// cannot when another copy is newer, because keeping one copy never downgrades the other.
+    public bool RetiresOthersIn(IEnumerable<string> directories) =>
+        Action != ApplicationsInstallAction.Blocked
+        && directories.Select(directory => Path.GetFullPath(Path.Combine(directory, KcapBundle.BundleName)))
+            .Where(root => root != Path.GetFullPath(Target))
+            .All(root => Replaces.Any(replaced => Path.GetFullPath(replaced) == root));
+
     public string Title => Action switch {
         ApplicationsInstallAction.Blocked => "Cannot install kcap",
+        _ when KeepsOne => "kcap is installed twice",
         _ when Migrates => "Upgrade to kcap",
         ApplicationsInstallAction.Update => "Update kcap",
         ApplicationsInstallAction.OpenInstalled => "kcap is already installed",
@@ -27,6 +40,7 @@ public sealed record ApplicationsInstallPlan(
     public string ButtonLabel => Action switch {
         ApplicationsInstallAction.Blocked => "Show in Finder",
         ApplicationsInstallAction.OpenInstalled when Migrates => "Replace and open",
+        _ when KeepsOne => "Keep this copy",
         _ when Migrates => "Quit and update",
         ApplicationsInstallAction.Update => "Quit and update",
         ApplicationsInstallAction.OpenInstalled => "Open installed copy",
@@ -39,6 +53,8 @@ public sealed record ApplicationsInstallPlan(
         _ when Migrates =>
             $"Kurrent Capacitor will be replaced with kcap, and the updated app will open. Your settings and sign-in will stay intact.\n\n{RestartNote}",
         ApplicationsInstallAction.Update => $"kcap will be updated and reopened.{Removal} Your settings and sign-in will stay intact.\n\n{RestartNote}",
+        _ when KeepsOne =>
+            $"The copy at {Target} stays. {(Replaces.Count == 1 ? $"The one at {Replaces[0]} is removed" : "The other copies are removed")}, and the daemon and the terminal command use the copy that stays.\n\n{RestartNote}",
         ApplicationsInstallAction.OpenInstalled when Replaces.Count == 0 =>
             "The installed copy of kcap will open. Your settings and sign-in will stay intact.",
         ApplicationsInstallAction.OpenInstalled =>
