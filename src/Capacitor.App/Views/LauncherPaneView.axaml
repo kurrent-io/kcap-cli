@@ -62,7 +62,7 @@
                     <views:AppIcon x:Name="UpdateBusyIcon" Classes="noticeIcon kcapSpinning" Size="16" Kind="LoaderCircle"
                                    Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Top" />
                     <StackPanel Grid.Column="1" Spacing="4">
-                        <TextBlock x:Name="UpdateTitle" Classes="noticeTitle" Text="Finishing the update" />
+                        <TextBlock x:Name="UpdateTitle" Classes="noticeTitle" Text="Finishing the update…" />
                         <TextBlock x:Name="UpdateDetailText" Classes="noticeBody" Text="{Binding UpdateDetail}"
                                    IsVisible="{Binding UpdateDetail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                     </StackPanel>
