@@ -9,7 +9,7 @@ public enum LocalInstallAffordance {
 
 public static class LocalInstallAffordanceExtensions {
     static readonly HashSet<string> RetryableCodes = new(StringComparer.Ordinal) {
-        "download_failed", "start_failed", "verification_failed", "recovery_failed", "commit_failed", "cancelled",
+        "download_failed", "start_failed", "verification_failed", "recovery_failed", "commit_failed", "cancelled", "client_below_floor",
     };
 
     extension(LocalInstallAffordance) {

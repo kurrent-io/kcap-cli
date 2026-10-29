@@ -101,6 +101,8 @@ internal sealed record WizardGraphOptions(
     Func<CancellationToken, Task<bool>>?                                         ReportCliSetup = null,
     // The visibility answers the signed-in tenant can honour; null offers every answer.
     Func<CancellationToken, Task<VisibilityOptionsResponse?>>?                   ReadVisibilityOptions = null,
+    // Brings any other kcap the local installer would refuse up to date; null finds nothing to update.
+    Func<CancellationToken, Task<ClientRepairOutcome>>?                          RepairClients = null,
     // This app sent the user to kcap.ai's sign-up and no sign-in has committed since.
     bool                                                                         ResumeWebSignUp = false);
 
@@ -269,6 +271,7 @@ internal static class WizardComposition {
             onLocalPath: () => OnLocalPath() && !CommittedLocal(),
             builtinOffer: options.BuiltinOffer,
             recorded: () => LocalEmbeddingFile.Read(root),
+            repairClients: options.RepairClients,
             resuming: Pending);
         var connect  = new ConnectChoiceViewModel();
         var signIn   = new SignInStepViewModel(
