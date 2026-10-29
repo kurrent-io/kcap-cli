@@ -58,18 +58,24 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
     bool _daemonsRerun;
     readonly Action<int>? _onUnauthorized;
     readonly Func<string, string, CancellationToken, Task<SessionRenameResult>>? _postRename;
-    // Applied renames by canonical session id, each stamped with the latest fetch sequence when it
-    // was recorded: only a fetch started after that, carrying a title of its own, replaces it.
-    readonly Dictionary<string, (string Title, long FetchSeq)> _overlay = new(StringComparer.Ordinal);
+    readonly TimeProvider _time;
+    // Applied renames by canonical session id. Only a fetch started after the entry was recorded,
+    // carrying a title other than the one the rename replaced, or the hold running out, retires it.
+    readonly Dictionary<string, (string Title, string? Replaced, long FetchSeq, DateTimeOffset RecordedAt)> _overlay =
+        new(StringComparer.Ordinal);
     long _fetchSeq;
+    // The server's title sync lags the write by seconds; the bound stops a server that kept the old title from being masked forever.
+    static readonly TimeSpan OverlayHold = TimeSpan.FromMinutes(2);
 
     public RemoteAgentsService(
             IServerLane lane, Func<CancellationToken, Task<RemoteFetch>> fetchAgents,
             TimeSpan? debounce = null,
             Func<string, string, CancellationToken, Task<SessionRenameResult>>? postRename = null,
+            TimeProvider? time = null,
             Action<int>? onUnauthorized = null) {
         _onUnauthorized = onUnauthorized;
         _postRename = postRename;
+        _time = time ?? TimeProvider.System;
         var wait = debounce ?? TimeSpan.FromMilliseconds(250);
         var connected = lane.Status
             .Select(s => s.State == ServerLaneState.Connected)
@@ -158,7 +164,8 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
     // Caller holds _lock.
     AgentInstanceDto WithOverlay(AgentInstanceDto row, long fetchSeq) {
         if (OverlayKey(row.SessionId) is not { } key || !_overlay.TryGetValue(key, out var entry)) return row;
-        if (fetchSeq > entry.FetchSeq && row.Title is { Length: > 0 }) {
+        var superseded = fetchSeq > entry.FetchSeq && row.Title is { Length: > 0 } && row.Title != entry.Replaced;
+        if (superseded || _time.GetUtcNow() - entry.RecordedAt >= OverlayHold) {
             _overlay.Remove(key);
             return row;
         }
@@ -178,11 +185,10 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
                 return new SessionRenameResult(false, null, SessionRenameReasons.IdentityMismatch);
             if (OverlayKey(sessionId) is not { } key) return result;
             var shown = result.Title is { Length: > 0 } ? result.Title : RenameWire.NormalizeTitle(title) ?? title;
-            _overlay[key] = (shown, _fetchSeq);
-            var affected = _agents.Items
-                .Where(a => a.AgentId == agentId || OverlayKey(a.SessionId) == key)
-                .Select(a => a with { Title = shown })
-                .ToList();
+            var cached = _agents.Items.Where(a => OverlayKey(a.SessionId) == key).ToList();
+            var replaced = _overlay.TryGetValue(key, out var prior) ? prior.Replaced : cached.FirstOrDefault()?.Title;
+            _overlay[key] = (shown, replaced, _fetchSeq, _time.GetUtcNow());
+            var affected = cached.Select(a => a with { Title = shown }).ToList();
             if (affected.Count > 0) _agents.AddOrUpdate(affected);
         }
         return result;
