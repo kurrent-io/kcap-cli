@@ -6,9 +6,9 @@
              x:Class="Capacitor.App.Views.WorkspaceView"
              x:DataType="vm:WorkspaceViewModel"
              Background="{StaticResource KcapCanvasBrush}">
-    <!-- Two columns: the workspace proper, and the work-context pane at its fixed width. The
+    <!-- Two columns: the workspace proper, and the work-context pane sized by ContextPaneSizing. The
          terminal keeps its own column, so the size it reports to the PTY is the real center width. -->
-    <Grid ColumnDefinitions="*,320">
+    <Grid x:Name="SplitGrid" ColumnDefinitions="*,320">
     <Grid Grid.Column="0" RowDefinitions="Auto,*">
         <!-- Header: title over checkout · Chat/Terminal switch · actions.
              Harness/transport live in the work-context pane; leaving is the rail's job. -->
@@ -52,6 +52,10 @@
                     </Button>
                     <Button x:Name="StopButton" Content="Stop" Command="{Binding StopCommand}" Classes="kcapDanger"
                             IsVisible="{Binding ShowsStop}" Padding="10,5" FontSize="13.5" />
+                    <Button x:Name="ContextShowButton" Classes="kcapGhost kcapIcon" IsVisible="False"
+                            ToolTip.Tip="Show details" AutomationProperties.Name="Show details">
+                        <views:AppIcon Kind="PanelRightOpen" Size="14" Foreground="{StaticResource KcapMutedBrush}" />
+                    </Button>
                 </StackPanel>
             </Grid>
         </Border>
@@ -185,5 +189,8 @@
         </Grid>
     </Grid>
     <views:WorkContextView x:Name="WorkContextHost" Grid.Column="1" DataContext="{Binding WorkContext}" />
+    <!-- Last child so it hit-tests above the workspace column it overhangs. -->
+    <GridSplitter x:Name="ContextSplitter" Grid.Column="1" HorizontalAlignment="Left" Width="6"
+                  Margin="-3,0,0,0" Background="Transparent" ResizeDirection="Columns" />
     </Grid>
 </UserControl>
