@@ -29,6 +29,10 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
     readonly CompositeDisposable _disposables = new();
     readonly BehaviorSubject<bool> _waitedLong = new(false);
     readonly SerialDisposable _patience = new();
+    // A disposed timer can still run a callback it already queued: the generation tells a stale one to do nothing.
+    readonly Lock _patienceGate = new();
+    int _patienceGeneration;
+    bool _patienceStopped;
     readonly AppUpdateTransition _transition;
     readonly TimeProvider _time;
     IReadOnlyList<UpdateStep> _steps = [];
@@ -118,8 +122,16 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
     }
 
     void ArmPatience() {
-        _waitedLong.OnNext(false);
-        _patience.Disposable = _time.CreateTimer(_ => _waitedLong.OnNext(true), null, DaemonPatience, Timeout.InfiniteTimeSpan);
+        lock (_patienceGate) {
+            if (_patienceStopped) return;
+            var generation = ++_patienceGeneration;
+            _waitedLong.OnNext(false);
+            _patience.Disposable = _time.CreateTimer(_ => {
+                lock (_patienceGate) {
+                    if (!_patienceStopped && generation == _patienceGeneration) _waitedLong.OnNext(true);
+                }
+            }, null, DaemonPatience, Timeout.InfiniteTimeSpan);
+        }
     }
 
     async Task CloseAfterAsync() {
@@ -226,7 +238,10 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
     public void Dispose() {
         _closed = true;
         _disposables.Dispose();
-        _patience.Dispose();
-        _waitedLong.Dispose();
+        lock (_patienceGate) {
+            _patienceStopped = true;
+            _patience.Dispose();
+            _waitedLong.Dispose();
+        }
     }
 }

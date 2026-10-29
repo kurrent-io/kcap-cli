@@ -52,19 +52,38 @@ internal static partial class InstalledAppProcesses {
     }
 
     /// Kcap app processes other than this one, from any bundle, that started before <paramref name="startedBefore"/>.
-    internal static int[] FindEarlier(DateTime startedBefore) {
-        var matches = new List<int>();
+    internal static int[] FindEarlier(DateTime startedBefore) => FindEarlier(startedBefore, Candidates(), RunningBundleIdentifier);
+
+    /// A process counts as kcap by the bundle identifier the system registered when it launched, not by its executable's
+    /// path: an update replaces the bundle under a copy that is still running. One whose identifier cannot be read is left out.
+    internal static int[] FindEarlier(DateTime startedBefore, IEnumerable<(int Pid, DateTime Started)> candidates, Func<int, string?> bundleIdentifier) =>
+        candidates.Where(c => c.Pid != Environment.ProcessId && c.Started < startedBefore
+                && bundleIdentifier(c.Pid) is { } id && KcapBundle.Identifiers.Contains(id, StringComparer.Ordinal))
+            .Select(c => c.Pid).ToArray();
+
+    static List<(int Pid, DateTime Started)> Candidates() {
+        var candidates = new List<(int, DateTime)>();
         foreach (var name in KcapBundle.ExecutableNames) {
             foreach (var process in Process.GetProcessesByName(name)) {
                 using (process) {
-                    if (process.Id == Environment.ProcessId) continue;
                     try {
-                        if (!process.HasExited && process.StartTime < startedBefore) matches.Add(process.Id);
+                        if (!process.HasExited) candidates.Add((process.Id, process.StartTime));
                     } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException) { }
                 }
             }
         }
-        return matches.ToArray();
+        return candidates;
+    }
+
+    static string? RunningBundleIdentifier(int pid) {
+        if (!OperatingSystem.IsMacOS() || pid <= 0) return null;
+        var pool = Send(GetClass("NSAutoreleasePool"), Selector("new"));
+        try {
+            var app = FindApplication(GetClass("NSRunningApplication"), Selector("runningApplicationWithProcessIdentifier:"), pid);
+            if (app == 0) return null;
+            var identifier = Send(app, Selector("bundleIdentifier"));
+            return identifier == 0 ? null : Marshal.PtrToStringUTF8(Send(identifier, Selector("UTF8String")));
+        } finally { Send(pool, Selector("drain")); }
     }
 
     /// <summary>

@@ -77,4 +77,21 @@ public class InstalledAppProcessesTests {
         await Assert.That(result).IsEqualTo((0, true));
         await Assert.That(calls).IsEqualTo(0);
     }
+
+    /// A matching executable name is not enough: only a process registered under a kcap bundle identifier is a copy of kcap.
+    [Test]
+    public async Task Only_an_earlier_process_registered_as_kcap_counts_as_an_earlier_copy() {
+        var now = DateTime.UtcNow;
+        var candidates = new[] {
+            (Pid: 101, Started: now.AddMinutes(-5)), (Pid: 102, Started: now.AddMinutes(-5)), (Pid: 103, Started: now.AddMinutes(-5)),
+            (Pid: 104, Started: now.AddMinutes(-5)), (Pid: 105, Started: now.AddMinutes(1)),
+        };
+        var identifiers = new Dictionary<int, string?> {
+            [101] = "io.kurrent.kcap", [102] = "io.kurrent.capacitor", [103] = "com.example.other", [104] = null, [105] = "io.kurrent.kcap",
+        };
+
+        var earlier = InstalledAppProcesses.FindEarlier(now, candidates, pid => identifiers[pid]);
+
+        await Assert.That(earlier).IsEquivalentTo([101, 102], CollectionOrdering.Matching);
+    }
 }

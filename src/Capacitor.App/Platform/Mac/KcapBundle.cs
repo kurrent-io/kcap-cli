@@ -17,6 +17,7 @@ public sealed record KcapBundle(string Root, string Version, string Executable, 
     const string LegacyIdentifier = "io.kurrent.capacitor";
 
     public static IReadOnlyList<string> ExecutableNames { get; } = [ExecutableName, LegacyExecutableName];
+    public static IReadOnlyList<string> Identifiers { get; } = [Identifier, LegacyIdentifier];
 
     public static KcapBundle? Read(string root) {
         try {
