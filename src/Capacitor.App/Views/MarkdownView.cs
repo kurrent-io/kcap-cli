@@ -51,6 +51,7 @@ public sealed class MarkdownView : ContentControl {
     readonly CodeBlockActions _codeActions;
     readonly ReferenceLinks _referenceLinks;
     readonly MarkdownLinkKeys _linkKeys;
+    bool _nonLeftRelease;
 
     static MarkdownView() {
         TextProperty.Changed.AddClassHandler<MarkdownView>((view, _) => {
@@ -71,10 +72,17 @@ public sealed class MarkdownView : ContentControl {
         // The viewer's template owns a ScrollViewer; the list around it is what scrolls.
         ScrollViewer.SetVerticalScrollBarVisibility(_viewer, ScrollBarVisibility.Disabled);
         ScrollViewer.SetHorizontalScrollBarVisibility(_viewer, ScrollBarVisibility.Disabled);
+        // MarkView opens a link on any button's release; a right-click belongs to the context menu,
+        // and launching the browser under the menu that click opens froze the app on macOS.
+        AddHandler(PointerReleasedEvent, (_, e) => _nonLeftRelease = e.InitialPressMouseButton != MouseButton.Left,
+            RoutingStrategies.Tunnel, handledEventsToo: true);
+        AddHandler(PointerReleasedEvent, (_, _) => _nonLeftRelease = false, RoutingStrategies.Bubble, handledEventsToo: true);
         _viewer.LinkClicked += (_, e) => {
             e.Handled = true;
+            if (_nonLeftRelease) return;
             if (OpenLink is { } open && open.CanExecute(e.Url)) open.Execute(e.Url);
         };
+        AddHandler(ContextRequestedEvent, (_, e) => ContextLinkUrl = LinkAt(e), RoutingStrategies.Tunnel, handledEventsToo: true);
         MarkViewSelection.Attach(this, _viewer, CopySelectionAsync);
         // Bubble on the host runs after the viewer's own move, which has already chosen Hand or
         // the arrow. Prose takes the I-beam and a link the hand; a bare image stays on the arrow.
@@ -132,6 +140,19 @@ public sealed class MarkdownView : ContentControl {
         _viewer.Cursor = link is not null || image?.Target is not null ? HandCursor
             : image is not null ? ArrowCursor
             : IBeamCursor;
+    }
+
+    /// The link a context menu was opened on: the one under the pointer, or the keyboard's current one.
+    internal string? ContextLinkUrl { get; private set; }
+
+    string? LinkAt(ContextRequestedEventArgs e) =>
+        e.TryGetPosition(_viewer, out var point)
+            ? FindHyperlinkAt(_viewer, point)?.NavigateUri?.ToString() ?? ImageUnder(e.Source as Visual)?.Target
+            : _linkKeys.CurrentUrl;
+
+    public async Task CopyLinkAsync() {
+        if (ContextLinkUrl is not { } url || TopLevel.GetTopLevel(this)?.Clipboard is not { } clipboard) return;
+        await clipboard.SetTextAsync(url);
     }
 
     static MarkdownImage? ImageUnder(Visual? visual) {
