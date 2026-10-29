@@ -53,6 +53,17 @@ public class AcpPromptUsageTests {
             .IsEquivalentTo(["gemini-3.8-flash 100 10", "gemini-3.1-pro 200 20"]);
     }
 
+    [Test]
+    public async Task Gemini_quota_counts_are_read_when_the_response_has_no_usage() {
+        const string quotaOnly = """
+            {"stopReason":"end_turn","_meta":{"quota":{"model_usage":[{"model":"gemini-3.8-flash","token_count":{"input_tokens":120,"output_tokens":7}}]}}}
+            """;
+
+        var usage = AcpPromptUsage.Read(Result(quotaOnly), sessionModel: null).Single();
+
+        await Assert.That($"{usage.Model} {usage.UsageInputTokens} {usage.UsageOutputTokens}").IsEqualTo("gemini-3.8-flash 120 7");
+    }
+
     /// <summary>Copilot counts the cached tiers inside inputTokens; OpenCode adds them on top. Both arrive gross.</summary>
     [Test]
     [Arguments(Copilot,  65759L, 0L,  65755L)]
