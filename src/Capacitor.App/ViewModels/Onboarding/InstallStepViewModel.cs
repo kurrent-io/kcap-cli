@@ -32,6 +32,7 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     string?                         _refusal;
     string?                         _clientProblem;
     bool                            _repairing;
+    bool                            _installPressed;
     bool                            _choosing;
     IReadOnlyList<InstallStepRow>   _rows = [];
     LocalSetupProgress?             _watched;
@@ -57,7 +58,8 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
 
         Search          = new SearchChoiceViewModel();
         TryAgainCommand = ReactiveCommand.CreateFromTask(TryAgainAsync);
-        RepairAgainCommand = ReactiveCommand.CreateFromTask(() => ClientProblemVisible ? PrepareAsync(_lifetime) : Task.CompletedTask);
+        RepairAgainCommand = ReactiveCommand.CreateFromTask(() =>
+            !ClientProblemVisible ? Task.CompletedTask : _installPressed ? StartChosenAsync(_lifetime) : PrepareAsync(_lifetime));
         CancelCommand   = ReactiveCommand.Create(() => { if (CancelVisible) _controller.Interrupt(); });
 
         Search.PropertyChanged += (_, e) => {
@@ -214,6 +216,7 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     /// Brings the other kcap copies up to date, then asks about search, or starts straight away when the answer is
     /// already known.
     async Task PrepareAsync(CancellationToken ct) {
+        _installPressed = false;
         if (!await RepairAsync(ct)) return;
 
         LocalEmbeddingSetting? recorded;
@@ -311,14 +314,22 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
         _                     => NotStartedText,
     };
 
-    async Task InstallAsync() {
-        if (!ChoiceVisible || !CanContinue) return;
+    Task InstallAsync() {
+        if (!ChoiceVisible || !CanContinue) return Task.CompletedTask;
 
         ChoiceVisible = false;
-        // The choice can stay up across Back and a return to this page, long enough for an older kcap to turn up.
-        if (!await RepairAsync(_lifetime)) return;
+        return StartChosenAsync(_lifetime);
+    }
 
-        await _controller.StartAsync(Search.Choice, _lifetime);
+    /// Starts with the answer the user pressed Install on, once nothing older is in the way. Try again after a refusal
+    /// here continues this same Install: an earlier run's answer, kept on the controller, was not what was chosen.
+    async Task StartChosenAsync(CancellationToken ct) {
+        _installPressed = true;
+        // The choice can stay up across Back and a return to this page, long enough for an older kcap to turn up.
+        if (!await RepairAsync(ct)) return;
+
+        _installPressed = false;
+        await _controller.StartAsync(Search.Choice, ct);
     }
 
     Task TryAgainAsync() {

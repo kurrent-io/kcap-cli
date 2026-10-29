@@ -672,4 +672,36 @@ public class InstallStepViewModelTests {
         await Assert.That(repair.Calls).IsEqualTo(2);
         await Assert.That(cli.SetupLocalCallCount).IsEqualTo(0);
     }
+
+    /// After refused arguments the controller still holds the earlier run's answer, so Try again on a blocked Install
+    /// must start with what the user chose this time.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Try_again_on_a_blocked_install_starts_with_the_answer_chosen_now() {
+        var repair  = new ScriptedRepair(new ClientRepairOutcome.Clear(), new ClientRepairOutcome.Clear(),
+            new ClientRepairOutcome.Cancelled("/usr/local/bin/kcap"), new ClientRepairOutcome.Clear());
+        var runs    = 0;
+        var refused = LocalSetupScript.Prints(2, LocalSetupScript.Failed("invalid_arguments"));
+        var cli     = new FakeKcapCli {
+            SetupLocalBehavior = (onLine, interrupt, ct) =>
+                (runs++ == 0 ? refused : LocalSetupScript.Prints(0, LocalSetupScript.Committed))(onLine, interrupt, ct),
+        };
+
+        var (problem, started) = await AvaloniaSession.DispatchAsync(async () => {
+            var install = Step(Controller(cli, LocalSetupScript.NoSetup(Config), Probe()), repair.RunAsync);
+            await EnterAndInstallAsync(install);
+            install.Search.UseKeyword = true;
+            await install.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+            var problem = install.ClientProblemVisible;
+
+            await install.RepairAgainCommand.Execute().ToTask();
+
+            return (problem, cli.SetupLocalEmbeddings.ToList());
+        });
+
+        await Assert.That(problem).IsTrue();
+        await Assert.That(started.Count).IsEqualTo(2);
+        await Assert.That(started[1]).IsEqualTo(LocalEmbeddingChoice.KeywordOnly);
+        await Assert.That(started[0]).IsNotEqualTo(LocalEmbeddingChoice.KeywordOnly);
+    }
 }
