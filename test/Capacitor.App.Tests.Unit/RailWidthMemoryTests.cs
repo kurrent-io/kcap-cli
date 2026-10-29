@@ -15,14 +15,24 @@ public class RailWidthMemoryTests {
     }
 
     [Test]
-    public async Task Saved_width_is_kept_however_narrow() {
+    public async Task Saved_width_is_kept_however_narrow_or_wide() {
         await Assert.That(RailWidthMemory.Resolve(0)).IsEqualTo(0);
         await Assert.That(RailWidthMemory.Resolve(212)).IsEqualTo(212);
+        await Assert.That(RailWidthMemory.Resolve(5000)).IsEqualTo(5000);
     }
 
+    /// A width saved on a larger screen must not push the splitter off a smaller window.
     [Test]
-    public async Task Saved_width_past_the_cap_is_lowered_to_it() {
-        await Assert.That(RailWidthMemory.Resolve(5000)).IsEqualTo(RailWidthMemory.MaxWidth);
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_rail_never_lays_out_wider_than_its_share_of_the_window() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var window = new MainWindow { Width = 1400, Height = 800 };
+            window.RailWidth = 5000;
+            window.Show();
+            window.UpdateLayout();
+            await Assert.That(window.SessionRail.Bounds.Width).IsEqualTo(1400 * RailWidthMemory.MaxShare);
+            window.Close();
+        });
     }
 
     [Test]

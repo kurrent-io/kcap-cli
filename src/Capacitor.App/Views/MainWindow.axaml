@@ -34,8 +34,7 @@
             <Panel>
                 <Grid x:Name="SessionsSurface">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="{x:Static svc:RailWidthMemory.DefaultWidthGridLength}"
-                                          MaxWidth="{x:Static svc:RailWidthMemory.MaxWidth}" />
+                        <ColumnDefinition Width="{x:Static svc:RailWidthMemory.DefaultWidthGridLength}" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
                     <views:SessionRailView x:Name="SessionRail" Grid.Column="0" />

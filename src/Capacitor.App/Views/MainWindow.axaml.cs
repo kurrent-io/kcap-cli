@@ -113,6 +113,8 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
 
     public MainWindow() {
         InitializeComponent();
+        SessionsSurface.SizeChanged += (_, e) =>
+            SessionsSurface.ColumnDefinitions[0].MaxWidth = e.NewSize.Width * RailWidthMemory.MaxShare;
         KeyBindings.AddRange(ZoomShortcut.For(this));
         // A move, a display scaling change and a resized work area each change what the screen offers.
         PositionChanged += (_, _) => RefreshMinimumSize();
