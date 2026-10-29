@@ -26,6 +26,8 @@ public sealed class MuseHarness : IHarness<MuseHarness> {
     public HarnessSignals Signals => new() {
         LaunchSignal   = probe => probe.Finds(CliBinary),
         UserDataSignal = Paths.HasUserData,
+        // "Muse" alone names unrelated apps; the bundled agent UI does not.
+        AppSignal      = apps => apps.Finds(Path.Combine("Muse.app", "Contents", "Resources", "hatch")),
         Wired          = () => MuseHooksInstaller.IsWired(Paths.SettingsJson),
     };
 

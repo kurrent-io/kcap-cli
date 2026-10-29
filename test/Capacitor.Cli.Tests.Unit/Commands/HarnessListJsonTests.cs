@@ -1,6 +1,8 @@
 using System.Text.Json;
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Setup;
 using TUnit.Assertions.Enums;
 
@@ -48,6 +50,21 @@ public class HarnessListJsonTests {
         await Assert.That(Row(root, "claude").GetProperty("config_found").GetBoolean()).IsFalse();
         await Assert.That(Row(root, "cursor").GetProperty("binary_on_path").GetBoolean()).IsFalse();
         await Assert.That(Row(root, "cursor").GetProperty("config_found").GetBoolean()).IsTrue();
+    }
+
+    [Test]
+    public async Task Reports_a_desktop_app_apart_from_the_other_signals() {
+        using var apps = new TempDir();
+        apps.CreateDir("Claude.app");
+
+        var root = Render(HarnessRegistry.Over(
+            TestBinaries.None, DesktopAppProbe.Searching(apps.Path),
+            ClaudeHarness.Over(new ClaudePaths(new UserHome("/nonexistent-home"), null))));
+        var row = Row(root, "claude");
+
+        await Assert.That(row.GetProperty("desktop_app").GetBoolean()).IsTrue();
+        await Assert.That(row.GetProperty("binary_on_path").GetBoolean()).IsFalse();
+        await Assert.That(row.GetProperty("config_found").GetBoolean()).IsFalse();
     }
 
     [Test]

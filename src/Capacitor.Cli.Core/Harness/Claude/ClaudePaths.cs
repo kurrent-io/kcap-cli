@@ -43,6 +43,20 @@ public sealed class ClaudePaths {
     public string UserConfigJson { get; }
 
     /// <summary>
+    /// Whether Claude Code has run here, by files only it writes. Not <c>settings.json</c>,
+    /// <c>skills/</c>, <c>.claude.json</c> or <c>projects/</c>: kcap's plugin install, skills sync and
+    /// daemon launcher write those.
+    /// </summary>
+    public bool HasUserData() =>
+        File.Exists(Path.Combine(Home, "history.jsonl"))
+     || File.Exists(Path.Combine(Home, "stats-cache.json"))
+     || Directory.Exists(Path.Combine(Home, "file-history"))
+     || Directory.Exists(Path.Combine(Home, "shell-snapshots"))
+     || Directory.Exists(Path.Combine(Home, "session-env"))
+     || Directory.Exists(Path.Combine(Home, "todos"))
+     || Directory.Exists(Path.Combine(Home, "statsig"));
+
+    /// <summary>
     /// Returns the project directory for a given repo path.
     /// Claude uses the absolute path with directory separators replaced by dashes.
     /// </summary>

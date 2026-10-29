@@ -3,14 +3,14 @@ using Capacitor.Cli.Core.Harness;
 namespace Capacitor.Cli.Core.Setup;
 
 /// <summary>
-/// One vendor's two independent detection signals: a PATH binary probe and a filesystem
-/// install-marker probe (the harness's <see cref="HarnessSignals.UserDataSignal"/>). <see cref="Detected"/> is the
-/// OR that <c>SetupCommand</c>'s wizard actually consumes — most vendors need both, because a
-/// fresh install has no on-disk state yet and an IDE-launched vendor has no CLI on PATH.
+/// One vendor's independent detection signals: a PATH binary probe, the files the vendor writes
+/// (<see cref="HarnessSignals.UserDataSignal"/>) and its desktop app (<see cref="HarnessSignals.AppSignal"/>).
+/// <see cref="Detected"/> is their OR: a fresh install has written nothing yet, and a desktop app
+/// bundles its CLI off PATH.
 /// </summary>
-public sealed record DetectedAgent(bool BinaryFound, bool InstallSignalFound) {
-    /// <summary>Neither signal — what an id outside this process's registry reads as.</summary>
+public sealed record DetectedAgent(bool BinaryFound, bool InstallSignalFound, bool DesktopAppFound = false) {
+    /// <summary>No signal — what an id outside this process's registry reads as.</summary>
     public static readonly DetectedAgent None = new(false, false);
 
-    public bool Detected => BinaryFound || InstallSignalFound;
+    public bool Detected => BinaryFound || InstallSignalFound || DesktopAppFound;
 }

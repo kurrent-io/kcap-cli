@@ -23,8 +23,8 @@ public sealed class HarnessRowViewModel : ReactiveObject {
         Label    = vendor.Label;
         Flag     = vendor.Flag;
         Declined = declined;
-        // The launch signal wins: "on your PATH" is the stronger claim when both fired.
-        Signal   = detected.BinaryFound ? "on your PATH" : "config found";
+        // The strongest claim wins: a launchable CLI, then an installed app, then files it wrote.
+        Signal   = detected.BinaryFound ? "on your PATH" : detected.DesktopAppFound ? "desktop app or its data" : "config found";
 
         _record = !declined;
         _tools  = !declined;

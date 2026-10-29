@@ -6,6 +6,7 @@ using Capacitor.Cli.Core.Harness.Copilot;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Harness.Gemini;
 using Capacitor.Cli.Core.Harness.Kiro;
+using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.Setup;
@@ -27,12 +28,67 @@ public class HarnessSignalTests {
 
     // ── markers ──
 
-    /// The directories Claude and Codex would be probed through exist on machines that never ran
-    /// them — kcap's own skills install creates one — so neither declares a marker at all.
+    /// A desktop-app install runs Claude Code off PATH, so the files Claude Code writes are enough.
     [Test]
-    public async Task Claude_and_Codex_declare_no_install_marker() {
-        await Assert.That(ClaudeHarness.Over(new ClaudePaths(Home, null)).Signals.UserDataSignal is null).IsTrue();
-        await Assert.That(CodexHarness.Over(new CodexPaths(Home, null)).Signals.UserDataSignal is null).IsTrue();
+    [Arguments("history.jsonl", false)]
+    [Arguments("stats-cache.json", false)]
+    [Arguments("file-history", true)]
+    [Arguments("shell-snapshots", true)]
+    [Arguments("session-env", true)]
+    [Arguments("todos", true)]
+    [Arguments("statsig", true)]
+    public async Task Claude_is_detected_by_a_file_it_writes(string entry, bool directory) {
+        var claude = ClaudeHarness.Over(new ClaudePaths(Home, null));
+
+        if (directory) Home.CreateDir(".claude", entry);
+        else Home.CreateFile([".claude", entry], "{}");
+
+        await Assert.That(claude.Signals.HasUserData).IsTrue();
+    }
+
+    /// Everything here is written by kcap — the plugin install, the skills sync, the daemon's
+    /// launcher — so none of it may make Claude detect itself after it is uninstalled.
+    [Test]
+    public async Task Claude_ignores_what_kcap_writes_into_its_home() {
+        var claude = ClaudeHarness.Over(new ClaudePaths(Home, null));
+
+        Home.CreateDir(".claude", "skills", "kcap");
+        Home.CreateDir(".claude", "projects", "-repo");
+        Home.CreateFile([".claude", "settings.json"], "{}");
+        Home.CreateFile(".claude.json", "{}");
+
+        await Assert.That(claude.Signals.HasUserData).IsFalse();
+    }
+
+    [Test]
+    [Arguments("sessions", true)]
+    [Arguments("archived_sessions", true)]
+    [Arguments("auth.json", false)]
+    [Arguments("models_cache.json", false)]
+    [Arguments("history.jsonl", false)]
+    [Arguments("installation_id", false)]
+    [Arguments("version.json", false)]
+    [Arguments(".codex-global-state.json", false)]
+    public async Task Codex_is_detected_by_a_file_it_writes(string entry, bool directory) {
+        var codex = CodexHarness.Over(new CodexPaths(Home, null));
+
+        if (directory) Home.CreateDir(".codex", entry);
+        else Home.CreateFile([".codex", entry], "{}");
+
+        await Assert.That(codex.Signals.HasUserData).IsTrue();
+    }
+
+    /// kcap's MCP setup, hooks install and skills sync write these.
+    [Test]
+    public async Task Codex_ignores_what_kcap_writes_into_its_home() {
+        var codex = CodexHarness.Over(new CodexPaths(Home, null));
+
+        Home.CreateDir(".codex", "skills", "kcap");
+        Home.CreateFile([".codex", "config.toml"], "");
+        Home.CreateFile([".codex", "hooks.json"], "{}");
+        Home.CreateFile([".codex", ".kcap-hooks-version"], "1.0.0");
+
+        await Assert.That(codex.Signals.HasUserData).IsFalse();
     }
 
     /// A bare <c>~/.gemini</c> is created by things other than a Gemini run; a settings file is not.
@@ -90,6 +146,77 @@ public class HarnessSignalTests {
         Directory.CreateDirectory(cursor.Paths.UserDir);
 
         await Assert.That(cursor.Signals.HasUserData).IsTrue();
+    }
+
+    // ── desktop apps ──
+
+    static IHarness[] Apps() => [
+        ClaudeHarness.Over(new ClaudePaths(Nowhere, null)),
+        CodexHarness.Over(new CodexPaths(Nowhere, null)),
+        CursorHarness.Over(new CursorPaths(Nowhere)),
+        KiroHarness.Over(new KiroPaths(Nowhere, null)),
+        AntigravityHarness.Over(GeminiHarness.Over(new GeminiPaths(Nowhere, null))),
+        OpenCodeHarness.Over(new OpenCodePaths(Nowhere, null, null, null)),
+        MuseHarness.Over(new MusePaths(Nowhere, null, null)),
+    ];
+
+    /// The CEO's machine: only the desktop apps, their CLIs bundled inside them and none on PATH.
+    [Test]
+    [Arguments(HarnessId.Claude, "Claude.app")]
+    [Arguments(HarnessId.Claude, "Claude/claude-code")]
+    [Arguments(HarnessId.Claude, "AnthropicClaude")]
+    [Arguments(HarnessId.Codex, "Codex.app")]
+    [Arguments(HarnessId.Codex, "ChatGPT.app/Contents/Resources/codex-cli")]
+    [Arguments(HarnessId.Codex, "Codex")]
+    [Arguments(HarnessId.Codex, "com.openai.codex")]
+    [Arguments(HarnessId.Cursor, "Cursor.app")]
+    [Arguments(HarnessId.Kiro, "Kiro.app")]
+    [Arguments(HarnessId.Kiro, "Kiro CLI.app")]
+    [Arguments(HarnessId.Kiro, "kiro-cli")]
+    [Arguments(HarnessId.Antigravity, "Antigravity.app")]
+    [Arguments(HarnessId.OpenCode, "OpenCode.app")]
+    [Arguments(HarnessId.Muse, "Muse.app/Contents/Resources/hatch")]
+    public async Task A_desktop_app_alone_detects_its_vendor(HarnessId id, string entry) {
+        using var root = new TempDir();
+        root.CreateDir(entry.Split('/'));
+
+        var detected = HarnessRegistry.Over(TestBinaries.None, DesktopAppProbe.Searching(root.Path), Apps()).Detect(id);
+
+        await Assert.That(detected.DesktopAppFound).IsTrue();
+        await Assert.That(detected.BinaryFound).IsFalse();
+        await Assert.That(detected.Detected).IsTrue();
+    }
+
+    /// One root per desktop app shared by every vendor, so an app answers for its own vendor only.
+    [Test]
+    public async Task A_desktop_app_detects_no_other_vendor() {
+        using var root = new TempDir();
+        root.CreateDir("Claude.app");
+
+        var registry = HarnessRegistry.Over(TestBinaries.None, DesktopAppProbe.Searching(root.Path), Apps());
+
+        await Assert.That(registry.Where(h => registry.Detect(h.Id).DesktopAppFound).Select(h => h.Id))
+            .IsEquivalentTo([HarnessId.Claude]);
+    }
+
+    /// "Muse" alone names unrelated apps, so only the bundle carrying Muse Code's agent counts.
+    [Test]
+    public async Task A_bare_Muse_app_is_not_Muse_Code() {
+        using var root = new TempDir();
+        root.CreateDir("Muse.app");
+        root.CreateDir("Muse");
+
+        var detected = HarnessRegistry.Over(TestBinaries.None, DesktopAppProbe.Searching(root.Path), Apps()).Detect(HarnessId.Muse);
+
+        await Assert.That(detected.DesktopAppFound).IsFalse();
+    }
+
+    /// A registry built over a test's layout looks in no real application folder.
+    [Test]
+    public async Task Over_without_a_probe_finds_no_desktop_app() {
+        var detected = HarnessRegistry.Over(TestBinaries.None, Apps()).Detect(HarnessId.Claude);
+
+        await Assert.That(detected.DesktopAppFound).IsFalse();
     }
 
     // ── binaries ──
