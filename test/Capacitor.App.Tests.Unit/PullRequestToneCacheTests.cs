@@ -63,66 +63,67 @@ public class PullRequestToneCacheTests {
         await Assert.That(source.Lists).IsEqualTo(2);
     }
 
+    /// Renewing the window would re-read every shown session every twenty seconds; past it the
+    /// chip keeps each PR's number and lifecycle, and the next read waits for the normal cadence.
     [Test]
-    [Arguments("empty")]
-    [Arguments("denied")]
-    [Arguments("transient")]
-    [Arguments("unavailable")]
-    public async Task A_failed_short_window_renewal_returns_to_the_normal_cadence(string failure) {
+    public async Task A_lapsed_access_window_drops_titles_without_a_read() {
         var (directory, source, time, cache) = Build();
         using var _c = cache;
         using var _d = directory;
-        source.AccessSeconds = 8;
+        source.AccessSeconds = 30;
+        source.Links = [FakePullRequestSource.Link(142)];
+        source.Lifecycles[142] = "draft";
         directory.Rows.AddOrUpdate(Row("a1", "s1"));
         await WaitUntilAsync(() => cache.CurrentSummaries.ContainsKey("s1"), "summary");
-        if (failure == "empty") source.Links = [];
-        else if (failure == "unavailable") source.Capability = PullRequestCapabilityKind.Unavailable;
-        else source.Failure = failure;
-        time.Advance(TimeSpan.FromSeconds(1));
-        var reads = source.Lists;
+        await Assert.That(cache.CurrentSummaries["s1"].MenuItems[0].Title).IsEqualTo("Private PR");
+
+        time.Advance(TimeSpan.FromSeconds(26));
+        await WaitUntilAsync(() => cache.CurrentSummaries["s1"].MenuItems[0].Title is null, "titles dropped");
+        await Assert.That(cache.CurrentSummaries["s1"].Label).IsEqualTo("PR #142");
+        await Assert.That(cache.CurrentSummaries["s1"].Lifecycle).IsEqualTo("Draft");
+        await Assert.That(cache.Current["s1"]).IsEqualTo(PullRequestTone.Draft);
         time.Advance(TimeSpan.FromSeconds(60));
-        await WaitUntilAsync(() => !cache.CurrentSummaries.ContainsKey("s1"), "metadata removed");
-        await Assert.That(source.Lists).IsEqualTo(reads);
-        source.Capability = PullRequestCapabilityKind.Supported;
-        time.Advance(TimeSpan.FromSeconds(60));
-        await WaitUntilAsync(() => source.Lists == reads + 1, "normal-cadence retry");
+        await Task.Delay(50);
+        await Assert.That(source.Lists).IsEqualTo(1);
+
+        time.Advance(TimeSpan.FromSeconds(35));
+        await WaitUntilAsync(() => cache.CurrentSummaries["s1"].MenuItems[0].Title == "Private PR", "titles back on the next read");
+        await Assert.That(source.Lists).IsEqualTo(2);
     }
 
     [Test]
-    public async Task Renewing_an_unchanged_summary_preserves_its_identity_when_another_session_changes() {
+    public async Task A_transient_failure_keeps_the_untitled_summary() {
         var (directory, source, time, cache) = Build();
         using var _c = cache;
         using var _d = directory;
-        source.AccessSeconds = 8;
+        source.AccessSeconds = 30;
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+        await WaitUntilAsync(() => cache.CurrentSummaries.ContainsKey("s1"), "summary");
+        source.Failure = "transient";
+        time.Advance(TimeSpan.FromMinutes(2));
+        await WaitUntilAsync(() => source.Lists == 2, "failed read");
+        await Assert.That(cache.CurrentSummaries["s1"].Count).IsEqualTo(2);
+        await Assert.That(cache.CurrentSummaries["s1"].MenuItems.All(i => i.Title is null)).IsTrue();
+    }
+
+    [Test]
+    public async Task Rereading_an_unchanged_summary_preserves_its_identity_when_another_session_changes() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
         directory.Rows.AddOrUpdate(Row("a1", "s1"));
         directory.Rows.AddOrUpdate(Row("a2", "s2"));
         await WaitUntilAsync(() => cache.CurrentSummaries.Count == 2, "both summaries");
         var summary = cache.CurrentSummaries["s1"];
-        time.Advance(TimeSpan.FromSeconds(1));
-        await WaitUntilAsync(() => source.Lists == 4, "both summaries renewed");
+        time.Advance(TimeSpan.FromMinutes(2));
+        await WaitUntilAsync(() => source.Lists == 4, "both summaries read again");
         directory.Rows.Remove("local:a2");
         await WaitUntilAsync(() => cache.CurrentSummaries.Count == 1, "other session removed");
         await Assert.That(ReferenceEquals(cache.CurrentSummaries["s1"], summary)).IsTrue();
         source.Lifecycles[1] = "merged";
-        time.Advance(TimeSpan.FromSeconds(1));
+        time.Advance(TimeSpan.FromMinutes(2));
         await WaitUntilAsync(() => cache.CurrentSummaries["s1"].MenuItems[0].Lifecycle == "Merged", "real metadata change");
         await Assert.That(ReferenceEquals(cache.CurrentSummaries["s1"], summary)).IsFalse();
-    }
-
-    [Test]
-    public async Task An_eight_second_access_window_renews_without_a_metadata_gap() {
-        var (directory, source, time, cache) = Build();
-        using var _c = cache;
-        using var _d = directory;
-        source.AccessSeconds = 8;
-        directory.Rows.AddOrUpdate(Row("a1", "s1"));
-        await WaitUntilAsync(() => cache.CurrentSummaries.ContainsKey("s1"), "summary");
-        for (var i = 0; i < 6; i++) {
-            var before = source.Lists;
-            time.Advance(TimeSpan.FromSeconds(1));
-            await WaitUntilAsync(() => source.Lists > before, "short-window renewal");
-            await Assert.That(cache.CurrentSummaries.ContainsKey("s1")).IsTrue();
-        }
     }
 
     [Test]
@@ -148,34 +149,6 @@ public class PullRequestToneCacheTests {
     }
 
     [Test]
-    public async Task A_short_access_window_is_renewed_before_expiry() {
-        var (directory, source, time, cache) = Build();
-        using var _c = cache;
-        using var _d = directory;
-        source.AccessSeconds = 30;
-        directory.Rows.AddOrUpdate(Row("a1", "s1"));
-        await WaitUntilAsync(() => cache.CurrentSummaries.ContainsKey("s1"), "summary");
-        time.Advance(TimeSpan.FromSeconds(25));
-        await WaitUntilAsync(() => source.Lists == 2, "access renewal");
-        await Assert.That(cache.CurrentSummaries.ContainsKey("s1")).IsTrue();
-    }
-
-    [Test]
-    public async Task A_transient_failure_keeps_metadata_only_until_its_access_window_expires() {
-        var (directory, source, time, cache) = Build();
-        using var _c = cache;
-        using var _d = directory;
-        source.AccessSeconds = 30;
-        directory.Rows.AddOrUpdate(Row("a1", "s1"));
-        await WaitUntilAsync(() => cache.CurrentSummaries.ContainsKey("s1"), "summary");
-        source.Failure = "transient";
-        time.Advance(TimeSpan.FromSeconds(20));
-        await Assert.That(cache.CurrentSummaries.ContainsKey("s1")).IsTrue();
-        time.Advance(TimeSpan.FromSeconds(10));
-        await WaitUntilAsync(() => !cache.CurrentSummaries.ContainsKey("s1"), "expired summary");
-    }
-
-    [Test]
     public async Task A_denied_refresh_clears_metadata_immediately() {
         var (directory, source, time, cache) = Build();
         using var _c = cache;
@@ -185,6 +158,54 @@ public class PullRequestToneCacheTests {
         source.Failure = "denied";
         time.Advance(TimeSpan.FromMinutes(2));
         await WaitUntilAsync(() => !cache.CurrentSummaries.ContainsKey("s1"), "revoked summary");
+    }
+
+    /// An ended session whose PRs all merged or closed has nothing left to change on a timer; a
+    /// workspace that discovers new links still reads it.
+    [Test]
+    public async Task An_ended_session_whose_prs_all_settled_is_not_read_again_on_a_timer() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        source.Lifecycles[1] = "merged";
+        source.Lifecycles[2] = "closed";
+        directory.Rows.AddOrUpdate(Ended("s1"));
+        directory.Rows.AddOrUpdate(Ended("s2"));
+        await WaitUntilAsync(() => cache.CurrentSummaries.Count == 2, "both read");
+        source.Lifecycles[1] = "open";
+        await Assert.That(source.Lists).IsEqualTo(2);
+
+        source.Links = [FakePullRequestSource.Link(1)];
+        time.Advance(TimeSpan.FromMinutes(11));
+        await Task.Delay(50);
+        await Assert.That(source.Lists).IsEqualTo(2);
+
+        cache.Refresh("s1");
+        await WaitUntilAsync(() => source.Lists == 3, "workspace refresh");
+        await WaitUntilAsync(() => cache.CurrentSummaries["s1"].Lifecycle == "Open", "reopened PR");
+        time.Advance(TimeSpan.FromMinutes(11));
+        await WaitUntilAsync(() => source.Lists == 4, "an open PR is read on the slow cadence again");
+    }
+
+    /// Nothing shows a hidden row's PRs, so it is not read until the rail's filter admits it.
+    [Test]
+    public async Task A_row_the_rail_hides_is_not_read() {
+        var directory = new FakeAgentDirectory();
+        var time = new FakeTimeProvider();
+        var source = new FakePullRequestSource(time) { AccessSeconds = 300 };
+        var shown = new System.Reactive.Subjects.BehaviorSubject<Func<AgentRow, bool>>(row => !row.IsEndedSession);
+        using var cache = new PullRequestToneCache(directory, source, time, shown);
+        using var _d = directory;
+        directory.Rows.AddOrUpdate(Row("a1", "live"));
+        directory.Rows.AddOrUpdate(Ended("ended"));
+        await WaitUntilAsync(() => cache.CurrentSummaries.ContainsKey("live"), "shown row read");
+        time.Advance(TimeSpan.FromMinutes(11));
+        await WaitUntilAsync(() => source.Lists == 2, "shown row read again");
+        await Assert.That(cache.CurrentSummaries.ContainsKey("ended")).IsFalse();
+
+        shown.OnNext(_ => true);
+        await WaitUntilAsync(() => cache.CurrentSummaries.ContainsKey("ended"), "row read once shown");
+        await Assert.That(source.Lists).IsEqualTo(3);
     }
 
     static readonly RepoIdentity Repo = new("path:/repo", "repo");

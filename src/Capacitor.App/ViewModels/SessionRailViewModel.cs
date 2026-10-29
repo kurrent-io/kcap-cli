@@ -199,6 +199,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             RailPreferences? preferences = null,
             Action<RailPreferences>? persistPreferences = null,
             bool scopeLocked = false,
+            IObserver<Func<AgentRow, bool>>? shownRows = null,
             Func<string, Task<RailPreferences>>? bindUserPreferences = null) {
         _directory = directory;
         _sessions = sessions;
@@ -220,6 +221,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
         SetSortCommand = ReactiveCommand.Create<RailSort>(sort => Sort = sort).DisposeWith(_disposables);
         ToggleDirectionCommand = ReactiveCommand.Create(() => { Descending = !Descending; }).DisposeWith(_disposables);
         _stateFilter = new BehaviorSubject<Func<AgentRow, bool>>(StateFilter()).DisposeWith(_disposables);
+        if (shownRows is not null) _stateFilter.Subscribe(shownRows.OnNext).DisposeWith(_disposables);
         _rowComparer = new BehaviorSubject<IComparer<RailSessionViewModel>>(RowComparer(_sort, _descending)).DisposeWith(_disposables);
         _groupComparer = new BehaviorSubject<IComparer<RailGroupViewModel>>(GroupComparer(_grouping)).DisposeWith(_disposables);
         _groupingChanges = new BehaviorSubject<RailGrouping>(_grouping).DisposeWith(_disposables);

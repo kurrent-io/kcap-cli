@@ -11,9 +11,13 @@ using DynamicData;
 namespace Capacitor.App.Services;
 
 /// The PR tone of every listed session, keyed by session id. A row whose listing carried its PR
-/// links is marked from the row and never read here; any other is read on a slow cadence through
-/// the same links-then-overview path the open workspace uses. A session without a tone is absent
-/// rather than mapped to None, so consumers can test membership.
+/// links is marked from the row and never read here; any other the rail shows is read on a slow
+/// cadence through the same links-then-overview path the open workspace uses. A session without a
+/// tone is absent rather than mapped to None, so consumers can test membership.
+///
+/// A read's titles show only within its access window; past it the summary keeps each PR's number
+/// and lifecycle, which the tone already reveals. Renewing the window instead would re-read every
+/// shown session every twenty seconds, and with the gh reader each read is a process spawn.
 public sealed class PullRequestToneCache : IDisposable {
     static readonly TimeSpan DefaultRefreshEvery = TimeSpan.FromMinutes(2);
     static readonly TimeSpan DefaultEndedRefreshEvery = TimeSpan.FromMinutes(10);
@@ -29,15 +33,16 @@ public sealed class PullRequestToneCache : IDisposable {
         public long                    Version = version;
         public PullRequestTone?        Tone;
         public RailPullRequestSummary? Summary;
-        /// When the summary's reads were taken and how many seconds of access they carried.
+        /// When the summary's reads were taken and how many seconds of access they carried; null
+        /// once its titles are dropped.
         public (long Started, double Seconds)? Access;
         public long?                   ReadAt;
-        public TimeSpan?               RefreshAfter;
+        /// Every PR the last read revealed is merged or closed.
+        public bool                    Settled;
 
         public void DropSummary() {
-            Summary      = null;
-            Access       = null;
-            RefreshAfter = null;
+            Summary = null;
+            Access  = null;
         }
     }
 
@@ -62,6 +67,8 @@ public sealed class PullRequestToneCache : IDisposable {
     /// Sessions no daemon here hosts — ended, a terminal's, a teammate's: none is this app's to poll
     /// every two minutes, and under Team there can be hundreds.
     IReadOnlySet<string> _slowSessions = FrozenSet<string>.Empty;
+    /// Ended sessions: once their PRs have all settled, nothing but a workspace refresh reads them again.
+    IReadOnlySet<string> _endedSessions = FrozenSet<string>.Empty;
     /// The server's read budget is the user's, not a session's: once it refuses one read, no read
     /// starts before the time it gave.
     DateTime _heldUntil = DateTime.MinValue;
@@ -69,17 +76,19 @@ public sealed class PullRequestToneCache : IDisposable {
 
     public PullRequestToneCache(
             IAgentDirectory directory, IPullRequestSource source, TimeProvider time,
+            IObservable<Func<AgentRow, bool>>? shown = null,
             TimeSpan? refreshEvery = null, TimeSpan? endedRefreshEvery = null) {
         _source = source;
         _time = time;
         _refreshEvery = refreshEvery ?? DefaultRefreshEvery;
         _endedRefreshEvery = endedRefreshEvery ?? DefaultEndedRefreshEvery;
         directory.Rows.Connect().ToCollection()
-            .CombineLatest(directory.LocalDaemonOnAppServer, (rows, localOnAppServer) => (
+            .CombineLatest(directory.LocalDaemonOnAppServer, shown ?? Observable.Return<Func<AgentRow, bool>>(_ => true),
+                (rows, localOnAppServer, isShown) => (
                 Listed: rows.Where(r => r is { SessionId.Length: > 0, ListedPullRequests: not null })
                     .GroupBy(r => r.SessionId!, StringComparer.Ordinal)
                     .ToFrozenDictionary(g => g.Key, g => g.First().ListedPullRequests!, StringComparer.Ordinal),
-                Polled: rows.Where(r => r.SessionId is { Length: > 0 } && Polled(r, localOnAppServer)).ToList()))
+                Polled: rows.Where(r => r.SessionId is { Length: > 0 } && Polled(r, localOnAppServer) && isShown(r)).ToList()))
             .Subscribe(next => {
                 var rows = next.Polled.Where(r => !next.Listed.ContainsKey(r.SessionId!)).ToList();
                 lock (_lock) {
@@ -89,9 +98,9 @@ public sealed class PullRequestToneCache : IDisposable {
                     _slowSessions = rows.Where(r => r.Origin == AgentOrigin.Server).Select(r => r.SessionId!)
                         .Except(rows.Where(r => r.Origin != AgentOrigin.Server).Select(r => r.SessionId!))
                         .ToFrozenSet(StringComparer.Ordinal);
-                    // A session a daemon took up keeps no wait it was given on the slow cadence.
-                    foreach (var (session, entry) in _entries)
-                        if (!_slowSessions.Contains(session) && entry.RefreshAfter > _refreshEvery) entry.RefreshAfter = _refreshEvery;
+                    _endedSessions = rows.Where(r => r.IsEndedSession).Select(r => r.SessionId!)
+                        .Except(rows.Where(r => !r.IsEndedSession).Select(r => r.SessionId!))
+                        .ToFrozenSet(StringComparer.Ordinal);
                 }
                 Tick();
             })
@@ -124,9 +133,8 @@ public sealed class PullRequestToneCache : IDisposable {
             if (_disposed || !_sessions.Contains(session)) return;
             // An older in-flight list must not publish after the workspace's newer discovery.
             var entry = EntryFor(session);
-            entry.Version      = ++_nextVersion;
-            entry.ReadAt       = null;
-            entry.RefreshAfter = null;
+            entry.Version = ++_nextVersion;
+            entry.ReadAt  = null;
         }
         Tick();
     }
@@ -138,6 +146,9 @@ public sealed class PullRequestToneCache : IDisposable {
     }
 
     TimeSpan CadenceFor(string session) => _slowSessions.Contains(session) ? _endedRefreshEvery : _refreshEvery;
+
+    bool Due(string session, Entry entry) => entry.ReadAt is not { } at
+        || (!(entry.Settled && _endedSessions.Contains(session)) && _time.GetElapsedTime(at) >= CadenceFor(session));
 
     /// The entry a read started at <paramref name="version"/> may still write to, or null when that read is stale.
     Entry? LiveEntry(string session, long version) =>
@@ -184,15 +195,16 @@ public sealed class PullRequestToneCache : IDisposable {
             foreach (var session in _sessions) EntryFor(session);
             foreach (var entry in _entries.Values.Where(e => e.Access is { } access
                          && _time.GetElapsedTime(access.Started).TotalSeconds > access.Seconds - 5)) {
-                entry.DropSummary();
+                entry.Access = null;
+                entry.Summary = entry.Summary is { } summary
+                    ? new(summary.MenuItems.Select(item => item with { Title = null }).ToArray()) : null;
                 summariesChanged = true;
             }
             if (tonesChanged) Publish();
             if (summariesChanged) PublishSummaries();
             due = _time.GetUtcNow().UtcDateTime < _heldUntil ? [] : _sessions
                 .Select(s => (Session: s, Entry: _entries[s]))
-                .Where(e => !_inFlight.Contains(e.Session)
-                    && (e.Entry.ReadAt is not { } at || _time.GetElapsedTime(at) >= (e.Entry.RefreshAfter ?? CadenceFor(e.Session))))
+                .Where(e => !_inFlight.Contains(e.Session) && Due(e.Session, e.Entry))
                 .Take(Math.Max(0, MaxConcurrentReads - _inFlight.Count))
                 .Select(e => (e.Session, e.Entry.Version)).ToList();
             foreach (var (session, _) in due) {
@@ -274,11 +286,6 @@ public sealed class PullRequestToneCache : IDisposable {
 
     async Task ReadAsync(string session, long version, CancellationToken ct) {
         try {
-            // Only a successfully renewed summary earns the faster access-window cadence.
-            lock (_lock) {
-                if (LiveEntry(session, version) is not { } entry) return;
-                entry.RefreshAfter = null;
-            }
             var capability = await _source.DiscoverAsync(false, ct).ConfigureAwait(false);
             if (capability.Kind != PullRequestCapabilityKind.Supported) {
                 // Signed out, or a server without overviews, is a verdict; an unreachable one is not.
@@ -332,6 +339,7 @@ public sealed class PullRequestToneCache : IDisposable {
             if (LiveEntry(session, version) is not { } entry) return;
             var tone = PullRequestTones.Strongest(revealed.Select(r => PullRequestTones.From(r.Read.Data!)));
             entry.Tone = tone == PullRequestTone.None ? null : tone;
+            entry.Settled = revealed.Count > 0 && revealed.All(r => r.Read.Data!.Lifecycle is "merged" or "closed");
             Publish();
             if (revealed.Count == 0) {
                 entry.Summary = null;
@@ -340,11 +348,7 @@ public sealed class PullRequestToneCache : IDisposable {
                 var summary = new RailPullRequestSummary(revealed.Select(r => new RailPullRequestMenuItem(
                     PullRequestWire.Subject(r.Link), r.Read.Data!.Title ?? r.Link.Title, LifecycleLabel(r.Read.Data!.Lifecycle, r.Read.Data!.IsDraft))).ToArray());
                 if (entry.Summary is not { } previous || !SameSummary(previous, summary)) entry.Summary = summary;
-                var remaining = revealed.Min(r => r.Read.RemainingSeconds(_time));
-                entry.Access = (_time.GetTimestamp(), remaining);
-                var readFor    = entry.ReadAt is { } at ? _time.GetElapsedTime(at).TotalSeconds : 0;
-                var renewAfter = readFor + Math.Max(1, remaining - 10);
-                entry.RefreshAfter = TimeSpan.FromSeconds(Math.Clamp(renewAfter, 1, CadenceFor(session).TotalSeconds));
+                entry.Access = (_time.GetTimestamp(), revealed.Min(r => r.Read.RemainingSeconds(_time)));
             }
             PublishSummaries();
         }
@@ -363,6 +367,7 @@ public sealed class PullRequestToneCache : IDisposable {
         lock (_lock) {
             if (LiveEntry(session, version) is not { } entry) return;
             entry.Tone = null;
+            entry.Settled = false;
             entry.DropSummary();
             Publish();
             PublishSummaries();
