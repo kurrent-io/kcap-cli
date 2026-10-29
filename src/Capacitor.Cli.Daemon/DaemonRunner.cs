@@ -206,7 +206,7 @@ public static partial class DaemonRunner {
 
         // Committed before the first advertisement, which carries it to the server.
         var startupCodex = Harness.Codex.CodexTransportResolution.Read(
-            1, config.ReadExperimentalSettings, () => ProbeCliVersion(config.CodexPath),
+            1, config.ReadExperimentalSettings, () => ProbeCliVersion(harnesses.LaunchCommand(HarnessId.Codex, config.CodexPath)),
             problem => {
                 config.ExperimentalSettingsProblem = problem;
                 return Harness.Codex.CodexTransportResolution.Unreadable(1, problem);

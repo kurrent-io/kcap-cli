@@ -85,10 +85,10 @@ static class CodexCliRunner {
         ) {
         // Resolve rather than pass "codex" verbatim: CreateProcess appends only .exe, so the
         // npm-installed codex.cmd shim on Windows would never be found.
-        var exePath = harnesses.ResolveExecutable(HarnessId.Codex);
+        var exePath = harnesses.ResolveLaunchable(HarnessId.Codex);
 
         if (exePath is null) {
-            log("codex not found on PATH");
+            log("codex not found on PATH or in the desktop app");
 
             return new(null, ClaudeCliFailure.ProcessFailure);
         }
