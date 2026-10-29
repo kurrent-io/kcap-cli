@@ -18,7 +18,8 @@ public sealed record AgentRow(
         // Null means unknown (the server registry carries no turn verdict), never "working".
         bool? AwaitingInput = null,
         // The runtime's latest handshake stage on a pending row; null on every published row.
-        string? LaunchStage = null) {
+        string? LaunchStage = null,
+        string? OwnerUserId = null) {
 
     public static AgentRow FromLocal(AgentStatusDto dto, RepoIdentity repo) => new(
         Key: $"local:{dto.Id}", Origin: AgentOrigin.Local, Id: dto.Id, SessionId: dto.SessionId, Kind: dto.Kind,
@@ -35,10 +36,11 @@ public sealed record AgentRow(
         return new(
             Key: $"remote:{dto.AgentId}", Origin: AgentOrigin.Remote, Id: dto.AgentId, SessionId: dto.SessionId,
             Kind: "agent", Vendor: dto.Vendor ?? "", Status: dto.Status, CreatedAt: dto.RegisteredAt,
-            RepoPath: dto.RepoPath, Title: TitleFromPrompt(dto.Prompt), Model: dto.Model, RequesterDisplay: null,
+            RepoPath: dto.RepoPath, Title: dto.Title is { Length: > 0 } ? dto.Title : TitleFromPrompt(dto.Prompt),
+            Model: dto.Model, RequesterDisplay: null,
             WorktreePath: null, WorkLocation: null, BorrowedFrom: null,
             MachineBadge: dto.DaemonName, RepoGroupKey: repo.Key, RepoGroupLabel: repo.Label,
-            CheckoutKey: $"@{daemonKey}", CheckoutLabel: $"on {dto.DaemonName}");
+            CheckoutKey: $"@{daemonKey}", CheckoutLabel: $"on {dto.DaemonName}", OwnerUserId: dto.OwnerUserId);
     }
 
     /// A launch the local daemon is still starting: no session, no worktree yet, and it opens as

@@ -33,6 +33,7 @@ public sealed record AgentInstanceDto {
     [JsonPropertyName("approval_policy")]   public string? ApprovalPolicy { get; init; }
     [JsonPropertyName("daemon_name")]       public string? DaemonName { get; init; }
     [JsonPropertyName("permission_preset")] public string? PermissionPreset { get; init; }
+    [JsonPropertyName("title")]             public string? Title { get; init; }
 }
 
 public sealed record AccessGrant {

@@ -10,7 +10,7 @@ public class WireShapeTests {
         "client_connected", "registered_at", "repo_owner", "repo_name", "repo_hash",
         "pr_number", "pr_url", "pr_title", "failure_reason", "owner_user_id",
         "visibility_mode", "grants", "vendor", "ended_at", "status_changed_at",
-        "sandbox_policy", "approval_policy", "daemon_name", "permission_preset",
+        "sandbox_policy", "approval_policy", "daemon_name", "permission_preset", "title",
     ];
 
     static readonly string[] AccessGrantKeys = ["grant_type", "grantee_id", "grantee_name"];
@@ -33,12 +33,14 @@ public class WireShapeTests {
          "owner_user_id":"u1","visibility_mode":"private",
          "grants":[{"grant_type":"user","grantee_id":"g1","grantee_name":"G"}],
          "vendor":"claude","ended_at":null,"status_changed_at":"2026-09-06T10:05:00Z",
-         "sandbox_policy":"sp","approval_policy":"ap","daemon_name":"work-mac","permission_preset":"pp"}
+         "sandbox_policy":"sp","approval_policy":"ap","daemon_name":"work-mac","permission_preset":"pp",
+         "title":"Fix the bug"}
         """;
         var dto = JsonSerializer.Deserialize(json, RemoteModelsJsonContext.Default.AgentInstanceDto)!;
         await Assert.That(dto.AgentId).IsEqualTo("a1");
         await Assert.That(dto.OwnerUserId).IsEqualTo("u1");
         await Assert.That(dto.DaemonName).IsEqualTo("work-mac");
+        await Assert.That(dto.Title).IsEqualTo("Fix the bug");
         await Assert.That(dto.RepoOwner).IsEqualTo("kurrent-io");
         await Assert.That(dto.Grants![0].GranteeId).IsEqualTo("g1");
         // failure_reason is genuinely null on this fixture — the nullable-field representative,
@@ -79,6 +81,7 @@ public class WireShapeTests {
         const string json = """{"agent_id":"a1","status":"Running","brand_new_field":42}""";
         var dto = JsonSerializer.Deserialize(json, RemoteModelsJsonContext.Default.AgentInstanceDto)!;
         await Assert.That(dto.AgentId).IsEqualTo("a1");
+        await Assert.That(dto.Title).IsNull();
     }
 
     [Test]

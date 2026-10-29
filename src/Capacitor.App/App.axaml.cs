@@ -546,6 +546,7 @@ public partial class App : Application {
         var sessionHttp = ServerHttp(profiles);
         var remoteAgents = new RemoteAgentsService(
             serverLane, RemoteAgentsService.HttpFetch(sessionHttp, profiles),
+            postRename: RemoteAgentsService.HttpRename(sessionHttp, profiles),
             onUnauthorized: serverLane.ParkSignedOut);
         var repoIdentity = new RepoIdentityResolver();
         var directory = new AgentDirectory(

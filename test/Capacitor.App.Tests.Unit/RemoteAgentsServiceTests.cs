@@ -1,4 +1,5 @@
 using Capacitor.App.Services;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Remote.Models;
 
 namespace Capacitor.App.Tests.Unit;
@@ -246,5 +247,133 @@ public class RemoteAgentsServiceTests {
 
         await Eventually(() => receivedEpoch is not null);
         await Assert.That(receivedEpoch).IsEqualTo(7);
+    }
+
+    static AgentInstanceDto Titled(string id, string session, string? title) => Agent(id) with { SessionId = session, Title = title, Prompt = "the prompt" };
+
+    static Func<string, string, CancellationToken, Task<SessionRenameResult>> Applies(string shown) =>
+        (_, _, _) => Task.FromResult(new SessionRenameResult(true, shown, null));
+
+    static string? TitleOf(RemoteAgentsService svc, string id) => svc.Agents.Lookup(id).Value.Title;
+
+    [Test]
+    public async Task Applied_rename_shows_at_once() {
+        var lane = new FakeServerLane();
+        using var svc = new RemoteAgentsService(
+            lane, _ => Task.FromResult(new RemoteFetch([Titled("a1", "s1", "Old")])), TimeSpan.Zero, Applies("New"));
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u1"));
+        await Eventually(() => svc.Agents.Count == 1);
+
+        var result = await svc.RenameAsync("a1", "s1", "New", CancellationToken.None);
+
+        await Assert.That(result.Applied).IsTrue();
+        await Assert.That(TitleOf(svc, "a1")).IsEqualTo("New");
+    }
+
+    [Test]
+    public async Task A_fetch_started_before_the_rename_keeps_the_overlay() {
+        var calls = 0;
+        var gate = new TaskCompletionSource<RemoteFetch>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lane = new FakeServerLane();
+        using var svc = new RemoteAgentsService(lane, async _ => {
+            var n = Interlocked.Increment(ref calls);
+            return n == 1 ? new RemoteFetch([Titled("a1", "s1", "Old")]) : await gate.Task;
+        }, TimeSpan.Zero, Applies("New"));
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u1"));
+        await Eventually(() => svc.Agents.Count == 1);
+        lane.AgentsChangedSubject.OnNext(System.Reactive.Unit.Default);
+        await Eventually(() => Volatile.Read(ref calls) == 2);
+
+        await svc.RenameAsync("a1", "s1", "New", CancellationToken.None);
+        gate.SetResult(new RemoteFetch([Titled("a1", "s1", "Old")]));
+
+        await Task.Delay(150);
+        await Assert.That(TitleOf(svc, "a1")).IsEqualTo("New");
+    }
+
+    [Test]
+    public async Task A_later_fetch_with_a_title_wins() {
+        var title = "Old";
+        var lane = new FakeServerLane();
+        using var svc = new RemoteAgentsService(
+            lane, _ => Task.FromResult(new RemoteFetch([Titled("a1", "s1", Volatile.Read(ref title))])), TimeSpan.Zero, Applies("New"));
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u1"));
+        await Eventually(() => svc.Agents.Count == 1);
+        await svc.RenameAsync("a1", "s1", "New", CancellationToken.None);
+
+        Volatile.Write(ref title, "Newer elsewhere");
+        lane.AgentsChangedSubject.OnNext(System.Reactive.Unit.Default);
+
+        await Eventually(() => TitleOf(svc, "a1") == "Newer elsewhere");
+    }
+
+    [Test]
+    public async Task A_later_fetch_without_a_title_keeps_the_overlay() {
+        var calls = 0;
+        var lane = new FakeServerLane();
+        using var svc = new RemoteAgentsService(lane, _ => {
+            Interlocked.Increment(ref calls);
+            return Task.FromResult(new RemoteFetch([Titled("a1", "s1", null)]));
+        }, TimeSpan.Zero, Applies("New"));
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u1"));
+        await Eventually(() => svc.Agents.Count == 1);
+        await svc.RenameAsync("a1", "s1", "New", CancellationToken.None);
+
+        lane.AgentsChangedSubject.OnNext(System.Reactive.Unit.Default);
+        await Eventually(() => Volatile.Read(ref calls) == 2);
+        await Task.Delay(100);
+
+        await Assert.That(TitleOf(svc, "a1")).IsEqualTo("New");
+    }
+
+    // The new identity can see an instance with the same session id: the old account's title must not follow it.
+    [Test]
+    public async Task Identity_change_clears_the_overlay() {
+        var calls = 0;
+        var lane = new FakeServerLane();
+        using var svc = new RemoteAgentsService(lane, _ => {
+            Interlocked.Increment(ref calls);
+            return Task.FromResult(new RemoteFetch([Titled("a1", "s1", null)]));
+        }, TimeSpan.Zero, Applies("New"));
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u1"));
+        await Eventually(() => svc.Agents.Count == 1);
+        await svc.RenameAsync("a1", "s1", "New", CancellationToken.None);
+
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u2"));
+        await Eventually(() => svc.Agents.Count == 0);
+        lane.AgentsChangedSubject.OnNext(System.Reactive.Unit.Default);
+        await Eventually(() => Volatile.Read(ref calls) == 2 && svc.Agents.Count == 1);
+        await Task.Delay(100);
+
+        await Assert.That(TitleOf(svc, "a1")).IsNull();
+    }
+
+    [Test]
+    public async Task A_rename_completing_after_an_identity_change_is_discarded() {
+        var calls = 0;
+        var renameGate = new TaskCompletionSource<SessionRenameResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lane = new FakeServerLane();
+        using var svc = new RemoteAgentsService(lane, _ => {
+            Interlocked.Increment(ref calls);
+            return Task.FromResult(new RemoteFetch([Titled("a1", "s1", null)]));
+        }, TimeSpan.Zero, (_, _, _) => renameGate.Task);
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u1"));
+        await Eventually(() => svc.Agents.Count == 1);
+
+        var pending = svc.RenameAsync("a1", "s1", "New", CancellationToken.None);
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u2"));
+        await Eventually(() => svc.Agents.Count == 0);
+        lane.AgentsChangedSubject.OnNext(System.Reactive.Unit.Default);
+        await Eventually(() => Volatile.Read(ref calls) == 2 && svc.Agents.Count == 1);
+        renameGate.SetResult(new SessionRenameResult(true, "New", null));
+        var result = await pending;
+
+        await Assert.That(result.Applied).IsFalse();
+        await Assert.That(result.Reason).IsEqualTo(SessionRenameReasons.IdentityMismatch);
+        await Assert.That(TitleOf(svc, "a1")).IsNull();
+        lane.AgentsChangedSubject.OnNext(System.Reactive.Unit.Default);
+        await Eventually(() => Volatile.Read(ref calls) == 3);
+        await Task.Delay(100);
+        await Assert.That(TitleOf(svc, "a1")).IsNull();
     }
 }

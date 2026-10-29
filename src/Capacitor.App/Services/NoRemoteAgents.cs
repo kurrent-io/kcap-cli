@@ -13,6 +13,8 @@ internal sealed class NoRemoteAgents : IRemoteAgentsService {
     public IObservableCache<AgentInstanceDto, string> Agents { get; } =
         new SourceCache<AgentInstanceDto, string>(a => a.AgentId).AsObservableCache();
     public IObservable<IReadOnlyList<DaemonInfo>> Daemons { get; } = Observable.Return<IReadOnlyList<DaemonInfo>>([]);
+    public Task<SessionRenameResult> RenameAsync(string agentId, string sessionId, string title, CancellationToken ct) =>
+        Task.FromResult(new SessionRenameResult(false, null, Capacitor.Cli.Core.LocalIpc.SessionRenameReasons.Unauthenticated));
 }
 
 /// Paired with <see cref="NoRemoteAgents"/>: a lane that never connects.
