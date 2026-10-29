@@ -67,7 +67,7 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
             IObservable<bool> restartPending, IObservable<LocalStepInput?> local, TimeProvider time) {
         _transition = transition;
         _time = time;
-        OpenCommand = ReactiveCommand.Create(Close);
+        OpenCommand = ReactiveCommand.Create(RequestOpen);
         ArmPatience();
         local.Select(l => l?.Running == true).DistinctUntilChanged().Skip(1).Where(running => !running)
             .Subscribe(_ => ArmPatience())
@@ -114,6 +114,9 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
     /// so the main window can hold back what the update is still changing.
     public IObservable<(bool Finishing, string? Detail)> Progress => _progress.DistinctUntilChanged();
 
+    /// Explicit handover, including while automatic completion is waiting for an earlier app to quit.
+    public event Action? OpenRequested;
+
     void Apply((IReadOnlyList<UpdateStep> Steps, bool Settled, bool Clean) state) {
         if (_disposed) return;
         Steps = state.Steps;
@@ -154,6 +157,11 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
         steps.FirstOrDefault(step => step.State is UpdateStepState.Running or UpdateStepState.Pending) is { } step
             ? step.Activity ?? step.Detail ?? step.Title
             : null;
+
+    void RequestOpen() {
+        OpenRequested?.Invoke();
+        Close();
+    }
 
     void Close() {
         if (_handedOver) return;
