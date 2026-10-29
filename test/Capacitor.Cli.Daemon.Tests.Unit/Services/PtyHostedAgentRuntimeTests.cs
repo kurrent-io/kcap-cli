@@ -212,6 +212,8 @@ public class PtyHostedAgentRuntimeTests {
 
             var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
             while (Volatile.Read(ref _consumed) < target && DateTime.UtcNow < deadline) await Task.Delay(5);
+
+            if (Volatile.Read(ref _consumed) < target) throw new TimeoutException("The runtime did not read the emitted output.");
         }
     }
 
@@ -303,6 +305,10 @@ public class PtyHostedAgentRuntimeTests {
         await Assert.That(pty.Writes).IsEmpty();
 
         await pump.EmitAsync(pty, ReadyBanner);
+        await AdvanceAsync(time, PtyHostedAgentRuntime.LaunchPromptQuietWindow / 2);
+        await Task.Delay(100);
+        await Assert.That(pty.Writes).IsEmpty();
+
         await StepAsync(time, PtyHostedAgentRuntime.LaunchPromptQuietWindow, () => pty.Writes.Count >= 1);
 
         await Assert.That(pty.Writes[0]).IsEqualTo("\x1b[200~build it\x1b[201~");
@@ -329,6 +335,10 @@ public class PtyHostedAgentRuntimeTests {
         await Assert.That(pty.Writes).IsEmpty();
 
         await pump.EmitAsync(pty, ReadyBanner);
+        await AdvanceAsync(time, PtyHostedAgentRuntime.LaunchPromptQuietWindow / 2);
+        await Task.Delay(100);
+        await Assert.That(pty.Writes).IsEmpty();
+
         await StepAsync(time, PtyHostedAgentRuntime.LaunchPromptQuietWindow, () => pty.Writes.Count >= 1);
 
         await Assert.That(pty.Writes[0]).IsEqualTo("\x1b[200~build it\x1b[201~");
