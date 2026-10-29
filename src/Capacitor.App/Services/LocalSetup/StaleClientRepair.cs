@@ -34,8 +34,7 @@ public sealed class StaleClientRepair(
         string? repaired = null;
 
         for (var attempt = 0; attempt < MaxAttempts; attempt++) {
-            var stale = await Task.Run(() => copies(path).Find().FirstOrDefault(c => !LocalClientFloor.Admits(c.Version)), ct)
-                .ConfigureAwait(false);
+            var stale = await FindStaleAsync(path, ct).ConfigureAwait(false);
 
             if (stale is null) return repaired is null ? new ClientRepairOutcome.Clear() : new ClientRepairOutcome.Repaired(repaired);
             if (stale.Kind == ClientCopyKind.DesktopApp) return new ClientRepairOutcome.OldApp(stale.Path);
@@ -47,7 +46,7 @@ public sealed class StaleClientRepair(
                 continue;
             }
 
-            if (await IdentityAsync(stale.Path, ct).ConfigureAwait(false) is not { } found) continue;
+            if (await BoundIdentityAsync(path, stale.Path, ct).ConfigureAwait(false) is not { } found) continue;
 
             switch (await RelinkAsync(stale.Path, found, ct).ConfigureAwait(false)) {
                 case Relink.Changed:
@@ -61,6 +60,17 @@ public sealed class StaleClientRepair(
         }
 
         return new ClientRepairOutcome.Failed(repaired ?? "", "more older copies of kcap turned up than setup can replace.");
+    }
+
+    Task<ClientCopy?> FindStaleAsync(string? path, CancellationToken ct) =>
+        Task.Run(() => copies(path).Find().FirstOrDefault(c => !LocalClientFloor.Admits(c.Version)), ct);
+
+    /// The entry's identity, read before a probe that still finds it below the floor, so the version that probe reports
+    /// belongs to the entry the identity describes: the replacement checks against it.
+    async Task<string?> BoundIdentityAsync(string? path, string entry, CancellationToken ct) {
+        if (await IdentityAsync(entry, ct).ConfigureAwait(false) is not { } before) return null;
+
+        return await FindStaleAsync(path, ct).ConfigureAwait(false) is { } stale && stale.Path == entry ? before : null;
     }
 
     abstract record Relink {
@@ -99,7 +109,8 @@ public sealed class StaleClientRepair(
     }
 
     /// Replaces <paramref name="link"/> only while it is still the entry <paramref name="found"/> describes: anything
-    /// that took its place in the meantime is someone else's and is looked at again.
+    /// that took its place in the meantime is someone else's and is looked at again. Neither rename nor ln can compare
+    /// as it replaces, so an entry landing between the last check and the swap still loses, to this app's kcap.
     async Task<Relink> RelinkAsync(string link, string found, CancellationToken ct) {
         if (appCli is null || !OneLine(appCli) || !OneLine(link) || !OneLine(found))
             return new Relink.Refused(new ClientRepairOutcome.Failed(link, "this app has no kcap of its own to put there."));

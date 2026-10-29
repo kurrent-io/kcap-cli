@@ -164,21 +164,37 @@ public class StaleClientRepairTests {
         await Assert.That(((ClientRepairOutcome.Failed)outcome).Path).IsEqualTo(stale);
     }
 
-    /// Whatever took the old copy's place while it was being probed is someone else's, so it is found again rather
-    /// than overwritten.
+    /// Whatever took the old copy's place before the rename is someone else's, so it is found again rather than
+    /// overwritten.
     [Test]
     public async Task An_entry_that_changed_before_it_could_be_replaced_is_left_alone() {
-        var app      = AppCli();
-        var stale    = Tmp.CreateExecutable("bin/kcap", "#!/bin/sh\nexit 0\n");
-        var stats    = 0;
-        var runner   = new Runner((_, _) => Ok, () => ++stats == 1 ? "1:2:3:4" : "1:9:9:9");
-        var copies   = new Copies(stale, app, () => stats >= 2);
+        var app    = AppCli();
+        var stale  = Tmp.CreateExecutable("bin/kcap", "#!/bin/sh\nexit 0\n");
+        var stats  = 0;
+        var runner = new Runner((_, _) => Ok, () => ++stats == 1 ? "1:2:3:4" : "1:9:9:9");
+        var copies = new Copies(stale, app, () => stats >= 2);
 
         var outcome = await Repair(runner, app, copies).RunAsync(CancellationToken.None);
 
         await Assert.That(outcome).IsEqualTo(new ClientRepairOutcome.Clear());
         await Assert.That(new FileInfo(stale).LinkTarget).IsNull();
         await Assert.That(Directory.GetFiles(Tmp.PathTo("bin"))).IsEquivalentTo([stale]);
+    }
+
+    /// An entry replaced after it was probed but before its identity was read carries the newcomer's identity, so only
+    /// a probe after that read can say whether the entry is still older.
+    [Test]
+    public async Task An_entry_replaced_before_its_identity_was_read_is_probed_again() {
+        var app    = AppCli();
+        var stale  = Tmp.CreateExecutable("bin/kcap", "#!/bin/sh\nexit 0\n");
+        var finds  = 0;
+        var runner = new Runner((_, _) => Ok);
+
+        var outcome = await new StaleClientRepair(runner, new FakeLoginShellProbe(), app,
+            _ => new Scripted(() => ++finds == 1 ? [new ClientCopy(ClientCopyKind.OnPath, stale, "1.3.0-beta.8")] : [])).RunAsync(CancellationToken.None);
+
+        await Assert.That(outcome).IsEqualTo(new ClientRepairOutcome.Clear());
+        await Assert.That(new FileInfo(stale).LinkTarget).IsNull();
     }
 
     [Test]
