@@ -561,7 +561,7 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
             case "model/rerouted":
                 // The resolved model changed mid-thread; the mapper attributes each subsequent token
                 // delta to the model-at-instant, so per-interval attribution across a reroute is correct.
-                if (n.Params?.Str("toModel") is { Length: > 0 } rerouted) _resolvedModel = rerouted;
+                if (n.Params?.Str("toModel") is { } rerouted) _resolvedModel = rerouted.Length > 0 ? rerouted : null;
                 _clock?.Advance();
                 break;
             default:
