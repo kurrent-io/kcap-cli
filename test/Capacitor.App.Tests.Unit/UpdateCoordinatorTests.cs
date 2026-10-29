@@ -143,6 +143,81 @@ public class UpdateCoordinatorTests {
     }
 
     [Test]
+    public async Task App_menu_check_while_the_ready_prompt_is_open_joins_it() {
+        var h = new Harness();
+        h.Updater.NextCheck = Beta3;
+        var answer = new TaskCompletionSource<bool>();
+        h.Surface.ConfirmBehavior = (_, _) => answer.Task;
+        h.Coordinator.Start();
+        h.Clock.Advance(TimeSpan.FromSeconds(30));
+        await WaitUntilAsync(() => h.Surface.Prompts.Count == 1, "the ready prompt");
+
+        var first  = h.Coordinator.CheckForUpdatesAsync();
+        var second = h.Coordinator.CheckForUpdatesAsync();
+        answer.SetResult(false);
+        await Task.WhenAll(first, second);
+
+        await Assert.That(h.Surface.Prompts.Count).IsEqualTo(1);
+    }
+
+    static UpdateCandidate NextBeta => new("0.13.0-beta.1", IsPrerelease: true);
+
+    static Harness StableOptedIn() {
+        var h = new Harness();
+        h.Updater.InstalledVersion = "0.12.0";
+        h.Updater.BetaChoice = true;
+        h.Updater.NextCheck = NextBeta;
+        return h;
+    }
+
+    /// Opting out keeps the installed version: a downloaded beta is neither offered nor installed.
+    [Test]
+    public async Task Opting_out_withdraws_a_downloaded_beta() {
+        var h = StableOptedIn();
+        await h.Coordinator.RunMenuActionAsync();
+        await Assert.That(h.Menu!.Label).IsEqualTo("Restart to update to 0.13.0-beta.1");
+
+        h.Updater.BetaChoice = false;
+        h.Updater.NextCheck = null;
+        await h.Coordinator.RecheckAsync();
+        await h.Coordinator.RunMenuActionAsync();
+
+        await Assert.That(h.Menu!.Label).IsEqualTo(UpdateCoordinator.CheckLabel);
+        await Assert.That(h.QuitCalls).IsEqualTo(0);
+        await Assert.That(h.Updater.CheckCalls).IsEqualTo(3);
+    }
+
+    [Test]
+    public async Task Opting_out_while_the_ready_prompt_is_open_ignores_its_acceptance() {
+        var h = StableOptedIn();
+        var answer = new TaskCompletionSource<bool>();
+        h.Surface.ConfirmBehavior = (_, _) => answer.Task;
+        var check = h.Coordinator.RunMenuActionAsync();
+        await WaitUntilAsync(() => h.Surface.Prompts.Count == 1, "the ready prompt");
+
+        h.Updater.BetaChoice = false;
+        answer.SetResult(true);
+        await check;
+
+        await Assert.That(h.QuitCalls).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Opting_out_during_the_download_never_offers_the_beta() {
+        var h = StableOptedIn();
+        h.Updater.HoldDownload = new TaskCompletionSource();
+        var check = h.Coordinator.RunMenuActionAsync();
+        await WaitUntilAsync(() => h.Updater.DownloadCalls == 1, "the download");
+
+        h.Updater.BetaChoice = false;
+        h.Updater.HoldDownload.SetResult();
+        await check;
+
+        await Assert.That(h.Surface.Prompts).IsEmpty();
+        await Assert.That(h.Menu!.Label).IsEqualTo(UpdateCoordinator.CheckLabel);
+    }
+
+    [Test]
     public async Task App_menu_check_while_idle_is_a_manual_check() {
         var h = new Harness();
 
