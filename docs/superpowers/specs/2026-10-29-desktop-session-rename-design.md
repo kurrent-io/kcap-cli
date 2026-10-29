@@ -136,8 +136,13 @@ replaced by each `/api/agent-instances` fetch, so an ad hoc row edit would not s
 - A fetch that started before the rename never clears the overlay.
 - A fetch that started after it clears the overlay entry once the payload carries a title for that
   session; the server's title then wins, whether it is the rename or a newer one.
-- Against an older server whose payload has no title field, the overlay entry lasts for the app's
-  lifetime, so a refresh cannot restore the prompt cut.
+- Against an older server whose payload has no title field, the overlay entry lasts as long as the
+  signed-in identity, so a refresh cannot restore the prompt cut.
+- Session ids and visible instances belong to the signed-in account. The overlay is scoped to the
+  same identity generation as the instance cache: it is cleared atomically with the cache when
+  `ServerLaneStatus.Subject` changes, and a rename completion that started under a superseded
+  generation is discarded rather than recorded. Required acceptance case: rename, sign out, sign in
+  as another user who can see an instance with the same session id — the old title never shows.
 
 ## Remote rail titles
 
@@ -171,12 +176,15 @@ Every session the user may rename:
   - the daemon is signed in as the app's signed-in user (the daemon reports its authenticated user
     id alongside the capability; the app compares it with its own subject), and
   - the agent is not private. A private agent's contract is "no per-agent server calls"
-    (`SnapshotAgentsForTitles` drops its session id), so it cannot be renamed.
+    (`SnapshotAgentsForTitles` drops its session id), so it cannot be renamed. The app cannot see
+    privacy today, so `AgentStatusDto` gains a trailing nullable `IsPrivate`; `null` (an older
+    daemon) counts as ineligible. The daemon's rename handler refuses a private agent on its own,
+    whatever the app sent.
 - Remote rows: shown when `AgentInstanceDto.OwnerUserId` matches the signed-in user.
 - Hidden for read-only participants and sessions without a session id.
 
 Required acceptance cases: daemon signed in as a different user, daemon pointed at a different
-server, a private agent, and an older daemon — each shows no pencil.
+server, a private agent, an older daemon that reports no privacy bit — each shows no pencil.
 
 The server re-checks ownership on every write; the client-side gate only avoids offering a rename
 that would 403.
