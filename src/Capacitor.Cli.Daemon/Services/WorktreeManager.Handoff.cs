@@ -158,6 +158,28 @@ public partial class WorktreeManager {
         return created;
     }
 
+    /// <summary>Checks the session's commits against the starting point. <paramref name="sessionCommits"/>
+    /// null means they are unknown; <paramref name="mayHaveUnpushedWork"/> means the session may have left
+    /// work that no commit list can show. A missing commit outranks either uncertainty.</summary>
+    public async Task<HandoffWork> CheckHandoffWorkAsync(
+            string repoPath, string startSha, IReadOnlyList<string>? sessionCommits, bool mayHaveUnpushedWork) {
+        var missing = new List<string>();
+
+        foreach (var commit in sessionCommits ?? []) {
+            var reachable = IsFullSha(commit)
+                && (await RunGitCaptureResult(repoPath, GitTimeout, time, true, [], "merge-base", "--is-ancestor", commit, startSha)).ExitCode == 0;
+            if (!reachable) missing.Add(commit);
+        }
+
+        var completeness = missing.Count > 0                            ? HandoffCompleteness.PartlyMissing
+                         : sessionCommits is null || mayHaveUnpushedWork ? HandoffCompleteness.Unconfirmed
+                         :                                                  HandoffCompleteness.Complete;
+
+        return new(completeness, missing);
+    }
+
+    static bool IsFullSha(string value) => value.Length is 40 or 64 && value.All(char.IsAsciiHexDigitLower);
+
     static InvalidOperationException StartChanged(string why) => new($"handoff_start_changed: {why}");
 
     static HandoffResolution FetchFailed((int ExitCode, string Stdout, string Stderr) result) =>

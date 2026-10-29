@@ -359,4 +359,78 @@ public class WorktreeManagerHandoffTests {
         await Assert.That(f.Clone.RevParse("refs/heads/feature")).IsEqualTo(bad);
         await Assert.That(Directory.Exists(Path.Combine(f.Clone.Path, ".capacitor", "worktrees", "handoff"))).IsFalse();
     }
+
+    static Task<HandoffWork> CheckAsync(Fixture f, string startSha, IReadOnlyList<string>? commits, bool mayHaveUnpushedWork = false) =>
+        Manager().CheckHandoffWorkAsync(f.Clone, startSha, commits, mayHaveUnpushedWork);
+
+    [Test]
+    public async Task all_session_commits_reachable_and_nothing_unpushed_is_complete() {
+        using var f      = Fixture.Create();
+        var       first  = f.CommitOnOrigin("feature", "b.txt");
+        var       second = f.CommitOnOrigin("feature", "c.txt");
+        var       start  = await ResolveAsync(f, new HandoffTarget("feature", null, false));
+
+        var work = await CheckAsync(f, start.Sha, [first, second]);
+
+        await Assert.That(work.Completeness).IsEqualTo(HandoffCompleteness.Complete);
+        await Assert.That(work.MissingCommits).IsEmpty();
+    }
+
+    [Test]
+    public async Task a_session_commit_missing_from_the_start_is_partly_missing() {
+        using var f     = Fixture.Create();
+        f.CommitOnOrigin("feature", "b.txt");
+        f.TrackLocally("feature");
+        var       local = f.CommitLocally("feature", "unpushed.txt");
+        var       start = await ResolveAsync(f, new HandoffTarget("feature", null, false));
+
+        var work = await CheckAsync(f, start.Sha, [local]);
+
+        await Assert.That(work.Completeness).IsEqualTo(HandoffCompleteness.PartlyMissing);
+        await Assert.That(work.MissingCommits).IsEquivalentTo([local]);
+    }
+
+    [Test]
+    public async Task a_session_commit_unknown_locally_is_partly_missing() {
+        using var f       = Fixture.Create();
+        var       start   = await ResolveAsync(f, new HandoffTarget("gone", null, false));
+        var       unknown = new string('a', 40);
+
+        var work = await CheckAsync(f, start.Sha, [unknown]);
+
+        await Assert.That(work.Completeness).IsEqualTo(HandoffCompleteness.PartlyMissing);
+        await Assert.That(work.MissingCommits).IsEquivalentTo([unknown]);
+    }
+
+    [Test]
+    public async Task unknown_session_commits_are_unconfirmed() {
+        using var f     = Fixture.Create();
+        var       start = await ResolveAsync(f, new HandoffTarget("gone", null, false));
+
+        var work = await CheckAsync(f, start.Sha, null);
+
+        await Assert.That(work.Completeness).IsEqualTo(HandoffCompleteness.Unconfirmed);
+    }
+
+    [Test]
+    public async Task possible_unpushed_work_is_unconfirmed_even_when_commits_are_reachable() {
+        using var f      = Fixture.Create();
+        var       commit = f.CommitOnOrigin("feature", "b.txt");
+        var       start  = await ResolveAsync(f, new HandoffTarget("feature", null, false));
+
+        var work = await CheckAsync(f, start.Sha, [commit], mayHaveUnpushedWork: true);
+
+        await Assert.That(work.Completeness).IsEqualTo(HandoffCompleteness.Unconfirmed);
+    }
+
+    [Test]
+    public async Task a_malformed_commit_is_missing_and_never_reaches_git_as_an_option() {
+        using var f     = Fixture.Create();
+        var       start = await ResolveAsync(f, new HandoffTarget("gone", null, false));
+
+        var work = await CheckAsync(f, start.Sha, ["--all"]);
+
+        await Assert.That(work.Completeness).IsEqualTo(HandoffCompleteness.PartlyMissing);
+        await Assert.That(work.MissingCommits).IsEquivalentTo(["--all"]);
+    }
 }

@@ -21,3 +21,9 @@ public sealed record HandoffStart(
 /// <summary>Either a start or why origin could not be read. An unreadable origin is never reported as
 /// an absent branch.</summary>
 public sealed record HandoffResolution(HandoffStart? Start, string? FetchError);
+
+public enum HandoffCompleteness { Complete, PartlyMissing, Unconfirmed }
+
+/// <summary>Whether the starting code holds the ended session's work. Only <see cref="HandoffCompleteness.Complete"/>
+/// may be presented as all there.</summary>
+public sealed record HandoffWork(HandoffCompleteness Completeness, IReadOnlyList<string> MissingCommits);
