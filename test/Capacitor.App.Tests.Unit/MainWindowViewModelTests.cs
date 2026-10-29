@@ -404,6 +404,45 @@ public class MainWindowViewModelTests {
     }
 
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_local_daemon_failure_stays_red_when_a_healthy_remote_machine_is_selected(bool remoteFirst) {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var service = new FakeDaemonClientService();
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+            var remote = new FakeRemoteAgents();
+            remote.DaemonsSubject.OnNext([
+                new DaemonInfo { Name = "home-pc", OwnerUserId = "u1", Connected = true },
+            ]);
+            var lane = new FakeServerLane();
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
+            using var home = new HomeViewModel(service, new AppStateStore(path), new UnusedLaunchClient(),
+                () => Task.FromResult(Array.Empty<string>()), TimeProvider.System, daemons: remote.Daemons,
+                viewerId: _ => Task.FromResult<string?>("u1"), laneStatus: lane.Status);
+            using var report = new BehaviorSubject<string?>(null);
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                home: home, laneStatus: lane.Status, lifecycleAttention: report);
+            using var activation = vm.Activator.Activate();
+            const string failed = "The daemon didn't start. Press Start daemon to try again.";
+            if (!remoteFirst) {
+                report.OnNext(failed);
+                await Assert.That(((ISolidColorBrush)vm.StatusBrush).Color).IsEqualTo(Color.Parse("#FF7272"));
+            }
+            await home.SelectMachineAsync("home-pc", isLocal: false);
+            if (remoteFirst) report.OnNext(failed);
+
+            await Assert.That(home.BannerFailed).IsFalse();
+            await Assert.That(vm.ConnectionDisplay).IsEqualTo("Unreachable");
+            await Assert.That(((ISolidColorBrush)vm.StatusBrush).Color).IsEqualTo(Color.Parse("#FF7272"));
+
+            report.OnNext(null);
+            await Assert.That(((ISolidColorBrush)vm.StatusBrush).Color).IsEqualTo(Color.Parse("#F4B860"));
+        });
+    }
+
+    [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task ConnectionDisplay_signed_out_wins_over_daemon_reconnecting() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {

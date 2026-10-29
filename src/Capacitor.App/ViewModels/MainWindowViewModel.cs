@@ -526,8 +526,15 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .ToProperty(this, x => x.ConnectionDisplay, "")
                 .DisposeWith(disposables);
 
-            // The launcher's own call on whether its card reports a failure, so the rail and the card cannot disagree.
-            var failed = (Home is { } home ? home.WhenAnyValue(x => x.BannerFailed) : Observable.Return(false)).DistinctUntilChanged();
+            // The rail describes the local daemon even while the launcher targets a remote machine.
+            // Keep its lifecycle failure independent of the selected machine's banner.
+            var localFailed = status.CombineLatest(_startMessageChanges,
+                (st, message) => st.State == AttachState.Unreachable
+                    && HomeViewModel.BannerFailedFor((HomeViewModel.DaemonDownNotice, message)));
+            var failed = localFailed.CombineLatest(
+                    Home is { } home ? home.WhenAnyValue(x => x.BannerFailed) : Observable.Return(false),
+                    (local, banner) => local || banner)
+                .DistinctUntilChanged();
             _statusBrush = status.CombineLatest(daemonConnection, signedOut, updating, failed, StatusBrushFor)
                 .ToProperty(this, x => x.StatusBrush, Paint(StatusColors.Unavailable))
                 .DisposeWith(disposables);
