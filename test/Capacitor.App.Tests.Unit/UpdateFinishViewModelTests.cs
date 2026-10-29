@@ -209,12 +209,36 @@ public class UpdateFinishViewModelTests {
             using var _ = vm.Progress.Subscribe(progress.Add);
 
             vm.OpenCommand.Execute().Subscribe();
-            await Assert.That(progress[^1]).IsEqualTo((true, "Daemon · Restarting into 1.4.1"));
+            await Assert.That(progress[^1]).IsEqualTo((true, "Restarting the daemon"));
 
             status.OnNext(Connected);
             daemon.OnNext(("1.4.1", "connected"));
             await Assert.That(progress[^1]).IsEqualTo((false, (string?)null));
         });
+    }
+
+    /// A daemon already on the new version waits for the local server, so it never shows done and then drops back when the server stops.
+    [Test]
+    public async Task A_daemon_on_the_new_version_waits_for_the_local_server_upgrade() {
+        var upgrading = new LocalStepInput(true, null, null, null, Phase: LocalUpgradePhase.Downloading, From: "1.4.0", To: "1.4.1");
+        var during = UpdateFinishViewModel.Project(Update, Connected, "1.4.1", "connected", false, upgrading);
+        var after = UpdateFinishViewModel.Project(Update, Connected, "1.4.1", "connected", false,
+            new LocalStepInput(false, new LocalUpgradeOutcome.Upgraded("1.4.0", "1.4.1"), null, null));
+
+        await Assert.That(during.Steps[^1] is { Detail: "Waiting for the local server", State: UpdateStepState.Running }).IsTrue();
+        await Assert.That(after.Steps[^1].State).IsEqualTo(UpdateStepState.Done);
+    }
+
+    /// The launcher names what is happening in plain words, without the versions the window's titles carry.
+    [Test]
+    public async Task The_launcher_reads_what_the_first_running_step_is_doing() {
+        var downloading = UpdateFinishViewModel.Project(Update, Connected, "1.4.1", "connected", false,
+            new LocalStepInput(true, null, null, null, Phase: LocalUpgradePhase.Downloading, From: "1.4.0", To: "1.4.1"));
+        var reconnecting = UpdateFinishViewModel.Project(Update, Connected, "1.4.1", "disconnected", false, null);
+
+        await Assert.That(UpdateFinishViewModel.ProgressDetail(downloading.Steps)).IsEqualTo("Downloading the local server");
+        await Assert.That(UpdateFinishViewModel.ProgressDetail(reconnecting.Steps)).IsEqualTo("Reconnecting the daemon to the server");
+        await Assert.That(UpdateFinishViewModel.ProgressDetail(UpdateFinishViewModel.Project(Update, Connected, "1.4.1", "connected", false, null).Steps)).IsNull();
     }
 
     static async Task WaitUntilAsync(Func<bool> condition) {

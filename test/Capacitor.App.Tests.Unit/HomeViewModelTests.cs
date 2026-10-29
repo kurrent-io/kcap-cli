@@ -887,13 +887,13 @@ public class HomeViewModelTests {
             using var vm = new HomeViewModel(daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System);
             await vm.SelectRepositoryAsync("/repo/a");
             Connect(daemon);
-            var progress = new BehaviorSubject<(bool, string?)>((true, "Daemon 1.4.1 · Connecting to the server"));
+            var progress = new BehaviorSubject<(bool, string?)>((true, "Reconnecting the daemon to the server"));
             vm.AttachUpdateProgress(progress);
 
             await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsFalse();
             await Assert.That(vm.StartButtonTip).IsEqualTo(HomeViewModel.FinishingUpdateNotice);
             await Assert.That(vm.Notices.ShowUpdate).IsTrue();
-            await Assert.That(vm.UpdateDetail).IsEqualTo("Daemon 1.4.1 · Connecting to the server");
+            await Assert.That(vm.UpdateDetail).IsEqualTo("Reconnecting the daemon to the server");
 
             progress.OnNext((false, null));
             await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsTrue();
@@ -914,7 +914,7 @@ public class HomeViewModelTests {
             using var vm = new HomeViewModel(daemon, new AppStateStore(Tmp.PathTo("app-state.json")), new RecordingLaunchClient(),
                 Known(), TimeProvider.System, daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"),
                 laneStatus: Observable.Return(new ServerLaneStatus(ServerLaneState.Connected)));
-            vm.AttachUpdateProgress(new BehaviorSubject<(bool, string?)>((true, "Local server · Starting")));
+            vm.AttachUpdateProgress(new BehaviorSubject<(bool, string?)>((true, "Starting the local server")));
 
             await vm.SelectMachineAsync("box", isLocal: false);
 

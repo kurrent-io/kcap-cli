@@ -152,7 +152,7 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
 
     internal static string? ProgressDetail(IReadOnlyList<UpdateStep> steps) =>
         steps.FirstOrDefault(step => step.State is UpdateStepState.Running or UpdateStepState.Pending) is { } step
-            ? step.Detail is { Length: > 0 } detail ? $"{step.Title} · {detail}" : step.Title
+            ? step.Activity ?? step.Detail ?? step.Title
             : null;
 
     void Close() {
@@ -165,37 +165,46 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
             AppUpdateTransition transition, AttachStatus status, string? daemonVersion, string? connection, bool restartPending,
             LocalStepInput? local, bool waitedLong = false) {
         var steps = new List<UpdateStep> { new($"kcap {Display(transition.To)}", "Installed", UpdateStepState.Done) };
-        if (LocalStep(local) is { } localStep) steps.Add(localStep);
-        steps.Add(DaemonStep(status, daemonVersion, connection, restartPending, transition.To, waitedLong));
+        var localStep = LocalStep(local);
+        if (localStep is not null) steps.Add(localStep);
+        var localRunning = localStep?.State is UpdateStepState.Running or UpdateStepState.Pending;
+        steps.Add(DaemonStep(status, daemonVersion, connection, restartPending, transition.To, waitedLong, localRunning));
         var settled = steps.All(step => step.State is not (UpdateStepState.Running or UpdateStepState.Pending));
         return (steps, settled, settled && steps.All(step => step.State == UpdateStepState.Done));
     }
 
     /// <param name="connection">The daemon's connection to the server: the main window reads anything but
     /// connected as an outage, so the step is not done before it.</param>
+    /// <param name="localRunning">The local server is still being upgraded. A daemon already on the new version waits for it
+    /// rather than showing done and then dropping back when the server stops.</param>
     internal static UpdateStep DaemonStep(AttachStatus status, string? daemonVersion, string? connection, bool restartPending, string appVersion,
-            bool waitedLong = false) {
+            bool waitedLong = false, bool localRunning = false) {
         const string title = "Daemon";
         var app = Display(appVersion);
         var known = daemonVersion is { Length: > 0 };
         var current = known && SameVersion(daemonVersion!, appVersion);
         var newer = known && PrereleaseSemver.IsNewer(Display(daemonVersion!), app);
         return status switch {
+            { State: AttachState.Connected } when current && localRunning => new($"{title} {app}", "Waiting for the local server",
+                UpdateStepState.Running, Activity: "Waiting for the local server"),
             { State: AttachState.Connected } when current && connection == ServerConnected => new($"{title} {app}", "Running", UpdateStepState.Done),
             { State: AttachState.Connected } when current && waitedLong => new($"{title} {app}", "Not connected to the server yet", UpdateStepState.Note),
-            { State: AttachState.Connected } when current => new($"{title} {app}", "Connecting to the server", UpdateStepState.Running),
+            { State: AttachState.Connected } when current => new($"{title} {app}", "Connecting to the server", UpdateStepState.Running,
+                Activity: "Reconnecting the daemon to the server"),
             { State: AttachState.Connected } when newer => new(title, $"Running {Display(daemonVersion!)}, newer than this app", UpdateStepState.Note),
             { State: AttachState.Connected } when restartPending => new(title, "Restarts once its agents finish their turn", UpdateStepState.Note),
             { State: AttachState.Connected } when waitedLong && known => new(title,
                 $"Still on {Display(daemonVersion!)}. Moves to {app} on its next restart", UpdateStepState.Note),
-            { State: AttachState.Connected } => new(title, $"Picking up {app}", UpdateStepState.Running),
-            { State: AttachState.Unreachable, Reason: ExpectedDaemonRestart.Reason } => new(title, $"Restarting into {app}", UpdateStepState.Running),
+            { State: AttachState.Connected } => new(title, $"Picking up {app}", UpdateStepState.Running, Activity: "Waiting for the daemon to restart"),
+            { State: AttachState.Unreachable, Reason: ExpectedDaemonRestart.Reason } => new(title, $"Restarting into {app}", UpdateStepState.Running,
+                Activity: "Restarting the daemon"),
             // The old daemon is incompatible with the new app until it restarts into the new binary.
-            { State: AttachState.Unreachable, Reason: "daemon_incompatible" } when !waitedLong => new(title, $"Picking up {app}", UpdateStepState.Running),
+            { State: AttachState.Unreachable, Reason: "daemon_incompatible" } when !waitedLong => new(title, $"Picking up {app}", UpdateStepState.Running,
+                Activity: "Waiting for the daemon to restart"),
             { State: AttachState.Unreachable, Reason: "daemon_incompatible" } => new(title,
                 "Still incompatible with this app. Open kcap and press Reconnect", UpdateStepState.Problem),
             { State: AttachState.Unreachable } => new(title, "Not running. Open kcap and press Start daemon", UpdateStepState.Problem),
-            _ => new(title, "Connecting", UpdateStepState.Running),
+            _ => new(title, "Connecting", UpdateStepState.Running, Activity: "Connecting to the daemon"),
         };
     }
 
@@ -209,16 +218,17 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
                 (_, { } to) => $"{title} {to}",
                 _ => title,
             };
-            var (detail, trailing) = local.Phase switch {
-                LocalUpgradePhase.Recovering => ("Finishing an interrupted upgrade", null),
+            var (detail, trailing, activity) = local.Phase switch {
+                LocalUpgradePhase.Recovering => ("Finishing an interrupted upgrade", null, "Finishing an interrupted local server upgrade"),
                 LocalUpgradePhase.Downloading => ("Downloading",
-                    local.DownloadFraction is { } f ? $"{(int)Math.Round(f * 100)}%" : null),
-                LocalUpgradePhase.Stopping => ("Stopping the server", null),
-                LocalUpgradePhase.Starting => ("Starting. A migration can take a few minutes", null),
-                LocalUpgradePhase.Restarting => ($"Starting {local.From} again", (string?)null),
-                _ => ("Checking the installation", null),
+                    local.DownloadFraction is { } f ? $"{(int)Math.Round(f * 100)}%" : null, "Downloading the local server"),
+                LocalUpgradePhase.Stopping => ("Stopping the server", null, "Stopping the local server"),
+                LocalUpgradePhase.Starting => ("Starting. A migration can take a few minutes", null,
+                    "Starting the local server. A migration can take a few minutes"),
+                LocalUpgradePhase.Restarting => ($"Starting {local.From} again", (string?)null, "Starting the previous local server again"),
+                _ => ("Checking the installation", null, "Checking the local server"),
             };
-            return new(heading, detail, UpdateStepState.Running, trailing, hint);
+            return new(heading, detail, UpdateStepState.Running, trailing, hint, activity);
         }
         return local.Outcome switch {
             LocalUpgradeOutcome.Upgraded { To: { } to } => new($"{title} {to}", "Upgraded", UpdateStepState.Done),
@@ -237,7 +247,7 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
                 string.Join(". ", new[] { TerminalAdvice.Strip(f.Message) is { } m ? Fragment(m) : "The upgrade did not finish",
                     f.From is { } stays ? $"Staying on {stays}" : null }.Where(part => part is not null)),
                 UpdateStepState.Problem, Hint: hint),
-            _ => new(title, "Not started", UpdateStepState.Pending),
+            _ => new(title, "Not started", UpdateStepState.Pending, Activity: "Getting ready to upgrade the local server"),
         };
     }
 
