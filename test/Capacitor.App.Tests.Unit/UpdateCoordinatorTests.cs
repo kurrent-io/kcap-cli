@@ -217,6 +217,36 @@ public class UpdateCoordinatorTests {
         await Assert.That(h.Menu!.Label).IsEqualTo(UpdateCoordinator.CheckLabel);
     }
 
+    /// A check already running read the feed under the old choice, so the recheck must not just join it.
+    [Test]
+    public async Task Recheck_during_a_running_check_checks_again_afterwards() {
+        var h = StableOptedIn();
+        h.Updater.HoldDownload = new TaskCompletionSource();
+        var check = h.Coordinator.RunMenuActionAsync();
+        await WaitUntilAsync(() => h.Updater.DownloadCalls == 1, "the download");
+
+        h.Updater.BetaChoice = false;
+        h.Updater.NextCheck = null;
+        var recheck = h.Coordinator.RecheckAsync();
+        h.Updater.HoldDownload.SetResult();
+        await Task.WhenAll(check, recheck);
+
+        await Assert.That(h.Updater.CheckCalls).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task Opting_out_after_accepting_the_restart_skips_the_apply_on_exit() {
+        var h = StableOptedIn();
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
+        await h.Coordinator.RunMenuActionAsync();
+        await Assert.That(h.QuitCalls).IsEqualTo(1);
+
+        h.Updater.BetaChoice = false;
+        h.Coordinator.ApplyPendingOnExit();
+
+        await Assert.That(h.Updater.ApplyOnExitCalls).IsEmpty();
+    }
+
     /// A package left ready after the choice changed, with no withdrawal, must not stop checking.
     [Test]
     public async Task A_check_drops_a_ready_beta_the_choice_no_longer_allows() {

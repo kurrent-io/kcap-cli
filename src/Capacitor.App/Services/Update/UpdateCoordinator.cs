@@ -136,7 +136,16 @@ public sealed class UpdateCoordinator {
     public Task RecheckAsync() {
         if (!_updater.IsAvailable) return Task.CompletedTask;
         if (Ready is { } ready && !IsEligible(_updater, ready)) Withdraw(ready);
-        return CheckAsync(manual: false);
+        lock (_lock) {
+            // A check already running read the feed under the old choice, so this one runs after it.
+            if (_inflight is { IsCompleted: false } running) return CheckAfterAsync(running);
+            return CheckAsync(manual: false);
+        }
+    }
+
+    async Task CheckAfterAsync(Task running) {
+        await running.ConfigureAwait(false);
+        await CheckAsync(manual: false).ConfigureAwait(false);
     }
 
     UpdateCandidate? Offerable => Ready is { } ready && IsEligible(_updater, ready) ? ready : null;
@@ -156,6 +165,11 @@ public sealed class UpdateCoordinator {
             _pendingApply = null;
         }
         if (pending is null) return;
+        // The beta choice can change between accepting the restart and the exit.
+        if (!IsEligible(_updater, pending)) {
+            _log?.Write("update_withdrawn", ("to", pending.Version), ("stage", "on_exit"));
+            return;
+        }
         try {
             _handingOver?.Invoke(pending);
         } catch (Exception ex) {
