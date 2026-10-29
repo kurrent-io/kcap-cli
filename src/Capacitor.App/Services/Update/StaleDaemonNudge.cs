@@ -22,6 +22,8 @@ public sealed class StaleDaemonNudge : IDisposable {
     readonly CancellationToken _ct;
     readonly IDisposable _subscription;
     ITimer? _timer;
+    // A disposed timer can still run a callback it already queued: the generation tells a stale one to do nothing.
+    long _generation;
     bool _asked;
     bool _disposed;
 
@@ -47,14 +49,17 @@ public sealed class StaleDaemonNudge : IDisposable {
 
     void Arm(bool stale) {
         lock (_lock) {
+            var generation = ++_generation;
             _timer?.Dispose();
-            _timer = stale && !_asked && !_disposed ? _time.CreateTimer(_ => Fire(), null, Grace, Timeout.InfiniteTimeSpan) : null;
+            _timer = stale && !_asked && !_disposed
+                ? _time.CreateTimer(_ => Fire(generation), null, Grace, Timeout.InfiniteTimeSpan)
+                : null;
         }
     }
 
-    void Fire() {
+    void Fire(long generation) {
         lock (_lock) {
-            if (_asked || _disposed) return;
+            if (_asked || _disposed || generation != _generation) return;
             _asked = true;
         }
         _ = SendAsync();
@@ -75,6 +80,7 @@ public sealed class StaleDaemonNudge : IDisposable {
     public void Dispose() {
         lock (_lock) {
             _disposed = true;
+            _generation++;
             _timer?.Dispose();
             _timer = null;
         }
