@@ -15,7 +15,7 @@ description: >-
 
 kcap records a team's coding-agent sessions and serves them back as
 tools: search past sessions, team memory, analytics, work items, plans,
-knowledge and shareable pages. `kcap` is its CLI. This skill installs `kcap`
+knowledge, shareable pages and document reviews. `kcap` is its CLI. This skill installs `kcap`
 and signs it in; what happens after that depends on the machine.
 
 **Where am I?**
@@ -160,7 +160,8 @@ field names; these are the servers, commands and args:
 name: kcap
 description: >-
   kcap: the team's recorded coding-agent sessions, team memory,
-  analytics, work items, plans, curated knowledge and shareable pages.
+  analytics, work items, plans, curated knowledge, shareable pages and
+  document reviews.
 servers:
   kcap-sessions:
     transport: stdio
@@ -190,6 +191,10 @@ servers:
     transport: stdio
     command: /home/hatch/workspace/kcap/node_modules/.bin/kcap
     args: [mcp, pages]
+  kcap-flows:
+    transport: stdio
+    command: /home/hatch/workspace/kcap/node_modules/.bin/kcap
+    args: [mcp, flows]
 ```
 
 `CONNECTOR.md`:
@@ -197,7 +202,7 @@ servers:
 ```markdown
 # kcap
 
-Seven stdio MCP servers over the team's kcap workspace. Call a tool with
+Eight stdio MCP servers over the team's kcap workspace. Call a tool with
 `python3 mcp_call.py <server> <tool> - < args.json`, where `args.json` contains
 the JSON arguments. Pass JSON through stdin rather than shell quoting it.
 List tools with
@@ -212,11 +217,14 @@ List tools with
 | kcap-plans | declared plan documents and tasks |
 | kcap-knowledge | curated facts and skills |
 | kcap-pages | `publish_page`, `list_my_pages`, `set_page_visibility`; for a page that collects answers, `get_page_results`, `await_page_responses`, `close_page_responses` |
+| kcap-flows | a document review by a separate hosted reviewer: `start_flow` with `definition_id` `doc-review`, `get_flow_status`, `send_to_participant`, `close_flow` |
 
 This VM is not a git checkout: pass `"repo": "all"` to `search_sessions` and
 `list_repo_sessions`, or they search nothing. A call is cut off after 60
 seconds, so pass `await_page_responses` a `timeout_s` of 50 or less and call it
-again to keep waiting. Sign-in is `kcap`'s own
+again to keep waiting. For the same reason pass `start_flow` and
+`send_to_participant` `"wait": false`, and `get_flow_status` `"wait": true`
+with a `timeout_s` of 50 or less. Sign-in is `kcap`'s own
 (`~/.config/kcap/`); if a call returns 401, run `kcap status` and follow the
 kcap skill's reconnect step.
 ```
@@ -247,12 +255,13 @@ Keep `~/workspace/capacitor` and its logs and recording data in place.
 name: kcap
 description: >-
   Use kcap — the team's recorded coding-agent sessions, team
-  memory, analytics, work items, plans, curated knowledge and shareable
-  pages — through the `kcap` custom connector. Triggers: "what did my team
+  memory, analytics, work items, plans, curated knowledge, shareable
+  pages and document reviews — through the `kcap` custom connector. Triggers: "what did my team
   work on", "what did we do last week", "find the session where", "did we
   ever", "who worked on", "recap session", "what's next", "team memory", "save
   this for the team", "how much did we spend on agents", "make this a kcap
-  page", "share this as a page", and any question about past coding work.
+  page", "share this as a page", "get this spec reviewed", "have Codex review
+  this document", and any question about past coding work.
 metadata:
   includeInPrompt: true
 ---
@@ -304,6 +313,19 @@ contents in a shell command. Read `CONNECTOR.md` there for the servers and tools
    them the code.
 10. Cite what you found: session title, date, author, and the `session_id`, so
    the user can open it in kcap.
+11. **Document review:** only when the user asks for a review by another
+   agent. Ask which reviewer (`claude`, `codex`, …) unless they named one.
+   `start_flow` with `definition_id: "doc-review"`, `vendor`, `"wait": false`,
+   and a `context` holding the whole document plus its type, audience and what
+   to scrutinise. Keep the returned `flow_run_id`. Poll `get_flow_status`
+   (`"wait": true`, `"timeout_s": 45`) until the round ends; tell the user
+   it is still running between polls rather than blocking a whole turn on
+   it. On findings, revise, then `send_to_participant` (`participant:
+   "reviewer"`, `"wait": false`) with the revised document or changed
+   sections and a note per finding; on clean, `close_flow`. The reviewer runs
+   on one of the user's own kcap daemons elsewhere — never start one here. A
+   `no_scratch_daemon` error means none is online: tell the user to run
+   `kcap daemon start -d` on a machine of theirs with an up-to-date kcap.
 ```
 
 ### B6. Keep the sign-in warm: an hourly `kcap status` cron
@@ -352,7 +374,7 @@ section: it reads the consent scope back to the user, runs
 
 - kcap is connected: ask me things like "what did my team work on this
   week", "find the session where we fixed X", "save this for the team", or
-  "make this a kcap page".
+  "make this a kcap page", or "get this spec reviewed by Codex".
 - Nothing on this VM is recorded until you ask: say "record my chats" and I
   will read the exact scope back to you before anything is sent.
 - Everything lives under your home — `~/workspace/kcap`, `~/.config/kcap`,
