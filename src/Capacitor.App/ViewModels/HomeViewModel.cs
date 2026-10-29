@@ -72,19 +72,19 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     internal const string SignInToAttach = "sign in to attach files";
 
-    internal const string ConnectingNotice     = "Connecting to the server…";
+    internal const string ConnectingNotice     = "Connecting to the server. This usually takes a few seconds.";
     /// Longer than the daemon's 30s connect backoff so one redial still reads as connecting.
     internal static readonly TimeSpan CatchUpLimit = TimeSpan.FromSeconds(60);
     internal const string FinishingSignInNotice =
         "Finishing sign-in. Reconnecting to the server…";
     internal const string DaemonDownNotice     =
-        "The daemon isn't running.";
+        "The daemon isn't running. Agents can't start until it's back.";
     internal const string DaemonRestartingNotice =
         "The daemon is restarting to update. It reconnects on its own.";
     internal const string DaemonIncompatibleNotice =
         "The app and daemon versions don't match. Update both, then reconnect.";
     internal const string ServerLostNotice     = "Not connected to the server. Sign in again to reconnect.";
-    internal const string SignInExpiredNotice  = "Your sign-in has expired.";
+    internal const string SignInExpiredNotice  = "Your sign-in has expired. Sign in again to reconnect.";
     /// A daemon attached by name that serves another server: signing in again cannot move it.
     internal static string DaemonOnOtherServerNotice(string daemonServer, string appServer) {
         var (daemonLabel, appLabel) = AttachedIdentity.ServerLabels(daemonServer, appServer);
@@ -111,6 +111,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         : $"No coding agents found on {remoteMachine}. Install one there. If it doesn't show up, run setup there again or restart its daemon.";
 
     internal static string HarnessUnavailableMessage(string label) => $"{label} isn't available on this machine. Choose another agent.";
+
+    /// The title over a daemon status that arrives alone, so the card keeps a title and a body.
+    internal const string DaemonStatusTitle = "Daemon status";
 
     internal static string RemoteOfflineNotice(string machine) => $"{machine} is offline. Launches resume when it reconnects.";
 
@@ -877,13 +880,14 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             var message = NoticeText.Commands(content.Message);
             var detail  = NoticeText.Commands(content.Detail);
             var (title, body) = NoticeText.Headline(message.Prose);
+            if (body is null && detail.Prose is null && title is not null) (title, body) = (DaemonStatusTitle, message.Prose);
             return (Title: title, Body: body, Detail: detail.Prose, Command: detail.Command ?? message.Command);
         });
         _bannerTitle = bannerCard.Select(card => card.Title)
-            .ToProperty(this, x => x.BannerTitle, ConnectingNotice)
+            .ToProperty(this, x => x.BannerTitle, NoticeText.Headline(ConnectingNotice).Title)
             .DisposeWith(_disposables);
         _bannerBody = bannerCard.Select(card => card.Body)
-            .ToProperty(this, x => x.BannerBody)
+            .ToProperty(this, x => x.BannerBody, NoticeText.Headline(ConnectingNotice).Body)
             .DisposeWith(_disposables);
         _bannerDetail = bannerCard.Select(card => card.Detail)
             .ToProperty(this, x => x.BannerDetail)
@@ -896,7 +900,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .ToProperty(this, x => x.ConnectionBannerVisible, initialValue: false)
             .DisposeWith(_disposables);
         _bannerBusy = bannerContent
-            .Select(content => InFlight(content.Detail ?? content.Message) || content.Message == DaemonRestartingNotice)
+            .Select(content => content.Detail is { } detail ? InFlight(detail)
+                : BusyNotice(content.Message) || InFlight(content.Message) || content.Message == DaemonRestartingNotice)
             .ToProperty(this, x => x.BannerBusy, initialValue: true)
             .DisposeWith(_disposables);
         var signInVisible = signInState
@@ -1121,8 +1126,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal static bool LaneIsCatchingUp(ServerLaneState lane) =>
         lane is ServerLaneState.Connecting or ServerLaneState.Retrying or ServerLaneState.Connected;
 
-    /// A line still waiting on something, which the banner shows with a spinner. Every in-flight
-    /// connection notice and lifecycle status ends in an ellipsis; no failure does.
+    /// A lifecycle status still waiting on something, which the banner shows with a spinner. Every
+    /// in-flight status ends in an ellipsis; no failure does.
     internal static bool InFlight(string? line) => line?.EndsWith('…') == true;
 
     internal static bool BusyNotice(string? notice) =>

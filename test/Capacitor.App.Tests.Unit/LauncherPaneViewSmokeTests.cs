@@ -270,7 +270,7 @@ public class LauncherPaneViewSmokeTests {
             static double Left(Control c, Visual rel) => c.TranslatePoint(new Point(0, 0), rel)!.Value.X;
             static double Bottom(Control c, Visual rel) => Top(c, rel) + c.Bounds.Height;
 
-            var gap = Top(button, banner) - Bottom(text, banner);
+            var gap = Top(button, banner) - Bottom(Find<TextBlock>(window, "BannerBodyText")!, banner);
             var idleShot = (
                 BarVisible: spinner.IsVisible,
                 TextTop: Top(text, banner),
@@ -287,7 +287,7 @@ public class LauncherPaneViewSmokeTests {
             var busyShot = (
                 BarVisible: spinner.IsVisible,
                 ActionsVisible: actions.IsEffectivelyVisible,
-                Compact: banner.Bounds.Height <= text.Bounds.Height + 28);
+                Compact: banner.Bounds.Height <= text.Bounds.Height + Find<TextBlock>(window, "BannerBodyText")!.Bounds.Height + 32);
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
@@ -336,8 +336,9 @@ public class LauncherPaneViewSmokeTests {
             message.OnNext(null);
             Dispatcher.UIThread.RunJobs();
             window.UpdateLayout();
+            var body = Find<TextBlock>(window, "BannerBodyText")!;
             var cleared = detail is not null && !detail.IsVisible
-                && Math.Abs(Top(button, window) - Top(copy, window) - copy.Bounds.Height - 14) < 1;
+                && Math.Abs(Top(button, window) - Top(body, window) - body.Bounds.Height - 14) < 1;
             window.Close();
             Dispatcher.UIThread.RunJobs();
             vm.Dispose();

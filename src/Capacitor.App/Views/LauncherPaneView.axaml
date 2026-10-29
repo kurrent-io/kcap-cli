@@ -110,6 +110,14 @@
                     </Panel>
                     <StackPanel Grid.Column="1" Spacing="4">
                         <TextBlock x:Name="LocalServerHeadline" Classes="noticeTitle" Text="The local server isn't running" />
+                        <TextBlock x:Name="LocalServerBody" Classes="noticeBody" Text="Start it to launch agents and open the dashboard.">
+                            <TextBlock.IsVisible>
+                                <MultiBinding Converter="{x:Static BoolConverters.And}" FallbackValue="True">
+                                    <Binding Path="LocalServer.IsStarting" Converter="{x:Static BoolConverters.Not}" FallbackValue="True" />
+                                    <Binding Path="LocalServer.Message" Converter="{x:Static StringConverters.IsNullOrEmpty}" />
+                                </MultiBinding>
+                            </TextBlock.IsVisible>
+                        </TextBlock>
                         <TextBlock x:Name="LocalServerStarting" Classes="noticeBody" Text="Starting the local server…"
                                    IsVisible="{Binding LocalServer.IsStarting, FallbackValue=False}" />
                         <SelectableTextBlock x:Name="LocalServerMessage" Classes="noticeBody" Text="{Binding LocalServer.Message}"

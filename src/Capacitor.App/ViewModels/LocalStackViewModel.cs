@@ -172,8 +172,9 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
         }
         : Waiting ? BusyDetail
         : _shown switch {
-            LocalUpgradeOutcome.Failed f => TerminalAdvice.Strip(f.Message),
+            LocalUpgradeOutcome.Failed f => TerminalAdvice.Strip(f.Message) ?? "The upgrade stopped before it finished.",
             LocalUpgradeOutcome.NotPublished when Progress.From is { } from => $"The local server stays at {from}.",
+            LocalUpgradeOutcome.NotPublished => "Try again later.",
             _ => null,
         };
 
