@@ -68,17 +68,6 @@ public class WizardSimpleStepsTests {
 
     // ── Shim: install / claim / outcome mapping ─────────────────────────────
 
-    sealed class FakeProcessRunner : IProcessRunner {
-        Func<Task<ProcessResult>> _step = () => Task.FromResult(new ProcessResult(0, "", "", false));
-
-        public void Enqueue(ProcessResult result) => _step = () => Task.FromResult(result);
-
-        public Task<ProcessResult> RunAsync(string fileName, string[] args, RunOptions options, CancellationToken ct) => _step();
-
-        public Task<StreamingResult> RunStreamingAsync(string fileName, string[] args, RunOptions options,
-            Action<StreamedLine> onLine, CancellationToken ct) => throw new NotImplementedException();
-    }
-
     sealed class FakeAppStateStore : IAppStateStore {
         public AppState State = new();
         public int Updates;
@@ -111,7 +100,7 @@ public class WizardSimpleStepsTests {
     }
 
     /// The local install starts the link in the background; the harness step's Next joins it
-    /// rather than raising a second admin prompt.
+    /// rather than linking a second time.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_second_install_while_one_runs_joins_it() {
@@ -121,7 +110,7 @@ public class WizardSimpleStepsTests {
 
             var background = vm.InstallAsync();
             var next       = vm.InstallAsync();
-            installer.Result.SetResult(new ShimResult(ShimOutcome.Installed, null, null));
+            installer.Result.SetResult(new ShimResult(ShimOutcome.Installed, null));
 
             return (installer.Calls, await background, await next);
         });
@@ -132,9 +121,9 @@ public class WizardSimpleStepsTests {
     }
 
     static readonly ShimResult[] UnfinishedShims = [
-        new(ShimOutcome.InstalledButNotOnPath, null, null),
-        new(ShimOutcome.InstalledButNotOnPath, "Add: export PATH=\"/usr/local/bin:$PATH\"", null),
-        new(ShimOutcome.Failed, "Permission denied.", "sudo ln -s /x /usr/local/bin/kcap"),
+        new(ShimOutcome.InstalledButNotOnPath, null),
+        new(ShimOutcome.InstalledButNotOnPath, "Add: export PATH=\"/Users/a/.local/bin:$PATH\""),
+        new(ShimOutcome.Failed, "Permission denied."),
     ];
 
     static async Task<List<string?>> PathFixMessagesAsync(bool onLocalPath) =>
@@ -157,7 +146,6 @@ public class WizardSimpleStepsTests {
         foreach (var message in messages) {
             await Assert.That(message).IsNotNull();
             await Assert.That(message!).DoesNotContain("kcap ");
-            await Assert.That(message).DoesNotContain("sudo");
             await Assert.That(message).DoesNotContain("export PATH");
         }
     }
@@ -169,13 +157,12 @@ public class WizardSimpleStepsTests {
 
         await Assert.That(messages[0]).Contains("run kcap --version");
         await Assert.That(messages[1]).Contains("export PATH");
-        await Assert.That(messages[2]).Contains("sudo ln -s");
+        await Assert.That(messages[2]).Contains("Permission denied.");
     }
 
     sealed class ShimHarness : IDisposable {
         readonly TempDir _tmp = new();
         public string TempDir => _tmp.Path;
-        public readonly FakeProcessRunner  Runner = new();
         public readonly FakeLoginShellProbe Probe = new();
         public readonly FakeAppStateStore  Store  = new();
         public readonly PathShimInstaller  Installer;
@@ -184,14 +171,26 @@ public class WizardSimpleStepsTests {
         public readonly PathFixViewModel   Vm;
 
         public ShimHarness() {
-            Destination = Path.Combine(TempDir, "kcap");
+            Destination = Path.Combine(_tmp.CreateDir(".local", "bin"), "kcap");
             Target      = Path.Combine(TempDir, "target-cli");
             Probe.KcapPathBehavior = _ => Task.FromResult<string?>(Destination);
-            Installer   = new PathShimInstaller(Runner, Probe, Destination);
+            Installer   = new PathShimInstaller(Probe, new UserHome(TempDir));
             Vm          = new PathFixViewModel(Installer, Store, Target);
         }
 
         public Task Install() => Vm.InstallAsync();
+
+        /// A file where the link's folder should be makes the next link fail.
+        public void DenyLinking(bool deny = true) {
+            var folder = Path.GetDirectoryName(Destination)!;
+            if (deny) {
+                Directory.Delete(folder);
+                File.WriteAllText(folder, "");
+            } else {
+                File.Delete(folder);
+                Directory.CreateDirectory(folder);
+            }
+        }
 
         public void Dispose() => _tmp.Dispose();
     }
@@ -201,7 +200,6 @@ public class WizardSimpleStepsTests {
     public async Task Install_claims_ShimOffered_exactly_once_across_two_clicks() {
         var updates = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new ShimHarness();
-            h.Runner.Enqueue(new ProcessResult(0, "", "", false));
             h.Probe.KcapOnPathBehavior = _ => Task.FromResult<bool?>(true);
 
             await h.Install();
@@ -219,7 +217,7 @@ public class WizardSimpleStepsTests {
     public async Task A_background_link_claims_no_offer() {
         var updates = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new ShimHarness();
-            h.Runner.Enqueue(new ProcessResult(1, "", "Permission denied", false));
+            h.DenyLinking();
 
             await h.Vm.LinkAsync(CancellationToken.None);
 
@@ -229,51 +227,22 @@ public class WizardSimpleStepsTests {
         await Assert.That(updates).IsEqualTo(0);
     }
 
-    /// The handoff carries a failure the user may not have seen, but not their own cancel.
+    /// The handoff carries a failure the user may not have seen; a link that never ran has none.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task An_unfinished_link_hands_off_its_reason_but_not_a_cancel() {
-        var (failed, cancelled, none) = await AvaloniaSession.DispatchAsync(async () => {
+    public async Task An_unfinished_link_hands_off_its_reason() {
+        var (failed, none) = await AvaloniaSession.DispatchAsync(async () => {
             var failing = new PathFixViewModel(
-                new ScriptedInstaller(new ShimResult(ShimOutcome.Failed, "Permission denied.", null)), new FakeAppStateStore(), "/x");
-            var cancelling = new PathFixViewModel(
-                new ScriptedInstaller(new ShimResult(ShimOutcome.Cancelled, null, null)), new FakeAppStateStore(), "/x");
+                new ScriptedInstaller(new ShimResult(ShimOutcome.Failed, "Permission denied.")), new FakeAppStateStore(), "/x");
             var idle = new PathFixViewModel(
-                new ScriptedInstaller(new ShimResult(ShimOutcome.Failed, null, null)), new FakeAppStateStore(), "/x");
+                new ScriptedInstaller(new ShimResult(ShimOutcome.Failed, null)), new FakeAppStateStore(), "/x");
             await failing.LinkAsync(CancellationToken.None);
-            await cancelling.LinkAsync(CancellationToken.None);
 
-            return (await failing.UnfinishedAsync(), await cancelling.UnfinishedAsync(), await idle.UnfinishedAsync());
+            return (await failing.UnfinishedAsync(), await idle.UnfinishedAsync());
         });
 
         await Assert.That(failed).Contains("Permission denied.");
-        await Assert.That(cancelled).IsNull();
         await Assert.That(none).IsNull();
-    }
-
-    sealed class SequencedInstaller(params Func<ShimResult>[] attempts) : ICliPathInstaller {
-        int _next;
-        public string Disclosure => "";
-        public ShimPreflight Preflight(string target) => throw new NotSupportedException();
-        public Task<ShimResult> InstallAsync(string target, CancellationToken ct) => Task.FromResult(attempts[_next++]());
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task A_cancel_does_not_hide_a_later_attempts_failure() {
-        var unfinished = await AvaloniaSession.DispatchAsync(async () => {
-            var vm = new PathFixViewModel(
-                new SequencedInstaller(
-                    () => new ShimResult(ShimOutcome.Cancelled, null, null),
-                    () => throw new IOException("disk full")),
-                new FakeAppStateStore(), "/x");
-            await vm.LinkAsync(CancellationToken.None);
-            await vm.LinkAsync(CancellationToken.None);
-
-            return await vm.UnfinishedAsync();
-        });
-
-        await Assert.That(unfinished).Contains("disk full");
     }
 
     [Test]
@@ -293,7 +262,6 @@ public class WizardSimpleStepsTests {
     public async Task Installed_outcome_fixes_the_path_with_no_message() {
         var (satisfied, message) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new ShimHarness();
-            h.Runner.Enqueue(new ProcessResult(0, "", "", false));
             h.Probe.KcapOnPathBehavior = _ => Task.FromResult<bool?>(true);
 
             await h.Install();
@@ -310,7 +278,6 @@ public class WizardSimpleStepsTests {
     public async Task InstalledButNotOnPath_outcome_is_not_fixed_and_carries_the_installer_detail() {
         var (satisfied, message) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new ShimHarness();
-            h.Runner.Enqueue(new ProcessResult(0, "", "", false));
             h.Probe.KcapOnPathBehavior = _ => Task.FromResult<bool?>(false);
 
             await h.Install();
@@ -325,26 +292,10 @@ public class WizardSimpleStepsTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Cancelled_outcome_is_not_fixed_and_says_nothing_changed() {
+    public async Task Failed_outcome_is_not_fixed_and_carries_the_installer_detail() {
         var (satisfied, message) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new ShimHarness();
-            h.Runner.Enqueue(new ProcessResult(1, "", "User canceled. (-128)", false));
-
-            await h.Install();
-
-            return (h.Vm.Fixed, h.Vm.Message);
-        });
-
-        await Assert.That(satisfied).IsFalse();
-        await Assert.That(message).IsEqualTo("Cancelled. Nothing changed.");
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Failed_outcome_is_not_fixed_and_names_the_sudo_fallback() {
-        var (satisfied, message) = await AvaloniaSession.DispatchAsync(async () => {
-            using var h = new ShimHarness();
-            h.Runner.Enqueue(new ProcessResult(1, "", "Permission denied", false));
+            h.DenyLinking();
 
             await h.Install();
 
@@ -354,7 +305,7 @@ public class WizardSimpleStepsTests {
         await Assert.That(satisfied).IsFalse();
         await Assert.That(message).IsNotNull();
         await Assert.That(message).StartsWith("Could not finish installing the terminal command.");
-        await Assert.That(message).Contains("sudo mkdir -p /usr/local/bin");
+        await Assert.That(message).Contains(".local");
     }
 
     [Test]

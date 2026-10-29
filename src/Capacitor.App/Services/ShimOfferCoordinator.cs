@@ -131,10 +131,7 @@ public sealed class ShimOfferCoordinator {
         // nothing clears it while the daemon stays connected.
         ShimOutcome.Installed => Installed(),
         ShimOutcome.InstalledButNotOnPath => Status(result.Detail ?? "kcap was linked, but is not yet on your terminal PATH."),
-        ShimOutcome.Cancelled => ClaimDeniedThenStatus("Installing the command-line tool was canceled."),
-        ShimOutcome.Failed => Status(result.SudoFallback is null
-            ? result.Detail ?? "Installing the command-line tool failed."
-            : $"{result.Detail} Or run: {result.SudoFallback}"),
+        ShimOutcome.Failed => Status(result.Detail ?? "Installing the command-line tool failed."),
         _ => Task.CompletedTask,
     };
 
@@ -146,11 +143,6 @@ public sealed class ShimOfferCoordinator {
     }
 
     Task<string?> AwaitPendingLinkAsync() => _pendingLink.WaitAsync(_lifetime);
-
-    async Task ClaimDeniedThenStatus(string message) {
-        await ClaimDeniedAsync().ConfigureAwait(false);
-        await Status(message).ConfigureAwait(false);
-    }
 
     Task Status(string message) {
         _warning = message;

@@ -18,22 +18,22 @@ public sealed class WindowsUserPathInstaller(IUserPathStore store, ILoginShellPr
     public async Task<ShimResult> InstallAsync(string target, CancellationToken ct) {
         var dir = CliDirectory(target);
         if (dir is null || dir.Contains(';') || dir.Contains('\n') || dir.Contains('\r'))
-            return new ShimResult(ShimOutcome.Failed, $"The CLI's folder cannot be added to PATH: {target}", null);
+            return new ShimResult(ShimOutcome.Failed, $"The CLI's folder cannot be added to PATH: {target}");
 
         if (!Contains(store.Read(), dir)) {
             try {
                 store.Append(dir);
             } catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or System.Security.SecurityException) {
-                return new ShimResult(ShimOutcome.Failed, $"Could not update your user PATH: {ex.Message}", null);
+                return new ShimResult(ShimOutcome.Failed, $"Could not update your user PATH: {ex.Message}");
             }
         }
 
         var onPath = await probe.KcapOnPathAsync(ct, forceRefresh: true).ConfigureAwait(false);
         return onPath switch {
-            true  => new ShimResult(ShimOutcome.Installed, null, null),
+            true  => new ShimResult(ShimOutcome.Installed, null),
             false => new ShimResult(ShimOutcome.InstalledButNotOnPath,
-                $"{dir} is on your user PATH, but kcap does not resolve from it yet. Open a new terminal and run kcap --version.", null),
-            _     => new ShimResult(ShimOutcome.Failed, $"{dir} was added to your user PATH, but it could not be re-read to confirm.", null),
+                $"{dir} is on your user PATH, but kcap does not resolve from it yet. Open a new terminal and run kcap --version."),
+            _     => new ShimResult(ShimOutcome.Failed, $"{dir} was added to your user PATH, but it could not be re-read to confirm."),
         };
     }
 

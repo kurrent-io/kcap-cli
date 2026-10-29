@@ -12,7 +12,6 @@ public sealed class PathFixViewModel : ReactiveObject {
 
     Task<bool>? _running;
     bool    _offerClaimed;
-    bool    _cancelled;
     bool    _fixed;
     string? _message;
     IReadOnlyList<DisclosureSpan> _plan = [];
@@ -54,16 +53,16 @@ public sealed class PathFixViewModel : ReactiveObject {
         private set => this.RaiseAndSetIfChanged(ref _message, value);
     }
 
-    /// Settles with why the last link did not finish, or null when it did, none ran, or the user
-    /// cancelled it. The app's startup offer waits on it, since setup may never have shown it.
+    /// Settles with why the last link did not finish, or null when it did or none ran. The app's
+    /// startup offer waits on it, since setup may never have shown it.
     public async Task<string?> UnfinishedAsync() {
         if (_running is null) return null;
         await _running.ConfigureAwait(true);
-        return Fixed || _cancelled ? null : Message;
+        return Fixed ? null : Message;
     }
 
     /// Installs the terminal command and reports whether the login shell can now run it. A call
-    /// while one is running joins it, so the admin prompt never shows twice.
+    /// while one is running joins it, so two links never race for the same folder.
     public async Task<bool> InstallAsync(CancellationToken ct = default) {
         if (_target is not null) await ClaimOfferedOnceAsync().ConfigureAwait(true);
         return await LinkAsync(ct).ConfigureAwait(true);
@@ -81,8 +80,7 @@ public sealed class PathFixViewModel : ReactiveObject {
             return false;
         }
 
-        Message    = null;
-        _cancelled = false;
+        Message = null;
         try {
             Apply(await _installer.InstallAsync(_target, ct).ConfigureAwait(true));
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
@@ -101,7 +99,6 @@ public sealed class PathFixViewModel : ReactiveObject {
     }
 
     void Apply(ShimResult result) {
-        _cancelled = result.Outcome == ShimOutcome.Cancelled;
         switch (result.Outcome) {
             case ShimOutcome.Installed:
                 Fixed   = true;
@@ -112,13 +109,8 @@ public sealed class PathFixViewModel : ReactiveObject {
                     ? "Installed, but your terminal cannot find it yet, so harnesses started from a terminal may not record."
                     : result.Detail ?? "Installed, but your terminal cannot find kcap yet. Open a new terminal and run kcap --version.";
                 break;
-            case ShimOutcome.Cancelled:
-                Message = "Cancelled. Nothing changed.";
-                break;
             default: // Failed
-                Message = result.SudoFallback is null || _onLocalPath()
-                    ? $"Could not finish installing the terminal command. {result.Detail}".TrimEnd()
-                    : $"Could not finish installing the terminal command. Run: {result.SudoFallback}";
+                Message = $"Could not finish installing the terminal command. {result.Detail}".TrimEnd();
                 break;
         }
     }
