@@ -1,4 +1,5 @@
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
@@ -39,6 +40,25 @@ public class UpdateCommandScriptInstallTests : IDisposable {
             RunRefresh      = exe => { refreshed.Add($"refresh:{exe}"); return Task.FromResult(refreshExit?.Invoke(exe) ?? 0); },
             RunLocalUpgrade = exe => { refreshed.Add($"local upgrade:{exe}"); return Task.FromResult(upgradeExit); },
         };
+    }
+
+    [Test]
+    [Arguments(false, LocalUpgradeCommand.Upgraded, 0)]
+    [Arguments(false, LocalUpgradeCommand.NotPublished, 0)]
+    [Arguments(false, LocalUpgradeCommand.Failed, 1)]
+    [Arguments(true, LocalUpgradeCommand.Failed, 0)]
+    public async Task A_current_cli_retries_the_local_stack_unless_only_checking(bool checkOnly, int upgradeExit, int expectedExit) {
+        Skip.When(OperatingSystem.IsWindows(), "the fixture's current is a symlink");
+        using var f = new ScriptReleaseFixture();
+        f.Publish(CapacitorVersion.CurrentDisplay());
+        var calls = new List<string>();
+        using var output = ConsoleOutput.StartFullCapture();
+
+        var exit = await Command(f, calls, upgradeExit: upgradeExit).HandleAsync(checkOnly ? ["--check"] : []);
+
+        await Assert.That(exit).IsEqualTo(expectedExit);
+        await Assert.That(calls).IsEquivalentTo(checkOnly ? [] : new[] { $"local upgrade:{f.Layout.CurrentBin("kcap")}" });
+        await Assert.That(f.CurrentTarget).IsEqualTo("versions/1.0.0");
     }
 
     [Test]
@@ -162,6 +182,6 @@ public class UpdateCommandScriptInstallTests : IDisposable {
         var exit = await Command(f, [], _ => 1).HandleAsync([]);
 
         await Assert.That(exit).IsEqualTo(0);
-        await Assert.That(output.GetCapturedError()).Contains("run `kcap refresh` to retry");
+        await Assert.That(output.GetCapturedError()).Contains("Run `kcap refresh` to retry");
     }
 }

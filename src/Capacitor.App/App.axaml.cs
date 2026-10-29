@@ -177,6 +177,10 @@ public partial class App : Application {
     // No disposal needed — its schedule loop exits on _shutdown; ApplyPendingOnExit is called
     // explicitly at shutdown rather than through Dispose.
     UpdateCoordinator? _updates;
+    IDisposable? _updateCheckSubscription;
+    UpdateCheckWindow? _updateCheckWindow;
+    bool _updateCheckHidden;
+    UpdateCheckProgress? _updateCheckProgress;
     // Assigned by StartAsync's success path only; every one is still null on a startup failure
     // (and cleared again by the catch, which disposes whatever had been built). Teardown —
     // shutdown and startup-failure alike — disposes them in reverse creation order, tray icon
@@ -501,6 +505,39 @@ public partial class App : Application {
     readonly TaskCompletionSource _updateHandedOver = new(TaskCreationOptions.RunContinuationsAsynchronously);
     bool _holdingMainWindow;
 
+    void ShowUpdateCheckProgress(UpdateCheckProgress? progress) {
+        _updateCheckProgress = progress;
+        if (progress is null) {
+            _updateCheckWindow?.Close();
+            _updateCheckHidden = false;
+        } else if (!_shutdownStarted && !_updateCheckHidden) {
+            if (_updateCheckWindow is null) {
+                var window = new UpdateCheckWindow { DataContext = progress };
+                window.Closed += (_, _) => {
+                    _updateCheckWindow = null;
+                    _updateCheckHidden = true;
+                };
+                _updateCheckWindow = window;
+                window.Show();
+                window.Activate();
+            } else {
+                _updateCheckWindow.DataContext = progress;
+            }
+        }
+    }
+
+    Task CheckForAppUpdatesAsync() {
+        _updateCheckHidden = false;
+        ShowUpdateCheckProgress(_updateCheckProgress);
+        return _updates?.CheckForUpdatesAsync() ?? Task.CompletedTask;
+    }
+
+    Task RunUpdateMenuActionAsync() {
+        _updateCheckHidden = false;
+        ShowUpdateCheckProgress(_updateCheckProgress);
+        return _updates?.RunMenuActionAsync() ?? Task.CompletedTask;
+    }
+
     void ShowUpdateFinishWindow(AppUpdateTransition transition, IObservable<AttachStatus> status,
             IObservable<(string? Version, string? Connection)> daemon, IObservable<bool> restartPending, IObservable<LocalStepInput?> local) {
         var vm = new UpdateFinishViewModel(transition, status, daemon, restartPending, local, _time);
@@ -520,7 +557,7 @@ public partial class App : Application {
             _holdingMainWindow = false;
             if (_coordinator is { } coordinator) coordinator.ShowInstead = null;
             LifecycleLog.Write("update_finished", ("operation", transition.Id), ("settled", vm.IsSettled ? "true" : "false"),
-                ("steps", string.Join("; ", vm.Steps.Select(step => $"{step.Title}: {step.State}"))),
+                ("steps", string.Join("; ", vm.Steps.Select(row => $"{row.Step.Title}: {row.Step.State}"))),
                 ("seconds", (_time.GetUtcNow() - _startedAt).TotalSeconds.ToString("0.0", CultureInfo.InvariantCulture)));
             if (!_shutdownStarted) _coordinator?.ShowMainWindow();
             window.Close();
@@ -561,7 +598,7 @@ public partial class App : Application {
     /// From the moment an update is accepted until this process exits, which quiescing can stretch.
     void ShowUpdateClosingWindow() {
         if (_updates?.ReadyVersion is not { } to) return;
-        var window = new UpdateFinishWindow { DataContext = UpdateFinishViewModel.Closing(_updater.InstalledVersion, to, _time) };
+        var window = new UpdateFinishWindow { DataContext = UpdateFinishViewModel.Closing(to, _time) };
         foreach (var other in (ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Windows.ToArray() ?? []) other.Hide();
         window.Show();
         window.Activate();
@@ -918,8 +955,10 @@ public partial class App : Application {
                 desktop.TryShutdown();
             }), _shutdown.Token,
             handingOver: HandOver(AppUpdateTransition.InApp), log: LifecycleLog);
+        _updateCheckSubscription = _updates.CheckProgress.Subscribe(progress =>
+            Dispatcher.UIThread.Post(() => ShowUpdateCheckProgress(progress)));
         _updates.Start();
-        if (_updater.IsAvailable) _appMenu.SetCheckForUpdatesAction(_updates.CheckForUpdatesAsync);
+        if (_updater.IsAvailable) _appMenu.SetCheckForUpdatesAction(CheckForAppUpdatesAsync);
 
         // Said once, here, because nothing else in the app would: the graph is up but deliberately degraded.
         AnnounceUnquiescedLane(lifecycleSurface, laneQuiesced);
@@ -1101,7 +1140,7 @@ public partial class App : Application {
             () => serverLane.RestartAsync(), _shutdown.Token, searchChange: localSearch) {
             Search = localSearch is null ? null : new LocalSearchViewModel(
                 () => LocalEmbeddingFile.Read(_localRoot), ct => LocalBuiltinOffer.LookupAsync(_localRoot, ct), serverLane.Status, localSearch, localUpgrade, () => serverLane.RestartAsync(),
-                _shutdown.Token, openSettings: _openSearchSettings),
+                _shutdown.Token, openSettings: _openSearchSettings, builtinModelReady: () => LocalBuiltinOffer.InstalledModelReady(_localRoot)),
         };
         _localStack = localStack;
         IObservable<bool>? stackOwnsStart = null;
@@ -1306,7 +1345,7 @@ public partial class App : Application {
             lifecycleAttention: lifecycleAttention, shimOfferable: shimOffer.Offerable,
             installShim: shimOffer.RunManualInstallAsync, permissions: permissions,
             remote: TrayViewModel.SummaryFrom(directory, attention.SessionsWithAttention),
-            updateMenu: _updates.MenuItem, updateAction: _updates.RunMenuActionAsync,
+            updateMenu: _updates.MenuItem, updateAction: RunUpdateMenuActionAsync,
             restartPending: restartPending.Pending, openSettings: openSettings, openLaunchApprovals: launchApprovals.Show);
         _tray = new TrayIconManager(this, _trayVm);
         LifecycleLog.Write("tray_created", ("executable", Environment.ProcessPath));
@@ -1482,7 +1521,7 @@ public partial class App : Application {
                 Search     = _localStack?.Search,
                 Experimental = new ExperimentalSettingsViewModel(new ExperimentalSettingsStore(_config), settings.ProfileName, service),
                 About = new AboutSettingsViewModel(service, SettingsCli(settings, service.DaemonName).Cli.VersionAsync, _localStack,
-                    _updates?.MenuItem, _updates is { } updates ? updates.RunMenuActionAsync : null,
+                    _updates?.MenuItem, _updates is not null ? RunUpdateMenuActionAsync : null,
                     followsBetas: () => _updater.AllowsPrerelease, setBetaUpdates: SetBetaUpdatesAsync, appLifetime: _shutdown.Token),
             };
         } catch (Exception ex) {
@@ -2457,8 +2496,8 @@ public partial class App : Application {
                 var declined = declinedTakeoverPairs ?? [];
                 var pairKey = (envelope.Request, named);
                 if (declined.Contains(pairKey)) {
-                    // A pair already declined this run downgrades to a one-line attention presentation — still exactly-once, just never a re-dialog for the SAME pair.
-                    surface.Attention($"kcap needs to replace the daemon service to continue ({named}).");
+                    Console.Error.WriteLine($"kcap: daemon replacement still needed ({named}); already declined this run");
+                    surface.Attention("Daemon service replacement is still needed. Restart kcap to review it again.");
                     markPresented?.Invoke();
                     break;
                 }
@@ -2473,8 +2512,9 @@ public partial class App : Application {
                     // No app-side evidence revalidation on accept: a stale Accept only fails coded (28/29, under the CLI's transaction lock) and re-arrives as a fresh outcome.
                     _ = await runMutation(envelope.Request with { Verb = MutationVerb.Replace }, ct).ConfigureAwait(false);
                 } else {
-                    declined.Add(pairKey); // Accept never records here — an accepting user wants the retry loop
-                    surface.Status($"kcap needs to replace the daemon service to continue ({named}) — declined.");
+                    declined.Add(pairKey);
+                    Console.Error.WriteLine($"kcap: daemon replacement declined ({named})");
+                    surface.Status("Daemon service replacement was skipped. Restart kcap to review it again.");
                 }
                 break;
             }
@@ -2791,6 +2831,8 @@ public partial class App : Application {
         // _reauthSettle synchronously, so reading it after Close observes this close's task.
         if (_signInWindow is { } reauthDialog) reauthDialog.Close();
         if (_settingsWindow is { } settingsDialog) settingsDialog.Close();
+        _updateCheckSubscription?.Dispose();
+        _updateCheckWindow?.Close();
         _launchApprovals?.Dispose();
         _menuBar?.SetLaunchApprovalsAction(null);
         if (_feedbackWindow is { } feedbackDialog) feedbackDialog.Close();

@@ -8,7 +8,7 @@ public sealed record ApplicationsInstallPlan(
     ApplicationsInstallAction Action, string Target, string? SourceVersion = null,
     string? InstalledVersion = null, string? Error = null, string? ExistingPath = null, string? PayloadPath = null,
     IReadOnlyList<string>? Replaces = null) {
-    const string RestartNote = "The app will quit and its daemon will restart. Active turns stop, and agents resume unless auto-resume is off.";
+    const string RestartNote = "kcap will quit and the daemon will restart. Active turns stop. Eligible agents resume if auto-resume is on. Other sessions may need attention.";
 
     public IReadOnlyList<string> Replaces { get; init; } = Replaces ?? [];
 
@@ -49,25 +49,25 @@ public sealed record ApplicationsInstallPlan(
 
     public string Detail => Action switch {
         ApplicationsInstallAction.OpenInstalled when Migrates =>
-            $"Kurrent Capacitor will be replaced with the kcap already installed at {Target}, which will open. Your settings and sign-in will stay intact.\n\n{RestartNote}",
+            $"kcap at {Target} will replace Kurrent Capacitor and open. Settings and sign-in are kept.\n\n{RestartNote}",
         _ when Migrates =>
-            $"Kurrent Capacitor will be replaced with kcap, and the updated app will open. Your settings and sign-in will stay intact.\n\n{RestartNote}",
-        ApplicationsInstallAction.Update => $"kcap will be updated and reopened.{Removal} Your settings and sign-in will stay intact.\n\n{RestartNote}",
+            $"kcap will replace Kurrent Capacitor and open. Settings and sign-in are kept.\n\n{RestartNote}",
+        ApplicationsInstallAction.Update => $"kcap will update and reopen.{Removal} Settings and sign-in are kept.\n\n{RestartNote}",
         _ when KeepsOne =>
-            $"The copy at {Target} stays. {(Replaces.Count == 1 ? $"The one at {Replaces[0]} is removed" : "The other copies are removed")}, and the daemon and the terminal command use the copy that stays.\n\n{RestartNote}",
+            $"The copy at {Target} stays. {(Replaces.Count == 1 ? $"The one at {Replaces[0]} is removed" : "The other copies are removed")}. The daemon and terminal command will use the remaining copy.\n\n{RestartNote}",
         ApplicationsInstallAction.OpenInstalled when Replaces.Count == 0 =>
-            "The installed copy of kcap will open. Your settings and sign-in will stay intact.",
+            "The installed copy of kcap will open. Settings and sign-in are kept.",
         ApplicationsInstallAction.OpenInstalled =>
-            $"The installed copy at {Target} will open.{Removal} Your settings and sign-in will stay intact.\n\n{RestartNote}",
+            $"The installed copy at {Target} will open.{Removal} Settings and sign-in are kept.\n\n{RestartNote}",
         ApplicationsInstallAction.Blocked => Error ?? "The existing copy cannot be safely replaced.",
         _ when Replaces.Count > 0 =>
-            $"kcap will be installed at {Target} and open automatically.{Removal} Your settings and sign-in will stay intact.\n\n{RestartNote}",
-        _ => $"kcap will be installed at {Target} and open automatically. Your settings and sign-in will stay intact.",
+            $"kcap will install at {Target}. It opens automatically.{Removal} Settings and sign-in are kept.\n\n{RestartNote}",
+        _ => $"kcap will install at {Target}. It opens automatically. Settings and sign-in are kept.",
     };
 
     string Removal => Replaces.Count == 0 ? ""
         : Replaces.Count == 1 ? $" It replaces the copy at {Replaces[0]}."
-        : " It replaces the other copies in your Applications folders.";
+        : " It replaces the other copies in the Applications folders.";
 
     public bool Equals(ApplicationsInstallPlan? other) =>
         other is not null && Action == other.Action && Target == other.Target && SourceVersion == other.SourceVersion

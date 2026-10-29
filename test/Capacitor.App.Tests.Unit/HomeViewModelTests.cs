@@ -893,7 +893,7 @@ public class HomeViewModelTests {
             await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsFalse();
             await Assert.That(vm.StartButtonTip).IsEqualTo(HomeViewModel.FinishingUpdateNotice);
             await Assert.That(vm.Notices.ShowUpdate).IsTrue();
-            await Assert.That(vm.UpdateDetail).IsEqualTo("Reconnecting the daemon to the server…");
+            await Assert.That(vm.UpdateDetail).IsEqualTo("Reconnecting the daemon to the server");
 
             progress.OnNext((false, null));
             await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsTrue();
@@ -937,6 +937,16 @@ public class HomeViewModelTests {
             await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsFalse();
             await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.NoHarnessesNotice(null));
             await Assert.That(vm.StartButtonTip).IsEqualTo(HomeViewModel.NoHarnessesNotice(null));
+
+            using var lifecycle = new BehaviorSubject<string?>(null);
+            vm.AttachDaemonRecovery(ReactiveCommand.Create(() => { }), ReactiveCommand.Create(() => { }),
+                Observable.Return(false), Observable.Return(false), lifecycle);
+            const string serviceNotice = "Daemon service replacement was skipped. Restart kcap to review it again.";
+            lifecycle.OnNext(serviceNotice);
+            await Assert.That(vm.BannerMessage).IsEqualTo(serviceNotice);
+            await Assert.That(vm.BannerDetail).IsNull();
+            lifecycle.OnNext(null);
+            await Assert.That(vm.BannerMessage).IsEqualTo(HomeViewModel.NoHarnessesNotice(null));
 
             daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(supportedVendors: ["codex"]));
             await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsTrue();

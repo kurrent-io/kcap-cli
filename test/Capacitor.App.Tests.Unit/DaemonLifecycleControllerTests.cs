@@ -1542,7 +1542,7 @@ public class DaemonLifecycleControllerTests {
     [Test]
     public async Task Disclosure_names_the_count_and_says_the_agents_resume() {
         var text = DaemonLifecycleController.ReloadDisclosure(2, resumes: true);
-        await Assert.That(text).IsEqualTo("Reloading restarts the daemon now. Its 2 running agents are stopped, mid-turn if need be, and resumed on the new daemon unless daemon.auto_resume is off. A review or evaluation still running when it exits may end.");
+        await Assert.That(text).IsEqualTo("Reloading restarts the daemon now. Its 2 running agents are stopped, even mid-turn. Eligible agents resume if auto-resume is on. A review or evaluation still running when it exits may end.");
         await Assert.That(DaemonLifecycleController.ReloadDisclosure(1, resumes: true)).Contains("Its 1 running agent is stopped");
         await Assert.That(DaemonLifecycleController.ReloadDisclosure(0, resumes: true)).IsEqualTo("Reloading restarts the daemon now. A review or evaluation still running when it exits may end.");
     }
@@ -1550,7 +1550,7 @@ public class DaemonLifecycleControllerTests {
     /// A daemon without the shutdown frame is restarted the old way and keeps no resume ledger.
     [Test]
     public async Task Disclosure_for_a_daemon_that_cannot_keep_its_agents_warns_they_end() {
-        await Assert.That(DaemonLifecycleController.ReloadDisclosure(2, resumes: false)).IsEqualTo("Reloading restarts the daemon and ends everything it hosts: 2 agents now, plus any agent, launch or evaluation running when it exits. Uncommitted work in their worktrees is lost.");
+        await Assert.That(DaemonLifecycleController.ReloadDisclosure(2, resumes: false)).IsEqualTo("Reloading restarts the daemon and stops its 2 agents. Any other agents, launches or evaluations running when it exits also end. Uncommitted work in their worktrees is lost.");
     }
 
     [Test]
@@ -2153,6 +2153,7 @@ public class DaemonLifecycleControllerTests {
 
         await WaitUntilAsync(() => h.Surface.Prompts.Count == 1, what: "the Windows service offer");
         await Assert.That(h.Surface.Prompts[0].Disclosure).IsEqualTo(DaemonLifecycleController.WindowsServiceDisclosure(2, resumes: true));
+        await Assert.That(h.Surface.Prompts[0].Disclosure).Contains("2 running agents resume if auto-resume is on");
     }
 
     /// One that cannot resume them waits for idle, without spending the run's offer

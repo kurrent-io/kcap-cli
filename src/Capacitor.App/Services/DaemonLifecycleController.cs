@@ -52,7 +52,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
     /// Every unit rewrite the app offers carries this disclosure.
     internal const string TakeoverDisclosure =
-        "kcap sets up the daemon service again from scratch, so custom settings such as an agent limit reset. If that fails, the service stays uninstalled.";
+        "kcap reinstalls the daemon service. Custom settings, including agent limits, reset. If installation fails, the service stays uninstalled.";
 
     /// Status when Start finds a live service and only kicks reattach. MainWindow replaces this
     /// (and its own Retry reconnect copy) if attach lands Unreachable again.
@@ -62,23 +62,22 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     internal const string RenameRestartStatus = "The daemon name changed. Restart this app before managing it.";
 
     internal const string UnsupervisedAttention =
-        "The daemon is running outside the daemon service, so nothing restarts it after a crash or a restart.";
+        "The daemon was started manually. It will not restart automatically.";
 
     /// <summary>The move stops the daemon keeping its agents, so one that resumes them carries them over</summary>
     internal static string WindowsServiceDisclosure(int activeAgents, bool resumes) =>
-        "kcap installs a Windows service that starts your daemon whenever you sign in and restarts it if it stops. " +
-        "Windows asks for administrator approval once, and the daemon still runs as you. It restarts now" +
-        (activeAgents == 0 || !resumes ? "."
-            : $"; its {activeAgents} running agent{(activeAgents == 1 ? " is" : "s are")} resumed under the service " +
-              "unless daemon.auto_resume is off.");
+        "The Windows service starts the daemon at sign-in and restarts it if it stops. " +
+        "Administrator approval is required. The daemon keeps the same user account.\n\nThe daemon restarts now." +
+        (activeAgents == 0 || !resumes ? ""
+            : $" Its {activeAgents} running agent{(activeAgents == 1 ? " resumes" : "s resume")} if auto-resume is on.");
 
     internal const string MovingToWindowsServiceStatus = "Moving the daemon to the Windows service…";
 
     internal const string WindowsServiceUpdateDisclosure =
-        "This version of kcap ships a newer Windows service. Updating it takes administrator approval; your daemon and its agents keep running.";
+        "The Windows service needs an update. Administrator approval is required. The daemon and its agents keep running.";
 
     internal const string UnsupervisedDisclosure =
-        "This daemon was started outside the daemon service. The service replaces it and keeps it running from now on; anything it hosts now is ended.";
+        "The service will replace this manually started daemon. Running agents will stop. The service will keep the new daemon running.";
 
     internal static readonly TimeSpan TxnActiveRequeryDelay = TimeSpan.FromSeconds(2);
 
@@ -210,11 +209,11 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     internal static string ReloadDisclosure(int activeAgents, bool resumes) => resumes
         ? "Reloading restarts the daemon now. " +
           (activeAgents == 0 ? ""
-              : $"Its {activeAgents} running agent{(activeAgents == 1 ? " is" : "s are")} stopped, mid-turn if need be, and resumed on the new daemon " +
-                "unless daemon.auto_resume is off. ") +
+              : $"Its {activeAgents} running agent{(activeAgents == 1 ? " is" : "s are")} stopped, even mid-turn. " +
+                "Eligible agents resume if auto-resume is on. ") +
           "A review or evaluation still running when it exits may end."
-        : $"Reloading restarts the daemon and ends everything it hosts: {activeAgents} agent{(activeAgents == 1 ? "" : "s")} now, " +
-          "plus any agent, launch or evaluation running when it exits. Uncommitted work in their worktrees is lost.";
+        : $"Reloading restarts the daemon and stops its {activeAgents} agent{(activeAgents == 1 ? "" : "s")}. " +
+          "Any other agents, launches or evaluations running when it exits also end. Uncommitted work in their worktrees is lost.";
 
     bool ResumesAgents() {
         lock (_lock) return _latestResumes;

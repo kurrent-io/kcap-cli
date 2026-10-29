@@ -31,11 +31,11 @@ public sealed class VelopackAppUpdater : IAppUpdater {
         return new UpdateCandidate(target.ToString(), target.IsPrerelease);
     }
 
-    public Task DownloadAsync(UpdateCandidate candidate, CancellationToken ct) {
+    public Task DownloadAsync(UpdateCandidate candidate, CancellationToken ct, Action<int>? progress = null) {
         var info = _lastCheck;
         if (info is null || info.TargetFullRelease.Version.ToString() != candidate.Version)
-            throw new InvalidOperationException($"No check offered {candidate.Version}; check before downloading.");
-        return _manager.DownloadUpdatesAsync(info, null, ct);
+            throw new InvalidOperationException($"No check offered {candidate.Version}. Check before downloading.");
+        return _manager.DownloadUpdatesAsync(info, progress, ct);
     }
 
     public void ApplyOnExit(UpdateCandidate candidate) =>

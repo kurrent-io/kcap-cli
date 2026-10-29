@@ -26,23 +26,27 @@ static class LocalServerHealth {
             return new ServerHealth.Unreachable($"no answer within {RequestTimeout.TotalSeconds:0} seconds");
         }
 
-        return new ServerHealth.Answered(status == HttpStatusCode.OK, Stores(body));
+        return Parse(status, body);
     }
 
-    static IReadOnlyDictionary<string, StoreHealth> Stores(string body) {
+    static ServerHealth.Answered Parse(HttpStatusCode status, string body) {
+        var ready = status == HttpStatusCode.OK;
         try {
             using var doc = JsonDocument.Parse(body);
-
-            if (doc.RootElement.Obj("results") is not { } results) return FrozenDictionary<string, StoreHealth>.Empty;
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return new(ready, FrozenDictionary<string, StoreHealth>.Empty);
+            var pending = doc.RootElement.TryGetProperty("updatePending", out var update) && update.ValueKind == JsonValueKind.True;
+            if (doc.RootElement.Obj("results") is not { } results)
+                return new(ready, FrozenDictionary<string, StoreHealth>.Empty, pending);
 
             var stores = new Dictionary<string, StoreHealth>(StringComparer.Ordinal);
             foreach (var entry in results.EnumerateObject()) {
                 if (entry.Value.Str("status") is { } s) stores[entry.Name] = new(s, entry.Value.Str("description"));
             }
 
-            return stores;
+            return new(ready, stores, pending);
         } catch (JsonException) {
-            return FrozenDictionary<string, StoreHealth>.Empty;
+            return new(ready, FrozenDictionary<string, StoreHealth>.Empty);
         }
     }
 }

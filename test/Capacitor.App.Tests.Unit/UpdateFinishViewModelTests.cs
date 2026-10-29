@@ -76,10 +76,9 @@ public class UpdateFinishViewModelTests {
 
         await Assert.That(downloading.State).IsEqualTo(UpdateStepState.Running);
         await Assert.That(downloading.Title).IsEqualTo("Local server 1.4.0 → 1.4.1");
-        await Assert.That(downloading.Detail).IsEqualTo("Downloading…");
+        await Assert.That(downloading.Detail).IsEqualTo("Downloading");
         await Assert.That(downloading.Trailing).IsEqualTo("71%");
-        await Assert.That(downloading.Hint).IsEqualTo("Upgrading kcap local 1.4.0 to 1.4.1. Downloading 1.4.1… 71%");
-        await Assert.That(starting.Detail).IsEqualTo("Starting… A migration can take a few minutes");
+        await Assert.That(starting.Detail).IsEqualTo("Starting the server");
     }
 
     [Test]
@@ -96,36 +95,28 @@ public class UpdateFinishViewModelTests {
             null, null))!;
         var notStarted = UpdateFinishViewModel.LocalStep(new LocalStepInput(false, null, null, null))!;
 
-        await Assert.That(upgraded is { Title: "Local server 1.4.1", Detail: "Upgraded", State: UpdateStepState.Done }).IsTrue();
+        await Assert.That(upgraded is { Title: "Local server 1.4.1", Detail: "Updated", State: UpdateStepState.Done }).IsTrue();
         await Assert.That(notPublished.State).IsEqualTo(UpdateStepState.Note);
         await Assert.That(notPublished.Detail).IsEqualTo("1.4.1 is not available yet. Staying on 1.4.0");
         await Assert.That(failed.State).IsEqualTo(UpdateStepState.Problem);
         await Assert.That(failed.Detail).IsEqualTo("1.4.1 did not start. Open kcap and press Start");
-        await Assert.That(notSwitched.Detail).IsEqualTo("The download failed. Staying on 1.4.0");
+        await Assert.That(notSwitched.Detail).IsEqualTo("Update did not finish. Staying on 1.4.0. Open kcap and press Try again");
         await Assert.That(notStarted.State).IsEqualTo(UpdateStepState.Pending);
         await Assert.That(UpdateFinishViewModel.LocalStep(new LocalStepInput(false, null, null, null, Skipped: true))).IsNull();
         await Assert.That(UpdateFinishViewModel.LocalStep(null)).IsNull();
     }
 
-    /// No step detail closes with a full stop, and none splits two clauses with a semicolon.
     [Test]
-    public async Task Step_details_are_fragments() {
-        var details = new[] {
-            UpdateFinishViewModel.DaemonStep(Connected, "1.4.0", "connected", true, "1.4.1"),
-            UpdateFinishViewModel.DaemonStep(Connected, "1.4.0", "connected", false, "1.4.1", waitedLong: true),
-            UpdateFinishViewModel.DaemonStep(Connected, "1.5.0", "connected", false, "1.4.1"),
-            UpdateFinishViewModel.DaemonStep(Restarting, null, null, true, "1.4.1"),
-            UpdateFinishViewModel.DaemonStep(Down, null, null, false, "1.4.1"),
-            UpdateFinishViewModel.DaemonStep(new AttachStatus(AttachState.Unreachable, "daemon_incompatible", null), null, null, false, "1.4.1", waitedLong: true),
-            UpdateFinishViewModel.DaemonStep(Connected, "1.4.1", "reconnecting", false, "1.4.1"),
-            UpdateFinishViewModel.DaemonStep(Connected, "1.4.1", "disconnected", false, "1.4.1", waitedLong: true),
-        }.Concat(new UpdateFinishViewModel("1.4.0", "1.4.1", new FakeTimeProvider(), stopsDaemon: true).Steps)
-            .Select(step => step.Detail!).ToList();
+    public async Task Long_failure_details_keep_the_recovery_action_concise() {
+        var message = "Could not download https://example.com/" + new string('x', 2000);
+        var step = UpdateFinishViewModel.LocalStep(new(false,
+            new LocalUpgradeOutcome.Failed("download_failed", message, false,
+                LocalInstallAffordance.For("download_failed"), "1.4.0", "1.4.1"), null, null))!;
 
-        foreach (var detail in details) {
-            await Assert.That(detail.EndsWith('.')).IsFalse();
-            await Assert.That(detail).DoesNotContain(";");
-        }
+        await Assert.That(step.Detail!.Length).IsLessThan(150);
+        await Assert.That(step.Detail).Contains("1.4.0");
+        await Assert.That(step.Detail).Contains("Try again");
+        await Assert.That(step.Hint).Contains(message);
     }
 
     [Test]
@@ -156,7 +147,7 @@ public class UpdateFinishViewModelTests {
             await Assert.That(vm.OpenLabel).IsEqualTo("Open kcap");
             status.OnNext(Connected);
             daemon.OnNext(("1.4.1", "connected"));
-            await Assert.That(vm.Heading).IsEqualTo("kcap 1.4.1 is ready");
+            await Assert.That(vm.Heading).IsEqualTo("kcap is ready");
             clock.Advance(UpdateFinishViewModel.HandOverDelay);
             await WaitUntilAsync(() => completed == 1);
 
@@ -165,7 +156,7 @@ public class UpdateFinishViewModelTests {
             var stuckCompleted = 0;
             stuck.Completed += () => stuckCompleted++;
             clock.Advance(TimeSpan.FromMinutes(1));
-            await Assert.That(stuck.Heading).IsEqualTo("kcap 1.4.1 is installed");
+            await Assert.That(stuck.Heading).IsEqualTo("kcap is installed");
             await Assert.That(stuckCompleted).IsEqualTo(0);
             stuck.OpenCommand.Execute().Subscribe();
             await Assert.That(stuckCompleted).IsEqualTo(1);
@@ -179,22 +170,22 @@ public class UpdateFinishViewModelTests {
             using var vm = new UpdateFinishViewModel(Update, Observable.Never<AttachStatus>(), Observable.Never<(string?, string?)>(),
                 Observable.Never<bool>(), Observable.Never<LocalStepInput?>(), new FakeTimeProvider());
 
-            await Assert.That(vm.Steps.Select(step => step.Title).SequenceEqual(["kcap 1.4.1", "Daemon"])).IsTrue();
-            await Assert.That(vm.Steps[1].Detail).IsEqualTo("Connecting…");
+            await Assert.That(vm.Steps.Select(row => row.Step.Title).SequenceEqual(["kcap 1.4.1", "Daemon"])).IsTrue();
+            await Assert.That(vm.Steps[1].Step.Detail).IsEqualTo("Connecting");
         });
     }
 
     [Test]
     [Arguments(false, "Closing kcap", "The daemon and its agents keep running")]
-    [Arguments(true, "Closing kcap and the daemon", "Agents resume after the update")]
+    [Arguments(true, "Closing kcap and the daemon", "Eligible agents resume if auto-resume is on")]
     public async Task The_closing_window_says_what_happens_to_agents_and_offers_nothing_to_open(bool stopsDaemon, string title, string agents) {
-        using var vm = new UpdateFinishViewModel("1.4.0", "1.4.1", new FakeTimeProvider(), stopsDaemon);
+        using var vm = new UpdateFinishViewModel("1.4.1", new FakeTimeProvider(), stopsDaemon);
 
-        await Assert.That(vm.Heading).IsEqualTo("Updating to kcap 1.4.1…");
+        await Assert.That(vm.Heading).IsEqualTo("Updating kcap…");
         await Assert.That(vm.CanOpen).IsFalse();
-        await Assert.That(vm.Steps.Select(step => step.State).SequenceEqual([UpdateStepState.Running, UpdateStepState.Pending])).IsTrue();
-        await Assert.That(vm.Steps[0].Title).IsEqualTo(title);
-        await Assert.That(vm.Steps[0].Detail).IsEqualTo(agents);
+        await Assert.That(vm.Steps.Select(row => row.Step.State).SequenceEqual([UpdateStepState.Running, UpdateStepState.Pending])).IsTrue();
+        await Assert.That(vm.Steps[0].Step.Title).IsEqualTo(title);
+        await Assert.That(vm.Steps[0].Step.Detail).IsEqualTo(agents);
     }
 
     /// The main window reads a daemon off the server as an outage, so the update is not finished before it reconnects.
@@ -203,7 +194,7 @@ public class UpdateFinishViewModelTests {
         var redialing = UpdateFinishViewModel.DaemonStep(Connected, "1.4.1", "disconnected", false, "1.4.1");
         var gaveUp = UpdateFinishViewModel.DaemonStep(Connected, "1.4.1", "disconnected", false, "1.4.1", waitedLong: true);
 
-        await Assert.That(redialing is { Title: "Daemon 1.4.1", Detail: "Connecting to the server…", State: UpdateStepState.Running }).IsTrue();
+        await Assert.That(redialing is { Title: "Daemon 1.4.1", Detail: "Connecting to the server", State: UpdateStepState.Running }).IsTrue();
         await Assert.That(gaveUp is { Detail: "Not connected to the server yet", State: UpdateStepState.Note }).IsTrue();
         await Assert.That(UpdateFinishViewModel.Project(Update, Connected, "1.4.1", "reconnecting", false, null).Settled).IsFalse();
     }
@@ -220,10 +211,10 @@ public class UpdateFinishViewModelTests {
 
             clock.Advance(UpdateFinishViewModel.DaemonPatience * 2);
             local.OnNext(new LocalStepInput(false, new LocalUpgradeOutcome.Upgraded("1.4.0", "1.4.1"), null, null));
-            await Assert.That(vm.Steps[^1].State).IsEqualTo(UpdateStepState.Running);
+            await Assert.That(vm.Steps[^1].Step.State).IsEqualTo(UpdateStepState.Running);
 
             clock.Advance(UpdateFinishViewModel.DaemonPatience);
-            await WaitUntilAsync(() => vm.Steps[^1].State == UpdateStepState.Note);
+            await WaitUntilAsync(() => vm.Steps[^1].Step.State == UpdateStepState.Note);
         });
     }
 
@@ -239,7 +230,7 @@ public class UpdateFinishViewModelTests {
             using var _ = vm.Progress.Subscribe(progress.Add);
 
             vm.OpenCommand.Execute().Subscribe();
-            await Assert.That(progress[^1]).IsEqualTo((true, "Restarting the daemon…"));
+            await Assert.That(progress[^1]).IsEqualTo((true, "Restarting the daemon"));
 
             status.OnNext(Connected);
             daemon.OnNext(("1.4.1", "connected"));
@@ -255,7 +246,7 @@ public class UpdateFinishViewModelTests {
         var after = UpdateFinishViewModel.Project(Update, Connected, "1.4.1", "connected", false,
             new LocalStepInput(false, new LocalUpgradeOutcome.Upgraded("1.4.0", "1.4.1"), null, null));
 
-        await Assert.That(during.Steps[^1] is { Detail: "Waiting for the local server…", State: UpdateStepState.Running }).IsTrue();
+        await Assert.That(during.Steps[^1] is { Detail: "Waiting for the local server", State: UpdateStepState.Running }).IsTrue();
         await Assert.That(after.Steps[^1].State).IsEqualTo(UpdateStepState.Done);
     }
 
@@ -266,8 +257,8 @@ public class UpdateFinishViewModelTests {
             new LocalStepInput(true, null, null, null, Phase: LocalUpgradePhase.Downloading, From: "1.4.0", To: "1.4.1"));
         var reconnecting = UpdateFinishViewModel.Project(Update, Connected, "1.4.1", "disconnected", false, null);
 
-        await Assert.That(UpdateFinishViewModel.ProgressDetail(downloading.Steps)).IsEqualTo("Downloading the local server…");
-        await Assert.That(UpdateFinishViewModel.ProgressDetail(reconnecting.Steps)).IsEqualTo("Reconnecting the daemon to the server…");
+        await Assert.That(UpdateFinishViewModel.ProgressDetail(downloading.Steps)).IsEqualTo("Downloading the local server");
+        await Assert.That(UpdateFinishViewModel.ProgressDetail(reconnecting.Steps)).IsEqualTo("Reconnecting the daemon to the server");
         await Assert.That(UpdateFinishViewModel.ProgressDetail(UpdateFinishViewModel.Project(Update, Connected, "1.4.1", "connected", false, null).Steps)).IsNull();
     }
 
@@ -286,8 +277,8 @@ public class UpdateFinishViewModelTests {
         var newer = UpdateFinishViewModel.DaemonStep(Connected, "1.5.0", "connected", false, "1.4.1");
 
         await Assert.That(waiting.State).IsEqualTo(UpdateStepState.Running);
-        await Assert.That(waiting.Detail).IsEqualTo("Picking up 1.4.1…");
-        await Assert.That(UpdateFinishViewModel.DaemonStep(Restarting, null, null, false, "1.4.1").Detail).IsEqualTo("Restarting into 1.4.1…");
+        await Assert.That(waiting.Detail).IsEqualTo("Waiting to restart into 1.4.1");
+        await Assert.That(UpdateFinishViewModel.DaemonStep(Restarting, null, null, false, "1.4.1").Detail).IsEqualTo("Restarting into 1.4.1");
         await Assert.That(waited.State).IsEqualTo(UpdateStepState.Note);
         await Assert.That(waited.Detail).IsEqualTo("Still on 1.4.0. Moves to 1.4.1 on its next restart");
         await Assert.That(newer.State).IsEqualTo(UpdateStepState.Note);

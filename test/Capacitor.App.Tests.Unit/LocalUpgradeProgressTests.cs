@@ -1,8 +1,28 @@
 using Capacitor.App.Services.LocalSetup;
+using Capacitor.App.ViewModels;
 
 namespace Capacitor.App.Tests.Unit;
 
 public class LocalUpgradeProgressTests {
+    [Test]
+    public async Task Model_bytes_replace_archive_progress_and_keyword_fallback_remains_visible() {
+        var p = Run(
+            """{"v":1,"event":"download_progress","received":200,"bytes":200}""",
+            """{"v":1,"event":"embeddings_builtin_downloading","bytes":300}""",
+            """{"v":1,"event":"embeddings_builtin_progress","received":99,"bytes":300}""");
+
+        await Assert.That(p.DownloadFraction).IsEqualTo(0.33);
+        await Assert.That(p.Phase.ToString()).IsEqualTo("DownloadingModel");
+
+        p.Apply(LocalSetupLine.Parse("""{"v":1,"event":"embeddings_skipped","code":"download_failed","message":"Search by keyword. Run kcap setup --local to retry."}""")!);
+        var outcome = LocalUpgradeOutcome.Settle(p, 0, null);
+        var step = UpdateFinishViewModel.LocalStep(new(false, outcome, null, null))!;
+
+        await Assert.That(outcome).IsTypeOf<LocalUpgradeOutcome.Upgraded>();
+        await Assert.That(step.State).IsEqualTo(UpdateStepState.Note);
+        await Assert.That(step.Detail).Contains("keyword");
+    }
+
     static LocalUpgradeProgress Run(params string[] lines) {
         var progress = new LocalUpgradeProgress();
         foreach (var text in lines) {
@@ -13,7 +33,7 @@ public class LocalUpgradeProgressTests {
 
     [Test]
     public async Task Unknown_events_and_garbage_lines_change_nothing() {
-        var p = Run("warning: x", "{\"v\":2,\"event\":\"embeddings_model_pulling\"}", "{\"v\":1,\"eve");
+        var p = Run("warning: x", "{\"v\":2,\"event\":\"future_upgrade_event\"}", "{\"v\":1,\"eve");
 
         await Assert.That(p.Phase).IsEqualTo(LocalUpgradePhase.Waiting);
         await Assert.That(p.From).IsNull();
@@ -43,7 +63,7 @@ public class LocalUpgradeProgressTests {
         }
 
         await Assert.That(phases).IsEquivalentTo(
-            [LocalUpgradePhase.Waiting, LocalUpgradePhase.Downloading, LocalUpgradePhase.Stopping, LocalUpgradePhase.Starting],
+            [LocalUpgradePhase.Waiting, LocalUpgradePhase.Downloading, LocalUpgradePhase.Extracting, LocalUpgradePhase.Stopping, LocalUpgradePhase.Starting],
             TUnit.Assertions.Enums.CollectionOrdering.Matching);
         await Assert.That(p.From).IsEqualTo("1.2.0");
         await Assert.That(p.To).IsEqualTo("1.3.0");

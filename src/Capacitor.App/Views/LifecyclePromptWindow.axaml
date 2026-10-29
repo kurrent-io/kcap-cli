@@ -21,7 +21,8 @@
         <Grid Margin="36,44,36,28" RowDefinitions="*,Auto">
             <ScrollViewer Grid.Row="0">
                 <StackPanel>
-                    <Panel Width="64" Height="64" HorizontalAlignment="Left">
+                    <views:UpdateIcon HorizontalAlignment="Left" IsVisible="{Binding IsUpdate}" />
+                    <Panel Width="64" Height="64" HorizontalAlignment="Left" IsVisible="{Binding !IsUpdate}">
                         <Image Source="avares://kcap-desktop/Assets/kcap-icon.png"
                                RenderOptions.BitmapInterpolationMode="HighQuality" />
                         <Border CornerRadius="12" BorderThickness="1" BorderBrush="{StaticResource KcapBorderBrush}" />
@@ -47,6 +48,16 @@
                                 Background="{StaticResource KcapSurfaceBrush}"
                                 BorderBrush="{StaticResource KcapBorderBrush}">
                             <TextBlock Text="{Binding UpdateVersion}" FontSize="12" FontFamily="{StaticResource OnboardingMonoFont}"
+                                       Foreground="{StaticResource KcapTextBrush}" />
+                        </Border>
+                    </StackPanel>
+
+                    <StackPanel Margin="0,12,0,0" Orientation="Horizontal" Spacing="10" IsVisible="{Binding ShowCurrentVersion}">
+                        <TextBlock Text="Installed version" VerticalAlignment="Center" FontSize="12.5"
+                                   Foreground="{StaticResource KcapMutedBrush}" />
+                        <Border Padding="10,3" CornerRadius="999" BorderThickness="1"
+                                Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}">
+                            <TextBlock Text="{Binding InstalledVersion}" FontSize="12" FontFamily="{StaticResource OnboardingMonoFont}"
                                        Foreground="{StaticResource KcapTextBrush}" />
                         </Border>
                     </StackPanel>

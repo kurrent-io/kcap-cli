@@ -283,7 +283,7 @@
                     <!-- The chip docks beside the status column. Until a daemon name or version
                          exists the second row is absent, and the chip shares the status line. -->
                     <Grid ColumnDefinitions="*,Auto" ClipToBounds="True">
-                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Spacing="2">
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Spacing="2" IsVisible="{Binding !ShowsUpdateContext}">
                     <StackPanel x:Name="RailConnectionStatus" Orientation="Horizontal" Spacing="7">
                         <!-- Extra info (lighter) then the fragment's name (kcapTipCaption). A
                              diagnostic takes the extra slot; without one the caption stands
@@ -292,10 +292,10 @@
                             <StackPanel Spacing="2">
                                 <TextBlock Text="{Binding ServerLaneTip}" TextWrapping="Wrap"
                                            IsVisible="{Binding ConnectionHasDetail}" />
-                                <TextBlock Text="{x:Static vm:MainWindowViewModel.AttachStatusTip}"
+                                <TextBlock Text="{x:Static vm:MainWindowViewModel.ConnectionStatusTip}"
                                            Classes="kcapTipCaption"
                                            IsVisible="{Binding ConnectionHasDetail}" />
-                                <TextBlock Text="{x:Static vm:MainWindowViewModel.AttachStatusTip}"
+                                <TextBlock Text="{x:Static vm:MainWindowViewModel.ConnectionStatusTip}"
                                            IsVisible="{Binding !ConnectionHasDetail}" />
                             </StackPanel>
                         </ToolTip.Tip>
@@ -366,6 +366,19 @@
                             </ToolTip.Tip>
                         </TextBlock>
                     </WrapPanel>
+                    </StackPanel>
+                    <StackPanel x:Name="RailUpdateContext" Grid.Column="0" VerticalAlignment="Center" Spacing="4"
+                                IsVisible="{Binding ShowsUpdateContext}">
+                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="7">
+                            <views:AppIcon Kind="Monitor" Size="14" Foreground="{StaticResource KcapMutedBrush}" />
+                            <TextBlock Grid.Column="1" Text="{Binding UpdateContextName}" Classes="footerValue"
+                                       Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
+                        </Grid>
+                        <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="5">
+                            <TextBlock Text="This machine" Classes="footerMeta" />
+                            <TextBlock Grid.Column="1" Classes="footerDot" IsVisible="{Binding DaemonName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            <TextBlock Grid.Column="2" Text="{Binding DaemonName}" Classes="footerMeta" TextTrimming="CharacterEllipsis" />
+                        </Grid>
                     </StackPanel>
                     <Button x:Name="RailHelpButton" Grid.Column="1" Classes="kcapChip"
                             Classes.withDaemon="{Binding ShowsDaemonLine}"

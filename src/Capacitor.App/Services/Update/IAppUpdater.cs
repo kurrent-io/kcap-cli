@@ -13,7 +13,7 @@ public interface IAppUpdater {
     UpdateCandidate? PendingRestart { get; }
 
     Task<UpdateCandidate?> CheckAsync(CancellationToken ct);
-    Task DownloadAsync(UpdateCandidate candidate, CancellationToken ct);
+    Task DownloadAsync(UpdateCandidate candidate, CancellationToken ct, Action<int>? progress = null);
 
     /// Hands the swap to the updater, which waits for this process to exit; call it last in the
     /// shutdown sequence — its wait is bounded to 60 s.
