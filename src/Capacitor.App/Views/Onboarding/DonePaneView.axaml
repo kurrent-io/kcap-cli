@@ -2,37 +2,9 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:views="clr-namespace:Capacitor.App.Views"
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels.Onboarding"
+             xmlns:onboarding="clr-namespace:Capacitor.App.Views.Onboarding"
              x:Class="Capacitor.App.Views.Onboarding.DonePaneView"
              x:DataType="vm:DoneStepViewModel">
-    <UserControl.Styles>
-        <Style Selector="Border.servicePill">
-            <Setter Property="CornerRadius" Value="10" />
-            <Setter Property="Padding" Value="9,3" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="Background" Value="{StaticResource OnboardingAccentWashBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource OnboardingPanelBorderBrush}" />
-        </Style>
-        <Style Selector="Border.servicePill TextBlock">
-            <Setter Property="FontFamily" Value="{StaticResource OnboardingMonoFont}" />
-            <Setter Property="FontSize" Value="10.5" />
-            <Setter Property="Foreground" Value="{StaticResource OnboardingTextBrush}" />
-        </Style>
-        <Style Selector="Border.servicePill.running">
-            <Setter Property="Background" Value="{StaticResource OnboardingResolvedFillBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource OnboardingResolvedBorderBrush}" />
-        </Style>
-        <Style Selector="Border.servicePill.running TextBlock">
-            <Setter Property="Foreground" Value="{StaticResource KcapSuccessBrush}" />
-        </Style>
-        <Style Selector="Border.servicePill.failed">
-            <Setter Property="Background" Value="{StaticResource OnboardingWarningFillBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource OnboardingWarningBorderBrush}" />
-        </Style>
-        <Style Selector="Border.servicePill.failed TextBlock">
-            <Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" />
-        </Style>
-    </UserControl.Styles>
-
     <StackPanel Spacing="14">
         <Border Classes="onboardingCard" IsVisible="{Binding ShowsFigures}">
             <StackPanel Spacing="20">
@@ -88,7 +60,7 @@
                         <DataTemplate x:DataType="vm:CaptureItem">
                             <Border Classes="onboardingRowRule" Padding="0,8">
                                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                                    <TextBlock Text="{Binding Label}" FontSize="13" Foreground="{StaticResource OnboardingTextBrush}" VerticalAlignment="Center" />
+                                    <TextBlock Text="{Binding Label}" FontSize="13" LineHeight="20" Foreground="{StaticResource OnboardingTextBrush}" VerticalAlignment="Center" />
                                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
                                         <Ellipse Width="6" Height="6" VerticalAlignment="Center" Classes.needsYou="{Binding NeedsYou}">
                                             <Ellipse.Styles>
@@ -96,7 +68,7 @@
                                                 <Style Selector="Ellipse.needsYou"><Setter Property="Fill" Value="{StaticResource OnboardingAtmosphereBrush}" /></Style>
                                             </Ellipse.Styles>
                                         </Ellipse>
-                                        <TextBlock Text="{Binding State}" Classes="onboardingSignal" VerticalAlignment="Center"
+                                        <TextBlock Text="{Binding State}" Classes="onboardingSignal" LineHeight="20" VerticalAlignment="Center"
                                                    Classes.needsYou="{Binding NeedsYou}">
                                             <TextBlock.Styles>
                                                 <Style Selector="TextBlock"><Setter Property="Foreground" Value="{StaticResource KcapSuccessBrush}" /></Style>
@@ -116,13 +88,14 @@
                 <TextBlock Classes="onboardingNote" IsVisible="{Binding PathHazardVisible}">
                     <Run Text="Nothing is stored until the login shell can find " /><Run Text="kcap" FontFamily="{StaticResource OnboardingMonoFont}" /><Run Text=". Go back to your agents to fix it" />
                 </TextBlock>
-                <TextBlock Classes="onboardingNote" Text="{Binding ImportHint}"
-                           IsVisible="{Binding ImportHint, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                <TextBlock Classes="onboardingNote" onboarding:OnboardingSpans.Spans="{Binding ImportHint}"
+                           IsVisible="{Binding ImportHint, Converter={x:Static ObjectConverters.IsNotNull}}" />
                 <Button x:Name="AddAgentButton" Classes="onboardingLink" HorizontalAlignment="Left"
                         AutomationProperties.Name="{Binding AddAgentLabel}"
                         Command="{Binding AddAgentCommand}" IsVisible="{Binding AddAgentVisible}">
                     <StackPanel Orientation="Horizontal" Spacing="6">
-                        <views:AppIcon Kind="Plus" Size="14" />
+                        <!-- The glyph's own inset would indent it past the text column above. -->
+                        <views:AppIcon Kind="Plus" Size="14" Margin="-3,0,0,0" />
                         <TextBlock Text="{Binding AddAgentLabel}" VerticalAlignment="Center" />
                     </StackPanel>
                 </Button>
@@ -138,17 +111,22 @@
         <Border x:Name="ServiceCard" Classes="onboardingCard">
             <StackPanel Spacing="10">
                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                    <TextBlock Classes="onboardingLabel" FontSize="15" VerticalAlignment="Center"
+                    <TextBlock Classes="onboardingLabel" FontSize="15" LineHeight="20" VerticalAlignment="Center"
                                Text="{x:Static vm:DoneStepViewModel.ServiceTitle}" />
-                    <Border Grid.Column="1" x:Name="ServicePill" Classes="servicePill" VerticalAlignment="Center"
-                            Classes.running="{Binding ServiceRunning}" Classes.failed="{Binding ServiceFailed}">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <views:AppIcon Kind="LoaderCircle" Size="12" IsVisible="{Binding ServiceInstalling}"
-                                           Classes.kcapSpinning="{Binding ServiceInstalling}"
-                                           Foreground="{StaticResource OnboardingAccentBrush}" />
-                            <TextBlock x:Name="ServicePillText" Text="{Binding ServicePill}" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </Border>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                        <views:AppIcon Kind="LoaderCircle" Size="12" IsVisible="{Binding ServiceInstalling}"
+                                       Classes.kcapSpinning="{Binding ServiceInstalling}"
+                                       Foreground="{StaticResource OnboardingAccentBrush}" />
+                        <Ellipse Width="6" Height="6" VerticalAlignment="Center" IsVisible="{Binding !ServiceInstalling}"
+                                 Classes.running="{Binding ServiceRunning}" Classes.failed="{Binding ServiceFailed}">
+                            <Ellipse.Styles>
+                                <Style Selector="Ellipse"><Setter Property="Fill" Value="{StaticResource OnboardingDimBrush}" /></Style>
+                                <Style Selector="Ellipse.running"><Setter Property="Fill" Value="{StaticResource KcapSuccessBrush}" /></Style>
+                                <Style Selector="Ellipse.failed"><Setter Property="Fill" Value="{StaticResource KcapDangerBrush}" /></Style>
+                            </Ellipse.Styles>
+                        </Ellipse>
+                        <TextBlock x:Name="ServiceStatusText" Classes="onboardingSignal" LineHeight="20" Text="{Binding ServiceStatus}" VerticalAlignment="Center" />
+                    </StackPanel>
                 </Grid>
                 <TextBlock x:Name="ServiceBodyText" Classes="onboardingBody" FontSize="13" Text="{Binding ServiceBody}" />
                 <TextBlock x:Name="ServiceNoteText" Classes="onboardingNote" Text="{Binding ServiceNote}"

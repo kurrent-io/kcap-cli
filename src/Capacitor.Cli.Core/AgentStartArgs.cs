@@ -9,6 +9,7 @@ public sealed class AgentStartArgs {
     public bool     Detached    { get; private set; }
     public bool     Private     { get; private set; }
     public string?  Title       { get; private set; }
+    public string?  Account     { get; private set; }
     public string[] Passthrough { get; private set; } = [];
     public string?  Error       { get; private set; }
 
@@ -16,7 +17,7 @@ public sealed class AgentStartArgs {
         var r = new AgentStartArgs();
 
         if (args.Length == 0) {
-            r.Error = "usage: kcap agent start <vendor> [--worktree] [--private] [--title <text>|--title=<text>] [--daemon <name>] [-d|--detach] [-- <agent args>]";
+            r.Error = "usage: kcap agent start <vendor> [--worktree] [--private] [--title <text>|--title=<text>] [--account <id|dir>|--account=<id|dir>] [--daemon <name>] [-d|--detach] [-- <agent args>]";
 
             return r;
         }
@@ -49,7 +50,7 @@ public sealed class AgentStartArgs {
 
                     break;
                 case "--title":
-                    if (i + 1 >= kcap.Length || KcapFlags.Contains(kcap[i + 1])) {
+                    if (i + 1 >= kcap.Length || IsKcapFlag(kcap[i + 1])) {
                         r.Error = "--title requires a value";
 
                         return r;
@@ -62,6 +63,20 @@ public sealed class AgentStartArgs {
                     if (!r.TrySetTitle(flag["--title=".Length..])) return r;
 
                     break;
+                case "--account":
+                    if (i + 1 >= kcap.Length || IsKcapFlag(kcap[i + 1])) {
+                        r.Error = AccountNeedsValue;
+
+                        return r;
+                    }
+
+                    if (!r.TrySetAccount(kcap[++i])) return r;
+
+                    break;
+                case var flag when flag.StartsWith("--account=", StringComparison.Ordinal):
+                    if (!r.TrySetAccount(flag["--account=".Length..])) return r;
+
+                    break;
                 default:
                     r.Error = $"unknown flag {kcap[i]} (agent args go after `--`)";
 
@@ -72,8 +87,27 @@ public sealed class AgentStartArgs {
         return r;
     }
 
-    // A title may itself start with '-', so only these are taken as a missing value.
-    static readonly string[] KcapFlags = ["--", "--worktree", "--private", "--daemon", "-d", "--detach", "--title"];
+    const string AccountNeedsValue = "--account requires a value";
+
+    // A title or account may itself start with '-', so only these are taken as a missing value.
+    static readonly string[] KcapFlags = ["--", "--worktree", "--private", "--daemon", "-d", "--detach", "--title", "--account"];
+
+    static bool IsKcapFlag(string token) =>
+        KcapFlags.Contains(token)
+        || token.StartsWith("--title=", StringComparison.Ordinal)
+        || token.StartsWith("--account=", StringComparison.Ordinal);
+
+    bool TrySetAccount(string value) {
+        if (string.IsNullOrWhiteSpace(value)) {
+            Error = AccountNeedsValue;
+
+            return false;
+        }
+
+        Account = value.Trim();
+
+        return true;
+    }
 
     bool TrySetTitle(string value) {
         if (string.IsNullOrWhiteSpace(value)) {

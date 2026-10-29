@@ -102,7 +102,7 @@ public class EditionStepViewModelTests {
         });
 
         await Assert.That(reason).IsEqualTo(
-            "This Mac is set up for a cloud workspace. Moving it to local comes in a later release.");
+            "This machine is set up for a cloud workspace. Switching to local setup isn't supported yet.");
         await Assert.That(canChoose).IsFalse();
     }
 
@@ -148,7 +148,9 @@ public class EditionStepViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_pane_shows_the_cards_in_place_of_next_and_the_cloud_card_reaches_sign_in() {
+    [Arguments("CloudEditionButton")]
+    [Arguments("ExistingWorkspaceButton")]
+    public async Task The_pane_shows_the_cards_in_place_of_next_and_each_cloud_action_reaches_sign_in(string action) {
         var (localShown, cloudShown, signInShown, nextShown, after) = await AvaloniaSession.DispatchAsync(async () => {
             var edition = new EditionStepViewModel(CliTelemetry.Disabled(TimeProvider.System).Funnel, () => null);
             var vm = new OnboardingViewModel([edition, new FakeWizardStep(WizardStepId.SignIn)]);
@@ -167,7 +169,7 @@ public class EditionStepViewModelTests {
             var signIn = Named<Button>("ExistingWorkspaceButton")?.IsEffectivelyVisible;
             var next = Named<Button>("NextButton")?.IsEffectivelyVisible;
 
-            cloud.Command!.Execute(null);
+            Named<Button>(action)!.Command!.Execute(null);
             await vm.PendingAdvanceForTesting;
             Dispatcher.UIThread.RunJobs();
             var current = vm.Current.Id;

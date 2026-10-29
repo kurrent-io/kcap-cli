@@ -1,6 +1,8 @@
+using System.Text.Json;
 using Capacitor.App.Services;
 using Capacitor.App.Services.Mutation;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Setup;
 using Microsoft.Extensions.Time.Testing;
 
@@ -547,6 +549,20 @@ public class DaemonMutationLaneTests {
         var outcome = await lane.RunAsync(request, CancellationToken.None);
         await Assert.That(cli.LastRetireServiceId).IsEqualTo("old-name");
         await Assert.That(outcome).IsEqualTo(new MutationOutcome.Failed(30, "foreign_profile", RecoverySurface.Attention));
+    }
+
+    [Test]
+    public async Task InstallWindowsService_dispatches_the_elevated_install_and_reads_a_declined_prompt_as_a_refusal() {
+        var cli = new FakeKcapCli {
+            InstallWindowsServiceBehavior = _ => Task.FromResult(new ProcessResult(VerifyExitCodes.ElevationDeclined, "", "declined", false)),
+        };
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli });
+
+        var outcome = await lane.RunAsync(Req(MutationVerb.InstallWindowsService), CancellationToken.None);
+
+        await Assert.That(cli.InstallWindowsServiceCallCount).IsEqualTo(1);
+        await Assert.That(cli.InstallVerifiedCallCount).IsEqualTo(0);
+        await Assert.That(outcome).IsEqualTo(new MutationOutcome.Refused("elevation_declined", RecoverySurface.Attention));
     }
 
     [Test]
@@ -1786,5 +1802,181 @@ public class DaemonMutationLaneTests {
         var outcome = await lane.RunAsync(Req(MutationVerb.Reload), CancellationToken.None).WaitAsync(Bounded);
 
         await Assert.That(outcome).IsEqualTo(new MutationOutcome.Succeeded());
+    }
+
+    // ---- account verbs ----
+
+    static MutationRequest AccountReq() =>
+        MutationRequestFactory.ForAccount(MutationVerb.AccountRewire, new AccountArgs(null, null, "abcd1234", null), "daemon-a", "default");
+
+    static WiringStepDto Step(string name, bool succeeded = true, string detail = "ok") => new(name, succeeded, detail);
+
+    static string ResultLine(WiringStepDto[] steps, long? revision, bool succeeded = true, string? error = null) =>
+        JsonSerializer.Serialize(
+            new AccountActionResultDto("rewire", "abcd1234", succeeded, steps, revision, error),
+            AccountActionResultJsonContext.Default.AccountActionResultDto);
+
+    static FakeKcapCli AccountCli(int exitCode, string stdout) =>
+        new() { AccountsBehavior = (_, _, _) => Task.FromResult(new ProcessResult(exitCode, stdout, "", false)) };
+
+    [Test]
+    public async Task Two_account_requests_never_coalesce() {
+        var gate = new TaskCompletionSource<ProcessResult>();
+        var cli = new FakeKcapCli { AccountsBehavior = (_, _, _) => gate.Task };
+        var factory = new RecordingExecutorFactory { Behavior = (_, _) => cli };
+        await using var lane = MakeLane(factory);
+        lane.AccountsRevisionReached = (_, _) => Task.FromResult(true);
+
+        var first  = lane.RunAsync(AccountReq(), CancellationToken.None);
+        var second = lane.RunAsync(AccountReq(), CancellationToken.None);
+        gate.SetResult(new ProcessResult(0, ResultLine([Step("hooks")], revision: 3), "", false));
+
+        await Assert.That(await first.WaitAsync(Bounded)).IsEqualTo(new MutationOutcome.Succeeded());
+        await Assert.That(await second.WaitAsync(Bounded)).IsEqualTo(new MutationOutcome.Succeeded());
+        await Assert.That(cli.AccountsCalls.Count).IsEqualTo(2);
+        await Assert.That(factory.Calls.Count).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task A_failed_step_is_a_failure_even_when_the_cli_says_succeeded() {
+        var cli = AccountCli(0, ResultLine([Step("hooks"), Step("network", succeeded: false, detail: "could not allow the server's domain")], revision: 9));
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli });
+        var probes = 0;
+        lane.AccountsRevisionReached = (_, _) => { probes++; return Task.FromResult(true); };
+
+        var outcome = await lane.RunAsync(AccountReq(), CancellationToken.None).WaitAsync(Bounded);
+
+        await Assert.That(outcome).IsEqualTo(
+            new MutationOutcome.Failed(0, "network: could not allow the server's domain", RecoverySurface.Attention));
+        await Assert.That(probes).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task A_refresh_with_a_failed_step_is_a_failure() {
+        var request = MutationRequestFactory.ForAccount(MutationVerb.AccountRefresh, new AccountArgs(null, null, "abcd1234", null), "daemon-a", "default");
+        var cli = AccountCli(0, ResultLine([Step("limits", succeeded: false, detail: "no reading")], revision: 9));
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli });
+        lane.AccountsRevisionReached = (_, _) => Task.FromResult(true);
+
+        var outcome = await lane.RunAsync(request, CancellationToken.None).WaitAsync(Bounded);
+
+        await Assert.That(outcome).IsTypeOf<MutationOutcome.Failed>();
+    }
+
+    [Test]
+    public async Task Stdout_noise_before_the_result_line_is_ignored() {
+        var stdout = "Wired claude account work (/Users/me/.claude).\r\n{\"note\":\"not a result\"}\n" +
+                     ResultLine([Step("hooks")], revision: 4) + "\r\n";
+        var cli = AccountCli(0, stdout);
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli });
+        lane.AccountsRevisionReached = (revision, _) => Task.FromResult(revision == 4);
+
+        var outcome = await lane.RunAsync(AccountReq(), CancellationToken.None).WaitAsync(Bounded);
+
+        await Assert.That(outcome).IsEqualTo(new MutationOutcome.Succeeded());
+    }
+
+    [Test]
+    [Arguments("")]
+    [Arguments("Wired claude account work (/Users/me/.claude).\n")]
+    [Arguments("{\"action\":\"rewire\",\"account_id\":null,\"succeeded\":tr")]
+    [Arguments("{\"action\":\"rewire\",\"succeeded\":true,\"revision\":null}")]
+    [Arguments("{\"succeeded\":true,\"steps\":[],\"revision\":null}")]
+    [Arguments("{\"action\":\"rewire\",\"succeeded\":true,\"steps\":[null],\"revision\":null}")]
+    public async Task A_missing_or_malformed_result_is_unconfirmed(string stdout) {
+        var cli = AccountCli(0, stdout);
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli });
+        lane.AccountsRevisionReached = (_, _) => Task.FromResult(true);
+
+        var outcome = await lane.RunAsync(AccountReq(), CancellationToken.None).WaitAsync(Bounded);
+
+        await Assert.That(outcome).IsEqualTo(new MutationOutcome.Unconfirmed("no_result"));
+    }
+
+    [Test]
+    public async Task A_nonzero_exit_without_a_result_is_a_failure() {
+        var cli = new FakeKcapCli {
+            AccountsBehavior = (_, _, _) => Task.FromResult(new ProcessResult(2, "", "kcap: daemon below floor\nrun kcap upgrade\n", false)),
+        };
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli });
+        lane.AccountsRevisionReached = (_, _) => Task.FromResult(true);
+
+        var outcome = await lane.RunAsync(AccountReq(), CancellationToken.None).WaitAsync(Bounded);
+
+        await Assert.That(outcome).IsEqualTo(new MutationOutcome.Failed(2, "kcap: daemon below floor", RecoverySurface.Attention));
+    }
+
+    [Test]
+    public async Task A_revision_the_snapshot_never_reaches_is_unconfirmed_and_one_it_reaches_succeeds() {
+        var cli = AccountCli(0, ResultLine([Step("hooks")], revision: 12));
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli });
+
+        var unwired = await lane.RunAsync(AccountReq(), CancellationToken.None).WaitAsync(Bounded);
+
+        var asked = new List<long>();
+        var reached = false;
+        lane.AccountsRevisionReached = (revision, _) => { asked.Add(revision); return Task.FromResult(reached); };
+        var unseen = await lane.RunAsync(AccountReq(), CancellationToken.None).WaitAsync(Bounded);
+        reached = true;
+        var seen = await lane.RunAsync(AccountReq(), CancellationToken.None).WaitAsync(Bounded);
+
+        await Assert.That(unwired).IsEqualTo(new MutationOutcome.Unconfirmed("snapshot_not_seen"));
+        await Assert.That(unseen).IsEqualTo(new MutationOutcome.Unconfirmed("snapshot_not_seen"));
+        await Assert.That(seen).IsEqualTo(new MutationOutcome.Succeeded());
+        await Assert.That(asked).IsEquivalentTo([12L, 12L]);
+    }
+
+    [Test]
+    public async Task A_null_revision_with_every_step_succeeded_succeeds() {
+        var cli = AccountCli(0, ResultLine([], revision: null));
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli });
+        var probes = 0;
+        lane.AccountsRevisionReached = (_, _) => { probes++; return Task.FromResult(false); };
+
+        var outcome = await lane.RunAsync(AccountReq(), CancellationToken.None).WaitAsync(Bounded);
+
+        await Assert.That(outcome).IsEqualTo(new MutationOutcome.Succeeded());
+        await Assert.That(probes).IsEqualTo(0);
+    }
+
+    [Test]
+    [Arguments(0)]
+    [Arguments(137)]
+    public async Task A_timed_out_run_is_unconfirmed_even_with_a_succeeded_result_line(int exitCode) {
+        var cli = new FakeKcapCli {
+            AccountsBehavior = (_, _, _) => Task.FromResult(new ProcessResult(exitCode, ResultLine([Step("hooks")], revision: 6), "", true)),
+        };
+        var channel = new OutcomeChannel();
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli }, channel: channel);
+        lane.AccountsRevisionReached = (_, _) => Task.FromResult(true);
+
+        var outcome = await lane.RunAsync(AccountReq(), CancellationToken.None).WaitAsync(Bounded);
+
+        await Assert.That(outcome).IsEqualTo(new MutationOutcome.Unconfirmed("timeout"));
+        await AssertChannelEmptyAsync(channel);
+    }
+
+    [Test, NotInParallel]
+    public async Task An_account_verbs_failure_never_reaches_the_outcome_channel() {
+        var runs = new Queue<Func<Task<ProcessResult>>>([
+            () => Task.FromResult(new ProcessResult(1, ResultLine([], revision: null, succeeded: false, error: "No account matches abcd1234."), "", false)),
+            () => Task.FromResult(new ProcessResult(0, "", "", false)),
+            () => throw new InvalidOperationException("boom"),
+        ]);
+        var cli = new FakeKcapCli { AccountsBehavior = (_, _, _) => runs.Dequeue()() };
+        var channel = new OutcomeChannel();
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli }, channel: channel);
+        using var capture = ConsoleOutput.StartErrorCapture();
+
+        var failed      = await lane.RunAsync(AccountReq(), CancellationToken.None).WaitAsync(Bounded);
+        var unconfirmed = await lane.RunAsync(AccountReq(), CancellationToken.None).WaitAsync(Bounded);
+        var faulted     = await lane.RunAsync(AccountReq(), CancellationToken.None).WaitAsync(Bounded);
+
+        await Assert.That(failed).IsEqualTo(new MutationOutcome.Failed(1, "No account matches abcd1234.", RecoverySurface.Attention));
+        await Assert.That(unconfirmed).IsEqualTo(new MutationOutcome.Unconfirmed("no_result"));
+        await Assert.That(faulted).IsEqualTo(
+            new MutationOutcome.Failed(DaemonMutationLane.UnexpectedExitCode, "internal_error", RecoverySurface.Attention));
+        await Assert.That(capture.GetCapturedError()).Contains(nameof(InvalidOperationException));
+        await AssertChannelEmptyAsync(channel);
     }
 }

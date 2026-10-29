@@ -14,4 +14,7 @@ public sealed record WatcherSpawnRequest(
     string? Cwd               = null,
     bool    SkipTitle         = false,
     string  Vendor            = "claude",
-    int?    ParentPid         = null);
+    int?    ParentPid         = null) {
+    /// <summary>Where a spawn failure is reported; null is the process's stderr.</summary>
+    public TextWriter? Stderr { get; init; }
+}

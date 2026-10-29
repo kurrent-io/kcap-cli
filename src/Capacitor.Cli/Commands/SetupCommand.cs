@@ -137,17 +137,22 @@ sealed class SpectreFirstRunFlowProgress(TimeProvider time, IKeyWatcher? keys = 
         if (capability == FirstRunMachineCapabilities.DaemonService) _wait.Stop();
 
         Say(SetupAuthProgress.Indent(capability switch {
-            FirstRunMachineCapabilities.PathShim => PathShimNotice(OperatingSystem.IsMacOS()),
+            FirstRunMachineCapabilities.PathShim => PathShimNotice(OperatingSystem.IsMacOS(),
+                new ShellProfile(UserHome.FromEnvironment(), Environment.GetEnvironmentVariable("SHELL")).Disclosure),
             FirstRunMachineCapabilities.DaemonService =>
                 "The browser asked to run the agent daemon as a service, so this machine stays reachable.",
             _ => "The browser asked this machine to do something this version of kcap does not know."
         }));
     }
 
-    /// <summary>The password prompt comes from macOS's own dialog; elsewhere the link needs none.</summary>
-    internal static string PathShimNotice(bool macOS) =>
+    /// <summary>The password prompt comes from macOS's own dialog; elsewhere the link needs none. A
+    /// user without admin rights gets <paramref name="profileLine"/> instead, so it is named before
+    /// it is written.</summary>
+    internal static string PathShimNotice(bool macOS, string? profileLine = null) =>
         "The browser asked to put kcap on your terminal PATH."
-      + (macOS ? " [dim]Your Mac will ask for your password.[/]" : "");
+      + (!macOS ? ""
+        : profileLine is null ? " [dim]Your Mac will ask for your admin password.[/]"
+        : $" [dim]Your Mac will ask for your admin password; without admin rights, kcap adds {Markup.Escape(profileLine)} instead.[/]");
 
     public void ActionEnded() => Refresh();
 
@@ -968,7 +973,7 @@ sealed class SetupCommand(
             defaultVisibility = (GetArg(args, "--default-visibility")
                               ?? (museAssistant ? MuseAssistantPosture.DefaultVisibility
                                 : local is not null ? LocalDefaultVisibility
-                                : "org_public")).ToLowerInvariant();
+                                : VisibilityChoices(await ReadVisibilityOptionsAsync(serverUrl, activeProfile)).Preselected)).ToLowerInvariant();
 
             await Console.Out.WriteLineAsync($"  Default visibility: {defaultVisibility}");
         } else if (flowVisibility.Apply is { } fromFlow) {
@@ -980,13 +985,13 @@ sealed class SetupCommand(
                 ? $"  [dim]· Not chosen in the browser - keeping {Markup.Escape(VisibilityLabel(fromFlow))}[/]"
                 : $"  [dim]· Chosen in the browser: {Markup.Escape(VisibilityLabel(fromFlow))}[/]");
         } else {
+            var choices = VisibilityChoices(await ReadVisibilityOptionsAsync(serverUrl, activeProfile));
             var visibilityPrompt = new SelectionPrompt<string>()
                 .Title("Which of your sessions should be readable by other users in the same kcap account by default?")
-                .AddChoices(AppConfig.ValidVisibilities)
-                .UseConverter(VisibilityLabel);
+                .AddChoices(choices.Keys)
+                .UseConverter(choices.Label);
 
-            // Start the cursor on the option we label "(default)" rather than the first choice.
-            visibilityPrompt.DefaultValue = "org_public";
+            visibilityPrompt.DefaultValue = choices.Preselected;
 
             defaultVisibility = AnsiConsole.Prompt(visibilityPrompt);
 
@@ -1111,7 +1116,8 @@ sealed class SetupCommand(
             CapacitorOnPath:        () => binaries.Finds("kcap"),
             InstallAgentSkills:     AgentsSkillsInstaller.Install,
             CleanLegacyCodexSkills: legacyDir => AgentsSkillsInstaller.CleanLegacyCodexSkills(legacyDir).RemovedAny,
-            InstallKiroHooks:       agentPath => PluginCommand.InstallKiroHooks(agentPath, harnesses),
+            // Read when it runs: a reported run swaps stderr for the writer its failure line comes from.
+            InstallKiroHooks:       agentPath => PluginCommand.InstallKiroHooks(agentPath, harnesses, Console.Error),
             InstallPiExtension:     PiExtensionInstaller.Install,
             InstallOpenCodeExtension: OpenCodeExtensionInstaller.Install,
             InstallAntigravityHooks:  PluginCommand.InstallAntigravityHooks,
@@ -2315,8 +2321,8 @@ sealed class SetupCommand(
     ///
     /// <para><b>An answered screen that set nothing leaves the profile alone</b>, which is the lane's
     /// contract for a null answer — and the reason this cannot simply fall through to the prompt: the
-    /// prompt's cursor starts on <c>org_public</c>, so one Return would widen an existing
-    /// <c>private</c>. A screen that was never answered has told us nothing and still needs asking.</para>
+    /// prompt preselects the tenant's default, so one Return could widen an existing <c>private</c>. A
+    /// screen that was never answered has told us nothing and still needs asking.</para>
     /// </summary>
     /// <param name="browser">The Agents answer, or null where that step never settled.</param>
     /// <param name="current">What the profile holds now.</param>
@@ -2339,6 +2345,58 @@ sealed class SetupCommand(
 
     /// <summary>Per request, not per leg: the poll below runs for as long as a human takes.</summary>
     static readonly TimeSpan BrowserFlowHttpTimeout = TimeSpan.FromSeconds(15);
+
+    /// <summary>What step 3 offers, in order, how each stop reads, and the one it preselects</summary>
+    internal readonly record struct VisibilityChoiceSet(IReadOnlyList<string> Keys, Func<string, string> Label, string Preselected);
+
+    /// <summary>
+    /// The stops the server says this tenant can honour, in the browser flow's copy and with its default. Without
+    /// that answer (a server without the route answers 404, or the read fails), every stop is offered with
+    /// <c>org_public</c> preselected
+    /// </summary>
+    internal static VisibilityChoiceSet VisibilityChoices(VisibilityOptionsResponse? offer) {
+        if (offer is not { DefaultVisibility: { } preselected }) return new(AppConfig.ValidVisibilities, VisibilityLabel, "org_public");
+
+        var copy = offer.Options.ToDictionary(o => o.Key!, o => o.Detail is { Length: > 0 } detail
+            ? $"{Markup.Escape(o.Label!)} [dim]— {Markup.Escape(detail)}[/]"
+            : Markup.Escape(o.Label!), StringComparer.Ordinal);
+
+        return new([.. copy.Keys], key => copy.GetValueOrDefault(key, key), preselected);
+    }
+
+    static readonly TimeSpan VisibilityOptionsTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>The server's stops, or null to offer every one. A 404 is silent; any other miss says why in one line,
+    /// and none of them stops setup. The timeout covers signing in as well as the read</summary>
+    async Task<VisibilityOptionsResponse?> ReadVisibilityOptionsAsync(string serverUrl, string profileName) {
+        string problem;
+        using var timeout = new CancellationTokenSource(VisibilityOptionsTimeout, time);
+
+        try {
+            await using var scoped = HttpForChosenServer(serverUrl, await ContextForAsync(profileName, serverUrl));
+
+            var (client, status) = await scoped.GetRequiredService<ICapacitorHttpClient>().ForWaitAsync(timeout.Token);
+
+            using (client) {
+                if (status is AuthStatus.Ok or AuthStatus.NoAuthRequired) {
+                    var read = await ServerVisibilityOptions.ReadAsync(client, serverUrl, timeout.Token);
+                    if (read.Problem is null) return read.Offer;
+
+                    problem = read.Problem;
+                } else {
+                    problem = $"not signed in ({status})";
+                }
+            }
+        } catch (OperationCanceledException) when (timeout.IsCancellationRequested) {
+            problem = $"no answer within {VisibilityOptionsTimeout.TotalSeconds:0}s";
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            problem = ex.Message;
+        }
+
+        AnsiConsole.MarkupLine($"  [dim]· Could not read which options this account supports ({Markup.Escape(problem)}); falling back to every option and org_public[/]");
+
+        return null;
+    }
 
     /// <summary>How long the login-shell probe may hold up the create. Two attempts at its own 5s
     /// timeout, plus room to spawn them; past that the machine reports "not probed", which is not the
@@ -2703,9 +2761,9 @@ sealed class SetupCommand(
                 return SetupExit.Refused;
             }
 
-            // The desktop app cannot answer a question, so a running Ollama is used unless a flag says otherwise.
-            var committed = await installer.InstallAsync(
-                new(args.SingleUser, args.Yes, args.Embeddings ?? new LocalEmbeddingAnswer.Ollama(null)), progress, deferral.Token);
+            var embeddings = args.Embeddings;
+            var builtin    = await LocalSetupTerminal.BuiltinModelAsync(installer, plan, embeddings, deferral.Token);
+            var committed  = await installer.InstallAsync(new(args.SingleUser, args.Yes, embeddings, builtin), progress, deferral.Token);
 
             // The app's wizard links to the dashboard before it reports anything itself.
             await PingCliSetupAsync(committed.ServerUrl, profile: "", AuthProvider.None, deferral.Token);
@@ -2887,6 +2945,9 @@ sealed class SetupCommand(
         }
 
         if (exePath is null) return null;
+
+        // A snap's plugin is found through `current`, so the registration survives the snap's later refreshes.
+        exePath = SnapLayout.Stabilize(exePath, File.Exists);
 
         // Through `current`, so the Claude plugin registration follows a script-install update.
         if (ScriptInstallLayout.FromBinary(exePath, File.Exists) is { } script) {

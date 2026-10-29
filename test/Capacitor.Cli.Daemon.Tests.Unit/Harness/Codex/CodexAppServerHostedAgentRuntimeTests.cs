@@ -120,18 +120,35 @@ public class CodexAppServerHostedAgentRuntimeTests {
         await runtime.DisposeAsync();
     }
 
+    /// <summary>Usage is attributed to the resolved model, so an empty one from thread/start would leave it unpriceable.</summary>
     [Test]
-    public async Task Reroute_notification_updates_the_resolved_model_from_toModel() {
-        // The model/rerouted payload carries fromModel/toModel — a reader on the old bare `model` field
-        // would silently keep the original model and mis-attribute every later token delta to it.
-        var fake = new FakeCodexAppServer { Model = "gpt-5.3-codex", RerouteToModelOnTurn = "gpt-5.4-codex" };
+    [Arguments("gpt-5.3-codex", "gpt-5.3-codex")]
+    [Arguments("default",       null)]
+    public async Task An_empty_thread_model_falls_back_to_the_launch_model(string launchModel, string? resolved) {
+        var fake = new FakeCodexAppServer { Model = "" };
+        var (runtime, _, _) = Build(_ => fake, Launch(model: launchModel));
+
+        await runtime.StartAsync(CancellationToken.None).WaitAsync(HangGuard);
+
+        await Assert.That(runtime.ResolvedModel).IsEqualTo(resolved);
+
+        await runtime.DisposeAsync();
+    }
+
+    /// <summary>A reroute away from the resolved model must not leave later usage attributed to it,
+    /// even when the new model's id is blank.</summary>
+    [Test]
+    [Arguments("gpt-5.4-codex", "gpt-5.4-codex")]
+    [Arguments("",              null)]
+    public async Task Reroute_notification_updates_the_resolved_model_from_toModel(string toModel, string? resolved) {
+        var fake = new FakeCodexAppServer { Model = "gpt-5.3-codex", RerouteToModelOnTurn = toModel };
         var (runtime, _, _) = Build(_ => fake, Launch());
 
         await runtime.StartAsync(CancellationToken.None).WaitAsync(HangGuard);
         await runtime.SendUserInputAsync("go").WaitAsync(HangGuard);
         await runtime.WaitForTurnIdleAsync(CancellationToken.None).WaitAsync(HangGuard);
 
-        await Assert.That(runtime.ResolvedModel).IsEqualTo("gpt-5.4-codex");
+        await Assert.That(runtime.ResolvedModel).IsEqualTo(resolved);
 
         await runtime.DisposeAsync();
     }
@@ -356,6 +373,34 @@ public class CodexAppServerHostedAgentRuntimeTests {
         await Assert.That(fake.LastSteerExpectedTurnId).IsEqualTo("turn-1");
         await Assert.That(fake.LastSteerText).IsEqualTo("second");
         await Assert.That(fake.ReceivedMethods.Count(m => m == "turn/start")).IsEqualTo(1); // NOT restarted
+
+        await fake.CompleteHeldTurnAsync();
+        await runtime.WaitForTurnIdleAsync(CancellationToken.None).WaitAsync(HangGuard);
+        await runtime.DisposeAsync();
+    }
+
+    [Test]
+    public async Task A_dispatched_inputs_recorded_user_message_carries_its_dispatch_and_earlier_same_text_inputs_none() {
+        var fake = new FakeCodexAppServer { HoldTurnOpen = true, EchoUserMessages = true, HoldUserMessages = true };
+        var (runtime, _, _) = Build(_ => fake, Launch(prompt: "same"), emitEnvelopes: true);
+        await runtime.StartAsync(CancellationToken.None).WaitAsync(HangGuard);
+        Guid first = Guid.NewGuid(), second = Guid.NewGuid();
+
+        await runtime.SendDispatchedInputAsync("same", first, waitForWrite: false).WaitAsync(HangGuard);
+        await runtime.SendUserInputAsync("again").WaitAsync(HangGuard);
+        await runtime.SendDispatchedInputAsync("again", second, waitForWrite: false).WaitAsync(HangGuard);
+        await fake.ReleaseUserMessagesAsync();
+
+        var users = new List<AcpEventEnvelope>();
+        using var cts = new CancellationTokenSource(HangGuard);
+        while (users.Count < 4) {
+            var env = await runtime.Envelopes.ReadAsync(cts.Token);
+            if (env.Kind == AcpEventKind.UserMessage) users.Add(env);
+        }
+
+        await Assert.That(users.Select(u => (u.Text, u.DispatchId))).IsEquivalentTo(
+            new (string?, Guid?)[] { ("same", null), ("same", first), ("again", null), ("again", second) },
+            TUnit.Assertions.Enums.CollectionOrdering.Matching);
 
         await fake.CompleteHeldTurnAsync();
         await runtime.WaitForTurnIdleAsync(CancellationToken.None).WaitAsync(HangGuard);

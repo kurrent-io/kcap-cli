@@ -97,6 +97,7 @@ public class TrayViewModelTests {
     [Test]
     [NotInParallel("AvaloniaSession")]
     [Arguments("daemon_unreachable", TrayState.Stopped)]
+    [Arguments(ExpectedDaemonRestart.Reason, TrayState.Connecting)]
     [Arguments("daemon_incompatible", TrayState.Attention)]
     [Arguments("some_future_reason", TrayState.Attention)]
     public async Task Unreachable_reason_maps_to_state(string reason, TrayState expected) {

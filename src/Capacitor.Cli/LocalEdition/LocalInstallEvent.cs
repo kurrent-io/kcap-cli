@@ -50,6 +50,14 @@ abstract record LocalInstallEvent {
 
     public sealed record EmbeddingsSkipped(LocalEmbeddingSkipCode Code, string Message) : LocalInstallEvent;
 
+    public sealed record EmbeddingBuiltinDownloading(long Bytes) : LocalInstallEvent;
+
+    public sealed record EmbeddingBuiltinProgress(long Received, long Bytes) : LocalInstallEvent;
+
+    /// <summary>The server embeds with the built-in model. <paramref name="Replaced"/> names an Ollama model configured
+    /// before, whose vectors no longer match.</summary>
+    public sealed record EmbeddingBuiltinConfigured(string? Replaced = null) : LocalInstallEvent;
+
     public sealed record RolledBack : LocalInstallEvent;
 
     public sealed record UpgradePlanned(string From, string To) : LocalInstallEvent;

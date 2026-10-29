@@ -4,9 +4,9 @@ using Capacitor.Cli.Core.LocalIpc;
 namespace Capacitor.Cli.Core.Tests.Unit.LocalIpc;
 
 /// <summary>
-/// Exact-JSON pins for the DaemonStatus payload (spec §4.1): snake_case, every field always
-/// emitted (absent = null, never omitted), field order as declared, ISO-8601 UTC created_at.
-/// Plus the §5 forward-compat pin: unknown members deserialize without error.
+/// Exact-JSON pins for the DaemonStatus payload: snake_case, every field always emitted
+/// (absent = null, never omitted), field order as declared, ISO-8601 UTC created_at.
+/// Plus the forward-compat pin: unknown members deserialize without error.
 /// </summary>
 public class StatusIpcJsonTests {
     [Test]
@@ -29,12 +29,12 @@ public class StatusIpcJsonTests {
         var json = JsonSerializer.Serialize(dto, StatusIpcJsonContext.Default.DaemonStatusDto);
 
         await Assert.That(json).IsEqualTo(
-            """{"daemon":{"name":"main","version":"0.12.3","server_url":"https://tenant.example.com","connection":"connected","max_agents":5,"active_agents":1,"pid":4242,"instance_id":"inst-abc","supported_vendors":null,"vendor_models":null,"credential":null,"profile":null},"agents":[{"id":"agent-abc123","kind":"review-flow","vendor":"codex","repo_path":"/Users/x/dev/repo","status":"Live","flow_run_id":"flow_1","flow_role":"reviewer","requester":"github:12345","created_at":"2026-08-01T12:34:56.789Z","model":"gpt-5-codex","requester_display":"Ada Lovelace","has_terminal":null,"title":"Fix the flaky test","transcript_path":null,"worktree_path":null,"work_location":null,"borrowed_from":null,"session_id":null,"branch":null,"awaiting_input":null,"transcript_format":null,"live_subagents":null,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null},{"id":"agent-b","kind":"agent","vendor":"claude","repo_path":null,"status":"Starting","flow_run_id":null,"flow_role":null,"requester":null,"created_at":"2026-08-01T12:35:00Z","model":null,"requester_display":null,"has_terminal":null,"title":null,"transcript_path":null,"worktree_path":null,"work_location":null,"borrowed_from":null,"session_id":null,"branch":null,"awaiting_input":null,"transcript_format":null,"live_subagents":null,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null}],"pending":null,"busy":null}""");
+            """{"daemon":{"name":"main","version":"0.12.3","server_url":"https://tenant.example.com","connection":"connected","max_agents":5,"active_agents":1,"pid":4242,"instance_id":"inst-abc","supported_vendors":null,"vendor_models":null,"credential":null,"profile":null,"vendor_models_by_account":null,"user_subject":null},"agents":[{"id":"agent-abc123","kind":"review-flow","vendor":"codex","repo_path":"/Users/x/dev/repo","status":"Live","flow_run_id":"flow_1","flow_role":"reviewer","requester":"github:12345","created_at":"2026-08-01T12:34:56.789Z","model":"gpt-5-codex","requester_display":"Ada Lovelace","has_terminal":null,"title":"Fix the flaky test","transcript_path":null,"worktree_path":null,"work_location":null,"borrowed_from":null,"session_id":null,"branch":null,"awaiting_input":null,"transcript_format":null,"live_subagents":null,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null,"account_directory":null,"account_id":null,"account_label":null,"turn_attested":null,"is_private":null},{"id":"agent-b","kind":"agent","vendor":"claude","repo_path":null,"status":"Starting","flow_run_id":null,"flow_role":null,"requester":null,"created_at":"2026-08-01T12:35:00Z","model":null,"requester_display":null,"has_terminal":null,"title":null,"transcript_path":null,"worktree_path":null,"work_location":null,"borrowed_from":null,"session_id":null,"branch":null,"awaiting_input":null,"transcript_format":null,"live_subagents":null,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null,"account_directory":null,"account_id":null,"account_label":null,"turn_attested":null,"is_private":null}],"pending":null,"busy":null,"experimental":null}""");
     }
 
     [Test]
     public async Task Unknown_members_in_a_payload_deserialize_without_error() {
-        // §5 forward compat: an older client must survive a future additive field.
+        // Forward compat: an older client must survive a future additive field.
         var json =
             """{"daemon":{"name":"m","version":"1","server_url":"u","connection":"connected","max_agents":5,"active_agents":0,"future_field":42},"agents":[{"id":"a","kind":"agent","vendor":"codex","repo_path":null,"status":"Live","flow_run_id":null,"flow_role":null,"requester":null,"created_at":"2026-08-01T00:00:00Z","model":null,"future_field":{"x":1}}],"future_top":true}""";
 
@@ -107,8 +107,8 @@ public class StatusIpcJsonTests {
         var json = JsonSerializer.Serialize(withPath, StatusIpcJsonContext.Default.AgentStatusDto);
         var jsonNull = JsonSerializer.Serialize(without, StatusIpcJsonContext.Default.AgentStatusDto);
 
-        await Assert.That(json).EndsWith(""","has_terminal":true,"title":"t","transcript_path":"/home/u/.claude/projects/-repo/abc.jsonl","worktree_path":null,"work_location":null,"borrowed_from":null,"session_id":null,"branch":null,"awaiting_input":null,"transcript_format":null,"live_subagents":null,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null}""");
-        await Assert.That(jsonNull).EndsWith(""","has_terminal":true,"title":"t","transcript_path":null,"worktree_path":null,"work_location":null,"borrowed_from":null,"session_id":null,"branch":null,"awaiting_input":null,"transcript_format":null,"live_subagents":null,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null}""");
+        await Assert.That(json).EndsWith(""","has_terminal":true,"title":"t","transcript_path":"/home/u/.claude/projects/-repo/abc.jsonl","worktree_path":null,"work_location":null,"borrowed_from":null,"session_id":null,"branch":null,"awaiting_input":null,"transcript_format":null,"live_subagents":null,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null,"account_directory":null,"account_id":null,"account_label":null,"turn_attested":null,"is_private":null}""");
+        await Assert.That(jsonNull).EndsWith(""","has_terminal":true,"title":"t","transcript_path":null,"worktree_path":null,"work_location":null,"borrowed_from":null,"session_id":null,"branch":null,"awaiting_input":null,"transcript_format":null,"live_subagents":null,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null,"account_directory":null,"account_id":null,"account_label":null,"turn_attested":null,"is_private":null}""");
     }
 
     [Test]
@@ -139,8 +139,8 @@ public class StatusIpcJsonTests {
         var json = JsonSerializer.Serialize(borrowed, StatusIpcJsonContext.Default.AgentStatusDto);
         var jsonNull = JsonSerializer.Serialize(older, StatusIpcJsonContext.Default.AgentStatusDto);
 
-        await Assert.That(json).EndsWith(""","transcript_path":"/x.jsonl","worktree_path":"/repo/.capacitor/worktrees/agent-1","work_location":"borrowed","borrowed_from":"/repo/.capacitor/worktrees/agent-1","session_id":null,"branch":null,"awaiting_input":null,"transcript_format":null,"live_subagents":null,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null}""");
-        await Assert.That(jsonNull).EndsWith(""","transcript_path":"/x.jsonl","worktree_path":null,"work_location":null,"borrowed_from":null,"session_id":null,"branch":null,"awaiting_input":null,"transcript_format":null,"live_subagents":null,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null}""");
+        await Assert.That(json).EndsWith(""","transcript_path":"/x.jsonl","worktree_path":"/repo/.capacitor/worktrees/agent-1","work_location":"borrowed","borrowed_from":"/repo/.capacitor/worktrees/agent-1","session_id":null,"branch":null,"awaiting_input":null,"transcript_format":null,"live_subagents":null,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null,"account_directory":null,"account_id":null,"account_label":null,"turn_attested":null,"is_private":null}""");
+        await Assert.That(jsonNull).EndsWith(""","transcript_path":"/x.jsonl","worktree_path":null,"work_location":null,"borrowed_from":null,"session_id":null,"branch":null,"awaiting_input":null,"transcript_format":null,"live_subagents":null,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null,"account_directory":null,"account_id":null,"account_label":null,"turn_attested":null,"is_private":null}""");
     }
 
     [Test]
@@ -174,8 +174,8 @@ public class StatusIpcJsonTests {
         var json = JsonSerializer.Serialize(full, StatusIpcJsonContext.Default.AgentStatusDto);
         var jsonNull = JsonSerializer.Serialize(older, StatusIpcJsonContext.Default.AgentStatusDto);
 
-        await Assert.That(json).EndsWith(""","borrowed_from":null,"session_id":"0123456789abcdef0123456789abcdef","branch":"feature/sidebar","awaiting_input":null,"transcript_format":null,"live_subagents":null,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null}""");
-        await Assert.That(jsonNull).EndsWith(""","borrowed_from":null,"session_id":null,"branch":null,"awaiting_input":null,"transcript_format":null,"live_subagents":null,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null}""");
+        await Assert.That(json).EndsWith(""","borrowed_from":null,"session_id":"0123456789abcdef0123456789abcdef","branch":"feature/sidebar","awaiting_input":null,"transcript_format":null,"live_subagents":null,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null,"account_directory":null,"account_id":null,"account_label":null,"turn_attested":null,"is_private":null}""");
+        await Assert.That(jsonNull).EndsWith(""","borrowed_from":null,"session_id":null,"branch":null,"awaiting_input":null,"transcript_format":null,"live_subagents":null,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null,"account_directory":null,"account_id":null,"account_label":null,"turn_attested":null,"is_private":null}""");
     }
 
     /// The daemon's own verdict on whether the agent finished its turn and waits on the user; an
@@ -191,7 +191,7 @@ public class StatusIpcJsonTests {
 
         var json = JsonSerializer.Serialize(dto, StatusIpcJsonContext.Default.AgentStatusDto);
 
-        await Assert.That(json).EndsWith($$$""","branch":"main","awaiting_input":{{{value.ToString().ToLowerInvariant()}}},"transcript_format":null,"live_subagents":null,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null}""");
+        await Assert.That(json).EndsWith($$$""","branch":"main","awaiting_input":{{{value.ToString().ToLowerInvariant()}}},"transcript_format":null,"live_subagents":null,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null,"account_directory":null,"account_id":null,"account_label":null,"turn_attested":null,"is_private":null}""");
     }
 
     [Test]
@@ -227,9 +227,9 @@ public class StatusIpcJsonTests {
         var envelopes = vendor with { TranscriptFormat = TranscriptFormats.Envelopes };
         var unset     = vendor with { TranscriptFormat = null };
 
-        await Assert.That(JsonSerializer.Serialize(vendor, StatusIpcJsonContext.Default.AgentStatusDto)).EndsWith(""","awaiting_input":null,"transcript_format":"vendor","live_subagents":null,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null}""");
-        await Assert.That(JsonSerializer.Serialize(envelopes, StatusIpcJsonContext.Default.AgentStatusDto)).EndsWith(""","transcript_format":"envelopes","live_subagents":null,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null}""");
-        await Assert.That(JsonSerializer.Serialize(unset, StatusIpcJsonContext.Default.AgentStatusDto)).EndsWith(""","transcript_format":null,"live_subagents":null,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null}""");
+        await Assert.That(JsonSerializer.Serialize(vendor, StatusIpcJsonContext.Default.AgentStatusDto)).EndsWith(""","awaiting_input":null,"transcript_format":"vendor","live_subagents":null,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null,"account_directory":null,"account_id":null,"account_label":null,"turn_attested":null,"is_private":null}""");
+        await Assert.That(JsonSerializer.Serialize(envelopes, StatusIpcJsonContext.Default.AgentStatusDto)).EndsWith(""","transcript_format":"envelopes","live_subagents":null,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null,"account_directory":null,"account_id":null,"account_label":null,"turn_attested":null,"is_private":null}""");
+        await Assert.That(JsonSerializer.Serialize(unset, StatusIpcJsonContext.Default.AgentStatusDto)).EndsWith(""","transcript_format":null,"live_subagents":null,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null,"account_directory":null,"account_id":null,"account_label":null,"turn_attested":null,"is_private":null}""");
     }
 
     [Test]
@@ -248,9 +248,9 @@ public class StatusIpcJsonTests {
         var zero     = unset with { LiveSubagents = 0 };
         var positive = unset with { LiveSubagents = 3 };
 
-        await Assert.That(JsonSerializer.Serialize(unset, StatusIpcJsonContext.Default.AgentStatusDto)).EndsWith(""","transcript_format":"vendor","live_subagents":null,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null}""");
-        await Assert.That(JsonSerializer.Serialize(zero, StatusIpcJsonContext.Default.AgentStatusDto)).EndsWith(""","transcript_format":"vendor","live_subagents":0,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null}""");
-        await Assert.That(JsonSerializer.Serialize(positive, StatusIpcJsonContext.Default.AgentStatusDto)).EndsWith(""","transcript_format":"vendor","live_subagents":3,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null}""");
+        await Assert.That(JsonSerializer.Serialize(unset, StatusIpcJsonContext.Default.AgentStatusDto)).EndsWith(""","transcript_format":"vendor","live_subagents":null,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null,"account_directory":null,"account_id":null,"account_label":null,"turn_attested":null,"is_private":null}""");
+        await Assert.That(JsonSerializer.Serialize(zero, StatusIpcJsonContext.Default.AgentStatusDto)).EndsWith(""","transcript_format":"vendor","live_subagents":0,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null,"account_directory":null,"account_id":null,"account_label":null,"turn_attested":null,"is_private":null}""");
+        await Assert.That(JsonSerializer.Serialize(positive, StatusIpcJsonContext.Default.AgentStatusDto)).EndsWith(""","transcript_format":"vendor","live_subagents":3,"usage_limit":null,"terminal_dialog":null,"interruption":null,"working_since":null,"account_directory":null,"account_id":null,"account_label":null,"turn_attested":null,"is_private":null}""");
     }
 
     [Test]
@@ -301,8 +301,40 @@ public class StatusIpcJsonTests {
         var json = JsonSerializer.Serialize(dto, StatusIpcJsonContext.Default.AgentStatusDto);
         var old  = """{"id":"a","kind":"agent","vendor":"claude","repo_path":null,"status":"Running","flow_run_id":null,"flow_role":null,"requester":null,"created_at":"2026-08-01T00:00:00Z","model":null,"requester_display":null}""";
 
-        await Assert.That(json).EndsWith("\"interruption\":\"too_old\",\"working_since\":null}");
+        await Assert.That(json).EndsWith("\"interruption\":\"too_old\",\"working_since\":null,\"account_directory\":null,\"account_id\":null,\"account_label\":null,\"turn_attested\":null,\"is_private\":null}");
         await Assert.That(JsonSerializer.Deserialize(json, StatusIpcJsonContext.Default.AgentStatusDto)!.Interruption).IsEqualTo("too_old");
         await Assert.That(JsonSerializer.Deserialize(old, StatusIpcJsonContext.Default.AgentStatusDto)!.Interruption).IsNull();
+    }
+
+    [Test]
+    public async Task Account_members_serialize_last_and_are_null_from_an_older_daemon() {
+        var dto = new AgentStatusDto("a", "agent", "claude", null, "Running", null, null, null, DateTime.UnixEpoch, null, null,
+            AccountDirectory: "/Users/x/.claude-work", AccountId: "a1b2", AccountLabel: "Work");
+        var old = """{"id":"a","kind":"agent","vendor":"claude","repo_path":null,"status":"Running","flow_run_id":null,"flow_role":null,"requester":null,"created_at":"2026-08-01T00:00:00Z","model":null,"requester_display":null}""";
+
+        var json = JsonSerializer.Serialize(dto, StatusIpcJsonContext.Default.AgentStatusDto);
+        var back = JsonSerializer.Deserialize(old, StatusIpcJsonContext.Default.AgentStatusDto)!;
+
+        await Assert.That(json).EndsWith(""","interruption":null,"working_since":null,"account_directory":"/Users/x/.claude-work","account_id":"a1b2","account_label":"Work","turn_attested":null,"is_private":null}""");
+        await Assert.That(back.AccountDirectory).IsNull();
+        await Assert.That(back.AccountId).IsNull();
+        await Assert.That(back.AccountLabel).IsNull();
+    }
+
+    [Test]
+    public async Task Privacy_and_user_subject_emit_null_by_default_and_round_trip_when_set() {
+        var agent = new AgentStatusDto("a1", "agent", "claude", "/repo", "Running", null, null, null, DateTime.UtcNow, null, null);
+        await Assert.That(JsonSerializer.Serialize(agent, StatusIpcJsonContext.Default.AgentStatusDto)).Contains("\"is_private\":null");
+        var priv = JsonSerializer.Deserialize(
+            JsonSerializer.Serialize(agent with { IsPrivate = true }, StatusIpcJsonContext.Default.AgentStatusDto),
+            StatusIpcJsonContext.Default.AgentStatusDto)!;
+        await Assert.That(priv.IsPrivate).IsTrue();
+
+        var info = new DaemonInfoDto("main", "1", "https://s", "connected", 1, 0);
+        await Assert.That(JsonSerializer.Serialize(info, StatusIpcJsonContext.Default.DaemonInfoDto)).Contains("\"user_subject\":null");
+        var back = JsonSerializer.Deserialize(
+            JsonSerializer.Serialize(info with { UserSubject = "u1" }, StatusIpcJsonContext.Default.DaemonInfoDto),
+            StatusIpcJsonContext.Default.DaemonInfoDto)!;
+        await Assert.That(back.UserSubject).IsEqualTo("u1");
     }
 }

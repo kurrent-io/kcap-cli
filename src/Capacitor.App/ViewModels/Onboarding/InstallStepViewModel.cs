@@ -17,33 +17,49 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     public const string ProfileMismatchCode = "profile_mismatch";
     public const string AnswerRequiredText  = "This installer needs answers this version of kcap doesn't give. Update kcap, then try again.";
     public const string NotStartedText = "The local server didn't finish starting. Try again to finish the install.";
+    public const string RepairingText  = "Updating an older kcap on this Mac";
+    public const string OldClientText  = "An older kcap on this Mac is still in the way. Try again to update it.";
 
     readonly LocalInstallController _controller;
     readonly Func<string?>          _appProfile;
     readonly Func<string?>          _configActiveProfile;
     readonly Func<bool>             _onLocalPath;
     readonly Func<LocalEmbeddingSetting?> _recorded;
+    readonly Func<CancellationToken, Task<LocalEmbeddingModelManifest?>> _builtinOffer;
     readonly Func<bool>             _resuming;
+    readonly Func<CancellationToken, Task<ClientRepairOutcome>> _repairClients;
     CancellationToken               _lifetime;
     string?                         _refusal;
+    string?                         _clientProblem;
+    bool                            _repairing;
+    bool                            _installPressed;
     bool                            _choosing;
     IReadOnlyList<InstallStepRow>   _rows = [];
     LocalSetupProgress?             _watched;
 
+    /// <param name="builtinOffer">The built-in model set the stack setup will run offers, or null; asked before the choice shows.</param>
     /// <param name="recorded">The installation's recorded embedding setting; a disk read, run off the UI thread.</param>
+    /// <param name="repairClients">Brings any other kcap the installer would refuse up to date, before anything is asked.</param>
     /// <param name="resuming">True while an earlier setup is unfinished: the page finishes it without asking again.</param>
     public InstallStepViewModel(
             LocalInstallController controller, Func<string?> appProfile, Func<string?> configActiveProfile,
-            Func<bool> onLocalPath, Func<LocalEmbeddingSetting?>? recorded = null, Func<bool>? resuming = null) {
+            Func<bool> onLocalPath, Func<CancellationToken, Task<LocalEmbeddingModelManifest?>> builtinOffer,
+            Func<LocalEmbeddingSetting?>? recorded = null,
+            Func<CancellationToken, Task<ClientRepairOutcome>>? repairClients = null,
+            Func<bool>? resuming = null) {
         _controller          = controller;
         _appProfile          = appProfile;
         _configActiveProfile = configActiveProfile;
         _onLocalPath         = onLocalPath;
+        _builtinOffer        = builtinOffer;
         _recorded            = recorded ?? (() => null);
         _resuming            = resuming ?? (() => false);
+        _repairClients       = repairClients ?? (_ => Task.FromResult<ClientRepairOutcome>(new ClientRepairOutcome.Clear()));
 
         Search          = new SearchChoiceViewModel();
         TryAgainCommand = ReactiveCommand.CreateFromTask(TryAgainAsync);
+        RepairAgainCommand = ReactiveCommand.CreateFromTask(() =>
+            !ClientProblemVisible ? Task.CompletedTask : _installPressed ? StartChosenAsync(_lifetime) : PrepareAsync(_lifetime));
         CancelCommand   = ReactiveCommand.Create(() => { if (CancelVisible) _controller.Interrupt(); });
 
         Search.PropertyChanged += (_, e) => {
@@ -120,9 +136,31 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     public bool LockedVisible   => Failure is { LockedToLocal: true } && !Running && !RefusalVisible;
     public bool TryAgainVisible => Failure is { Affordance: LocalInstallAffordance.Retry } && !Running;
     public bool CancelVisible   => Running;
-    public bool BackVisible     => !Running && Failure is not { LockedToLocal: true };
+    public bool BackVisible     => !Running && !Repairing && Failure is not { LockedToLocal: true };
 
-    public bool ProgressVisible => RefusalMessage is null && !ChoiceVisible;
+    public bool ProgressVisible => RefusalMessage is null && !ChoiceVisible && !Repairing && !ClientProblemVisible;
+
+    /// Another kcap is being brought up to date; nothing has been asked or installed yet.
+    public bool Repairing {
+        get => _repairing;
+        private set {
+            this.RaiseAndSetIfChanged(ref _repairing, value);
+            this.RaisePropertyChanged(nameof(ProgressVisible));
+            this.RaisePropertyChanged(nameof(BackVisible));
+        }
+    }
+
+    /// Why another kcap could not be brought up to date; the page offers to try again.
+    public string? ClientProblem {
+        get => _clientProblem;
+        private set {
+            this.RaiseAndSetIfChanged(ref _clientProblem, value);
+            this.RaisePropertyChanged(nameof(ClientProblemVisible));
+            this.RaisePropertyChanged(nameof(ProgressVisible));
+        }
+    }
+
+    public bool ClientProblemVisible => ClientProblem is not null;
 
     public string? RefusalMessage {
         get => _refusal;
@@ -139,6 +177,7 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
 
     public ReactiveCommand<Unit, Unit> TryAgainCommand { get; }
     public ReactiveCommand<Unit, Unit> CancelCommand   { get; }
+    public ReactiveCommand<Unit, Unit> RepairAgainCommand { get; }
 
     public event Action? AdvanceRequested;
 
@@ -150,7 +189,9 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
             return;
         }
 
-        // A settled failure stays on screen until Try again: re-entry never starts a run of its own.
+        // An older kcap may be gone by now, and refusing it changed nothing, so re-entry checks again.
+        if (RefusedClient(_controller.Outcome)) _controller.Forget();
+        // Any other settled failure stays on screen until Try again: re-entry never starts a run of its own.
         if (_controller.Running || _controller.Outcome is not null) return;
 
         // The installer writes the config's active profile; the app reads KCAP_PROFILE first.
@@ -164,7 +205,19 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
         }
 
         RefusalMessage = null;
-        if (ChoiceVisible) return;
+        if (ChoiceVisible || Repairing) return;
+
+        await PrepareAsync(ct);
+    }
+
+    static bool RefusedClient(LocalInstallOutcome? outcome) =>
+        outcome is LocalInstallOutcome.Failed { Code: var code } && code == LocalInstallFailureCode.ClientBelowFloor.Wire();
+
+    /// Brings the other kcap copies up to date, then asks about search, or starts straight away when the answer is
+    /// already known.
+    async Task PrepareAsync(CancellationToken ct) {
+        _installPressed = false;
+        if (!await RepairAsync(ct)) return;
 
         LocalEmbeddingSetting? recorded;
         try {
@@ -173,15 +226,58 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
             return;
         }
         Search.Prefill(recorded);
-        // Only a known answer resumes unasked: the earlier run's choice may never have reached the record.
-        if (_resuming() && (_controller.Embeddings ?? Known(recorded)) is { } known) await _controller.StartAsync(known, ct);
-        else ChoiceVisible = true;
+        // Only a known answer resumes unasked: the earlier run's choice may never have reached the record. A run
+        // refused for an older kcap keeps the answer it was given.
+        if ((_controller.Embeddings ?? (_resuming() ? Known(recorded) : null)) is { } known) {
+            await _controller.StartAsync(known, ct);
+            return;
+        }
+
+        LocalEmbeddingModelManifest? offered;
+        try {
+            offered = await _builtinOffer(ct);
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            return;
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"kcap app: looking up the built-in search model failed: {ex.Message}");
+            offered = null;
+        }
+        Search.OfferBuiltin(offered);
+        ChoiceVisible = true;
     }
 
+    /// False, with the reason shown, when another kcap the installer would refuse is still there.
+    async Task<bool> RepairAsync(CancellationToken ct) {
+        ClientProblem = null;
+        Repairing     = true;
+        ClientRepairOutcome repair;
+        try {
+            repair = await _repairClients(ct);
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            return false;
+        } finally {
+            Repairing = false;
+        }
+        if (!repair.Ready) ClientProblem = ProblemText(repair);
+
+        return repair.Ready;
+    }
+
+    static string ProblemText(ClientRepairOutcome outcome) => outcome switch {
+        ClientRepairOutcome.Cancelled c =>
+            $"An older kcap at {c.Path} has to be updated before kcap can install, and macOS needs your password to do it. Try again to update it.",
+        ClientRepairOutcome.OldApp a =>
+            $"An older copy of the kcap app is at {a.Path}. Move it to the Trash, then try again.",
+        ClientRepairOutcome.Failed f =>
+            $"kcap couldn't update the older kcap at {f.Path}: {f.Reason} Try again to update it.",
+        _ => OldClientText,
+    };
+
     static LocalEmbeddingChoice? Known(LocalEmbeddingSetting? recorded) => recorded switch {
-        null              => null,
-        { Model: null }   => LocalEmbeddingChoice.KeywordOnly,
-        { Model: { } m }  => new LocalEmbeddingChoice(m),
+        null                                         => null,
+        { Provider: LocalEmbeddingProvider.Builtin } => LocalEmbeddingChoice.Builtin,
+        { Model: null }                              => LocalEmbeddingChoice.KeywordOnly,
+        { Model: { } m }                             => new LocalEmbeddingChoice(m),
     };
 
     public async Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) {
@@ -213,6 +309,7 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
         "download_failed"     => "The download didn't finish. Check your connection and try again.",
         "verification_failed" => "The download didn't pass its signature check. Try again to download it again.",
         "cancelled"           => "The install was cancelled.",
+        "client_below_floor"  => OldClientText,
         null                  => "The install stopped before it finished. Try again.",
         _                     => NotStartedText,
     };
@@ -221,10 +318,27 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
         if (!ChoiceVisible || !CanContinue) return Task.CompletedTask;
 
         ChoiceVisible = false;
-        return _controller.StartAsync(Search.Choice, _lifetime);
+        return StartChosenAsync(_lifetime);
     }
 
-    Task TryAgainAsync() => TryAgainVisible ? _controller.RetryAsync(_lifetime) : Task.CompletedTask;
+    /// Starts with the answer the user pressed Install on, once nothing older is in the way. Try again after a refusal
+    /// here continues this same Install: an earlier run's answer, kept on the controller, was not what was chosen.
+    async Task StartChosenAsync(CancellationToken ct) {
+        _installPressed = true;
+        // The choice can stay up across Back and a return to this page, long enough for an older kcap to turn up.
+        if (!await RepairAsync(ct)) return;
+
+        _installPressed = false;
+        await _controller.StartAsync(Search.Choice, ct);
+    }
+
+    Task TryAgainAsync() {
+        if (!TryAgainVisible) return Task.CompletedTask;
+        if (!RefusedClient(_controller.Outcome)) return _controller.RetryAsync(_lifetime);
+
+        _controller.Forget();
+        return PrepareAsync(_lifetime);
+    }
 
     void OnSettled(LocalInstallOutcome outcome) {
         if (outcome is LocalInstallOutcome.Installed) AdvanceRequested?.Invoke();

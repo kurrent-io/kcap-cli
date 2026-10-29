@@ -102,4 +102,44 @@ public class SystemdServiceManagerTests {
         await Assert.That(() => manager.SetEnvironment("test", "PATH", "/usr/bin:/opt/agents")).Throws<System.ComponentModel.Win32Exception>();
         await Assert.That(File.ReadAllText(path)).IsEqualTo(unit);
     }
+
+    /// <summary>Without a user bus systemctl answers nothing, and the unit must read as unknown rather than
+    /// absent, or a verify would install over a daemon that may be running.</summary>
+    [Test]
+    public async Task Query_without_a_reachable_systemd_is_unknown() {
+        var manager = new SystemdServiceManager(Home, runProcess: (_, _) => (1, "", "Failed to connect to bus: No medium found"));
+
+        var query = manager.Query("test");
+
+        await Assert.That(query.Probe).IsEqualTo(LabelProbe.Unknown);
+        await Assert.That(query.JobPid).IsNull();
+    }
+
+    /// <summary>The unit's binary comes from the file, so it stays known without systemd.</summary>
+    [Test]
+    public async Task Query_without_a_reachable_systemd_still_reads_the_units_binary() {
+        var path = SystemdUnit.UnitPath(Home, "test");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "ExecStart=/opt/kcap/kcap-daemon --name test\n");
+        var manager = new SystemdServiceManager(Home, runProcess: (_, _) => (1, "", "Failed to connect to bus: No medium found"));
+
+        var query = manager.Query("test");
+
+        await Assert.That(query.Probe).IsEqualTo(LabelProbe.Unknown);
+        await Assert.That(query.BinaryPath).IsEqualTo("/opt/kcap/kcap-daemon");
+    }
+
+    [Test]
+    public async Task Query_of_a_disabled_unit_on_disk_is_loaded_and_installed() {
+        var path = SystemdUnit.UnitPath(Home, "test");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "ExecStart=/opt/kcap/kcap-daemon --name test\n");
+        var manager = new SystemdServiceManager(Home, runProcess: (_, args) =>
+            args.Contains("is-active") ? (3, "inactive\n", "") : args.Contains("is-enabled") ? (1, "disabled\n", "") : (0, "", ""));
+
+        var query = manager.Query("test");
+
+        await Assert.That(query.Probe).IsEqualTo(LabelProbe.Loaded);
+        await Assert.That(query.State).IsEqualTo(ServiceState.Installed);
+    }
 }

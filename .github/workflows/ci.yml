@@ -49,7 +49,7 @@ jobs:
         run: '[ -n "${TMPDIR:-}" ] || echo "TMPDIR=/private/tmp" >> "$GITHUB_ENV"'
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v6
+        uses: ./.github/actions/setup-dotnet
         with:
           cache: true
           # No lock file to key on; CPM makes this the one file that pins every version.
@@ -153,7 +153,7 @@ jobs:
           fetch-tags: true
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v6
+        uses: ./.github/actions/setup-dotnet
 
       - name: Install minver
         run: dotnet tool install -g minver-cli --version 8.0.0

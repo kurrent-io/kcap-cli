@@ -28,6 +28,8 @@ public class AgentOrchestratorResumeOnBootTests {
         public bool ThrowsFromSupports { get; init; }
         public bool SupportsRestartResume(string? runtimeTransport) =>
             ThrowsFromSupports ? throw new InvalidOperationException("the factory faulted") : true;
+        public bool ResumesIdle { get; init; }
+        public bool ResumesIdleWithoutPrompt(string? runtimeTransport) => ResumesIdle;
 
         public ConcurrentQueue<RuntimeStartContext> Contexts { get; } = new();
         public TaskCompletionSource? Gate { get; set; }
@@ -102,25 +104,73 @@ public class AgentOrchestratorResumeOnBootTests {
             Fixture f, string agentId, string? worktree = null, string? vendorSession = "vendor-session-1",
             bool isPrivate = false, ResumeState state = ResumeState.Resuming, DateTimeOffset? at = null,
             string? predecessor = "instance-old", string? daemonInstanceId = null, bool standalone = false,
-            string vendor = "cursor", string? permissionMode = null, IReadOnlyList<string>? inherited = null) {
+            string vendor = "cursor", string? permissionMode = null, string title = "the thing", bool? titleDerived = null,
+            IReadOnlyList<string>? inherited = null, bool? awaitingInput = null) {
         var stamp = at ?? TimeProvider.System.GetUtcNow();
         var launch = new ResumeLaunchDescriptor(
             Prompt: "build the thing", Model: "auto", Effort: null, RepoPath: f.Repo,
             WorktreePath: worktree ?? Tmp.CreateDir($"wt-{agentId}"), Work: WorkLocation.OwnedWorktree,
             GitRelativeCwd: null, SandboxPolicy: null, ApprovalPolicy: null, PermissionPreset: null,
-            McpConfigPath: null, Title: "the thing", IsPrivate: isPrivate, Origin: "server",
+            McpConfigPath: null, Title: title, IsPrivate: isPrivate, Origin: "server",
             RequesterUserId: "user-1", RequesterDisplay: "User One", ConsentSource: "default",
             ConsentAt: stamp.ToString("O"), FlowRunId: null, FlowRole: null,
             WorktreeBranch: $"capacitor/custom-{agentId}", WorktreeIsStandalone: standalone, WorktreeSourceRepo: f.Repo,
-            PermissionMode: permissionMode);
+            PermissionMode: permissionMode, TitleDerived: titleDerived);
         var entry = new ResumeLedgerEntry(
             ResumeLedgerEntry.CurrentSchemaVersion, agentId, "daemon-1", stamp, stamp, vendor, "acp",
             $"session-{agentId}", vendorSession, launch, state, Attempts: 0, LastError: null,
             PredecessorInstanceId: predecessor, ResumingAt: state == ResumeState.Resuming ? stamp : null,
-            DaemonInstanceId: daemonInstanceId, InheritedAgentIds: inherited);
+            DaemonInstanceId: daemonInstanceId, InheritedAgentIds: inherited, AwaitingInput: awaitingInput);
         f.Orch.ResumeLedger!.Write(entry);
 
         return entry;
+    }
+
+    /// <summary>An agent that was waiting comes back waiting, with nothing sent, but only where the runtime can resume
+    /// without a turn. Mid-turn, an entry from an older daemon that recorded no wait, or a runtime that needs a first turn
+    /// all get the nudge.</summary>
+    [Test]
+    [Arguments(true, true, false)]
+    [Arguments(true, false, true)]
+    [Arguments(true, null, true)]
+    [Arguments(false, true, true)]
+    public async Task Only_a_waiting_agent_on_a_runtime_that_resumes_without_a_turn_comes_back_without_the_nudge(
+            bool resumesIdle, bool? awaitingInput, bool nudged) {
+        var f = Build(new ResumableFactory { PtyStyle = true, ResumesIdle = resumesIdle });
+        await using var _ = f.Orch;
+        var entry = Entry(f, "resume-idle", awaitingInput: awaitingInput);
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        var ctx = f.Factory.Contexts.Single();
+        await Assert.That(ctx.Prompt).IsEqualTo(nudged ? ResumeNudge.Build(entry.ResumingAt!.Value, "build the thing") : "");
+        await Assert.That(f.Orch.GetAgentForTest("resume-idle")!.ActivityClock.AwaitingInput).IsEqualTo(!nudged);
+        // The running entry holds no waiting state of its own: a crash before the next keep-agents shutdown must
+        // not read a turn started since as waiting.
+        await Assert.That(f.Orch.ResumeLedger!.TryRead("resume-idle")!.AwaitingInput).IsNull();
+    }
+
+    /// <summary>A silently resumed agent is waiting from the moment anything can reach it, so a turn that starts
+    /// while the resume is still registering is not overwritten as waiting.</summary>
+    [Test]
+    public async Task A_turn_that_starts_while_a_silent_resume_registers_stays_working() {
+        var server = new CaptureServerConnection {
+            AgentRegisteredEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+            AgentRegisteredGate    = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+        };
+        var f = Build(new ResumableFactory { PtyStyle = true, ResumesIdle = true }, server: server);
+        await using var _ = f.Orch;
+        Entry(f, "resume-busy", awaitingInput: true);
+
+        f.Orch.LoadResumeLedger();
+        var resuming = f.Orch.ResumeOnBootAsync(CancellationToken.None);
+        await server.AgentRegisteredEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        f.Orch.GetAgentForTest("resume-busy")!.ActivityClock.SetAwaitingInput(false);
+        server.AgentRegisteredGate.SetResult();
+        await resuming;
+
+        await Assert.That(f.Orch.GetAgentForTest("resume-busy")!.ActivityClock.AwaitingInput).IsFalse();
     }
 
     [Test]
@@ -163,6 +213,68 @@ public class AgentOrchestratorResumeOnBootTests {
         await Assert.That(consentLog).Contains("\"agent_id\":\"resume-1\"");
         await Assert.That(consentLog).Contains("\"source\":\"resume\"");
         await Assert.That(f.Orch.ResumingClaims()).IsEmpty();
+    }
+
+    /// <summary>A resumed run is a new run: its epoch replaces the predecessor's, and no end committed for
+    /// the predecessor's run carries over.</summary>
+    [Test]
+    public async Task A_resumed_entry_records_its_own_epoch_and_no_committed_end() {
+        var f = Build();
+        await using var _ = f.Orch;
+        var entry = Entry(f, "resume-epoch");
+        f.Orch.ResumeLedger!.Write(entry with { RunEpoch = "epoch-old", LaunchEpoch = "epoch-old" });
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        var after = f.Orch.ResumeLedger!.TryRead("resume-epoch")!;
+        await Assert.That(after.RunEpoch).IsEqualTo(f.Orch.DaemonEpochForTest);
+        await Assert.That(after.LaunchEpoch).IsEqualTo("epoch-old");
+        await Assert.That(after.EndCommittedAt).IsNull();
+    }
+
+    /// <summary>A start title cut from the prompt stays a placeholder on resume: re-registered as the caller's,
+    /// it would outrank the title the session has since been given.</summary>
+    [Test]
+    public async Task A_resumed_prompt_cut_title_registers_as_derived() {
+        var f = Build();
+        await using var _ = f.Orch;
+        Entry(f, "resume-derived", title: "build the thing", titleDerived: true);
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        var agent = f.Orch.GetAgentForTest("resume-derived")!;
+        await Assert.That(agent.StartTitle).IsEqualTo(new AgentStartTitle("build the thing", Derived: true));
+        await Assert.That(f.Orch.ResumeLedger!.TryRead("resume-derived")!.Launch.TitleDerived ?? false).IsTrue();
+    }
+
+    [Test]
+    public async Task A_resumed_explicit_title_stays_the_callers() {
+        var f = Build();
+        await using var _ = f.Orch;
+        Entry(f, "resume-explicit", title: "Named by the caller", titleDerived: false);
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        var agent = f.Orch.GetAgentForTest("resume-explicit")!;
+        await Assert.That(agent.StartTitle).IsEqualTo(new AgentStartTitle("Named by the caller", Derived: false));
+    }
+
+    /// <summary>An entry without the flag cannot say which kind its title is, so it resumes as derived: a resumed
+    /// session already holds its start title, and a placeholder never displaces it.</summary>
+    [Test]
+    public async Task A_resumed_title_without_the_flag_registers_as_derived() {
+        var f = Build();
+        await using var _ = f.Orch;
+        Entry(f, "resume-legacy", title: "build the thing", titleDerived: null);
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        var agent = f.Orch.GetAgentForTest("resume-legacy")!;
+        await Assert.That(agent.StartTitle).IsEqualTo(new AgentStartTitle("build the thing", Derived: true));
     }
 
     /// <summary>A native resume keeps its agent id, so an agent that was itself a successor goes on naming the agent it

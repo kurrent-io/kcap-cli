@@ -16,7 +16,9 @@ namespace Capacitor.Cli.Daemon.Services;
 /// (NTP, DST, a debugger pause) must not change <see cref="IdleForMs"/>, which is what makes a status
 /// report a proof rather than a snapshot.</para>
 /// </summary>
-internal sealed class AgentActivityClock(TimeProvider time) {
+/// <param name="initialSeq">Where a resumed agent's sequence continues from.</param>
+/// <param name="priorAgeMs">The age a resumed agent had already reached.</param>
+internal sealed class AgentActivityClock(TimeProvider time, ulong initialSeq = 1, ulong priorAgeMs = 0) {
     readonly Lock _gate = new();
 
     // Captured once at construction, on the same monotonic axis as _lastAdvanceTimestamp — never
@@ -26,13 +28,16 @@ internal sealed class AgentActivityClock(TimeProvider time) {
     // Mode changes still prove that the process is alive, but do not extend a task's quiet
     // window. Keep turn evidence separate from the liveness timestamp the reviewer reaper reads.
     long    _lastTurnActivityTimestamp = time.GetTimestamp();
-    ulong   _activitySeq = 1;
+    ulong   _activitySeq = initialSeq;
     bool    _turnInFlight;
     bool    _awaitingInput;
     // Set when the wait came from silence rather than a turn end, so the next output can clear
     // it. A hook verdict clears the bit and then owns the flag.
     bool    _silenceWait;
     long?   _viewerInputAt;
+    // A relayed prompt submit or tool call with no turn end since. Output and a cleared wait also
+    // describe an idle prompt, so this is a PTY vendor's only proof a turn is running.
+    bool    _hookTurn;
     ulong   _waitGeneration;
     // When the flag last became false. Silence is measured from here as well as from the last
     // output: a key that clears the wait must not be undone by the idle time already elapsed.
@@ -66,6 +71,17 @@ internal sealed class AgentActivityClock(TimeProvider time) {
     /// <summary>Fires outside <see cref="_gate"/> on every genuine <see cref="AwaitingInput"/>
     /// change, with the new value.</summary>
     public Action<bool>? OnAwaitingInputChanged { get; set; }
+
+    /// <summary>Positive evidence that a turn is running now: the ACP turn gate held, or a PTY
+    /// vendor's relayed prompt submit or tool call with no turn end or quiet mark since. False
+    /// means unproven, not idle: a delivered input or a keyed submit never sets it, because a
+    /// submit that starts no turn (a local slash command) looks the same.</summary>
+    public bool TurnAttested {
+        get { lock (_gate) return _turnInFlight || _hookTurn; }
+    }
+
+    /// <summary>Fires outside <see cref="_gate"/> on every genuine <see cref="TurnAttested"/> change.</summary>
+    public Action? OnTurnAttestedChanged { get; set; }
 
     /// <summary>Counts every observed turn end, whether or not it moved the flag: a PTY vendor
     /// relays only Stop, so a wait nothing cleared sees the next turn end as a second Stop with the
@@ -110,9 +126,7 @@ internal sealed class AgentActivityClock(TimeProvider time) {
     public ulong AgeMs {
         get {
             lock (_gate) {
-                var elapsed = time.GetElapsedTime(_spawnTimestamp);
-
-                return elapsed <= TimeSpan.Zero ? 0UL : (ulong) elapsed.TotalMilliseconds;
+                return priorAgeMs + Elapsed(_spawnTimestamp);
             }
         }
     }
@@ -128,7 +142,7 @@ internal sealed class AgentActivityClock(TimeProvider time) {
     public ActivitySnapshot Snapshot() {
         lock (_gate) {
             return new ActivitySnapshot(
-                _activitySeq, Elapsed(_lastAdvanceTimestamp), Elapsed(_spawnTimestamp), _turnInFlight);
+                _activitySeq, Elapsed(_lastAdvanceTimestamp), priorAgeMs + Elapsed(_spawnTimestamp), _turnInFlight);
         }
     }
 
@@ -199,13 +213,17 @@ internal sealed class AgentActivityClock(TimeProvider time) {
     /// <summary>The turn ended without a stop notice sticking: no output and no live subagent for
     /// <paramref name="quiet"/>. A later <see cref="Advance"/> clears it; a hook verdict replaces it.</summary>
     public bool TryMarkQuiet(TimeSpan quiet) {
+        bool attestedChanged;
         lock (_gate) {
             if (DueLocked(quiet) is not { } due || due > TimeSpan.Zero) return false;
+            attestedChanged = _hookTurn;
             _silenceWait   = true;
             _awaitingInput = true;
+            _hookTurn      = false;
             _waitGeneration++;
-            return true;
         }
+        if (attestedChanged) OnTurnAttestedChanged?.Invoke();
+        return true;
     }
 
     // Caller must hold _gate. Null when silence must not be applied.
@@ -244,8 +262,9 @@ internal sealed class AgentActivityClock(TimeProvider time) {
     /// <summary>Turn start/end — also counts as activity, independent of accompanying envelope
     /// traffic.</summary>
     public void SetTurnInFlight(bool value) {
-        bool ended, awaitingChanged;
+        bool ended, awaitingChanged, attestedChanged;
         lock (_gate) {
+            var attested = _turnInFlight || _hookTurn;
             ended = _turnInFlight && !value;
             _turnInFlight = value;
             // Only a genuine falling edge means a turn finished; a gate cleared without ever being
@@ -257,30 +276,36 @@ internal sealed class AgentActivityClock(TimeProvider time) {
             if (!awaiting) _notAwaitingSince = time.GetTimestamp();
             if (_awaitingInput && !awaiting) _workingSince = _notAwaitingSince;
             _awaitingInput = awaiting;
+            _hookTurn = false;
+            attestedChanged = attested != value;
             AdvanceLocked();
         }
         // Outside the lock, same rule as OnLaunchStageChanged: the callback's send reads this
         // clock's own (independently guarded) properties.
         if (ended) OnTurnEnded?.Invoke();
         if (awaitingChanged) OnAwaitingInputChanged?.Invoke(!value);
+        if (attestedChanged) OnTurnAttestedChanged?.Invoke();
     }
 
-    /// <summary>The explicit path for sources that see no turn gate: a PTY vendor's hook relay
-    /// and a delivered input. Moves the flag alone — see <see cref="AwaitingInput"/>.</summary>
+    /// <summary>A PTY vendor's relayed hook verdict: Stop is true, a prompt submit or tool call
+    /// false. Moves the wait and <see cref="TurnAttested"/> alone — see <see cref="AwaitingInput"/>.</summary>
     public void SetAwaitingInput(bool value) {
-        bool changed;
+        bool changed, attestedChanged;
         lock (_gate) {
             // A hook verdict replaces a silence wait, so later output cannot clear a real stop.
             _silenceWait = false;
             changed = _awaitingInput != value;
+            attestedChanged = !_turnInFlight && _hookTurn == value;
             if (value) _waitGeneration++;
             else {
                 _notAwaitingSince = time.GetTimestamp();
                 if (changed) _workingSince = _notAwaitingSince;
             }
             _awaitingInput = value;
+            _hookTurn = !value;
         }
         if (changed) OnAwaitingInputChanged?.Invoke(value);
+        if (attestedChanged) OnTurnAttestedChanged?.Invoke();
     }
 
     /// <summary>Clears the wait a delivery answered, unless a newer one began since the caller

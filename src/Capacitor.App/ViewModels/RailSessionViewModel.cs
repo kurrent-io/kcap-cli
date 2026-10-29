@@ -13,10 +13,15 @@ namespace Capacitor.App.ViewModels;
 
 /// One session row of the rail, retaining commands and bindings across directory revisions.
 public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
+    public const string TerminalTooltip = "Started in a terminal, not hosted by a daemon";
+
     public string Id { get; }
     public string Key { get; }
     DateTime _createdAt;
     public DateTime CreatedAt { get => _createdAt; private set => this.RaiseAndSetIfChanged(ref _createdAt, value); }
+    /// The server's last activity for a listed session; null for a row only a daemon knows.
+    DateTime? _lastActivityAt;
+    public DateTime? LastActivityAt { get => _lastActivityAt; private set => this.RaiseAndSetIfChanged(ref _lastActivityAt, value); }
     string? _checkoutPath;
     public string? CheckoutPath { get => _checkoutPath; private set => this.RaiseAndSetIfChanged(ref _checkoutPath, value); }
     /// Null when the row has no title, in which case the chips line stands alone as the row.
@@ -42,6 +47,28 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     public string MachineTooltip => $"This session runs on the remote daemon ‘{MachineBadge}’.";
     bool _isRemote;
     public bool IsRemote { get => _isRemote; private set => this.RaiseAndSetIfChanged(ref _isRemote, value); }
+    /// A session the server lists with no daemon row behind it.
+    bool _isServer;
+    public bool IsServer { get => _isServer; private set => this.RaiseAndSetIfChanged(ref _isServer, value); }
+    /// A live server row no daemon hosts: started in a terminal.
+    bool _isTerminalSession;
+    public bool IsTerminalSession { get => _isTerminalSession; private set => this.RaiseAndSetIfChanged(ref _isTerminalSession, value); }
+    bool _isEnded;
+    public bool IsEnded { get => _isEnded; private set => this.RaiseAndSetIfChanged(ref _isEnded, value); }
+    /// Up to two initials of the owner's name, for a row that is not the signed-in user's.
+    string? _ownerInitials;
+    public string? OwnerInitials { get => _ownerInitials; private set => this.RaiseAndSetIfChanged(ref _ownerInitials, value); }
+    string? _ownerAvatarUrl;
+    public string? OwnerAvatarUrl { get => _ownerAvatarUrl; private set => this.RaiseAndSetIfChanged(ref _ownerAvatarUrl, value); }
+    bool _showsOwner;
+    public bool ShowsOwner { get => _showsOwner; private set => this.RaiseAndSetIfChanged(ref _showsOwner, value); }
+    string _ownerTooltip = "";
+    public string OwnerTooltip { get => _ownerTooltip; private set => this.RaiseAndSetIfChanged(ref _ownerTooltip, value); }
+    string _repoLabel = "";
+    public string RepoLabel { get => _repoLabel; private set => this.RaiseAndSetIfChanged(ref _repoLabel, value); }
+    readonly ObservableAsPropertyHelper<bool> _showsRepo;
+    /// The repository name moves onto the row when the groups no longer say it.
+    public bool ShowsRepo => _showsRepo.Value;
     /// A launch the daemon has not published yet: Meta carries its stage instead of an age.
     bool _isStarting;
     public bool IsStarting { get => _isStarting; private set => this.RaiseAndSetIfChanged(ref _isStarting, value); }
@@ -64,7 +91,8 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     public AgentStatusPresentation Status => _status.Value;
 
     readonly ObservableAsPropertyHelper<bool> _isStale;
-    /// A remote row greys out while the lane is stale; a local row is never stale.
+    /// A remote or server row greys out while the lane is stale, a server row also on the server's
+    /// own idle flag; a local row is never stale.
     public bool IsStale => _isStale.Value;
 
     readonly CompositeDisposable _disposables = new();
@@ -79,7 +107,8 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
             IObservable<IReadOnlyDictionary<string, int>>? agentsRunningCommands = null,
             IObservable<IReadOnlyDictionary<string, RailPullRequestSummary>>? pullRequests = null,
             IObservable<bool>? localOnAppServer = null, Action<string, AgentOrigin, PullRequestSubjectDto?>? openPullRequest = null,
-            IObservable<Unit>? ageTicks = null) {
+            IObservable<Unit>? ageTicks = null,
+            Action<string>? openServer = null, IObservable<RailGrouping>? grouping = null) {
         _time = time;
         _row = new BehaviorSubject<AgentRow>(row).DisposeWith(_disposables);
         Id = row.Id;
@@ -117,23 +146,34 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
             .ToProperty(this, x => x.Status, initialValue: SessionStatusDots.ForRow(row, pending: false))
             .DisposeWith(_disposables);
 
-        _isStale = (IsRemote ? remoteStale : Observable.Return(false))
+        _isStale = _row.CombineLatest(remoteStale, (current, laneStale) =>
+                current.Origin is AgentOrigin.Remote or AgentOrigin.Server && (laneStale || current.IsStale))
             .ToProperty(this, x => x.IsStale, initialValue: false)
             .DisposeWith(_disposables);
 
-        OpenCommand = ReactiveCommand.Create(() => (IsRemote ? openRemote : openLocal)(row.Id));
+        _showsRepo = (grouping ?? Observable.Return(RailGrouping.Repository)).CombineLatest(_row, (mode, current) =>
+                mode != RailGrouping.Repository && current.RepoGroupLabel is { Length: > 0 } and not "No repository")
+            .ToProperty(this, x => x.ShowsRepo, initialValue: false)
+            .DisposeWith(_disposables);
+
+        OpenCommand = ReactiveCommand.Create(() => {
+            if (IsServer) openServer?.Invoke(row.Id);
+            else (IsRemote ? openRemote : openLocal)(row.Id);
+        });
         _disposables.Add(OpenCommand);
         OpenPullRequestCommand = ReactiveCommand.Create(() => {
             if (HasPullRequest && !HasMultiplePullRequests)
-                openPullRequest?.Invoke(Id, IsRemote ? AgentOrigin.Remote : AgentOrigin.Local, PullRequest!.Subject);
+                openPullRequest?.Invoke(Id, Origin(), PullRequest!.Subject);
         });
         _disposables.Add(OpenPullRequestCommand);
         OpenPullRequestChoiceCommand = ReactiveCommand.Create<RailPullRequestMenuItem>(item => {
             if (PullRequest?.MenuItems.Any(current => current.Subject == item.Subject) == true)
-                openPullRequest?.Invoke(Id, IsRemote ? AgentOrigin.Remote : AgentOrigin.Local, item.Subject);
+                openPullRequest?.Invoke(Id, Origin(), item.Subject);
         });
         _disposables.Add(OpenPullRequestChoiceCommand);
     }
+
+    AgentOrigin Origin() => IsServer ? AgentOrigin.Server : IsRemote ? AgentOrigin.Remote : AgentOrigin.Local;
 
     internal void Update(AgentRow row) {
         UpdateFields(row);
@@ -145,21 +185,25 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
         var oldVendor = Vendor;
         var oldMachine = MachineBadge;
         CreatedAt = row.CreatedAt;
+        LastActivityAt = row.LastActivityAt;
         CheckoutPath = (row.WorkLocation == WorkLocationText.Borrowed ? row.BorrowedFrom : row.WorktreePath) ?? row.RepoPath;
-        var kindExtra = row.Kind == "agent" ? null : row.Kind;
-        var borrowed = row.WorkLocation == WorkLocationText.Borrowed ? "borrowed" : null;
-        // Remote CreatedAt is registry registration time, not a trustworthy session start.
-        var age = row.Origin == AgentOrigin.Remote ? null : UptimeFormat.Format(
-            _time.GetUtcNow().UtcDateTime - DateTime.SpecifyKind(row.CreatedAt, DateTimeKind.Utc));
-
         Primary = string.IsNullOrEmpty(row.Title) ? null : row.Title;
         HasTitle = Primary is not null;
         Vendor = row.Vendor;
         HasVendor = !string.IsNullOrEmpty(row.Vendor);
         Model = string.IsNullOrEmpty(row.Model) ? null : row.Model;
         IsStarting = row.Origin == AgentOrigin.Pending;
-        var subagents = row.LiveSubagents is int live and > 0 ? $"{live} subagent{(live == 1 ? "" : "s")}" : null;
-        Meta = IsStarting ? LaunchStages.Label(row.LaunchStage) : Join(kindExtra, borrowed, age, subagents);
+        IsServer = row.Origin == AgentOrigin.Server;
+        IsTerminalSession = row.IsTerminalSession;
+        IsEnded = row.IsEndedSession;
+        OwnerInitials = Initials(row.OwnerName);
+        var avatar = string.IsNullOrEmpty(row.OwnerAvatarUrl) ? null : row.OwnerAvatarUrl;
+        ShowsOwner = (OwnerInitials is not null || avatar is not null) && row.OwnerIsViewer != true;
+        // A hidden badge's avatar still fetches, so only a shown one gets the URL.
+        OwnerAvatarUrl = ShowsOwner ? avatar : null;
+        OwnerTooltip = row.OwnerName is { Length: > 0 } owner ? $"{owner}\nOwner" : "";
+        RepoLabel = row.RepoGroupLabel;
+        Meta = IsStarting ? LaunchStages.Label(row.LaunchStage) : MetaFor(row);
         MachineBadge = row.MachineBadge;
         IsRemote = row.Origin == AgentOrigin.Remote;
 
@@ -175,14 +219,33 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
         }
     }
 
+    /// Ended: when it ended and how long it ran. Live: the age, with the kind, borrow and subagent
+    /// notes a daemon row carries. A remote registry row's registration time is not a start, so it
+    /// shows no age.
+    string MetaFor(AgentRow row) {
+        var now = _time.GetUtcNow();
+        if (row.IsEndedSession && row.EndedAt is { } ended) {
+            var endedAt = new DateTimeOffset(DateTime.SpecifyKind(ended, DateTimeKind.Utc));
+            return $"{RelativeTime.Format(endedAt, now)} · {UptimeFormat.Format(ended - row.CreatedAt)}";
+        }
+        var kind = row.Kind is "agent" or "session" ? null : row.Kind;
+        var borrowed = row.WorkLocation == WorkLocationText.Borrowed ? "borrowed" : null;
+        var age = row.Origin == AgentOrigin.Remote ? null : UptimeFormat.Format(
+            now.UtcDateTime - DateTime.SpecifyKind(row.CreatedAt, DateTimeKind.Utc));
+        var subagents = row.LiveSubagents is int live and > 0 ? $"{live} subagent{(live == 1 ? "" : "s")}" : null;
+        return Join(kind, borrowed, age, subagents);
+    }
+
     void RefreshAge() {
         var row = _row.Value;
-        if (row.Origin != AgentOrigin.Local) return;
-        var kind = row.Kind == "agent" ? null : row.Kind;
-        var borrowed = row.WorkLocation == WorkLocationText.Borrowed ? "borrowed" : null;
-        var age = UptimeFormat.Format(_time.GetUtcNow().UtcDateTime - DateTime.SpecifyKind(row.CreatedAt, DateTimeKind.Utc));
-        var subagents = row.LiveSubagents is int live and > 0 ? $"{live} subagent{(live == 1 ? "" : "s")}" : null;
-        Meta = Join(kind, borrowed, age, subagents);
+        if (row.Origin is not (AgentOrigin.Local or AgentOrigin.Server)) return;
+        Meta = MetaFor(row);
+    }
+
+    static string? Initials(string? name) {
+        if (string.IsNullOrWhiteSpace(name)) return null;
+        var words = name.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return string.Concat(words.Take(2).Select(word => char.ToUpperInvariant(word[0])));
     }
 
     static string Join(params string?[] parts) =>

@@ -137,4 +137,26 @@ public class LaunchRequestTests {
             "permission_mode"
         ]);
     }
+
+    static readonly string[] TwelveKeys = [
+        "daemon_name", "prompt", "model", "effort", "repo_path", "tools",
+        "attachment_ids", "visibility", "grants", "vendor", "codex_posture", "acp_permission_preset"
+    ];
+
+    [Test]
+    public async Task A_chosen_account_adds_the_account_id_key() {
+        var json = Payload(new LaunchRequest("kcap-dev", "/repo", "claude", "go", AccountId: "a1"));
+        var keys = json.EnumerateObject().Select(p => p.Name).ToArray();
+
+        await Assert.That(keys).IsEquivalentTo([.. TwelveKeys, "account_id"]);
+        await Assert.That(json.GetProperty("account_id").GetString()).IsEqualTo("a1");
+    }
+
+    [Test]
+    public async Task A_blank_account_id_is_sent_as_no_key() {
+        var json = Payload(new LaunchRequest("kcap-dev", "/repo", "claude", "go", AccountId: "  "));
+        var keys = json.EnumerateObject().Select(p => p.Name).ToArray();
+
+        await Assert.That(keys).IsEquivalentTo(TwelveKeys);
+    }
 }

@@ -6,6 +6,8 @@ using System.Text.RegularExpressions;
 using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Accounts.Readings;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
@@ -60,11 +62,12 @@ internal record AgentInstance(
         string                  Vendor,
         IHostedAgentRuntime     Runtime,
         WorktreeInfo            Worktree,
-        CancellationTokenSource ReadCts
+        CancellationTokenSource ReadCts,
+        ResolvedAccount?        Account = null
     ) {
     public string?              SessionId         { get; set; }
 
-    /// The vendor's own session id, the one a resume hands back to the vendor CLI.
+    /// The vendor's resume id, which can be reserved before a transcript confirms SessionId.
     public string?              VendorSession     { get; set; }
 
     /// Set when this agent stops to be resumed by a successor daemon: teardown then keeps its
@@ -126,6 +129,11 @@ internal record AgentInstance(
 
     /// The select dialog on this agent's screen, or null. Written only from the PTY read loop.
     public TerminalDialogDto? TerminalDialog { get; set; }
+
+    /// The last dialog report sent to the server, which the next one waits behind; guarded by
+    /// <see cref="TerminalDialogReportGate"/>.
+    public Task TerminalDialogReport { get; set; } = Task.CompletedTask;
+    public readonly Lock TerminalDialogReportGate = new();
 
     /// The agent's own transcript — Claude's project .jsonl or Codex's rollout — resolved once
     /// by discovery and cached: the status payload and the Codex send-path probe both read it,
@@ -342,6 +350,9 @@ internal record AgentInstance(
     /// <summary>Owned worktree (daemon-created — safe to remove on cleanup) vs borrowed cwd
     /// (the user's own checkout — never removed).</summary>
     public WorkLocation Work { get; init; } = WorkLocation.OwnedWorktree;
+
+    /// <summary>Runs in an empty scratch workspace: its path is no repository, and teardown deletes it.</summary>
+    public bool ScratchWorkspace { get; init; }
 
     /// <summary>Authorized live checkout mirrored into this owned worktree for a runtime that
     /// cannot safely execute in-place. Refreshed before each later review round.</summary>
@@ -720,6 +731,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     // scan) or explicitly rate-limited by TitleResolveLoop itself.
     readonly PeriodicTimer _titleResolve;
 
+    ITitleServerPort _titleServer;
+    internal ITitleServerPort TitleServerForTest { set => _titleServer = value; }
+
+    /// Null until <see cref="RunTitleResolveLoopAsync"/> builds it.
+    volatile TitleResolveLoop? _titleLoop;
+
     // Refresh once the token is within this much of its expiry. Kept above the 60 s tick plus the
     // reactive 30 s IsExpired margin, so proactive refresh still fires before a hook would hit the
     // margin — but no wider, so a token minted seconds ago at login isn't refreshed on the spot.
@@ -829,8 +846,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             PolicySnapshotProvider?                           policySnapshots = null,
             // Null outside DaemonRunner: a private fence over this daemon's own marker path. DaemonRunner
             // passes the singleton the control socket fences.
-            AdmissionFence?                                   admissionFence = null
+            AdmissionFence?                                   admissionFence = null,
+            // Null outside DaemonRunner: no accounts, so no catalog is probed per account.
+            AccountsPublisher?                                accounts = null,
+            // Null outside DaemonRunner: limit hits seen on screen are not recorded.
+            AccountReadingSink?                               readings = null
         ) {
+        AccountsSnapshot = accounts is null ? static () => null : () => accounts.Current;
+        _readings        = readings;
         _admission = admissionFence ?? new AdmissionFence(
             config.Store.RetiringMarkerPath(config.Name), config.InstanceId, time,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<AdmissionFence>.Instance);
@@ -846,10 +869,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _tokens            = tokens;
         _harnesses         = harnesses;
         _server            = server;
+        _server.OnCredentialResolved = ObserveCredential;
         _worktreeManager   = worktreeManager;
         _repoMatcher       = repoMatcher;
         _ptyFactory        = ptyFactory;
         _http              = http;
+        _titleServer       = new TitleServerPort(http, config.ServerUrl);
         _permissionBridge  = permissionBridge;
         _permissionBroker  = permissionBroker ?? new();
         _launchers         = launchers;
@@ -874,7 +899,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _attachmentFetcher = new AttachmentFetcher(
             httpClientFactory, _server.Credentials, logger);
         _pidRecords  = new AgentPidRecordStore(recordRoot, logger);
-        ResumeLedger = ResumeLedgerStore.For(config.Store, config.Name, time);
+        ResumeLedger      = ResumeLedgerStore.For(config.Store, config.Name, time);
+        ParticipantLedger = ResumeLedgerStore.ParticipantsFor(config.Store, config.Name, time);
         _failedLaunchLog = new FailedLaunchLog(recordRoot, time);
         _quarantine  = new AgentKillQuarantine(logger, time);
         _daemonId    = ComputeDaemonId(config.Name);
@@ -891,7 +917,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // a co-existing durable record's TRUSTED flow is routed through onRecordResolved by EmitAndClear.
         _markerCandidates = new MarkerCandidateStore(recordRoot, logger);
         _orphanReaper = new OrphanReaper(_pidRecords, _daemonId, _daemonEpoch, logger, time,
-            onRecordResolved: (a, e, fr, role) => _resolvedLedger?.Upsert(a, e, fr, role),
+            onRecordResolved: (a, e, fr, role) => {
+                // The server clears the flow role this evidence names, and a participant resumed under its own
+                // id still holds that role.
+                var resuming = ParticipantResumes(a);
+                _resolvedLedger?.Upsert(a, e, resuming ? null : fr, resuming ? null : role);
+            },
             markerStore: _markerCandidates,
             onMarkerResolved: (a, e) => _resolvedLedger?.Upsert(a, e, null, null));
 
@@ -959,11 +990,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // can't diverge from it even if config.DaemonEpoch were left unpinned (tests).
         _server.GetDaemonEpoch         =  () => _daemonEpoch;
 
-        _server.GetLiveAgentIds = () => [
-            .. _agents
-                .Where(kvp => (kvp.Value.Status is "Starting" or "Running") && !kvp.Value.IsServerSilent)
-                .Select(kvp => kvp.Key)
-        ];
+        _server.GetLiveAgentIds = LiveAgentIds;
+        _server.GetRecoverySnapshot = TakeRecoverySnapshot;
 
         // Phase B (D2): richer live-agent metadata (kind + flow identity) alongside the ids.
         _server.GetLiveAgents = () => [.. BuildLiveAgents()];
@@ -1027,7 +1055,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
      && (_agents.ContainsKey(agentId)
       || (_pidRecords?.Exists(agentId) ?? false)
       || _resumeCandidates.ContainsKey(agentId)
-      || (ResumeLedger is { } ledger && File.Exists(ledger.EntryPath(agentId))));
+      || (StoreFor(agentId) is { } ledger && File.Exists(ledger.EntryPath(agentId))));
 
     /// <summary>§3.3: snapshot the processor and, when it is still null, RESERVE the inline slot in the SAME
     /// critical section publication uses. Returns null to mean "run inline, then call
@@ -1452,8 +1480,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// kill-quarantine). Pure; the send loop + tests share it.</summary>
     internal DaemonStatusReport BuildStatusReport(string? echoNonce = null) {
         var (activeCount, activeCountVersion) = ActiveCountSnapshot();
+        var recovery = TakeRecoverySnapshot();
 
-        return new(activeCount, [.. BuildLiveAgents()], [.. QuarantineSnapshot()],
+        return new(activeCount, recovery.LiveAgents, [.. QuarantineSnapshot()],
             // Phase B2-b (sequenced-settlement design §4.2.4): re-advertise the durable resolved-
             // candidates ledger on every self-report until the server prunes it per-entry via
             // AckResolvedCandidates. Epoch is the shipped per-boot _daemonEpoch.
@@ -1468,7 +1497,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // blocked known-id set so a completion-false report carries its reason; StartupDiscovery
             // surfaces the recordless-survivor marker-scan state (Pending/Complete/Failed on Linux,
             // NotApplicable off it). Additive/inert until the paired server PR consumes them.
-            StartupReapComplete: ComputeStartupReapComplete(),
+            StartupReapComplete: recovery.StartupReapComplete,
             ResolvedStartupCandidates: [.. _resolvedLedger?.Snapshot() ?? []],
             UnresolvedStartupCandidates: [.. _orphanReaper?.BlockedCandidates() ?? []],
             StartupDiscovery: _orphanReaper?.CurrentDiscovery,
@@ -1480,7 +1509,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             HarnessInventory: CurrentHarnessInventory(),
             EchoNonce: echoNonce,
             ActiveCountVersion: activeCountVersion,
-            ResumingAgents: ResumingClaims());
+            ResumingAgents: recovery.Claims);
+    }
+
+    string[] LiveAgentIds() => [
+        .. _agents
+            .Where(kvp => (kvp.Value.Status is "Starting" or "Running") && !kvp.Value.IsServerSilent)
+            .Select(kvp => kvp.Key)
+    ];
+
+    /// <summary>Under the ledger lock a resume publishes and its candidate settles under.</summary>
+    internal RecoverySnapshot TakeRecoverySnapshot() {
+        lock (_ledgerLock) return new([.. LiveAgentIds()], [.. BuildLiveAgents()], ResumingClaims(), ComputeStartupReapComplete());
     }
 
     /// <summary>Phase B2-b (sequenced-settlement design): the per-platform startup-reap-complete
@@ -1498,6 +1538,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// signal).</item>
     /// </list></summary>
     internal bool ComputeStartupReapComplete() {
+        if (ParticipantRecoveryPending()) return false;
+
         var blocked = _orphanReaper?.BlockedCandidates().Count ?? 0;
         if (blocked > 0) return false;
         if (OperatingSystem.IsLinux())
@@ -1528,6 +1570,17 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <para><c>Transient</c> marks the arms a retry resolves (a reconnect, a failed probe, a
     /// re-advertisement) so the caller codes them retryable; the arms a retry cannot fix (vendor,
     /// policy version, CLI out of range) stay terminal and demand an operator action.</para></summary>
+    /// <summary>A scratch reviewer sees nothing but its prompt, so a scratch launch that also names a
+    /// repository, a borrowed checkout, a base ref or attachments is refused rather than half-honoured.</summary>
+    internal static string? ScratchLaunchRejection(LaunchAgentCommand cmd) {
+        if (!cmd.ScratchWorkspace) return null;
+        if (cmd.Kind != LaunchKind.ReviewFlow) return "A scratch workspace is only for a review-flow reviewer.";
+        if (!string.IsNullOrEmpty(cmd.RepoPath) || cmd.Borrowed || cmd.BorrowCwd is not null
+         || cmd.BaseRef is not null || cmd.AttachmentIds is { Length: > 0 })
+            return "A scratch-workspace launch must name no repository, borrowed checkout, base ref or attachments.";
+        return null;
+    }
+
     internal static (bool Ok, string Reason, bool Transient) EvaluateReviewerCertification(
             string vendor, string? probedVersion, string? currentConnectionId,
             ReviewerCertificationRequirement certification) {
@@ -1577,48 +1630,75 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     }
 
     /// <summary>
-    /// Re-probes the vendors advertised at startup and re-registers when the advertisement changed
-    /// — the one path through which a running daemon updates what the server knows about its CLI
-    /// versions and vendor model catalogs. Returns at once; the work is single-flighted off the caller's stack so a burst of
-    /// requests coalesces and the last publication is always the newest probe.
+    /// Re-resolves the Codex switch, re-probes the vendors advertised at startup and re-registers when
+    /// the advertisement changed or the server has not yet seen the committed Codex resolution — the one
+    /// path through which a running daemon updates what the server knows about its CLI versions, vendor
+    /// model catalogs and Codex transport. Returns at once; the work is single-flighted off the caller's
+    /// stack so a burst of requests coalesces and the last publication is always the newest probe.
     /// </summary>
     /// <param name="republishUnchanged">Re-register even when the local advertisement already
     /// reads the same, for a caller that knows the server's copy differs.</param>
-    internal void RefreshAdvertisedCapabilities(string reason, bool republishUnchanged = false) {
+    /// <param name="probeCatalogs">False for a caller with no reason to think a model catalog changed,
+    /// which then spawns no catalog probe.</param>
+    internal void RefreshAdvertisedCapabilities(string reason, bool republishUnchanged = false, bool probeCatalogs = true) {
         // Sticky rather than captured by the delegate: a request folded into a running pass reruns
         // THAT pass's delegate, which would otherwise carry the earlier caller's answer.
         if (republishUnchanged) Interlocked.Exchange(ref _republishRequested, 1);
-        // A republish-only caller has no reason to think a catalog changed, so it spawns no probe.
-        else Interlocked.Exchange(ref _catalogProbeRequested, 1);
+        else if (probeCatalogs) Interlocked.Exchange(ref _catalogProbeRequested, 1);
 
         _capabilityRefresh.Trigger(
             async () => {
                 var republish    = Interlocked.Exchange(ref _republishRequested, 0) == 1;
                 var probeCatalog = Interlocked.Exchange(ref _catalogProbeRequested, 0) == 1;
+
+                var codex = CommitCodexResolution();
+
                 var current   = _config.UnattendedVendorCapabilities;
                 var fresh     = DaemonRunner.RetainAdvertisedVersions(current,
-                    DaemonRunner.ComputeUnattendedVendorCapabilities(_runtimeFactories.Values, _config, _config.UnattendedVendors));
+                    DaemonRunner.ComputeUnattendedVendorCapabilities(_runtimeFactories.Values, _config, codex, _config.UnattendedVendors), codex);
 
-                var previousCatalog = _config.VendorModels;
-                var supported       = _config.SupportedVendors ?? [];
-                var catalogVendors  = !probeCatalog ? [] : _runtimeFactories.Values
+                var previousCatalog   = _config.VendorModels;
+                var previousByAccount = _config.VendorModelsByAccount;
+                var supported         = _config.SupportedVendors ?? [];
+                var catalogVendors    = !probeCatalog ? [] : _runtimeFactories.Values
                     .Where(f => supported.Contains(f.Vendor, StringComparer.Ordinal))
                     .Where(f => f.CatalogFingerprintPaths.Count > 0 || (previousCatalog?.ContainsKey(f.Vendor) ?? false))
                     .Select(f => f.Vendor)
                     .ToArray();
-                var mergedCatalog = catalogVendors.Length == 0
+                var accountFactory = probeCatalog ? VendorModelCatalogs.AccountFactory(_runtimeFactories.Values, supported) : null;
+                var accounts       = accountFactory is null ? [] : VendorModelCatalogs.AccountsIn(AccountsSnapshot());
+                // Fingerprinted before the probe, as at startup: the watcher starts watching an added
+                // account from this, so a write between the probe and that start still reads as a change.
+                if (accountFactory is not null)
+                    _config.VendorCatalogBaselines = VendorModelCatalogs.WithAccountBaselines(_config.VendorCatalogBaselines, accountFactory, accounts);
+
+                var vendorProbe = catalogVendors.Length == 0
+                    ? null
+                    : VendorModelCatalogs.ProbeAsync(_runtimeFactories.Values, catalogVendors, _shutdownCts.Token);
+                var accountProbe = accounts.Count == 0
+                    ? null
+                    : VendorModelCatalogs.ProbeByAccountAsync(accountFactory!, accounts, _shutdownCts.Token);
+                await Task.WhenAll(vendorProbe ?? Task.CompletedTask, accountProbe ?? Task.CompletedTask);
+
+                var mergedCatalog = vendorProbe is null
                     ? previousCatalog
-                    : VendorModelCatalogs.Merge(previousCatalog,
-                        await VendorModelCatalogs.ProbeAsync(_runtimeFactories.Values, catalogVendors, _shutdownCts.Token));
-                var catalogChanged = !VendorModelCatalogs.Equal(previousCatalog, mergedCatalog);
+                    : VendorModelCatalogs.Merge(previousCatalog, await vendorProbe);
+                // Read after the probes: an account removed while its probe ran is not advertised.
+                var live = VendorModelCatalogs.AccountsIn(AccountsSnapshot()).Select(a => a.AccountId).ToHashSet(StringComparer.Ordinal);
+                var mergedByAccount = VendorModelCatalogs.MergeByAccount(
+                    previousByAccount, accountProbe is null ? new Dictionary<string, VendorModelOption[]>() : await accountProbe, live);
+                var catalogChanged  = !VendorModelCatalogs.Equal(previousCatalog, mergedCatalog)
+                                   || !VendorModelCatalogs.Equal(previousByAccount, mergedByAccount);
+                var unacknowledged = _config.AcknowledgedCodexResolution.Generation != codex.Generation;
 
-                if (!republish && !catalogChanged && current is not null && current.SequenceEqual(fresh)) return;
+                if (!republish && !catalogChanged && !unacknowledged && current is not null && current.SequenceEqual(fresh)) return;
 
-                _config.UnattendedVendorCapabilities = fresh;
+                _config.Advertise(fresh, codex);
                 // One reference swap: status serializers on other threads may be enumerating the old one.
                 // Pulsed before the re-register so a failed one cannot keep the change from local subscribers.
                 if (catalogChanged) {
-                    _config.VendorModels = mergedCatalog;
+                    _config.VendorModels          = mergedCatalog;
+                    _config.VendorModelsByAccount = mergedByAccount;
                     _statusNotifier.Pulse();
                 }
                 LogReAdvertising(_logger, reason,
@@ -1629,8 +1709,32 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 "Capability refresh ({Reason}) failed; the next registration or launch re-evaluates it.", reason));
     }
 
+    /// <summary>Resolves the Codex switch and commits the result when it differs from the committed
+    /// one, under the next generation. New launches route on it from the moment it is swapped in.</summary>
+    CodexTransportResolution CommitCodexResolution() {
+        var committed  = _config.CodexResolution;
+        string? problem = null;
+        var resolved   = CodexTransportResolution.Read(
+            committed.Generation + 1, _config.ReadExperimentalSettings, () => DaemonRunner.ProbeCliVersion(_harnesses.LaunchCommand(HarnessId.Codex, _config.CodexPath)),
+            unreadable => { problem = unreadable; return committed; });
+
+        if (problem is not null && problem != _config.ExperimentalSettingsProblem) LogUnreadableSettings(_logger, problem);
+        _config.ExperimentalSettingsProblem = problem;
+        if (resolved.SameStateAs(committed)) return committed;
+
+        _config.CodexResolution = resolved;
+        LogCodexResolution(_logger, resolved.Generation, resolved.SwitchOn, resolved.Active, resolved.InactiveReason ?? "");
+        _statusNotifier.Pulse();
+        return resolved;
+    }
+
     /// <summary>Test seam: the most recently scheduled capability refresh, for awaiting quiescence.</summary>
     internal Task CapabilityRefreshForTest => _capabilityRefresh.Current;
+
+    /// <summary>The host's accounts as last published; the per-account catalogs follow it.</summary>
+    internal Func<AccountsSnapshotDto?> AccountsSnapshot { get; set; }
+
+    readonly AccountReadingSink? _readings;
 
     /// <summary>
     /// Re-sends the registration on the current connection so the server's copy of a connect
@@ -1638,6 +1742,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// burst of changes coalesces and the last publication carries the newest config.
     /// </summary>
     internal void RepublishRegistration(string reason) => RefreshAdvertisedCapabilities(reason, republishUnchanged: true);
+
+    /// <summary>Re-resolves the experimental switches and re-advertises what they change, without
+    /// re-probing any model catalog.</summary>
+    internal void RefreshExperimentalSettings(string reason) => RefreshAdvertisedCapabilities(reason, probeCatalogs: false);
 
     internal AgentLiveness ReadLiveness(string agentId) {
         // Order matters: check _agents first (Live/Quarantined-by-status), then _quarantine, then Dead.
@@ -1648,10 +1756,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         return AgentLiveness.Dead;
     }
 
-    /// <summary>Phase B (D4 §6.4(2a)): the kill-quarantine snapshot for the status report.</summary>
+    /// <summary>The kill-quarantine snapshot for the status report.</summary>
     internal IReadOnlyList<QuarantinedAgentInfo> QuarantineSnapshot() => _quarantine?.Snapshot() ?? [];
 
-    /// <summary>Phase B (D4 §6.4(2a)): the daemon's admission gate — EVERY live registry entry
+    /// <summary>The daemon's admission gate — EVERY live registry entry
     /// (not just Starting/Running — a Completed/Failed agent still mid-teardown holds its slot until
     /// CleanupAgentAsync's count-preserving remove) PLUS unconfirmed-death quarantined ones. Using the
     /// full <c>_agents.Count</c> (rather than <see cref="ActiveCount"/>, whose Starting/Running meaning is
@@ -1778,6 +1886,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <summary>Test seams (this daemon's PID-record store) so a unit test can seed/inspect records
     /// without a real launch. Never used in production.</summary>
     internal void WritePidRecordForTest(AgentPidRecord record)     => _pidRecords?.Write(record);
+    internal void DeletePidRecordForTest(string agentId)           => DeletePidRecord(agentId);
     internal IReadOnlyList<AgentPidRecord> PidRecordsForTest()      => _pidRecords?.ReadAll() ?? [];
 
     /// <summary>Test-only: the per-daemon record root, so a test can build the store a NEXT BOOT would
@@ -2042,7 +2151,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 ActivitySeq:  a.ActivityClock.ActivitySeq,
                 IdleForMs:    a.ActivityClock.IdleForMs,
                 TurnInFlight: a.ActivityClock.TurnInFlight,
-                LaunchStage:  a.Status == "Starting" ? a.ActivityClock.LaunchStage : null))
+                LaunchStage:  a.Status == "Starting" ? a.ActivityClock.LaunchStage : null,
+                AccountDirectory: a.Account?.Directory,
+                AccountId:        a.Account?.AccountId,
+                AccountLabel:     a.Account?.Label))
             .ToList();
 
         foreach (var p in _pendingLaunches.Values) {
@@ -2055,7 +2167,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 TurnInFlight: p.ActivityClock.TurnInFlight,
                 // A pending launch IS "Starting" by definition — there is no other status it can hold —
                 // so the Status gate above is satisfied unconditionally here.
-                LaunchStage:  p.ActivityClock.LaunchStage));
+                LaunchStage:  p.ActivityClock.LaunchStage,
+                AccountDirectory: p.Account?.Directory,
+                AccountId:        p.Account?.AccountId,
+                AccountLabel:     p.Account?.Label));
         }
 
         return live;
@@ -2074,7 +2189,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         AgentActivityClock ActivityClock,
         string?            Vendor,
         string?            RepoPath,
-        string?            Title);
+        string?            Title,
+        ResolvedAccount?   Account);
 
     readonly ConcurrentDictionary<string, PendingLaunch> _pendingLaunches = new(StringComparer.Ordinal);
 
@@ -2163,10 +2279,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <c>_agents</c>.</summary>
     internal IDisposable TrackPendingLaunch(
             string agentId, LaunchKind kind, string? flowRunId, string? flowRole, AgentActivityClock clock,
-            string? vendor = null, string? repoPath = null, string? title = null, DateTime? createdAt = null) {
+            string? vendor = null, string? repoPath = null, string? title = null, DateTime? createdAt = null,
+            ResolvedAccount? account = null) {
         lock (_membership)
             _pendingLaunches[agentId] = new PendingLaunch(
-                agentId, kind, createdAt ?? _time.GetUtcNow().UtcDateTime, flowRunId, flowRole, clock, vendor, repoPath, title);
+                agentId, kind, createdAt ?? _time.GetUtcNow().UtcDateTime, flowRunId, flowRole, clock, vendor, repoPath, title, account);
         _statusNotifier.Pulse();
 
         return new PendingLaunchScope(this, agentId);
@@ -2185,8 +2302,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <see cref="SendStatusReportNowAsync"/>. EVERY launch path must route through here — a path that
     /// builds its own clock silently loses the stage-report wiring. Shared with
     /// <see cref="SeedAgentForTest"/> so tests exercise the same wiring, never a test-only hookup.</summary>
-    AgentActivityClock CreateActivityClock() =>
-        new(_time) {
+    AgentActivityClock CreateActivityClock(ulong initialSeq = 1, ulong priorAgeMs = 0) =>
+        new(_time, initialSeq, priorAgeMs) {
             OnLaunchStageChanged   = () => { _statusNotifier.Pulse(); _ = SendStatusReportNowAsync(); },
             OnTurnEnded            = () => _ = SendStatusReportNowAsync(),
             // The flag rides the local status payload; the clock already holds the new value when
@@ -2195,6 +2312,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 _statusNotifier.Pulse();
                 RescheduleQuietTurn();
             },
+            OnTurnAttestedChanged  = _statusNotifier.Pulse,
         };
 
     /// <summary>Test-only seam — insert a minimal <see cref="AgentInstance"/> (Noop
@@ -2212,10 +2330,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // CreateActivityClock() gives a real launch, with a controllable time source.
             AgentActivityClock? activityClock = null,
             WorktreeInfo? worktree = null, WorkLocation work = WorkLocation.OwnedWorktree,
+            string vendor = "codex",
             string? borrowedSnapshotSource = null) {
         var agent = new AgentInstance(
-            id, prompt, model, null, "/repo", "codex",
-            new PtyHostedAgentRuntime("codex", pty ?? NoopPtyProcess.Instance, _time),
+            id, prompt, model, null, "/repo", vendor,
+            new PtyHostedAgentRuntime(vendor, pty ?? NoopPtyProcess.Instance, _time),
             worktree ?? new WorktreeInfo("/repo", "b", "/repo"),
             new CancellationTokenSource()) {
             Kind = kind, FlowRunId = flowRunId, FlowRole = flowRole, IsPrivate = isPrivate,
@@ -2370,6 +2489,27 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         return new CommandOutcome(CommandOutcomeKind.LaunchRejected, cmd.AgentId, RejectReason: CommandRejectedReason.Semantic);
     }
 
+    /// <summary>The account a launch runs under. A vendor without a default directory has no accounts:
+    /// a launch without an id carries none, and one naming an id is refused.</summary>
+    internal AccountResolutionOutcome ResolveAccount(string vendorToken, string? accountId) =>
+        ResolveAccount(vendorToken, accountId, resumed: null);
+
+    /// <summary>A resume resolves the account its ledger entry <paramref name="resumed"/> recorded, and
+    /// ignores <paramref name="accountId"/>.</summary>
+    AccountResolutionOutcome ResolveAccount(string vendorToken, string? accountId, ResumeLaunchDescriptor? resumed) {
+        if (HarnessId.From(vendorToken) is not { } vendor || !_config.DefaultDirectories.TryGetValue(vendor, out var defaultDirectory)) {
+            return resumed is null && !string.IsNullOrEmpty(accountId)
+                ? new AccountResolutionOutcome(null, $"{AccountResolution.Unavailable}: {vendorToken} has no accounts")
+                : new AccountResolutionOutcome(null, null);
+        }
+
+        var registry = _config.Accounts?.TryLoad();
+
+        return resumed is null
+            ? AccountResolution.Resolve(registry, vendor, accountId, defaultDirectory)
+            : AccountResolution.ResolveForResume(registry, vendor, resumed.AccountId, resumed.AccountDirectory, defaultDirectory);
+    }
+
     /// <summary>The server's start title, or — from a server that sends none — one derived from the prompt.</summary>
     internal static AgentStartTitle? StartTitleOf(LaunchAgentCommand cmd) =>
         !string.IsNullOrWhiteSpace(cmd.Title)
@@ -2378,8 +2518,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     /// <summary>The launch body. Its outcome drives the sequenced lane: a pre-flight rejection is
     /// <c>LaunchRejected</c> (capacity as <c>daemon_capacity</c>, every other validation as
-    /// <c>semantic</c>) alongside its LaunchFailed; a spawn or registration failure that was cleaned up is
-    /// <c>launch_failed_cleaned</c>; a registered agent is <c>launch_executed</c>.</summary>
+    /// <c>semantic</c>) alongside its LaunchFailed; an account refusal, or a spawn or registration failure
+    /// that was cleaned up, is <c>launch_failed_cleaned</c>; a registered agent is <c>launch_executed</c>.</summary>
     async Task<CommandOutcome> HandleAdmittedLaunchAsync(
             LaunchAgentCommand cmd, LaunchHold hold, CancellationToken cancel = default, Action<AgentInstance>? onPublished = null) {
         var agentId = cmd.AgentId;
@@ -2436,6 +2576,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     async Task<CommandOutcome> LaunchAdmittedAsync(
             LaunchAgentCommand cmd, LaunchConsentOutcome consent, LaunchHold hold, ResumeLaunch? resume = null,
             CancellationToken cancel = default, Action<AgentInstance>? onPublished = null) {
+        if (cmd.ResumeSessionId is "") cmd = cmd with { ResumeSessionId = null };
         var agentId       = cmd.AgentId;
         var isPrivate     = resume?.IsPrivate ?? false;
         var prompt        = cmd.Prompt;
@@ -2512,6 +2653,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
         }
 
+        if (ScratchLaunchRejection(cmd) is { } scratchRejection) {
+            await LaunchFailedUnlessPrivateAsync(isPrivate, cmd.AgentId, scratchRejection);
+
+            return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
+        }
+
         // A caller-selected Codex posture is validated here — before the repo checks and the worktree
         // creation below, so a rejection leaves nothing to clean up. Selection is only ever valid for
         // an interactive daemon-owned-worktree launch: a posture on a borrowed, review-flow or
@@ -2523,19 +2670,21 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
         }
 
+        if (CodexTransportDecision.ExpectedTransportRejection(cmd.Vendor, cmd.ExpectedRuntimeTransport) is { } transportRejection) {
+            await LaunchFailedUnlessPrivateAsync(isPrivate, cmd.AgentId, transportRejection);
+
+            return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
+        }
+
         if (isReviewFlow && cmd.ReviewerCertification is { } certification) {
             var version = string.Equals(cmd.Vendor, "claude", StringComparison.Ordinal)
-                ? DaemonRunner.ProbeCliVersionForLaunch(_config.ClaudePath)
+                ? DaemonRunner.ProbeCliVersionForLaunch(_harnesses.LaunchCommand(HarnessId.Claude, _config.ClaudePath))
                 : null;
             var certificationCheck = EvaluateReviewerCertification(
                 cmd.Vendor, version, _server.CurrentConnectionId, certification);
             if (!certificationCheck.Ok) {
-                // Codex review round 2 (P1): tell the caller FIRST. Recomputing capabilities re-runs
-                // the REGISTRATION probe — three 10s attempts plus backoff — so doing it before the
-                // notification meant a failed launch probe cost ~10s here and then ~30.75s more
-                // before the caller heard anything. The single-attempt launch probe did not bound the
-                // launch path at all while this sat in front of the rejection; my claim that it did
-                // was wrong.
+                // Tell the caller first: the refresh below re-runs the registration probe (three 10s
+                // attempts plus backoff), which would otherwise hold the rejection back for ~30s.
                 await LaunchFailedUnlessPrivateAsync(isPrivate, cmd.AgentId,
                     $"{(certificationCheck.Transient ? "reviewer_certification_transient" : "reviewer_certification_changed")}: {certificationCheck.Reason}.");
 
@@ -2551,8 +2700,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             }
         }
 
-        WorktreeInfo? worktree      = null;
-        string?       mcpConfigPath = null;
+        WorktreeInfo?    worktree      = null;
+        string?          mcpConfigPath = null;
+        ResolvedAccount? account       = null;
 
         // Declared OUTSIDE the try so it is in scope in the catch blocks below: the failed-launch
         // cleanup must consult it to decide whether the worktree is ours to remove. A borrowed cwd
@@ -2583,7 +2733,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // Created here, ahead of the reviewer-token mint and the AgentInstance that will own it, so the
         // SAME instance reaches the permission-bridge grant, the ACP runtime and the AgentInstance —
         // one clock per launch, never three.
-        var activityClock = CreateActivityClock();
+        var activityClock = resume?.Entry.Participant is { } participant
+            ? CreateActivityClock(participant.ActivitySeq + 1, participant.AgeMs)
+            : CreateActivityClock();
 
         CapacityReservation? capacity = null;
 
@@ -2595,14 +2747,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.DaemonCapacity);
             }
 
-            // A local spawn was never held to the allowed-repo list, so neither is its resume.
-            if (resume is not { Origin: "local" } && !_config.IsRepoAllowed(repoPath)) {
+            // A local spawn was never held to the allowed-repo list, so neither is its resume. A scratch
+            // launch names no repository to allow, find or report on.
+            if (!cmd.ScratchWorkspace && resume is not { Origin: "local" } && !_config.IsRepoAllowed(repoPath)) {
                 await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, $"Repo path not allowed: {repoPath}");
 
                 return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
             }
 
-            if (!Directory.Exists(repoPath)) {
+            if (!cmd.ScratchWorkspace && !Directory.Exists(repoPath)) {
                 await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, $"Repo path does not exist: {repoPath}");
 
                 return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
@@ -2612,7 +2765,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // review-specific check and of the worktree, so a refused launch never inspects a
             // repository it may not report on. A BORROWED launch is judged further down instead,
             // on the canonical path its authorization resolves.
-            if ((isReview || isReviewFlow) && !cmd.Borrowed
+            if ((isReview || isReviewFlow) && !cmd.Borrowed && !cmd.ScratchWorkspace
              && await RefuseOutOfCaptureScopeAsync(agentId, repoPath) is { } scopeRefusal) {
                 return scopeRefusal;
             }
@@ -2655,6 +2808,21 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
                 return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
             }
+
+            // A reviewer runs on the daemon's default account, where its MCP inventory and hooks are read.
+            var resolution = cmd.Kind != LaunchKind.Default && !string.IsNullOrEmpty(cmd.AccountId)
+                ? new AccountResolutionOutcome(null, $"{AccountResolution.Unavailable}: a {(isReview ? "review" : "review-flow")} launch runs on the default account")
+                : ResolveAccount(cmd.Vendor, cmd.AccountId, resume?.Entry.Launch);
+
+            // A failure, not a rejection: the refusal reaches the caller by name, never as a generic rejection.
+            if (resolution.Refusal is { } refusal) {
+                if (resume is not null) resume.AccountRefusal = refusal;
+                await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, refusal);
+
+                return new CommandOutcome(CommandOutcomeKind.LaunchFailedCleaned, agentId);
+            }
+
+            account = resolution.Account;
 
             LogLaunching(agentId, repoPath, cmd.Vendor, effort ?? "default", effectiveModel);
 
@@ -2700,9 +2868,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     // Direct borrowed runtimes have their own certified read-only boundary.
                     worktree = WorktreeInfo.Borrowed(auth.CanonicalCwd!);
                 }
+            } else if (cmd.ScratchWorkspace) {
+                worktree = await _worktreeManager.CreateScratchAsync($"scratch-{agentId}", _shutdownCts.Token);
             } else {
                 worktree = await _worktreeManager.CreateAsync(repoPath, baseRef: baseRef);
             }
+
+            if (cmd.ScratchWorkspace) repoPath = worktree.Path;
 
             // The checkout the agent runs in is what the session's repo policy file means — the same
             // trust boundary the local seams read. Bound once here so the whole run is judged against
@@ -2846,7 +3018,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             journal = TranscriptJournal.ForAgent(_pidRecordRoot, agentId, _logger, _time);
 
-            var pinnedSessionId = resume is null ? MintPinnedSessionId(cmd) : null;
+            var pinnedSessionId = cmd.ResumeSessionId is null ? MintPinnedSessionId(cmd) : null;
 
             var runtimeCtx = new RuntimeStartContext(
                 AgentId: agentId,
@@ -2900,7 +3072,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 IsPrivate: isPrivate,
                 PinnedSessionId: pinnedSessionId,
                 RequestedTransport: resume?.Entry.Transport,
-                PersistenceProbe: () => _agents.TryGetValue(agentId, out var bound) ? bound.AcpForwarder?.Forwarder : null
+                ExpectedRuntimeTransport: cmd.ExpectedRuntimeTransport,
+                PersistenceProbe: () => _agents.TryGetValue(agentId, out var bound) ? bound.AcpForwarder?.Forwarder : null,
+                Account: account
             );
 
             HostedRuntimeStart start;
@@ -2910,14 +3084,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // written by THIS agent's process, not the user's earlier sessions.
             var spawnedAtUtc = _time.GetUtcNow().UtcDateTime;
 
-            if (resume is null) WritePreStartLedger(cmd, prompt, effectiveModel, effort, worktree, work, consent, pinnedSessionId);
+            if (resume is null) WritePreStartLedger(cmd, prompt, effectiveModel, effort, worktree, work, consent, pinnedSessionId, account);
 
             // Make this launch describable for the duration of the handshake below: the AgentInstance
             // does not exist until StartAsync returns, so without this the out-of-cycle report each
             // SetLaunchStage fires would omit the very agent it is reporting a stage for.
             using var pendingLaunch = isPrivate ? null : TrackPendingLaunch(
                 agentId, cmd.Kind, cmd.FlowRunId, cmd.FlowRole, activityClock,
-                vendor: cmd.Vendor, repoPath: repoPath, title: startTitle?.Text ?? AgentStartTitle.Shorten(prompt));
+                vendor: cmd.Vendor, repoPath: repoPath, title: startTitle?.Text ?? AgentStartTitle.Shorten(prompt), account: account);
 
             try {
                 // A resume's start also ends with its attempt, so a stop during the handshake does not wait for the vendor.
@@ -3009,13 +3183,17 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // and LastOutputAt anchors the stuck-in-Starting window while CreatedAt is the age the
             // server and the rail report.
             var startedAtUtc = _time.GetUtcNow().UtcDateTime;
+            var resumedSessionId = resume?.Entry.SessionId;
+            if (string.Equals(cmd.Vendor, "claude", StringComparison.OrdinalIgnoreCase) && cmd.ResumeSessionId is { } requestedSession
+             && SessionIds.Canonical(resumedSessionId) != SessionIds.Canonical(requestedSession))
+                resumedSessionId = null;
 
-            var agent = new AgentInstance(agentId, prompt, registeredModel, effort, repoPath, cmd.Vendor, runtime, worktree, cts) {
+            var agent = new AgentInstance(agentId, prompt, registeredModel, effort, repoPath, cmd.Vendor, runtime, worktree, cts, account) {
                 CreatedAt = startedAtUtc, LastOutputAt = startedAtUtc,
                 // Set in the initializer, not after: PublishAgent below is the first snapshot anyone
                 // reads, and RegisterAgentAsync after it can stall on a server outage.
-                SessionId           = start.Transcript is { } t ? SessionIds.Canonical(t.AcpSessionId) : pinnedSessionId ?? resume?.Entry.SessionId,
-                VendorSession       = start.Runtime.VendorResumeToken ?? start.Transcript?.AcpSessionId ?? pinnedSessionId ?? resume?.Entry.VendorSession,
+                SessionId           = start.Transcript is { } t ? SessionIds.Canonical(t.AcpSessionId) : resumedSessionId,
+                VendorSession       = start.Runtime.VendorResumeToken ?? start.Transcript?.AcpSessionId ?? pinnedSessionId ?? cmd.ResumeSessionId ?? resume?.Entry.VendorSession,
                 TranscriptPath      = start.Transcript is null ? null : journal.IsOpen ? journal.Path : null,
                 Journal             = start.Transcript is null ? null : journal,
                 ActivityClock       = activityClock,
@@ -3023,6 +3201,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 CurrentCols         = HostedPtyCols,
                 CurrentRows         = HostedPtyRows,
                 Work                = work,
+                ScratchWorkspace    = cmd.ScratchWorkspace,
                 SandboxPolicy       = appliedPosture?.Sandbox,
                 ApprovalPolicy      = appliedPosture?.Approval,
                 // Echoed on AgentRegistered for the dashboard chip; carried verbatim from the command
@@ -3093,7 +3272,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             if (!agent.IsServerSilent) runtime.OnCommandsAvailable = commands => ReportCommands(agentId, commands);
 
             if (!agent.IsServerSilent && string.Equals(cmd.Vendor, "claude", StringComparison.OrdinalIgnoreCase) && cmd.Kind == LaunchKind.Default)
-                _ = ProbeClaudeCommandsAsync(agentId, worktree.Path);
+                _ = ProbeClaudeCommandsAsync(agentId, worktree.Path, agent.Account);
 
             // A runtime with no terminal output (ACP/cursor) has no output-chunk signal to flip
             // Starting→Running on — ReadAgentOutputAsync's read loop never yields a byte for such
@@ -3196,17 +3375,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // Report the resolved model so the server can display / validate the real model the agent
             // is running. Best-effort: never let a report failure break the launch.
             if (!agent.IsServerSilent && cmd.ExplicitReviewerModel is { } explicitReviewerModel) {
-                // Task 8: a protocol-v3 explicit-model reviewer launch reports the CONCRETE
-                // resolved model via the dedicated ReportExplicitReviewerModelResolved channel, keyed by
-                // the durable LaunchAttemptId, so the server's one-shot waiter can validate + re-price it.
+                // An explicit-model reviewer reports the concrete model on its own channel, keyed by the
+                // LaunchAttemptId, so the server's one-shot waiter can validate and re-price it.
                 ReportExplicitReviewerModel(agentId, cmd.Vendor, explicitReviewerModel, runtimeFactory);
             } else if (!agent.IsServerSilent && string.Equals(cmd.Vendor, "codex", StringComparison.OrdinalIgnoreCase)) {
-                // Legacy path (name/arity/behavior UNCHANGED): the dispatched `model` may be the "default"
-                // no-override sentinel, in which case Codex resolves the model from ~/.codex/config.toml.
-                // Codex-only — Claude/other agents never call the ReportAgentResolvedModel hub.
                 // updateLocal only on the PTY path: an app-server Codex (Transcript present) already
                 // registered its confirmed handshake model, which must not be overwritten locally.
-                ReportResolvedModel(agentId, cmd.Vendor, model, updateLocal: start.Transcript is null);
+                ReportResolvedModel(agentId, cmd.Vendor, model, agent.Account, updateLocal: start.Transcript is null);
             }
 
             // Phase B2-b (sequenced-settlement design §4.2.2): the launch executed — the agent is registered.
@@ -3259,7 +3434,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                             cmd.Vendor,
                             new PtyHostedAgentRuntime(cmd.Vendor, NoopPtyProcess.Instance, _time),
                             worktree,
-                            new CancellationTokenSource()
+                            new CancellationTokenSource(),
+                            account
                         ) {
                             CreatedAt     = _time.GetUtcNow().UtcDateTime,
                             LastOutputAt  = _time.GetUtcNow().UtcDateTime,
@@ -3331,15 +3507,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// (ReportAgentResolvedModel) and the config resolution are Codex-specific, so the caller
     /// gates this on <c>vendor == "codex"</c>. The dispatched <paramref name="model"/> may be
     /// the "default" no-override sentinel (or empty), in which case Codex resolves the model from
-    /// <c>~/.codex/config.toml</c> — we resolve the same value here. Never throws: a resolve/report
+    /// the launch's <c>config.toml</c> — we resolve the same value here. Never throws: a resolve/report
     /// failure must not break launch.
     /// </summary>
-    void ReportResolvedModel(string agentId, string vendor, string model, bool updateLocal) {
+    void ReportResolvedModel(string agentId, string vendor, string model, ResolvedAccount? account, bool updateLocal) {
         try {
             var isDefault = string.IsNullOrEmpty(model) || string.Equals(model, "default", StringComparison.OrdinalIgnoreCase);
 
             var resolved = isDefault && string.Equals(vendor, "codex", StringComparison.OrdinalIgnoreCase)
-                ? CodexResolvedModel(model)
+                ? CodexResolvedModel(model, account)
                 : model;
 
             if (string.IsNullOrEmpty(resolved)) return;
@@ -3378,10 +3554,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         }
     }
 
-    async Task ProbeClaudeCommandsAsync(string agentId, string worktreePath) {
+    async Task ProbeClaudeCommandsAsync(string agentId, string worktreePath, ResolvedAccount? account) {
         try {
             var commands = await Harness.Claude.ClaudeCommandProbe.ProbeAsync(
-                _harnesses, worktreePath, _time, TimeSpan.FromSeconds(30), LogClaudeCommandProbe, _shutdownCts.Token);
+                _harnesses, worktreePath, account, _config.Home, _time, TimeSpan.FromSeconds(30), LogClaudeCommandProbe, _shutdownCts.Token);
 
             if (commands.Count > 0) ReportCommands(agentId, commands);
         } catch (Exception ex) {
@@ -3417,15 +3593,20 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     }
 
     /// <summary>
-    /// Reads the top-level <c>model = "…"</c> from <c>~/.codex/config.toml</c> (honouring
-    /// <c>CODEX_HOME</c> via <see cref="CodexPaths"/>); falls back to <paramref name="fallback"/>
-    /// when the file is missing/unreadable or has no top-level model key.
+    /// Reads the top-level <c>model = "…"</c> from the launch layout's <c>config.toml</c>; falls back
+    /// to <paramref name="fallback"/> when the file is missing/unreadable or has no top-level model key.
     /// </summary>
-    string CodexResolvedModel(string fallback) {
-        var fromConfig = CodexConfigToml.ReadTopLevelModel(_harnesses.Of<CodexHarness>().Paths.ConfigToml);
+    string CodexResolvedModel(string fallback, ResolvedAccount? account) {
+        var fromConfig = CodexConfigToml.ReadTopLevelModel(CodexPathsFor(account).ConfigToml);
 
         return string.IsNullOrWhiteSpace(fromConfig) ? fallback : fromConfig;
     }
+
+    ClaudePaths ClaudePathsFor(ResolvedAccount? account) =>
+        account is null ? _harnesses.Of<ClaudeHarness>().Paths : AccountLayouts.Claude(_config.Home, account.Directory);
+
+    CodexPaths CodexPathsFor(ResolvedAccount? account) =>
+        account is null ? _harnesses.Of<CodexHarness>().Paths : AccountLayouts.Codex(_config.Home, account.Directory);
 
     static readonly TimeSpan GitGuardTimeout = TimeSpan.FromSeconds(10);
 
@@ -3560,10 +3741,30 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     void NoteScreen(AgentInstance agent, ClaudeScreenWatcher screen, byte[] data) {
         screen.Resize(agent.CurrentCols, agent.CurrentRows);
         var (usageLimit, dialog) = screen.Observe(data);
+        agent.Runtime.NoteTerminalDialog(dialog is not null);
         if (Equals(agent.UsageLimit, usageLimit) && Equals(agent.TerminalDialog, dialog)) return;
+        var limitReached = agent.UsageLimit is null && usageLimit is not null;
+        var dialogChanged = !Equals(agent.TerminalDialog, dialog);
         agent.UsageLimit     = usageLimit;
         agent.TerminalDialog = dialog;
+        // The menu names no window: the signal constrains every exhausted window, or stands as unknown when none is.
+        if (limitReached)
+            _readings?.Post(agent.Account, new ReadingObservation(
+                _time.GetUtcNow(), Fresh: false, [], null, null, [new LimitSignal(null, null)],
+                LimitReachedReported: false, LimitStateKnown: false));
         _statusNotifier.Pulse();
+        if (dialogChanged && !agent.IsServerSilent) _ = ReportTerminalDialogAsync(agent, dialog);
+    }
+
+    /// <summary>Sends one agent's dialog reports one at a time, in call order: the server keeps whichever lands
+    /// last, so a close overtaking the open before it would leave a closed dialog showing remotely.</summary>
+    Task ReportTerminalDialogAsync(AgentInstance agent, TerminalDialogDto? dialog) {
+        lock (agent.TerminalDialogReportGate) return agent.TerminalDialogReport = SendAfterAsync(agent.TerminalDialogReport);
+
+        async Task SendAfterAsync(Task previous) {
+            await previous.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+            await _server.ReportAgentTerminalDialogAsync(agent.Id, dialog);
+        }
     }
 
     /// <summary>
@@ -4577,7 +4778,19 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     }
 
     async Task HandleSendInput(SendInputCommand cmd) {
-        var (agentId, text, attachmentIds, _) = cmd;
+        switch (TryHoldForResume(cmd)) {
+            case true:
+                return;
+            case false:
+                await ReportInputDroppedAsync(cmd, SendInputDropReason.QueueFull);
+                return;
+        }
+
+        await DeliverSendInputAsync(cmd);
+    }
+
+    async Task DeliverSendInputAsync(SendInputCommand cmd) {
+        var (agentId, text, attachmentIds, dispatchId) = cmd;
 
         if (!_agents.TryGetValue(agentId, out var agent)) {
             LogSendInputUnknownAgent(agentId, _agents.Count);
@@ -4595,7 +4808,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         LogSendInputReceived(agentId, agent.Runtime.Vendor, text.Length, attachmentIds?.Length ?? 0);
 
-        var outcome = await DeliverInputAsync(agent, text, attachmentIds);
+        var outcome = await DeliverInputAsync(agent, text, attachmentIds, dispatchId);
 
         switch (outcome.Kind) {
             case InputDeliveryKind.QuitRequested:
@@ -4622,7 +4835,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// write depends on — the borrowed-snapshot refresh, attachment downloads, and the reap-claim
     /// checks that decide whether a condemned agent may still be written to — happens inside the
     /// agent's own delivery section.</summary>
-    internal async Task<InputDeliveryOutcome> DeliverInputAsync(AgentInstance agent, string text, string[]? attachmentIds) {
+    internal async Task<InputDeliveryOutcome> DeliverInputAsync(AgentInstance agent, string text, string[]? attachmentIds, Guid? dispatchId = null) {
         // Refused before the section, so nothing is downloaded for a message that was never going to
         // be delivered. The ids are re-validated here whichever lane they arrived on: the local frame
         // checks them too, but a server dispatch reaches this method directly. A borrowed cwd is the
@@ -4645,7 +4858,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // the command's meaning. The runtime is what journals a delivered prompt, so the one text it
         // never sees is recorded here: the chat renders the journal alone.
         if (!agent.Runtime.EmitsTerminalOutput && IsQuitCommand(text)) {
-            agent.Journal?.Record(AcpEventTranslator.BuildUserMessage(seq: 0, _time.GetUtcNow().ToString("O"), text));
+            agent.Journal?.Record(AcpEventTranslator.BuildUserMessage(seq: 0, _time.GetUtcNow().ToString("O"), text) with { DispatchId = dispatchId });
 
             return InputDeliveryOutcome.QuitRequested;
         }
@@ -4772,7 +4985,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
                 try {
                     // PTY runtimes use bracketed paste; ACP runtimes send a structured prompt.
-                    if (agent.BorrowedSnapshotSource is not null)
+                    if (dispatchId is { } dispatch)
+                        await agent.Runtime.SendDispatchedInputAsync(message, dispatch, waitForWrite: agent.BorrowedSnapshotSource is not null);
+                    else if (agent.BorrowedSnapshotSource is not null)
                         await agent.Runtime.SendUserInputAndWaitForWriteAsync(message);
                     else
                         await agent.Runtime.SendUserInputAsync(message);
@@ -4796,6 +5011,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // output/ACP envelopes/turn transitions); a refused or failed write above skips it.
                 agent.ActivityClock.Advance();
                 agent.ActivityClock.ClearAwaitingInputSince(waitGeneration);
+                RecordRoundInput(agent, message);
 
                 // One report per successfully handled invocation (SendInputCommand carries no round
                 // identity, so a duplicate is tolerated and content-honest); fire-and-forget, contained,
@@ -5119,7 +5335,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     async Task<AgentRegisteredResponse> RegisterAgentAsync(AgentInstance agent) {
         if (agent.IsPrivate) return AgentRegisteredResponse.Accepted;
 
-        var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.StartTitle, agent.ContinuesAgentId);
+        var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.StartTitle, agent.ContinuesAgentId,
+            agent.Account?.Directory, agent.Account?.AccountId, agent.Account?.Label);
 
         if (!registration.Registered) {
             agent.RegistrationRefused = true;
@@ -5139,8 +5356,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             new AgentRunStarted(agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.Worktree.Path, agent.Vendor)
         );
 
-        // Persist repo path and notify server so the launch dialog updates.
-        _ = Task.Run(async () => {
+        // Persist repo path and notify server so the launch dialog updates. A scratch workspace is
+        // deleted at teardown, so recording it would advertise a repository that no longer exists.
+        if (!agent.ScratchWorkspace) _ = Task.Run(async () => {
                 try {
                     await new RepoPathStore(_configRoot, _time).AddAsync(agent.RepoPath);
                     await _server.UpdateRepoPathsAsync();
@@ -5616,7 +5834,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             for (var attempt = 1; ; attempt++) {
                 try {
-                    var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.StartTitle, agent.ContinuesAgentId);
+                    var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.StartTitle, agent.ContinuesAgentId,
+                        agent.Account?.Directory, agent.Account?.AccountId, agent.Account?.Label);
 
                     // A refusal is the server's answer, not a transient failure: it is not retried, and the agent is
                     // left out of later re-registrations too. A status sent for the refused id could clear the
@@ -5691,6 +5910,19 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                         }
                     }
 
+                    // The server holds the open dialog in memory only, like the command list. The read
+                    // loop reports changes meanwhile, and one can land before this replay, so the replay
+                    // repeats until what it last sent is what the screen still shows.
+                    if (agent.TerminalDialog is { } dialog) {
+                        TerminalDialogDto? replayed = dialog;
+                        await ReportTerminalDialogAsync(agent, replayed);
+
+                        while (!Equals(agent.TerminalDialog, replayed)) {
+                            replayed = agent.TerminalDialog;
+                            await ReportTerminalDialogAsync(agent, replayed);
+                        }
+                    }
+
                     // No replay from here: the agent's cloud sink was asked to resync above, and
                     // it sends a reset ahead of the ring on the same ordered lane as live output.
                     break;
@@ -5753,18 +5985,16 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     static readonly TimeSpan CodexTurnObserveInterval = TimeSpan.FromSeconds(2);
     static readonly TimeSpan CodexTurnObserveTimeout  = TimeSpan.FromMinutes(2);
 
-    /// Locates the transcript a freshly spawned agent writes — Claude's per-worktree
-    /// project dir (a symlink onto the source repo's, shared with the user's own sessions,
-    /// so the locator disambiguates by cwd), Codex's rollout tree (disambiguated by cwd and
-    /// spawn time), Muse's log from its runtime's session or the launch's hosted-session marker. A vendor without a
-    /// locator is a no-op. Best-effort background work, cancelled with the agent; it never blocks
-    /// a launch.
+    /// Locates the transcript a freshly spawned agent writes — Claude's project dir (by the session
+    /// id the agent holds, else by cwd), Codex's rollout tree (by cwd and spawn time), Muse's log from
+    /// its runtime's session or the launch's hosted-session marker. A vendor without a locator, or a
+    /// launch whose transcript it could not tell apart from another session's, is a no-op.
+    /// Best-effort background work, cancelled with the agent; it never blocks a launch.
     Task DetectSessionIdAsync(AgentInstance agent, string vendor, DateTime spawnedAtUtc) {
         Func<ISet<string>, (string SessionId, string Path)?>? locate = vendor.ToLowerInvariant() switch {
-            "claude" => ruledOut => SessionTranscriptLocator.TryLocateWinner(
-                _harnesses.Of<ClaudeHarness>().Paths.ProjectDir(agent.Worktree.Path), agent.Worktree.Path, spawnedAtUtc, ruledOut),
+            "claude" => ClaudeTranscriptLocator(agent, spawnedAtUtc),
             "codex"  => ruledOut => CodexSessionRolloutLocator.TryLocateWinner(
-                _harnesses.Of<CodexHarness>().Paths.Sessions, agent.Worktree.Path, spawnedAtUtc, ruledOut),
+                CodexPathsFor(agent.Account).Sessions, agent.Worktree.Path, spawnedAtUtc, ruledOut),
             "muse"   => _ => MuseHostedSessionLocator.TryLocate(
                 _config.Home, _harnesses.Of<MuseHarness>().Paths, agent.Id, DateOnly.FromDateTime(_time.GetLocalNow().DateTime),
                 (agent.Runtime as MuseMspHostedAgentRuntime)?.Session),
@@ -5777,6 +6007,25 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         agent.DiscoveryTask = task;
         return task;
     }
+
+    /// Null for an in-place agent with no session id: every Claude session in a borrowed folder
+    /// shares its cwd, so a cwd match there could be the user's own session.
+    Func<ISet<string>, (string SessionId, string Path)?>? ClaudeTranscriptLocator(AgentInstance agent, DateTime spawnedAtUtc) {
+        var projectDir = ClaudePathsFor(agent.Account).ProjectDir(agent.Worktree.Path);
+
+        if ((agent.VendorSession ?? agent.SessionId) is { } known)
+            return _ => SessionTranscriptLocator.TryLocateSession(projectDir, known);
+
+        if (agent.Work == WorkLocation.BorrowedCwd) {
+            LogSessionIdUndiscoverable(agent.Id);
+
+            return null;
+        }
+
+        return ruledOut => SessionTranscriptLocator.TryLocateWinner(projectDir, agent.Worktree.Path, spawnedAtUtc, ruledOut);
+    }
+
+    internal Task DetectSessionIdForTest(AgentInstance agent, DateTime spawnedAtUtc) => DetectSessionIdAsync(agent, agent.Vendor, spawnedAtUtc);
 
     internal Task RunDiscoveryForTest(AgentInstance agent, Func<ISet<string>, (string SessionId, string Path)?> locate) {
         var task = RunDiscoveryAsync(agent, locate);
@@ -5794,7 +6043,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             var       warnTask = WarnIfStillUnlinkedAsync(agent, warnCts.Token);
 
             try {
-                await discovery.RunAsync(locate, async winner => {
+                await discovery.RunAsync(ruledOut => OwnTranscript(agent, locate(ruledOut), ruledOut), async winner => {
                     if (cts.IsCancellationRequested || agent.Status is "Completed" or "Failed") return;
 
                     // Mutation first, pulse second — and the pulse before any server call, which can
@@ -5820,9 +6069,22 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         }
     }
 
+    /// <summary>Null for a transcript under a session other than the one the agent already holds: that is
+    /// another session's file, and linking it would report that session as this agent's. Ruled out by
+    /// path, so a locator that caches by path moves past it.</summary>
+    (string SessionId, string Path)? OwnTranscript(AgentInstance agent, (string SessionId, string Path)? found, ISet<string> ruledOut) {
+        if (found is not { } candidate || agent.SessionId is not { } own
+         || SessionIds.Canonical(candidate.SessionId) == SessionIds.Canonical(own))
+            return found;
+
+        if (ruledOut.Add(candidate.Path)) LogForeignTranscriptSkipped(agent.Id, candidate.SessionId, own);
+
+        return null;
+    }
+
     /// <summary>Says, once and early, what the operator is otherwise left to infer from silence.
     /// Never cancels or reaps the launch — detection keeps running while the agent is alive, and
-    /// a slow first turn or startup prompt still links once the transcript records its cwd.</summary>
+    /// a slow first turn or startup prompt still links once its transcript turns up.</summary>
     async Task WarnIfStillUnlinkedAsync(AgentInstance agent, CancellationToken ct) {
         try {
             await Task.Delay(SessionIdSlowWarnAfter, _time, ct).ConfigureAwait(false);
@@ -5830,7 +6092,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return;
         }
 
-        if (agent.SessionId is null)
+        if (agent.TranscriptPath is null)
             LogSessionIdSlow(agent.Id, SessionIdSlowWarnAfter.TotalSeconds);
     }
 
@@ -5848,6 +6110,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // touches a current-incarnation live agent), env-marker scan reaps a prior incarnation's
             // recordless survivors. Fire-and-forget; single-flight; swallows its own faults.
             _ = ReapOrphansOnceAsync(ct);
+            _ = SweepParticipantTombstonesAsync();
 
             // Selection is a snapshot; the DECISION is the claim each of these makes under the agent's
             // own fence (TryClaimReapAsync), which re-validates incarnation and — for the idle/wedge
@@ -5906,6 +6169,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         if (_config.Profiles.Resolution.SendsNoBearer) return;
 
         var loop = new TokenRefreshLoop(new TokenStoreRefreshPort(_tokens, _config.Profiles.Name, ProactiveRefreshWindow), _logger, ProactiveRefreshMinInterval, _time);
+        await RefreshUserSubjectAsync(ct);
 
         while (await _tokenRefresh.WaitForNextTickAsync(ct)) {
             // Defence in depth: TickAsync is intentionally total, but this runs as an
@@ -5918,6 +6182,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             } catch (Exception ex) {
                 _logger.LogWarning(ex, "Token refresh tick faulted — continuing loop");
             }
+
+            await RefreshUserSubjectAsync(ct);
         }
     }
 
@@ -5946,16 +6212,22 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         }
     }
 
+    TitleResolveLoop BuildTitleResolveLoop() => new(
+        SnapshotAgentsForTitles,
+        (agentId, title) => { if (_agents.TryGetValue(agentId, out var agent)) SetResolvedTitle(agent, title); },
+        _titleServer,
+        NativeTitleFor,
+        GenerateTitleForAsync,
+        _server.UpdateTitleAsync,
+        _time,
+        _logger);
+
+    /// Builds and publishes the loop without starting its timer, so a test can drive its ticks.
+    internal TitleResolveLoop PublishTitleLoopForTest() => _titleLoop = BuildTitleResolveLoop();
+
     async Task RunTitleResolveLoopAsync(CancellationToken ct) {
-        var loop = new TitleResolveLoop(
-            SnapshotAgentsForTitles,
-            (agentId, title) => { if (_agents.TryGetValue(agentId, out var agent)) SetResolvedTitle(agent, title); },
-            new TitleServerPort(_http, _config.ServerUrl),
-            NativeTitleFor,
-            GenerateTitleForAsync,
-            _server.UpdateTitleAsync,
-            _time,
-            _logger);
+        var loop = BuildTitleResolveLoop();
+        _titleLoop = loop;
 
         while (await _titleResolve.WaitForNextTickAsync(ct)) {
             // Defence in depth: TickAsync is intentionally total, but this runs as an
@@ -6321,6 +6593,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     [LoggerMessage(Level = LogLevel.Information, Message = "Re-advertising unattended vendor capabilities ({Reason}): {Versions}")]
     static partial void LogReAdvertising(ILogger logger, string reason, string versions);
 
+    [LoggerMessage(Level = LogLevel.Information, Message = "Codex transport resolution {Generation}: switch {SwitchOn}, app-server {Active} {InactiveReason}")]
+    static partial void LogCodexResolution(ILogger logger, long generation, bool switchOn, bool active, string inactiveReason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Experimental settings unreadable ({Problem}); keeping the committed Codex transport")]
+    static partial void LogUnreadableSettings(ILogger logger, string problem);
+
     [LoggerMessage(Level = LogLevel.Information, Message = "Launching agent {AgentId} for {Repo} (vendor={Vendor}, effort={Effort}, model={Model})")]
     partial void LogLaunching(string agentId, string repo, string vendor, string effort, string? model);
 
@@ -6659,8 +6937,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     [LoggerMessage(Level = LogLevel.Warning, Message = "Transcript-based session-id detection failed for agent {AgentId}; nothing else assigns one, so this agent stays unlinked")]
     partial void LogSessionIdDetectFailed(Exception ex, string agentId);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Agent {AgentId} still has no session id {Seconds:F0}s after spawn; the surface is showing 'waiting for session to start'. Detection continues while the agent is running.")]
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Agent {AgentId} still has no transcript {Seconds:F0}s after spawn; the surface is showing 'waiting for session to start'. Detection continues while the agent is running.")]
     partial void LogSessionIdSlow(string agentId, double seconds);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Agent {AgentId} found transcript of session {Found}, not its own session {Own}; not linking it")]
+    partial void LogForeignTranscriptSkipped(string agentId, string found, string own);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Agent {AgentId} runs in place with no known session id; its transcript is not discovered, since another session in the same folder would match")]
+    partial void LogSessionIdUndiscoverable(string agentId);
 
     [GeneratedRegex(@"\x1B\[[0-9;]*[A-Za-z]|\x1B\].*?\x07|\x1B[()][AB012]|\x1B\[[\?]?[0-9;]*[hlm]")]
     private static partial Regex StripAnsiRegex();

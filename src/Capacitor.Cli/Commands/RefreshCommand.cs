@@ -54,7 +54,7 @@ public sealed class RefreshCommand(IProcessRunner runner) {
         }
 
         if (kind is InstallKind.Npm or InstallKind.Script && resolvePluginDir() is { } pluginDir) {
-            var target = ScriptInstallLayout.Stabilize(binaryPath);
+            var target = InstallPaths.Stabilize(binaryPath);
             if (PluginMcpConfigPatcher.Patch(pluginDir, target, out var error) == PluginMcpConfigPatcher.Outcome.Failed)
                 await stderr.WriteLineAsync(
                     $"Could not point the Claude plugin's MCP entries at {target} ({error}); they keep launching `kcap` from PATH.");

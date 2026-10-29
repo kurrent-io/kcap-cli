@@ -11,6 +11,9 @@ public enum InstallKind {
     /// <summary>A global npm install; the npm launcher drives <c>kcap update</c>.</summary>
     Npm,
 
+    /// <summary>The desktop app's snap; snapd refreshes it.</summary>
+    Snap,
+
     /// <summary>Anything else: a dev build, a copied binary, a package manager we do not drive.</summary>
     Unknown,
 }

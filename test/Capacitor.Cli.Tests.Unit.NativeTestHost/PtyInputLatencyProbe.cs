@@ -31,7 +31,8 @@ static class PtyInputLatencyProbe {
         var       ptys    = new List<IPtyProcess>(count);
 
         try {
-            for (var i = 0; i < count; i++) ptys.Add(factory.Spawn("/bin/cat", [], AppContext.BaseDirectory));
+            // Not cat: uutils coreutils refuses the spawner's fd-bound exec, so the PTY closes at once.
+            for (var i = 0; i < count; i++) ptys.Add(factory.Spawn("/bin/sh", ["-c", "read line"], AppContext.BaseDirectory));
 
             _ = DrainAsync(ptys[0], echoes, stop.Token);
             foreach (var pty in ptys.Skip(1)) _ = DrainAsync(pty, null, stop.Token);

@@ -17,6 +17,30 @@
             </Grid>
         </Border>
 
+        <Border Classes="onboardingCard" IsVisible="{Binding Repairing}">
+            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+                <Panel Classes="onboardingSpinner" Width="14" Height="14" VerticalAlignment="Center">
+                    <icons:AppIcon Kind="LoaderCircle" Size="14" Foreground="{StaticResource OnboardingAccentBrush}"
+                                   Classes.kcapSpinning="{Binding Repairing}" />
+                </Panel>
+                <TextBlock Grid.Column="1" x:Name="RepairingText" Classes="onboardingBody" VerticalAlignment="Center"
+                           Text="{x:Static vm:InstallStepViewModel.RepairingText}" />
+            </Grid>
+        </Border>
+
+        <Border Classes="onboardingWarning" IsVisible="{Binding ClientProblemVisible}">
+            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
+                <icons:AppIcon Kind="TriangleAlert" Size="14" VerticalAlignment="Top" Margin="0,2,0,0"
+                               Foreground="{StaticResource KcapWarningBrush}" />
+                <StackPanel Grid.Column="1" Spacing="8">
+                    <TextBlock x:Name="ClientProblemText" Classes="onboardingBody" TextWrapping="Wrap"
+                               Text="{Binding ClientProblem}" />
+                    <Button x:Name="RepairAgainButton" Classes="onboardingPrimary" Content="Try again" HorizontalAlignment="Left"
+                            Command="{Binding RepairAgainCommand}" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
         <Border Classes="onboardingCard" IsVisible="{Binding ChoiceVisible}">
             <icons:SearchChoiceView DataContext="{Binding Search}" />
         </Border>

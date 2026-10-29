@@ -2,7 +2,8 @@
 name: work-items
 description: >-
   Use when planning a work item's parts or dependencies, correcting a duplicate
-  or wrong attachment, or deferring unfinished work as a loose end. Also use
+  or wrong attachment, declaring an item a tracker closed still unfinished, or
+  deferring unfinished work as a loose end. Also use
   when picking up, releasing or completing a loose end, continuing another
   session's claimed work, or answering what to work on next. Records declared
   structure and execution ownership through kcap-workitems. Ordinary attachment
@@ -71,10 +72,20 @@ two — that records structure that isn't there. Merge instead:
   removal is durable for automated correlation; an attachment a user pinned cannot be
   removed by an agent.
 
+## Work a tracker closed too early
+
+A tracker can close an issue when a PR merges even though the work it names is not done.
+When the user says so, or the session shows it, call `declare_work_incomplete` with the
+`work_item_id` and, when you can, a one-sentence `reason` saying what is left. The item stays in flight
+until a PR merges or an issue closes after the declaration. Only a session attached to the
+item can declare it, and a repeat from the same session is a no-op. Unfinished work that is
+not the item itself is a loose end, not this.
+
 ## Loose ends
 
-A loose end is one concrete piece of unfinished work — a missing test, a TODO you left in
-the code, a follow-up the user asked for. Declare each with `declare_loose_end` (`text`,
+A loose end is one concrete piece of unfinished work — a missing test, a flaky test you hit
+and did not fix (one that failed, then passed on a rerun), a TODO you left in the code, a
+follow-up the user asked for. Declare each with `declare_loose_end` (`text`,
 one plain sentence) at the moment you decide to defer it, not in a batch at the end. The
 server keys it on the session, the owner and the normalized text, so declaring the same
 end twice is a no-op (`created: false`). It refuses text shorter than 12 or longer than
@@ -181,6 +192,7 @@ next work or said they are done with or parking that work.
 | `get_work_item_topology` | `work_item_id` | Read parent, parts, and dependencies (visibility-scoped). |
 | `merge_work_item` | `work_item_id`, `into_work_item_id` | Merge a duplicate into the survivor (prefer the keyed item as survivor). |
 | `detach_work_item` | `work_item_id` | Detach the session from a wrongly attached item. `session_id` defaults to the current session. |
+| `declare_work_incomplete` | `work_item_id`, optional `reason` | Keep a tracker close from settling an item whose work is unfinished. `session_id` defaults to the current session. |
 | `list_work_item_evals` | `work_item_id` | List the item's evaluation runs you can read, newest first; `cursor` from `next_cursor`. |
 | `get_work_item_eval` | `work_item_id`, `run_id` | Read one run's per-question results, judged requirements and retrospective. |
 | `request_work_item_eval` | `work_item_id` | Queue an evaluation (`mode` `process`, the default, or `root_cause`); returns your still-active run instead of a second one. |

@@ -60,17 +60,13 @@
                 <TextBlock Classes="onboardingNote" Text="Sign in securely in your browser. You'll return here to finish setup."
                            IsVisible="{Binding ShowPrimaryAction}" />
 
-                <StackPanel Spacing="4" IsVisible="{Binding Satisfied}">
-                    <Border Classes="onboardingResolved">
-                        <StackPanel Orientation="Horizontal" Spacing="10">
-                            <icons:AppIcon Kind="Check" Size="14" VerticalAlignment="Center" Foreground="{StaticResource KcapSuccessBrush}" />
-                            <StackPanel Spacing="2">
-                                <TextBlock x:Name="StartSignedInText" Classes="onboardingLabel" Text="{Binding ConnectionStatus}" />
-                                <TextBlock Classes="onboardingBody" Text="{Binding StatusDetail}"
-                                           IsVisible="{Binding StatusDetail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                            </StackPanel>
-                        </StackPanel>
-                    </Border>
+                <StackPanel Orientation="Horizontal" Spacing="10" IsVisible="{Binding Satisfied}">
+                    <icons:AppIcon Kind="Check" Size="14" VerticalAlignment="Center" Foreground="{StaticResource KcapSuccessBrush}" />
+                    <StackPanel Spacing="2">
+                        <TextBlock x:Name="StartSignedInText" Classes="onboardingLabel" Text="{Binding ConnectionStatus}" />
+                        <TextBlock Classes="onboardingBody" Text="{Binding StatusDetail}"
+                                   IsVisible="{Binding StatusDetail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    </StackPanel>
                 </StackPanel>
 
                 <StackPanel Spacing="4" IsVisible="{Binding StatusLineVisible}">
@@ -158,16 +154,14 @@
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
-                <Border Classes="onboardingResolved" IsVisible="{Binding Satisfied}">
-                    <StackPanel Orientation="Horizontal" Spacing="10">
-                        <icons:AppIcon Kind="Check" Size="14" VerticalAlignment="Center" Foreground="{StaticResource KcapSuccessBrush}" />
-                        <StackPanel Spacing="2">
-                            <TextBlock x:Name="SignedInText" Classes="onboardingLabel" Text="{Binding ConnectionStatus}" />
-                            <TextBlock Classes="onboardingBody" Text="{Binding StatusDetail}"
-                                       IsVisible="{Binding StatusDetail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                        </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="10" IsVisible="{Binding Satisfied}">
+                    <icons:AppIcon Kind="Check" Size="14" VerticalAlignment="Center" Foreground="{StaticResource KcapSuccessBrush}" />
+                    <StackPanel Spacing="2">
+                        <TextBlock x:Name="SignedInText" Classes="onboardingLabel" Text="{Binding ConnectionStatus}" />
+                        <TextBlock Classes="onboardingBody" Text="{Binding StatusDetail}"
+                                   IsVisible="{Binding StatusDetail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                     </StackPanel>
-                </Border>
+                </StackPanel>
             </StackPanel>
         </Border>
 

@@ -107,4 +107,15 @@ public class SystemdUnitTests {
 
         await Assert.That(SystemdUnit.WithEnvironmentValue(unit, "PATH", "/usr/bin:/opt/agents")).IsNull();
     }
+
+    /// <summary>A unit someone ran `systemctl --user disable` on is still ours to start; one systemd finds
+    /// without our file is not.</summary>
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task StatusFrom_a_disabled_unit_is_installed_only_with_our_file(bool unitPresent) {
+        var state = SystemdUnit.StatusFrom("inactive\n", enabledExit: 1, "disabled\n", unitPresent);
+
+        await Assert.That(state).IsEqualTo(unitPresent ? ServiceState.Installed : ServiceState.NotInstalled);
+    }
 }

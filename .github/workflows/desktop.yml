@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v6
+        uses: ./.github/actions/setup-dotnet
 
       - name: Install vpk
         run: dotnet tool install -g vpk --version 1.2.0
@@ -115,7 +115,7 @@ jobs:
               chmod +x publish/app/kcap publish/app/kcap-daemon "publish/app/kcap-desktop"
               bash scripts/assemble-app-bundle.sh publish/app "publish/kcap.app" "$VERSION" ;;
             Windows)
-              cp trio/bin/kcap.exe trio/bin/kcap-daemon.exe publish/app/
+              cp trio/bin/kcap.exe trio/bin/kcap-daemon.exe trio/bin/kcap-service.exe publish/app/
               bash scripts/bundle-app-plugin.sh publish/app "$VERSION" ;;
             Linux)
               mkdir -p publish/app/bin
@@ -212,6 +212,7 @@ jobs:
           bash scripts/assert-app-cli-version.sh "$install/current/kcap.exe" "$VERSION"
           bash scripts/assert-bundle-digest.sh "$install" trio/bin/daemon.sha256
           "$install/current/kcap-daemon.exe" --version
+          "$install/current/kcap-service.exe" --version
 
       # A missing native library or a platform-only call on the startup path ends the process
       # within seconds.

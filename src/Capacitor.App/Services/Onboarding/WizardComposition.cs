@@ -75,6 +75,8 @@ internal sealed record WizardGraphOptions(
     IUrlOpener                                                                   UrlOpener,
     ILoginShellProbe                                                             Probe,
     Func<ILoginShellProbe, Func<CancellationToken, Task<IReadOnlyDictionary<HarnessId, DetectedAgent>>>> DetectionFeed,
+    // The built-in model set the stack setup will run offers, or null.
+    Func<CancellationToken, Task<LocalEmbeddingModelManifest?>>                  BuiltinOffer,
     string?                                                                      CliPath,
     bool                                                                         ShimApplicable,
     string?                                                                      ShimTarget,
@@ -97,6 +99,10 @@ internal sealed record WizardGraphOptions(
     UsageDataNotice?                                                             UsageNotice = null,
     // Tells the configured server this machine has kcap installed; true once it accepted.
     Func<CancellationToken, Task<bool>>?                                         ReportCliSetup = null,
+    // The visibility answers the signed-in tenant can honour; null offers every answer.
+    Func<CancellationToken, Task<VisibilityOptionsResponse?>>?                   ReadVisibilityOptions = null,
+    // Brings any other kcap the local installer would refuse up to date; null finds nothing to update.
+    Func<CancellationToken, Task<ClientRepairOutcome>>?                          RepairClients = null,
     // This app sent the user to kcap.ai's sign-up and no sign-in has committed since.
     bool                                                                         ResumeWebSignUp = false);
 
@@ -263,7 +269,9 @@ internal static class WizardComposition {
                 : null,
             // A committed machine has nothing left to install.
             onLocalPath: () => OnLocalPath() && !CommittedLocal(),
+            builtinOffer: options.BuiltinOffer,
             recorded: () => LocalEmbeddingFile.Read(root),
+            repairClients: options.RepairClients,
             resuming: Pending);
         var connect  = new ConnectChoiceViewModel();
         var signIn   = new SignInStepViewModel(
@@ -288,7 +296,8 @@ internal static class WizardComposition {
             ct => options.Probe.SetVariablesAsync(HarnessesStepViewModel.ProviderKeys, ct),
             machine,
             () => options.ResolveIdentity()?.Profile, options.ShutdownToken,
-            onLocalPath: OnLocalPath);
+            onLocalPath: OnLocalPath,
+            visibilityOptions: options.ReadVisibilityOptions);
         var history = new HistoryStepViewModel(
             cli, () => harnesses.Recording, options.Bridges.Post, machine, options.Time, OnLocalPath);
         var daemon = new DaemonEnabler(

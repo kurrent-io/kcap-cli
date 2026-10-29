@@ -14,6 +14,7 @@ internal sealed record TitleAgentView(
 internal interface ITitleServerPort {
     Task<string?> GetTitleAsync(string sessionId, CancellationToken ct);
     Task<HarnessTitleOutcome> PushTitleAsync(string sessionId, HarnessTitlePost post, CancellationToken ct);
+    Task<TitleRenameOutcome> RenameAsync(string sessionId, string title, CancellationToken ct);
 }
 
 /// <summary>
@@ -46,6 +47,10 @@ internal sealed class TitleResolveLoop {
     /// making one — it typically lands within a minute. Generate only after the server has
     /// stayed silent this long.
     static readonly TimeSpan GenerationGrace = TimeSpan.FromMinutes(5);
+
+    /// Projection lag is seconds; the bound stops a rename the server superseded before showing
+    /// it from being held forever.
+    static readonly TimeSpan RenameLagHold = TimeSpan.FromMinutes(2);
 
     sealed class AgentTitleState {
         public string? Applied;
@@ -81,6 +86,23 @@ internal sealed class TitleResolveLoop {
         public long NativeStatLength;
         public DateTime NativeStatLastWriteUtc;
         public HarnessTitlePost? NativeStatResult;
+        /// Bumped by every applied rename; a tick that started on an older revision discards
+        /// its apply and its push, since what it read predates the rename.
+        public int Revision;
+        /// A rename the daemon applied. Authority until the server shows a different title, even
+        /// when it matches the prompt or one of our push attempts.
+        public string? Renamed;
+        /// Whether a server read has returned <see cref="Renamed"/>. The server's title is a
+        /// projected read model, so until it shows the rename any other title is a lagging read.
+        public bool RenameSeen;
+        public DateTimeOffset RenamedAt;
+        /// The push attempts made before <see cref="Renamed"/>: a late echo of one is a stale read,
+        /// never a newer title, so it cannot retire the rename. A retry of one after the rename
+        /// re-sends the same stale title and keeps it here; only a title new since the rename can.
+        public HashSet<string> PreRenameAttempts = new(StringComparer.Ordinal);
+        /// The tick epoch the state was created in; a removal pass spares a state created after
+        /// its snapshot, whose agent the snapshot could not have seen.
+        public long Born;
     }
 
     /// <summary>
@@ -95,6 +117,8 @@ internal sealed class TitleResolveLoop {
         readonly HashSet<string> _set = new(StringComparer.Ordinal);
 
         public bool Contains(string title) => _set.Contains(title);
+
+        public HashSet<string> Snapshot() => new(_set, StringComparer.Ordinal);
 
         public void Add(string title) {
             if (!_set.Add(title)) return;
@@ -112,7 +136,11 @@ internal sealed class TitleResolveLoop {
     readonly Func<string, string, CancellationToken, Task<bool>> _postGenerated;
     readonly TimeProvider _time;
     readonly ILogger _logger;
+    /// Guards <see cref="_states"/> and every state field <see cref="ApplyRename"/> touches.
+    /// Never held across an await.
+    readonly Lock _gate = new();
     readonly Dictionary<string, AgentTitleState> _states = [];
+    long _epoch;
 
     public TitleResolveLoop(
             Func<IReadOnlyList<TitleAgentView>> agents,
@@ -133,16 +161,42 @@ internal sealed class TitleResolveLoop {
         _logger        = logger;
     }
 
+    /// <summary>Records a rename the server accepted and shows it at once. Safe to call while
+    /// <see cref="TickAsync"/> is in flight.</summary>
+    public void ApplyRename(string agentId, string title) {
+        if (Normalize(title) is not { } renamed) return;
+
+        lock (_gate) {
+            var state = StateFor(agentId);
+            state.Renamed              = renamed;
+            state.RenameSeen           = false;
+            state.RenamedAt            = _time.GetUtcNow();
+            state.PreRenameAttempts    = state.PushAttempts.Snapshot();
+            state.ServerTitle          = renamed;
+            state.Applied              = renamed;
+            state.StartTitleSuperseded = true;
+            state.Revision++;
+            _apply(agentId, renamed);
+        }
+    }
+
     public async Task TickAsync(CancellationToken ct) {
+        long epoch;
+        lock (_gate) epoch = ++_epoch;
+
         var agents = _agents();
 
         var live = new HashSet<string>(agents.Select(a => a.Id), StringComparer.Ordinal);
-        foreach (var gone in _states.Keys.Where(id => !live.Contains(id)).ToList()) _states.Remove(gone);
+        lock (_gate) {
+            foreach (var gone in _states.Where(kv => !live.Contains(kv.Key) && kv.Value.Born < epoch).Select(kv => kv.Key).ToList())
+                _states.Remove(gone);
+        }
 
         foreach (var agent in agents) {
             ct.ThrowIfCancellationRequested();
 
-            if (!_states.TryGetValue(agent.Id, out var state)) _states[agent.Id] = state = new AgentTitleState();
+            AgentTitleState state;
+            lock (_gate) state = StateFor(agent.Id);
 
             try {
                 await ResolveOneAsync(agent, state, ct);
@@ -154,7 +208,15 @@ internal sealed class TitleResolveLoop {
         }
     }
 
+    AgentTitleState StateFor(string agentId) {
+        if (!_states.TryGetValue(agentId, out var state)) _states[agentId] = state = new AgentTitleState { Born = _epoch };
+        return state;
+    }
+
     async Task ResolveOneAsync(TitleAgentView agent, AgentTitleState state, CancellationToken ct) {
+        int revision;
+        lock (_gate) revision = state.Revision;
+
         var chosen = agent.StartTitle is { Derived: false } start ? Normalize(start.Text) : null;
 
         try {
@@ -164,11 +226,15 @@ internal sealed class TitleResolveLoop {
         }
         var native = state.Native;
 
-        var (serverReadOk, serverReal) = await ReadServerAsync(agent, state, ct);
+        var (serverReadOk, serverReal, current) = await ReadServerAsync(agent, state, revision, ct);
+        if (!current) return;
+
+        bool renamed;
+        lock (_gate) renamed = state.Renamed is not null;
 
         // An unreadable server is not a silent one: generation must not spend an LLM call on a
         // session whose watcher-made title merely couldn't be fetched.
-        if (chosen is null && serverReadOk && serverReal is null && native is null && !state.GenerationAttempted
+        if (chosen is null && serverReadOk && serverReal is null && native is null && !renamed && !state.GenerationAttempted
          && !string.IsNullOrWhiteSpace(agent.Prompt)
          && _time.GetUtcNow() - DateTime.SpecifyKind(agent.CreatedAt, DateTimeKind.Utc) >= GenerationGrace) {
             state.GenerationAttempted = true;
@@ -181,49 +247,67 @@ internal sealed class TitleResolveLoop {
             // The model call runs long enough for an independent title to land meanwhile —
             // re-check so the fallback can neither display over it nor converge over it. A
             // failed re-check blocks the push (not the local display) until the next tick.
-            if (state.Generated is not null) (serverReadOk, serverReal) = await ReadServerAsync(agent, state, ct);
+            if (state.Generated is not null) {
+                (serverReadOk, serverReal, current) = await ReadServerAsync(agent, state, revision, ct);
+                if (!current) return;
+            }
         }
 
-        // On a failed read the last successfully-read authority stands in, so an outage tick
-        // cannot demote the applied title down the ladder.
         // Only a rename outranks a chosen start title; the server refuses an auto native title over it.
         var local = chosen is not null && native?.Kind != HarnessTitleKind.Rename ? chosen : Normalize(native?.Title) ?? chosen;
-        Apply(agent, state, (serverReadOk ? serverReal : state.ServerTitle) ?? local ?? state.Generated);
 
-        // The harness's own title is pushed whenever it changes, independent of the server's
-        // current title — it is authoritative for what the harness itself calls the session.
-        if (native is not null && !native.Equals(state.PushedNative) && agent.SessionId is { } sid) {
-            // A server read comes back display-capped, so the capped form is what an echo of this push looks like.
-            state.PushAttempts.Add(Normalize(native.Title)!);
+        HarnessTitlePost? nativePush = null;
+        string? nativeSid = null, generatedPush = null, generatedSid = null;
+        lock (_gate) {
+            if (state.Revision != revision) return;
 
+            // On a failed read the last successfully-read authority stands in, so an outage tick
+            // cannot demote the applied title down the ladder.
+            Apply(agent, state, (serverReadOk ? serverReal : state.ServerTitle) ?? state.Renamed ?? local ?? state.Generated);
+
+            // The harness's own title is pushed whenever it changes, independent of the server's
+            // current title — it is authoritative for what the harness itself calls the session.
+            if (native is not null && !native.Equals(state.PushedNative) && agent.SessionId is { } sid) {
+                // A server read comes back display-capped, so the capped form is what an echo of this push looks like.
+                state.PushAttempts.Add(Normalize(native.Title)!);
+                nativePush = native;
+                nativeSid  = sid;
+            }
+
+            // A locally generated title only converges to the server while it verifiably has no
+            // real title, no native title and no standing rename — generation is a fallback, not an authority.
+            if (serverReadOk && serverReal is null && native is null && state.Renamed is null && state.Generated is { } generated
+             && generated != state.PushedGenerated && agent.SessionId is { } genSid) {
+                state.PushAttempts.Add(generated);
+                generatedPush = generated;
+                generatedSid  = genSid;
+            }
+        }
+
+        if (nativePush is not null) {
             var outcome = HarnessTitleOutcome.Failed;
             try {
-                outcome = await _server.PushTitleAsync(sid, native, ct);
+                outcome = await _server.PushTitleAsync(nativeSid!, nativePush, ct);
             } catch (Exception ex) {
-                _logger.LogDebug(ex, "Native title push failed for session {SessionId}", sid);
+                _logger.LogDebug(ex, "Native title push failed for session {SessionId}", nativeSid);
             }
 
             // A refusal (blank title, unsafe id, not the owner) is a verdict on this exact
             // value, not a transient hiccup — retrying it every tick forever would spend a
             // request for nothing. Failed/SessionNotFound stay retryable.
             if (outcome is HarnessTitleOutcome.Posted or HarnessTitleOutcome.PostedToLegacyRoute or HarnessTitleOutcome.Refused)
-                state.PushedNative = native;
+                lock (_gate) state.PushedNative = nativePush;
         }
 
-        // A locally generated title only converges to the server while it verifiably has no
-        // real title and no native title exists — generation is a fallback, not an authority.
-        if (serverReadOk && serverReal is null && native is null && state.Generated is { } generated
-         && generated != state.PushedGenerated && agent.SessionId is { } genSid) {
-            state.PushAttempts.Add(generated);
-
+        if (generatedPush is not null) {
             var posted = false;
             try {
-                posted = await _postGenerated(genSid, generated, ct);
+                posted = await _postGenerated(generatedSid!, generatedPush, ct);
             } catch (Exception ex) {
-                _logger.LogDebug(ex, "Generated title push failed for session {SessionId}", genSid);
+                _logger.LogDebug(ex, "Generated title push failed for session {SessionId}", generatedSid);
             }
 
-            if (posted) state.PushedGenerated = generated;
+            if (posted) lock (_gate) state.PushedGenerated = generatedPush;
         }
     }
 
@@ -239,31 +323,55 @@ internal sealed class TitleResolveLoop {
     /// authority, and the retained-across-outages <see cref="AgentTitleState.ServerTitle"/>. A
     /// confirmed push is not re-armed by a read that no longer shows it: the server has no path
     /// that deletes a title, so a missing one is projection lag, and a native value re-sent over a
-    /// later Regenerate would fight it.</summary>
-    async Task<(bool Ok, string? Real)> ReadServerAsync(TitleAgentView agent, AgentTitleState state, CancellationToken ct) {
-        if (agent.SessionId is not { } sessionId) return (true, null); // an unrecorded agent has no server to ask
+    /// later Regenerate would fight it. <c>Current</c> is false when a rename landed during the
+    /// read, which makes the read stale.</summary>
+    async Task<(bool Ok, string? Real, bool Current)> ReadServerAsync(
+            TitleAgentView agent, AgentTitleState state, int revision, CancellationToken ct) {
+        if (agent.SessionId is not { } sessionId) return (true, null, true); // an unrecorded agent has no server to ask
 
+        string? serverTitle;
         try {
-            var serverTitle = Normalize(await _server.GetTitleAsync(sessionId, ct));
+            serverTitle = Normalize(await _server.GetTitleAsync(sessionId, ct));
+        } catch (Exception ex) {
+            _logger.LogDebug(ex, "Server title read failed for session {SessionId}", sessionId);
+
+            lock (_gate) return (false, null, state.Revision == revision);
+        }
+
+        lock (_gate) {
+            if (state.Revision != revision) return (true, null, false);
+
+            // Once the server has shown the rename, or the lag hold has run out, a newer title
+            // replaces it — a later native push included. A late echo of a push made before the
+            // rename, or of the prompt, is a stale read and never does.
+            if (state.Renamed is { } held && serverTitle is not null) {
+                if (serverTitle == held) {
+                    state.RenameSeen = true;
+                } else if ((state.RenameSeen || _time.GetUtcNow() - state.RenamedAt >= RenameLagHold)
+                        && !state.PreRenameAttempts.Contains(serverTitle) && !IsPromptEcho(serverTitle, agent.Prompt)) {
+                    state.Renamed    = null;
+                    state.RenameSeen = false;
+                    state.PreRenameAttempts.Clear();
+                }
+            }
 
             // A title the loop itself pushed (or may have pushed — an unacknowledged attempt
             // can still have committed) coming back is not an independent server title:
             // treating it as one would freeze the ladder on our own echo and a later native
-            // revision could never advance past it.
+            // revision could never advance past it. The applied rename is exempt: it is real
+            // whatever it happens to match.
             string? serverReal = null;
-            if (serverTitle is not null && !state.PushAttempts.Contains(serverTitle)
-             && !IsPromptEcho(serverTitle, agent.Prompt)
-             && (state.StartTitleSuperseded || serverTitle != Normalize(agent.StartTitle?.Text))) {
+            if (state.Renamed is { } rename && (serverTitle == rename || !state.RenameSeen)) {
+                serverReal = rename;
+            } else if (serverTitle is not null && !state.PushAttempts.Contains(serverTitle)
+                    && !IsPromptEcho(serverTitle, agent.Prompt)
+                    && (state.StartTitleSuperseded || serverTitle != Normalize(agent.StartTitle?.Text))) {
                 serverReal = serverTitle;
             }
 
             state.ServerTitle = serverReal;
 
-            return (true, serverReal);
-        } catch (Exception ex) {
-            _logger.LogDebug(ex, "Server title read failed for session {SessionId}", sessionId);
-
-            return (false, null);
+            return (true, serverReal, true);
         }
     }
 

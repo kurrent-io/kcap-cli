@@ -291,6 +291,7 @@ public class LocalUninstallTests {
         var installed = await InstallAsync();
         Tmp.CreateFile("cfg/spool/session.jsonl", "{}");
         Tmp.CreateFile("cfg/transcript-spool/session.jsonl", "{}");
+        WriteUnderRoot(Path.Combine("models", new string('a', 64), "model.onnx"), "onnx");
         ServerVersionStore.Set(installed.ServerUrl, "1.2.3", Config, TimeProvider.System);
 
         await Assert.That(await UninstallAsync(purge: true)).IsEqualTo(LocalUninstallOutcome.Purged);
@@ -299,7 +300,7 @@ public class LocalUninstallTests {
         await Assert.That(registry.Active).IsNull();
         await Assert.That(registry.Retired).IsEquivalentTo([new RetiredInstallation(installed.InstallationId, installed.Port, installed.ServerUrl)]);
 
-        foreach (var name in new[] { "bin", "run", "data", "logs" })
+        foreach (var name in new[] { "bin", "run", "data", "logs", "models" })
             await Assert.That(Directory.Exists(Dir(name))).IsFalse().Because(name);
 
         await Assert.That(Directory.Exists(Config.Path("spool"))).IsFalse();

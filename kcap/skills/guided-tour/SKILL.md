@@ -40,7 +40,7 @@ nothing before or after it: no preamble, no commentary, no summary of what the c
 | placeholder | value | fallback |
 |---|---|---|
 | `{{AGENT}}` | the product name of the harness running this tour: Claude Code, Codex, Cursor, Copilot, Gemini CLI, Kiro, OpenCode, Pi or Antigravity | — |
-| `{{OTHER_AGENT}}` on card 4 | Codex | Claude Code when `{{AGENT}}` is Codex |
+| `{{OTHER_AGENT}}` on cards 1 and 4 | Codex | Claude Code when `{{AGENT}}` is Codex |
 | `{{OTHER_AGENT}}` on card 5 | from `list_reviewer_vendors`, excluding the harness running the tour (its `driver_vendor`, or `{{AGENT}}`'s token when that is absent): `codex` if listed, else `claude`, else the first one listed, by product name (`codex` → Codex, `claude` → Claude Code) | as card 4 |
 | `{{T1}}`, `{{T2}}`, `{{T3}}` | the first names of up to three distinct teammates, most recent first (TEAMMATES below) | `my teammate` for each one missing; capitalise it when it opens the question |
 | `{{CAPTURE}}` | the team table, or the one-line variant (CAPTURE below) | — |
@@ -124,15 +124,15 @@ shows what is there, or the placeholder line, and moves on.
 
 ---
 
-## 👋 Welcome  · 1 of 7
+## 👋 Capture every step of your work, remembered and shared  · 1 of 7
 
-kcap is the shared memory, observability, and collaboration layer for the modern A-SDLC. Ask {{AGENT}}:
+Examples of what you can accomplish with kcap. Ask {{AGENT}}:
 
 **❯** Are there any loose ends, or did we cover everything in the plan?
 **❯** What did we finish, what was checked, and what remains?
 **❯** What decisions and checks sit behind this PR?
-
-Capture, investigate, collaborate, review, use, reuse: every step of your work, remembered and shared
+**❯** Open the PR. Complete a {{OTHER_AGENT}} code review flow and address the findings
+**❯** I hit my usage limit in {{OTHER_AGENT}}. Find my active session on the feature and continue it here
 
 ── 1 of 7 · Type `next` and hit Enter to continue · `stop` to exit ──
 
@@ -261,8 +261,8 @@ the card implied should be there.
 | 1 | loose ends / plan coverage; finished, checked, remaining | `list_loose_ends`, the session's declared plan (`get_declared_plans`), `get_session_summary`. A server without next-work answers `list_loose_ends` with "not enabled": answer from the summary's Unfinished section instead |
 | 1, 5 | decisions behind a PR; review a teammate's PR | `kcap-review`: `get_pr_summary`, then `search_context` / `get_transcript` for the reasoning |
 | 3, 4, 6 | past sessions, team activity, who solved what, unfinished work | `search_sessions`, `list_repo_sessions`, `get_session_summary` |
-| 4, 6 | continue another session (a teammate's, or one from another agent) | `continue_session`; if it refuses because that session may still be running, ask before retrying with `force: true` |
-| 5 | spec and code review flows | the agent-flows skill: `get_flow_definition` first, the reviewer is `{{OTHER_AGENT}}`. A flow needs a connected kcap daemon with that reviewer installed — if the start is refused, say exactly which part is missing |
+| 1, 4, 6 | continue another session (a teammate's, or one from another agent) | `continue_session` takes a session id, so find it first: `list_repo_sessions` (`state: "active"`, `owner: "me"` for the user's own) or `search_sessions` on the feature's keywords, and confirm the match with the user when more than one fits. If it refuses because that session may still be running, ask before retrying with `force: true` |
+| 1, 5 | spec and code review flows | the agent-flows skill: `get_flow_definition` first, the reviewer is `{{OTHER_AGENT}}`. A flow needs a connected kcap daemon with that reviewer installed — if the start is refused, say exactly which part is missing |
 | 6 | what to do next; what is blocking | `get_next_work`, citing its because-clauses. If it reports next-work is not enabled, answer from the latest session summaries' Unfinished sections and say the ranked list is off on this server |
 | 7 | evaluate a session | `kcap eval`: LLM judges, 1–3 minutes and real spend. Say both and get a go before starting; run it in the background where the harness allows |
 | 7 | promote lessons | `kcap curate apply --dry-run` first and show what would be written; write only on an explicit yes. On a young record there is nothing to promote yet — say so plainly |

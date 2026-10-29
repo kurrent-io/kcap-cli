@@ -4,15 +4,15 @@ using Capacitor.Cli.Core.WorkItems;
 
 namespace Capacitor.Cli.Harness.Claude;
 
-/// <summary>Whether a Stop hook blocks the stop once, asking the agent to declare its loose ends and
-/// present next work. Every gate must agree: the server asked for it in the ack, the profile has not
+/// <summary>Whether a Stop hook blocks the stop once, asking the agent to close the loose ends it finished,
+/// declare the rest and present next work. Every gate must agree: the server asked for it in the ack, the profile has not
 /// opted out of next-work, the agent is not already continuing from a Stop block, and its last message
 /// reads as a wrap-up. A flow participant is never blocked, whatever the ack says.</summary>
 static class ClaudeCompletionNudge {
     internal const int LastMessageCap = 4000;
 
     internal const string BlockDecision =
-        """{"decision":"block","reason":"kcap: If the piece of work the user framed has reached a terminal state — a PR merged, an issue closed, a question answered with nothing pending, or the user done with it — (1) declare any remaining loose ends with declare_loose_end, one call per item; (2) call get_next_work and, unless it says this session's attached work is still open and the user has neither asked for next work nor said they are done with or parking it, tell the user, in a few lines, what to consider working on next and why. Otherwise say nothing about next work and stop again."}""";
+        """{"decision":"block","reason":"kcap: If the piece of work the user framed has reached a terminal state — a PR merged, an issue closed, a question answered with nothing pending, or the user done with it — (1) close_loose_end each loose end whose work this session finished, the ones it declared (pass the declaration_id, or find them with list_loose_ends by session_id) and the ones it claimed (list_loose_ends by claimed_session_id; pass each claim_id); (2) declare any remaining loose ends with declare_loose_end, one call per item; (3) call get_next_work and, unless it says this session's attached work is still open and the user has neither asked for next work nor said they are done with or parking it, tell the user, in a few lines, what to consider working on next and why. Otherwise say nothing about next work and stop again."}""";
 
     /// <summary>A server that predates the field answers with an empty body, and a current one omits
     /// the field rather than sending false; neither nudges.</summary>

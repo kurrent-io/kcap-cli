@@ -1,7 +1,11 @@
+using System.Collections.Frozen;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Daemon.Harness.Claude;
+using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.Cli.Daemon;
@@ -11,6 +15,9 @@ public class DaemonConfig {
     public string   ServerUrl           { get; set; } = "";
     public string[] AllowedRepoPaths    { get; set; } = [];
     public int      MaxConcurrentAgents { get; set; } = 5;
+
+    /// <summary>The daemon's own binary as it stood at process start, the restart poll's first baseline.</summary>
+    public BinaryStat? LaunchBinary { get; set; }
 
     /// <summary>How long a self-detected restart waits for interactive agents to reach a turn boundary.</summary>
     public TimeSpan RestartTurnWait { get; set; } = TimeSpan.FromMinutes(5);
@@ -134,6 +141,10 @@ public class DaemonConfig {
     /// </summary>
     public string? InstanceId { get; set; }
 
+    /// <summary>The instance of the boot just before this one, as the daemon lock witnessed it; null when
+    /// the lock could not tell. A flow participant resumes only from that instance's planned stop.</summary>
+    public string? PriorInstanceId { get; set; }
+
     /// <summary>
     /// Daemon binary version (<c>AssemblyInformationalVersion</c>). Sent
     /// over <c>DaemonConnect</c> and surfaced on the server's
@@ -163,7 +174,23 @@ public class DaemonConfig {
     /// yet or in tests that bypass the runner.
     /// </summary>
     public string[]? UnattendedVendors { get; set; }
-    public IReadOnlyList<UnattendedVendorCapability>? UnattendedVendorCapabilities { get; set; }
+
+    /// <summary>Setting this keeps the Codex resolution already paired with the capabilities; a caller
+    /// that computed them from a resolution publishes both through <see cref="Advertise"/>.</summary>
+    public IReadOnlyList<UnattendedVendorCapability>? UnattendedVendorCapabilities {
+        get => Advertisement.Capabilities;
+        set => Advertisement = Advertisement with { Capabilities = value };
+    }
+
+    internal UnattendedAdvertisement Advertisement {
+        get => Volatile.Read(ref _advertisement);
+        private set => Volatile.Write(ref _advertisement, value);
+    }
+
+    UnattendedAdvertisement _advertisement = UnattendedAdvertisement.None;
+
+    internal void Advertise(IReadOnlyList<UnattendedVendorCapability> capabilities, Harness.Codex.CodexTransportResolution codex) =>
+        Advertisement = new(capabilities, codex);
 
     /// <summary>Installed vendors whose runtime can host a single-pass PR review — the server offers and
     /// admits only these for one. <c>null</c> before the runner has probed.</summary>
@@ -178,8 +205,14 @@ public class DaemonConfig {
     /// instance.</summary>
     public Dictionary<string, VendorModelOption[]>? VendorModels { get; set; }
 
-    /// <summary>Fingerprints of each vendor's catalog files, taken before the startup probe; the
-    /// vendor CLI watcher's starting point for them.</summary>
+    /// <summary>Each registered Codex account's launchable models, keyed by registry id. An unregistered
+    /// default has no id, so its catalog is only in <see cref="VendorModels"/>. Replaced by reference,
+    /// like <see cref="VendorModels"/>.</summary>
+    public Dictionary<string, VendorModelOption[]>? VendorModelsByAccount { get; set; }
+
+    /// <summary>Fingerprints of each vendor's catalog files, taken before the startup probe, and of each
+    /// account's, taken before its latest probe; the vendor CLI watcher's starting point for an entry
+    /// it begins watching. Replaced by reference.</summary>
     public IReadOnlyDictionary<string, Services.CatalogPathStat[]>? VendorCatalogBaselines { get; set; }
 
     /// <summary>
@@ -204,6 +237,12 @@ public class DaemonConfig {
         set;
     }
 
+    /// <summary>The host's account registry; null leaves the accounts publisher inert.</summary>
+    public AccountStore? Accounts { get; set; }
+
+    /// <summary>The config directory each account-bearing vendor uses when no account is chosen.</summary>
+    public IReadOnlyDictionary<HarnessId, string> DefaultDirectories { get; set; } = FrozenDictionary<HarnessId, string>.Empty;
+
     /// <summary>The PATH probe resolved at boot, the one the <c>HarnessRegistry</c> is built over. A
     /// configured vendor path is not a harness question, so its resolvers take this.</summary>
     public BinaryProbe Binaries {
@@ -216,28 +255,64 @@ public class DaemonConfig {
     public string ClaudePath { get; set; } = Core.Harness.Claude.ClaudeHarness.CliBinary;
     public string CodexPath  { get; set; } = Core.Harness.Codex.CodexHarness.CliBinary;
 
-    /// <summary>Transport for hosted Codex reviewers: <c>pty</c> (default) or <c>app-server</c>.
-    /// Set via <c>KCAP_CODEX_TRANSPORT</c>. Governs NEW review-flow launches only; interactive
-    /// launches always take the PTY path in this phase. The effective decision (this selection AND
-    /// the version floor) is resolved once into <see cref="CodexAppServerActive"/>.</summary>
-    public string CodexTransport { get; set; } = "pty";
+    /// <summary>The Codex resolution this daemon routes on and advertises. Swapped whole by the
+    /// capability refresh; readers on other threads take the reference once.</summary>
+    internal Harness.Codex.CodexTransportResolution CodexResolution {
+        get => Volatile.Read(ref _codexResolution);
+        set => Volatile.Write(ref _codexResolution, value);
+    }
 
-    /// <summary>Resolved once at startup: true when <see cref="CodexTransport"/> is <c>app-server</c>
-    /// AND the installed Codex meets the app-server version floor. Read by BOTH the launch router and
-    /// the certification advertisement so the advertised policy and the transport used are one fact.
-    /// Never set from config directly.</summary>
-    public bool CodexAppServerActive { get; set; }
+    Harness.Codex.CodexTransportResolution _codexResolution = Harness.Codex.CodexTransportResolution.Unresolved;
 
-    /// <summary>Per-daemon opt-in: also host INTERACTIVE Codex agents over app-server, not just
-    /// unattended reviewers. Requires <see cref="CodexAppServerActive"/> — this widens which launches
-    /// take that transport, it does not select it. Off unless an operator sets
-    /// <c>KCAP_CODEX_APPSERVER_INTERACTIVE</c> on this daemon, so turning it on moves one host.
-    ///
-    /// <para>Scope: INTERACTIVE launches the SERVER dispatches (the web launch dialog). PR review and
-    /// review flows are untouched by this switch — review flows already take app-server wherever it is
-    /// selected, and PR review stays on PTY. `kcap agent start` spawns an attachable terminal through the
-    /// local control socket, which never reaches the runtime factory, so it stays PTY regardless.</para></summary>
-    public bool CodexAppServerInteractive { get; set; }
+    /// <summary>The last resolution a registration carried to the server. A launch that names no
+    /// transport follows this one, since it is what the server dispatched against.</summary>
+    internal Harness.Codex.CodexTransportResolution AcknowledgedCodexResolution {
+        get => Volatile.Read(ref _acknowledgedCodexResolution);
+        set => Volatile.Write(ref _acknowledgedCodexResolution, value);
+    }
+
+    Harness.Codex.CodexTransportResolution _acknowledgedCodexResolution = Harness.Codex.CodexTransportResolution.Unresolved;
+
+    /// <summary>Records that a registration carried <paramref name="sent"/>. Only a newer generation
+    /// moves it, since registrations from different paths can finish out of order.</summary>
+    /// <returns>True when the acknowledgement moved.</returns>
+    internal bool AcknowledgeCodex(Harness.Codex.CodexTransportResolution sent) {
+        while (true) {
+            var current = AcknowledgedCodexResolution;
+            if (sent.Generation <= current.Generation) return false;
+            if (ReferenceEquals(Interlocked.CompareExchange(ref _acknowledgedCodexResolution, sent, current), current)) return true;
+        }
+    }
+
+    public long ServerAcknowledgedCodexGeneration => AcknowledgedCodexResolution.Generation;
+
+    /// <summary>The newest Codex generation a registration attempt carried and failed to deliver. It
+    /// stands for the committed resolution only while that one is still unacknowledged.</summary>
+    internal long FailedCodexGeneration => Volatile.Read(ref _failedCodexGeneration);
+
+    long _failedCodexGeneration;
+
+    /// <returns>True when the failed generation moved.</returns>
+    internal bool CodexRegistrationFailed(Harness.Codex.CodexTransportResolution sent) {
+        while (true) {
+            var current = FailedCodexGeneration;
+            if (sent.Generation <= current) return false;
+            if (Interlocked.CompareExchange(ref _failedCodexGeneration, sent.Generation, current) == current) return true;
+        }
+    }
+
+    /// <summary>Why <c>experimental.json</c> could not be read on the last resolution pass; null when it was.</summary>
+    internal string? ExperimentalSettingsProblem {
+        get => Volatile.Read(ref _experimentalSettingsProblem);
+        set => Volatile.Write(ref _experimentalSettingsProblem, value);
+    }
+
+    string? _experimentalSettingsProblem;
+
+    /// <summary>This daemon's profile's experimental switches, read from disk now. Empty when no
+    /// profile was resolved.</summary>
+    public ExperimentalSettingsRead ReadExperimentalSettings() =>
+        ProfileNameOrNull is { } profile ? new ExperimentalSettingsStore(ConfigRoot).Load(profile) : ExperimentalSettingsRead.Empty;
 
     /// <summary>Seconds an interactive hosted Codex approval (<c>*/requestApproval</c>) waits for the
     /// user before failing closed (deny). Overridable via <c>KCAP_CODEX_APPSERVER_APPROVAL_TIMEOUT_SECONDS</c>.

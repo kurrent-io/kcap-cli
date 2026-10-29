@@ -244,7 +244,8 @@
             <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
             <Setter Property="FontSize" Value="13" />
             <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Padding" Value="14,8" />
+            <!-- Six tabs at the default text size fit one row of the fixed-width Settings window. -->
+            <Setter Property="Padding" Value="10,8" />
         </Style>
         <Style Selector="TabItem.kcapSettingsTab /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="Transparent" />

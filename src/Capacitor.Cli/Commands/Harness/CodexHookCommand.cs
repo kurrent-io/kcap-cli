@@ -38,7 +38,7 @@ namespace Capacitor.Cli.Commands.Harness;
 ///                       bridge errors: deny + exit nonzero). Otherwise the approval policy and judge
 ///                       answer allow or deny; failing that, POST /hooks/permission-record
 ///                       (fire-and-forget; CLI emits no decision so Codex's own prompt takes over).
-///   UserPromptSubmit  → swallowed (v1 — neither vendor consumes them)
+///   UserPromptSubmit  → swallowed (neither vendor consumes them)
 ///   PreToolUse        → a matching deny rule denies the call, in every launch mode; else nothing
 ///   PostToolUse       → swallowed (a hosted agent's tool-settled notice still goes to its daemon)
 /// </remarks>
@@ -48,7 +48,7 @@ sealed class CodexHookCommand(
         GitProviderRouter router, WorkingDirectory workdir) {
     readonly SessionStartAudience audience = SessionStartAudience.From(hosted);
 
-    readonly AgentHookPoster _poster = new(config, profiles, http, watchers, clock.Time);
+    AgentHookPoster Poster(CodexHookEnvironment env) => new(config, profiles, http, watchers, clock.Time, env.Stderr);
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -79,8 +79,8 @@ sealed class CodexHookCommand(
     ///
     /// <para><b>Absent-fragment invariant:</b> with <paramref name="fragment"/> null the adapter
     /// returns the byte-for-byte <see cref="SessionScopedOutputJson"/> handshake, so every no-memory
-    /// path (opt-out, exclusion, provider failure, budget exhaustion) is indistinguishable from
-    /// pre-memory behaviour. <c>CodexSessionStartMemoryTests</c> pins that equality.</para>
+    /// path (opt-out, exclusion, provider failure, budget exhaustion) writes the same bytes.
+    /// <c>CodexSessionStartMemoryTests</c> pins that equality.</para>
     ///
     /// <para>The payload is serialized into a string BEFORE the first byte reaches
     /// <paramref name="writer"/>, so a renderer/serializer fault cannot emit a partial rich object
@@ -91,18 +91,9 @@ sealed class CodexHookCommand(
         string payload;
 
         try {
-            // No fragment → the pre-existing constant, deliberately NOT the shared adapter's
-            // rendering of the same envelope. Both encode `{"continue":true}`, but the adapter
-            // appends a trailing newline to every envelope it renders (see its `json + "\n"`),
-            // which Claude and Cursor already ship. Adopting it here would change the bytes Codex
-            // receives on EVERY no-memory SessionStart — opt-out, exclusion, provider failure,
-            // budget exhaustion — for no gain. Byte-identity on that path is an acceptance
-            // criterion, so the constant wins; the adapter still owns the only shape that is
-            // actually new (the fragment-bearing one), where the trailing newline matches the
-            // sibling harnesses.
-            // Byte-identity on the NO-CONTENT path (no memory fragment AND no nudge) is an acceptance
-            // criterion, so the constant still wins there. A nudge alone routes through the adapter
-            // (with the trailing newline the fragment-bearing shape already ships).
+            // With no fragment and no nudge, the constant rather than the shared adapter: the adapter
+            // appends a trailing newline, and the no-content handshake keeps the exact bytes the
+            // handshake test pins. Anything with content goes through the adapter like every harness.
             payload = fragment is null && string.IsNullOrWhiteSpace(workItemsNudge)
                 ? SessionScopedOutputJson
                 : SessionStartMemoryOutputAdapters.Render(HarnessId.Codex, fragment, workItemsNudge);
@@ -114,7 +105,7 @@ sealed class CodexHookCommand(
     }
 
     /// <summary>
-    /// Task 5: enforces the Codex stdout-first contract — <paramref name="writeStdout"/>
+    /// Enforces the Codex stdout-first contract — <paramref name="writeStdout"/>
     /// (the synchronous handshake write) always completes before <paramref name="postStdoutWork"/>
     /// (the best-effort watcher-ensure + background spool drain) even starts. The parent Codex
     /// process blocks on the hook's stdout, so a large/unreachable spool backlog sitting behind
@@ -200,7 +191,9 @@ sealed class CodexHookCommand(
         }
     }
 
-    public async Task<int> Handle(TextReader stdin) {
+    public Task<int> Handle(TextReader stdin) => Handle(stdin, CodexHookEnvironment.FromProcess(Environment.GetEnvironmentVariable));
+
+    internal async Task<int> Handle(TextReader stdin, CodexHookEnvironment env) {
         var body    = await stdin.ReadToEndAsync();
 
         JsonNode? node;
@@ -218,21 +211,17 @@ sealed class CodexHookCommand(
 
         if (string.IsNullOrWhiteSpace(eventName)) return 0;
 
-        // KCAP_SKIP=1 marks a kcap-launched headless Codex invocation
-        // (CodexCliRunner sets it). Suppress all server / watcher / git
-        // enrichment work so we don't forward the nested session's hooks
-        // back into kcap, but still honour Codex's stdout contract — the
-        // Stop / SessionStart parsers reject empty output, and a missing
-        // PermissionRequest response leaves Codex hung.
-        if (Environment.GetEnvironmentVariable("KCAP_SKIP") is "1") {
+        // A kcap-launched headless Codex records nothing, but Codex's stdout contract still holds: its
+        // Stop / SessionStart parsers reject empty output, and a missing PermissionRequest answer hangs it.
+        if (env.Skip) {
             switch (eventName) {
                 case "SessionStart" or "Stop":
-                    WriteSessionScopedOutput(Console.Out);
+                    WriteSessionScopedOutput(env.Stdout);
                     break;
                 case "PermissionRequest":
                     // Empty hookSpecificOutput → Codex falls back to its
                     // own approval prompt. See HandlePermissionRequestStub.
-                    Console.Write("{}");
+                    env.Stdout.Write("{}");
                     break;
             }
             return 0;
@@ -256,19 +245,14 @@ sealed class CodexHookCommand(
         await NotifyToolSettledAsync(node, eventName);
 
         if (eventName switch { "Stop" => true, "UserPromptSubmit" or "PreToolUse" => false, _ => (bool?) null } is { } waiting)
-            await DaemonBridgeRelay.NotifyInputWaitAsync(hosted, "codex", TryGetString(node, "session_id"), TryGetString(node, "cwd"), waiting, clock.Budget(Ceiling).Remaining);
+            await DaemonBridgeRelay.NotifyInputWaitAsync(hosted, "codex", TryGetString(node, "session_id"), TryGetString(node, "cwd"), waiting, clock.Budget(Ceiling));
 
-        // Mirror the Claude path: if the user ran `kcap disable`, skip every
-        // server POST and the watcher restart. Without this check the next Codex
-        // Stop hook would re-enliven the watcher and re-send transcript data for
+        // After `kcap disable`, no POST and no watcher restart: the next Stop would otherwise re-send
         // a session whose data was just deleted server-side.
         var disabledSessionId = TryGetString(node, "session_id");
         if (disabledSessionId is not null && DisabledSessions.IsDisabled(disabledSessionId, config)) {
-            // Emit the session-scoped JSON Codex's Stop/SessionStart parsers expect,
-            // then skip dispatch. (Claude's disabled branch also returns immediately
-            // — see Program.cs around line 593.)
             if (eventName is "Stop" or "SessionStart") {
-                WriteSessionScopedOutput(Console.Out);
+                WriteSessionScopedOutput(env.Stdout);
             }
             return 0;
         }
@@ -288,19 +272,19 @@ sealed class CodexHookCommand(
 
         if (PathExclusion.IsOutOfScope(TryGetString(node, "cwd"), activeProfile?.AllowedPaths,
                                       activeProfile?.ExcludedPaths, home)) {
-            EmitFallbackOutput(eventName);
+            EmitFallbackOutput(env, eventName);
             return 0;
         }
 
         try {
             return eventName switch {
-                "SessionStart"      => await HandleSessionStart(node, activeProfile, clock.Budget(Ceiling)),
-                "Stop"              => await HandleStop(node),
-                "PermissionRequest" => await HandlePermissionRequest(node),
-                "PreToolUse"        => await HandlePreToolUse(node),
+                "SessionStart"      => await HandleSessionStart(node, activeProfile, clock.Budget(Ceiling), env),
+                "Stop"              => await HandleStop(node, env),
+                "PermissionRequest" => await HandlePermissionRequest(node, env),
+                "PreToolUse"        => await HandlePreToolUse(node, env),
                 "UserPromptSubmit"
-                  or "PostToolUse"  => 0,  // v1: swallow informational events
-                _                   => 0   // unknown — silently ignore
+                  or "PostToolUse"  => 0,
+                _                   => 0
             };
         } catch (Exception ex) {
             // Fail open, but NOT by leaving stdout empty: unlike Claude, Codex's
@@ -310,8 +294,8 @@ sealed class CodexHookCommand(
             // CLI's top-level guard would exit 0 with empty stdout and Codex would
             // report "invalid hook output". Emit the
             // event-appropriate fallback here first, and record for diagnosis.
-            CrashReporter.Record(config, "hook", ex, clock.Time);
-            EmitFallbackOutput(eventName);
+            CrashReporter.Record(config, "hook", ex, clock.Time, env.Stderr);
+            EmitFallbackOutput(env, eventName);
             return 0;
         }
     }
@@ -324,7 +308,7 @@ sealed class CodexHookCommand(
         var sessionId  = TryGetString(node, "session_id");
         var cwd        = TryGetString(node, "cwd");
         var subagentId = SubagentIdOf(node);
-        var budget     = clock.Budget(Ceiling).Remaining;
+        var budget     = clock.Budget(Ceiling);
         var sentAt     = clock.Time.GetUtcNow().ToUnixTimeMilliseconds();
 
         return eventName switch {
@@ -346,21 +330,21 @@ sealed class CodexHookCommand(
     // PermissionRequest (so Codex's own approval prompt takes over), nothing for
     // the swallowed informational events. Used both when we intentionally skip
     // work (exclusion) and as the fail-open fallback when a handler throws.
-    static void EmitFallbackOutput(string eventName) {
+    static void EmitFallbackOutput(CodexHookEnvironment env, string eventName) {
         switch (eventName) {
             case "SessionStart" or "Stop":
                 // Codex's SessionStart/Stop parser rejects empty stdout.
-                WriteSessionScopedOutput(Console.Out);
+                WriteSessionScopedOutput(env.Stdout);
                 break;
             case "PermissionRequest":
                 // Empty hookSpecificOutput → Codex's local approval prompt
                 // takes over (matches the KCAP_SKIP=1 branch above).
-                Console.Write("{}");
+                env.Stdout.Write("{}");
                 break;
         }
     }
 
-    async Task<int> HandleSessionStart(JsonNode node, Profile? activeProfile, HookBudget budget) {
+    async Task<int> HandleSessionStart(JsonNode node, Profile? activeProfile, HookBudget budget, CodexHookEnvironment env) {
         // Stamp the user's configured default visibility onto the payload
         // BEFORE git enrichment so it survives the JsonString round-trip.
         // /hooks/session-start/codex shares SessionStartHook with the Claude
@@ -394,7 +378,7 @@ sealed class CodexHookCommand(
 
             if (excludedSessionId is not null) DisabledSessions.Mark(excludedSessionId, config);
 
-            WriteSessionScopedOutput(Console.Out);
+            WriteSessionScopedOutput(env.Stdout);
             return 0;
         }
 
@@ -423,76 +407,55 @@ sealed class CodexHookCommand(
             budget.Remaining);
 
         var spool = new HookSpool(config, clock.Time);
-        var outcome = await _poster.PostOrSpoolAsync("session-start/codex", enriched, "codex-hook", spool,
+        var outcome = await Poster(env).PostOrSpoolAsync("session-start/codex", enriched, "codex-hook", spool,
             sessionId: sessionId ?? "", route: "session-start/codex");
 
         // After the post, so a fault here cannot lose the session-start record; before the stdout handshake, because
         // Codex runs its first tool once that is written.
         if (sessionId is not null) FreezePolicySnapshot(sessionId, TryGetString(enrichedNode, "workspace_root"));
 
-        // Codex blocks on this hook's stdout — satisfy the handshake contract FIRST, and only
-        // then run the best-effort watcher-ensure and the global spool drain. Routed through
-        // RunSessionStartHandshakeForTest so the ordering is provable in isolation (see
-        // CodexStdoutContractTests): a large/unreachable spool backlog behind postStdoutWork can
-        // never delay or gate the write below.
-        // Resolve the optional memory fragment BEFORE entering the handshake, so the ordering seam
-        // still receives a synchronous write: the fragment is already a value by the time
-        // writeStdout runs, and the post-stdout work remains strictly after it.
-        //
-        // The handshake now runs on EVERY outcome, including a permanent POST rejection. It used to be
-        // skipped by an early `return 1` above, which left Codex — a host that BLOCKS on this hook's
-        // stdout — with zero bytes: no `continue`, no context, just a wait for its hook timeout. The
-        // recording outcome must not decide whether the host can proceed.
+        // Codex blocks on this hook's stdout, so the handshake goes first, on every outcome a
+        // permanent POST rejection included, and the watcher and spool drain only after it. The
+        // fragment is resolved beforehand so the write itself stays synchronous.
         var fragment = await AwaitMemoryFragmentAsync(memoryTask, budget);
 
         // The static work-items nudge, resolved (availability-gated + opt-out) independently
         // of the lease-driven memory/guidelines fragment and merged only at the output layer.
         var workItemsNudge = HarnessNudgeEmitter.Combine(
-            SessionNudges.Resolve(HarnessId.Codex, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience),
+            SessionNudges.Resolve(HarnessId.Codex, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience, TryGetString(enrichedNode, "cwd"), home),
             HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true || !audience.GetsOnboarding, config, harnesses, clock.Time),
             FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true || !audience.GetsOnboarding, config, HarnessId.Codex, harnesses));
 
         await RunSessionStartHandshakeForTest(
-            writeStdout: () => WriteSessionStartOutput(Console.Out, fragment, workItemsNudge),
-            postStdoutWork: () => RunPostStdoutWork(spool, enrichedNode, sessionId, outcome));
+            writeStdout: () => WriteSessionStartOutput(env.Stdout, fragment, workItemsNudge),
+            postStdoutWork: () => RunPostStdoutWork(spool, enrichedNode, sessionId, outcome, env));
 
-        // Non-zero on a permanent rejection is preserved — it is the signal the session was not
-        // recorded — but it is now reported AFTER the handshake rather than instead of it. The watcher
-        // still does not spawn: RunPostStdoutWork gates that on ShouldSpawnAfter(outcome).
+        // Non-zero says the session was not recorded; RunPostStdoutWork spawns no watcher for it.
         return outcome == HookPostOutcome.Failed ? 1 : 0;
     }
 
-    // Everything here runs AFTER Codex's stdout handshake and is best-effort: spawning the
-    // watcher (when the lifecycle POST was delivered or durably spooled) and kicking off the
-    // global lifecycle/transcript spool drain in the background. Neither may precede or block on
-    // the stdout write in HandleSessionStart. The drain is fire-and-forget (never awaited) — its
-    // own internal throttle/budget/try-catch make it safe to abandon if the process exits first;
-    // reliable delivery for Codex sessions is carried by the daemon's periodic drain pass,
-    // not by this opportunistic best-effort attempt.
-    // guard-1: an envelope-sourced hosted session's transcript comes from the daemon, so spawning a
-    // rollout watcher here would double-ingest it. Marker absent on every other session.
-    static bool IsEnvelopeSourcedHostedSession() =>
-        Environment.GetEnvironmentVariable("KCAP_HOSTED_APPSERVER") is "1";
-
+    // Runs after Codex's stdout handshake and must never delay it. The spool drain is
+    // fire-and-forget: the daemon's periodic drain carries reliable delivery. An envelope-sourced
+    // hosted session's transcript comes from the daemon, so a rollout watcher would double-ingest it.
     Task RunPostStdoutWork(
-            HookSpool spool, JsonNode? enrichedNode, string? sessionId, HookPostOutcome outcome) {
+            HookSpool spool, JsonNode? enrichedNode, string? sessionId, HookPostOutcome outcome, CodexHookEnvironment env) {
         var transcriptSpool = new TranscriptSpool(config, clock.Time);
 
-        _ = _poster.DrainSpoolsAsync(spool, transcriptSpool, sessionId);
+        _ = Poster(env).DrainSpoolsAsync(spool, transcriptSpool, sessionId);
 
         if (!AgentHookPoster.ShouldSpawnAfter(outcome, Url)) return Task.CompletedTask;
 
         var transcript = TryGetString(enrichedNode, "transcript_path");
         var cwd        = TryGetString(enrichedNode, "cwd");
 
-        return sessionId is not null && transcript is not null && !IsEnvelopeSourcedHostedSession()
+        return sessionId is not null && transcript is not null && !env.HostedAppServer
             ? watchers.EnsureWatcherRunning(sessionId, transcript,
                 agentId: null, sessionIdOverride: null, cwd: cwd,
-                skipTitle: false, vendor: "codex")
+                skipTitle: false, vendor: "codex", stderr: env.Stderr)
             : Task.CompletedTask;
     }
 
-    async Task<int> HandleStop(JsonNode node) {
+    async Task<int> HandleStop(JsonNode node, CodexHookEnvironment env) {
         // Codex 'Stop' fires at every turn end, NOT session end. Session-end
         // is fired by the watcher's parent-PID monitor in WatchCommand.cs
         // when the codex process actually exits — that path POSTs
@@ -510,12 +473,12 @@ sealed class CodexHookCommand(
         var cwd        = TryGetString(node, "cwd");
 
         if (sessionId is not null && transcript is not null) {
-            // Guard-1: skip the watcher restart for an envelope-sourced hosted session (the daemon owns
-            // its transcript); the idle-marker stop POST still fires so the "working" indicator clears.
-            if (!IsEnvelopeSourcedHostedSession()) {
+            // The daemon owns an envelope-sourced hosted session's transcript; the idle-marker stop
+            // POST still fires so the "working" indicator clears.
+            if (!env.HostedAppServer) {
                 await watchers.EnsureWatcherRunning(sessionId, transcript,
                     agentId: null, sessionIdOverride: null, cwd: cwd,
-                    skipTitle: false, vendor: "codex"
+                    skipTitle: false, vendor: "codex", stderr: env.Stderr
                 );
             }
 
@@ -524,7 +487,7 @@ sealed class CodexHookCommand(
 
         // Codex's stop-hook output parser rejects empty stdout as
         // "invalid stop hook JSON output". Emit the schema default explicitly.
-        WriteSessionScopedOutput(Console.Out);
+        WriteSessionScopedOutput(env.Stdout);
         return 0;
     }
 
@@ -540,48 +503,48 @@ sealed class CodexHookCommand(
 
     /// <summary>A deny rule binds a call Codex would run unasked, in every launch mode: a watched session, a
     /// daemon-hosted terminal, and the hosted app-server, where this hook also fires.</summary>
-    async Task<int> HandlePreToolUse(JsonNode node) {
+    async Task<int> HandlePreToolUse(JsonNode node, CodexHookEnvironment env) {
         if (node is JsonObject payload && TryGetString(node, "session_id") is { } sessionId)
-            await new CodexPolicySeam(config, clock.Time).HandlePreToolUseAsync(payload, sessionId, Console.Out);
+            await new CodexPolicySeam(config, clock.Time).HandlePreToolUseAsync(payload, sessionId, env.Stdout);
         return 0;
     }
 
-    async Task<int> HandlePermissionRequest(JsonNode node) {
+    async Task<int> HandlePermissionRequest(JsonNode node, CodexHookEnvironment env) {
         // An envelope-sourced hosted session answers approvals over the app-server protocol itself:
         // Codex's requestApproval reaches the daemon's CodexApprovalBridge, which surfaces it to the
         // user and fails closed on its own deadline. Bouncing this hook to the daemon bridge would
         // answer first, through a channel with no deadline, and that decline would never come.
-        if (IsEnvelopeSourcedHostedSession())
-            return YieldToCodex();
+        if (env.HostedAppServer)
+            return YieldToCodex(env);
 
         return hosted.Bridge switch {
-            DaemonBridge.Loopback bridge => await HandlePermissionRequestViaBridge(bridge.BaseUrl, node),
-            DaemonBridge.NotLoopback bad => RefuseBridge(bad.Value),
-            _                            => await HandlePermissionRequestStub(node),
+            DaemonBridge.Loopback bridge => await HandlePermissionRequestViaBridge(bridge.BaseUrl, node, env),
+            DaemonBridge.NotLoopback bad => RefuseBridge(env, bad.Value),
+            _                            => await HandlePermissionRequestStub(node, env),
         };
     }
 
     /// <summary>Empty hookSpecificOutput — Codex reads it as "no decision" and runs its own approval
     /// flow (codex-rs/hooks/src/events/permission_request.rs).</summary>
-    static int YieldToCodex() {
-        Console.Write("{}");
+    static int YieldToCodex(CodexHookEnvironment env) {
+        env.Stdout.Write("{}");
         return 0;
     }
 
     /// A named bridge this hook may not post to is a misconfiguration, not a terminal session: the
     /// stub's silent fallback to Codex's own prompt would hide it, and this hook fails closed.
-    static int RefuseBridge(string daemonUrl) {
-        Console.Error.WriteLine(
+    static int RefuseBridge(CodexHookEnvironment env, string daemonUrl) {
+        env.Stderr.WriteLine(
             $"[kcap] codex-hook permission-request: {HostedAgent.BridgeUrlVar} must be http loopback, got: {daemonUrl}");
 
-        return EmitDenyAndExitNonzero();
+        return EmitDenyAndExitNonzero(env);
     }
 
-    async Task<int> HandlePermissionRequestStub(JsonNode node) {
+    async Task<int> HandlePermissionRequestStub(JsonNode node, CodexHookEnvironment env) {
         if (node is JsonObject payload && TryGetString(node, "session_id") is { } sessionId) {
             var budget = clock.Budget(Ceiling).Remaining;
             var seam   = new CodexPolicySeam(config, clock.Time, PolicyJudgeGateway.ForHook(http, Url, clock.Time));
-            if (await seam.HandlePermissionRequestAsync(payload, sessionId, Console.Out,
+            if (await seam.HandlePermissionRequestAsync(payload, sessionId, env.Stdout,
                     budget < CodexPolicySeam.JudgeBudget ? budget : CodexPolicySeam.JudgeBudget) == SeamAnswer.Answered)
                 return 0;
         }
@@ -606,10 +569,10 @@ sealed class CodexHookCommand(
         // PostBestEffortAsync for the shared swallow-all/cap behavior.
         await PostBestEffortAsync("permission-record", node, TimeSpan.FromSeconds(2));
 
-        return YieldToCodex();
+        return YieldToCodex(env);
     }
 
-    async Task<int> HandlePermissionRequestViaBridge(string bridgeBase, JsonNode node) {
+    async Task<int> HandlePermissionRequestViaBridge(string bridgeBase, JsonNode node, CodexHookEnvironment env) {
         using var client = http.Loopback();
         // The daemon holds the request open until the human decides, and Codex sets no timeout of
         // its own on this hook, so the wait is theirs to end rather than the client's.
@@ -621,17 +584,17 @@ sealed class CodexHookCommand(
             using var resp    = await client.PostAsync($"{bridgeBase}/codex/permission-request", content);
 
             if (!resp.IsSuccessStatusCode) {
-                Console.Error.WriteLine(
+                env.Stderr.WriteLine(
                     $"[kcap] codex-hook permission-request bridge: HTTP {(int)resp.StatusCode}");
-                return EmitDenyAndExitNonzero();
+                return EmitDenyAndExitNonzero(env);
             }
 
             var body = await resp.Content.ReadAsStringAsync();
-            Console.Write(body);
+            env.Stdout.Write(body);
             return 0;
         } catch (Exception ex) {
-            Console.Error.WriteLine($"[kcap] codex-hook permission-request bridge error: {ex.Message}");
-            return EmitDenyAndExitNonzero();
+            env.Stderr.WriteLine($"[kcap] codex-hook permission-request bridge error: {ex.Message}");
+            return EmitDenyAndExitNonzero(env);
         }
     }
 
@@ -644,7 +607,7 @@ sealed class CodexHookCommand(
         return payload;
     }
 
-    static int EmitDenyAndExitNonzero() {
+    static int EmitDenyAndExitNonzero(CodexHookEnvironment env) {
         var response = new JsonObject {
             ["hookSpecificOutput"] = new JsonObject {
                 ["hookEventName"] = "PermissionRequest",
@@ -652,7 +615,7 @@ sealed class CodexHookCommand(
             }
         };
 
-        Console.Write(response.ToJsonString());
+        env.Stdout.Write(response.ToJsonString());
         return 1;
     }
 

@@ -220,6 +220,23 @@ public class PiRpcHostedAgentRuntimeTests {
     }
 
     [Test]
+    public async Task A_dispatched_prompt_stamps_its_dispatch_on_its_user_message_and_its_echo_adds_none() {
+        var (rt, proc) = NewRuntime();
+        await using var _ = rt;
+        var dispatch = Guid.NewGuid();
+
+        await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
+        await rt.SendDispatchedInputAsync("do the thing", dispatch, waitForWrite: false).WaitAsync(HangGuard);
+        proc.Push(UserMessage("do the thing"));
+        proc.Push(AssistantText("on it"));
+
+        var sent = await NextEnvelopeAsync(rt);
+        await Assert.That(sent.Kind).IsEqualTo(AcpEventKind.UserMessage);
+        await Assert.That(sent.DispatchId).IsEqualTo(dispatch);
+        await Assert.That((await NextEnvelopeAsync(rt)).Kind).IsEqualTo(AcpEventKind.AssistantText);
+    }
+
+    [Test]
     public async Task A_rejected_prompt_emits_a_system_note() {
         var (rt, proc) = NewRuntime();
         await using var _ = rt;

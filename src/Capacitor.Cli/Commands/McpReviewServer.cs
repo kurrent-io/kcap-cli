@@ -100,7 +100,7 @@ sealed class McpReviewServer(ConfigRoot config, ProfileContext profiles, TokenSt
         await using var writer = new StreamWriter(stdout, new UTF8Encoding(false));
         writer.AutoFlush = true;
 
-        await McpStdioLoop.RunAsync(reader, writer, TimedDispatchToolCallAsync, (id, method, request) => method switch {
+        await McpStdioLoop.RunAsync(reader, writer, tools, TimedDispatchToolCallAsync, (id, method, request) => method switch {
             "initialize" => BuildInitializeResponse(id, request),
             "tools/list" => BuildToolsListResponse(id, tools),
             _            => McpProtocol.TryHandleStandardMethod(method, id)
@@ -397,6 +397,8 @@ record McpToolsResult(McpTool[] Tools);
 
 record McpTool(string Name, string Description, McpInputSchema InputSchema, McpToolAnnotations Annotations);
 
+// No additionalProperties keyword: Gemini's function declarations reject it, and the stdio loop refuses an
+// undeclared argument on every host anyway.
 record McpInputSchema(string Type, Dictionary<string, McpSchemaProperty> Properties, string[] Required);
 
 // Items was added when the work-items server declared the first `array`-typed properties in any of

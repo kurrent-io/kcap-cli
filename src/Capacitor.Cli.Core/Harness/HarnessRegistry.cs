@@ -33,10 +33,12 @@ namespace Capacitor.Cli.Core.Harness;
 public sealed class HarnessRegistry : IReadOnlyList<IHarness>, IHarnessDetection {
     readonly IReadOnlyList<IHarness> _harnesses;
     readonly BinaryProbe             _binaries;
+    readonly DesktopAppProbe         _apps;
 
-    HarnessRegistry(IReadOnlyList<IHarness> harnesses, BinaryProbe binaries) {
+    HarnessRegistry(IReadOnlyList<IHarness> harnesses, BinaryProbe binaries, DesktopAppProbe apps) {
         _harnesses = harnesses;
         _binaries  = binaries;
+        _apps      = apps;
     }
 
     /// <summary>Every harness's identity, reached through each type's own statics rather than an
@@ -82,16 +84,20 @@ public sealed class HarnessRegistry : IReadOnlyList<IHarness>, IHarnessDetection
             MistralVibeHarness.FromEnvironment(home),
             GrokHarness.FromEnvironment(home),
             MuseHarness.FromEnvironment(home),
-        ], binaries);
+        ], binaries, DesktopAppProbe.FromEnvironment(home));
     }
 
     /// <summary>Over harnesses resolved elsewhere — a test's, or a subset.</summary>
     public static HarnessRegistry Over(BinaryProbe binaries, params IHarness[] harnesses) =>
-        new(harnesses, binaries);
+        new(harnesses, binaries, DesktopAppProbe.None);
+
+    /// <summary>Over harnesses resolved elsewhere, with desktop apps looked for under <paramref name="apps"/>.</summary>
+    public static HarnessRegistry Over(BinaryProbe binaries, DesktopAppProbe apps, params IHarness[] harnesses) =>
+        new(harnesses, binaries, apps);
 
     /// <summary>The same vendors, looked for on another search path. What a GUI launch needs: it
     /// inherits only the launcher's PATH, and spawns through the login shell's.</summary>
-    public HarnessRegistry Searching(BinaryProbe binaries) => new(_harnesses, binaries);
+    public HarnessRegistry Searching(BinaryProbe binaries) => new(_harnesses, binaries, _apps);
 
     /// <summary>What this label says, for a caller holding an id rather than a harness.</summary>
     public static string LabelOf(HarnessId id) => Identities.First(i => i.Id == id).Label;
@@ -113,18 +119,19 @@ public sealed class HarnessRegistry : IReadOnlyList<IHarness>, IHarnessDetection
             ? harness
             : throw new InvalidOperationException($"Harness {TSelf.Id} in this registry is not a {typeof(TSelf).Name}.");
 
-    /// <summary>What the launch and user-data signals say about this vendor, asked now. The two
-    /// stay apart: the first-run screen names the one it saw.</summary>
+    /// <summary>What each detection signal says about this vendor, asked now. They stay apart: the
+    /// setup screens name the one they saw.</summary>
     public DetectedAgent Detect(HarnessId id) =>
         ById(id) is { } harness
             ? new DetectedAgent(
                 BinaryFound:        harness.Signals.CanLaunch(_binaries),
-                InstallSignalFound: harness.Signals.HasUserData)
+                InstallSignalFound: harness.Signals.HasUserData,
+                DesktopAppFound:    harness.Signals.HasDesktopApp(_apps))
             // An id this registry never carried — a stale flag, a server payload — reads as absent
             // rather than throwing: neither must take a command down.
             : DetectedAgent.None;
 
-    /// <summary>Whether either signal found this vendor.</summary>
+    /// <summary>Whether any signal found this vendor.</summary>
     public bool Detected(HarnessId id) => Detect(id).Detected;
 
     /// <summary>Full path to <paramref name="id"/>'s <see cref="IHarness.CliBinary"/> on this
@@ -132,6 +139,25 @@ public sealed class HarnessRegistry : IReadOnlyList<IHarness>, IHarnessDetection
     /// IDE and no <c>kiro-cli</c> must resolve to null, never to a GUI launcher.</summary>
     public string? ResolveExecutable(HarnessId id) =>
         ById(id) is { } harness ? _binaries.Resolve(harness.CliBinary) : null;
+
+    /// <summary><see cref="ResolveExecutable"/>, else the CLI the vendor's desktop app bundles. For a
+    /// caller about to spawn the CLI; one comparing search paths keeps to the PATH-only answer.</summary>
+    public string? ResolveLaunchable(HarnessId id) =>
+        ResolveExecutable(id) ?? ById(id)?.Signals.FindBundledCli(_apps);
+
+    /// <summary>
+    /// What to spawn for a configured <paramref name="command"/>: the command itself, unless it is the
+    /// vendor's bare default name and that is not on the search path, when the desktop app's bundled
+    /// CLI stands in. A path the operator configured is never second-guessed. Asked per launch, since
+    /// a bundled CLI's path can change with each app update.
+    /// </summary>
+    public string LaunchCommand(HarnessId id, string command) =>
+        ById(id) is { } harness
+     && string.Equals(command, harness.CliBinary, StringComparison.Ordinal)
+     && !_binaries.Finds(command)
+     && harness.Signals.FindBundledCli(_apps) is { } bundled
+            ? bundled
+            : command;
 
     public int      Count           => _harnesses.Count;
     public IHarness this[int index] => _harnesses[index];

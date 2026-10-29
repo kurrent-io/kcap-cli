@@ -230,7 +230,10 @@ public class PathShimInstallerTests {
         var target = tmp.PathTo("target-cli");
         var runner = new FakeProcessRunner();
         runner.Enqueue(new ProcessResult(0, "", "", false));
-        var probe = new FakeLoginShellProbe { KcapOnPathBehavior = _ => Task.FromResult<bool?>(true) };
+        var probe = new FakeLoginShellProbe {
+            KcapOnPathBehavior = _ => Task.FromResult<bool?>(true),
+            KcapPathBehavior = _ => Task.FromResult<string?>(dest),
+        };
         var installer = new PathShimInstaller(runner, probe);
 
         var result = await Install(installer, dest, target, CancellationToken.None);
@@ -315,7 +318,10 @@ public class PathShimInstallerTests {
         File.WriteAllText(target, "cli");
         File.CreateSymbolicLink(dest, target);
         var runner = new FakeProcessRunner();
-        var probe = new FakeLoginShellProbe { KcapOnPathBehavior = _ => Task.FromResult<bool?>(true) };
+        var probe = new FakeLoginShellProbe {
+            KcapOnPathBehavior = _ => Task.FromResult<bool?>(true),
+            KcapPathBehavior = _ => Task.FromResult<string?>(dest),
+        };
         var installer = new PathShimInstaller(runner, probe);
 
         var result = await Install(installer, dest, target, CancellationToken.None);
@@ -339,7 +345,10 @@ public class PathShimInstallerTests {
         File.WriteAllText(target, "cli");
         File.CreateSymbolicLink(dest, target);
         var runner = new FakeProcessRunner();
-        var probe = new FakeLoginShellProbe { KcapOnPathBehavior = _ => Task.FromResult<bool?>(true) };
+        var probe = new FakeLoginShellProbe {
+            KcapOnPathBehavior = _ => Task.FromResult<bool?>(true),
+            KcapPathBehavior = _ => Task.FromResult<string?>(dest),
+        };
         var installer = new PathShimInstaller(runner, probe);
 
         var result = await Install(installer, dest, target, CancellationToken.None);
@@ -362,7 +371,8 @@ public class PathShimInstallerTests {
         runner.Enqueue(new ProcessResult(0, "", "", false));
         var probe = new FakeLoginShellProbe {
             KcapOnPathBehavior = _ => Task.FromResult<bool?>(false), // the stale, already-cached pre-install answer
-            KcapOnPathFreshBehavior = _ => Task.FromResult<bool?>(true), // the real post-install state
+            KcapOnPathFreshBehavior = _ => Task.FromResult<bool?>(true),
+            KcapPathFreshBehavior = _ => Task.FromResult<string?>(dest), // the real post-install state
         };
         var installer = new PathShimInstaller(runner, probe);
 
@@ -385,6 +395,7 @@ public class PathShimInstallerTests {
         var probe = new FakeLoginShellProbe {
             KcapOnPathBehavior = _ => Task.FromResult<bool?>(false),
             KcapOnPathFreshBehavior = _ => Task.FromResult<bool?>(true),
+            KcapPathFreshBehavior = _ => Task.FromResult<string?>(dest),
         };
         var installer = new PathShimInstaller(runner, probe);
 
@@ -491,6 +502,302 @@ public class PathShimInstallerTests {
         await Assert.That(result.Outcome).IsEqualTo(ShimOutcome.Cancelled);
         await Assert.That(new FileInfo(Path.Combine(localBin, "kcap")).Exists).IsFalse();
         await Assert.That(runner.Calls.Count).IsEqualTo(1);
+    }
+
+    // --- Without admin rights ---
+
+    [Test]
+    public async Task InstallAsync_without_admin_links_into_local_bin_and_adds_the_profile_line() {
+        Skip.When(OperatingSystem.IsWindows(), "macOS lstat semantics");
+
+        using var tmp = new TempDir();
+        var home = new UserHome(tmp.Path);
+        var target = tmp.CreateFile("target-cli");
+        var runner = new FakeProcessRunner();
+        var probe = new FakeLoginShellProbe {
+            KcapOnPathBehavior = _ => Task.FromResult<bool?>(true),
+            KcapPathBehavior = _ => Task.FromResult<string?>(tmp.PathTo(".local", "bin", "kcap")),
+        };
+        var installer = new PathShimInstaller(runner, probe, home: home, profile: new ShellProfile(home, "/bin/zsh"),
+            mayElevate: _ => Task.FromResult(false));
+
+        var result = await Install(installer, tmp.PathTo("admin-kcap"), target, CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(ShimOutcome.Installed);
+        await Assert.That(new FileInfo(tmp.PathTo(".local", "bin", "kcap")).LinkTarget).IsEqualTo(target);
+        await Assert.That(File.ReadAllText(tmp.PathTo(".zprofile"))).Contains(ShellProfile.Begin);
+        await Assert.That(runner.Calls).IsEmpty();
+    }
+
+    [Test]
+    public async Task InstallAsync_with_admin_keeps_the_prompt_and_leaves_the_profile_alone() {
+        Skip.When(OperatingSystem.IsWindows(), "macOS lstat semantics");
+
+        using var tmp = new TempDir();
+        var home = new UserHome(tmp.Path);
+        var target = tmp.CreateFile("target-cli");
+        var runner = new FakeProcessRunner();
+        runner.Enqueue(new ProcessResult(1, "", "execution error: User canceled. (-128)", false));
+        var installer = new PathShimInstaller(runner, new FakeLoginShellProbe(), home: home,
+            profile: new ShellProfile(home, "/bin/zsh"), mayElevate: _ => Task.FromResult(true));
+
+        var result = await Install(installer, tmp.PathTo("admin-kcap"), target, CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(ShimOutcome.Cancelled);
+        await Assert.That(runner.Calls.Count).IsEqualTo(1);
+        await Assert.That(File.Exists(tmp.PathTo(".zprofile"))).IsFalse();
+    }
+
+    [Test]
+    public async Task InstallAsync_without_admin_never_replaces_another_kcap_in_local_bin() {
+        Skip.When(OperatingSystem.IsWindows(), "macOS lstat semantics");
+
+        using var tmp = new TempDir();
+        var home = new UserHome(tmp.Path);
+        var target = tmp.CreateFile("target-cli");
+        var foreign = tmp.CreateFile([".local", "bin", "kcap"], "someone else's");
+        var installer = new PathShimInstaller(new FakeProcessRunner(), new FakeLoginShellProbe(), home: home,
+            profile: new ShellProfile(home, "/bin/zsh"), mayElevate: _ => Task.FromResult(false));
+
+        var result = await Install(installer, tmp.PathTo("admin-kcap"), target, CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(ShimOutcome.Failed);
+        await Assert.That(File.ReadAllText(foreign)).IsEqualTo("someone else's");
+        await Assert.That(File.Exists(tmp.PathTo(".zprofile"))).IsFalse();
+    }
+
+    /// The user could not have replaced the admin folder's entry anyway.
+    [Test]
+    public async Task InstallAsync_without_admin_is_not_blocked_by_another_kcap_in_the_admin_folder() {
+        Skip.When(OperatingSystem.IsWindows(), "macOS lstat semantics");
+
+        using var tmp = new TempDir();
+        var home = new UserHome(tmp.Path);
+        var target = tmp.CreateFile("target-cli");
+        var adminLink = tmp.CreateFile("admin-kcap", "someone else's");
+        var probe = new FakeLoginShellProbe {
+            KcapOnPathBehavior = _ => Task.FromResult<bool?>(true),
+            KcapPathBehavior = _ => Task.FromResult<string?>(tmp.PathTo(".local", "bin", "kcap")),
+        };
+        var installer = new PathShimInstaller(new FakeProcessRunner(), probe, home: home,
+            profile: new ShellProfile(home, "/bin/zsh"), mayElevate: _ => Task.FromResult(false));
+
+        var result = await Install(installer, adminLink, target, CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(ShimOutcome.Installed);
+        await Assert.That(new FileInfo(tmp.PathTo(".local", "bin", "kcap")).LinkTarget).IsEqualTo(target);
+        await Assert.That(File.ReadAllText(adminLink)).IsEqualTo("someone else's");
+    }
+
+    [Test]
+    public async Task Disclosure_shows_the_profile_line_before_it_is_written() {
+        Skip.When(OperatingSystem.IsWindows(), "POSIX shell profile paths");
+        using var tmp = new TempDir();
+        var home = new UserHome(tmp.Path);
+        var installer = new PathShimInstaller(new FakeProcessRunner(), new FakeLoginShellProbe(), home: home,
+            profile: new ShellProfile(home, "/bin/zsh"));
+
+        await Assert.That(installer.Disclosure).Contains($"export PATH=\"$PATH:{ShellProfile.Folder(home)}\" (in ~{Path.DirectorySeparatorChar}.zprofile)");
+    }
+
+    [Test]
+    public async Task DescribeAsync_names_a_writable_folder_already_on_the_terminal_path() {
+        Skip.When(OperatingSystem.IsWindows(), "POSIX access(2)");
+        using var tmp = new TempDir();
+        var home = new UserHome(tmp.Path);
+        var bin = tmp.CreateDir("bin");
+        var installer = new PathShimInstaller(new FakeProcessRunner(), new FakeLoginShellProbe { TerminalPathBehavior = _ => Task.FromResult<string?>($"/usr/bin:{bin}") },
+            home: home, profile: new ShellProfile(home, "/bin/zsh"), mayElevate: _ => Task.FromResult(false));
+
+        var spans = await installer.DescribeAsync(tmp.PathTo("target-cli"), CancellationToken.None);
+
+        await Assert.That(spans.Where(s => s.Code).Select(s => s.Text)).IsEquivalentTo([$"~{Path.DirectorySeparatorChar}bin"]);
+        await Assert.That(Text(spans)).DoesNotContain("admin");
+        await Assert.That(File.Exists(Path.Combine(bin, "kcap"))).IsFalse();
+    }
+
+    [Test]
+    public async Task DescribeAsync_warns_an_admin_of_the_password_prompt() {
+        Skip.When(OperatingSystem.IsWindows(), "POSIX shell profile paths");
+        using var tmp = new TempDir();
+        using var system = new TempDir();
+        var home = new UserHome(tmp.Path);
+        var installer = new PathShimInstaller(new FakeProcessRunner(), new FakeLoginShellProbe(), system.PathTo("kcap"), home,
+            new ShellProfile(home, "/bin/zsh"), mayElevate: _ => Task.FromResult(true));
+
+        var spans = await installer.DescribeAsync(tmp.PathTo("target-cli"), CancellationToken.None);
+
+        await Assert.That(spans.Where(s => s.Code).Select(s => s.Text)).IsEquivalentTo([system.Path]);
+        await Assert.That(Text(spans)).Contains("admin password");
+        await Assert.That(Text(spans)).DoesNotContain(".zprofile");
+    }
+
+    [Test]
+    public async Task DescribeAsync_without_admin_names_the_local_folder_and_the_profile() {
+        Skip.When(OperatingSystem.IsWindows(), "POSIX shell profile paths");
+        using var tmp = new TempDir();
+        var home = new UserHome(tmp.Path);
+        var installer = new PathShimInstaller(new FakeProcessRunner(), new FakeLoginShellProbe(), home: home,
+            profile: new ShellProfile(home, "/bin/zsh"), mayElevate: _ => Task.FromResult(false));
+
+        var spans = await installer.DescribeAsync(tmp.PathTo("target-cli"), CancellationToken.None);
+
+        var sep = Path.DirectorySeparatorChar;
+        await Assert.That(spans.Where(s => s.Code).Select(s => s.Text)).IsEquivalentTo([$"~{sep}.local{sep}bin", $"~{sep}.zprofile"]);
+        await Assert.That(Text(spans)).DoesNotContain("admin");
+        await Assert.That(File.Exists(tmp.PathTo(".zprofile"))).IsFalse();
+    }
+
+    [Test]
+    public async Task DescribeAsync_names_an_admin_link_it_would_leave_alone() {
+        Skip.When(OperatingSystem.IsWindows(), "macOS lstat semantics");
+        using var tmp = new TempDir();
+        using var system = new TempDir();
+        var home = new UserHome(tmp.Path);
+        var adminLink = system.CreateFile("kcap", "someone else's");
+        var installer = new PathShimInstaller(new FakeProcessRunner(), new FakeLoginShellProbe(), adminLink, home,
+            new ShellProfile(home, "/bin/zsh"), mayElevate: _ => Task.FromResult(true));
+
+        var spans = await installer.DescribeAsync(tmp.PathTo("target-cli"), CancellationToken.None);
+
+        await Assert.That(Text(spans)).Contains("belongs to another install");
+        await Assert.That(Text(spans)).DoesNotContain("admin password");
+    }
+
+    [Test]
+    public async Task DescribeAsync_without_admin_names_a_local_link_it_would_leave_alone() {
+        Skip.When(OperatingSystem.IsWindows(), "macOS lstat semantics");
+        using var tmp = new TempDir();
+        var home = new UserHome(tmp.Path);
+        tmp.CreateFile([".local", "bin", "kcap"], "someone else's");
+        var installer = new PathShimInstaller(new FakeProcessRunner(), new FakeLoginShellProbe(), home: home,
+            profile: new ShellProfile(home, "/bin/zsh"), mayElevate: _ => Task.FromResult(false));
+
+        var spans = await installer.DescribeAsync(tmp.PathTo("target-cli"), CancellationToken.None);
+
+        var sep = Path.DirectorySeparatorChar;
+        await Assert.That(spans.Where(s => s.Code).Select(s => s.Text)).IsEquivalentTo([$"~{sep}.local{sep}bin{sep}kcap"]);
+        await Assert.That(Text(spans)).DoesNotContain(".zprofile");
+    }
+
+    [Test]
+    public async Task DescribeAsync_without_admin_on_an_unsupported_shell_promises_no_prompt() {
+        Skip.When(OperatingSystem.IsWindows(), "POSIX shell profile paths");
+        using var tmp = new TempDir();
+        var home = new UserHome(tmp.Path);
+        var installer = new PathShimInstaller(new FakeProcessRunner(), new FakeLoginShellProbe(), home: home,
+            profile: new ShellProfile(home, "/opt/homebrew/bin/fish"), mayElevate: _ => Task.FromResult(false));
+
+        var spans = await installer.DescribeAsync(tmp.PathTo("target-cli"), CancellationToken.None);
+
+        await Assert.That(Text(spans)).Contains("can't set PATH for this shell");
+        await Assert.That(Text(spans)).DoesNotContain("admin password");
+    }
+
+    static string Text(IEnumerable<DisclosureSpan> spans) => string.Concat(spans.Select(s => s.Text));
+
+    [Test]
+    [Arguments("staff everyone localaccounts admin _appserverusr\n", true)]
+    [Arguments("staff everyone localaccounts _lpoperator\n", false)]
+    public async Task IsAdminAsync_reads_the_admin_group(string groups, bool admin) {
+        var runner = new FakeProcessRunner();
+        runner.Enqueue(new ProcessResult(0, groups, "", false));
+
+        await Assert.That(await PathShimInstaller.IsAdminAsync(runner, CancellationToken.None)).IsEqualTo(admin);
+    }
+
+    /// An unanswered question keeps the prompt an admin can complete rather than editing a profile.
+    [Test]
+    public async Task IsAdminAsync_assumes_admin_when_id_fails() {
+        var runner = new FakeProcessRunner();
+        runner.Enqueue(new ProcessResult(1, "", "id: boom", false));
+
+        await Assert.That(await PathShimInstaller.IsAdminAsync(runner, CancellationToken.None)).IsTrue();
+    }
+
+
+    [Test]
+    public async Task An_existing_admin_link_off_path_still_gets_the_user_fallback() {
+        Skip.When(OperatingSystem.IsWindows(), "macOS lstat semantics");
+        using var tmp = new TempDir();
+        var home = new UserHome(tmp.Path);
+        var target = tmp.CreateFile("target-cli");
+        var admin = tmp.PathTo("admin-kcap");
+        File.CreateSymbolicLink(admin, target);
+        var probe = new FakeLoginShellProbe {
+            KcapOnPathBehavior = _ => Task.FromResult<bool?>(File.Exists(tmp.PathTo(".zprofile"))),
+            KcapPathBehavior = _ => Task.FromResult<string?>(tmp.PathTo(".local", "bin", "kcap")),
+        };
+        var installer = new PathShimInstaller(new FakeProcessRunner(), probe, home: home,
+            profile: new ShellProfile(home, "/bin/zsh"), mayElevate: _ => Task.FromResult(false));
+        var result = await Install(installer, admin, target, CancellationToken.None);
+        await Assert.That(result.Outcome).IsEqualTo(ShimOutcome.Installed);
+        await Assert.That(new FileInfo(tmp.PathTo(".local", "bin", "kcap")).LinkTarget).IsEqualTo(target);
+        await Assert.That(new FileInfo(admin).LinkTarget).IsEqualTo(target);
+    }
+
+    [Test]
+    [Arguments("/bin/fish", "safe")]
+    [Arguments("/bin/zsh", "a!b")]
+    public async Task Unsupported_profile_fallback_does_not_create_a_link(string shell, string folder) {
+        Skip.When(OperatingSystem.IsWindows(), "macOS lstat semantics");
+        using var tmp = new TempDir();
+        var home = new UserHome(tmp.CreateDir(folder));
+        var installer = new PathShimInstaller(new FakeProcessRunner(), new FakeLoginShellProbe(), home: home,
+            profile: new ShellProfile(home, shell), mayElevate: _ => Task.FromResult(false));
+        var result = await Install(installer, tmp.PathTo("admin-kcap"), tmp.CreateFile("target-cli"), CancellationToken.None);
+        await Assert.That(result.Outcome).IsEqualTo(ShimOutcome.Failed);
+        await Assert.That(Directory.Exists(Path.Combine(home.Path, ".local"))).IsFalse();
+    }
+
+    [Test]
+    [Arguments("earlier", true, ShimOutcome.InstalledButNotOnPath)]
+    [Arguments(null, true, ShimOutcome.Failed)]
+    [Arguments("installed", true, ShimOutcome.Installed)]
+    [Arguments("installed", null, ShimOutcome.Failed)]
+    public async Task Profile_fallback_verifies_the_fresh_resolved_command(string? command, bool? onPath, ShimOutcome expected) {
+        Skip.When(OperatingSystem.IsWindows(), "macOS lstat semantics");
+        using var tmp = new TempDir();
+        var home = new UserHome(tmp.Path);
+        var link = tmp.PathTo(".local", "bin", "kcap");
+        var earlier = tmp.CreateFile("earlier-kcap");
+        var probe = new FakeLoginShellProbe {
+            KcapOnPathFreshBehavior = _ => Task.FromResult(onPath),
+            KcapPathBehavior = _ => Task.FromResult<string?>(link),
+            KcapPathFreshBehavior = _ => Task.FromResult(command is null ? null : command == "installed" ? link : earlier),
+        };
+        var installer = new PathShimInstaller(new FakeProcessRunner(), probe, home: home,
+            profile: new ShellProfile(home, "/bin/zsh"), mayElevate: _ => Task.FromResult(false));
+        var result = await Install(installer, tmp.PathTo("admin-kcap"), tmp.CreateFile("target-cli"), CancellationToken.None);
+        await Assert.That(result.Outcome).IsEqualTo(expected);
+        if (command == "earlier") {
+            await Assert.That(result.Detail).Contains(earlier);
+            await Assert.That(File.Exists(earlier)).IsTrue();
+        }
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Resolved_link_casing_uses_the_host_path_rules(bool throughProfile) {
+        Skip.When(OperatingSystem.IsWindows(), "macOS lstat semantics");
+        using var tmp = new TempDir();
+        var home = new UserHome(tmp.Path);
+        var localBin = tmp.CreateDir(".local", "bin").Path;
+        var link = Path.Combine(localBin, "kcap");
+        var target = tmp.CreateFile("target-cli");
+        var runner = new FakeProcessRunner();
+        runner.Enqueue(new ProcessResult(1, "", "User canceled. (-128)", false));
+        var probe = ResolvingTo(link.ToUpperInvariant(), throughProfile ? "/usr/bin:/bin" : localBin);
+        var installer = new PathShimInstaller(runner, probe, home: home,
+            profile: throughProfile ? new ShellProfile(home, "/bin/zsh") : null,
+            mayElevate: _ => Task.FromResult(false));
+        var result = await Install(installer, tmp.PathTo("admin-kcap"), target, CancellationToken.None);
+        var expected = OperatingSystem.IsMacOS() ? ShimOutcome.Installed
+            : throughProfile ? ShimOutcome.InstalledButNotOnPath : ShimOutcome.Cancelled;
+        await Assert.That(result.Outcome).IsEqualTo(expected);
+        if (OperatingSystem.IsMacOS())
+            await Assert.That(new FileInfo(link).LinkTarget).IsEqualTo(target);
     }
 
     static FakeLoginShellProbe ResolvingTo(string resolved, string terminalPath) => new() {

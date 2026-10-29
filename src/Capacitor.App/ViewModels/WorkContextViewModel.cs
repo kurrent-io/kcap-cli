@@ -88,6 +88,16 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     public string Harness { get => _harness; private set => this.RaiseAndSetIfChanged(ref _harness, value); }
     string _transport = "—";
     public string Transport { get => _transport; private set => this.RaiseAndSetIfChanged(ref _transport, value); }
+    string _tokens = SessionFactText.Unknown;
+    public string Tokens { get => _tokens; private set => this.RaiseAndSetIfChanged(ref _tokens, value); }
+    string _cost = SessionFactText.Unknown;
+    public string Cost { get => _cost; private set => this.RaiseAndSetIfChanged(ref _cost, value); }
+    string _contextUse = SessionFactText.Unknown;
+    public string ContextUse { get => _contextUse; private set => this.RaiseAndSetIfChanged(ref _contextUse, value); }
+    string _sessionSharing = SessionFactText.Unknown;
+    public string SessionSharing { get => _sessionSharing; private set => this.RaiseAndSetIfChanged(ref _sessionSharing, value); }
+    string _agentSharing = SessionFactText.Unknown;
+    public string AgentSharing { get => _agentSharing; private set => this.RaiseAndSetIfChanged(ref _agentSharing, value); }
     string _sessionIdText = "resolving…";
     public string SessionIdText {
         get => _sessionIdText;
@@ -339,6 +349,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         _dto = dto;
         UpdateFacts(dto);
         HasAgent = true;
+        this.RaisePropertyChanged(nameof(ShowsPeople));
         if (dto.SessionId is { Length: > 0 } id && !string.Equals(_reader.CurrentState, id, StringComparison.Ordinal))
             SwitchSession(id);
         else if (_isRemote && string.IsNullOrEmpty(dto.SessionId) && HasSession) {
@@ -348,6 +359,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
             SessionIdText = "resolving…";
             PrimaryRepository = null;
             ClearServerProjections();
+            ApplySessionFacts(null);
             IsStale = false;
             Phase = WorkContextPhase.WaitingForSession;
             Plan.SwitchSession(null);
@@ -376,15 +388,16 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         var vendorLabel = HostedHarnessCatalog.LabelFor(DefaultHarnessOptions, dto.Vendor);
         Harness = $"{vendorLabel} · {HostedHarnessCatalog.ModelLabelFor(dto.Vendor, dto.Model ?? "")}";
         Transport = TransportLabel(HostedHarnessCatalog.EffectiveFamily(dto.HasTerminal, dto.Vendor));
-        if (!_reader.HasCurrent) SessionIdText = dto.SessionId ?? "resolving…";
+        if (!_reader.HasCurrent) SessionIdText = SessionIds.Canonical(dto.SessionId) ?? "resolving…";
         UpdateRequester(dto, vendorLabel);
     }
 
     void SwitchSession(string id) {
         HasSession = true;
-        SessionIdText = id;
+        SessionIdText = SessionIds.Canonical(id) ?? id;
         PrimaryRepository = null;
         ClearServerProjections();
+        ApplySessionFacts(null);
         IsStale = false;
         Phase = WorkContextPhase.Loading;
         _reader.Switch(id);
@@ -402,6 +415,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
 
     internal void Reconnected() {
         if (_tornDown) return;
+        ForgetViewer();
         Plan.Refresh();
         Artefacts?.Refresh();
         _reader.Refresh();
@@ -409,6 +423,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
 
     void OnSignInCompleted() {
         if (_tornDown) return;
+        ForgetViewer();
         Plan.Refresh();
         Artefacts?.Refresh();
         _reader.Refresh();
@@ -418,10 +433,17 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     void Apply(WorkContextRead read) {
         switch (read.Kind) {
             case WorkContextReadKind.SignedOut:      ApplyTerminal(WorkContextPhase.SignedOut);      return;
-            case WorkContextReadKind.NotInPlan:      ApplyTerminal(WorkContextPhase.NotInPlan);      return;
+            case WorkContextReadKind.NotInPlan:
+                // The plan gates work items only; a failed summary keeps the last session facts, stale.
+                ApplyTerminal(WorkContextPhase.NotInPlan, keepSessionFacts: true);
+                if (!read.SummaryFailed) ApplySessionFacts(read.Summary);
+                else IsStale = _hasSessionFacts;
+                return;
             case WorkContextReadKind.SessionUnknown: ApplyTerminal(WorkContextPhase.SessionUnknown); return;
             case WorkContextReadKind.Unreachable:
-                if (Phase is WorkContextPhase.Ready or WorkContextPhase.NoWorkItem) IsStale = true;
+                // A plan-gated pane that holds session facts goes stale rather than blank.
+                if (Phase is WorkContextPhase.Ready or WorkContextPhase.NoWorkItem
+                    || (Phase == WorkContextPhase.NotInPlan && _hasSessionFacts)) IsStale = true;
                 else Phase = WorkContextPhase.Unreachable;
                 return;
             case WorkContextReadKind.Ready:
@@ -433,9 +455,10 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         }
     }
 
-    /// The server has just said the viewer may not have this data, so nothing of it stays visible.
-    void ApplyTerminal(WorkContextPhase phase) {
+    /// The server has just said the viewer may not have this data, so nothing it gates stays visible.
+    void ApplyTerminal(WorkContextPhase phase, bool keepSessionFacts = false) {
         ClearServerProjections();
+        if (!keepSessionFacts) ApplySessionFacts(null);
         ForgetViewer();
         Phase = phase;
         IsStale = false;

@@ -7,11 +7,13 @@ namespace Capacitor.App.ViewModels.Onboarding;
 /// One repository on the History page and how far its history goes.
 public sealed class HistoryRepoRow : ReactiveObject {
     ImportLevel _level;
+    ImportLevel _imported;
 
-    /// <param name="local">The local edition has no other readers, so its one import stop is private.</param>
+    /// <param name="local">The local edition has no other readers, so its one import level is private.</param>
     internal HistoryRepoRow(ImportDiscoveryRepo repo, bool local = false) {
         _level        = local ? ImportLevel.OnlyMe : ImportLevel.Shared;
-        LastStop      = local ? (int)ImportLevel.OnlyMe : (int)ImportLevel.Shared;
+        _imported     = _level;
+        Local         = local;
         Owner         = repo.Owner;
         Name          = repo.Name;
         Sessions      = repo.Sessions;
@@ -22,6 +24,9 @@ public sealed class HistoryRepoRow : ReactiveObject {
     public string Owner { get; }
     public string Name  { get; }
     public string Slug  => $"{Owner}/{Name}";
+
+    /// Imports are always private here, so Only me is not a choice.
+    public bool Local { get; }
 
     public int             Sessions      { get; }
     public DateTimeOffset? LastSessionAt { get; }
@@ -35,22 +40,30 @@ public sealed class HistoryRepoRow : ReactiveObject {
     public ImportLevel Level {
         get => _level;
         set {
-            if (EqualityComparer<ImportLevel>.Default.Equals(_level, value)) return;
+            if (Local && value == ImportLevel.Shared) value = ImportLevel.OnlyMe;
+            if (_level == value) return;
             this.RaiseAndSetIfChanged(ref _level, value);
-            // The row's track binds Stop, not Level. A bulk set from the owner writes Level.
-            this.RaisePropertyChanged(nameof(Stop));
+            if (value != ImportLevel.Skip) _imported = value;
+            // The checkboxes bind these, and a bulk set from the owner writes Level.
+            this.RaisePropertyChanged(nameof(Included));
+            this.RaisePropertyChanged(nameof(OnlyMe));
         }
     }
 
-    /// The highest stop the track offers.
-    public int LastStop { get; }
+    /// Checking a repository again brings back the audience it had before it was skipped.
+    public bool Included {
+        get => Level != ImportLevel.Skip;
+        set => Level = value ? _imported : ImportLevel.Skip;
+    }
 
-    /// The level as the track's stop index.
-    public int Stop {
-        get => (int)Level;
+    /// Unchecked follows the recording privacy setting. A skipped repository keeps the audience for when
+    /// it is checked again, so an owner-wide Only me reaches it too.
+    public bool OnlyMe {
+        get => Level == ImportLevel.OnlyMe;
         set {
-            if (value < 0 || value > LastStop) return;
-            Level = (ImportLevel)value;
+            var audience = value || Local ? ImportLevel.OnlyMe : ImportLevel.Shared;
+            if (Level == ImportLevel.Skip) _imported = audience;
+            else Level = audience;
         }
     }
 

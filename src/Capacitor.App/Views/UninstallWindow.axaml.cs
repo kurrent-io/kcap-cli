@@ -8,18 +8,40 @@ using ReactiveUI.Avalonia.Reactive;
 namespace Capacitor.App.Views;
 
 public partial class UninstallWindow : ReactiveWindow<UninstallRunViewModel> {
+    UninstallRunViewModel? _observed;
+
     public UninstallWindow() {
         InitializeComponent();
     }
 
-    protected override void OnDataContextChanged(EventArgs e) {
-        base.OnDataContextChanged(e);
-        if (ViewModel is { } vm) vm.Lines.CollectionChanged += OnLinesChanged;
+    internal static UninstallWindow ShowProgress(IEnumerable<Window> appWindows, UninstallRunViewModel run) {
+        var previous = appWindows.ToArray();
+        var window = new UninstallWindow { DataContext = run };
+        window.Show();
+        foreach (var other in previous) other.Hide();
+        window.Activate();
+        return window;
     }
 
-    // Closing mid-run would quit with the CLI still removing things.
+    protected override void OnDataContextChanged(EventArgs e) {
+        StopObserving();
+        base.OnDataContextChanged(e);
+        _observed = ViewModel;
+        if (_observed is { } vm) vm.Lines.CollectionChanged += OnLinesChanged;
+    }
+
+    protected override void OnClosed(EventArgs e) {
+        StopObserving();
+        base.OnClosed(e);
+    }
+
+    void StopObserving() {
+        if (_observed is { } vm) vm.Lines.CollectionChanged -= OnLinesChanged;
+        _observed = null;
+    }
+
     protected override void OnClosing(WindowClosingEventArgs e) {
-        if (e.CloseReason == WindowCloseReason.WindowClosing && ViewModel?.State == UninstallRunState.Running) e.Cancel = true;
+        if (e.CloseReason == WindowCloseReason.WindowClosing && ViewModel?.IsBusy == true) e.Cancel = true;
         base.OnClosing(e);
     }
 

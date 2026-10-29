@@ -255,7 +255,7 @@ public class MainWindowSmokeTests {
                 service.StartBehavior = _ => Task.FromResult(new StartDaemonResult(false, "boom: could not bind socket"));
                 await vm.StartDaemonCommand.Execute().ToTask();
                 Dispatcher.UIThread.RunJobs();
-                var textAfter = Banner().Text;
+                var textAfter = window.GetVisualDescendants().OfType<SelectableTextBlock>().First(t => t.Name == "BannerDetailText").Text;
 
                 window.Close();
                 Dispatcher.UIThread.RunJobs();
@@ -265,7 +265,7 @@ public class MainWindowSmokeTests {
             });
 
         await Assert.That(bannerInitially).IsTrue(); // Connecting… still has a notice
-        await Assert.That(bannerTextUnreachable).IsEqualTo(HomeViewModel.DaemonDownNotice);
+        await Assert.That(bannerTextUnreachable).IsEqualTo(NoticeText.Headline(HomeViewModel.DaemonDownNotice).Title);
         await Assert.That(bannerTextAfterFailure).IsEqualTo("boom: could not bind socket");
     }
 
@@ -559,6 +559,80 @@ public class MainWindowSmokeTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public Task Rail_pagination_tracks_the_filter_and_disappears_when_fully_loaded() => AvaloniaSession.RunOnUiAsync(async () => {
+        var service = new FakeDaemonClientService();
+        using var directory = new FakeAgentDirectory();
+        using var sessions = new FakeServerSessionsService();
+        using var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System, sessions: sessions);
+        var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System, rail: rail);
+        var window = new MainWindow { DataContext = vm };
+        try {
+            window.Show();
+            sessions.PagingSubject.OnNext(new ServerSessionsPaging(20, 84, 1, true, false));
+            Dispatcher.UIThread.RunJobs();
+            var view = window.FindDescendantOfType<SessionRailView>()!;
+            var more = view.FindControl<Button>("RailShowMoreButton")!;
+            var count = view.FindControl<TextBlock>("RailLoadedText")!;
+            var cap = view.FindControl<TextBlock>("RailCapNote")!;
+            await Assert.That(more.IsVisible).IsTrue();
+            await Assert.That(more.Content).IsEqualTo("Load more ended sessions");
+            await Assert.That(count.Text).IsEqualTo("20 of 84 ended sessions loaded");
+
+            rail.State = RailState.Live;
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(more.IsVisible).IsFalse();
+            await Assert.That(count.IsVisible).IsFalse();
+            await Assert.That(cap.IsVisible).IsFalse();
+
+            rail.State = RailState.Ended;
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(more.IsVisible).IsTrue();
+            await Assert.That(count.IsVisible).IsTrue();
+
+            sessions.PagingSubject.OnNext(new ServerSessionsPaging(4, 4, 1, false, false));
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(more.IsVisible).IsFalse();
+            await Assert.That(count.IsVisible).IsFalse();
+            await Assert.That(cap.IsVisible).IsFalse();
+        } finally {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Clicking_the_team_segment_changes_the_rails_scope_and_persists_it() => AvaloniaSession.RunOnUiAsync(async () => {
+        var service = new FakeDaemonClientService();
+        service.StatusSubject.OnNext(new(AttachState.Connected, null, null));
+        using var directory = new FakeAgentDirectory();
+        using var sessions = new FakeServerSessionsService();
+        var persisted = new List<RailPreferences>();
+        using var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System, sessions: sessions, persistPreferences: persisted.Add);
+        var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System, rail: rail);
+        var window = new MainWindow { DataContext = vm };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+        try {
+            var view = window.FindDescendantOfType<SessionRailView>()!;
+            var mine = view.FindControl<Button>("RailScopeMineButton")!;
+            var team = view.FindControl<Button>("RailScopeTeamButton")!;
+            await Assert.That(mine.Classes.Contains("active")).IsTrue();
+
+            team.Command!.Execute(team.CommandParameter);
+            Dispatcher.UIThread.RunJobs();
+
+            await Assert.That(rail.Scope).IsEqualTo(RailScope.Team);
+            await Assert.That(team.Classes.Contains("active")).IsTrue();
+            await Assert.That(mine.Classes.Contains("active")).IsFalse();
+            await Assert.That(persisted.Select(p => p.Scope)).IsEquivalentTo(new[] { RailScope.Team });
+        } finally {
+            window.Close();
+        }
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public Task Repository_headers_collapse_the_body_and_keep_long_labels_clear_of_counts() => AvaloniaSession.RunOnUiAsync(async () => {
         var service = new FakeDaemonClientService();
         service.StatusSubject.OnNext(new(AttachState.Connected, null, null));
@@ -578,7 +652,7 @@ public class MainWindowSmokeTests {
             var headers = window.GetVisualDescendants().OfType<Button>().Where(b => b.Classes.Contains("railRepoHeader")).ToArray();
             await Assert.That(headers).Count().IsEqualTo(2);
             foreach (var header in headers) {
-                var repo = (RailRepoViewModel)header.DataContext!;
+                var repo = (RailGroupViewModel)header.DataContext!;
                 var label = header.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("eyebrow"));
                 var count = header.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("sectionMeta"));
                 var row = RailRow(window, repo.Sessions[0].Primary!);
@@ -645,7 +719,7 @@ public class MainWindowSmokeTests {
             pending.OnNext(new HashSet<string> { "a1" });
             Dispatcher.UIThread.RunJobs();
             window.UpdateLayout();
-            await Assert.That(rail.Repos[0].IsExpanded).IsFalse();
+            await Assert.That(rail.Groups[0].IsExpanded).IsFalse();
             await Assert.That(RailRow(window, "Waiting session").IsEffectivelyVisible).IsFalse();
             await Assert.That(mark.FindControl<TextBlock>("StatusWord")!.Text).IsEqualTo("Needs you");
             await Assert.That(ToolTip.GetTip(header) as string).Contains("Pending response");
@@ -749,7 +823,7 @@ public class MainWindowSmokeTests {
                 await Assert.That(ToolTip.GetTip(pr) as string).Contains("Open");
                 await Assert.That((pr.Background as ISolidColorBrush)!.Color.A).IsEqualTo((byte)0);
                 await Assert.That(pr.Bounds.Width).IsLessThan(card.Bounds.Width / 2);
-                var age = session.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("railMeta"));
+                var age = session.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "SessionMeta");
                 var prLabel = pr.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Text == "PR #142");
                 double Baseline(TextBlock text) => text.TranslatePoint(new Point(0, text.TextLayout.Baseline), card)!.Value.Y;
                 await Assert.That(Math.Abs(Baseline(age) - Baseline(prLabel))).IsLessThan(2);
@@ -827,11 +901,11 @@ public class MainWindowSmokeTests {
         Dispatcher.UIThread.RunJobs();
         try {
             var row = RailRow(window, "File listing");
-            var badge = row.GetVisualDescendants().OfType<Border>().Single(b => b.Classes.Contains("railChip"));
+            var badge = row.GetVisualDescendants().OfType<Border>().Single(b => b.Name == "SessionMachineBadge");
             var label = badge.GetVisualDescendants().OfType<TextBlock>().Single();
             await Assert.That(label.Text).IsEqualTo($"on {machine}");
             await Assert.That(((RailSessionViewModel)row.DataContext!).Meta).IsEqualTo("");
-            await Assert.That(row.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("railMeta")).IsEffectivelyVisible).IsFalse();
+            await Assert.That(row.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "SessionMeta").IsEffectivelyVisible).IsFalse();
             await Assert.That(badge.IsEffectivelyVisible).IsTrue();
             await Assert.That(badge.Bounds.Width).IsGreaterThan(0);
             await Assert.That(badge.BorderThickness).IsEqualTo(new Thickness(0));
@@ -991,7 +1065,7 @@ public class MainWindowSmokeTests {
                 var mark = row.GetVisualDescendants().OfType<AgentStatusMark>().First();
                 var word = mark.FindControl<TextBlock>("StatusWord")!;
                 var vendor = row.GetVisualDescendants().OfType<Border>().First(b => b.Classes.Contains("vendorMark"));
-                var meta = row.GetVisualDescendants().OfType<TextBlock>().First(t => t.Classes.Contains("railMeta"));
+                var meta = row.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "SessionMeta");
                 double Center(Control control) =>
                     control.TranslatePoint(new Point(0, control.Bounds.Height / 2), row)!.Value.Y;
                 double Baseline(TextBlock text) =>
@@ -1067,7 +1141,7 @@ public class MainWindowSmokeTests {
                 var pendingRow = RailRow(window, "Pending launch");
                 var longWord = longRow.GetVisualDescendants().OfType<AgentStatusMark>().First().FindControl<TextBlock>("StatusWord")!;
                 var needsYouWord = needsYouRow.GetVisualDescendants().OfType<AgentStatusMark>().First().FindControl<TextBlock>("StatusWord")!;
-                var pendingMeta = pendingRow.GetVisualDescendants().OfType<TextBlock>().First(t => t.Classes.Contains("railMeta"));
+                var pendingMeta = pendingRow.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "SessionMeta");
                 var pendingMark = pendingRow.GetVisualDescendants().OfType<AgentStatusMark>().First();
                 var stageWidth = NaturalWidth(pendingMeta, LaunchStages.Label("session_created"));
                 var result = (
@@ -1473,7 +1547,7 @@ public class MainWindowSmokeTests {
 
     /// Off macOS the help flyout carries the app menu's Settings, Changelog and version — the only
     /// in-window route to Settings where no native menu bar is drawn. Settings stays inert until the
-    /// app hands it an action.
+    /// app hands it an action, and Uninstall is not shown until the app can remove itself.
     [Test]
     [NotInParallel("AvaloniaSession")]
     [Arguments(true)]
@@ -1482,10 +1556,12 @@ public class MainWindowSmokeTests {
         var service = new FakeDaemonClientService();
         service.SnapshotsSubject.OnNext(Snap());
         var settings = new System.Reactive.Subjects.BehaviorSubject<Action?>(null);
+        var uninstall = new System.Reactive.Subjects.BehaviorSubject<Action?>(null);
         var opener = new RecordingOpener();
         var opened = 0;
+        var uninstalls = 0;
         var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
-            opener: opener, settingsAction: settings, appMenuInWindow: inWindow);
+            opener: opener, settingsAction: settings, uninstallAction: uninstall, appMenuInWindow: inWindow);
         var window = new MainWindow { DataContext = vm };
         try {
             window.Show();
@@ -1505,10 +1581,14 @@ public class MainWindowSmokeTests {
             await Assert.That(changelogButton.Content).IsEqualTo("Changelog");
             await Assert.That(rail.FindControl<TextBlock>("RailAppVersionText")!.Text).StartsWith("Desktop app ");
             await Assert.That(settingsButton.IsEffectivelyEnabled).IsFalse();
+            var uninstallButton = rail.FindControl<Button>("RailHelpUninstallButton")!;
+            await Assert.That(uninstallButton.IsVisible).IsFalse();
 
             settings.OnNext(() => opened++);
+            uninstall.OnNext(() => uninstalls++);
             Dispatcher.UIThread.RunJobs();
             await Assert.That(settingsButton.IsEffectivelyEnabled).IsTrue();
+            await Assert.That(uninstallButton.IsEffectivelyVisible).IsEqualTo(inWindow);
             if (inWindow) {
                 ClickFlyoutButton(settingsButton);
                 await Assert.That(flyout.IsOpen).IsFalse();
@@ -1519,6 +1599,12 @@ public class MainWindowSmokeTests {
                 ClickFlyoutButton(changelogButton);
                 await Assert.That(flyout.IsOpen).IsFalse();
                 await Assert.That(opener.Opened).IsEquivalentTo([AppMenuBar.ChangelogUrl]);
+
+                flyout.ShowAt(help);
+                Dispatcher.UIThread.RunJobs();
+                ClickFlyoutButton(uninstallButton);
+                await Assert.That(flyout.IsOpen).IsFalse();
+                await Assert.That(uninstalls).IsEqualTo(1);
             } else {
                 flyout.Hide();
                 Dispatcher.UIThread.RunJobs();
@@ -1706,9 +1792,9 @@ public class MainWindowSmokeTests {
         await Assert.That(sharesLine).IsTrue();
     }
 
-    /// Name, then the agent count, then the version. The dot shares the count's parent, so a
-    /// wrap cannot leave it on the line above. Both leave when the attach drops; the snapshot
-    /// stays, so the name and version remain with nothing between them.
+    /// Name, then the agent count; the version shows only while an update waits (Settings › About
+    /// carries it otherwise). The dot shares the count's parent, so a wrap cannot leave it on the
+    /// line above, and leaves with the count when the attach drops.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Rail_daemon_row_separators_leave_with_the_fragment_they_precede() {
@@ -1754,10 +1840,10 @@ public class MainWindowSmokeTests {
         });
 
         await Assert.That(connected).IsEquivalentTo(
-            new[] { "daemon-a", "\u00b7", "1 of 5 agents", "kcap 1.2.3" }, CollectionOrdering.Matching);
+            new[] { "daemon-a", "\u00b7", "1 of 5 agents" }, CollectionOrdering.Matching);
         await Assert.That(dotSharesCountParent).IsTrue();
         await Assert.That(detached).IsEquivalentTo(
-            new[] { "daemon-a", "kcap 1.2.3" }, CollectionOrdering.Matching);
+            new[] { "daemon-a" }, CollectionOrdering.Matching);
     }
 
     /// A queued daemon update is the version's own status: warning paint on the semver, the
@@ -1857,7 +1943,7 @@ public class MainWindowSmokeTests {
         await Assert.That(visibleWhileIn).IsFalse();
     }
 
-    static void ClickFlyoutButton(Button button) {
+    internal static void ClickFlyoutButton(Button button) {
         Dispatcher.UIThread.RunJobs();
         var top = TopLevel.GetTopLevel(button)
             ?? throw new InvalidOperationException("Flyout button is not attached to a TopLevel.");

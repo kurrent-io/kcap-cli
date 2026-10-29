@@ -26,7 +26,7 @@ static class LocalSetupScript {
         root.EnsureCreated();
         LocalStateFiles.WriteJournal(root, new(LocalSetupState.Operation, "committing", ServerStart.Deny, null,
             DateTimeOffset.UnixEpoch, new Dictionary<string, string>()));
-        if (recorded) LocalEmbeddingFile.Write(root, new LocalEmbeddingSetting("mxbai-embed-large"));
+        if (recorded) LocalEmbeddingFile.Write(root, LocalEmbeddingSetting.Ollama("mxbai-embed-large"));
 
         return root;
     }

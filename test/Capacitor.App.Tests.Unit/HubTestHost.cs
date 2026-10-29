@@ -45,6 +45,7 @@ public sealed class HubTestHost : IAsyncDisposable {
     public static List<(string AgentId, int Cols, int Rows)> Resizes { get; } = [];
     public static List<string> ResizeReleases { get; } = [];
     public static List<(string AgentId, string Text)> UserInputs { get; } = [];
+    public static List<DiscardQueuedInputRequest> Discards { get; } = [];
     public static List<(string AgentId, string Key)> SpecialKeys { get; } = [];
 
     /// <param name="admissionDelay">Holds back the server's registration of each connection, to widen
@@ -74,6 +75,7 @@ public sealed class HubTestHost : IAsyncDisposable {
         Resizes.Clear();
         ResizeReleases.Clear();
         UserInputs.Clear();
+        Discards.Clear();
         SpecialKeys.Clear();
 
         var builder = WebApplication.CreateBuilder();
@@ -231,6 +233,7 @@ public sealed class HubTestHost : IAsyncDisposable {
         public Task RequestResizeTerminal(string agentId, int cols, int rows) { Resizes.Add((agentId, cols, rows)); return Task.CompletedTask; }
         public Task ReleaseResizeTerminal(string agentId) { ResizeReleases.Add(agentId); return Task.CompletedTask; }
         public Task SendUserInput(string agentId, string text, string[]? attachmentIds) { UserInputs.Add((agentId, text)); return Task.CompletedTask; }
+        public Task DiscardQueuedInput(DiscardQueuedInputRequest request) { Discards.Add(request); return Task.CompletedTask; }
         public Task SendSpecialKey(string agentId, string key) { SpecialKeys.Add((agentId, key)); return Task.CompletedTask; }
     }
 }

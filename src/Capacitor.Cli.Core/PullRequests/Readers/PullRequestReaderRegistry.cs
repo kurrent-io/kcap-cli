@@ -49,7 +49,7 @@ public sealed class PullRequestReaderRegistry(IPullRequestSource sessionLinks, I
         if (links.Kind != PullRequestReadKind.Ready || links.Data is null) {
             if (context is { Repository: { } fallbackRepository, Branch: { Length: > 0 } fallbackBranch }
                     && Ready().FirstOrDefault(provider => provider.Serves(fallbackRepository.Provider, fallbackRepository.Host)) is { } fallbackProvider) {
-                var discovered = await fallbackProvider.DiscoverAsync(fallbackRepository, fallbackBranch, ct).ConfigureAwait(false);
+                var discovered = Lowered(await fallbackProvider.DiscoverAsync(fallbackRepository, fallbackBranch, ct).ConfigureAwait(false));
                 if (discovered.Count > 0) return new(PullRequestReadKind.Ready, MergeAndOrder(discovered), FetchedAt: _time.GetUtcNow().UtcDateTime);
             }
             return links;
@@ -59,10 +59,15 @@ public sealed class PullRequestReaderRegistry(IPullRequestSource sessionLinks, I
         var live = new List<PullRequestLinkDto>();
         if (context is { Repository: { } repository, Branch: { Length: > 0 } branch })
             foreach (var provider in Ready().Where(provider => provider.Serves(repository.Provider, repository.Host)))
-                live.AddRange(await provider.DiscoverAsync(repository, branch, ct).ConfigureAwait(false));
+                live.AddRange(Lowered(await provider.DiscoverAsync(repository, branch, ct).ConfigureAwait(false)));
         // Live rows first: DistinctBy keeps the first occurrence, and a live row's HeadRef is never stale.
         return links with { Data = MergeAndOrder(live.Concat(items)) };
     }
+
+    // A discovered link takes the repository's casing, a listed one is lowercase, and subjects compare case-sensitively:
+    // a PR picked from the rail must find its row in the panel.
+    static IReadOnlyList<PullRequestLinkDto> Lowered(IReadOnlyList<PullRequestLinkDto> links)
+        => [.. links.Select(link => link with { Owner = link.Owner.ToLowerInvariant(), RepoName = link.RepoName.ToLowerInvariant() })];
 
     static PullRequestLinkListDto MergeAndOrder(IEnumerable<PullRequestLinkDto> items) {
         var merged = items.DistinctBy(item => (item.Provider, item.Host, item.Owner.ToLowerInvariant(), item.RepoName.ToLowerInvariant(), item.Number))

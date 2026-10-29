@@ -141,6 +141,46 @@ public class ArtefactsApiTests : IDisposable {
     }
 
     [Test]
+    public async Task A_read_serves_the_version_its_record_names() {
+        // Without a pin, a version published between the two requests would be served as the older one.
+        _server.Given(Request.Create().WithPath("/api/artefacts/a1").UsingGet())
+               .RespondWith(Response.Create().WithStatusCode(HttpStatusCode.OK)
+                                    .WithHeader("Content-Type", "application/json").WithBody(DetailJson));
+
+        _server.Given(Request.Create().WithPath("/artefacts/a1/content").WithParam("v", "2").UsingGet())
+               .RespondWith(Response.Create().WithStatusCode(HttpStatusCode.OK).WithBody("<p>v2</p>"));
+
+        var read = await Assert.That(await Api().ReadAsync("a1", null)).IsTypeOf<ArtefactReadResult.Read>();
+
+        await Assert.That(read!.Version).IsEqualTo(2);
+        await Assert.That(read.Html).IsEqualTo("<p>v2</p>");
+        await Assert.That(read.Artefact.Title).IsEqualTo("Plan");
+    }
+
+    [Test]
+    public async Task A_read_of_a_named_version_asks_for_that_version() {
+        _server.Given(Request.Create().WithPath("/api/artefacts/a1").UsingGet())
+               .RespondWith(Response.Create().WithStatusCode(HttpStatusCode.OK)
+                                    .WithHeader("Content-Type", "application/json").WithBody(DetailJson));
+
+        _server.Given(Request.Create().WithPath("/artefacts/a1/content").WithParam("v", "1").UsingGet())
+               .RespondWith(Response.Create().WithStatusCode(HttpStatusCode.OK).WithBody("<p>v1</p>"));
+
+        var read = await Assert.That(await Api().ReadAsync("a1", 1)).IsTypeOf<ArtefactReadResult.Read>();
+
+        await Assert.That(read!.Html).IsEqualTo("<p>v1</p>");
+    }
+
+    [Test]
+    public async Task A_page_the_profile_may_not_open_reads_as_not_found_without_asking_for_its_content() {
+        _server.Given(Request.Create().WithPath("/api/artefacts/hidden").UsingGet())
+               .RespondWith(Response.Create().WithStatusCode(HttpStatusCode.NotFound));
+
+        await Assert.That(await Api().ReadAsync("hidden", null)).IsTypeOf<ArtefactReadResult.NotFound>();
+        await Assert.That(_server.LogEntries.Any(e => e.RequestMessage.Path.EndsWith("/content", StringComparison.Ordinal))).IsFalse();
+    }
+
+    [Test]
     public async Task An_unexpected_status_is_an_exception_rather_than_a_silent_value() {
         _server.Given(Request.Create().WithPath("/api/artefacts").UsingPost())
                .RespondWith(Response.Create().WithStatusCode(HttpStatusCode.InternalServerError).WithBody("boom"));

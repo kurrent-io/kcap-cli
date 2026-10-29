@@ -40,6 +40,19 @@ public class AgentOrchestratorStopForResumeTests {
         }
     }
 
+    /// <summary>Whether the agent was waiting at shutdown is what decides if its successor nudges it.</summary>
+    [Test]
+    public async Task KeepAgents_records_whether_each_agent_was_waiting_for_input() {
+        var orch = Build(new CaptureServerConnection());
+        Seed(orch, "idle").ActivityClock.SetAwaitingInput(true);
+        Seed(orch, "working").ActivityClock.SetAwaitingInput(false);
+
+        await orch.DisposeAsync();
+
+        await Assert.That(Ledger().TryRead("idle")!.AwaitingInput).IsTrue();
+        await Assert.That(Ledger().TryRead("working")!.AwaitingInput).IsFalse();
+    }
+
     [Test]
     public async Task KeepAgents_persists_the_ring_and_keeps_the_worktree_and_pid_record() {
         using var tmp      = new TempDir();
@@ -169,6 +182,51 @@ public class AgentOrchestratorStopForResumeTests {
         AgentOrchestrator.ReplayRing(empty, []);
 
         await Assert.That(empty.OutputBuffer.Snapshot()).IsEquivalentTo(marker);
+    }
+
+    /// <summary>A run whose session end was already committed may have that end on its way to the
+    /// server, which would stop whatever a successor resumed under the id.</summary>
+    [Test]
+    public async Task A_committed_end_keeps_the_agent_from_being_marked_resuming() {
+        var orch  = Build(new CaptureServerConnection());
+        var agent = Seed(orch, "ended-1");
+        var entry = Ledger().TryRead("ended-1")!;
+        Ledger().Write(entry with { EndCommittedAt = TimeProvider.System.GetUtcNow(), EndCommittedSession = entry.SessionId });
+
+        await orch.PrepareForResumeAsync(agent, CancellationToken.None);
+
+        await Assert.That(Ledger().TryRead("ended-1")!.State).IsEqualTo(ResumeState.Running);
+        await Assert.That(agent.ResumePending).IsFalse();
+        await orch.DisposeAsync();
+    }
+
+    /// <summary>An end committed for an earlier session of the same process, as a Claude /clear does,
+    /// leaves the current session resumable.</summary>
+    [Test]
+    public async Task An_end_committed_for_an_earlier_session_does_not_block_the_resume() {
+        var orch  = Build(new CaptureServerConnection());
+        var agent = Seed(orch, "cleared-1");
+        agent.SessionId = "session-now";
+        orch.UpdateLedgerSession(agent);
+        var entry = Ledger().TryRead("cleared-1")!;
+        Ledger().Write(entry with { EndCommittedAt = TimeProvider.System.GetUtcNow(), EndCommittedSession = "session-before" });
+
+        await orch.PrepareForResumeAsync(agent, CancellationToken.None);
+
+        await Assert.That(Ledger().TryRead("cleared-1")!.State).IsEqualTo(ResumeState.Resuming);
+        await orch.DisposeAsync();
+    }
+
+    [Test]
+    public async Task A_launch_records_the_daemon_epoch_it_runs_under() {
+        var orch = Build(new CaptureServerConnection());
+        Seed(orch, "epoch-1");
+
+        var entry = Ledger().TryRead("epoch-1")!;
+
+        await Assert.That(entry.RunEpoch).IsEqualTo(orch.DaemonEpochForTest);
+        await Assert.That(entry.LaunchEpoch).IsEqualTo(orch.DaemonEpochForTest);
+        await orch.DisposeAsync();
     }
 
     AgentOrchestrator Build(CaptureServerConnection server) => AgentOrchestratorHarness.BuildOrchestrator(

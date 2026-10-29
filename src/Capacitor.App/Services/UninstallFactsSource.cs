@@ -16,7 +16,8 @@ public sealed record UninstallFactsSource(
     string BundleRoot,
     TimeSpan TerminalPathTimeout,
     TimeProvider Time,
-    TextWriter Log) {
+    TextWriter Log,
+    Func<IReadOnlyList<string>>? PathProfiles = null) {
     public async Task<UninstallFacts> GatherAsync(CancellationToken ct) {
         var terminalPath = await ReadTerminalPathAsync(ct).ConfigureAwait(false);
 
@@ -28,7 +29,8 @@ public sealed record UninstallFactsSource(
             Read(HostedServerUrl, "the server", null),
             terminalPath is null
                 ? null
-                : Read<IReadOnlyList<OtherKcapInstall>?>(() => OtherKcapInstalls.Find(terminalPath, BundleRoot), "other kcap installs", null));
+                : Read<IReadOnlyList<OtherKcapInstall>?>(() => OtherKcapInstalls.Find(terminalPath, BundleRoot), "other kcap installs", null),
+            PathProfiles is null ? [] : Read<IReadOnlyList<string>?>(PathProfiles, "shell profiles", null));
     }
 
     async Task<string?> ReadTerminalPathAsync(CancellationToken ct) {

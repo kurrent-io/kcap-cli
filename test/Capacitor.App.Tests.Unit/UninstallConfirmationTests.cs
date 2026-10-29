@@ -20,15 +20,17 @@ public class UninstallConfirmationTests {
         await Assert.That(d).Contains("background service");
         await Assert.That(d).Contains("settings and sign-in");
         await Assert.That(d).Contains("kcap app");
+        await Assert.That(d).Contains("PATH line");
+        await Assert.That(d).Contains("shell profile");
     }
 
     [Test]
-    public async Task Local_server_sets_the_warning_and_the_purge_arg() {
+    public async Task Local_server_sets_the_warning_and_purge_consent() {
         var r = UninstallConfirmation.Build(Facts(local: "http://localhost:7000"));
 
         await Assert.That(r.Prompt.Warning).Contains("http://localhost:7000");
         await Assert.That(r.Prompt.Warning).Contains("permanently deleted");
-        await Assert.That(r.RelaunchArgs.SequenceEqual(["--uninstall", "--purge-local"])).IsTrue();
+        await Assert.That(r.PurgeLocal).IsTrue();
         await Assert.That(r.Prompt.Kind).IsEqualTo(LifecyclePrompt.KindUninstall);
     }
 
@@ -37,7 +39,7 @@ public class UninstallConfirmationTests {
         var r = UninstallConfirmation.Build(Facts());
 
         await Assert.That(r.Prompt.Warning).IsNull();
-        await Assert.That(r.RelaunchArgs.SequenceEqual(["--uninstall"])).IsTrue();
+        await Assert.That(r.PurgeLocal).IsFalse();
     }
 
     [Test]
@@ -128,4 +130,18 @@ public class UninstallConfirmationTests {
         await Assert.That(d).Contains("/opt/homebrew/bin/kcap");
         await Assert.That(d).Contains("brew uninstall kcap");
     }
+    [Test]
+    public async Task Names_the_shell_profile_that_will_be_edited() {
+        var facts = Facts() with { PathProfiles = ["/Users/standard/.zprofile"] };
+        var disclosure = UninstallConfirmation.Build(facts).Prompt.Disclosure;
+        await Assert.That(disclosure).Contains("/Users/standard/.zprofile");
+        await Assert.That(disclosure).Contains("PATH line");
+    }
+
+    [Test]
+    public async Task No_eligible_profiles_says_nothing_about_profile_edits() {
+        var disclosure = UninstallConfirmation.Build(Facts() with { PathProfiles = [] }).Prompt.Disclosure;
+        await Assert.That(disclosure).DoesNotContain("shell profile");
+    }
+
 }

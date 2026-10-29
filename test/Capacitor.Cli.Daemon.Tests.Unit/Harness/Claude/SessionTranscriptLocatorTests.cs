@@ -323,4 +323,113 @@ public class SessionTranscriptLocatorTests {
         var second = SessionTranscriptLocator.TryLocateWinner(projectDir, worktree, spawnedAt, ruledOut);
         await Assert.That(second?.SessionId).IsEqualTo("0123456789abcdef0123456789abcdef");
     }
+
+    // ── TryLocateSession: the transcript a known session id names ───────
+
+    const string Pinned = "0123abcd-0000-4000-8000-0123456789ab";
+
+    [Test]
+    public async Task TryLocateSession_takes_the_named_transcript_over_a_newer_one_with_the_same_cwd() {
+        using var tmp = new TempDir();
+        var projectDir = tmp.CreateDir("projects", "-repo").Path;
+        var cwd = tmp.PathTo("repo");
+        tmp.CreateFile(["projects", "-repo", "ffffffff-0000-4000-8000-000000000000.jsonl"], TranscriptLine(cwd) + "\n");
+        var own = tmp.CreateFile(["projects", "-repo", Pinned + ".jsonl"], TranscriptLine(cwd) + "\n");
+        File.SetLastWriteTimeUtc(own, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        // A future spawn excludes both files without relying on mutable filesystem birth times.
+        var spawnedAt = DateTime.UtcNow.AddDays(1);
+
+        await Assert.That(SessionTranscriptLocator.TryLocateWinner(projectDir, cwd, spawnedAt)).IsNull();
+
+        var found = SessionTranscriptLocator.TryLocateSession(projectDir, Pinned);
+
+        await Assert.That(found?.SessionId).IsEqualTo("0123abcd0000400080000123456789ab");
+        await Assert.That(found?.Path).IsEqualTo(own);
+    }
+
+    [Test]
+    public async Task TryLocateSession_finds_the_dashed_transcript_of_a_dashless_id() {
+        using var tmp = new TempDir();
+        var projectDir = tmp.CreateDir("projects", "-repo").Path;
+        var own = tmp.CreateFile(["projects", "-repo", Pinned + ".jsonl"], "");
+
+        var found = SessionTranscriptLocator.TryLocateSession(projectDir, "0123abcd0000400080000123456789ab");
+
+        await Assert.That(found?.Path).IsEqualTo(own);
+    }
+
+    [Test]
+    public async Task TryLocateSession_finds_nothing_until_claude_creates_the_file() {
+        using var tmp = new TempDir();
+        var projectDir = tmp.CreateDir("projects", "-repo").Path;
+        tmp.CreateFile(["projects", "-repo", "ffffffff-0000-4000-8000-000000000000.jsonl"], TranscriptLine(tmp.PathTo("repo")) + "\n");
+
+        await Assert.That(SessionTranscriptLocator.TryLocateSession(projectDir, Pinned)).IsNull();
+
+        var own = tmp.CreateFile(["projects", "-repo", Pinned + ".jsonl"], "");
+
+        await Assert.That(SessionTranscriptLocator.TryLocateSession(projectDir, Pinned)?.Path).IsEqualTo(own);
+    }
+
+    [Test]
+    public async Task TryLocateSession_through_a_symlinked_project_dir_returns_the_resolved_path() {
+        using var tmp = new TempDir();
+        var real = tmp.CreateDir("projects", "-source").Path;
+        var link = tmp.PathTo("projects", "-worktree");
+        Directory.CreateSymbolicLink(link, real);
+        tmp.CreateFile(["projects", "-source", Pinned + ".jsonl"], "");
+
+        var found = SessionTranscriptLocator.TryLocateSession(link, Pinned);
+
+        await Assert.That(found?.Path).IsEqualTo(tmp.PathTo("projects", "-source", Pinned + ".jsonl"));
+    }
+
+    [Test]
+    public async Task TryLocateSession_of_a_missing_project_dir_finds_nothing() {
+        using var tmp = new TempDir();
+
+        await Assert.That(SessionTranscriptLocator.TryLocateSession(tmp.PathTo("projects", "-absent"), Pinned)).IsNull();
+    }
+
+    [Test]
+    public async Task TryLocateSession_finds_a_known_transcript_in_another_project() {
+        using var tmp = new TempDir();
+        var own = tmp.CreateFile(["projects", "-original", Pinned + ".jsonl"], TranscriptLine(Worktree) + "\n");
+
+        var found = SessionTranscriptLocator.TryLocateSession(tmp.PathTo("projects", "-new"), Pinned);
+
+        await Assert.That(found?.Path).IsEqualTo(own);
+    }
+
+    [Test]
+    public async Task TryLocateSession_prefers_the_current_project_over_a_copy_elsewhere() {
+        using var tmp = new TempDir();
+        var own = tmp.CreateFile(["projects", "-current", Pinned + ".jsonl"], TranscriptLine(Worktree) + "\n");
+        tmp.CreateFile(["projects", "-other", Pinned + ".jsonl"], TranscriptLine(Worktree) + "\n");
+
+        var found = SessionTranscriptLocator.TryLocateSession(tmp.PathTo("projects", "-current"), Pinned);
+
+        await Assert.That(found?.Path).IsEqualTo(own);
+    }
+
+    [Test]
+    public async Task TryLocateSession_rejects_distinct_cross_project_copies() {
+        using var tmp = new TempDir();
+        tmp.CreateFile(["projects", "-one", Pinned + ".jsonl"], TranscriptLine(Worktree) + "\n");
+        tmp.CreateFile(["projects", "-two", Pinned + ".jsonl"], TranscriptLine(Worktree) + "\n");
+
+        await Assert.That(SessionTranscriptLocator.TryLocateSession(tmp.PathTo("projects", "-new"), Pinned)).IsNull();
+    }
+
+    [Test]
+    public async Task TryLocateSession_treats_symlinked_project_directories_as_one_transcript() {
+        using var tmp = new TempDir();
+        var source = tmp.CreateDir("projects", "-source");
+        var own = source.CreateFile(Pinned + ".jsonl", TranscriptLine(Worktree) + "\n");
+        Directory.CreateSymbolicLink(tmp.PathTo("projects", "-link"), source);
+
+        var found = SessionTranscriptLocator.TryLocateSession(tmp.PathTo("projects", "-new"), Pinned);
+
+        await Assert.That(found?.Path).IsEqualTo(own);
+    }
 }

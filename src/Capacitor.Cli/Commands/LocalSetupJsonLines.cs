@@ -35,6 +35,9 @@ static class LocalSetupJsonLines {
         LocalInstallEvent.EmbeddingModelReady r    => new() { Event = "embeddings_model_ready", Model = r.Model, Dimensions = r.Dimensions },
         LocalInstallEvent.EmbeddingsConfigured c   => new() { Event = "embeddings_configured", Provider = "ollama", Model = c.Model, ReplacedModel = c.Replaced },
         LocalInstallEvent.EmbeddingsSkipped k      => new() { Event = "embeddings_skipped", Code = k.Code.Wire(), Message = k.Message },
+        LocalInstallEvent.EmbeddingBuiltinDownloading d => new() { Event = "embeddings_builtin_downloading", Bytes = d.Bytes },
+        LocalInstallEvent.EmbeddingBuiltinProgress p    => new() { Event = "embeddings_builtin_progress", Received = p.Received, Bytes = p.Bytes },
+        LocalInstallEvent.EmbeddingBuiltinConfigured c  => new() { Event = "embeddings_configured", Provider = "builtin", ReplacedModel = c.Replaced },
         _                                    => throw new ArgumentOutOfRangeException(nameof(e), e, null),
     });
 

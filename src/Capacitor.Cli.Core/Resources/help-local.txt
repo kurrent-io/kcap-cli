@@ -21,8 +21,8 @@ Subcommands:
                             Stop every kcap daemon and watcher and the local server, then remove the
                             server's service and binaries. Its data and identity are kept, so
                             `kcap setup --local` brings it back on the same URL.
-      --purge               Also delete its data, logs, pending recordings and caches, and clear every
-                            profile pointing at it. Its URL is retired: nothing is sent to it again,
+      --purge               Also delete its data, logs, downloaded models, pending recordings and
+                            caches, and clear every profile pointing at it. Its URL is retired: nothing is sent to it again,
                             and a new installation gets a new port.
       --force               Uninstall even while a daemon is running agents; they end with it.
       --yes, -y             Do not ask for confirmation.

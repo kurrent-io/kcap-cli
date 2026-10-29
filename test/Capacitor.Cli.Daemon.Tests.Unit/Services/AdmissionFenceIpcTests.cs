@@ -37,7 +37,7 @@ public class AdmissionFenceIpcTests {
         var settingsIpc   = new DaemonSettingsIpc(config, orchestrator, notifier, NullLogger<DaemonSettingsIpc>.Instance);
         var restart       = RestartCoordinator.ForTest(config.Store, config.Name, "test", new NoopRestartStrategy(), TimeProvider.System);
         var control       = new LocalControlServer(config, orchestrator, restart, consentIpc, permissionIpc, statusIpc, settingsIpc,
-            TestFences.Ipc(config, orchestrator), TestShutdown.Ipc(orchestrator, restart), NullLogger<LocalControlServer>.Instance);
+            TestFences.Ipc(config, orchestrator), TestShutdown.Ipc(orchestrator, restart), TestAccountsIpc.Inert(), NullLogger<LocalControlServer>.Instance);
         await control.StartAsync(ct);
 
         var sockPath = config.Store.SocketPath(config.Name);

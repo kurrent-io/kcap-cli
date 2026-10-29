@@ -32,7 +32,8 @@ public class LocalControlAgentResumeTests {
     sealed class NoopPtyProcessFactory : IPtyProcessFactory {
         public IPtyProcess Spawn(
                 string command, string[] args, string cwd,
-                Dictionary<string, string>? extraEnv = null, ushort cols = 120, ushort rows = 40
+                Dictionary<string, string>? extraEnv = null, ushort cols = 120, ushort rows = 40,
+                IReadOnlyCollection<string>? removeEnv = null
             ) => throw new NotSupportedException("never spawns a PTY");
     }
 
@@ -77,7 +78,7 @@ public class LocalControlAgentResumeTests {
             new PermissionIpc(new PermissionPromptBroker(), NullLogger<PermissionIpc>.Instance),
             new DaemonStatusIpc(config, orchestrator, connection, notifier, TimeProvider.System),
             new DaemonSettingsIpc(config, orchestrator, notifier, NullLogger<DaemonSettingsIpc>.Instance),
-            TestFences.Ipc(config, orchestrator), TestShutdown.Ipc(orchestrator, restart, lifetime), NullLogger<LocalControlServer>.Instance);
+            TestFences.Ipc(config, orchestrator), TestShutdown.Ipc(orchestrator, restart, lifetime), TestAccountsIpc.Inert(), NullLogger<LocalControlServer>.Instance);
         await server.StartAsync(cts.Token);
 
         try {

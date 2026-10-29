@@ -83,6 +83,25 @@ public class CodexJudgeDeclarationReaderTests {
         await Assert.That((await reading).Turns!.UserMessages.Length).IsEqualTo(2);
     }
 
+    /// A cursor being replaced cannot be read for a moment; the wait has to outlast that rather than end as if the
+    /// session had no watcher. An unreadable file stands in for the replace, which only Windows makes observable.
+    [Test]
+    public async Task A_cursor_that_cannot_be_read_for_a_moment_is_polled_again() {
+        Skip.Unless(!OperatingSystem.IsWindows() && !Environment.IsPrivilegedProcess, "needs POSIX permissions and an unprivileged user");
+        if (OperatingSystem.IsWindows()) return;
+
+        var path = Rollout(User("fix the build", "t1", "user.text"), User("now ship it", "t2", "user.text"));
+        Cursor.Write(Sid, 2);
+        var file = Cursor.Path(Sid);
+        File.SetUnixFileMode(file, UnixFileMode.None);
+
+        var reading = Read(path, TimeSpan.FromSeconds(5));
+        await Task.Delay(250);
+        File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+
+        await Assert.That((await reading).Turns!.UserMessages.Length).IsEqualTo(2);
+    }
+
     [Test]
     public async Task A_redacted_line_is_declared_by_the_hash_of_its_redacted_bytes() {
         var raw  = User("use ghp_0123456789abcdefghijklmnopqrstuvwxyz to push", "t1", "user.text");

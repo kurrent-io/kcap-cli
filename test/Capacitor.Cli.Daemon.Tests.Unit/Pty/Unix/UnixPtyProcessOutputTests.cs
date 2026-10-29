@@ -65,7 +65,7 @@ public partial class UnixPtyProcessOutputTests {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
 
         using var spawner = new UnixSpawnerThread();
-        var       proc    = Spawn(spawner, "/bin/cat"); // cooked mode: the kernel echoes input
+        var       proc    = Spawn(spawner, IdleReader.Command, IdleReader.Args); // cooked mode: the kernel echoes input
         try {
             using (var cancelled = new CancellationTokenSource(TimeSpan.FromMilliseconds(100))) {
                 await ReadToEndAsync(proc, cancelled.Token).WaitAsync(Bound);
@@ -93,7 +93,7 @@ public partial class UnixPtyProcessOutputTests {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
 
         using var spawner = new UnixSpawnerThread();
-        var       proc    = Spawn(spawner, "/bin/cat");
+        var       proc    = Spawn(spawner, IdleReader.Command, IdleReader.Args);
 
         var read = ReadToEndAsync(proc);
         await Task.Delay(100);

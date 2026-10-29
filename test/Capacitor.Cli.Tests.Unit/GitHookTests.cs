@@ -23,14 +23,17 @@ public class GitHookTests {
     IReadOnlyList<ObservedCommit> Filed() => SessionCommits.Of(Config.Root, Session).ReadFrom(0).Commits;
 
     [Test]
-    public async Task A_commit_is_filed_under_the_claimed_session_with_its_message_redacted() {
+    public async Task A_commit_is_filed_under_the_claimed_session_with_the_hook_time_and_its_message_redacted() {
         Repo.CreateFile("a.txt", "x");
         Repo.CommitAll("Fix watcher (#12)\n\nAPI_KEY=sk-live-1234567890abcdef");
         Claim();
 
+        var before = DateTimeOffset.UtcNow;
         await Hook();
+        var after = DateTimeOffset.UtcNow;
 
         await Assert.That(Filed().Single().Sha).IsEqualTo(Repo.Head);
+        await Assert.That(Filed().Single().CommittedAt).IsNotNull().And.IsBetween(before, after);
         await Assert.That(Filed().Single().Message).StartsWith("Fix watcher (#12)");
         await Assert.That(Filed().Single().Message).DoesNotContain("sk-live-1234567890abcdef");
     }

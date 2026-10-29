@@ -177,7 +177,7 @@ public class AppStartupTests {
             Dispatcher.UIThread.RunJobs(); // ReactiveWindow<T>'s Loaded->Activator.Activate() wiring
 
             var vm = (MainWindowViewModel)window.DataContext!;
-            var result = (vm.ServerLaneTip, vm.Rail?.Repos.Sum(r => r.Sessions.Count));
+            var result = (vm.ServerLaneTip, vm.Rail?.Groups.Sum(r => r.Sessions.Count));
 
             window.Close();
             Dispatcher.UIThread.RunJobs();

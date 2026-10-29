@@ -170,6 +170,16 @@ public class AgentSessionsTests {
         await Assert.That(AgentOrigin()).IsEqualTo(Here);
     }
 
+    /// <summary>The hosted agent and daemon epoch a claim ran under come back with its origin, through a
+    /// deferred end too, so the end can be fenced against a resume of that agent.</summary>
+    [Test]
+    public async Task The_hosted_agent_and_epoch_come_back_with_the_origin() {
+        var hosted = Here with { AgentId = "agent-1", DaemonEpoch = "epoch-1" };
+        Sessions.Claim(Agent, Session, hosted);
+
+        await Assert.That(AgentOrigin()).IsEqualTo(hosted);
+    }
+
     /// <summary>A path may hold a newline on Unix; the origin still reads back whole.</summary>
     [Test]
     public async Task An_origin_with_a_newline_in_a_path_reads_back_whole() {

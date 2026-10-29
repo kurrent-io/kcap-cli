@@ -7,9 +7,11 @@ namespace Capacitor.Cli.Commands;
 /// untouched; under <c>--json</c> alone nothing else is accepted, because the desktop app's wizard owns those steps.
 /// <c>--json --no-prompt</c> is the whole run, reported.</summary>
 sealed record LocalSetupArgs(
-        bool Json, bool SingleUser, bool Yes, bool NoPrompt, string? EmbeddingModel = null, bool NoEmbeddings = false, bool WholeRun = false) {
-    public const string EmbeddingModelFlag = "--embedding-model";
-    public const string NoEmbeddingsFlag   = "--no-embeddings";
+        bool Json, bool SingleUser, bool Yes, bool NoPrompt, string? EmbeddingModel = null, bool NoEmbeddings = false, bool WholeRun = false,
+        bool BuiltinEmbeddings = false) {
+    public const string EmbeddingModelFlag    = "--embedding-model";
+    public const string NoEmbeddingsFlag      = "--no-embeddings";
+    public const string BuiltinEmbeddingsFlag = "--builtin-embeddings";
 
     static readonly string[] Conflicting = [
         "--server-url", "--discover", "--org", "--slug", "--tier", "--invite-code", "--device", "--github", "--muse-assistant",
@@ -18,13 +20,16 @@ sealed record LocalSetupArgs(
     /// <summary>The flags whose next token is their value, which a bare name check must skip.</summary>
     static readonly string[] TakesValue = ["--plugin-scope", "--default-visibility", "--use-provider-api-key", "--daemon-name", EmbeddingModelFlag];
 
-    static readonly string[] JsonAccepts = ["--local", "--json", "--single-user", "--yes", "--no-update-check", EmbeddingModelFlag, NoEmbeddingsFlag];
+    static readonly string[] JsonAccepts = [
+        "--local", "--json", "--single-user", "--yes", "--no-update-check", EmbeddingModelFlag, NoEmbeddingsFlag, BuiltinEmbeddingsFlag,
+    ];
 
-    /// <summary>The embedding answer the flags give, or null when they give none.</summary>
-    public LocalEmbeddingAnswer? Embeddings =>
+    /// <summary>The embedding answer the flags give; <see cref="LocalEmbeddingAnswer.Default"/> when they give none.</summary>
+    public LocalEmbeddingAnswer Embeddings =>
         NoEmbeddings ? new LocalEmbeddingAnswer.Skip()
+      : BuiltinEmbeddings ? new LocalEmbeddingAnswer.Builtin()
       : EmbeddingModel is { } model ? new LocalEmbeddingAnswer.Ollama(model)
-      : null;
+      : new LocalEmbeddingAnswer.Default();
 
     /// <param name="args">The command line with the verb at index 0, as <c>HandleAsync</c> receives it.</param>
     /// <param name="kcapUrlEnv">The <c>KCAP_URL</c> environment value.</param>
@@ -58,9 +63,15 @@ sealed record LocalSetupArgs(
         }
 
         var noEmbeddings = rest.Contains(NoEmbeddingsFlag);
+        var builtin      = rest.Contains(BuiltinEmbeddingsFlag);
 
-        if (noEmbeddings && model is not null)
-            return Refuse($"{NoEmbeddingsFlag} and {EmbeddingModelFlag} contradict each other. Drop one of them.");
+        var given = new List<string>();
+        if (builtin) given.Add(BuiltinEmbeddingsFlag);
+        if (noEmbeddings) given.Add(NoEmbeddingsFlag);
+        if (model is not null) given.Add(EmbeddingModelFlag);
+
+        if (given.Count > 1)
+            return Refuse($"{given[0]} and {given[1]} contradict each other. Drop one of them.");
 
         if (!string.IsNullOrEmpty(kcapUrlEnv))
             return Refuse($"KCAP_URL is set ({kcapUrlEnv}), so every later step would talk to that server instead of the local one. Unset it to use --local.");
@@ -70,9 +81,9 @@ sealed record LocalSetupArgs(
 
         if (json && !noPrompt && Flags(rest).FirstOrDefault(a => !JsonAccepts.Contains(a)) is { } extra)
             return Refuse($"{extra} cannot be used with --local --json, which runs only the install and accepts only --single-user, --yes, "
-                        + $"--no-update-check, {EmbeddingModelFlag} and {NoEmbeddingsFlag}. Add --no-prompt to run every step.");
+                        + $"--no-update-check, {EmbeddingModelFlag}, {NoEmbeddingsFlag} and {BuiltinEmbeddingsFlag}. Add --no-prompt to run every step.");
 
-        return (new(json, rest.Contains("--single-user"), rest.Contains("--yes"), json || noPrompt, model, noEmbeddings, json && noPrompt), null);
+        return (new(json, rest.Contains("--single-user"), rest.Contains("--yes"), json || noPrompt, model, noEmbeddings, json && noPrompt, builtin), null);
     }
 
     /// <summary>The <c>--embedding-model=&lt;model&gt;</c> form as two tokens.</summary>

@@ -9,12 +9,21 @@ sealed class CloudTerminalSinkMirror {
     static readonly byte[] ResetBytes = [0x1B, 0x63];
 
     int           _entered;
+    int           _downForReads;
     volatile bool _ready = true;
 
     public ConcurrentQueue<byte[]>                Sent   { get; } = new();
     public Func<byte[], CancellationToken, Task>? OnSend { get; set; }
     public int                                    Entered => Volatile.Read(ref _entered);
-    public bool                                   Ready   { get => _ready; set => _ready = value; }
+    public bool Ready {
+        get => (Volatile.Read(ref _downForReads) <= 0 || Interlocked.Decrement(ref _downForReads) < 0) && _ready;
+        set => _ready = value;
+    }
+
+    /// <summary>A transport drop the sink notices once: the next readiness read sees the connection down, and the
+    /// ones after see it back. No timer decides when it recovers, so how the sink classifies the failure does not
+    /// depend on scheduling.</summary>
+    public void DropUntilNoticed() => Interlocked.Exchange(ref _downForReads, 1);
 
     public async Task Send(string agentId, string base64, CancellationToken ct) {
         var bytes = Convert.FromBase64String(base64);

@@ -171,7 +171,7 @@ sealed class LocalCommand(
         LocalUninstallOutcome outcome;
 
         try {
-            outcome = await stack.RunAsync(new SyncProgress<LocalInstallEvent>(RenderRecovery),
+            outcome = await stack.RunAsync(new SyncProgress<LocalInstallEvent>(e => RenderRecovery(Console.Out, e)),
                 (lease, state, ct) => uninstall.RunAsync(lease, state, purge, force, config.Directory, ct), CancellationToken.None, force);
         } catch (Exception ex) when (ex is LocalLifecycleException or LocalInstallFailure or LocalUpgradeFailure) {
             return await FailAsync(ex.Message);
@@ -203,7 +203,7 @@ sealed class LocalCommand(
         await Console.Out.WriteLineAsync($"  • Retire {installation.ServerUrl}: nothing is sent to it again, and a new installation gets a new port");
     }
 
-    internal static void RenderRecovery(LocalInstallEvent e) {
+    internal static void RenderRecovery(TextWriter output, LocalInstallEvent e) {
         var line = e switch {
             LocalInstallEvent.Recovering r  => $"Finishing an interrupted {r.Operation} (stopped at {r.Phase})…",
             LocalInstallEvent.Recovered r   => $"Finished the interrupted {r.Operation}",
@@ -212,7 +212,7 @@ sealed class LocalCommand(
             _                               => LocalSetupTerminal.Line(e, CapacitorVersion.CurrentDisplay()),
         };
 
-        if (line is not null) Console.Out.WriteLine($"  {line}");
+        if (line is not null) output.WriteLine($"  {line}");
     }
 
     static async Task<int> FailAsync(string message) {

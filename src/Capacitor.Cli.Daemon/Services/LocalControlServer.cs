@@ -14,7 +14,7 @@ internal sealed partial class LocalControlServer(
         DaemonConfig config, AgentOrchestrator orchestrator,
         RestartCoordinator restart, LaunchConsentIpc consentIpc, PermissionIpc permissionIpc, DaemonStatusIpc statusIpc,
         DaemonSettingsIpc settingsIpc, AdmissionFenceIpc fenceIpc,
-        DaemonShutdownIpc shutdownIpc, ILogger<LocalControlServer> logger
+        DaemonShutdownIpc shutdownIpc, AccountsIpc accountsIpc, ILogger<LocalControlServer> logger
     ) : BackgroundService {
     protected override async Task ExecuteAsync(CancellationToken ct) {
         var path = config.Store.SocketPath(config.Name);
@@ -85,7 +85,9 @@ internal sealed partial class LocalControlServer(
                 case FrameType.Shutdown: await shutdownIpc.HandleAsync(first.Text, stream, ct); break;
                 case FrameType.AgentResume: await HandleAgentResumeAsync(first.Text, stream, ct); break;
                 case FrameType.AgentSession: await orchestrator.HandleLocalAgentSessionAsync(first.Text, stream, ct); break;
-                default: await FrameCodec.WriteAsync(stream, LocalFrame.Error($"expected Spawn/Attach/AttachWithRuntime/List/Stop/StopV2/Restart/ConsentSubscribe/ConsentResolve/ConsentRulesGet/ConsentRulesPut/ConsentSubscribeV2/ConsentResolveV2/ConsentRulesPutV2/PermissionSubscribe/PermissionResolve/Hello/StatusSubscribe/SendText/SendTextWithAttachments/DaemonSettingsPut/AdmissionFenceAcquire/Shutdown/AgentResume/AgentSession, got {first.Type}"), ct); break;
+                case FrameType.AccountsSubscribe: await accountsIpc.HandleSubscribeAsync(stream, ct); break;
+                case FrameType.SessionRename: await orchestrator.HandleLocalRenameAsync(first.Text, stream, ct); break;
+                default: await FrameCodec.WriteAsync(stream, LocalFrame.Error($"expected Spawn/Attach/AttachWithRuntime/List/Stop/StopV2/Restart/ConsentSubscribe/ConsentResolve/ConsentRulesGet/ConsentRulesPut/ConsentSubscribeV2/ConsentResolveV2/ConsentRulesPutV2/PermissionSubscribe/PermissionResolve/Hello/StatusSubscribe/SendText/SendTextWithAttachments/DaemonSettingsPut/AdmissionFenceAcquire/Shutdown/AgentResume/AgentSession/AccountsSubscribe/SessionRename, got {first.Type}"), ct); break;
             }
         } catch (Exception ex) when (ex is not OperationCanceledException) {
             LogConnectionError(ex);

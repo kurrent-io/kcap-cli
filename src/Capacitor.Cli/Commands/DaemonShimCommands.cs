@@ -82,9 +82,11 @@ public static class DaemonShimCommands {
         if (args.Any(a => a != "--json"))
             return Usage();
 
-        var result = await EvaluateAsync(time, resolveTarget, probe, install, preflight, installable, CancellationToken.None);
+        var json   = args.Contains("--json");
+        var result = await EvaluateAsync(time, resolveTarget, probe, install, preflight, installable,
+            disclose: json ? Console.Error.WriteLine : Console.Out.WriteLine);
 
-        return await Report(result, args.Contains("--json"));
+        return await Report(result, json);
     }
 
     /// <summary>
@@ -99,9 +101,9 @@ public static class DaemonShimCommands {
             TimeProvider time, Func<string?>? resolveTarget = null, ILoginShellProbe? probe = null,
             Func<string, CancellationToken, Task<ShimResult>>? install = null,
             Func<string, ShimPreflight>? preflight = null, bool? installable = null,
-            CancellationToken ct = default) {
+            Action<string>? disclose = null, CancellationToken ct = default) {
         var target = (resolveTarget ?? (() => ResolveLinkTarget(
-            () => Environment.ProcessPath is { } exe ? ScriptInstallLayout.Stabilize(exe) : null, File.Exists,
+            () => Environment.ProcessPath is { } exe ? InstallPaths.Stabilize(exe) : null, File.Exists,
             OperatingSystem.IsWindows())))();
 
         if (string.IsNullOrEmpty(target))
@@ -124,7 +126,7 @@ public static class DaemonShimCommands {
                 new ShimEnsureJson(Capability, target, onPath != null, onPath, "none",
                     FirstRunMachineActionOutcomes.Refused, decision.Reason),
 
-            _ => await Install(target, installer, install, preflight, ct),
+            _ => await Install(target, installer, install, preflight, disclose, ct),
         };
     }
 
@@ -173,11 +175,12 @@ public static class DaemonShimCommands {
 
     static async Task<ShimEnsureJson> Install(string target, ICliPathInstaller? installer,
             Func<string, CancellationToken, Task<ShimResult>>? install, Func<string, ShimPreflight>? preflight,
-            CancellationToken ct) {
+            Action<string>? disclose, CancellationToken ct) {
         // The macOS installer tries a writable PATH folder first, so an entry at /usr/local/bin is
         // not a refusal until that fails. It refuses a conflicting entry without prompting, and a
         // foreign entry there after a failed install is the coded conflict row the flow was promised.
         preflight ??= installer!.Preflight;
+        if (installer is not null) disclose?.Invoke(installer.Disclosure);
 
         var result = install is not null
             ? await install(target, ct).ConfigureAwait(false)
@@ -271,7 +274,9 @@ public static class DaemonShimCommands {
         Console.Error.WriteLine("  ensure [--json]   Probe the terminal PATH; if kcap is absent, link kcap");
         Console.Error.WriteLine("                    to this CLI in a writable PATH folder, else");
         Console.Error.WriteLine("                    /usr/local/bin (macOS; prompts once for your admin");
-        Console.Error.WriteLine("                    password), or add its folder to your user PATH (Windows).");
+        Console.Error.WriteLine("                    password, or without admin rights links ~/.local/bin/kcap");
+        Console.Error.WriteLine("                    and adds that folder to PATH in your shell profile), or");
+        Console.Error.WriteLine("                    add its folder to your user PATH (Windows).");
         return 1;
     }
 }

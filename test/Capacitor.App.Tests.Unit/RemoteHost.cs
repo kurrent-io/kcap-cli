@@ -18,6 +18,7 @@ sealed class RemoteHost : IDisposable {
     public RemoteHost() => _access = new SessionAccessService(_lane, new FakeTimeProvider());
 
     public FakeAgentDirectory Directory { get; } = new();
+    public FakeServerSessionsService Sessions { get; } = new();
     public FakeWorkContextSource WorkSource { get; } = new();
 
     // A separate overload rather than an optional parameter: the factory parameter takes this
@@ -37,9 +38,28 @@ sealed class RemoteHost : IDisposable {
             () => new FakeTerminalSurface(), pullRequests: pullRequests, drafts: drafts);
     }
 
+    /// A session-only workspace over a row the server lists with no daemon behind it.
+    public RemoteSessionViewModel NewServer(string sessionId, string status = "ended") {
+        var row = ServerRow(sessionId, status);
+        Directory.Rows.AddOrUpdate(row);
+        return new RemoteSessionViewModel(row, Directory, _access, _permissions, WorkspaceFixtures.NewActions(), _lane,
+            (_, _) => Task.FromResult(new SessionDetailFetch(null)), new RecordingOpener(), new FakeTimeProvider(), WorkSource,
+            () => new FakeTerminalSurface());
+    }
+
+    public static AgentRow ServerRow(string sessionId, string status = "ended") =>
+        AgentRow.FromServer(new Capacitor.Remote.Models.RepoSessionDto {
+            SessionId = sessionId, Status = status, AccessLevel = "full", Vendor = "claude", Title = "Ended session",
+            Owner = new() { UserId = "u1", DisplayName = "Alexey" },
+            StartedAt = DateTimeOffset.UnixEpoch, LastActivityAt = DateTimeOffset.UnixEpoch.AddHours(1),
+            EndedAt = status == "ended" ? DateTimeOffset.UnixEpoch.AddHours(1) : null,
+            Repo = new() { Hash = "h", Owner = "kurrent-io", Name = "kcap-cli" },
+        }, hostedPresentation: false);
+
     public void Dispose() {
         _access.Dispose();
         _permissions.Dispose();
         Directory.Dispose();
+        Sessions.Dispose();
     }
 }

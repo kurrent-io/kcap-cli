@@ -77,7 +77,7 @@ public class AcpPolicyDegradedNoticeTests {
         await h.Fake.WriteRawFrameAsync(
             FakeAcpAgent.BuildSessionUpdateNotification(
                 FakeAcpAgent.FixedSessionId,
-                FakeAcpAgent.BuildToolCallUpdate("call-1", "rm -rf /", "execute", "pending")),
+                FakeAcpAgent.BuildToolCallUpdate("call-1", "rm -rf /", "execute", "pending", rawInputJson: """{"command":"rm -rf /"}""")),
             h.Cts.Token);
 
         heldInitialize.SetResult();

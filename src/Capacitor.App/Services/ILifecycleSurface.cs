@@ -35,4 +35,6 @@ public sealed record LifecyclePrompt(
     public const string KindRemoveProfile = "remove-profile";
     public const string KindSetup         = "setup";
     public const string KindUninstall     = "uninstall";
+    public const string KindWindowsService       = "windows-service";
+    public const string KindWindowsServiceUpdate = "windows-service-update";
 }

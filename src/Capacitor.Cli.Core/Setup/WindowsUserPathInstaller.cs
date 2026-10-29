@@ -7,6 +7,11 @@ public sealed class WindowsUserPathInstaller(IUserPathStore store, ILoginShellPr
         "This adds this app's folder to your user PATH, so kcap works from any new terminal. " +
         "No administrator rights are needed.";
 
+    public Task<IReadOnlyList<DisclosureSpan>> DescribeAsync(string target, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<DisclosureSpan>>(CliDirectory(target) is { } dir
+            ? [new("It puts "), new(dir, Code: true), new(" on your user PATH. No administrator rights are needed.")]
+            : [new(Disclosure)]);
+
     public ShimPreflight Preflight(string target) =>
         CliDirectory(target) is { } dir && Contains(store.Read(), dir) ? ShimPreflight.AlreadyInstalled : ShimPreflight.Installable;
 

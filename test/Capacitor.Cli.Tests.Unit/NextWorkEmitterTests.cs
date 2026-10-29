@@ -52,7 +52,42 @@ public class NextWorkEmitterTests {
     public async Task The_guidance_names_deferral_and_completion() {
         await Assert.That(NextWorkEmitter.Guidance).Contains("Finish a listed item before starting new work.");
         await Assert.That(NextWorkEmitter.Guidance).Contains("declare it at that moment with declare_loose_end (one call per item, never \"none\")");
+        await Assert.That(NextWorkEmitter.Guidance).Contains("A flaky test you hit and do not fix here, one that failed and then passed on a rerun, is a loose end too");
         await Assert.That(NextWorkEmitter.Guidance).EndsWith(NextWorkEmitter.CompletionInstruction);
+    }
+
+    /// <summary>The offer follows the guidance only when the ack says this server can start agents; an
+    /// absent, false or malformed flag leaves the guidance as it was, rows or not.</summary>
+    [Test]
+    [Arguments("true", true)]
+    [Arguments("false", false)]
+    [Arguments("\"yes\"", false)]
+    [Arguments(null, false)]
+    public async Task The_start_agent_offer_follows_the_guidance_only_when_the_ack_allows_it(string? flag, bool offered) {
+        var withRows = JsonNode.Parse(Ack)!;
+        var noRows   = JsonNode.Parse("""{"next_work":{"rows":[],"as_of":"t","arms_not_current":[]}}""")!;
+        if (flag is not null) {
+            withRows["next_work"]!["agent_start"] = JsonNode.Parse(flag);
+            noRows["next_work"]!["agent_start"]   = JsonNode.Parse(flag);
+        }
+
+        var fragment = NextWorkEmitter.BuildFragment(withRows, disabled: false)!;
+        var fallback = NextWorkEmitter.BuildFragmentOrInstruction(noRows, disabled: false)!;
+
+        var guidanceLine = fragment.Split('\n').Single(l => l.StartsWith(NextWorkEmitter.Guidance, StringComparison.Ordinal));
+        await Assert.That(guidanceLine).IsEqualTo(offered ? $"{NextWorkEmitter.Guidance} {NextWorkEmitter.StartAgentOffer}" : NextWorkEmitter.Guidance);
+        await Assert.That(fallback).IsEqualTo(offered ? $"{NextWorkEmitter.InstructionOnly} {NextWorkEmitter.StartAgentOffer}" : NextWorkEmitter.InstructionOnly);
+    }
+
+    /// <summary>The offer never licenses a start the user did not ask for, is honoured only by a harness
+    /// that has the tool, and hands start_agent only the target keys it accepts.</summary>
+    [Test]
+    public async Task The_start_agent_offer_waits_for_the_user_and_the_tool() {
+        var text = NextWorkEmitter.StartAgentOffer;
+
+        await Assert.That(text).StartsWith("If start_agent is among your tools");
+        await Assert.That(text).Contains("Start one only when the user asks");
+        await Assert.That(text).Contains("target_key from get_next_work as work_item only when it is a wi: or le: key");
     }
 
     /// <summary>The unit is the piece of work, not the request: the instruction names the terminal states,
@@ -65,6 +100,7 @@ public class NextWorkEmitterTests {
         await Assert.That(text).Contains("a question answered with nothing pending");
         await Assert.That(text).Contains("Never present after a step inside work that is still open");
         await Assert.That(text).Contains("attached work is still open, do not present unless the user asked for next work or said they are done with or parking that work");
+        await Assert.That(text).Contains("close_loose_end what you finished, declare the rest with declare_loose_end");
         await Assert.That(text).Contains("declare_loose_end (one call per item, never \"none\"), call get_next_work");
     }
 

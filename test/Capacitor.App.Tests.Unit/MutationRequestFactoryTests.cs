@@ -78,4 +78,29 @@ public class MutationRequestFactoryTests {
         await Assert.That(refusal).IsNull();
         await Assert.That(request!.CanonicalServer).IsEqualTo("https://kcap.example.com:443");
     }
+
+    [Test]
+    public async Task ForAccount_builds_without_a_server_and_mints_a_request_id_per_call() {
+        var args = new AccountArgs(null, null, "abcd1234", "Work");
+
+        var first  = MutationRequestFactory.ForAccount(MutationVerb.AccountRename, args, "daemon-a", null);
+        var second = MutationRequestFactory.ForAccount(MutationVerb.AccountRename, args, "daemon-a", null);
+
+        await Assert.That(first.Verb).IsEqualTo(MutationVerb.AccountRename);
+        await Assert.That(first.Profile).IsEqualTo("");
+        await Assert.That(first.CanonicalServer).IsEqualTo("");
+        await Assert.That(first.DaemonName).IsEqualTo("daemon-a");
+        await Assert.That(first.Account).IsEqualTo(args);
+        await Assert.That(Guid.TryParseExact(first.RequestId, "N", out _)).IsTrue();
+        await Assert.That(second.RequestId).IsNotEqualTo(first.RequestId);
+        await Assert.That(second).IsNotEqualTo(first);
+        await Assert.That(MutationRequestFactory.ForAccount(MutationVerb.AccountRename, args, "daemon-a", "work").Profile).IsEqualTo("work");
+    }
+
+    [Test]
+    public async Task ForAccount_refuses_a_non_account_verb() {
+        foreach (var verb in Enum.GetValues<MutationVerb>().Where(v => !v.IsAccountVerb()))
+            await Assert.That(() => MutationRequestFactory.ForAccount(verb, new AccountArgs(null, null, "abcd1234", null), "daemon-a", "default"))
+                .Throws<ArgumentOutOfRangeException>();
+    }
 }

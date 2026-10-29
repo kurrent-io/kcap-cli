@@ -294,25 +294,27 @@ public class LocalPermissionBridgeTests {
     }
 
     [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
-    public async Task ApplyPermissionsAndUpdatedInputAreCopiedIntoDecision() {
-        using var apDoc = JsonDocument.Parse("""{"allow":["Bash(ls:*)"]}""");
+    public async Task Allow_always_reaches_claude_as_the_rules_it_suggested_with_the_updated_input() {
         using var uiDoc = JsonDocument.Parse("""{"command":"ls -la"}""");
+        const string suggestions = """[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"ls:*"}],"behavior":"allow","destination":"localSettings"}]""";
 
         var (bridge, _) = CreateBridge((_, _, _, _, _) =>
-            Task.FromResult(new PermissionDecision("allow", apDoc.RootElement.Clone(), uiDoc.RootElement.Clone()))
+            Task.FromResult(new PermissionDecision("allow", ClaudePermissions.AlwaysAllow("Bash"), uiDoc.RootElement.Clone()))
         );
 
         try {
             await bridge.StartAsync(CancellationToken.None);
 
             using var client   = CreateClient();
-            using var response = await client.PostAsync($"{bridge.BaseUrl}/claude/permission-request", JsonContent.Create(new { session_id = "abc" }));
+            using var request  = new StringContent($$"""{"session_id":"abc","tool_name":"Bash","permission_suggestions":{{suggestions}}}""", Encoding.UTF8, "application/json");
+            using var response = await client.PostAsync($"{bridge.BaseUrl}/claude/permission-request", request);
 
             var       body = await response.Content.ReadAsStringAsync();
             using var doc  = JsonDocument.Parse(body);
 
             var decision = doc.RootElement.GetProperty("hookSpecificOutput").GetProperty("decision");
-            await Assert.That(decision.GetProperty("applyPermissions").GetProperty("allow")[0].GetString()).IsEqualTo("Bash(ls:*)");
+            await Assert.That(decision.TryGetProperty("applyPermissions", out _)).IsFalse();
+            await Assert.That(decision.GetProperty("updatedPermissions").GetRawText()).IsEqualTo(suggestions);
             await Assert.That(decision.GetProperty("updatedInput").GetProperty("command").GetString()).IsEqualTo("ls -la");
         } finally {
             await bridge.DisposeAsync();
@@ -394,27 +396,25 @@ public class LocalPermissionBridgeTests {
     // ── Per-vendor routing tests ──────────────────────────────────────────────
 
     [Test, NotInParallel(nameof(LocalPermissionBridgeTests))]
-    public async Task Claude_path_returns_claude_response_shape() {
-        using var apDoc = JsonDocument.Parse("""{"allow":["Bash(*)"]}""");
-        using var uiDoc = JsonDocument.Parse("""{"command":"ls"}""");
-
+    public async Task Claude_path_saves_a_session_rule_when_claude_suggested_none() {
         var (bridge, _) = CreateBridge((_, _, _, _, _) =>
-            Task.FromResult(new PermissionDecision("allow", apDoc.RootElement.Clone(), uiDoc.RootElement.Clone()))
+            Task.FromResult(new PermissionDecision("allow", ClaudePermissions.AlwaysAllow("Bash"), null))
         );
 
         try {
             await bridge.StartAsync(CancellationToken.None);
 
             using var client   = CreateClient();
-            using var response = await client.PostAsync($"{bridge.BaseUrl}/claude/permission-request", JsonContent.Create(new { session_id = "abc" }));
+            using var response = await client.PostAsync($"{bridge.BaseUrl}/claude/permission-request", JsonContent.Create(new { session_id = "abc", tool_name = "Bash" }));
 
             await Assert.That((int)response.StatusCode).IsEqualTo(200);
 
             var       body     = await response.Content.ReadAsStringAsync();
             using var doc      = JsonDocument.Parse(body);
             var       decision = doc.RootElement.GetProperty("hookSpecificOutput").GetProperty("decision");
-            await Assert.That(decision.TryGetProperty("applyPermissions", out _)).IsTrue();
-            await Assert.That(decision.TryGetProperty("updatedInput", out _)).IsTrue();
+            await Assert.That(decision.TryGetProperty("applyPermissions", out _)).IsFalse();
+            await Assert.That(decision.GetProperty("updatedPermissions").GetRawText())
+                .IsEqualTo("""[{"type":"addRules","rules":[{"toolName":"Bash"}],"behavior":"allow","destination":"session"}]""");
         } finally {
             await bridge.DisposeAsync();
         }

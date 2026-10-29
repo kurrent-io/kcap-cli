@@ -25,6 +25,19 @@ sealed class DaemonServiceCommands(
         var action  = args[0];
         var rest    = args[1..];
         var noStart = rest.Contains("--no-start");
+        var system  = rest.Contains("--system");
+
+        if (system && action is not ("install" or "uninstall")) return Usage();
+        if (system && !OperatingSystem.IsWindows()) {
+            await Console.Error.WriteLineAsync("--system installs the Windows service; it does nothing on this OS.");
+            return 1;
+        }
+
+        // Elevated first, so the install below already finds the service and enrolls with it.
+        if (system && action == "install" && OperatingSystem.IsWindows()) {
+            var elevated = WindowsServiceElevation.Run("install");
+            if (elevated != 0) return await ElevationFailedAsync(elevated, "install");
+        }
 
         IServiceManager manager;
         try {
@@ -34,12 +47,30 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
-        var verbs = new DaemonServiceCommands(
-            store, root, profiles, manager,
-            DaemonStore.Sanitize(DaemonNameResolver.Resolve(rest, profiles.DaemonName)), home, time);
+        var serviceId = DaemonStore.Sanitize(DaemonNameResolver.Resolve(rest, profiles.DaemonName));
+        var verbs = new DaemonServiceCommands(store, root, profiles, manager, serviceId, home, time);
+
+        // An update of the service binary: when the daemon is already enrolled as asked, the elevated step was the
+        // whole job. A changed profile or agent cap goes through the install below, which re-enrolls.
+        if (system && action == "install" && manager is WindowsServiceManager windows && EnrolledAsAsked(windows)) {
+            await Console.Out.WriteLineAsync($"kcap-service is current; '{serviceId}' is already enrolled with it.");
+            return 0;
+        }
+
+        bool EnrolledAsAsked(WindowsServiceManager windows) {
+            try {
+                return windows.Query(serviceId) is { Probe: LabelProbe.Loaded, UnitPresent: true }
+                    && windows.EnrolledAs(serviceId,
+                        DaemonCommands.ExtractFlagValue(rest, "--profile") ?? profiles.Resolution.ProfileName,
+                        DaemonCommands.ExtractFlagValue(rest, "--max-agents"));
+            } catch (ArgumentException) {
+                return false;
+            }
+        }
 
         return action switch {
             "install"   => await verbs.Install(rest, startNow: !noStart),
+            "uninstall" when system && OperatingSystem.IsWindows() => await verbs.UninstallSystem(),
             "uninstall" => UnderArg(rest) switch {
                 null    => await verbs.Uninstall(),
                 ""      => Usage(),
@@ -52,6 +83,28 @@ sealed class DaemonServiceCommands(
             "refresh"   => await verbs.Refresh(force: rest.Contains("--force")),
             _           => Usage(),
         };
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    static async Task<int> ElevationFailedAsync(int exit, string verb) {
+        await Console.Error.WriteLineAsync(exit == WindowsServiceElevation.DeclinedExit
+            ? "The administrator prompt was declined; the Windows service was not changed."
+            : $"kcap-service {verb} failed (exit {exit}); the Windows service was not changed.");
+        return exit;
+    }
+
+    /// <summary>Unenrolls this user, then removes the machine's service behind the UAC prompt. The service's
+    /// other users keep their daemons running, unsupervised, until they install again</summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    internal async Task<int> UninstallSystem() {
+        if (manager is WindowsServiceManager) {
+            var unenrolled = await Uninstall();
+            if (unenrolled != 0) return unenrolled;
+        }
+        var elevated = WindowsServiceElevation.Run("uninstall");
+        if (elevated != 0) return await ElevationFailedAsync(elevated, "uninstall");
+        await Console.Out.WriteLineAsync("The Windows service kcap-service is uninstalled.");
+        return 0;
     }
 
     /// <summary>
@@ -242,7 +295,7 @@ sealed class DaemonServiceCommands(
     /// a later run when the daemon does not accept the stop; a systemd daemon picks the new path up on its next start.
     /// </summary>
     internal async Task<int> Refresh(bool force = false, Func<string, string>? stabilize = null) {
-        stabilize ??= ScriptInstallLayout.Stabilize;
+        stabilize ??= InstallPaths.Stabilize;
 
         if (force && manager is not LaunchdServiceManager) {
             await Console.Error.WriteLineAsync("refresh_outcome=unsupported");
@@ -606,7 +659,7 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
-        if (!ended) DaemonCommands.MarkLedgerInterrupted(store, id, time);
+        if (!ended) DaemonCommands.MarkLedgerInterrupted(store, id, time, Console.Error);
 
         await Console.Out.WriteLineAsync($"Service '{id}' uninstalled ({manager.Describe()}).");
         return 0;
@@ -636,6 +689,10 @@ sealed class DaemonServiceCommands(
                 } else if (!Owned(unit)) {
                     // An install holding the lock may have repointed the unit at another copy of kcap.
                     continue;
+                } else if (manager.Query(unit).Probe == LabelProbe.Unknown) {
+                    // Ending the daemon first would leave it stopped beside a unit the supervisor cannot remove.
+                    await Console.Error.WriteLineAsync($"Could not uninstall service '{unit}': {manager.Describe()} did not report its state; its daemon was left running.");
+                    failed = true;
                 } else {
                     var ended = await ServiceRemoval.EndAgentsAsync(store, unit, time);
 
@@ -643,7 +700,7 @@ sealed class DaemonServiceCommands(
                         await Console.Error.WriteLineAsync($"Could not uninstall service '{unit}': {error}");
                         failed = true;
                     } else {
-                        if (!ended) DaemonCommands.MarkLedgerInterrupted(store, unit, time);
+                        if (!ended) DaemonCommands.MarkLedgerInterrupted(store, unit, time, Console.Error);
                         await Console.Out.WriteLineAsync($"Service '{unit}' uninstalled ({manager.Describe()}).");
                     }
                 }
@@ -692,7 +749,7 @@ sealed class DaemonServiceCommands(
 
     PollingServiceVerify NewPollingVerify(Func<bool>? profileViable = null) =>
         new(store, manager, n => DaemonPidProbe.ValidatedPid(store, n), (n, t) => HelloProbe.RunAsync(store, n, time, t), time,
-            profileViable);
+            profileViable, endsManualOwner: OperatingSystem.IsWindows());
 
     async Task<int> StartPlain() {
         using var txn = await ServiceTxnLock.TryAcquireAsync(store, id, TimeSpan.FromSeconds(10), time);
@@ -750,30 +807,61 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
-        if (!exited) DaemonCommands.MarkLedgerInterrupted(store, id, time, DaemonCommands.KeepsSavedResumes(request, outcome));
+        if (!exited) DaemonCommands.MarkLedgerInterrupted(store, id, time, Console.Error, DaemonCommands.KeepsSavedResumes(request, outcome));
 
         await Console.Out.WriteLineAsync($"Service '{id}' stopped (still installed).");
         return 0;
     }
 
-    async Task<int> Status() {
-        var status = manager.Status(id);
+    internal async Task<int> Status() {
+        await StaleTxnMarker.SettleAsync(store, manager, id, time);
+        ServiceStatus status;
+        try {
+            status = manager.Status(id);
+        } catch (InvalidOperationException ex) {
+            await Console.Error.WriteLineAsync($"Could not read the state of service '{id}' ({manager.Describe()}): {ex.Message}");
+            return 1;
+        }
         await Console.Out.WriteLineAsync($"Service '{id}': {status.State} ({manager.Describe()})");
         if (status.BinaryPath is { } bin) await Console.Out.WriteLineAsync($"  binary: {bin}");
+        if (ServiceTxnMarker.Exists(store, id) && !ServiceTxnLock.IsHeld(store, id))
+            await Console.Out.WriteLineAsync(UnfinishedTxnLines(
+                id, ServiceTxnMarker.Read(store, id), ServiceTxnMarker.WrittenAt(store, id)));
         return 0;
     }
 
+    /// <summary>The human status lines for a marker no running operation holds.</summary>
+    internal static string UnfinishedTxnLines(string id, TxnMarker? marker, DateTimeOffset? writtenAt) {
+        var what = marker is null ? "operation" : marker.Operation;
+        var where = marker is null ? "" : $" at '{marker.Phase}'";
+        var when = writtenAt is { } at ? $" ({at.ToLocalTime():yyyy-MM-dd HH:mm})" : "";
+        return $"  An earlier service {what} did not finish: it stopped{where}{when}.\n"
+             + $"  Repair it with: kcap daemon service install --replace --verify --name {id}";
+    }
+
     async Task<int> StatusJson() {
+        await StaleTxnMarker.SettleAsync(store, manager, id, time);
         var query           = manager.Query(id);
         var installBinary   = UnitIdentity.ResolveDaemonBinary();
         var daemonPid       = DaemonPidProbe.ValidatedPid(store, id);
         var txnActive       = ServiceTxnLock.IsHeld(store, id);
         var txnMarker       = ServiceTxnMarker.Exists(store, id);
+        var marker          = txnMarker ? ServiceTxnMarker.Read(store, id) : null;
+        var markedAt        = txnMarker ? ServiceTxnMarker.WrittenAt(store, id) : null;
         var (unitProfile, unitServerUrl, unitExpectedServer, unitConsentSeed) = UnitEnvEvidence(query.UnitPresent);
+
+        string? supervisor = null;
+        bool? upgrade = null, installable = null;
+        if (OperatingSystem.IsWindows()) {
+            supervisor  = ServiceManagerFactory.SupervisorWord(manager);
+            upgrade     = manager is WindowsServiceManager ? WindowsServiceBinaries.UpgradeAvailable() : null;
+            installable = manager is WindowsScheduledTaskServiceManager && WindowsServiceBinaries.Bundled() is not null;
+        }
 
         var (json, exitCode) = ServiceStatusRender.Render(
             query, id, installBinary, daemonPid, txnMarker, txnActive,
-            unitProfile, unitServerUrl, unitExpectedServer, unitConsentSeed);
+            unitProfile, unitServerUrl, unitExpectedServer, unitConsentSeed,
+            marker, markedAt, supervisor, upgrade, installable);
 
         if (json is null) {
             await Console.Error.WriteLineAsync($"Could not determine service status for '{id}' ({manager.Describe()}).");
@@ -821,6 +909,7 @@ sealed class DaemonServiceCommands(
     /// <param name="retireServiceId">Retired by the install arm's transaction; the start arms never retire.</param>
     internal async Task<(ServiceEnsureJson Result, int Exit)> EvaluateEnsureAsync(
             string? profileName, string? retireServiceId = null) {
+        await StaleTxnMarker.SettleAsync(store, manager, id, time);
         var query     = manager.Query(id);
         var daemonPid = DaemonPidProbe.ValidatedPid(store, id);
         var txnActive = ServiceTxnLock.IsHeld(store, id);
@@ -1098,7 +1187,9 @@ sealed class DaemonServiceCommands(
         Console.Error.WriteLine("                          --replace (requires --verify) takes over an existing label/unit/live owner");
         Console.Error.WriteLine("                          --retire ID (requires --replace --verify) also removes unit ID in the same transaction");
         Console.Error.WriteLine("                          --no-start is incompatible with --verify");
+        Console.Error.WriteLine("  install --system [...] Windows: install or update kcap-service (one administrator prompt), then hand the daemon to it");
         Console.Error.WriteLine("  uninstall [--name N]   Stop and remove the service unit");
+        Console.Error.WriteLine("  uninstall --system     Windows: hand the daemon back, then remove kcap-service (one administrator prompt)");
         Console.Error.WriteLine("  uninstall --under DIR  Remove every unit whose daemon binary is inside DIR");
         Console.Error.WriteLine("  start [--name N] [--verify]   Start the installed service now");
         Console.Error.WriteLine("                          --verify polls readiness/ownership and rolls back on failure");

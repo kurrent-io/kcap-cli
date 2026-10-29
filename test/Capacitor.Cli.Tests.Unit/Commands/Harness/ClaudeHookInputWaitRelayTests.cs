@@ -13,9 +13,8 @@ using Capacitor.Cli.PrDetection;
 namespace Capacitor.Cli.Tests.Unit.Commands.Harness;
 
 /// The input-wait relay a daemon-hosted Claude session sends its daemon: which turn boundaries
-/// reach it, and what silences it. Bare <c>[NotInParallel]</c> because the relay drops its own POST
-/// once <see cref="DaemonBridgeRelay.Cap"/> is spent and says nothing — on a saturated runner
-/// that is the whole second, and a test asserting the POST landed fails for the runner's reasons.
+/// reach it, and what silences it. On a clock that never moves unless a test ages it, so the relay's
+/// cap cannot run out under a loaded host.
 public class ClaudeHookInputWaitRelayTests {
     [TempHome] public required TempHome Home { get; init; }
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
@@ -40,11 +39,11 @@ public class ClaudeHookInputWaitRelayTests {
     async Task<int> RunAsync(HostedAgent hosted, string eventName, HookClock? clock = null, string extraFields = "") {
         using var client = new HttpClient(new OkHandler());
         var payload = $$$"""{"hook_event_name":"{{{eventName}}}","session_id":"{{{Sid}}}","cwd":"/tmp","tool_name":"Bash","tool_input":{"command":"ls"}{{{extraFields}}}}""";
-        return await new ClaudeHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), clock ?? new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://server.example", Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None)
+        return await new ClaudeHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), clock ?? new HookClock(new FakeTimeProvider()), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://server.example", Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None)
             .HandleWithDeps(new HookSpool(Config.Root, time: TimeProvider.System), new StringReader(payload), () => Task.FromResult(new AuthAttempt(client, AuthStatus.Ok, null, null)), new StringWriter());
     }
 
-    [Test, NotInParallel]
+    [Test]
     [Arguments("Stop", true)]
     [Arguments("UserPromptSubmit", false)]
     [Arguments("PreToolUse", false)]
@@ -67,7 +66,7 @@ public class ClaudeHookInputWaitRelayTests {
 
     /// A session the user runs themselves has a daemon URL only by accident of environment
     /// inheritance; without the agent id nothing identifies it to a daemon.
-    [Test, NotInParallel]
+    [Test]
     public async Task An_unhosted_stop_relays_nothing() {
         using var bridge = WireMockServer.Start();
         var unhosted = new HostedAgent(null, IsRendered: false, new DaemonBridge.Loopback($"http://127.0.0.1:{bridge.Ports[0]}/tok"));
@@ -80,7 +79,7 @@ public class ClaudeHookInputWaitRelayTests {
     /// A subagent's tool call runs the same hook with the parent's environment, but it is not the
     /// parent's turn: a background subagent working on after the parent asked the user something
     /// must not clear the parent's wait. What it does relay is ClaudeHookSubagentRelayTests' subject.
-    [Test, NotInParallel]
+    [Test]
     public async Task A_subagents_tool_call_posts_no_input_wait() {
         using var bridge = WireMockServer.Start();
         bridge.Given(Request.Create().WithPath("/tok/claude/input-wait").UsingPost())
@@ -95,7 +94,7 @@ public class ClaudeHookInputWaitRelayTests {
 
     /// The relay spends the hook's own budget, never more: once that is gone the hint is dropped
     /// rather than pushing the policy decision past the host's kill.
-    [Test, NotInParallel]
+    [Test]
     public async Task An_exhausted_hook_budget_skips_the_relay() {
         using var bridge = WireMockServer.Start();
         bridge.Given(Request.Create().WithPath("/tok/claude/input-wait").UsingPost())

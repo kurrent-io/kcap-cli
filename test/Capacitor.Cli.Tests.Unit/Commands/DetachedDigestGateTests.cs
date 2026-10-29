@@ -11,40 +11,28 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 public class DetachedDigestGateTests {
     [Test]
     public async Task No_directive_means_no_gate() {
-        var exit = DaemonCommands.DetachedDigestGate("/nonexistent", _ => null);
+        var exit = DaemonCommands.DetachedDigestGate("/nonexistent", _ => null, TextWriter.Null);
         await Assert.That(exit).IsNull();
     }
 
+    /// An empty directive is a deliberate refusal, not absence, so it gates like "prompt" does.
     [Test]
     public async Task Empty_directive_value_still_activates_the_gate() {
-        // Exact-value contract: an empty (present-but-blank) invoking value is a deliberate
-        // refusal, not absence — the digest gate must still activate for it, same as "prompt".
         var exit = DaemonCommands.DetachedDigestGate("/nonexistent",
-            k => k == "KCAP_CONSENT_SEED_DEFAULT" ? "" : null);
+            k => k == "KCAP_CONSENT_SEED_DEFAULT" ? "" : null, TextWriter.Null);
         await Assert.That(exit).IsEqualTo(43);
     }
 
     [Test]
-    public async Task Directive_with_placeholder_digest_fails_closed_exit_43() {
-        // dev/test builds carry the placeholder → Matches() is false → gate refuses
-        var exit = DaemonCommands.DetachedDigestGate("/nonexistent",
-            k => k == "KCAP_CONSENT_SEED_DEFAULT" ? "prompt" : null);
-        await Assert.That(exit).IsEqualTo(43);
-    }
-
-    [Test, NotInParallel]
-    public async Task Directive_with_placeholder_digest_writes_the_stderr_line_exactly_once() {
-        using var capture = ConsoleOutput.StartErrorCapture();
-
+    public async Task Directive_with_placeholder_digest_writes_the_stderr_line_exactly_once_and_exits_43() {
+        var stderr = new StringWriter();
 
         var exit = DaemonCommands.DetachedDigestGate("/nonexistent",
-            k => k == "KCAP_CONSENT_SEED_DEFAULT" ? "prompt" : null);
+            k => k == "KCAP_CONSENT_SEED_DEFAULT" ? "prompt" : null, stderr);
 
         await Assert.That(exit).IsEqualTo(43);
 
-        var lines = capture.GetCapturedError()
-            .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
-
+        var lines = stderr.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
         await Assert.That(lines).IsEquivalentTo(["daemon_start_reason=package_inconsistent"]);
     }
 }

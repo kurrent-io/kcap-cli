@@ -58,6 +58,12 @@ public sealed class ClaudeHookCommand(
     /// <see cref="HookBudget.Safety"/>; must match the session-start timeout in <c>kcap/hooks/hooks.json</c>.</summary>
     internal static readonly TimeSpan SessionStartCeiling = TimeSpan.FromSeconds(9);
 
+    public Task<string> PrepareForDrain(string body) =>
+        ClaudeSessionStartClaim.PrepareAsync(body, config,
+            () => ProcessHelpers.GetCodingAgentPid("claude", allowFallback: false),
+            id => ShouldSuppressCaptureAsync(id, body, "session-start", profiles.Effective,
+                clock.Budget(Ceiling("session-start"))));
+
     public Task<int> Handle(TextReader stdin, TextWriter? stdout = null) {
         var spool = new HookSpool(config, clock.Time);
         spool.ReapOlderThan(TimeSpan.FromDays(30));
@@ -256,7 +262,7 @@ public sealed class ClaudeHookCommand(
                 body = hook.ToJsonString();
         } catch { }
 
-        if (command == "session-end" && ResumeEndSuppression.ShouldSuppress(hosted)) return 0;
+        if (command == "session-end" && SessionEndFence.ShouldHold(hosted, sessionId)) return 0;
 
         var budget = clock.Budget(Ceiling(command));
 
@@ -276,15 +282,15 @@ public sealed class ClaudeHookCommand(
         // which runs no tool; a finished subagent covers its own prompts, since the parent's turn
         // ending says nothing about a background subagent's.
         if (command is "post-tool-use" or "post-tool-use-failure" && toolUseId is not null)
-            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId, subagentId, budget.Remaining, toolName, toolInput,
+            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId, subagentId, budget, toolName, toolInput,
                 clock.Time.GetUtcNow().ToUnixTimeMilliseconds());
 
         if (command == "stop" && agentId is null)
-            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: null, budget.Remaining,
+            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: null, budget,
                 sentAtMs: clock.Time.GetUtcNow().ToUnixTimeMilliseconds());
 
         if (command == "subagent-stop" && subagentId is not null)
-            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: subagentId, budget.Remaining,
+            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: subagentId, budget,
                 sentAtMs: clock.Time.GetUtcNow().ToUnixTimeMilliseconds());
 
         // A subagent's hook (agent_id set) runs with the parent's environment but is not the
@@ -293,9 +299,9 @@ public sealed class ClaudeHookCommand(
         if (subagentId is not null)
             await DaemonBridgeRelay.NotifySubagentAsync(
                 hosted, "claude", sessionId, cwd, subagentId, live: command != "subagent-stop",
-                clock.Time.GetUtcNow().ToUnixTimeMilliseconds(), budget.Remaining);
+                clock.Time.GetUtcNow().ToUnixTimeMilliseconds(), budget);
         else if (command switch { "stop" => true, "user-prompt-submit" or "pre-tool-use" => false, _ => (bool?) null } is { } waiting)
-            await DaemonBridgeRelay.NotifyInputWaitAsync(hosted, "claude", sessionId, cwd, waiting, budget.Remaining);
+            await DaemonBridgeRelay.NotifyInputWaitAsync(hosted, "claude", sessionId, cwd, waiting, budget);
 
         // The tool events have no server route and no other work, so they end here — after both
         // notices above have had their chance to post.
@@ -537,7 +543,7 @@ public sealed class ClaudeHookCommand(
         // route convention (`SessionStart` → `session-start`).
         var command = ToKebab(eventName);
 
-        if (command == "session-end" && ResumeEndSuppression.ShouldSuppress(hosted)) return 0;
+        if (command == "session-end" && SessionEndFence.ShouldHold(hosted, nativeSessionId)) return 0;
 
         // Taken out here, where the event is finally known. Its own rather than the caller's: this is
         // an entry point in its own right, and a budget is nothing but a ceiling read off the shared
@@ -1016,7 +1022,7 @@ public sealed class ClaudeHookCommand(
                         responseNode, coordinationNoticesDisabled);
 
                     // The static nudges, each gated on its server being loaded by this session.
-                    var sessionNudges = SessionNudges.Resolve(HarnessId.Claude, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience);
+                    var sessionNudges = SessionNudges.Resolve(HarnessId.Claude, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience, sessionCwd, home);
                     // Opted out for a hosted session, which leaves the first-run notice armed for a person's next one.
                     var harnessNudge = HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true || !audience.GetsOnboarding, config, harnesses, clock.Time);
                     var firstRunNotice = FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true || !audience.GetsOnboarding, config, HarnessId.Claude, harnesses);
@@ -1354,7 +1360,7 @@ public sealed class ClaudeHookCommand(
     /// <c>session_start</c>, and <c>session-start</c> all return
     /// <c>session-start</c>.
     /// </summary>
-    static string ToKebab(string s) {
+    internal static string ToKebab(string s) {
         if (string.IsNullOrEmpty(s)) return s;
 
         var sb = new StringBuilder(s.Length + 4);

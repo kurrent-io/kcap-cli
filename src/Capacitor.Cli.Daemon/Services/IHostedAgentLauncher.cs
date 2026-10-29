@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.LocalIpc;
 
@@ -54,6 +55,10 @@ internal interface IHostedAgentLauncher {
 
     /// <summary>Whether <see cref="BuildArgs"/> resumes the vendor session a restart resume names.</summary>
     bool SupportsResume => false;
+
+    /// <summary>Whether a reviewer launched by this launcher in an owned worktree reopens its session
+    /// across a daemon restart. Declared only once a live probe of the reviewer shape has passed.</summary>
+    bool SupportsReviewerResume => false;
 
     string? BorrowedReviewContainment => null;
 
@@ -111,7 +116,8 @@ internal sealed record LauncherContext(
         bool                              IsReview,
         bool                              IsReviewFlow,
         ReviewLaunchInfo?                 Review,
-        ReviewLaunchBuilder.ReviewLaunch? ReviewLaunch
+        ReviewLaunchBuilder.ReviewLaunch? ReviewLaunch,
+        ResolvedAccount?                  Account = null
     ) {
     /// <summary>Owned worktree (daemon-created) vs borrowed cwd (the user's own checkout).
     /// Borrowed-cwd launches skip repo-mutating <c>Prepare()</c> steps.</summary>
@@ -143,4 +149,5 @@ internal sealed record LauncherContext(
     public string? ResumeSessionId { get; init; }
 }
 
-internal readonly record struct LaunchArgs(string[] Args, string? McpConfigPath);
+/// <param name="SessionId">The vendor session a local launch runs under, when its args pin or name one.</param>
+internal readonly record struct LaunchArgs(string[] Args, string? McpConfigPath, string? SessionId = null);

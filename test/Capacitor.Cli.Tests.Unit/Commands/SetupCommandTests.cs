@@ -795,6 +795,13 @@ public class SetupCommandTests {
     }
 
     [Test]
+    public async Task PathShimNotice_names_the_profile_line_a_standard_user_gets() {
+        var notice = SpectreFirstRunFlowProgress.PathShimNotice(macOS: true, "export PATH=\"$PATH:/Users/a/.local/bin\" (in ~/.zprofile)");
+
+        await Assert.That(notice).Contains("without admin rights, kcap adds export PATH=\"$PATH:/Users/a/.local/bin\" (in ~/.zprofile)");
+    }
+
+    [Test]
     public async Task LiveRecordingRestartTip_returns_note_when_any_agent_installed() {
         var result = new CodingAgentsStep.Result(
             ClaudeInstalled:       true,
@@ -1516,6 +1523,52 @@ public class SetupCommandTests {
         // import actually saw.
         await Assert.That(await AuthFixtures.NewTokenStore(Config.Root).LoadAsync(
             captured.Profiles.Name)).IsNull();
+    }
+
+    static VisibilityOptionsResponse Offer(string preselected, params string[] keys) => new() {
+        Options           = [.. keys.Select(k => new VisibilityOptionDto { Key = k, Label = $"label {k}", Detail = $"detail {k}" })],
+        DefaultVisibility = preselected,
+    };
+
+    public static IEnumerable<Func<(VisibilityOptionsResponse? Offer, string[] Keys, string Preselected)>> VisibilityOfferRows() => [
+        () => (Offer("private", "private", "public"), ["private", "public"], "private"),
+        () => (Offer("project", "private", "project", "public"), ["private", "project", "public"], "project"),
+        () => (Offer("org_public", "private", "project", "org_public", "public"), ["private", "project", "org_public", "public"], "org_public"),
+        () => (null, ["private", "project", "org_public", "public"], "org_public"),
+    ];
+
+    /// <summary>Step 3 offers the stops the server says the tenant can honour, in its order and with its copy, and
+    /// preselects its default; with no answer it offers every stop from <c>org_public</c></summary>
+    [Test]
+    [MethodDataSource(nameof(VisibilityOfferRows))]
+    public async Task Step_three_offers_what_the_tenant_can_honour(VisibilityOptionsResponse? offer, string[] keys, string preselected) {
+        var choices = SetupCommand.VisibilityChoices(offer);
+
+        await Assert.That(choices.Keys).IsEquivalentTo(keys, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+        await Assert.That(choices.Preselected).IsEqualTo(preselected);
+        await Assert.That(choices.Label(keys[0])).IsEqualTo(offer is null ? SetupCommand.VisibilityLabel(keys[0]) : $"label {keys[0]} [dim]— detail {keys[0]}[/]");
+    }
+
+    /// <summary>A scripted run that names no visibility takes the server's default, and <c>org_public</c> from a
+    /// server that answers 404 for the read or fails it</summary>
+    [Test]
+    [Arguments(200, """{"options":[{"key":"private","label":"Only me"},{"key":"project","label":"Project"}],"default_visibility":"project"}""", "project")]
+    [Arguments(404, "", "org_public")]
+    [Arguments(500, "", "org_public")]
+    [NotInParallel]
+    public async Task HandleAsync_NoPrompt_without_a_visibility_takes_the_servers_default(int status, string body, string expected) {
+        using var server = WireMockServer.Start();
+        StubAuthProviderNone(server);
+        server.Given(Request.Create().WithPath("/api/users/me/visibility-options").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(status).WithHeader("Content-Type", "application/json").WithBody(body));
+
+        await using var fixture = await HandleAsyncE2EFixture.CreateAsync("acme-visibility", "widgets", Config.Root);
+
+        var runner = FakeImportRunner.Succeeding();
+        var exit   = await Command(runner, fixture.RepoDir).HandleAsync(BuildArgs("--server-url", server.Url!, "--no-prompt"));
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(runner.Captured?.DefaultVisibility).IsEqualTo(expected);
     }
 
     [Test]

@@ -57,9 +57,12 @@ Options:
                               search by meaning, pulling it if Ollama lacks it.
                               The model fixes the width of the stored vectors,
                               so changing it later embeds everything again.
-  --no-embeddings             With --local: do not configure Ollama, removing a
+  --builtin-embeddings        With --local: embed with the built-in model for
+                              search by meaning, downloading it if it is not in
+                              place. Needs nothing else installed.
+  --no-embeddings             With --local: search by keyword only, removing a
                               model an earlier setup configured. Remembered, so a
-                              later setup without either flag keeps it.
+                              later setup without an embedding flag keeps it.
   --json                      With --no-prompt: write one JSON object per line
                               to stdout for the whole run, ending with "done"
                               or "failed", and the narration to stderr. See
@@ -71,9 +74,10 @@ Options:
                               invalid_arguments), and 130 when an interrupt
                               (Ctrl+C or SIGTERM) was received, whichever line
                               came last. Takes only --single-user, --yes,
-                              --no-update-check, --embedding-model and
-                              --no-embeddings, and uses a running Ollama unless
-                              told otherwise. With --discover: the workspace
+                              --no-update-check, --embedding-model,
+                              --no-embeddings and --builtin-embeddings, and
+                              without one of the last three chooses as
+                              --no-prompt does. With --discover: the workspace
                               report.
   --daemon-name <name>        Daemon name. With --no-prompt, a name another
                               machine's daemon holds fails (exit 1); otherwise it is the
@@ -217,10 +221,14 @@ changes.
   Re-run on a configured machine        -                       yes
   One user on this machine (local)      --single-user           required
   Install kcap local (local)            --yes                   required*
-  Ollama for search by meaning (local)  --embedding-model,      required**
+  Search by meaning (local)             --builtin-embeddings,   chosen**
+                                        --embedding-model,
                                         --no-embeddings
-  Default visibility                    --default-visibility    org_public
-                                                                (private
+  Default visibility                    --default-visibility    the workspace's
+                                                                default
+                                                                (org_public on
+                                                                an older
+                                                                server, private
                                                                 with --local)
   Install kcap for detected agents      --skip-harnesses,       yes
                                         --skip-<agent>-hooks
@@ -229,7 +237,7 @@ changes.
   Keep provider API keys                --use-provider-api-key  kept
   Daemon name                           --daemon-name           suggested
   Import past sessions                  --skip-import           yes
-  * except to reuse an installation  ** while Ollama runs and nothing is recorded
+  * except to reuse an installation  ** see Local edition below
 
   Signing in: a machine credential (KCAP_CLIENT_ID and KCAP_CLIENT_SECRET, from
   kcap machine create) is checked with the server and used; if the server
@@ -264,15 +272,16 @@ and act as its admin, so setup asks you to confirm that and the install itself
 (--single-user and --yes; --no-prompt and --json cannot ask and require both).
 Under --no-prompt its sessions default to private visibility.
 Running it again reuses the existing installation.
-When Ollama is running on http://localhost:11434, setup offers it for search by
-meaning with mxbai-embed-large (1024 dimensions, about 670 MB), pulls the model
-if missing, and restarts the server when the model changes. --no-prompt asks
-nothing, so with Ollama running and nothing recorded yet it needs
---embedding-model or --no-embeddings. Without Ollama, or when the pull fails,
-setup carries on and search works by keyword. A failed or cancelled
-install removes what it created and keeps its logs/ directory. A machine with
-a profile for another server is refused for now, and musl builds of kcap are
-not supported.
+Search by meaning uses Ollama on http://localhost:11434 with mxbai-embed-large
+(1024 dimensions, about 670 MB), pulled if missing, or the built-in model, which
+setup downloads and kcap runs itself. With no embedding flag, an earlier choice
+stands; with none recorded, setup uses Ollama when it is running and the built-in
+model otherwise, asking first unless --no-prompt. When neither is available, or
+the download or pull fails, setup carries on and search works by keyword. A
+failed or cancelled install removes what it created and keeps its logs/
+directory and any model files it downloaded, which the next setup reuses. A
+machine with a profile for another server is refused for now, and musl builds
+of kcap are not supported.
 KCAP_LOCAL_BUNDLE_BASE_URL and KCAP_LOCAL_BUNDLE_VERSION redirect the download
 for development and pre-release builds; the manifest must still verify.
 

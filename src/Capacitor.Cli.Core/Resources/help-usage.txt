@@ -41,6 +41,11 @@ Configuration:
   remap --list                     List configured cwd remaps
   remap --remove <from>            Remove a cwd remap entry
 
+Experimental features:
+  experimental                     List experimental features and whether each is on
+  experimental enable <feature>    Turn a feature on for the active profile
+  experimental disable <feature>   Turn a feature off for the active profile
+
 Harness setup nudges:
   harness list [--json]            Show which coding agents are installed and whether kcap is set up for each
   harness dismiss <vendor…>|--all  Stop nudging to set kcap up for an installed-but-unconfigured harness
@@ -132,6 +137,9 @@ Hooks (internal — invoked by Claude Code / Codex / Cursor / Copilot / Gemini /
   hook --antigravity <event>       Dispatch a Google Antigravity control-hook event (event as positional arg; payload on stdin)
   hook --mistral-vibe              Dispatch a Mistral Vibe hook event (reads payload from stdin)
   hook --muse                      Dispatch a Muse Code hook event (reads payload from stdin)
+
+Status line (internal — installed into each Claude account by kcap accounts wiring):
+  statusline --account <id>        Record the account's usage from the payload on stdin, then run the original status line
 
 Environment:
   KCAP_URL              Server URL (overrides config file)

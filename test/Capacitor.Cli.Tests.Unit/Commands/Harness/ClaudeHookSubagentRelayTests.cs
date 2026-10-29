@@ -13,9 +13,8 @@ using Capacitor.Cli.PrDetection;
 namespace Capacitor.Cli.Tests.Unit.Commands.Harness;
 
 /// The subagent relay a daemon-hosted Claude session sends its daemon: every hook a subagent runs
-/// reports it alive, its stop reports it gone, and neither touches the parent's wait. Bare
-/// <c>[NotInParallel]</c> for the same reason as <see cref="ClaudeHookInputWaitRelayTests"/>: the
-/// relay drops its own POST once <see cref="DaemonBridgeRelay.Cap"/> is spent and says nothing.
+/// reports it alive, its stop reports it gone, and neither touches the parent's wait. On a clock that
+/// never moves unless a test ages it, so the relay's cap cannot run out under a loaded host.
 public class ClaudeHookSubagentRelayTests {
     [TempHome] public required TempHome Home { get; init; }
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
@@ -57,11 +56,11 @@ public class ClaudeHookSubagentRelayTests {
         var agentField = agentId is null ? "" : $",\"agent_id\":\"{agentId}\"";
         var toolField  = toolUseId is null ? "" : $",\"tool_use_id\":\"{toolUseId}\"";
         var payload = $$$"""{"hook_event_name":"{{{eventName}}}","session_id":"{{{Sid}}}","cwd":"/tmp","tool_name":"Bash","tool_input":{"command":"ls"}{{{agentField}}}{{{toolField}}}}""";
-        return await new ClaudeHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), clock ?? new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://server.example", Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None)
+        return await new ClaudeHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), clock ?? new HookClock(new FakeTimeProvider()), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://server.example", Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None)
             .HandleWithDeps(new HookSpool(Config.Root, time: TimeProvider.System), new StringReader(payload), () => Task.FromResult(new AuthAttempt(client, AuthStatus.Ok, null, null)), new StringWriter());
     }
 
-    [Test, NotInParallel]
+    [Test]
     [Arguments("SubagentStart")]
     [Arguments("PreToolUse")]
     public async Task A_subagents_hook_reports_it_alive_with_its_stamp(string eventName) {
@@ -83,7 +82,7 @@ public class ClaudeHookSubagentRelayTests {
 
     /// The permission hook strips the dashes from its agent_id before the bridge sees it, and the
     /// daemon matches the two exactly, so a live report must name the subagent the same way.
-    [Test, NotInParallel]
+    [Test]
     public async Task A_subagents_hook_reports_its_id_dashless_as_the_permission_hook_sent_it() {
         using var bridge = Bridge();
 
@@ -93,7 +92,7 @@ public class ClaudeHookSubagentRelayTests {
         await Assert.That(Relayed(bridge, "/tok/claude/subagent")!["subagent_id"]!.GetValue<string>()).IsEqualTo(SubagentId);
     }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task A_subagents_stop_reports_it_gone() {
         using var bridge = Bridge();
 
@@ -106,7 +105,7 @@ public class ClaudeHookSubagentRelayTests {
         await Assert.That(Relayed(bridge, "/tok/claude/input-wait")).IsNull();
     }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task A_parents_hook_reports_no_subagent_and_still_relays_its_wait() {
         using var bridge = Bridge();
 
@@ -118,7 +117,7 @@ public class ClaudeHookSubagentRelayTests {
     }
 
     /// Without the hosted agent id nothing identifies the session to a daemon.
-    [Test, NotInParallel]
+    [Test]
     public async Task An_unhosted_subagent_hook_relays_nothing() {
         using var bridge = Bridge();
         var unhosted = new HostedAgent(null, IsRendered: false, new DaemonBridge.Loopback($"http://127.0.0.1:{bridge.Ports[0]}/tok"));
@@ -131,7 +130,7 @@ public class ClaudeHookSubagentRelayTests {
     /// The daemon holds a prompt until it hears the tool is done, so retiring it must reach the
     /// bridge before the count-only heartbeat: a wedged bridge must not let the heartbeat starve
     /// the notice that frees a prompt, since a stale count instead recovers by its own expiry.
-    [Test, NotInParallel]
+    [Test]
     public async Task A_subagents_stop_retires_its_prompt_before_reporting_it_gone() {
         using var bridge = Bridge();
 
@@ -142,7 +141,7 @@ public class ClaudeHookSubagentRelayTests {
         await Assert.That(paths.IndexOf("/tok/claude/tool-settled")).IsLessThan(paths.IndexOf("/tok/claude/subagent"));
     }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task A_subagents_finished_tool_retires_its_prompt_before_reporting_it_alive() {
         using var bridge = Bridge();
 
@@ -153,7 +152,7 @@ public class ClaudeHookSubagentRelayTests {
         await Assert.That(paths.IndexOf("/tok/claude/tool-settled")).IsLessThan(paths.IndexOf("/tok/claude/subagent"));
     }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task An_exhausted_hook_budget_skips_the_relay() {
         using var bridge = Bridge();
 

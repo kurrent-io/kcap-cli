@@ -57,6 +57,7 @@ public static partial class DaemonRunner {
         // before DI exists, so it is threaded by hand until the container is built.
         var time = TimeProvider.System;
         if (TryHandleVersionFlag(args, Console.Out)) return 0;
+        var launchBinary = RestartCoordinator.StatProcessBinary();
 
         string?    logFile     = null;
         string?    stderrFile  = null;
@@ -86,6 +87,7 @@ public static partial class DaemonRunner {
             Binaries     = binaries,
             WorktreeRoot = Path.Combine(userHome.Path, ".capacitor", "worktrees"),
             OriginalArgs = args,
+            LaunchBinary = launchBinary,
         };
         var awaitLock = args.Contains("--await-lock");
 
@@ -98,6 +100,11 @@ public static partial class DaemonRunner {
         // Below the carrier scrub: this reads every vendor's override variable, and the scrub above
         // must run before anything reads the environment.
         var harnesses = Core.Harness.HarnessRegistry.FromEnvironment(userHome, binaries);
+        config.Accounts           = Core.Accounts.AccountStore.Beside(paths);
+        config.DefaultDirectories = new Dictionary<HarnessId, string> {
+            [HarnessId.Claude] = harnesses.Of<Core.Harness.Claude.ClaudeHarness>().Paths.Home,
+            [HarnessId.Codex]  = harnesses.Of<Core.Harness.Codex.CodexHarness>().Paths.Home,
+        }.ToFrozenDictionary();
 
         // Resolve server URL + active profile. The CLI does this in its own
         // Program.cs, but the daemon is a separate process so its statics start
@@ -159,7 +166,6 @@ public static partial class DaemonRunner {
         var builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings { Args = [] });
         builder.Services.AddLogging();
 
-        // Configure logging: file when detached, console when foreground.
         // Minimum level defaults to Information; raise verbosity for transport
         // diagnostics (e.g. per-tick DaemonPing RTT, which logs at Debug) via
         // --log-level or KCAP_DAEMON_LOG_LEVEL=debug. The --log-level arg wins
@@ -170,16 +176,6 @@ public static partial class DaemonRunner {
 
         builder.Logging.ClearProviders();
         builder.Logging.SetMinimumLevel(minLevel);
-
-        if (logFile is not null) {
-            builder.Logging.AddProvider(new RollingFileLoggerProvider(logFile, time, minLevel: minLevel));
-        } else {
-            builder.Logging.AddSimpleConsole(opts => {
-                    opts.TimestampFormat = "yyyy-MM-dd HH:mm:ss.fff ";
-                    opts.UseUtcTimestamp = false;
-                }
-            );
-        }
 
         // Daemon settings from the active profile, with env overrides
         var profileDaemon = profiles.Resolution.Profile?.Daemon;
@@ -200,24 +196,28 @@ public static partial class DaemonRunner {
                 await Console.Error.WriteLineAsync($"Warning: ignoring invalid KCAP_MAX_AGENTS={maxAgents}");
         }
 
-        // Before the transport decision below, which probes whatever CodexPath ends up naming.
+        // Before the Codex resolution below, which probes whatever CodexPath ends up naming.
         BindVendorOverrides(config, harnesses.Select(h => h.Id), Environment.GetEnvironmentVariable);
 
         if (Environment.GetEnvironmentVariable("KCAP_CODEX_APPSERVER_APPROVAL_TIMEOUT_SECONDS") is { Length: > 0 } envApprovalTimeout
          && int.TryParse(envApprovalTimeout, out var approvalTimeoutSeconds) && approvalTimeoutSeconds > 0)
             config.CodexAppServerApprovalTimeoutSeconds = approvalTimeoutSeconds;
 
-        Harness.Codex.CodexTransportDecision.BindFromEnvironment(config, Environment.GetEnvironmentVariable);
+        if (Harness.Codex.LegacyCodexEnvironment.Warning(Environment.GetEnvironmentVariable) is { } legacyCodexWarning)
+            await Console.Error.WriteLineAsync(legacyCodexWarning);
 
-        // One resolved fact for both the launch router and the certification advertisement.
-        config.CodexAppServerActive = Harness.Codex.CodexTransportDecision.ResolveActive(
-            config.CodexTransport, () => ProbeCliVersion(config.CodexPath));
+        // Committed before the first advertisement, which carries it to the server.
+        var startupCodex = Harness.Codex.CodexTransportResolution.Read(
+            1, config.ReadExperimentalSettings, () => ProbeCliVersion(harnesses.LaunchCommand(HarnessId.Codex, config.CodexPath)),
+            problem => {
+                config.ExperimentalSettingsProblem = problem;
+                return Harness.Codex.CodexTransportResolution.Unreadable(1, problem);
+            });
+        config.CodexResolution = startupCodex;
 
-        // The per-vendor reviewer switches. These are OPT-OUT now: unset means enabled, matching
-        // Claude/Codex/Cursor/Copilot, which have never been gated. See ParseConsentFlag for the full
-        // argument and its three precisions — in short, the reviewer vendor is a caller-chosen
-        // parameter, so wherever an ungated vendor is also advertised, gating these four did not widen
-        // the capability class a requester could reach, and only taxed the honest path.
+        // The per-vendor reviewer switches are opt-out: unset means enabled, matching the vendors that
+        // are never gated. The reviewer vendor is a caller-chosen parameter, so where an ungated vendor
+        // is advertised, gating these would not narrow what a requester can reach (see ParseConsentFlag).
         // Iterates the SHARED registry, not a local list. A vendor listed here but missing from
         // GatedReviewers.All would be absent from every service unit (ServiceEnvironment derives the
         // allowlist from the same rows), leaving a reviewer that cannot be turned off on the supported
@@ -290,8 +290,21 @@ public static partial class DaemonRunner {
             return LockRefusalExit(IsSupervised(config.Name));
         }
 
-        config.InstanceId = daemonLock.InstanceId;
+        config.InstanceId      = daemonLock.InstanceId;
+        config.PriorInstanceId = daemonLock.PriorInstanceId;
         StartupPhase(time, "lock acquired");
+
+        // File when detached, console when foreground. After the lock: Windows opens the log file
+        // write-exclusive, so a duplicate daemon opening it first would crash instead of refusing above.
+        if (logFile is not null) {
+            builder.Logging.AddProvider(new RollingFileLoggerProvider(logFile, time, minLevel: minLevel));
+        } else {
+            builder.Logging.AddSimpleConsole(opts => {
+                    opts.TimestampFormat = "yyyy-MM-dd HH:mm:ss.fff ";
+                    opts.UseUtcTimestamp = false;
+                }
+            );
+        }
 
         // Phase B2-b (sequenced-settlement design §4.2.3): the durable per-daemon state root — used by
         // the pre-host boot-check block immediately below AND (further down) by the coverage journal /
@@ -463,13 +476,11 @@ public static partial class DaemonRunner {
                     ?? throw new InvalidOperationException("No IHostedAgentLauncher registered for vendor 'claude'"),
                 sp.GetRequiredService<IPtyProcessFactory>(),
                 sp.GetRequiredService<ILogger<PtyHostedAgentRuntimeFactory>>(),
-                sp.GetRequiredService<TimeProvider>()
+                sp.GetRequiredService<TimeProvider>(),
+                config.Home
             )
         );
-        // Codex is the ONE vendor with two transports. The composite factory routes review-flow
-        // launches to codex app-server when this daemon resolved it active (config.CodexAppServerActive),
-        // and delegates everything else — every interactive launch, and all launches under the PTY
-        // default — to the wrapped PTY factory, byte-identically to before.
+        // Codex is the one vendor with two transports; its composite factory picks one per launch.
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp => {
             var codexLauncher = sp.GetServices<IHostedAgentLauncher>().SingleOrDefault(l => l.Vendor == "codex")
                     ?? throw new InvalidOperationException("No IHostedAgentLauncher registered for vendor 'codex'");
@@ -477,14 +488,18 @@ public static partial class DaemonRunner {
                 codexLauncher,
                 sp.GetRequiredService<IPtyProcessFactory>(),
                 sp.GetRequiredService<ILogger<PtyHostedAgentRuntimeFactory>>(),
-                sp.GetRequiredService<TimeProvider>());
+                sp.GetRequiredService<TimeProvider>(),
+                config.Home);
             return new Harness.Codex.CodexHostedAgentRuntimeFactory(
                 (Harness.Codex.CodexLauncher) codexLauncher, pty,
                 sp.GetRequiredService<DaemonConfig>(),
                 sp.GetRequiredService<ILoggerFactory>(),
                 time,
                 connection: sp.GetRequiredService<ServerConnection>(), // interactive approvals reach the user through it
-                policyJudge: sp.GetRequiredService<PolicyJudgeGateway>());
+                policyJudge: sp.GetRequiredService<PolicyJudgeGateway>(),
+                // Resolved per call: the orchestrator is built from the runtime factories.
+                refreshCapabilities: reason => sp.GetRequiredService<AgentOrchestrator>().RefreshAdvertisedCapabilities(reason),
+                readings: sp.GetRequiredService<AccountReadingSink>());
         });
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
             new AcpHostedAgentRuntimeFactory(
@@ -626,6 +641,21 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton<VendorCliWatcher>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<VendorCliWatcher>());
 
+        builder.Services.AddSingleton<AccountsPublisher>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<AccountsPublisher>());
+        builder.Services.AddSingleton<AccountsIpc>();
+        builder.Services.AddSingleton(sp => new AccountReadingSink(config.Accounts, time, sp.GetRequiredService<ILogger<AccountReadingSink>>()));
+        builder.Services.AddSingleton(sp => new AccountRefresher(
+            config,
+            account => account.Vendor == HarnessId.Codex
+                ? new Core.Harness.Codex.CodexAccountProbe(harnesses, userHome, time)
+                : new Core.Harness.Claude.ClaudeIdentityProbe(harnesses, userHome, time),
+            time, sp.GetRequiredService<ILogger<AccountRefresher>>()));
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<AccountRefresher>());
+
+        builder.Services.AddSingleton<ExperimentalSettingsWatcher>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<ExperimentalSettingsWatcher>());
+
         builder.Services.AddSingleton<RepoStoreWatcher>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<RepoStoreWatcher>());
 
@@ -687,19 +717,22 @@ public static partial class DaemonRunner {
         // Every advertised vendor is recorded, since a catalog-only vendor is watched too.
         config.UnattendedVendorBaselines =
             FingerprintUnattendedVendors(config.Binaries, runtimeFactories, config.SupportedVendors);
-        config.VendorCatalogBaselines =
-            VendorModelCatalogs.FingerprintCatalogPaths(runtimeFactories, config.SupportedVendors);
-        config.UnattendedVendorCapabilities =
-            ComputeUnattendedVendorCapabilities(runtimeFactories, config, config.UnattendedVendors);
-        config.VendorModels =
-            await VendorModelCatalogs.ProbeAsync(runtimeFactories, config.SupportedVendors, CancellationToken.None);
-        foreach (var (vendor, models) in config.VendorModels) LogVendorModels(logger, vendor, models.Length);
+        var startupCapabilities = ComputeUnattendedVendorCapabilities(runtimeFactories, config, startupCodex, config.UnattendedVendors);
+        config.Advertise(startupCapabilities, startupCodex);
+
+        // Built before the host starts, so the per-account probe and the vendor watcher's first watch
+        // set read the same accounts.
+        var accounts = host.Services.GetRequiredService<AccountsPublisher>();
+        await accounts.RebuildAsync(CancellationToken.None);
+        await ProbeVendorCatalogsAsync(config, runtimeFactories, accounts.Current, CancellationToken.None);
+        foreach (var (vendor, models) in config.VendorModels!) LogVendorModels(logger, vendor, models.Length);
+        foreach (var (id, models) in config.VendorModelsByAccount!) LogVendorModels(logger, VendorModelCatalogs.AccountKey(id), models.Length);
         LogStartupPhase(logger, "vendors probed");
 
         // Which build of each unattended vendor was installed when this daemon started. Recorded at
         // startup (like the Cursor-unavailable warning below) rather than per launch, and reported
         // without any comparison against a validated-build record.
-        LogUnattendedVendorIdentities(logger, config.UnattendedVendorCapabilities);
+        LogUnattendedVendorIdentities(logger, startupCapabilities);
 
         // The counterpart of the line above. A withheld vendor used to vanish from advertisement in
         // silence: the refusal text existed, but only the launch path threw it — and advertisement is
@@ -737,6 +770,12 @@ public static partial class DaemonRunner {
 
         var lifetime   = host.Services.GetRequiredService<IHostApplicationLifetime>();
         var connection = host.Services.GetRequiredService<ServerConnection>();
+
+        connection.GetAccountsSnapshot = () => accounts.Current;
+        accounts.SendToServer          = connection.AccountsChangedAsync;
+        var refresher = host.Services.GetRequiredService<AccountRefresher>();
+        accounts.RequestRefresh        = refresher.Request;
+        accounts.RequestWiringRefresh  = refresher.RequestSoon;
 
         // Death-rattle instrumentation: without these, a daemon dying mid-run
         // (signal, OOM, unobserved-task FailFast, native crash) leaves no trace
@@ -1567,12 +1606,14 @@ public static partial class DaemonRunner {
 
     internal const string MuseVendor = "muse";
 
+    /// <param name="codex">The committed resolution Codex's policy, transport and — when the switch is
+    /// on, which is when the resolution probed it — version are read from.</param>
     /// <param name="advertised">The already-classified advertised vendors, when the caller has them.
     /// Passing them avoids re-running a classification that spawns vendor binaries; omitting them
     /// recomputes, which is what the tests and any other caller want.</param>
     internal static IReadOnlyList<UnattendedVendorCapability> ComputeUnattendedVendorCapabilities(
             IEnumerable<IHostedAgentRuntimeFactory> factories, DaemonConfig config,
-            IEnumerable<string>? advertised = null) {
+            Harness.Codex.CodexTransportResolution codex, IEnumerable<string>? advertised = null) {
         var unattended = advertised?.ToArray() ?? ComputeUnattendedVendors(factories, config);
         var byVendor   = factories.ToDictionary(f => f.Vendor, StringComparer.Ordinal);
 
@@ -1580,7 +1621,9 @@ public static partial class DaemonRunner {
         // under one ceiling, rather than blocking startup for the sum across every advertised vendor.
         // A vendor whose binary is unresolved is not probed at all — its version stays null, exactly as
         // an inline probe of an empty path would leave it.
+        var codexFromResolution = codex.SwitchOn;
         var probePaths = unattended
+            .Where(v => !(codexFromResolution && IsCodex(v)))
             .Where(v => byVendor.TryGetValue(v, out var f) && !string.IsNullOrEmpty(f.CliPath))
             .ToDictionary(v => v, v => byVendor[v].CliPath, StringComparer.Ordinal);
         var probedVersions = ProbeVendorsConcurrently(
@@ -1589,14 +1632,10 @@ public static partial class DaemonRunner {
         var capabilities = new List<UnattendedVendorCapability>();
         foreach (var vendor in unattended) {
             var factory = byVendor[vendor];
-            // Codex's policy follows the same resolved field the launch router uses, so the certified
-            // policy and the transport actually launched cannot diverge.
-            if (LauncherPolicyVersion(vendor, config.CodexAppServerActive) is not { } policyVersion) continue;
-            // Trust-by-default: a vendor's borrowed-review capability is a property of its FACTORY,
-            // never of the installed build's identity. Gating this on an exact-build match made an
-            // ordinary vendor auto-update silently withdraw the capability (and the server then
-            // resolved workspace_mode=fallback, reviewing a stale committed base with nobody told).
-            // See docs/superpowers/specs/2026-07-27-ai1528-trust-by-default-borrowed-review-design.md.
+            var isCodex = IsCodex(vendor);
+            if ((isCodex ? codex.LauncherPolicyVersion : LauncherPolicyVersion(vendor, codexAppServer: false)) is not { } policyVersion) continue;
+            // A property of the factory, never of the installed build: gating it on the build would let a
+            // vendor auto-update silently withdraw it and send reviewers back to a stale base.
             var borrowedSupported = factory.SupportsBorrowedReviewFlow;
             // Reviewer MODEL override support: advertised true ONLY when this vendor — already known
             // installed + unattended-certified by ComputeUnattendedVendors above — also carries a
@@ -1606,7 +1645,7 @@ public static partial class DaemonRunner {
             var modelResolver = factory.ReviewerModelResolver;
             capabilities.Add(new(
                 vendor,
-                probedVersions.GetValueOrDefault(vendor),
+                isCodex && codexFromResolution ? codex.CliVersion : probedVersions.GetValueOrDefault(vendor),
                 policyVersion,
                 borrowedSupported,
                 borrowedSupported ? factory.BorrowedReviewContainment : null,
@@ -1614,12 +1653,32 @@ public static partial class DaemonRunner {
                 ReviewerModelPolicyVersion: modelResolver?.PolicyVersion,
                 // Caller-selected launch posture, advertised per vendor rather than per platform —
                 // the seam is platform-neutral, and only the Codex launcher honours a posture block.
-                SupportsLaunchPosture: string.Equals(vendor, "codex", StringComparison.Ordinal),
-                InteractiveTransport: string.Equals(vendor, "codex", StringComparison.Ordinal)
-                    ? Harness.Codex.CodexTransportDecision.InteractiveTransport(config)
-                    : null));
+                SupportsLaunchPosture: isCodex,
+                InteractiveTransport: isCodex ? codex.InteractiveTransport : null));
         }
         return capabilities;
+    }
+
+    static bool IsCodex(string vendor) => HarnessNames.From(vendor) == HarnessId.Codex;
+
+    /// <summary>Fingerprints, then probes, each advertised vendor's catalog and, for the vendor whose
+    /// catalog depends on the account, each registered account's catalog under its own directory.</summary>
+    internal static async Task ProbeVendorCatalogsAsync(
+            DaemonConfig config, IReadOnlyList<IHostedAgentRuntimeFactory> factories,
+            Core.Accounts.AccountsSnapshotDto? accounts, CancellationToken ct) {
+        var supported      = config.SupportedVendors ?? [];
+        var accountFactory = VendorModelCatalogs.AccountFactory(factories, supported);
+        var perAccount     = accountFactory is null ? [] : VendorModelCatalogs.AccountsIn(accounts);
+
+        config.VendorCatalogBaselines = VendorModelCatalogs.FingerprintCatalogPaths(factories, supported, accountFactory, perAccount);
+        var vendorProbe  = VendorModelCatalogs.ProbeAsync(factories, supported, ct);
+        var accountProbe = accountFactory is null
+            ? Task.FromResult(new Dictionary<string, VendorModelOption[]>(StringComparer.Ordinal))
+            : VendorModelCatalogs.ProbeByAccountAsync(accountFactory, perAccount, ct);
+        await Task.WhenAll(vendorProbe, accountProbe);
+
+        config.VendorModels          = await vendorProbe;
+        config.VendorModelsByAccount = await accountProbe;
     }
 
     /// <summary>Fingerprints each advertised vendor's binary through the factory that launches it —
@@ -1638,11 +1697,14 @@ public static partial class DaemonRunner {
     /// <summary>Carries a version already advertised over a re-probe that returned none. The server
     /// reads a null version as the vendor being gone, so a transient probe miss must not withdraw
     /// a reviewer that was advertised a moment ago. Every other field comes from the re-probe.</summary>
+    /// <param name="codex">With its switch on, Codex's version comes from this resolution, null included:
+    /// it was probed with the policy and transport beside it, and an older version would misdescribe them.</param>
     internal static IReadOnlyList<UnattendedVendorCapability> RetainAdvertisedVersions(
-            IReadOnlyList<UnattendedVendorCapability>? current, IReadOnlyList<UnattendedVendorCapability> fresh) {
+            IReadOnlyList<UnattendedVendorCapability>? current, IReadOnlyList<UnattendedVendorCapability> fresh,
+            Harness.Codex.CodexTransportResolution codex) {
         if (current is null) return fresh;
         return fresh.Select(capability => {
-            if (!string.IsNullOrEmpty(capability.CliVersion)) return capability;
+            if (!string.IsNullOrEmpty(capability.CliVersion) || (codex.SwitchOn && IsCodex(capability.Vendor))) return capability;
             var advertised = current.FirstOrDefault(c => string.Equals(c.Vendor, capability.Vendor, StringComparison.Ordinal));
             return string.IsNullOrEmpty(advertised?.CliVersion) ? capability : capability with { CliVersion = advertised.CliVersion };
         }).ToArray();
@@ -1661,7 +1723,6 @@ public static partial class DaemonRunner {
     /// per launch. A change on disk is logged once, when it is re-advertised.
     /// Pure over the computed capabilities — same reasoning as
     /// <see cref="ShouldWarnCursorUnavailable"/> — so it is testable without booting the DI host.
-    /// See docs/superpowers/specs/2026-07-27-ai1528-trust-by-default-borrowed-review-design.md.
     /// </summary>
     internal static void LogUnattendedVendorIdentities(
             ILogger logger, IEnumerable<UnattendedVendorCapability> capabilities) {

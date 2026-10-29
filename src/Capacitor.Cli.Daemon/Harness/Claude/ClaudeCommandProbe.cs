@@ -1,8 +1,8 @@
 using System.Diagnostics;
 using System.Text.Json;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Harness;
-using Capacitor.Cli.Daemon.Services;
 
 namespace Capacitor.Cli.Daemon.Harness.Claude;
 
@@ -20,38 +20,22 @@ static class ClaudeCommandProbe {
     const string InitializeRequest =
         """{"type":"control_request","request_id":"kcap-command-probe","request":{"subtype":"initialize"}}""";
 
+    /// <param name="account">The agent's account, whose directory the probe reads commands from.</param>
     public static async Task<IReadOnlyList<HostedAgentCommand>> ProbeAsync(
             HarnessRegistry   harnesses,
             string            workingDir,
+            ResolvedAccount?  account,
+            UserHome          home,
             TimeProvider      time,
             TimeSpan          timeout,
             Action<string>    log,
             CancellationToken ct) {
         // Resolve rather than spawn "claude" verbatim, for the same reason ClaudeCliRunner does: on
         // Windows the npm shim is claude.cmd, which a bare FileName would never find.
-        var exePath = harnesses.ResolveExecutable(HarnessId.Claude);
+        var exePath = harnesses.ResolveLaunchable(HarnessId.Claude);
         if (exePath is null) return [];
 
-        var psi = new ProcessStartInfo {
-            FileName               = exePath,
-            WorkingDirectory       = workingDir,
-            RedirectStandardInput  = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError  = true,
-            UseShellExecute        = false,
-            CreateNoWindow         = true,
-            Environment            = { ["KCAP_SKIP"] = "1" },
-        };
-        psi.Environment.Remove("CLAUDECODE");
-        psi.Environment.Remove("CLAUDE_CODE_ENTRYPOINT");
-
-        foreach (var arg in new[] {
-                     "-p", "--input-format", "stream-json", "--output-format", "stream-json",
-                     "--verbose", "--strict-mcp-config", "--mcp-config", """{"mcpServers":{}}""",
-                 })
-            psi.ArgumentList.Add(arg);
-
-        using var process = CliProcess.TryStart(psi, log);
+        using var process = CliProcess.TryStart(BuildStartInfo(exePath, workingDir, account, home), log);
         if (process is null) return [];
 
         using var timeoutCts = new CancellationTokenSource(timeout, time);
@@ -87,6 +71,34 @@ static class ClaudeCommandProbe {
 
             return [];
         }
+    }
+
+    internal static ProcessStartInfo BuildStartInfo(string exePath, string workingDir, ResolvedAccount? account, UserHome home) {
+        var psi = new ProcessStartInfo {
+            FileName               = exePath,
+            WorkingDirectory       = workingDir,
+            RedirectStandardInput  = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError  = true,
+            UseShellExecute        = false,
+            CreateNoWindow         = true,
+            Environment            = { [HostedAgent.SkipVar] = "1" },
+        };
+        psi.Environment.Remove("CLAUDECODE");
+        psi.Environment.Remove("CLAUDE_CODE_ENTRYPOINT");
+
+        if (account is not null && VendorHomeVariable.Plan(HarnessId.Claude, account.Directory, home) is { } plan) {
+            if (plan.Value is null) psi.Environment.Remove(plan.Variable);
+            else psi.Environment[plan.Variable] = plan.Value;
+        }
+
+        foreach (var arg in new[] {
+                     "-p", "--input-format", "stream-json", "--output-format", "stream-json",
+                     "--verbose", "--strict-mcp-config", "--mcp-config", """{"mcpServers":{}}""",
+                 })
+            psi.ArgumentList.Add(arg);
+
+        return psi;
     }
 
     internal static IReadOnlyList<HostedAgentCommand> ParseCommands(string stdout) {

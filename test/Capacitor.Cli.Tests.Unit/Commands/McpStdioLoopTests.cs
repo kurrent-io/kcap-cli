@@ -49,7 +49,7 @@ public class McpStdioLoopTests {
         new JsonObject { ["id"] = id.DeepClone(), ["result"] = new JsonObject { ["method"] = method } }.ToJsonString();
 
     static Task Run(string input, Responses output, Func<JsonNode, JsonObject, Task<string>> callTool) =>
-        McpStdioLoop.RunAsync(new StringReader(input), output, callTool, (id, method, _) => Answer(id, method), "test");
+        McpStdioLoop.RunAsync(new StringReader(input), output, [], callTool, (id, method, _) => Answer(id, method), "test");
 
     [Test]
     public async Task A_long_call_holds_up_neither_a_later_call_nor_a_ping() {
@@ -78,7 +78,7 @@ public class McpStdioLoopTests {
         using var output = new Responses();
         var input = string.Join('\n', Call(1, "slow"), Call(2, "fast"), Request("3", "\"ping\""));
 
-        var loop = McpStdioLoop.RunAsync(new StringReader(input), output, (id, request) => {
+        var loop = McpStdioLoop.RunAsync(new StringReader(input), output, [], (id, request) => {
             started.Enqueue(Tool(request));
             if (Tool(request) != "slow") return Task.FromResult(Answer(id, "tools/call"));
 
@@ -105,7 +105,7 @@ public class McpStdioLoopTests {
         using var output = new Responses();
         var input = string.Join('\n', Call(1, "a-first"), Call(2, "a-second"), Call(3, "b"));
 
-        var loop = McpStdioLoop.RunAsync(new StringReader(input), output, (id, request) => {
+        var loop = McpStdioLoop.RunAsync(new StringReader(input), output, [], (id, request) => {
             started.Enqueue(Tool(request));
             if (Tool(request) != "a-first") return Task.FromResult(Answer(id, "tools/call"));
 
@@ -135,7 +135,7 @@ public class McpStdioLoopTests {
             """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"x","arguments":{"a":1,"a":2}}}""",
             Request("2", "\"ping\""));
 
-        await McpStdioLoop.RunAsync(new StringReader(input), output, (id, _) => {
+        await McpStdioLoop.RunAsync(new StringReader(input), output, [], (id, _) => {
                 Interlocked.Increment(ref ran);
                 return Task.FromResult(Answer(id, "tools/call"));
             },
@@ -146,6 +146,57 @@ public class McpStdioLoopTests {
         await Assert.That(refused["error"]!["code"]!.GetValue<int>()).IsEqualTo(-32600);
         await Assert.That(ran).IsEqualTo(0);
         await Assert.That(output.Ids).Contains("2");
+    }
+
+    static readonly McpTool[] Filtered = [
+        new("list", "Lists.", new("object", new() { ["repo"] = new("string", "A repo."), ["limit"] = new("integer", "A cap.") }, []),
+            McpToolAnnotations.Read),
+    ];
+
+    static string CallWith(int id, string tool, string arguments) =>
+        $$$"""{"jsonrpc":"2.0","id":{{{id}}},"method":"tools/call","params":{"name":"{{{tool}}}","arguments":{{{arguments}}}}}""";
+
+    /// <summary>An argument the tool does not declare would be dropped, and a dropped filter reads as an applied one, so
+    /// the call is refused before the tool runs, naming what it was passed and what it takes. A declared-only call, and
+    /// a call to a tool the list does not hold, reach the server as before.</summary>
+    [Test]
+    public async Task A_call_passing_an_argument_its_tool_does_not_declare_is_refused_before_it_runs() {
+        using var output = new Responses();
+        var ran = new ConcurrentBag<string>();
+        var input = string.Join('\n',
+            CallWith(1, "list", """{"repo":"a/b","from":"2026-01-01","to":"2026-02-01"}"""),
+            CallWith(2, "list", """{"repo":"a/b","limit":5}"""),
+            CallWith(3, "other", """{"anything":1}"""));
+
+        await McpStdioLoop.RunAsync(new StringReader(input), output, Filtered, (id, _) => {
+                ran.Add(id.ToJsonString());
+                return Task.FromResult(Answer(id, "tools/call"));
+            },
+            (id, method, _) => Answer(id, method), "test");
+
+        var refused = output.All.Single(r => r["id"]!.ToJsonString() == "1")["result"]!;
+        await Assert.That(refused["isError"]!.GetValue<bool>()).IsTrue();
+        await Assert.That(refused["content"]![0]!["text"]!.GetValue<string>())
+            .IsEqualTo("list does not take from, to: it takes repo, limit. Nothing was done.");
+        await Assert.That(ran).IsEquivalentTo(new[] { "2", "3" });
+    }
+
+    /// <summary>A duplicated key cannot be read as a set of names, so the check leaves the call to the tool's own
+    /// handler rather than answering it as an internal error.</summary>
+    [Test]
+    public async Task A_call_whose_arguments_repeat_a_key_still_reaches_its_tool() {
+        using var output = new Responses();
+        var ran = 0;
+
+        await McpStdioLoop.RunAsync(new StringReader(CallWith(1, "list", """{"repo":"a","repo":"b"}""")), output, Filtered,
+            (id, _) => {
+                Interlocked.Increment(ref ran);
+                return Task.FromResult(Answer(id, "tools/call"));
+            },
+            (id, method, _) => Answer(id, method), "test");
+
+        await Assert.That(ran).IsEqualTo(1);
+        await Assert.That(output.All.Single()["error"]).IsNull();
     }
 
     /// Yields its lines, then fails the next read as a broken stdin would.
@@ -161,7 +212,7 @@ public class McpStdioLoopTests {
         var release = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var output = new Responses();
 
-        var loop = McpStdioLoop.RunAsync(new FailingReader(Call(1, "slow")), output, (_, _) => release.Task,
+        var loop = McpStdioLoop.RunAsync(new FailingReader(Call(1, "slow")), output, [], (_, _) => release.Task,
             (id, method, _) => Answer(id, method), "test");
         await Task.Delay(50);
 

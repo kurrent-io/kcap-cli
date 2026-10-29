@@ -38,7 +38,7 @@ namespace Capacitor.Cli.Commands;
 sealed class UninstallCommand(
         DaemonStore store, ConfigRoot config, UserHome home, HarnessRegistry harnesses, BinaryProbe binaries,
         AgentsPaths agents, WorkingDirectory workdir, IOutgoingRecorders recorders, ILocalStackFactory stacks,
-        KcapLinkRemover links) {
+        KcapLinkRemover links, StandardStreams console) {
     static readonly string[] StackDirectories = ["bin", "run", "data", "logs"];
 
     public async Task<int> HandleAsync(string[] args) {
@@ -55,9 +55,9 @@ sealed class UninstallCommand(
             projectRoot = GitRepository.FindRoot(workdir.Path);
 
             if (projectRoot is null) {
-                await Console.Error.WriteLineAsync(
+                await console.Error.WriteLineAsync(
                     $"--project requires a git working tree, but '{workdir.Path}' is not inside one.");
-                await Console.Error.WriteLineAsync(
+                await console.Error.WriteLineAsync(
                     "Re-run from inside your repo, or drop --project to only remove user-level configuration.");
 
                 return 1;
@@ -74,12 +74,12 @@ sealed class UninstallCommand(
         } catch (LocalInstallFailure ex) when (ex.Code == LocalInstallFailureCode.UnsupportedPlatform) {
             // No local edition runs on this platform, so there is none to remove.
         } catch (LocalInstallFailure ex) {
-            await Console.Error.WriteLineAsync($"Could not read the local server: {ex.Message}");
+            await console.Error.WriteLineAsync($"Could not read the local server: {ex.Message}");
             localFailed = true;
         }
 
         if (localState is LocalStackState.Unreadable(var unreadablePath, var unreadableReason)) {
-            await Console.Error.WriteLineAsync(
+            await console.Error.WriteLineAsync(
                 $"{unreadablePath} cannot be read ({unreadableReason}), so the local server is left as it is and the config directory is kept.");
             localFailed = true;
         }
@@ -88,7 +88,7 @@ sealed class UninstallCommand(
         var removeLocal = localState is LocalStackState.Installed or LocalStackState.Interrupted;
 
         if (LocalConsentError(localState, local?.Root.Directory ?? "", skipPrompt, purgeLocal, keepConfig) is { } refusal) {
-            await Console.Error.WriteLineAsync(refusal);
+            await console.Error.WriteLineAsync(refusal);
             return 1;
         }
 
@@ -96,9 +96,9 @@ sealed class UninstallCommand(
             var busy = await recorders.BusyAsync();
 
             if (busy.Count > 0) {
-                foreach (var line in busy) await Console.Error.WriteLineAsync(line);
+                foreach (var line in busy) await console.Error.WriteLineAsync(line);
 
-                await Console.Error.WriteLineAsync("Stop them, or pass --force to end them. Nothing was changed.");
+                await console.Error.WriteLineAsync("Stop them, or pass --force to end them. Nothing was changed.");
 
                 return 1;
             }
@@ -106,51 +106,56 @@ sealed class UninstallCommand(
 
         var configDir = config.Directory;
 
-        await Console.Out.WriteLineAsync("This will remove kcap from your machine:");
-        await Console.Out.WriteLineAsync("  • Stop any running daemons and watcher processes");
+        await console.Out.WriteLineAsync("This will remove kcap from your machine:");
+        await console.Out.WriteLineAsync("  • Stop any running daemons and watcher processes");
 
         switch (localState) {
             case LocalStackState.Installed { Installation.ServerUrl: var url }:
-                await Console.Out.WriteLineAsync(keepConfig
+                await console.Out.WriteLineAsync(keepConfig
                     ? $"  • Remove the local server at {url}, keeping its data"
                     : $"  • Delete the local server at {url} and every session it recorded");
                 break;
             case LocalStackState.Interrupted(var operation, _):
                 // An interrupted purge is always finished, whatever --keep-config says.
-                await Console.Out.WriteLineAsync(keepConfig && operation != LocalPurgeJournal.Operation
+                await console.Out.WriteLineAsync(keepConfig && operation != LocalPurgeJournal.Operation
                     ? $"  • Finish an interrupted {operation} of the local server in {local!.Root.Directory}, then remove it, keeping its data"
                     : $"  • Finish an interrupted {operation} of the local server in {local!.Root.Directory}, then delete it and every session it recorded");
                 break;
         }
 
-        await Console.Out.WriteLineAsync($"  • Remove kcap entries from {harnesses.Of<ClaudeHarness>().Paths.UserSettings}");
-        await Console.Out.WriteLineAsync($"  • Remove kcap entries from {harnesses.Of<CodexHarness>().Paths.UserHooksJson}");
-        await Console.Out.WriteLineAsync($"  • Remove kcap entries from {harnesses.Of<CursorHarness>().Paths.UserHooksJson}");
-        await Console.Out.WriteLineAsync($"  • Remove {harnesses.Of<CopilotHarness>().Paths.KcapHooksJson}");
-        await Console.Out.WriteLineAsync($"  • Remove kcap entries from {harnesses.Of<GeminiHarness>().Paths.SettingsJson}");
-        await Console.Out.WriteLineAsync($"  • Remove {harnesses.Of<KiroHarness>().Paths.KcapAgentJson} and restore the previous default Kiro agent");
-        await Console.Out.WriteLineAsync($"  • Remove {harnesses.Of<PiHarness>().Paths.KcapExtension}");
-        await Console.Out.WriteLineAsync($"  • Remove {harnesses.Of<OpenCodeHarness>().Paths.KcapPlugin}");
-        await Console.Out.WriteLineAsync($"  • Remove the kcap plugin from {harnesses.Of<AntigravityHarness>().Paths.PluginDir}");
-        await Console.Out.WriteLineAsync($"  • Remove kcap entries from {harnesses.Of<MuseHarness>().Paths.SettingsJson}");
-        await Console.Out.WriteLineAsync($"  • Remove kcap entries from {harnesses.Of<MistralVibeHarness>().Paths.HooksToml} and {harnesses.Of<MistralVibeHarness>().Paths.ConfigToml}");
-        await Console.Out.WriteLineAsync($"  • Remove agent skills under {agents.UserSkillsDir} and vendor-specific skill trees");
-        await Console.Out.WriteLineAsync($"  • Remove {Path.Combine(home.Path, ".cache", "kcap")} and legacy Cursor pending recordings");
+        await console.Out.WriteLineAsync($"  • Remove kcap entries from {harnesses.Of<ClaudeHarness>().Paths.UserSettings}");
+        await console.Out.WriteLineAsync($"  • Remove kcap entries from {harnesses.Of<CodexHarness>().Paths.UserHooksJson}");
+        await console.Out.WriteLineAsync($"  • Remove kcap entries from {harnesses.Of<CursorHarness>().Paths.UserHooksJson}");
+        await console.Out.WriteLineAsync($"  • Remove {harnesses.Of<CopilotHarness>().Paths.KcapHooksJson}");
+        await console.Out.WriteLineAsync($"  • Remove kcap entries from {harnesses.Of<GeminiHarness>().Paths.SettingsJson}");
+        await console.Out.WriteLineAsync($"  • Remove {harnesses.Of<KiroHarness>().Paths.KcapAgentJson} and restore the previous default Kiro agent");
+        await console.Out.WriteLineAsync($"  • Remove {harnesses.Of<PiHarness>().Paths.KcapExtension}");
+        await console.Out.WriteLineAsync($"  • Remove {harnesses.Of<OpenCodeHarness>().Paths.KcapPlugin}");
+        await console.Out.WriteLineAsync($"  • Remove the kcap plugin from {harnesses.Of<AntigravityHarness>().Paths.PluginDir}");
+        await console.Out.WriteLineAsync($"  • Remove kcap entries from {harnesses.Of<MuseHarness>().Paths.SettingsJson}");
+        await console.Out.WriteLineAsync($"  • Remove kcap entries from {harnesses.Of<MistralVibeHarness>().Paths.HooksToml} and {harnesses.Of<MistralVibeHarness>().Paths.ConfigToml}");
+        await console.Out.WriteLineAsync($"  • Remove agent skills under {agents.UserSkillsDir} and vendor-specific skill trees");
+        await console.Out.WriteLineAsync($"  • Remove {Path.Combine(home.Path, ".cache", "kcap")} and legacy Cursor pending recordings");
 
         var pathLinks = !keepPathLinks && !OperatingSystem.IsWindows() ? links.Find() : [];
 
         foreach (var link in pathLinks)
-            await Console.Out.WriteLineAsync($"  • Remove the kcap command link at {link}");
+            await console.Out.WriteLineAsync($"  • Remove the kcap command link at {link}");
+
+        IReadOnlyList<string> profiles = keepPathLinks || OperatingSystem.IsWindows() ? [] : ShellProfile.Removable(home, pathLinks);
+
+        foreach (var profile in profiles)
+            await console.Out.WriteLineAsync($"  • Remove the PATH line kcap added to {profile}");
 
         if (projectRoot is not null) {
-            await Console.Out.WriteLineAsync(
+            await console.Out.WriteLineAsync(
                 $"  • Remove kcap entries from {Path.Combine(projectRoot, ".claude", "settings.local.json")}");
-            await Console.Out.WriteLineAsync(
+            await console.Out.WriteLineAsync(
                 $"  • Remove kcap entries from {Path.Combine(projectRoot, ".codex", "hooks.json")}");
         }
 
         if (!keepConfig) {
-            await Console.Out.WriteLineAsync(local is not null && Directory.Exists(local.Root.Directory)
+            await console.Out.WriteLineAsync(local is not null && Directory.Exists(local.Root.Directory)
                 ? $"  • Remove kcap configuration from {configDir} (local lifecycle safety metadata is kept)"
                 : $"  • Delete the kcap config directory ({configDir})");
         }
@@ -162,14 +167,14 @@ sealed class UninstallCommand(
                          && new DirectoryInfo(store.Directory).LinkTarget is null
                          && new DirectoryInfo(Path.GetDirectoryName(store.Directory)!).LinkTarget is null;
         if (ownsDaemonDir)
-            await Console.Out.WriteLineAsync($"  • Delete the daemon state directory ({store.Directory})");
+            await console.Out.WriteLineAsync($"  • Delete the daemon state directory ({store.Directory})");
 
         if (!skipPrompt) {
-            await Console.Out.WriteAsync("Proceed? [y/N] ");
-            var reply = await Console.In.ReadLineAsync();
+            await console.Out.WriteAsync("Proceed? [y/N] ");
+            var reply = await console.In.ReadLineAsync();
 
             if (!string.Equals(reply?.Trim(), "y", StringComparison.OrdinalIgnoreCase)) {
-                await Console.Out.WriteLineAsync("Cancelled.");
+                await console.Out.WriteLineAsync("Cancelled.");
 
                 return 0;
             }
@@ -183,7 +188,7 @@ sealed class UninstallCommand(
 
         var cleanupStarted = false;
         try {
-            return await local.RunAsync(new SyncProgress<LocalInstallEvent>(LocalCommand.RenderRecovery), async (lease, state, ct) => {
+            return await local.RunAsync(new SyncProgress<LocalInstallEvent>(e => LocalCommand.RenderRecovery(console.Out, e)), async (lease, state, ct) => {
                 if (CanonicalPath.IsWithin(config.Directory, local.Root.Directory))
                     throw new LocalLifecycleException("KCAP_CONFIG_DIR must be outside KCAP_LOCAL_ROOT to preserve lifecycle safety metadata.");
                 if (state is LocalStackState.NotInstalled) {
@@ -198,14 +203,14 @@ sealed class UninstallCommand(
                         .RunAsync(lease, state, purge: !keepConfig, force, config.Directory, ct);
                     switch (outcome) {
                         case LocalUninstallOutcome.Purged:
-                            await Console.Out.WriteLineAsync($"Purged the local server in {local.Root.Directory}.");
+                            await console.Out.WriteLineAsync($"Purged the local server in {local.Root.Directory}.");
                             break;
                         case LocalUninstallOutcome.Uninstalled:
-                            await Console.Out.WriteLineAsync($"Uninstalled the local server. Its data in {local.Root.Directory} is kept.");
+                            await console.Out.WriteLineAsync($"Uninstalled the local server. Its data in {local.Root.Directory} is kept.");
                             break;
                     }
                 } catch (Exception ex) when (ex is LocalLifecycleException or LocalInstallFailure or LocalUpgradeFailure or IOException or UnauthorizedAccessException) {
-                    await Console.Error.WriteLineAsync($"Could not remove the local server: {ex.Message}");
+                    await console.Error.WriteLineAsync($"Could not remove the local server: {ex.Message}");
                     removalFailed = true;
                 }
                 cleanupStarted = true;
@@ -228,7 +233,7 @@ sealed class UninstallCommand(
             });
         } catch (Exception ex) when (ex is LocalLifecycleException or LocalInstallFailure or LocalUpgradeFailure or IOException or UnauthorizedAccessException) {
             // Past the local removal the config directory is not yet deleted, so a re-run can finish.
-            await Console.Error.WriteLineAsync(cleanupStarted
+            await console.Error.WriteLineAsync(cleanupStarted
                 ? $"kcap uninstall stopped: {ex.Message}. Re-run `kcap uninstall` to finish."
                 : $"Could not remove the local server: {ex.Message}");
             return 1;
@@ -243,7 +248,8 @@ sealed class UninstallCommand(
                 hadFailures = true;
 
             var accountStore  = AccountStore.Beside(store);
-            var env           = PluginEnvironment.FromProcess(await AppConfig.LoadProfileConfig(config), home, harnesses, binaries, accountStore);
+            var env           = PluginEnvironment.FromProcess(await AppConfig.LoadProfileConfig(config), home, harnesses, binaries, accountStore)
+                with { Stdout = console.Out, Stderr = console.Error };
             var pluginCommand = new PluginCommand(env, workdir);
 
             // User-level agent integrations. Each remove command is idempotent and
@@ -269,13 +275,13 @@ sealed class UninstallCommand(
             if (await pluginCommand.HandleAsync(["plugin", "remove", "--skills"]) != 0) hadFailures = true;
 
             if (pluginCommand.AccountsMayStillBeWired) {
-                await Console.Error.WriteLineAsync(
+                await console.Error.WriteLineAsync(
                     "Some vendor accounts may still record to kcap: check them with `kcap accounts`, then re-run `kcap uninstall`.");
                 hadFailures = true;
             }
 
             if (!new GitHookInstaller(home).Remove()) {
-                await Console.Error.WriteLineAsync("Could not remove the kcap git hook. Fix the global git configuration and retry.");
+                await console.Error.WriteLineAsync("Could not remove the kcap git hook. Fix the global git configuration and retry.");
                 hadFailures = true;
             }
 
@@ -303,9 +309,20 @@ sealed class UninstallCommand(
 
             if (pathLinks.Count > 0) {
                 foreach (var failure in links.Remove()) {
-                    await Console.Error.WriteLineAsync($"Could not remove {failure.Path}: {failure.Reason}");
-                    await Console.Error.WriteLineAsync($"Remove it yourself: sudo rm {ShellQuote(failure.Path)}");
+                    await console.Error.WriteLineAsync($"Could not remove {failure.Path}: {failure.Reason}");
+                    await console.Error.WriteLineAsync($"Remove it yourself: sudo rm {ShellQuote(failure.Path)}");
                     hadFailures = true;
+                }
+            }
+
+            if (profiles.Count > 0) {
+                foreach (var profile in ShellProfile.Removable(home, [])) {
+                    try {
+                        ShellProfile.Remove(profile);
+                    } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                        await console.Error.WriteLineAsync($"Could not remove kcap's PATH line from {profile}: {ex.Message}");
+                        hadFailures = true;
+                    }
                 }
             }
 
@@ -317,20 +334,20 @@ sealed class UninstallCommand(
                     var claudeOutcome = PluginCommand.RemoveClaudePlugin(claudeProject);
 
                     if (claudeOutcome == PluginCommand.ClaudeRemovalOutcome.Removed) {
-                        await Console.Out.WriteLineAsync($"Plugin removed (project: {claudeProject})");
+                        await console.Out.WriteLineAsync($"Plugin removed (project: {claudeProject})");
                     }
                 } catch (Exception ex) {
-                    await Console.Error.WriteLineAsync($"Could not update {claudeProject}: {ex.Message}");
+                    await console.Error.WriteLineAsync($"Could not update {claudeProject}: {ex.Message}");
                     hadFailures = true;
                 }
 
                 if (File.Exists(codexProject)) {
                     try {
                         if (PluginCommand.RemoveCodexHooks(codexProject)) {
-                            await Console.Out.WriteLineAsync($"Codex hooks removed (project: {codexProject})");
+                            await console.Out.WriteLineAsync($"Codex hooks removed (project: {codexProject})");
                         }
                     } catch (Exception ex) {
-                        await Console.Error.WriteLineAsync($"Could not update Codex hooks at {codexProject}: {ex.Message}");
+                        await console.Error.WriteLineAsync($"Could not update Codex hooks at {codexProject}: {ex.Message}");
                         hadFailures = true;
                     }
                 }
@@ -345,17 +362,17 @@ sealed class UninstallCommand(
             // as the registry: a re-run has to find and stop what is still running. A directory
             // KCAP_DAEMONS_DIR moved, or a link, may be shared, so nothing in it is assumed to be kcap's.
             if (!ownsDaemonDir) {
-                await Console.Out.WriteLineAsync($"Left the daemon state directory {store.Directory} in place: it is moved or linked elsewhere, so kcap cannot tell its files from others'.");
+                await console.Out.WriteLineAsync($"Left the daemon state directory {store.Directory} in place: it is moved or linked elsewhere, so kcap cannot tell its files from others'.");
             } else if (!hadFailures && Directory.Exists(store.Directory)) {
                 try {
                     if (store.DeleteAll()) {
-                        await Console.Out.WriteLineAsync($"Removed daemon state directory: {store.Directory}");
+                        await console.Out.WriteLineAsync($"Removed daemon state directory: {store.Directory}");
                     } else {
-                        await Console.Error.WriteLineAsync($"Could not remove daemon state directory {store.Directory}: a daemon or daemon command is still using it.");
+                        await console.Error.WriteLineAsync($"Could not remove daemon state directory {store.Directory}: a daemon or daemon command is still using it.");
                         hadFailures = true;
                     }
                 } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
-                    await Console.Error.WriteLineAsync($"Could not remove daemon state directory {store.Directory}: {ex.Message}");
+                    await console.Error.WriteLineAsync($"Could not remove daemon state directory {store.Directory}: {ex.Message}");
                     hadFailures = true;
                 }
             }
@@ -365,7 +382,7 @@ sealed class UninstallCommand(
                     try {
                         if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
                     } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
-                        await Console.Error.WriteLineAsync($"Could not remove {directory}: {ex.Message}");
+                        await console.Error.WriteLineAsync($"Could not remove {directory}: {ex.Message}");
                         hadFailures = true;
                     }
                 }
@@ -373,18 +390,18 @@ sealed class UninstallCommand(
 
             if (!keepConfig) {
                 if (hadFailures) {
-                    await Console.Error.WriteLineAsync(
+                    await console.Error.WriteLineAsync(
                         $"Skipping config-directory delete because earlier steps failed: {configDir}");
-                    await Console.Error.WriteLineAsync(
+                    await console.Error.WriteLineAsync(
                         "Investigate the errors above, then re-run `kcap uninstall` to finish.");
                 } else if (Directory.Exists(configDir)) {
                     try {
                         UninstallFiles.DeleteConfig(configDir, localRoot);
-                        await Console.Out.WriteLineAsync($"Removed configuration from: {configDir}");
+                        await console.Out.WriteLineAsync($"Removed configuration from: {configDir}");
                         if (localRoot is not null)
-                            await Console.Out.WriteLineAsync($"Kept local lifecycle safety metadata in {localRoot} (no recordings).");
+                            await console.Out.WriteLineAsync($"Kept local lifecycle safety metadata in {localRoot} (no recordings).");
                     } catch (Exception ex) {
-                        await Console.Error.WriteLineAsync($"Could not remove config directory {configDir}: {ex.Message}");
+                        await console.Error.WriteLineAsync($"Could not remove config directory {configDir}: {ex.Message}");
                         hadFailures = true;
                     }
                 }
@@ -396,20 +413,21 @@ sealed class UninstallCommand(
             if (!hadFailures && Directory.Exists(accountStore.Directory)) {
                 try {
                     Directory.Delete(accountStore.Directory, recursive: true);
-                    await Console.Out.WriteLineAsync($"Removed account registry: {accountStore.Directory}");
+                    await console.Out.WriteLineAsync($"Removed account registry: {accountStore.Directory}");
                 } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
-                    await Console.Error.WriteLineAsync($"Could not remove account registry {accountStore.Directory}: {ex.Message}");
+                    await console.Error.WriteLineAsync($"Could not remove account registry {accountStore.Directory}: {ex.Message}");
                     hadFailures = true;
                 }
             }
 
             if (hadFailures) {
-                await Console.Error.WriteLineAsync("kcap uninstall finished with errors — see above.");
+                await console.Error.WriteLineAsync("kcap uninstall finished with errors — see above.");
 
                 return 1;
             }
 
-            await Console.Out.WriteLineAsync("kcap uninstalled.");
+            await console.Out.WriteLineAsync("kcap uninstalled.");
+            await console.Out.WriteLineAsync("Restart any coding agents that were open during uninstall to clear their loaded kcap hooks.");
 
             return 0;
         }
@@ -440,24 +458,17 @@ sealed class UninstallCommand(
             OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
     /// <summary>
-    /// Deletes every <c>kcap-*</c> directory directly under
-    /// <paramref name="root"/>. Catches the cases where the installer's
-    /// fixed name list doesn't match what's on disk: a skill renamed,
-    /// retired, or added between releases. <c>kcap-</c> is our
-    /// namespace prefix so this is safe; user-authored folders without it
-    /// are untouched. Returns true on full success, false when any deletion
-    /// (or the enumeration itself) failed — callers feed the result into
-    /// their failure aggregator so a stuck folder doesn't get masked by
-    /// a "kcap uninstalled." exit.
+    /// Deletes every <c>kcap-*</c> directory directly under <paramref name="root"/>, catching skills the
+    /// installer's current name list does not know. False when any deletion or the enumeration failed.
     /// </summary>
-    static bool SweepCapacitorPrefixedDirs(string root) {
+    bool SweepCapacitorPrefixedDirs(string root) {
         if (!Directory.Exists(root)) return true;
 
         IEnumerable<string> dirs;
         try {
             dirs = Directory.EnumerateDirectories(root, "kcap-*").ToArray();
         } catch (Exception ex) {
-            Console.Error.WriteLine($"Could not enumerate {root}: {ex.Message}");
+            console.Error.WriteLine($"Could not enumerate {root}: {ex.Message}");
             return false;
         }
 
@@ -466,7 +477,7 @@ sealed class UninstallCommand(
             try {
                 Directory.Delete(dir, recursive: true);
             } catch (Exception ex) {
-                Console.Error.WriteLine($"Could not remove {dir}: {ex.Message}");
+                console.Error.WriteLine($"Could not remove {dir}: {ex.Message}");
                 ok = false;
             }
         }

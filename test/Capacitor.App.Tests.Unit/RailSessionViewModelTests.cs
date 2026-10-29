@@ -428,4 +428,137 @@ public class RailSessionViewModelTests {
             await Assert.That(pending.Tooltip).Contains("Process started");
         });
     }
+
+    // ── server rows ────────────────────────────────────────────────────────────────────────────
+
+    static readonly DateTime Started = new(2026, 10, 22, 13, 4, 24, DateTimeKind.Utc);
+    static readonly DateTime Ended = new(2026, 10, 22, 16, 56, 41, DateTimeKind.Utc);
+
+    static AgentRow ServerRow(string status = "ended", string ownerName = "Tony Young", bool stale = false, string? repoName = "kcap-cli", bool hosted = false) =>
+        AgentRow.FromServer(new RepoSessionDto {
+            SessionId = "s1", Status = status, AccessLevel = "full", Vendor = "claude", Title = "Desktop app RAM growth",
+            Owner = new() { UserId = "u2", DisplayName = ownerName, AvatarUrl = "https://avatars.example/u2" },
+            StartedAt = new DateTimeOffset(Started), LastActivityAt = new DateTimeOffset(status == "ended" ? Ended : Started),
+            EndedAt = status == "ended" ? new DateTimeOffset(Ended) : null, Stale = stale,
+            Repo = repoName is null ? null : new() { Hash = "h", Owner = "kurrent-io", Name = repoName },
+        }, hostedPresentation: hosted);
+
+    static Microsoft.Extensions.Time.Testing.FakeTimeProvider At(DateTime utc) => new(new DateTimeOffset(utc));
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_ended_server_row_shows_ended_meta_and_an_ended_status() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var row = new RailSessionViewModel(ServerRow(), new BehaviorSubject<string?>(null), NoPending, NotStale,
+                _ => { }, _ => { }, At(Ended.AddHours(2)));
+
+            await Assert.That(row.IsServer).IsTrue();
+            await Assert.That(row.IsEnded).IsTrue();
+            await Assert.That(row.IsTerminalSession).IsFalse();
+            await Assert.That(row.Meta).IsEqualTo("2h ago · 3h 52m");
+            await Assert.That(row.Status.Ended).IsTrue();
+            await Assert.That(row.Status.Kind).IsEqualTo(AgentStatusKind.Done);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_live_terminal_row_carries_the_chip_and_ages() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var time = At(Started.AddMinutes(25));
+            using var row = new RailSessionViewModel(ServerRow(status: "active"), new BehaviorSubject<string?>(null), NoPending, NotStale,
+                _ => { }, _ => { }, time);
+
+            await Assert.That(row.IsTerminalSession).IsTrue();
+            await Assert.That(row.IsEnded).IsFalse();
+            await Assert.That(row.Meta).IsEqualTo("25m");
+            await Assert.That(RailSessionViewModel.TerminalTooltip).IsEqualTo("Started in a terminal, not hosted by a daemon");
+
+            using var hosted = new RailSessionViewModel(ServerRow(status: "active", hosted: true), new BehaviorSubject<string?>(null), NoPending, NotStale,
+                _ => { }, _ => { }, time);
+            await Assert.That(hosted.IsTerminalSession).IsFalse();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Owner_initials_show_for_another_users_row_only() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var theirs = new RailSessionViewModel(ServerRow() with { OwnerIsViewer = false }, new BehaviorSubject<string?>(null), NoPending, NotStale,
+                _ => { }, _ => { }, At(Ended));
+            await Assert.That(theirs.OwnerInitials).IsEqualTo("TY");
+            await Assert.That(theirs.ShowsOwner).IsTrue();
+            await Assert.That(theirs.OwnerTooltip).IsEqualTo("Tony Young\nOwner");
+            await Assert.That(theirs.OwnerAvatarUrl).IsEqualTo("https://avatars.example/u2");
+
+            using var mine = new RailSessionViewModel(ServerRow() with { OwnerIsViewer = true }, new BehaviorSubject<string?>(null), NoPending, NotStale,
+                _ => { }, _ => { }, At(Ended));
+            await Assert.That(mine.ShowsOwner).IsFalse();
+            await Assert.That(mine.OwnerAvatarUrl).IsNull();
+
+            using var nameless = new RailSessionViewModel(ServerRow() with { OwnerName = null, OwnerIsViewer = false }, new BehaviorSubject<string?>(null), NoPending, NotStale,
+                _ => { }, _ => { }, At(Ended));
+            await Assert.That(nameless.ShowsOwner).IsTrue();
+            await Assert.That(nameless.OwnerAvatarUrl).IsEqualTo("https://avatars.example/u2");
+
+            using var unknown = new RailSessionViewModel(ServerRow(), new BehaviorSubject<string?>(null), NoPending, NotStale,
+                _ => { }, _ => { }, At(Ended));
+            await Assert.That(unknown.ShowsOwner).IsTrue();
+            await Assert.That(unknown.OwnerInitials).IsEqualTo("TY");
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Repository_label_shows_only_when_not_grouped_by_repository() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var grouping = new BehaviorSubject<RailGrouping>(RailGrouping.Repository);
+            using var row = new RailSessionViewModel(ServerRow(), new BehaviorSubject<string?>(null), NoPending, NotStale,
+                _ => { }, _ => { }, At(Ended), grouping: grouping);
+
+            await Assert.That(row.RepoLabel).IsEqualTo("kurrent-io/kcap-cli");
+            await Assert.That(row.ShowsRepo).IsFalse();
+            grouping.OnNext(RailGrouping.Date);
+            await Assert.That(row.ShowsRepo).IsTrue();
+
+            using var noRepo = new RailSessionViewModel(ServerRow(repoName: null), new BehaviorSubject<string?>(null), NoPending, NotStale,
+                _ => { }, _ => { }, At(Ended), grouping: grouping);
+            await Assert.That(noRepo.ShowsRepo).IsFalse();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Open_routes_a_server_row_to_the_server_opener() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var local = new List<string>();
+            var remote = new List<string>();
+            var server = new List<string>();
+            using var row = new RailSessionViewModel(ServerRow(), new BehaviorSubject<string?>(null), NoPending, NotStale,
+                local.Add, remote.Add, At(Ended), openServer: server.Add);
+
+            row.OpenCommand.Execute().Subscribe();
+
+            await Assert.That(server).IsEquivalentTo(["s1"]);
+            await Assert.That(local).IsEmpty();
+            await Assert.That(remote).IsEmpty();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_stale_server_row_greys_out_like_a_stale_remote_one() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var laneStale = new BehaviorSubject<bool>(false);
+            using var fresh = new RailSessionViewModel(ServerRow(status: "active"), new BehaviorSubject<string?>(null), NoPending, laneStale,
+                _ => { }, _ => { }, At(Started));
+            using var idle = new RailSessionViewModel(ServerRow(status: "active", stale: true), new BehaviorSubject<string?>(null), NoPending, laneStale,
+                _ => { }, _ => { }, At(Started));
+
+            await Assert.That(fresh.IsStale).IsFalse();
+            await Assert.That(idle.IsStale).IsTrue();
+            laneStale.OnNext(true);
+            await Assert.That(fresh.IsStale).IsTrue();
+        });
+    }
 }

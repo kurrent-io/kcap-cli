@@ -63,6 +63,8 @@ public class McpToolAnnotationsTests {
         await Assert.That(setTasks.DestructiveHint).IsTrue();
         await Assert.That(setTasks.IdempotentHint).IsFalse();
         await Assert.That(Tool("kcap-workitems", "detach_work_item").Annotations.DestructiveHint).IsTrue();
+        // A repeat from the same session appends nothing, and a later settle is what clears it.
+        await Assert.That(Tool("kcap-workitems", "declare_work_incomplete").Annotations).IsEqualTo(McpToolAnnotations.Upsert);
         await Assert.That(Tool("kcap-memory", "save_memory").Annotations.ReadOnlyHint).IsFalse();
         // Changing who may see a memory overwrites its access scope.
         await Assert.That(Tool("kcap-memory", "rescope_memory").Annotations.DestructiveHint).IsTrue();

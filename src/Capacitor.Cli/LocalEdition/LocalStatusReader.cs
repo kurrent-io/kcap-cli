@@ -40,16 +40,21 @@ sealed class LocalStatusReader(LocalStack stack, string cliVersion, Func<int, Po
         else if (PrereleaseSemver.IsNewer(installation.Version, cliVersion))
             notes.Add($"The stack is newer than this kcap ({cliVersion}); this kcap keeps working with it, and kcap local upgrade leaves it as it is.");
 
+        var recorded = LocalEmbeddingFile.Read(stack.Root);
+        var pending  = recorded is { Pending: true } ? " (not yet applied; kcap setup --local applies it)" : "";
+
         var fields = new List<KeyValuePair<string, string>> {
             new("URL", installation.ServerUrl),
             new("Version", installation.Version),
             new("Installation", installation.Id),
             new("Root", stack.Root.Directory),
             new("Service", $"{service.Describe} {Label(unit)} ({service.UnitFile(unit)})"),
-            new("Search", (unit.EmbeddingModel is { } model
+            new("Search", (unit.Embedding is { Provider: LocalEmbeddingProvider.Ollama, Model: { } model }
                 ? $"by meaning through Ollama with {model} while it answers, and by keyword"
-                : "by keyword only; kcap setup --local --embedding-model <model> adds search by meaning through Ollama")
-              + (LocalEmbeddingFile.Read(stack.Root) is { Pending: true } ? " (not yet applied; kcap setup --local applies it)" : "")),
+                : unit.Embedding is { Provider: LocalEmbeddingProvider.Builtin }
+                ? "by meaning with the built-in model, and by keyword"
+                : "by keyword only; kcap setup --local --builtin-embeddings adds search by meaning")
+              + pending),
         };
 
         if (state.UnitAbsent) return Down($"Not running: no {service.Describe} is installed for it.", fields, notes, StoppedAdvice(unit, "installs and starts it"), Leftovers());
@@ -77,7 +82,7 @@ sealed class LocalStatusReader(LocalStack stack, string cliVersion, Func<int, Po
 
             case UnitActivity.Running(var pid):
                 fields.Add(new("Process", $"pid {pid}"));
-                return await RunningAsync(installation.Port, pid, unit, fields, notes, ct);
+                return await RunningAsync(installation.Port, pid, unit, fields, notes, pending, ct);
 
             case UnitActivity.Restarting(var code):
                 fields.Add(new("Postgres", PostgresField()));
@@ -98,7 +103,7 @@ sealed class LocalStatusReader(LocalStack stack, string cliVersion, Func<int, Po
     }
 
     async Task<LocalStatusReport> RunningAsync(
-            int port, int pid, LocalServerUnit unit, List<KeyValuePair<string, string>> fields, List<string> notes, CancellationToken ct) {
+            int port, int pid, LocalServerUnit unit, List<KeyValuePair<string, string>> fields, List<string> notes, string pending, CancellationToken ct) {
         var taken = Taken(port, pid).ToList();
 
         switch (await LocalServerHealth.ReadAsync(stack.Local, unit, stack.Time, ct)) {
@@ -106,6 +111,7 @@ sealed class LocalStatusReader(LocalStack stack, string cliVersion, Func<int, Po
                 if (taken.Count > 0) return Down($"Not ready: something else answers on port {port}.", fields, notes, taken);
 
                 AddStores(fields, ready.Stores);
+                await ApplyEmbeddingHealthAsync(fields, unit, pending, ct);
 
                 return await LocalServerProbe.AuthConfigAsync(stack.Local, unit.BaseUrl, ct) switch {
                     AuthConfigAnswer.Lifted => new(true, $"Ready on {unit.BaseUrl}.", fields, notes),
@@ -119,6 +125,7 @@ sealed class LocalStatusReader(LocalStack stack, string cliVersion, Func<int, Po
                 if (taken.Count > 0) return Down($"Not ready: something else answers on port {port}.", fields, notes, taken);
 
                 AddStores(fields, starting.Stores);
+                await ApplyEmbeddingHealthAsync(fields, unit, pending, ct);
                 return Down("Starting, or a store is down.", fields, notes,
                     [$"The server reports ready once both stores are up and its schema is migrated. {Logs} shows its progress."]);
 
@@ -133,6 +140,27 @@ sealed class LocalStatusReader(LocalStack stack, string cliVersion, Func<int, Po
                 throw new InvalidOperationException("Unexpected health reading.");
         }
     }
+
+    /// <summary>Replaces the file-derived Search line only for a built-in model the server reports on; everything else
+    /// keeps the recorded wording.</summary>
+    async Task ApplyEmbeddingHealthAsync(List<KeyValuePair<string, string>> fields, LocalServerUnit unit, string pending, CancellationToken ct) {
+        if (await LocalServerProbe.EmbeddingsAsync(stack.Local, unit.BaseUrl, stack.Time, ct) is not { Provider: "builtin" } health) return;
+
+        var index = fields.FindIndex(f => f.Key == "Search");
+        if (index < 0) return;
+
+        fields[index] = new("Search", (health switch {
+            { Usable: true }  => "by meaning with the built-in model, and by keyword",
+            { Reason: null }  => "by keyword only: the built-in model is not loaded yet",
+            { Reason: var r } => $"by keyword only: the built-in model is not usable ({r}); {Remedy(r)}"
+        }) + pending);
+    }
+
+    /// <summary>Setup restores files that are missing or altered; it finds verified files present and restarts nothing,
+    /// so it cannot fix a model that fails to load.</summary>
+    static string Remedy(string reason) => reason is "model_missing" or "digest_mismatch"
+        ? "run kcap setup --local"
+        : "run kcap local restart, and see kcap local logs if it persists";
 
     /// <summary>A listener on the port that is not the server's own process; <paramref name="ours"/> null when the
     /// server is not running, so any listener is a stranger.</summary>

@@ -15,15 +15,43 @@ public sealed record ProfileRow(string Name, string? ServerUrl, bool IsActive, b
         _                                      => "Could not read sign-in status"
     };
 
-    public string ServerLabel => ServerUrl is { Length: > 0 } url ? url : "Add a server with kcap profile add";
+    public bool HasServer => ServerUrl is { Length: > 0 };
+    /// Signed in is the normal state, so only a status that needs something is shown.
+    public bool ShowsStatus => Status is not (ProfileCredentialStatus.NoServer or ProfileCredentialStatus.SignedIn
+        or ProfileCredentialStatus.NoSignInNeeded);
+
+    /// A profile in use that cannot reach its server is the one that needs you now.
+    public bool StatusNeedsAttention => ShowsStatus && (IsActive || IsBound);
+
+    /// The blank profile every config starts with, never given a server: nothing to show or do.
+    public bool IsPlaceholder => Name == ProfileConfig.DefaultName && !HasServer && !IsActive && !IsBound;
+
+    public string? UsageLabel => (IsActive, IsBound) switch {
+        (true, true)  => "In use",
+        (true, false) => "Command line",
+        (false, true) => "This app",
+        _             => null,
+    };
+
+    public string? UsageTip => (IsActive, IsBound) switch {
+        (true, true)  => "The kcap command line and this app both use this profile",
+        (true, false) => "The kcap command line uses this profile. Relaunch kcap to use it here too",
+        (false, true) => "This app uses this profile. The command line has since switched to another",
+        _             => null,
+    };
 
     public bool CanSignIn => Status is not (ProfileCredentialStatus.NoServer or ProfileCredentialStatus.NoSignInNeeded);
 
-    // Offered on a signed-in row too: the status is graded offline, so a credential the server has
-    // since rejected still reads as signed in, and the button is the only way to replace it.
-    public string SignInLabel => Status is ProfileCredentialStatus.SignedIn or ProfileCredentialStatus.Expired
-        ? "Sign in again"
-        : "Sign in";
+    /// A profile that cannot reach its server until someone signs in gets the button up front.
+    public bool NeedsSignIn => CanSignIn && Status is not ProfileCredentialStatus.SignedIn;
+
+    // Offered on a signed-in row too, from the menu: the status is graded offline, so a credential
+    // the server has since rejected still reads as signed in, and this is the only way to replace it.
+    public bool CanSignInAgain => Status is ProfileCredentialStatus.SignedIn;
+
+    public string SignInLabel => Status is ProfileCredentialStatus.Expired ? "Sign in again" : "Sign in";
+
+    public bool HasMenu => CanSignInAgain || CanRemove;
 
     public bool CanRemove => !IsActive && !IsBound && Name != ProfileConfig.DefaultName;
 }

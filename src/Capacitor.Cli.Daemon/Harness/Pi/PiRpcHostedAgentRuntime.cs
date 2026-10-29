@@ -617,7 +617,12 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
 
     // ---- Input ----
 
-    public async Task SendUserInputAsync(string text) {
+    public Task SendUserInputAsync(string text) => SendAsync(text, dispatchId: null);
+
+    public Task SendDispatchedInputAsync(string text, Guid dispatchId, bool waitForWrite) => SendAsync(text, dispatchId);
+
+    // Pi's echo of a prompt it was sent is dropped, so the envelope emitted here is the one that carries the dispatch.
+    async Task SendAsync(string text, Guid? dispatchId) {
         if (_guards is not null && text.AsSpan().TrimStart().StartsWith("/")) {
             StartReap("pi_reviewer_prompt_is_command");
             throw new InvalidOperationException(
@@ -629,7 +634,7 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
         // own continuation resumes. The envelope is emitted first so the viewer sees their message
         // immediately, rather than only when Pi gets round to echoing it.
         RememberSentPrompt(text);
-        EmitLocalEnvelope(new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: text));
+        EmitLocalEnvelope(new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: text, DispatchId: dispatchId));
 
         var id     = NextCommandId();
         var waiter = RegisterPending(id);

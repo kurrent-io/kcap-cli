@@ -19,7 +19,7 @@ public sealed class ProcessWatcherSpawner(
         // bypassed it would otherwise write a PID file asserting capture that cannot happen — a
         // watcher streams to SignalR and can never connect here.
         if (!HookHttp.IsPostable(Url)) {
-            await Console.Error.WriteLineAsync(
+            await (request.Stderr ?? Console.Error).WriteLineAsync(
                 UnusableUrlDiagnostic.Build(profiles.Resolution.Source, Url, $"watcher not started for {key}"));
             return;
         }
@@ -56,7 +56,7 @@ public sealed class ProcessWatcherSpawner(
             // agent's handles with it — an inherited hook-stdout pipe would stay open for the
             // watcher's whole lifetime and the agent's read would never reach EOF.
             if (starter.StartDetached(psi) is not { } pid) {
-                await Console.Error.WriteLineAsync($"Failed to spawn watcher for {key}");
+                await (request.Stderr ?? Console.Error).WriteLineAsync($"Failed to spawn watcher for {key}");
 
                 return;
             }
@@ -76,7 +76,7 @@ public sealed class ProcessWatcherSpawner(
                 /* best-effort — a missing marker just means IsWatcherAlive treats "now" as startupAt */
             }
         } catch (Exception ex) {
-            await Console.Error.WriteLineAsync($"Failed to spawn watcher for {key}: {ex.Message}");
+            await (request.Stderr ?? Console.Error).WriteLineAsync($"Failed to spawn watcher for {key}: {ex.Message}");
         }
     }
 

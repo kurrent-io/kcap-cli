@@ -20,9 +20,27 @@ public sealed record AppState(
     int? WindowX = null,
     int? WindowY = null,
     bool WindowMaximized = false,
+    // Rail shape per signed-in user, keyed "{server}|{userId}"; and the user each profile
+    // ("{server}|{profileName}") last resolved to, so startup opens in that user's shape.
+    IReadOnlyDictionary<string, ViewModels.RailPreferences>? RailPreferencesByUser = null,
+    IReadOnlyDictionary<string, string>? LastUserByProfile = null,
     double? UiScale = null,
+    double? RailWidth = null,
+    bool RailCollapsed = false,
+    double? ContextPaneWidth = null,
+    bool ContextPaneCollapsed = false,
     // When setup last sent the user to kcap.ai's sign-up; cleared once a sign-in commits.
-    DateTimeOffset? WebSignUpOpenedAt = null);
+    DateTimeOffset? WebSignUpOpenedAt = null,
+    bool WindowsServiceDeclined = false,
+    // Null follows the installed version: a beta install takes betas, a stable one does not.
+    bool? BetaUpdates = null,
+    // "host/vendor:repo" -> account id, written by AccountMemory.
+    IReadOnlyDictionary<string, string>? AccountByRepo = null,
+    // Vendor id -> whether kcap's tools were last installed for it from Settings. Nothing on disk
+    // says so, unlike hooks, so this is the only record of that answer.
+    IReadOnlyDictionary<string, bool>? HarnessToolsByVendor = null,
+    // A setup attempt is unverified until its command and recording check both succeed.
+    IReadOnlyList<string>? UnverifiedHarnessSetups = null);
 
 public interface IAppStateStore {
     Task<AppState> LoadAsync();
@@ -35,10 +53,12 @@ public interface IAppStateStore {
 public sealed partial class AppStateStore(string path) : IAppStateStore {
     readonly SemaphoreSlim _gate = new(1, 1);
 
+    // An uncontended gate completes synchronously, so the file I/O is pushed to the pool explicitly:
+    // callers await these from the UI thread.
     public async Task<AppState> LoadAsync() {
         await _gate.WaitAsync().ConfigureAwait(false);
         try {
-            return Read();
+            return await Task.Run(Read).ConfigureAwait(false);
         } finally {
             _gate.Release();
         }
@@ -47,8 +67,7 @@ public sealed partial class AppStateStore(string path) : IAppStateStore {
     public async Task<bool> UpdateAsync(Func<AppState, AppState> mutate) {
         await _gate.WaitAsync().ConfigureAwait(false);
         try {
-            var next = mutate(Read());
-            if (Write(next)) return true;
+            if (await Task.Run(() => Write(mutate(Read()))).ConfigureAwait(false)) return true;
 
             Console.Error.WriteLine($"kcap: failed to persist app state to {path}");
             return false;

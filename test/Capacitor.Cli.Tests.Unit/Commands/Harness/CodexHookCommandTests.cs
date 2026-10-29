@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Commands.Harness;
+using Capacitor.Cli.Core.Http;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -13,24 +14,40 @@ namespace Capacitor.Cli.Tests.Unit.Commands.Harness;
 // Shares the AuthProviderDiscoveryCache cohort with the rest of the assembly's /auth/config
 // stubbers, so this class's own stub cannot race one of theirs.
 [NotInParallel("AuthProviderDiscoveryCache")]
+[ParallelLimiter<SubprocessLimit>]
 public class CodexHookCommandTests : IDisposable {
 
     [TempHome] public required TempHome Home { get; init; }
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
-    // Console is process-global, and tests in other files capture it too, so no group key can
-    // exclude every reader: each capturing test below carries a bare [NotInParallel].
-
     readonly WireMockServer _server = WireMockServer.Start();
+    readonly StringWriter   _stdout = new();
+    readonly StringWriter   _stderr = new();
 
     public void Dispose() => _server.Stop();
+
+    string Stdout => _stdout.ToString();
 
     void StubNoAuthRequired() =>
         _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200)
                 .WithHeader("Content-Type", "application/json")
                 .WithBody("""{"provider":"None"}"""));
+
+    Task<int> RunAsync(
+            string payload, string? serverUrl = null, HostedAgent? hosted = null, ICapacitorHttpClient? http = null,
+            IWatcherSpawner? spawner = null, bool skip = false, bool hostedAppServer = false) {
+        var profiles = Resolutions.At(serverUrl ?? _server.Url!, Config.Root);
+        var client   = http ?? new FixedCapacitorHttpClient();
+        var watchers = spawner is null
+            ? TestWatchers.For(Config.Root, profiles, client)
+            : TestWatchers.For(Config.Root, profiles, client, spawner);
+        var command = new CodexHookCommand(Config.Root, profiles, new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home),
+            hosted ?? HostedAgent.Terminal, client, watchers, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory));
+
+        return command.Handle(new StringReader(payload), new CodexHookEnvironment(_stdout, _stderr, skip, hostedAppServer));
+    }
 
     [Test]
     public async Task SessionStart_posts_to_session_start_codex_with_normalized_session_id() {
@@ -48,7 +65,7 @@ public class CodexHookCommandTests : IDisposable {
                       }
                       """;
 
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(payload));
+        var exit = await RunAsync(payload, spawner: new FakeWatcherSpawner());
 
         await Assert.That(exit).IsEqualTo(0);
 
@@ -62,23 +79,12 @@ public class CodexHookCommandTests : IDisposable {
         // The approval policy is frozen at session start, under the key PreToolUse reads it by.
         await Assert.That(new PolicySnapshotStore(Config.Root).TryLoad("019e032205fc7570be6575719c3ea861")).IsNotNull();
 
-        // SessionStart also writes Codex's required JSON output to stdout.
-        // We can't reliably capture stdout here because the test path spawns a
-        // real watcher child process via Process.Start, which under TUnit's
-        // Console capture corrupts subsequent stdout reads. The Stop test covers
-        // the identical write pattern (Console.Write(SessionScopedOutputJson)),
-        // and HandleSessionStart writes the same constant in the same way before
-        // the watcher spawn.
+        await Assert.That(JsonDocument.Parse(Stdout).RootElement.GetProperty("continue").GetBoolean()).IsTrue();
     }
 
-    // Codex 'Stop' fires at turn end, not session end. The hook now best-effort
-    // POSTs to /hooks/stop so the server can emit the idle-wait marker that
-    // clears the chat "working" indicator — but it must NOT POST session-end
-    // (that path is reserved for the watcher's parent-exit fallback), and must
-    // still emit {"continue":true} on stdout with no watcher chatter.
-    //
-    // Globally sequential: captures Console.Out for the duration.
-    [Test, NotInParallel]
+    // Codex 'Stop' fires at turn end, not session end: the hook POSTs /hooks/stop for the idle-wait
+    // marker but never session-end, which belongs to the watcher's parent-exit fallback.
+    [Test]
     public async Task Stop_posts_to_hooks_stop_and_emits_continue_json() {
         StubNoAuthRequired();
         _server.Given(Request.Create().WithPath("/hooks/stop").UsingPost())
@@ -95,13 +101,9 @@ public class CodexHookCommandTests : IDisposable {
                       }
                       """;
 
-        using var capture = ConsoleOutput.StartCapture();
-
-
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(payload));
+        var exit = await RunAsync(payload);
         await Assert.That(exit).IsEqualTo(0);
 
-        // Stop now POSTs /hooks/stop exactly once, carrying the full payload.
         var stopRequests = _server.FindLogEntries(Request.Create().WithPath("/hooks/stop").UsingPost());
         await Assert.That(stopRequests.Count).IsEqualTo(1);
         var body = JsonDocument.Parse(stopRequests[0].RequestMessage.Body!).RootElement;
@@ -110,22 +112,19 @@ public class CodexHookCommandTests : IDisposable {
         await Assert.That(body.GetProperty("cwd").GetString()).IsEqualTo("/tmp");
         await Assert.That(body.GetProperty("hook_event_name").GetString()).IsEqualTo("Stop");
 
-        // Must NOT POST session-end.
         var endRequests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-end/codex").UsingPost());
         await Assert.That(endRequests.Count).IsEqualTo(0);
 
-        // Invariant: valid JSON object on stdout, no chatter.
-        var stdout = capture.GetCapturedOutput();
-        var doc    = JsonDocument.Parse(stdout);
+        // A single JSON object on stdout, with no watcher chatter.
+        var doc = JsonDocument.Parse(Stdout);
         await Assert.That(doc.RootElement.GetProperty("continue").GetBoolean()).IsTrue();
-        await Assert.That(stdout.Contains("Watcher ")).IsFalse();
-        await Assert.That(stdout.Contains("Spawned")).IsFalse();
+        await Assert.That(Stdout.Contains("Watcher ")).IsFalse();
+        await Assert.That(Stdout.Contains("Spawned")).IsFalse();
     }
 
-    // The POST is best-effort: a slow/unreachable server must never hang the hook
-    // or break its stdout contract. Cap at 2s and swallow — assert we still emit
-    // {"continue":true} and return under 5s even when /hooks/stop stalls 10s.
-    [Test, NotInParallel]
+    // The POST is best-effort and capped at 2s: a /hooks/stop that stalls 10s still gets
+    // {"continue":true} back well under 5s.
+    [Test]
     public async Task Stop_still_emits_continue_json_when_server_is_slow() {
         _server.Given(Request.Create().WithPath("/hooks/stop").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}").WithDelay(TimeSpan.FromSeconds(10)));
@@ -139,24 +138,17 @@ public class CodexHookCommandTests : IDisposable {
                       }
                       """;
 
-        using var capture = ConsoleOutput.StartCapture();
-        var sw           = System.Diagnostics.Stopwatch.StartNew();
-
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(payload));
+        var sw   = System.Diagnostics.Stopwatch.StartNew();
+        var exit = await RunAsync(payload);
         sw.Stop();
         await Assert.That(exit).IsEqualTo(0);
 
-        var doc = JsonDocument.Parse(capture.GetCapturedOutput());
-        await Assert.That(doc.RootElement.GetProperty("continue").GetBoolean()).IsTrue();
-
-        // 2s POST cap + slack for CI jitter.
+        await Assert.That(JsonDocument.Parse(Stdout).RootElement.GetProperty("continue").GetBoolean()).IsTrue();
         await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
     }
 
-    // Symmetric with PermissionRequest_returns_quickly_when_auth_discovery_is_slow:
-    // the shared best-effort POST helper's single deadline must cover /auth/config
-    // discovery for the Stop path too, not just the POST itself.
-    [Test, NotInParallel]
+    // The best-effort POST's single deadline covers /auth/config discovery too, not just the POST.
+    [Test]
     public async Task Stop_still_emits_continue_json_when_auth_discovery_is_slow() {
         _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}").WithDelay(TimeSpan.FromSeconds(10)));
@@ -172,23 +164,28 @@ public class CodexHookCommandTests : IDisposable {
                       }
                       """;
 
-        using var capture = ConsoleOutput.StartCapture();
-        var sw           = System.Diagnostics.Stopwatch.StartNew();
-
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(payload));
+        var sw   = System.Diagnostics.Stopwatch.StartNew();
+        var exit = await RunAsync(payload);
         sw.Stop();
         await Assert.That(exit).IsEqualTo(0);
 
-        var doc = JsonDocument.Parse(capture.GetCapturedOutput());
-        await Assert.That(doc.RootElement.GetProperty("continue").GetBoolean()).IsTrue();
-
+        await Assert.That(JsonDocument.Parse(Stdout).RootElement.GetProperty("continue").GetBoolean()).IsTrue();
         await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
     }
 
-    // A malformed (scheme-less) server URL must not crash the hook: it still emits
-    // {"continue":true} and returns 0. The guard in PostBestEffortAsync bails before
-    // any client is built, so an unusable URL spends no budget or lease.
-    [Test, NotInParallel]
+    /// What the hook's poster reports goes to the run's own stderr, which Codex reads as the hook's result.
+    [Test]
+    public async Task SessionStart_reports_an_unusable_server_on_the_runs_own_stderr() {
+        var exit = await RunAsync("""{"hook_event_name":"SessionStart","session_id":"abc","cwd":"/tmp"}""",
+            serverUrl: "localhost:5108", spawner: new FakeWatcherSpawner());
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(_stderr.ToString()).Contains("session-start/codex spooled, not sent");
+        await Assert.That(JsonDocument.Parse(Stdout).RootElement.GetProperty("continue").GetBoolean()).IsTrue();
+    }
+
+    // A scheme-less server URL is refused before any client is built, and the hook still answers.
+    [Test]
     public async Task Stop_with_malformed_base_url_still_emits_continue_and_returns_zero() {
         var payload = """
                       {
@@ -199,28 +196,16 @@ public class CodexHookCommandTests : IDisposable {
                       }
                       """;
 
-        using var capture = ConsoleOutput.StartCapture();
-
-        // Scheme-less URL → IsAcceptableUrl is false → PostBestEffortAsync returns
-        // before any client is built, spending no budget or lease.
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At("localhost:5108", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("localhost:5108", Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(payload));
+        var exit = await RunAsync(payload, serverUrl: "localhost:5108");
         await Assert.That(exit).IsEqualTo(0);
 
-        var doc = JsonDocument.Parse(capture.GetCapturedOutput());
-        await Assert.That(doc.RootElement.GetProperty("continue").GetBoolean()).IsTrue();
+        await Assert.That(JsonDocument.Parse(Stdout).RootElement.GetProperty("continue").GetBoolean()).IsTrue();
     }
 
-    // Globally sequential alongside Stop_is_turn_end_no_op_and_does_not_post_session_end —
-    // see that test for why ConsoleSerialGroup alone has been observed to
-    // interleave in suite runs and drop captured Console output.
-    [Test, NotInParallel]
+    // With no bridge the request is recorded on /hooks/permission-record and stdout carries no
+    // decision, so Codex's own in-CLI prompt asks the user rather than the hook auto-allowing.
+    [Test]
     public async Task PermissionRequest_records_event_and_yields_decision_to_codex() {
-        // The Codex permission-request hook must not silently auto-allow tool
-        // calls; with no bridge to bounce through it records
-        // the request server-side via /hooks/permission-record (the same
-        // fire-and-forget endpoint Claude's terminal path uses) and emits an
-        // empty hookSpecificOutput so Codex's normal in-CLI approval prompt
-        // asks the user. Regression test for this behavior.
         StubNoAuthRequired();
         _server.Given(Request.Create().WithPath("/hooks/permission-record").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
@@ -236,24 +221,16 @@ public class CodexHookCommandTests : IDisposable {
                       }
                       """;
 
-        using var capture = ConsoleOutput.StartCapture();
-
-
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(payload));
+        var exit = await RunAsync(payload);
 
         await Assert.That(exit).IsEqualTo(0);
 
-        // stdout must NOT carry a hook decision — Codex falls back to its
-        // own approval prompt when hookSpecificOutput.decision is absent.
-        var stdout = capture.GetCapturedOutput();
-        var doc    = JsonDocument.Parse(stdout);
-
+        var doc = JsonDocument.Parse(Stdout);
         var hasDecision = doc.RootElement.TryGetProperty("hookSpecificOutput", out var hso)
          && hso.TryGetProperty("decision", out _);
         await Assert.That(hasDecision).IsFalse();
 
-        // Recording must land on /hooks/permission-record, not on the
-        // long-poll /hooks/permission-request/{vendor} route.
+        // Not the long-poll /hooks/permission-request/{vendor} route, which outlives Codex's hook timeout.
         var recorded = _server.FindLogEntries(Request.Create().WithPath("/hooks/permission-record").UsingPost());
         await Assert.That(recorded.Count).IsEqualTo(1);
 
@@ -261,11 +238,8 @@ public class CodexHookCommandTests : IDisposable {
         await Assert.That(wrong.Count).IsEqualTo(0);
     }
 
-    // the hook must return well under Codex's 30 s timeout even when
-    // the recording endpoint is slow. We cap the HTTP client at 2 s and
-    // swallow the resulting TaskCanceledException — guard against future
-    // regressions where someone reintroduces an unbounded await.
-    [Test, NotInParallel]
+    // A slow recording endpoint must not hold the hook near Codex's 30s timeout.
+    [Test]
     public async Task PermissionRequest_returns_quickly_when_server_is_slow() {
         _server.Given(Request.Create().WithPath("/hooks/permission-record").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}").WithDelay(TimeSpan.FromSeconds(10)));
@@ -281,29 +255,17 @@ public class CodexHookCommandTests : IDisposable {
                       }
                       """;
 
-        using var capture = ConsoleOutput.StartCapture();
-        var sw           = System.Diagnostics.Stopwatch.StartNew();
-
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(payload));
+        var sw   = System.Diagnostics.Stopwatch.StartNew();
+        var exit = await RunAsync(payload);
         sw.Stop();
         await Assert.That(exit).IsEqualTo(0);
 
-        // 2 s HTTP timeout + a generous slack for build/CI jitter.
         await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
     }
 
-    // Qodo finding: bounding only the POST left auth discovery
-    // (GET /auth/config) running on HttpClient's 100 s default. Stub
-    // /auth/config slow and assert the hook still returns under 5 s — the
-    // shared 2 s CTS in CodexHookCommand covers discovery too.
-    //
-    // Separately, this test redirects Console.Out, so it must share
-    // ConsoleSerialGroup with every other Console.Out-redirecting test in
-    // the suite. Previously it lived in its own "CodexPermissionRequestStdout"
-    // group and raced against the ConsoleSerialGroup tests, occasionally
-    // causing both this test and the unrelated stdout-asserting ones to
-    // observe a stale Console.Out writer.
-    [Test, NotInParallel]
+    // Auth discovery sits inside the same 2s deadline: without it, a stalled /auth/config would
+    // run on HttpClient's 100s default.
+    [Test]
     public async Task PermissionRequest_returns_quickly_when_auth_discovery_is_slow() {
         _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}").WithDelay(TimeSpan.FromSeconds(10)));
@@ -322,10 +284,8 @@ public class CodexHookCommandTests : IDisposable {
                       }
                       """;
 
-        using var capture = ConsoleOutput.StartCapture();
-        var sw           = System.Diagnostics.Stopwatch.StartNew();
-
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(payload));
+        var sw   = System.Diagnostics.Stopwatch.StartNew();
+        var exit = await RunAsync(payload);
         sw.Stop();
         await Assert.That(exit).IsEqualTo(0);
 
@@ -334,8 +294,6 @@ public class CodexHookCommandTests : IDisposable {
 
     [Test]
     public async Task UserPromptSubmit_PreToolUse_PostToolUse_are_swallowed() {
-        // v1: pass-through events not consumed server-side. CLI should
-        // exit 0 without making any HTTP request.
         foreach (var evt in new[] { "UserPromptSubmit", "PreToolUse", "PostToolUse" }) {
             var payload = $$"""
                             {
@@ -346,40 +304,32 @@ public class CodexHookCommandTests : IDisposable {
                             }
                             """;
 
-            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(payload));
+            var exit = await RunAsync(payload);
             await Assert.That(exit).IsEqualTo(0);
         }
 
-        // No HTTP requests should have been issued.
         await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
     }
 
     /// A deny rule must bind a call Codex runs unasked wherever it runs, the hosted app-server included.
-    [Test, NotInParallel]
+    [Test]
     [Arguments(false)]
     [Arguments(true)]
     public async Task PreToolUse_answers_a_deny_rule_in_every_mode(bool hostedAppServer) {
         File.WriteAllText(Config.Root.Path("approvals.yaml"),
             "version: 1\nrules:\n  - match: { kind: shell, command: \"rm -rf *\" }\n    outcome: deny\n");
-        using var marker  = EnvScope.Exclusive("KCAP_HOSTED_APPSERVER", hostedAppServer ? "1" : null);
-        using var capture = ConsoleOutput.StartCapture();
+        var payload = """{"hook_event_name":"PreToolUse","session_id":"01a15cd7-3e2d-75b2-ad28-c00f7dbcf5d0","tool_name":"Bash","tool_input":{"command":"rm -rf build"},"tool_use_id":"exec-1","cwd":"/tmp"}""";
 
-        {
-            var payload = """{"hook_event_name":"PreToolUse","session_id":"01a15cd7-3e2d-75b2-ad28-c00f7dbcf5d0","tool_name":"Bash","tool_input":{"command":"rm -rf build"},"tool_use_id":"exec-1","cwd":"/tmp"}""";
+        var exit = await RunAsync(payload, hostedAppServer: hostedAppServer);
 
-            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(payload));
-
-            await Assert.That(exit).IsEqualTo(0);
-            var output = JsonDocument.Parse(capture.GetCapturedOutput()).RootElement.GetProperty("hookSpecificOutput");
-            await Assert.That(output.GetProperty("permissionDecision").GetString()).IsEqualTo("deny");
-        }
+        await Assert.That(exit).IsEqualTo(0);
+        var output = JsonDocument.Parse(Stdout).RootElement.GetProperty("hookSpecificOutput");
+        await Assert.That(output.GetProperty("permissionDecision").GetString()).IsEqualTo("deny");
     }
 
     [Test]
     public async Task Unknown_event_returns_zero_and_no_request() {
-        var payload = """{"hook_event_name": "BogusEvent", "session_id": "abc"}""";
-
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(payload));
+        var exit = await RunAsync("""{"hook_event_name": "BogusEvent", "session_id": "abc"}""");
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
@@ -387,9 +337,7 @@ public class CodexHookCommandTests : IDisposable {
 
     [Test]
     public async Task Missing_hook_event_name_returns_zero_silently() {
-        var payload = """{"session_id": "abc"}""";
-
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(payload));
+        var exit = await RunAsync("""{"session_id": "abc"}""");
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
@@ -397,65 +345,41 @@ public class CodexHookCommandTests : IDisposable {
 
     [Test]
     public async Task Malformed_json_returns_zero_silently() {
-        var payload = "{not json";
-
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(payload));
+        var exit = await RunAsync("{not json");
 
         await Assert.That(exit).IsEqualTo(0);
     }
 
-    // Fix #3: non-string hook_event_name (e.g. a number) must not crash — return 0 silently.
     [Test]
     public async Task Hook_event_name_as_number_returns_zero_without_crash() {
-        var payload = """{"hook_event_name": 99, "session_id": "abc", "transcript_path": "/tmp/r.jsonl"}""";
-
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(payload));
+        var exit = await RunAsync("""{"hook_event_name": 99, "session_id": "abc", "transcript_path": "/tmp/r.jsonl"}""");
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
     }
 
-    // Fix #3: non-string session_id in a Stop payload must not crash.
-    // session_id falls to null via the safe TryGetString helper, so HandleStop
-    // short-circuits before EnsureWatcherRunning. No server POST is expected
-    // (Stop's session-end POST was removed), but we still stub
-    // /hooks/session-end/codex so a regression that reintroduces the POST
-    // surfaces as a test failure via the WireMock log assertion below.
+    // A non-string session_id reads as absent, so Stop skips the watcher, and it still never
+    // POSTs session-end — the stub is there so a regression shows up in the request log.
     [Test]
     public async Task Stop_with_numeric_session_id_returns_zero_without_crash() {
-        var payload = """{"hook_event_name": "Stop", "session_id": 12345, "transcript_path": "/tmp/r.jsonl"}""";
-
         _server.Given(Request.Create().WithPath("/hooks/session-end/codex").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(payload));
+        var exit = await RunAsync("""{"hook_event_name": "Stop", "session_id": 12345, "transcript_path": "/tmp/r.jsonl"}""");
 
         await Assert.That(exit).IsEqualTo(0);
 
-        // Stop must never POST session-end, even with a malformed payload.
         var endRequests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-end/codex").UsingPost());
         await Assert.That(endRequests.Count).IsEqualTo(0);
     }
 
-    // When the user runs `kcap disable`, the marker file
-    // under the config root's "disabled" directory must short-circuit the Codex
-    // hook the same way it does for Claude. Without this guard, the next
-    // Codex Stop hook restarts the watcher (HandleStop calls
-    // WatcherManager.EnsureWatcherRunning) and re-enlivens a session whose
+    // After `kcap disable` the next Stop must not restart the watcher and re-send a session whose
     // data was just deleted server-side.
-    //
-    // Globally sequential: this test captures Console.Out, and shares the
-    // same NotInParallel(ConsoleSerialGroup) lock as every other
-    // stdout-redirecting test in the suite.
-    [Test, NotInParallel]
+    [Test]
     public async Task Handle_skips_dispatch_when_session_is_disabled() {
-        // session_id without dashes — NormalizeGuidField is a no-op on this
-        // shape, so the value written to disk matches the value the hook
-        // looks up after normalization.
+        // Dashless, so the id written to disk is the one the hook looks up after normalizing.
         const string sessionId = "disabledsess123abc";
 
-        // Stub every route the dispatch path could hit so a regression that
-        // re-enables dispatch surfaces as a recorded request.
         _server.Given(Request.Create().WithPath("/hooks/session-start/codex").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
@@ -470,117 +394,70 @@ public class CodexHookCommandTests : IDisposable {
 
         DisabledSessions.Mark(sessionId, Config.Root);
 
-        using var capture = ConsoleOutput.StartCapture();
+        var exit = await RunAsync(payload);
 
-        try {
-            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(payload));
-
-            await Assert.That(exit).IsEqualTo(0);
-
-            // Disabled-session branch must skip every server POST and the
-            // watcher restart.
-            await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
-
-            // Codex's Stop parser still expects valid JSON on stdout.
-            var stdout = capture.GetCapturedOutput();
-            var doc    = JsonDocument.Parse(stdout);
-            await Assert.That(doc.RootElement.GetProperty("continue").GetBoolean()).IsTrue();
-        } finally {
-            DisabledSessions.RemoveMarker(sessionId, Config.Root);
-        }
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
+        await Assert.That(JsonDocument.Parse(Stdout).RootElement.GetProperty("continue").GetBoolean()).IsTrue();
     }
 
-    // ---- Guard-1: envelope-sourced hosted session suppresses the watcher (§2.5) ----
+    // An envelope-sourced hosted session's transcript comes from the daemon, so the hook spawns no watcher.
 
-    [Test, NotInParallel]
+    [Test]
     public async Task Stop_skips_the_watcher_for_an_envelope_sourced_hosted_session() {
         StubNoAuthRequired();
         _server.Given(Request.Create().WithPath("/hooks/stop").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
-
-        var previousMarker = Environment.GetEnvironmentVariable("KCAP_HOSTED_APPSERVER");
         var spawner = new FakeWatcherSpawner();
-        using var capture = ConsoleOutput.StartCapture();
 
-        try {
-            Environment.SetEnvironmentVariable("KCAP_HOSTED_APPSERVER", "1");
-            var payload = """{"hook_event_name":"Stop","session_id":"g1-stop-suppressed","transcript_path":"/tmp/r.jsonl","cwd":"/tmp"}""";
+        var exit = await RunAsync("""{"hook_event_name":"Stop","session_id":"g1-stop-suppressed","transcript_path":"/tmp/r.jsonl","cwd":"/tmp"}""",
+            spawner: spawner, hostedAppServer: true);
+        await Assert.That(exit).IsEqualTo(0);
 
-            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient(), spawner), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(payload));
-            await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(spawner.Spawned.Count).IsEqualTo(0);
+        // Only the watcher is suppressed: the idle-marker stop POST still fires.
+        var stopRequests = _server.FindLogEntries(Request.Create().WithPath("/hooks/stop").UsingPost());
+        await Assert.That(stopRequests.Count).IsEqualTo(1);
 
-            // The watcher never spawns for an envelope-sourced session...
-            await Assert.That(spawner.Spawned.Count).IsEqualTo(0);
-            // ...but only the watcher is suppressed: the idle-marker stop POST still fires.
-            var stopRequests = _server.FindLogEntries(Request.Create().WithPath("/hooks/stop").UsingPost());
-            await Assert.That(stopRequests.Count).IsEqualTo(1);
-
-            var doc = JsonDocument.Parse(capture.GetCapturedOutput());
-            await Assert.That(doc.RootElement.GetProperty("continue").GetBoolean()).IsTrue();
-        } finally {
-            Environment.SetEnvironmentVariable("KCAP_HOSTED_APPSERVER", previousMarker);
-        }
+        await Assert.That(JsonDocument.Parse(Stdout).RootElement.GetProperty("continue").GetBoolean()).IsTrue();
     }
 
-    [Test, NotInParallel]
+    /// The positive control for the suppression above: without the marker the watcher spawns.
+    [Test]
     public async Task Stop_spawns_the_watcher_without_the_hosted_appserver_marker() {
-        // Positive control for the suppression test above: without the marker the watcher spawns, so the
-        // suppression assertion can actually fail if guard-1 regresses.
         StubNoAuthRequired();
         _server.Given(Request.Create().WithPath("/hooks/stop").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
-
-        var previousMarker = Environment.GetEnvironmentVariable("KCAP_HOSTED_APPSERVER");
         var spawner = new FakeWatcherSpawner();
-        using var capture = ConsoleOutput.StartCapture();
 
-        try {
-            Environment.SetEnvironmentVariable("KCAP_HOSTED_APPSERVER", null);
-            var payload = """{"hook_event_name":"Stop","session_id":"g1-stop-control","transcript_path":"/tmp/r.jsonl","cwd":"/tmp"}""";
+        var exit = await RunAsync("""{"hook_event_name":"Stop","session_id":"g1-stop-control","transcript_path":"/tmp/r.jsonl","cwd":"/tmp"}""",
+            spawner: spawner);
+        await Assert.That(exit).IsEqualTo(0);
 
-            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient(), spawner), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(payload));
-            await Assert.That(exit).IsEqualTo(0);
-
-            await Assert.That(spawner.Spawned.Count).IsEqualTo(1);
-        } finally {
-            Environment.SetEnvironmentVariable("KCAP_HOSTED_APPSERVER", previousMarker);
-        }
+        await Assert.That(spawner.Spawned.Count).IsEqualTo(1);
     }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task SessionStart_skips_the_watcher_for_an_envelope_sourced_hosted_session() {
         StubNoAuthRequired();
         _server.Given(Request.Create().WithPath("/hooks/session-start/codex").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
-
-        var previousMarker = Environment.GetEnvironmentVariable("KCAP_HOSTED_APPSERVER");
         var spawner = new FakeWatcherSpawner();
 
-        try {
-            Environment.SetEnvironmentVariable("KCAP_HOSTED_APPSERVER", "1");
-            var payload = """{"hook_event_name":"SessionStart","session_id":"g1-start-suppressed","transcript_path":"/tmp/r.jsonl","cwd":"/tmp"}""";
+        var exit = await RunAsync("""{"hook_event_name":"SessionStart","session_id":"g1-start-suppressed","transcript_path":"/tmp/r.jsonl","cwd":"/tmp"}""",
+            spawner: spawner, hostedAppServer: true);
+        await Assert.That(exit).IsEqualTo(0);
 
-            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient(), spawner), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(payload));
-            await Assert.That(exit).IsEqualTo(0);
-
-            // No watcher for an envelope-sourced session; the session-start POST is untouched.
-            await Assert.That(spawner.Spawned.Count).IsEqualTo(0);
-            var startRequests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-start/codex").UsingPost());
-            await Assert.That(startRequests.Count).IsEqualTo(1);
-        } finally {
-            Environment.SetEnvironmentVariable("KCAP_HOSTED_APPSERVER", previousMarker);
-        }
+        await Assert.That(spawner.Spawned.Count).IsEqualTo(0);
+        var startRequests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-start/codex").UsingPost());
+        await Assert.That(startRequests.Count).IsEqualTo(1);
     }
 
-    // ---- PermissionRequest daemon-bridge tests ----
-    //
-    // The no-daemon-URL "stub" branch is covered by the regression test
-    // PermissionRequest_records_event_and_yields_decision_to_codex above; it
-    // asserts the new record-and-yield contract (no in-CLI decision, fall back
-    // to Codex's own approval prompt). The tests below cover the new
-    // daemon-bridge branch added since then.
+    // ---- PermissionRequest through the daemon bridge ----
 
-    [Test, NotInParallel]
+    const string PermissionRequest = """{"hook_event_name":"PermissionRequest","session_id":"s1"}""";
+
+    [Test]
     public async Task PermissionRequest_with_daemon_url_set_posts_to_bridge_and_forwards_response_to_stdout() {
         using var bridge = WireMockServer.Start();
         var       token  = "abc123";
@@ -594,20 +471,17 @@ public class CodexHookCommandTests : IDisposable {
 
         var hosted = new HostedAgent(null, IsRendered: false, DaemonBridge.Parse($"http://127.0.0.1:{bridge.Ports[0]}/{token}"));
 
-        using var capture = ConsoleOutput.StartCapture();
-
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://server.example", Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}""")
-        );
+        var exit = await RunAsync(PermissionRequest, serverUrl: "http://server.example", hosted: hosted);
 
         await Assert.That(exit).IsEqualTo(0);
-        await Assert.That(capture.GetCapturedOutput()).Contains("\"behavior\":\"allow\"");
+        await Assert.That(Stdout).Contains("\"behavior\":\"allow\"");
     }
 
     /// <summary>In an envelope-sourced hosted session the app-server runtime answers approvals over
     /// Codex's own requestApproval, with a deadline. The hook must step aside — a bridge round-trip
     /// here would answer first through a channel with no deadline. Keyed on the same marker that
     /// suppresses the hook's transcript watcher for such sessions.</summary>
-    [Test, NotInParallel]
+    [Test]
     public async Task PermissionRequest_in_an_envelope_sourced_hosted_session_yields_to_codex_without_posting_to_the_bridge() {
         using var bridge = WireMockServer.Start();
         var       token  = "abc123";
@@ -615,18 +489,16 @@ public class CodexHookCommandTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200)
                 .WithBody("""{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"""));
         var hosted = new HostedAgent(null, IsRendered: true, DaemonBridge.Parse($"http://127.0.0.1:{bridge.Ports[0]}/{token}"));
-        using var marker  = EnvScope.Exclusive("KCAP_HOSTED_APPSERVER", "1");
-        using var capture = ConsoleOutput.StartCapture();
 
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://server.example", Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory))
-            .Handle(new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1","tool_name":"shell","tool_input":{"command":"ls"}}"""));
+        var exit = await RunAsync("""{"hook_event_name":"PermissionRequest","session_id":"s1","tool_name":"shell","tool_input":{"command":"ls"}}""",
+            serverUrl: "http://server.example", hosted: hosted, hostedAppServer: true);
 
         await Assert.That(exit).IsEqualTo(0);
-        await Assert.That(capture.GetCapturedOutput().Trim()).IsEqualTo("{}");
+        await Assert.That(Stdout.Trim()).IsEqualTo("{}");
         await Assert.That(bridge.LogEntries.Count).IsEqualTo(0);
     }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task PermissionRequest_with_daemon_url_emits_deny_and_exits_nonzero_on_500() {
         using var bridge = WireMockServer.Start();
         var       token  = "abc123";
@@ -636,41 +508,34 @@ public class CodexHookCommandTests : IDisposable {
 
         var hosted = new HostedAgent(null, IsRendered: false, DaemonBridge.Parse($"http://127.0.0.1:{bridge.Ports[0]}/{token}"));
 
-        using var capture = ConsoleOutput.StartCapture();
-
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://server.example", Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}""")
-        );
+        var exit = await RunAsync(PermissionRequest, serverUrl: "http://server.example", hosted: hosted);
 
         await Assert.That(exit).IsEqualTo(1);
-        await Assert.That(capture.GetCapturedOutput()).Contains("\"behavior\":\"deny\"");
+        await Assert.That(Stdout).Contains("\"behavior\":\"deny\"");
+        await Assert.That(_stderr.ToString()).Contains("HTTP 500");
     }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task PermissionRequest_with_daemon_url_emits_deny_on_connection_refused() {
-        // Use a deliberately-unreachable port (e.g. 1) so the connection fails immediately.
+        // Port 1 refuses at once.
         var hosted = new HostedAgent(null, IsRendered: false, DaemonBridge.Parse("http://127.0.0.1:1/abc"));
 
-        using var capture = ConsoleOutput.StartCapture();
-
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://server.example", Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}""")
-        );
+        var exit = await RunAsync(PermissionRequest, serverUrl: "http://server.example", hosted: hosted);
 
         await Assert.That(exit).IsEqualTo(1);
-        await Assert.That(capture.GetCapturedOutput()).Contains("\"behavior\":\"deny\"");
+        await Assert.That(Stdout).Contains("\"behavior\":\"deny\"");
     }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task PermissionRequest_with_non_loopback_daemon_url_emits_deny_without_posting() {
         using var bridge = WireMockServer.Start();
         var       hosted = new HostedAgent(null, IsRendered: false, DaemonBridge.Parse($"http://example.com:{bridge.Ports[0]}/abc"));
 
-        using var capture = ConsoleOutput.StartCapture();
-
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://server.example", Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}""")
-        );
+        var exit = await RunAsync(PermissionRequest, serverUrl: "http://server.example", hosted: hosted);
 
         await Assert.That(exit).IsEqualTo(1);
-        await Assert.That(capture.GetCapturedOutput()).Contains("\"behavior\":\"deny\"");
+        await Assert.That(Stdout).Contains("\"behavior\":\"deny\"");
+        await Assert.That(_stderr.ToString()).Contains(HostedAgent.BridgeUrlVar);
         await Assert.That(bridge.LogEntries.Count).IsEqualTo(0);
     }
 
@@ -679,38 +544,34 @@ public class CodexHookCommandTests : IDisposable {
     /// the user itself. Reading it as an address instead refuses the address and then, because this
     /// hook fails closed, the tool call with it — every one, for the whole session.
     /// </summary>
-    [Test, NotInParallel]
+    [Test]
     public async Task PermissionRequest_with_a_blank_daemon_url_yields_to_codex_rather_than_denying() {
         StubNoAuthRequired();
         _server.Given(Request.Create().WithPath("/hooks/permission-record").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
-        var       hosted  = new HostedAgent(null, IsRendered: false, DaemonBridge.Parse(""));
-        using var capture = ConsoleOutput.StartCapture();
+        var hosted = new HostedAgent(null, IsRendered: false, DaemonBridge.Parse(""));
 
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory))
-            .Handle(new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1","tool_name":"shell","tool_input":{"command":"ls"}}"""));
+        var exit = await RunAsync("""{"hook_event_name":"PermissionRequest","session_id":"s1","tool_name":"shell","tool_input":{"command":"ls"}}""",
+            hosted: hosted);
 
         await Assert.That(exit).IsEqualTo(0);
-        await Assert.That(capture.GetCapturedOutput()).DoesNotContain("deny");
+        await Assert.That(Stdout.Trim()).IsEqualTo("{}");
     }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task PermissionRequest_with_https_daemon_url_emits_deny_without_posting() {
-        using var bridge      = WireMockServer.Start();
-        var hosted = new HostedAgent(null, IsRendered: false, DaemonBridge.Parse($"https://127.0.0.1:{bridge.Ports[0]}/abc"));
+        using var bridge = WireMockServer.Start();
+        var       hosted = new HostedAgent(null, IsRendered: false, DaemonBridge.Parse($"https://127.0.0.1:{bridge.Ports[0]}/abc"));
 
-        using var capture = ConsoleOutput.StartCapture();
-
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://server.example", Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}""")
-        );
+        var exit = await RunAsync(PermissionRequest, serverUrl: "http://server.example", hosted: hosted);
 
         await Assert.That(exit).IsEqualTo(1);
-        await Assert.That(capture.GetCapturedOutput()).Contains("\"behavior\":\"deny\"");
+        await Assert.That(Stdout).Contains("\"behavior\":\"deny\"");
         await Assert.That(bridge.LogEntries.Count).IsEqualTo(0);
     }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task PermissionRequest_with_daemon_url_does_not_double_post_to_server_hooks_endpoint() {
         using var bridge = WireMockServer.Start();
         using var server = WireMockServer.Start();
@@ -728,105 +589,50 @@ public class CodexHookCommandTests : IDisposable {
 
         var hosted = new HostedAgent(null, IsRendered: false, DaemonBridge.Parse($"http://127.0.0.1:{bridge.Ports[0]}/{token}"));
 
-        using var capture = ConsoleOutput.StartCapture();
+        await RunAsync(PermissionRequest, serverUrl: $"http://127.0.0.1:{server.Ports[0]}", hosted: hosted);
 
-        await new CodexHookCommand(Config.Root, Resolutions.At($"http://127.0.0.1:{server.Ports[0]}", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At($"http://127.0.0.1:{server.Ports[0]}", Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"s1"}""")
-        );
-
-        await Assert.That(server.LogEntries.Count).IsEqualTo(0); // server NOT touched
+        await Assert.That(server.LogEntries.Count).IsEqualTo(0);
         await Assert.That(bridge.LogEntries.Count).IsEqualTo(1);
     }
 
-    // KCAP_SKIP=1 marks a kcap-launched headless Codex flow
-    // (CodexCliRunner sets it). The dispatcher must still satisfy Codex's
-    // hook output contract — empty stdout on SessionStart / Stop is a
-    // protocol error — while suppressing every side effect: no server
-    // POST, no watcher spawn, no git enrichment.
+    // KCAP_SKIP marks a kcap-launched headless Codex flow: every side effect is suppressed, but the
+    // hook still owes Codex its stdout, since empty output on SessionStart or Stop is a protocol error.
 
-    [Test, NotInParallel]
-    public async Task KcapSkip_SessionStart_emits_continue_json_and_skips_server() {
-        var previousSkip = Environment.GetEnvironmentVariable("KCAP_SKIP");
-        Environment.SetEnvironmentVariable("KCAP_SKIP", "1");
+    [Test]
+    [Arguments("SessionStart")]
+    [Arguments("Stop")]
+    public async Task KcapSkip_emits_continue_json_and_skips_server(string eventName) {
+        var exit = await RunAsync($$"""{"hook_event_name":"{{eventName}}","session_id":"abc","cwd":"/tmp","transcript_path":"/tmp/r.jsonl"}""",
+            skip: true);
 
-        using var capture = ConsoleOutput.StartCapture();
-
-        try {
-            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader("""{"hook_event_name":"SessionStart","session_id":"abc","cwd":"/tmp","transcript_path":"/tmp/r.jsonl"}"""));
-
-            await Assert.That(exit).IsEqualTo(0);
-
-            var doc = JsonDocument.Parse(capture.GetCapturedOutput());
-            await Assert.That(doc.RootElement.GetProperty("continue").GetBoolean()).IsTrue();
-
-            await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
-        } finally {
-            Environment.SetEnvironmentVariable("KCAP_SKIP", previousSkip);
-        }
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(JsonDocument.Parse(Stdout).RootElement.GetProperty("continue").GetBoolean()).IsTrue();
+        await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
     }
 
-    [Test, NotInParallel]
-    public async Task KcapSkip_Stop_emits_continue_json_and_skips_server() {
-        var previousSkip = Environment.GetEnvironmentVariable("KCAP_SKIP");
-        Environment.SetEnvironmentVariable("KCAP_SKIP", "1");
-
-        using var capture = ConsoleOutput.StartCapture();
-
-        try {
-            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader("""{"hook_event_name":"Stop","session_id":"abc","cwd":"/tmp","transcript_path":"/tmp/r.jsonl"}"""));
-
-            await Assert.That(exit).IsEqualTo(0);
-
-            var doc = JsonDocument.Parse(capture.GetCapturedOutput());
-            await Assert.That(doc.RootElement.GetProperty("continue").GetBoolean()).IsTrue();
-
-            await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
-        } finally {
-            Environment.SetEnvironmentVariable("KCAP_SKIP", previousSkip);
-        }
-    }
-
-    [Test, NotInParallel]
+    /// An empty object is no decision, so Codex falls back to its own approval prompt.
+    [Test]
     public async Task KcapSkip_PermissionRequest_emits_empty_object_and_skips_server() {
-        // Empty hookSpecificOutput → Codex falls back to its own approval
-        // prompt. Same shape as the non-skip stub path, just without the
-        // /hooks/permission-record POST.
-        var previousSkip = Environment.GetEnvironmentVariable("KCAP_SKIP");
-        Environment.SetEnvironmentVariable("KCAP_SKIP", "1");
+        var exit = await RunAsync("""{"hook_event_name":"PermissionRequest","session_id":"abc","tool_name":"shell"}""", skip: true);
 
-        using var capture = ConsoleOutput.StartCapture();
-
-        try {
-            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader("""{"hook_event_name":"PermissionRequest","session_id":"abc","tool_name":"shell"}"""));
-
-            await Assert.That(exit).IsEqualTo(0);
-
-            var doc = JsonDocument.Parse(capture.GetCapturedOutput());
-            await Assert.That(doc.RootElement.ValueKind).IsEqualTo(JsonValueKind.Object);
-
-            await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
-        } finally {
-            Environment.SetEnvironmentVariable("KCAP_SKIP", previousSkip);
-        }
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(Stdout).IsEqualTo("{}");
+        await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
     }
 
-    [Test, NotInParallel]
+    /// PreToolUse has no stdout contract, so a skipped one writes nothing, not even the deny a rule
+    /// would otherwise answer with.
+    [Test]
     public async Task KcapSkip_PreToolUse_is_silent_and_skips_server() {
-        // Non-Stop / SessionStart / PermissionRequest events have no Codex
-        // stdout contract; the skip must produce nothing.
-        var previousSkip = Environment.GetEnvironmentVariable("KCAP_SKIP");
-        Environment.SetEnvironmentVariable("KCAP_SKIP", "1");
+        File.WriteAllText(Config.Root.Path("approvals.yaml"),
+            "version: 1\nrules:\n  - match: { kind: shell, command: \"rm -rf *\" }\n    outcome: deny\n");
 
-        using var capture = ConsoleOutput.StartCapture();
+        var exit = await RunAsync("""{"hook_event_name":"PreToolUse","session_id":"01a15cd7-3e2d-75b2-ad28-c00f7dbcf5d0","tool_name":"Bash","tool_input":{"command":"rm -rf build"},"cwd":"/tmp"}""",
+            skip: true);
 
-        try {
-            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader("""{"hook_event_name":"PreToolUse","session_id":"abc","tool_name":"shell"}"""));
-
-            await Assert.That(exit).IsEqualTo(0);
-            await Assert.That(capture.GetCapturedOutput()).IsEqualTo(string.Empty);
-            await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
-        } finally {
-            Environment.SetEnvironmentVariable("KCAP_SKIP", previousSkip);
-        }
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(Stdout).IsEqualTo(string.Empty);
+        await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
     }
 
     [Test]
@@ -863,7 +669,7 @@ public class CodexHookCommandTests : IDisposable {
     /// lane that ignores an ambient proxy — the agent's own environment supplies one often enough, and
     /// a proxied hop would take the payload off the machine.
     /// </summary>
-    [Test, NotInParallel]
+    [Test]
     public async Task The_permission_request_bridge_draws_the_loopback_lane() {
         var       hosted  = new HostedAgent(null, IsRendered: false, new DaemonBridge.Loopback("http://127.0.0.1:51234/bridge"));
         using var handler = new Accepting();
@@ -879,9 +685,7 @@ public class CodexHookCommandTests : IDisposable {
                       }
                       """;
 
-        using var capture = ConsoleOutput.StartCapture();
-
-        var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, http, TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), http), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(payload));
+        var exit = await RunAsync(payload, hosted: hosted, http: http);
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(http.Lanes).IsEquivalentTo(new[] { "Loopback" });

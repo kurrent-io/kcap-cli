@@ -316,6 +316,17 @@ public class GitHubCliReaderProviderReadTests {
         if (reason == "rate_limited") await Assert.That(read.RetryAt).IsEqualTo(h.Time.GetUtcNow().UtcDateTime.AddSeconds(60));
     }
 
+    /// <summary>A failure no reason names carries gh's first error line, so the notice says what actually went wrong.</summary>
+    [Test]
+    public async Task An_unrecognised_failure_carries_the_first_line_of_gh_stderr() {
+        using var h = new GhHarness(Tmp); h.SignedIn("github.com");
+        h.Process.When(["pr", "view"], "", exitCode: 1, stderr: "\n  error connecting to api.github.com  \ncheck your internet connection\n");
+        await h.Provider.ProbeAsync(false, default);
+        var read = await h.Provider.OverviewAsync("session", Subject, default);
+        await Assert.That(read.Reason).IsEqualTo("tool_failed");
+        await Assert.That(read.Detail).IsEqualTo("error connecting to api.github.com");
+    }
+
     [Test]
     public async Task Timeouts_oversized_and_malformed_output_map_to_transport_and_protocol_failures() {
         using var h = new GhHarness(Tmp); h.SignedIn("github.com");

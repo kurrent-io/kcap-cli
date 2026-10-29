@@ -1,8 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels.Onboarding"
-             xmlns:views="clr-namespace:Capacitor.App.Views.Onboarding"
-             xmlns:icons="clr-namespace:Capacitor.App.Views"
+                          xmlns:icons="clr-namespace:Capacitor.App.Views"
              x:Class="Capacitor.App.Views.Onboarding.HistoryPaneView"
              x:DataType="vm:HistoryStepViewModel">
     <StackPanel Spacing="14">
@@ -69,7 +68,7 @@
                                     <DataTemplate x:DataType="x:String">
                                         <StackPanel Orientation="Horizontal" Spacing="4">
                                             <icons:AppIcon Kind="Check" Size="12" Foreground="{StaticResource KcapSuccessBrush}" />
-                                            <TextBlock Text="{Binding}" FontFamily="{StaticResource OnboardingMonoFont}" FontSize="10.5"
+                                            <TextBlock Classes="onboardingSignal" Text="{Binding}"
                                                        Foreground="{StaticResource OnboardingTextBrush}" VerticalAlignment="Center" />
                                         </StackPanel>
                                     </DataTemplate>
@@ -78,21 +77,12 @@
                         </StackPanel>
                     </Border>
 
-                    <!-- Header: the legend sits over the tracks, each label on its own stop. -->
                     <Border Classes="onboardingRowRule" Padding="0,9,0,8">
-                        <Grid ColumnDefinitions="*,228" ColumnSpacing="10">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                             <TextBlock Classes="onboardingMicro" VerticalAlignment="Bottom">
                                 <Run Text="FOUND ON " /><Run Text="{Binding MachineName}" Foreground="{StaticResource OnboardingTextBrush}" />
                             </TextBlock>
-                            <Grid Grid.Column="1" ColumnDefinitions="*,*" IsVisible="{Binding LocalLevels}">
-                                <TextBlock Classes="onboardingMicro" Text="SKIP" HorizontalAlignment="Left" />
-                                <TextBlock Grid.Column="1" Classes="onboardingMicro" Text="IMPORT" HorizontalAlignment="Right" />
-                            </Grid>
-                            <Grid Grid.Column="1" ColumnDefinitions="*,*,*" IsVisible="{Binding CloudLevels}">
-                                <TextBlock Classes="onboardingMicro" Text="SKIP" HorizontalAlignment="Left" />
-                                <TextBlock Grid.Column="1" Classes="onboardingMicro" Text="ONLY ME" HorizontalAlignment="Center" />
-                                <TextBlock Grid.Column="2" Classes="onboardingMicro" Text="SHARED" HorizontalAlignment="Right" />
-                            </Grid>
+                            <TextBlock Grid.Column="1" Classes="onboardingMicro" Text="ONLY ME" IsVisible="{Binding CloudLevels}" />
                         </Grid>
                     </Border>
 
@@ -101,27 +91,34 @@
                             <DataTemplate x:DataType="vm:HistoryOwnerGroup">
                                 <Border Classes="onboardingRowRule">
                                     <StackPanel>
-                                        <Grid ColumnDefinitions="*,228" ColumnSpacing="10" Margin="2,9">
-                                            <StackPanel Spacing="2" VerticalAlignment="Center">
+                                        <!-- A mixed owner shows its box half-filled; a click on it clears every repository. -->
+                                        <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10" Margin="2,9">
+                                            <CheckBox x:Name="OwnerImportCheck" Classes="onboardingCheck" IsChecked="{Binding Included, Mode=TwoWay}"
+                                                      AutomationProperties.Name="{Binding Owner, StringFormat='Import every repository from {0}'}" />
+                                            <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
                                                 <TextBlock x:Name="OwnerText" Classes="onboardingLabel" FontSize="13" Text="{Binding Owner}" />
                                                 <TextBlock Classes="onboardingSignal" Text="{Binding SignalLine}" />
                                             </StackPanel>
-                                            <views:ImportTrack Grid.Column="1" x:Name="OwnerTrack" VerticalAlignment="Center"
-                                                               AutomationProperties.Name="{Binding Owner, StringFormat='History access for {0}'}"
-                                                               LastStop="{Binding LastStop}" Stop="{Binding Stop, Mode=TwoWay}" />
+                                            <CheckBox Grid.Column="2" x:Name="OwnerOnlyMeCheck" Classes="onboardingCheck"
+                                                      IsChecked="{Binding OnlyMe, Mode=TwoWay}" IsEnabled="{Binding OnlyMeEnabled}"
+                                                      IsVisible="{Binding !Local}"
+                                                      AutomationProperties.Name="{Binding Owner, StringFormat='Keep every repository from {0} to only me'}" />
                                         </Grid>
                                         <ItemsControl ItemsSource="{Binding Repos}">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate x:DataType="vm:HistoryRepoRow">
-                                                    <Grid ColumnDefinitions="*,228" ColumnSpacing="10" Margin="16,9,2,9">
-                                                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                                                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10" Margin="16,9,2,9">
+                                                        <CheckBox x:Name="RepoImportCheck" Classes="onboardingCheck" IsChecked="{Binding Included, Mode=TwoWay}"
+                                                                  AutomationProperties.Name="{Binding Slug, StringFormat='Import {0}'}" />
+                                                        <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
                                                             <TextBlock x:Name="RepoText" Classes="onboardingLabel" FontSize="13" Text="{Binding Name}"
                                                                        TextWrapping="Wrap" />
                                                             <TextBlock Classes="onboardingSignal" Text="{Binding SignalLine}" />
                                                         </StackPanel>
-                                                        <views:ImportTrack Grid.Column="1" x:Name="RepoTrack" VerticalAlignment="Center"
-                                                                           AutomationProperties.Name="{Binding Slug, StringFormat='History access for {0}'}"
-                                                                           LastStop="{Binding LastStop}" Stop="{Binding Stop, Mode=TwoWay}" />
+                                                        <CheckBox Grid.Column="2" x:Name="RepoOnlyMeCheck" Classes="onboardingCheck"
+                                                                  IsChecked="{Binding OnlyMe, Mode=TwoWay}" IsEnabled="{Binding Included}"
+                                                                  IsVisible="{Binding !Local}"
+                                                                  AutomationProperties.Name="{Binding Slug, StringFormat='Keep {0} to only me'}" />
                                                     </Grid>
                                                 </DataTemplate>
                                             </ItemsControl.ItemTemplate>

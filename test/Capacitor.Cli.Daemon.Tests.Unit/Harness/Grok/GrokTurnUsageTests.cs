@@ -3,9 +3,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Harness.Grok;
-using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Acp;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Grok;
 
@@ -14,8 +12,6 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Grok;
 /// <c>turn_completed</c> frame, shaped as Grok 1.0.52 sends it (<c>docs/probes/2026-10-13-grok-acp/</c>).
 /// </summary>
 public class GrokTurnUsageTests {
-    static readonly TimeSpan HangGuard = TimeSpan.FromSeconds(5);
-
     static readonly JsonElement EndTurnResult = JsonDocument.Parse("""{"stopReason":"end_turn"}""").RootElement.Clone();
 
     const string ModelUsage = """
@@ -76,31 +72,29 @@ public class GrokTurnUsageTests {
 
     [Test]
     public async Task The_runtime_emits_the_usage_of_its_own_session() {
-        await using var h = new Harness();
+        await using var h = new AcpRuntimeHarness(GrokTurnUsage.Read);
         h.Fake.EnqueuePromptScript([Frame()], EndTurnResult);
 
-        h.StartFakeAgentLoop();
-        await h.Runtime.StartAsync("/abs/worktree", "hi", h.Cts.Token).WaitAsync(HangGuard);
+        await h.StartAsync();
 
-        var usage = await ReadUntilAsync(h.Runtime, e => e.Kind == AcpEventKind.TokenUsage);
+        var usage = await h.ReadUntilAsync(e => e.Kind == AcpEventKind.TokenUsage);
         await Assert.That(usage.Model).IsEqualTo("grok-4.5-build");
         await Assert.That(usage.TimestampIso).IsNotNull();
-        await Assert.That((await ReadUntilAsync(h.Runtime, e => e.Kind == AcpEventKind.TokenUsage)).Model).IsEqualTo("grok-4.6-build");
+        await Assert.That((await h.ReadUntilAsync(e => e.Kind == AcpEventKind.TokenUsage)).Model).IsEqualTo("grok-4.6-build");
     }
 
     /// <summary>A frame for another session on the same connection is not this agent's spend. The marker
     /// after it proves the frame was read, so the absence is not just a slow wire.</summary>
     [Test]
     public async Task The_runtime_ignores_another_sessions_usage() {
-        await using var h = new Harness();
+        await using var h = new AcpRuntimeHarness(GrokTurnUsage.Read);
         var marker = FakeAcpAgent.BuildSessionUpdateNotification(FakeAcpAgent.FixedSessionId, FakeAcpAgent.BuildAgentMessageChunkUpdate("done"));
         h.Fake.EnqueuePromptScript([Frame(sessionId: "some-other-session"), marker], EndTurnResult);
 
-        h.StartFakeAgentLoop();
-        await h.Runtime.StartAsync("/abs/worktree", "hi", h.Cts.Token).WaitAsync(HangGuard);
+        await h.StartAsync();
 
         var seen = new List<AcpEventEnvelope>();
-        await ReadUntilAsync(h.Runtime, e => { seen.Add(e); return e.Kind == AcpEventKind.AssistantText; });
+        await h.ReadUntilAsync(e => { seen.Add(e); return e.Kind == AcpEventKind.AssistantText; });
         await Assert.That(seen.Any(e => e.Kind == AcpEventKind.TokenUsage)).IsFalse();
     }
 
@@ -108,45 +102,5 @@ public class GrokTurnUsageTests {
     public async Task The_grok_row_reads_turn_usage() {
         await Assert.That(AcpVendorDescriptors.Grok.TurnUsageReader).IsNotNull();
         await Assert.That(AcpVendorDescriptors.OpenCode.TurnUsageReader).IsNull();
-    }
-
-    static async Task<AcpEventEnvelope> ReadUntilAsync(AcpHostedAgentRuntime runtime, Func<AcpEventEnvelope, bool> match) {
-        while (true) {
-            var envelope = await runtime.Envelopes.ReadAsync().AsTask().WaitAsync(HangGuard);
-            if (match(envelope)) return envelope;
-        }
-    }
-
-    sealed class FakeAcpProcess : IAcpProcess {
-        public int  Pid       { get; init; } = 4242;
-        public bool HasExited { get; private set; }
-        public int? ExitCode  { get; private set; }
-        public Task WaitForExitAsync(TimeSpan? timeout = null) => timeout is { } t ? Task.Delay(t) : Task.Delay(Timeout.InfiniteTimeSpan);
-        public Task TerminateAsync(TimeSpan? timeout = null) { HasExited = true; ExitCode = 0; return Task.CompletedTask; }
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-    }
-
-    sealed class Harness : IAsyncDisposable {
-        public FakeAcpAgent            Fake    { get; } = new();
-        public AcpHostedAgentRuntime   Runtime { get; }
-        public CancellationTokenSource Cts     { get; } = new();
-
-        Task _fakeRunTask = Task.CompletedTask;
-
-        public Harness() {
-            var conn = new AcpConnection(Fake.ClientWriteStream, Fake.ClientReadStream, NullLogger.Instance);
-            Runtime = new AcpHostedAgentRuntime(conn, new FakeAcpProcess(), NullLogger.Instance, TimeProvider.System,
-                turnUsageReader: GrokTurnUsage.Read);
-        }
-
-        public void StartFakeAgentLoop() => _fakeRunTask = Fake.RunAsync(Cts.Token);
-
-        public async ValueTask DisposeAsync() {
-            await Cts.CancelAsync();
-            try { await _fakeRunTask.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
-            await Runtime.DisposeAsync();
-            await Fake.DisposeAsync();
-            Cts.Dispose();
-        }
     }
 }

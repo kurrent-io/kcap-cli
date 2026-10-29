@@ -27,7 +27,7 @@ public class LocalServerUnitTests {
     [Test]
     public async Task A_recorded_embedding_model_reaches_the_server_as_environment() {
         var root = new LocalRoot(Tmp.CreateDir("embedded"));
-        LocalEmbeddingFile.Write(root, new LocalEmbeddingSetting("mxbai-embed-large"));
+        LocalEmbeddingFile.Write(root, LocalEmbeddingSetting.Ollama("mxbai-embed-large"));
 
         var unit = LocalServerUnit.ForInstallation(root, 51234);
 
@@ -35,6 +35,29 @@ public class LocalServerUnitTests {
         await Assert.That(unit.Environment).Contains(new KeyValuePair<string, string>("Embedding__Ollama__Model", "mxbai-embed-large"));
         await Assert.That(unit.Environment).Contains(new KeyValuePair<string, string>("Embedding__Ollama__BaseUrl", "http://localhost:11434"));
         await Assert.That(LocalServerSystemdUnit.Unit(unit)).Contains("Environment=Embedding__Ollama__Model=mxbai-embed-large\n");
+    }
+
+    [Test]
+    public async Task Unit_environment_for_builtin_is_provider_only() {
+        var root = new LocalRoot(Tmp.CreateDir("builtin"));
+        LocalEmbeddingFile.Write(root, LocalEmbeddingSetting.Builtin(new string('a', 64)));
+
+        var unit = LocalServerUnit.ForInstallation(root, 51234);
+
+        await Assert.That(unit.Environment.Where(e => e.Key.StartsWith("Embedding__", StringComparison.Ordinal)))
+            .IsEquivalentTo([new KeyValuePair<string, string>("Embedding__Provider", "builtin")]);
+    }
+
+    [Test]
+    public async Task A_decline_or_an_unknown_provider_gives_the_unit_no_embedding_settings() {
+        var declined = new LocalRoot(Tmp.CreateDir("declined"));
+        LocalEmbeddingFile.Write(declined, LocalEmbeddingSetting.Declined);
+        var unknown = new LocalRoot(Tmp.CreateDir("unknown"));
+        Directory.CreateDirectory(Path.GetDirectoryName(LocalEmbeddingFile.PathFor(unknown))!);
+        File.WriteAllText(LocalEmbeddingFile.PathFor(unknown), """{"provider":"cohere"}""");
+
+        await Assert.That(LocalServerUnit.ForInstallation(declined, 51234).Environment.Select(e => e.Key)).IsEquivalentTo([LocalRoot.EnvVar, "Local__Port"]);
+        await Assert.That(LocalServerUnit.ForInstallation(unknown, 51234).Environment.Select(e => e.Key)).IsEquivalentTo([LocalRoot.EnvVar, "Local__Port"]);
     }
 
     [Test]

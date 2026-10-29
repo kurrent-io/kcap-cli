@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Capacitor.Cli.Commands.Harness;
 using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli;
@@ -30,7 +31,8 @@ static class PreviousSession {
     }
 
     static bool IsClearStart(JsonObject hook) =>
-        (TryGetString(hook, "hook_event_name"), TryGetString(hook, "source")) is ("SessionStart", "clear");
+        TryGetString(hook, "source") == "clear"
+     && ClaudeHookCommand.ToKebab(TryGetString(hook, "hook_event_name") ?? "") == "session-start";
 
     static string? TryGetString(JsonObject hook, string key) =>
         hook[key] is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;

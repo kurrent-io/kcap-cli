@@ -1,5 +1,12 @@
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Accounts.Readings;
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Daemon.Services;
+using Capacitor.Cli.Daemon.Tests.Unit.Pty;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
@@ -9,6 +16,19 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 /// reviewer launch.
 /// </summary>
 public class VendorCliWatcherTests {
+    sealed class ArmedClock(FakeTimeProvider inner) : TimeProvider {
+        readonly TaskCompletionSource _armed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Armed => _armed.Task;
+        public override DateTimeOffset GetUtcNow() => inner.GetUtcNow();
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) {
+            var timer = inner.CreateTimer(callback, state, dueTime, period);
+            _armed.TrySetResult();
+            return timer;
+        }
+    }
+
     /// <summary>Every path here is rooted, which resolves without a search path.</summary>
     static BinaryProbe Binaries => TestBinaries.None;
 
@@ -81,6 +101,28 @@ public class VendorCliWatcherTests {
         h.Watcher.Tick();
 
         await Assert.That(h.Refreshes.Count).IsEqualTo(1);
+    }
+
+    /// <summary>A desktop app's bundled CLI moves to a new directory on update and the old one is
+    /// pruned: the watcher follows the vendor's current path rather than the one it started with. The
+    /// pruned path stats null, so watching it alone would never see the change.</summary>
+    [Test]
+    public async Task A_cli_that_moved_is_watched_at_its_current_path() {
+        const string before = "/app/claude-code/2.1.259/claude";
+        const string after  = "/app/claude-code/2.1.263/claude";
+        var current = before;
+        var h = new Harness(("claude", before));
+        h.Watcher.CurrentCliPath = vendor => vendor == "claude" ? current : null;
+        h.Stats[before] = Old;
+        h.Watcher.PrimeBaselines();
+
+        h.Stats.Remove(before);
+        h.Stats[after] = New;
+        current = after;
+        h.Watcher.Tick();
+
+        await Assert.That(h.Refreshes.Count).IsEqualTo(1);
+        await Assert.That(h.Refreshes[0]).Contains("claude");
     }
 
     [Test]
@@ -272,5 +314,128 @@ public class VendorCliWatcherTests {
 
         await Assert.That(set.Select(w => w.Vendor)).IsEquivalentTo(["claude", "pi", "silent"]);
         await Assert.That(set.Single(w => w.Vendor == "pi").CatalogPaths).IsEquivalentTo(["/a"]);
+    }
+
+    static VendorAccount AddCodexAccount(AccountStore store, string directory) {
+        var account = new VendorAccount(Guid.NewGuid().ToString("N"), HarnessId.Codex,
+            AccountDirectory.Normalize(directory), Path.GetFileName(directory), DateTimeOffset.UnixEpoch);
+        store.Mutate(r => (r with { Accounts = [.. r.Accounts, account] }, 0));
+        return account;
+    }
+
+    /// A startup snapshot can overlap an account announcement. Once startup and the rebuilding tick
+    /// settle, changes to the added account's auth file must still ask for a refresh.
+    [Test]
+    public async Task Adding_an_account_probes_it_and_extends_the_watch_set() {
+        using var home = new TempHome();
+        var store = new AccountStore(home.PathTo("accounts"));
+        AddCodexAccount(store, home.PathTo(".codex-work"));
+        var startupPaths = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseStartup = new ManualResetEventSlim();
+        var firstPaths = 0;
+        var codex = new StubCatalogFactory("codex", [new("gpt-default", "Default")], paths: [home.PathTo(".codex", "auth.json")]) {
+            ProbeDirectory = dir => Task.FromResult<IReadOnlyList<VendorModelOption>?>([new(Path.GetFileName(dir), Path.GetFileName(dir))]),
+            PathsFor = dir => {
+                if (Interlocked.Exchange(ref firstPaths, 0) == 1) {
+                    startupPaths.TrySetResult();
+                    if (!releaseStartup.Wait(WaitHarness.Bounded)) throw new TimeoutException("Watcher startup was not released");
+                }
+
+                return [Path.Combine(dir, "auth.json")];
+            },
+        };
+        DaemonConfig? config = null;
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
+            new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
+            extraRuntimeFactories: [codex],
+            configure: c => {
+                c.SupportedVendors             = ["codex"];
+                c.UnattendedVendors            = [];
+                c.UnattendedVendorCapabilities = [];
+                config = c;
+            });
+        using var publisher = new AccountsPublisher(
+            new DaemonConfig { Accounts = store }, home, new FakeTimeProvider(), NullLogger<AccountsPublisher>.Instance);
+        await publisher.StartAsync(CancellationToken.None);
+        orch.AccountsSnapshot = () => publisher.Current;
+        var factories = new Dictionary<string, IHostedAgentRuntimeFactory>(StringComparer.Ordinal) { ["codex"] = codex };
+        var clock = new ArmedClock(new FakeTimeProvider());
+        using var watcher = new VendorCliWatcher(config!, orch, factories, publisher, NullLogger<VendorCliWatcher>.Instance, clock);
+        watcher.StatBinary = _ => null;
+        Volatile.Write(ref firstPaths, 1);
+        await watcher.StartAsync(CancellationToken.None);
+        Task? tick = null;
+        try {
+            await startupPaths.Task.WaitAsync(WaitHarness.Bounded);
+            var spare = AddCodexAccount(store, home.PathTo(".codex-spare"));
+            await publisher.RebuildAsync(CancellationToken.None);
+            await orch.CapabilityRefreshForTest.WaitAsync(TimeSpan.FromSeconds(10));
+
+            await Assert.That(codex.ProbedDirectories).Contains(spare.Directory);
+            await Assert.That(config!.VendorModelsByAccount![spare.Id].Single().Value).IsEqualTo(".codex-spare");
+
+            Thread? tickThread = null;
+            var tickStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            tick = Task.Run(() => {
+                tickThread = Thread.CurrentThread;
+                tickStarted.TrySetResult();
+                watcher.Tick();
+            });
+            await tickStarted.Task.WaitAsync(WaitHarness.Bounded);
+            // Startup stays parked until the concurrent tick has completed or is waiting on its gate.
+            await WaitHarness.PollUntilAsync(() => tick.IsCompleted
+                || (tickThread!.ThreadState & ThreadState.WaitSleepJoin) != 0);
+            releaseStartup.Set();
+            await tick.WaitAsync(WaitHarness.Bounded);
+            await clock.Armed.WaitAsync(WaitHarness.Bounded);
+
+            var refreshes = new List<string>();
+            watcher.Refresh = refreshes.Add;
+            home.CreateFile([".codex-spare", "auth.json"], "{}");
+            watcher.Tick();
+
+            await Assert.That(watcher.Watched.SelectMany(w => w.CatalogPaths)).Contains(home.PathTo(".codex-spare", "auth.json"));
+            await Assert.That(refreshes.Count).IsEqualTo(1);
+            await Assert.That(refreshes[0]).Contains(spare.Id);
+
+            watcher.Tick();
+            await Assert.That(refreshes.Count).IsEqualTo(1);
+        } finally {
+            releaseStartup.Set();
+            if (tick is not null) await tick.WaitAsync(WaitHarness.Bounded);
+            await watcher.StopAsync(CancellationToken.None);
+            await publisher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task Only_a_change_to_the_accounts_reprobes_not_a_reading_change() {
+        using var home = new TempHome();
+        var store = new AccountStore(home.PathTo("accounts"));
+        var work  = AddCodexAccount(store, home.PathTo(".codex-work"));
+        using var publisher = new AccountsPublisher(
+            new DaemonConfig { Accounts = store }, home, new FakeTimeProvider(), NullLogger<AccountsPublisher>.Instance);
+        var refreshes = new List<string>();
+        using var watcher = VendorCliWatcher.ForTest([], refreshes.Add, _ => null, new FakeTimeProvider());
+        publisher.Changed += watcher.OnAccountsChanged;
+        await publisher.StartAsync(CancellationToken.None);
+        try {
+            await Assert.That(refreshes.Count).IsEqualTo(1);
+
+            var recorded = store.Readings.TryRecord(work.Id, 0, null, f => f with {
+                Reading = f.Reading with { Windows = [new UsageWindowDto("five_hour", 300, 42, null, null)] },
+            });
+            await Assert.That(recorded).IsTrue();
+            var before = publisher.Version;
+            await publisher.RebuildAsync(CancellationToken.None);
+            await Assert.That(publisher.Version).IsGreaterThan(before);
+            await Assert.That(refreshes.Count).IsEqualTo(1);
+
+            AddCodexAccount(store, home.PathTo(".codex-spare"));
+            await publisher.RebuildAsync(CancellationToken.None);
+            await Assert.That(refreshes.Count).IsEqualTo(2);
+        } finally {
+            await publisher.StopAsync(CancellationToken.None);
+        }
     }
 }

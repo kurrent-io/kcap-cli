@@ -74,14 +74,73 @@ public class LocalStatusReaderTests {
 
         await Assert.That(Text(await Read())).Contains("Search: by keyword only");
 
-        LocalEmbeddingFile.Write(Root, new LocalEmbeddingSetting("mxbai-embed-large"));
+        LocalEmbeddingFile.Write(Root, LocalEmbeddingSetting.Ollama("mxbai-embed-large"));
 
         await Assert.That(Text(await Read())).Contains("Search: by meaning through Ollama with mxbai-embed-large while it answers, and by keyword");
         await Assert.That(Text(await Read())).DoesNotContain("not yet applied");
 
-        LocalEmbeddingFile.Write(Root, new LocalEmbeddingSetting("mxbai-embed-large") { Pending = true });
+        LocalEmbeddingFile.Write(Root, LocalEmbeddingSetting.Ollama("mxbai-embed-large") with { Pending = true });
 
         await Assert.That(Text(await Read())).Contains("(not yet applied; kcap setup --local applies it)");
+    }
+
+    [Test]
+    public async Task The_search_field_names_a_recorded_builtin_model_without_ollama() {
+        Running();
+        LocalEmbeddingFile.Write(Root, LocalEmbeddingSetting.Builtin(new string('a', 64)));
+
+        var text = Text(await Read());
+
+        await Assert.That(text).Contains("Search: by meaning with the built-in model, and by keyword");
+        await Assert.That(text).DoesNotContain("Ollama");
+    }
+
+    const string Meaning = "Search: by meaning with the built-in model, and by keyword";
+
+    const string OllamaLine = "Search: by meaning through Ollama with mxbai-embed-large while it answers, and by keyword";
+
+    /// <summary>The server's own account of the built-in model wins over the recorded file whenever it answers; a 404
+    /// from an older server or a silent one leaves the file's wording.</summary>
+    [Test]
+    [Arguments("""{"provider":"builtin","usable":true,"reason":null,"probe_head":[0.1,0.2,0.3,0.4]}""", Meaning)]
+    [Arguments("""{"provider":"builtin","usable":false,"reason":"model_missing","probe_head":null}""",
+        "Search: by keyword only: the built-in model is not usable (model_missing); run kcap setup --local")]
+    [Arguments("""{"provider":"builtin","usable":false,"reason":"digest_mismatch","probe_head":null}""",
+        "Search: by keyword only: the built-in model is not usable (digest_mismatch); run kcap setup --local")]
+    [Arguments("""{"provider":"builtin","usable":false,"reason":"load_failed","probe_head":null}""",
+        "Search: by keyword only: the built-in model is not usable (load_failed); run kcap local restart, and see kcap local logs if it persists")]
+    [Arguments("""{"provider":"builtin","usable":false,"reason":"probe_failed","probe_head":null}""",
+        "Search: by keyword only: the built-in model is not usable (probe_failed); run kcap local restart, and see kcap local logs if it persists")]
+    [Arguments("""{"provider":"builtin","usable":false,"reason":null,"probe_head":null}""",
+        "Search: by keyword only: the built-in model is not loaded yet")]
+    [Arguments("""{"provider":"ollama","usable":true,"reason":null,"probe_head":null}""", OllamaLine)]
+    [Arguments("{nope", OllamaLine)]
+    [Arguments(null, OllamaLine)]
+    public async Task The_search_field_follows_the_servers_embedding_health(string? body, string expected) {
+        Running();
+        Health(HttpStatusCode.OK);
+        LocalEmbeddingFile.Write(Root, LocalEmbeddingSetting.Ollama("mxbai-embed-large"));
+
+        var ready = Server.Override;
+        Server.Override = path => path == "/healthz/embeddings"
+            ? body is null
+                ? new HttpResponseMessage(HttpStatusCode.NotFound)
+                : new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") }
+            : ready!(path);
+
+        await Assert.That(Text(await Read())).Contains(expected);
+    }
+
+    [Test]
+    public async Task A_builtin_search_field_survives_a_server_that_does_not_answer_embeddings() {
+        Running();
+        Health(HttpStatusCode.OK);
+        LocalEmbeddingFile.Write(Root, LocalEmbeddingSetting.Builtin(new string('a', 64)));
+
+        var ready = Server.Override;
+        Server.Override = path => path == "/healthz/embeddings" ? throw new HttpRequestException("refused") : ready!(path);
+
+        await Assert.That(Text(await Read())).Contains(Meaning);
     }
 
     [Test]

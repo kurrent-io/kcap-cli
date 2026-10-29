@@ -71,7 +71,7 @@ public class ApplicationIntegrationRefreshTests {
     }
 
     [Test]
-    public async Task Migration_handoff_repairs_an_owned_Codex_MCP_entry_after_removing_the_user_Applications_copy() {
+    public async Task Migration_handoff_repairs_an_owned_Codex_MCP_entry_and_the_installed_copy_removes_the_user_Applications_copy() {
         var apps = Tmp.CreateDir("Applications");
         var userApps = Tmp.CreateDir("home/Applications");
         var old = Path.Combine(userApps, "kcap.app");
@@ -93,11 +93,16 @@ public class ApplicationIntegrationRefreshTests {
             }
             return new ProcessResult(0, "", "", false);
         });
-        var refresh = new ApplicationIntegrationRefresh(new ConfigRoot(Tmp.CreateDir("config")), runner);
+        var config = new ConfigRoot(Tmp.CreateDir("config"));
+        var refresh = new ApplicationIntegrationRefresh(config, runner);
+        var retirement = new ApplicationRetirement(config, TimeProvider.System, _ => []);
         var mover = new ApplicationsMover(runner, (from, to) => { Directory.Move(from, to); return true; }, apps,
-            activate: (target, _) => { refresh.Schedule(target); return Task.FromResult(true); }, userApplicationsDir: userApps);
+            activate: (target, _) => { refresh.Schedule(target); return Task.FromResult(true); }, userApplicationsDir: userApps,
+            retirement: retirement);
         var outcome = await mover.MoveAsync(old, CancellationToken.None);
         await Assert.That(outcome.Moved).IsTrue();
+        await Assert.That(Directory.Exists(old)).IsTrue();
+        await retirement.RunPendingAsync(outcome.InstalledPath, CancellationToken.None);
         await Assert.That(Directory.Exists(old)).IsFalse();
         await refresh.RunPendingAsync(outcome.InstalledPath, CancellationToken.None);
         var commands = CodexConfigToml.ReadMcpServerCommands(codex);

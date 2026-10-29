@@ -26,6 +26,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     readonly ObservableAsPropertyHelper<string> _title;
     public string Title => _title.Value;
 
+    public SessionTitleEditorViewModel TitleEditor { get; }
+
     readonly ObservableAsPropertyHelper<string> _repoLabelText;
     /// Checkout under the title (`repo / worktree`); harness/transport live in the work-context pane.
     public string RepoLabelText => _repoLabelText.Value;
@@ -35,6 +37,14 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
 
     readonly ObservableAsPropertyHelper<bool> _sessionEnded;
     public bool SessionEnded => _sessionEnded.Value;
+
+    readonly ObservableAsPropertyHelper<string?> _sessionId;
+    /// The session the daemon reports for this agent, which a finished agent's workspace hands off by.
+    public string? SessionId => _sessionId.Value;
+
+    readonly ObservableAsPropertyHelper<string?> _lastStatus;
+    /// The daemon's latest status word for this agent; Completed and Failed end differently.
+    public string? LastStatus => _lastStatus.Value;
 
     readonly ObservableAsPropertyHelper<bool> _isStarting;
     /// A launch the daemon has not published yet; the header and the starting panel read the
@@ -176,6 +186,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     // says, not a value captured once at construction.
     AgentStatusDto? _latestDto;
     AgentRow? _startingRow;
+    string? _appSubject;
 
     public WorkspaceViewModel(
             string agentId, IDaemonClientService daemon, AgentActionService actions,
@@ -186,7 +197,9 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             IPlanSource? plans = null, IPlanArtifactSource? planArtifacts = null, BackgroundCommandActivity? commands = null,
             ComposerDrafts? drafts = null, Func<string, Action>? inputSending = null,
             Func<string, ResumeLedgerEntry?>? resumeLedger = null, LastReads<PullRequestSnapshot>? pullRequestSnapshots = null,
-            LocalTranscripts? transcripts = null, Action<string>? pullRequestLinksChanged = null) {
+            LocalTranscripts? transcripts = null, Action<string>? pullRequestLinksChanged = null, AccountReadings? readings = null,
+            IMessageSenderSource? senders = null,
+            IObservable<string?>? appSubject = null, IAppNotifier? notifier = null) {
         AgentId = agentId;
         _drafts = drafts;
         _opener = opener;
@@ -280,9 +293,29 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         var header = presence.StartWith(new AgentPresence(null, false))
             .CombineLatest(pendingRow, (p, row) => (p.Dto, Row: p.Dto is null ? row : null));
 
-        _title = header.Select(h => h.Dto is not null ? TitleFor(h.Dto) : h.Row?.Title ?? TitleFor(null))
+        var titles = header.Select(h => h.Dto is not null ? TitleFor(h.Dto) : h.Row?.Title ?? TitleFor(null));
+        _title = titles
             .ToProperty(this, x => x.Title, TitleFor(null))
             .DisposeWith(_disposables);
+
+        // The daemon renames as its own account, so it must be the app's account on the app's
+        // server; a private agent makes no per-agent server calls at all, and an ended one has no
+        // title loop left to hold the rename.
+        var subject = (appSubject ?? Observable.Return<string?>(null)).DistinctUntilChanged().Replay(1).RefCount();
+        subject.Subscribe(s => _appSubject = s).DisposeWith(_disposables);
+        var canRename = Observable.CombineLatest(
+                daemon.Status.Select(s => s.State == AttachState.Connected && s.Capabilities?.Contains(RenameWire.Capability) == true),
+                localDaemonOnAppServer ?? Observable.Return(false),
+                daemon.Snapshots.Select(s => s.Daemon.UserSubject).StartWith((string?)null),
+                subject,
+                presence.Select(p => !p.SessionEnded && p.Dto is { IsPrivate: false, SessionId.Length: > 0 }),
+                (capable, onAppServer, daemonSubject, viewer, agent) =>
+                    capable && onAppServer && agent && viewer is not null && daemonSubject == viewer)
+            .ObserveOn(RxSchedulers.MainThreadScheduler);
+        TitleEditor = new SessionTitleEditorViewModel(titles, canRename, async (title, ct) => {
+            var ack = await ops.RenameSessionAsync(new SessionRenameDto(agentId, title, _appSubject), ct);
+            return new SessionRenameResult(ack.Ok, ack.Title, ack.Ok ? null : ack.Reason);
+        }, notifier ?? new AppNotifier()).DisposeWith(_disposables);
         _repoLabelText = header.Select(h => h.Dto is not null ? CheckoutLabelFor(h.Dto) : h.Row is { } row ? RepoLabel.Leaf(row.RepoPath) : CheckoutLabelFor(null))
             .ToProperty(this, x => x.RepoLabelText, CheckoutLabelFor(null))
             .DisposeWith(_disposables);
@@ -313,6 +346,12 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         _sessionEnded = presence.Select(p => p.SessionEnded)
             .ToProperty(this, x => x.SessionEnded, initialValue: false)
             .DisposeWith(_disposables);
+        _sessionId = presence.Select(p => p.Dto?.SessionId)
+            .ToProperty(this, x => x.SessionId, initialValue: null)
+            .DisposeWith(_disposables);
+        _lastStatus = presence.Select(p => p.Dto?.Status)
+            .ToProperty(this, x => x.LastStatus, initialValue: null)
+            .DisposeWith(_disposables);
 
         presence
             .Where(p => p.Dto is not null && !LacksRuntimeMetadata(p.Dto))
@@ -325,7 +364,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                     ? new TerminalChatInput(Terminal, agentId, daemon, ops, presence)
                     : new LocalFrameChatInput(agentId, daemon, ops, presence);
                 Chat = new ChatTabViewModel(
-                    agentId, daemon, input, uploader, projection, opener, time, permissions, runs, note, sessionIds, localDaemonOnAppServer, planActivity, OpenCard, drafts, transcripts) {
+                    agentId, daemon, input, uploader, projection, opener, time, permissions, runs, note, sessionIds, localDaemonOnAppServer, planActivity, OpenCard, drafts, transcripts,
+                    senders, readings?.Local, readings?.Clock, signInCompleted) {
                     ShowTerminal = hasTerminal ? () => ActiveTab = WorkspaceTab.Terminal : null,
                     InputSending = inputSending,
                 };

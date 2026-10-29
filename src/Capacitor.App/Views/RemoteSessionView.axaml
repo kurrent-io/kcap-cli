@@ -8,15 +8,13 @@
              Background="{StaticResource KcapCanvasBrush}">
     <!-- The session's process lives on another machine: the header, the switch over the server's
          streams, and the two actions that reach across. -->
-    <Grid ColumnDefinitions="*,320">
+    <Grid x:Name="SplitGrid" ColumnDefinitions="*,320">
     <Grid Grid.Column="0" RowDefinitions="Auto,Auto,*">
         <Border Grid.Row="0" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,0,0,1"
                 Padding="20,16,16,16" Background="Transparent" PointerPressed="OnHeaderPointerPressed">
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
                 <StackPanel Spacing="6" VerticalAlignment="Center" Margin="0,0,8,0">
-                    <TextBlock x:Name="RemoteTitle" Text="{Binding Title}" FontWeight="SemiBold" FontSize="16"
-                               Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis"
-                               ToolTip.Tip="{Binding Title}" />
+                    <views:SessionTitleEditor x:Name="RemoteTitle" DataContext="{Binding TitleEditor}" />
                     <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
                         <views:AgentStatusMark x:Name="RemoteStatus" Classes="header"
                                                DataContext="{Binding Chat.AgentStatus}"
@@ -37,7 +35,7 @@
                             <Button x:Name="PullRequestTabButton" Content="Pull Request" Classes="kcapSegmentItem"
                                     Classes.active="{Binding IsPullRequestActive}" Command="{Binding ShowPullRequestCommand}"
                                     IsVisible="{Binding ShowsPullRequestTab}" />
-                            <Button x:Name="ArtefactsTabButton" Content="Artefacts" Classes="kcapSegmentItem"
+                            <Button x:Name="ArtefactsTabButton" Content="Pages" Classes="kcapSegmentItem"
                                     Classes.active="{Binding IsArtefactsActive}" Command="{Binding ShowArtefactsCommand}"
                                     IsVisible="{Binding ShowsArtefactsTab}" />
                         </StackPanel>
@@ -47,7 +45,11 @@
                         <views:AppIcon Kind="ExternalLink" Size="14" Foreground="{StaticResource KcapMutedBrush}" />
                     </Button>
                     <Button x:Name="StopButton" Content="Stop" Command="{Binding StopCommand}" Classes="kcapDanger"
-                            Padding="10,5" FontSize="13.5" />
+                            Padding="10,5" FontSize="13.5" IsVisible="{Binding ShowsStop}" />
+                    <Button x:Name="ContextShowButton" Classes="kcapGhost kcapIcon" IsVisible="False"
+                            ToolTip.Tip="Show details" AutomationProperties.Name="Show details">
+                        <views:AppIcon Kind="PanelRightOpen" Size="14" Foreground="{StaticResource KcapMutedBrush}" />
+                    </Button>
                 </StackPanel>
             </Grid>
         </Border>
@@ -91,31 +93,37 @@
                 </Border>
                 <!-- Read-only: the keys the daemon accepts are the only input that crosses. -->
                 <Border Grid.Row="1" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,1,0,0" Padding="20,8">
-                    <Grid ColumnDefinitions="*,Auto">
-                        <ItemsControl Grid.Column="0" ItemsSource="{Binding Terminal.Keys}">
+                    <StackPanel Spacing="6">
+                        <ItemsControl ItemsSource="{Binding Terminal.Keys}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
-                                    <StackPanel Orientation="Horizontal" Spacing="6" />
+                                    <WrapPanel ItemSpacing="6" LineSpacing="6" />
                                 </ItemsPanelTemplate>
                             </ItemsControl.ItemsPanel>
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate x:DataType="services:SpecialKeyChoice">
-                                    <Button Classes="specialKey" Content="{Binding Label}" Click="OnTerminalKeyClick" Padding="10,4" FontSize="12" CornerRadius="7"
+                                    <Button Classes="specialKey kcapChip" Content="{Binding Label}" Click="OnTerminalKeyClick" Padding="10,4" FontSize="12" CornerRadius="7"
                                             Command="{Binding $parent[views:RemoteSessionView].((vm:RemoteSessionViewModel)DataContext).Terminal.SendKeyCommand}"
                                             CommandParameter="{Binding Key}" />
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                        <TextBlock Grid.Column="1" Text="{Binding Terminal.SizeNote}" FontSize="11.5" VerticalAlignment="Center"
+                        <TextBlock Text="{Binding Terminal.SizeNote}" FontSize="11.5" TextWrapping="Wrap"
                                    Foreground="{StaticResource KcapFaintBrush}" />
-                    </Grid>
+                    </StackPanel>
                 </Border>
             </Grid>
             <ContentControl x:Name="PullRequestPane" IsVisible="{Binding ShowsPullRequestPane}" />
             <ContentControl x:Name="ArtefactsPane" IsVisible="{Binding ShowsArtefactsPane}" />
         </Grid>
     </Grid>
-    <views:WorkContextView x:Name="WorkContextHost" Grid.Column="1" DataContext="{Binding WorkContext}"
-                           IsVisible="{Binding $parent[views:RemoteSessionView].((vm:RemoteSessionViewModel)DataContext).ShowsPanes}" />
+    <!-- Collapsing hides this wrapper, so the pane's own visibility binding stays intact. -->
+    <Panel x:Name="ContextColumn" Grid.Column="1">
+        <views:WorkContextView x:Name="WorkContextHost" DataContext="{Binding WorkContext}"
+                               IsVisible="{Binding $parent[views:RemoteSessionView].((vm:RemoteSessionViewModel)DataContext).ShowsPanes}" />
+    </Panel>
+    <!-- Last child so it hit-tests above the workspace column it overhangs. -->
+    <GridSplitter x:Name="ContextSplitter" Grid.Column="1" HorizontalAlignment="Left" Width="6"
+                  Margin="-3,0,0,0" Background="Transparent" ResizeDirection="Columns" />
     </Grid>
 </UserControl>

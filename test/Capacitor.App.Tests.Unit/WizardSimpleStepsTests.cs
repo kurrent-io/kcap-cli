@@ -46,7 +46,7 @@ public class WizardSimpleStepsTests {
         var (fixedPath, disclosure, message) = await AvaloniaSession.DispatchAsync(async () => {
             var vm = new PathFixViewModel(windows, store, target);
             await vm.InstallAsync();
-            return (vm.Fixed, vm.Disclosure, vm.Message);
+            return (vm.Fixed, string.Concat(vm.Plan.Select(s => s.Text)), vm.Message);
         });
 
         await Assert.That(fixedPath).IsEqualTo(verified);
@@ -186,6 +186,7 @@ public class WizardSimpleStepsTests {
         public ShimHarness() {
             Destination = Path.Combine(TempDir, "kcap");
             Target      = Path.Combine(TempDir, "target-cli");
+            Probe.KcapPathBehavior = _ => Task.FromResult<string?>(Destination);
             Installer   = new PathShimInstaller(Runner, Probe, Destination);
             Vm          = new PathFixViewModel(Installer, Store, Target);
         }
@@ -389,7 +390,7 @@ public class WizardSimpleStepsTests {
 
             var texts    = window.GetVisualDescendants().OfType<TextBlock>().ToList();
             var title    = texts.FirstOrDefault(t => t.Name == "StepTitleText")?.Text;
-            var daemon   = texts.FirstOrDefault(t => t.Name == "ServicePillText")?.Text;
+            var daemon   = texts.FirstOrDefault(t => t.Name == "ServiceStatusText")?.Text;
             var capture  = window.GetVisualDescendants().OfType<ItemsControl>().FirstOrDefault(i => i.Name == "CaptureItems")?.ItemCount;
 
             window.Close();

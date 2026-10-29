@@ -19,6 +19,7 @@ public static class KcapToolCatalogue {
         new("get_page_results",          ToolCategory.Artefact, "Read answers",             null),
         new("close_page_responses",      ToolCategory.Artefact, "Closed answers",           null),
         new("list_my_pages",             ToolCategory.Artefact, "Listed pages",             null),
+        new("get_page",                  ToolCategory.Artefact, "Read page",                null),
         // the same tools under their artefact names, which recorded transcripts still carry
         new("publish_artefact",          ToolCategory.Artefact, "Published page",           "title",  ToolCardKind.Page),
         new("set_artefact_visibility",   ToolCategory.Artefact, "Shared page",              "visibility"),
@@ -40,6 +41,7 @@ public static class KcapToolCatalogue {
         new("declare_work_relation",     ToolCategory.Work,     "Declared work relation",   null),
         new("merge_work_item",           ToolCategory.Work,     "Merged work items",        null),
         new("detach_work_item",          ToolCategory.Work,     "Detached work item",       null),
+        new("declare_work_incomplete",   ToolCategory.Work,     "Declared work incomplete", null),
         new("dismiss_next_work",         ToolCategory.Work,     "Dismissed a suggestion",   null),
         new("get_session_work_items",    ToolCategory.Work,     "Read work items",          null),
         new("request_work_item_eval",    ToolCategory.Work,     "Requested an evaluation",  null),

@@ -570,6 +570,24 @@ public class AcpHostedAgentRuntimeTests {
         h.Fake.HoldPromptResponses.TrySetResult();
     }
 
+    [Test]
+    public async Task A_dispatched_prompt_stamps_its_dispatch_on_its_user_message_and_the_launch_prompt_carries_none() {
+        await using var h = new Harness();
+        h.StartFakeAgentLoop();
+        var dispatch = Guid.NewGuid();
+
+        await h.Runtime.StartAsync("/abs/worktree", "prompt-A", h.Cts.Token).WaitAsync(HangGuard);
+        await h.Runtime.SendDispatchedInputAsync("prompt-B", dispatch, waitForWrite: false).WaitAsync(HangGuard);
+
+        var userMessages = new List<AcpEventEnvelope>();
+        while (userMessages.Count < 2) {
+            var env = await h.Runtime.Envelopes.ReadAsync(h.Cts.Token).AsTask().WaitAsync(HangGuard);
+            if (env.Kind == AcpEventKind.UserMessage) userMessages.Add(env);
+        }
+
+        await Assert.That(userMessages.Select(e => e.DispatchId)).IsEquivalentTo(new Guid?[] { null, dispatch }, CollectionOrdering.Matching);
+    }
+
     // ── Test plan item 9: cancellation propagates out of StartAsync ───────────────────
 
     /// <summary>

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Services;
 
@@ -12,6 +13,14 @@ internal sealed class StubCatalogFactory(string vendor, IReadOnlyList<VendorMode
     public bool    SupportsUnattended => false;
     public int     ProbeCalls         { get; private set; }
 
+    /// Answers a probe of an account's directory; unset, it answers like the default probe.
+    public Func<string, Task<IReadOnlyList<VendorModelOption>?>>? ProbeDirectory { get; init; }
+
+    /// An account directory's catalog files; unset, they are the default ones.
+    public Func<string, IReadOnlyList<string>>? PathsFor { get; init; }
+
+    public ConcurrentQueue<string> ProbedDirectories { get; } = new();
+
     public IReadOnlyList<string> CatalogFingerprintPaths { get; } = paths ?? [];
 
     public bool IsAvailable() => true;
@@ -20,6 +29,16 @@ internal sealed class StubCatalogFactory(string vendor, IReadOnlyList<VendorMode
         ProbeCalls++;
         return Task.FromResult(models);
     }
+
+    public Task<IReadOnlyList<VendorModelOption>?> ProbeModelsAsync(string? configDirectory, CancellationToken ct) {
+        if (configDirectory is null) return ProbeModelsAsync(ct);
+
+        ProbedDirectories.Enqueue(configDirectory);
+        return ProbeDirectory?.Invoke(configDirectory) ?? Task.FromResult(models);
+    }
+
+    public IReadOnlyList<string> CatalogFingerprintPathsFor(string? configDirectory) =>
+        configDirectory is not null && PathsFor is { } pathsFor ? pathsFor(configDirectory) : CatalogFingerprintPaths;
 
     public Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) =>
         throw new NotSupportedException("a catalog stub launches nothing");

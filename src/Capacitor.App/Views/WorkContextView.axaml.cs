@@ -15,6 +15,11 @@ public partial class WorkContextView : UserControl {
         InitializeComponent();
     }
 
+    /// Shown only where something can bring the pane back, so set by <see cref="ContextPaneSizing"/>.
+    public event EventHandler? HideRequested;
+
+    void OnHideClick(object? sender, RoutedEventArgs e) => HideRequested?.Invoke(this, EventArgs.Empty);
+
     // Drag only from empty chrome — never from the refresh button (or any other Button in the strip).
     void OnHeaderPointerPressed(object? sender, PointerPressedEventArgs e) {
         if (e.Source is Visual source && source.FindAncestorOfType<Button>(includeSelf: true) is not null)

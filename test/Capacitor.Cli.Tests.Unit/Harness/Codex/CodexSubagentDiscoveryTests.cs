@@ -1,7 +1,13 @@
+using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Harness.Codex;
 using Capacitor.Cli.PrDetection;
+using WireMock.RequestBuilders;
+using WireMock.ResponseBuilders;
+using WireMock.Server;
 
 namespace Capacitor.Cli.Tests.Unit.Harness.Codex;
 
@@ -239,6 +245,61 @@ public class CodexSubagentDiscoveryTests {
             .Contains(Dashless(ChildDashed));
         await Assert.That(subs.Select(s => s.ChildDashlessId).ToList())
             .Contains(Dashless(grandDashed));
+    }
+
+    // ── Spawning calls ────────────────────────────────────────────────────
+
+    static string Item(string payload) => $$"""{"timestamp":"2026-08-10T15:21:00.000Z","type":"response_item","payload":{{payload}}}""";
+
+    /// <summary>An import posts every subagent's start after the whole parent transcript, so each start names the
+    /// parent's spawn_agent call whose output names the agent's path; a grandchild names its ancestor's call, and an
+    /// agent no spawn output names, here one whose path only another tool's output carries, names none</summary>
+    [Test]
+    public async Task An_imported_subagent_start_names_the_call_that_spawned_it_or_its_ancestor() {
+        using var tmp    = new TempDir();
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().UsingAnyMethod()).RespondWith(Response.Create().WithStatusCode(200));
+
+        var day    = DayDir(tmp.Path);
+        var parent = WriteParent(day);
+        File.AppendAllLines(parent, [
+            Item("""{"type":"function_call","name":"spawn_agent","namespace":"collaboration","call_id":"call_spawn","arguments":"{\"task_name\":\"spec_quality\"}"}"""),
+            Item("""{"type":"function_call_output","call_id":"call_spawn","output":"{\"task_name\":\"/root/spec_quality\"}"}"""),
+            Item("""{"type":"function_call","name":"exec_command","call_id":"call_exec","arguments":"{}"}"""),
+            Item("""{"type":"function_call_output","call_id":"call_exec","output":"{\"task_name\":\"/root/other\"}"}"""),
+            """{"timestamp":"2026-08-10T15:22:00.000Z","type":"response_item","payload":{"type":"function_call","na""",
+        ]);
+
+        const string grandDashed = "019fec46-51e6-7a03-9f0b-cc6f701a9134";
+        WriteChild(day);
+        WriteChild(day, dashedId: grandDashed, parentDashedId: ChildDashed, agentPath: "/root/spec_quality/deep_dive", stamp: "2026-08-10T17-25-00");
+        WriteChild(day, dashedId: OtherDashed, agentPath: "/root/other", stamp: "2026-08-10T17-26-00");
+
+        using var client = new HttpClient();
+        await SessionImporter.ImportSessionAsync(client, server.Url!, parent, Dashless(ParentDashed),
+            new SessionMetadata { Cwd = "/w" }, encodedCwd: null, TimeProvider.System, vendor: HarnessId.Codex);
+
+        var named = server.LogEntries
+            .Where(e => e.RequestMessage.Path == "/hooks/subagent-start")
+            .Select(e => JsonNode.Parse(e.RequestMessage.Body!)!)
+            .ToDictionary(n => (string)n["agent_id"]!, n => (string?)n["spawn_call_id"]);
+
+        await Assert.That(named).IsEquivalentTo(new Dictionary<string, string?> {
+            [Dashless(ChildDashed)] = "call_spawn",
+            [Dashless(grandDashed)] = "call_spawn",
+            [Dashless(OtherDashed)] = null,
+        });
+    }
+
+    [Test]
+    [Arguments("/root/a", "call_a")]
+    [Arguments("/root/a/b/c", "call_a")]
+    [Arguments("/root/ab", null)]
+    [Arguments(null, null)]
+    public async Task A_path_takes_its_own_spawning_call_or_its_nearest_ancestors(string? agentPath, string? expected) {
+        var calls = new Dictionary<string, string> { ["/root/a"] = "call_a", ["/root/b"] = "call_b" };
+
+        await Assert.That(CodexSubagentDiscovery.SpawnCallFor(calls, agentPath)).IsEqualTo(expected);
     }
 
     // ── CodexImportSource.DiscoverAsync filter ────────────────────────────

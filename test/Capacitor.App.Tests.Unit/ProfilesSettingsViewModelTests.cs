@@ -120,7 +120,7 @@ public class ProfilesSettingsViewModelTests {
 
         await vm.RemoveCommand.Execute(row).ToTask();
 
-        await Assert.That(vm.Message).IsEqualTo("This profile changed; the list was refreshed.");
+        await Assert.That(vm.Message).IsEqualTo("This profile changed. The list was refreshed.");
         await Assert.That(vm.Rows.Single(r => r.Name == "other").ServerUrl).IsEqualTo("https://repointed.example");
     });
 
@@ -175,18 +175,37 @@ public class ProfilesSettingsViewModelTests {
         await Assert.That(vm.Message).IsEqualTo("Could not read the profile configuration.");
     });
 
-    /// A row that already holds a credential for its server offers "Sign in again": beside a
-    /// "Signed in" status a bare "Sign in" reads as a contradiction, not as re-authentication.
+    /// A signed-in row keeps "Sign in again" out of the way, in its menu: the status is graded
+    /// offline, so it stays reachable for a credential the server has since rejected. Rows that
+    /// cannot reach their server lead with the button.
     [Test]
-    public Task Sign_in_reads_as_again_on_a_row_that_holds_a_credential() => AvaloniaSession.RunOnUiAsync(async () => {
+    public Task Sign_in_leads_only_on_rows_that_need_it() => AvaloniaSession.RunOnUiAsync(async () => {
         var vm = Make(await Seed());
         await vm.RefreshAsync();
 
         var rows = vm.Rows.ToDictionary(r => r.Name);
-        await Assert.That(rows["work"].SignInLabel).IsEqualTo("Sign in again");
+        await Assert.That(rows["work"].NeedsSignIn).IsFalse();
+        await Assert.That(rows["work"].CanSignInAgain).IsTrue();
+        await Assert.That(rows["work"].HasMenu).IsTrue();
+        await Assert.That(rows["stale"].NeedsSignIn).IsTrue();
         await Assert.That(rows["stale"].SignInLabel).IsEqualTo("Sign in again");
+        await Assert.That(rows["other"].NeedsSignIn).IsTrue();
         await Assert.That(rows["other"].SignInLabel).IsEqualTo("Sign in");
-        await Assert.That(rows["moved"].SignInLabel).IsEqualTo("Sign in");
-        await Assert.That(rows["bad"].SignInLabel).IsEqualTo("Sign in");
+        await Assert.That(rows["moved"].NeedsSignIn).IsTrue();
+        await Assert.That(rows["bad"].NeedsSignIn).IsTrue();
+        await Assert.That(rows["open"].NeedsSignIn).IsFalse();
+    });
+
+    /// The blank default profile is listed only once it is in use or has a server.
+    [Test]
+    public Task The_unused_blank_default_profile_is_not_listed() => AvaloniaSession.RunOnUiAsync(async () => {
+        var vm = Make(await Seed());
+        await vm.RefreshAsync();
+        await Assert.That(vm.ListedRows.Any(r => r.Name == "default")).IsFalse();
+        await Assert.That(vm.ListedRows.Count).IsEqualTo(vm.Rows.Count - 1);
+
+        var bound = Make(AuthFixtures.NewTokenStore(Config.Root), bound: "default");
+        await bound.RefreshAsync();
+        await Assert.That(bound.ListedRows.Any(r => r.Name == "default")).IsTrue();
     });
 }

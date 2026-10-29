@@ -7,6 +7,7 @@ public static class HubMethods {
     public const string RequestLaunchAgentV2   = "RequestLaunchAgentV2";
     public const string RequestStopAgent       = "RequestStopAgent";
     public const string SendUserInput          = "SendUserInput";
+    public const string DiscardQueuedInput     = "DiscardQueuedInput";
     public const string SendSpecialKey         = "SendSpecialKey";
     public const string SubscribeToTerminal    = "SubscribeToTerminal";
     public const string UnsubscribeFromTerminal = "UnsubscribeFromTerminal";
@@ -15,6 +16,7 @@ public static class HubMethods {
     public const string SubscribeToChat        = "SubscribeToChat";
     public const string UnsubscribeFromChat    = "UnsubscribeFromChat";
     public const string RegisterSessionAccessWatch = "RegisterSessionAccessWatch";
+    public const string GetDaemonAccounts      = "GetDaemonAccounts";
 }
 
 /// Server → UI-client pushes. Org-wide ones arrive with no join call; the rest follow the join or
@@ -44,12 +46,17 @@ public static class HubBroadcasts {
     public const string WelcomeStateChanged    = "WelcomeStateChanged";
     public const string SessionAccessChanged   = "SessionAccessChanged";
     public const string RawStreamAccessRevoked = "RawStreamAccessRevoked";
+    public const string DaemonAccountsChanged  = "DaemonAccountsChanged";
 }
 
 public static class ApiRoutes {
     public const string AgentInstances = "api/agent-instances";
     public const string Daemons        = "api/daemons";
     public const string ModelOptions   = "api/agents/model-options";
+    public const string SessionOwners  = "api/sessions/owners";
+    public static string SessionListing(string state, string? owner, int limit, int offset) =>
+        $"api/sessions/listing?state={state}&limit={limit}&offset={offset}"
+        + (owner is null ? "" : $"&owner={Uri.EscapeDataString(owner)}");
     public static string SessionDetail(string sessionId) =>
         $"api/sessions/{Uri.EscapeDataString(sessionId)}/detail";
     public static string SubagentEvents(string sessionId, string agentId, long from) =>

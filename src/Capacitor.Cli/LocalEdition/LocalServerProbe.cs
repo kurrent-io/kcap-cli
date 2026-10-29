@@ -31,4 +31,32 @@ static class LocalServerProbe {
             return AuthConfigAnswer.Other;
         }
     }
+
+    static readonly TimeSpan EmbeddingsTimeout = TimeSpan.FromSeconds(3);
+
+    /// <summary>Null for an older server's 404, a failed or silent request, or a body that is not the report. Never
+    /// throws except <see cref="OperationCanceledException"/> from <paramref name="ct"/>.</summary>
+    public static async Task<EmbeddingHealthAnswer?> EmbeddingsAsync(HttpClient http, string baseUrl, TimeProvider time, CancellationToken ct) {
+        using var attempt = new CancellationTokenSource(EmbeddingsTimeout, time);
+        using var linked  = CancellationTokenSource.CreateLinkedTokenSource(ct, attempt.Token);
+
+        try {
+            using var response = await http.GetAsync($"{baseUrl.TrimEnd('/')}/healthz/embeddings", linked.Token);
+
+            if (response.StatusCode != HttpStatusCode.OK) return null;
+
+            using var doc  = JsonDocument.Parse(await response.Content.ReadAsStringAsync(linked.Token));
+            var       root = doc.RootElement;
+
+            if (root.Str("provider") is not { } provider || root.Bool("usable") is not { } usable) return null;
+
+            return new(provider, usable, root.Str("reason"));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            throw;
+        }
+        catch (Exception) {
+            return null;
+        }
+    }
 }

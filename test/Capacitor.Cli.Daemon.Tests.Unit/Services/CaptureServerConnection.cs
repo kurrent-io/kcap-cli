@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Threading.Channels;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -11,12 +12,16 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 /// Captures LaunchFailedAsync calls and no-ops the other server-side methods
 /// so the orchestrator's launch flow doesn't touch a real SignalR connection.
 /// </summary>
-sealed class CaptureServerConnection() : ServerConnection(
-    new() { Name = "test", ServerUrl = "http://127.0.0.1:1" },
-    new FixedCredentialSource(),
-    NullLoggerFactory.Instance,
-    NullLogger<ServerConnection>.Instance
-, TimeProvider.System) {
+sealed class CaptureServerConnection : ServerConnection {
+    readonly DaemonConfig _config;
+
+    public CaptureServerConnection(DaemonConfig? config = null)
+        : this(config ?? new() { Name = "test", ServerUrl = "http://127.0.0.1:1" }, 0) { }
+
+    CaptureServerConnection(DaemonConfig config, int _) : base(
+            config, new FixedCredentialSource(), NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, TimeProvider.System) =>
+        _config = config;
+
     public            string?                               ConnectionIdForTest { get; init; } = "connection-1";
     internal override string?                               CurrentConnectionId => ConnectionIdForTest;
     readonly List<(string AgentId, string Reason)> _launchFailedCalls = [];
@@ -55,11 +60,14 @@ sealed class CaptureServerConnection() : ServerConnection(
     /// <c>ReRegisterAsync</c> lands here). No-op'd: there is no hub to register with.</summary>
     public int RegisterDaemonCalls => Volatile.Read(ref _registerDaemonCalls);
 
-    public Exception? RegisterDaemonThrow { get; init; }
+    public Exception? RegisterDaemonThrow { get; set; }
 
-    internal override Task RegisterDaemonAsync() {
+    internal override Task RegisterDaemonAsync(RegistrationAttempt attempt) {
         Interlocked.Increment(ref _registerDaemonCalls);
-        return RegisterDaemonThrow is { } ex ? Task.FromException(ex) : Task.CompletedTask;
+        if (RegisterDaemonThrow is { } ex) return Task.FromException(ex);
+        attempt.Sending(_config.Advertisement);
+        attempt.Accept();
+        return Task.CompletedTask;
     }
 
     public override async Task LaunchFailedAsync(string agentId, string reason) {
@@ -123,6 +131,9 @@ sealed class CaptureServerConnection() : ServerConnection(
     public List<(string AgentId, string? Transport)> AgentRegisteredTransports { get; } = [];
     public List<(string AgentId, string? Vendor)> AgentRegisteredVendors { get; } = [];
 
+    /// <summary>The account each registration named, in call order.</summary>
+    public List<(string AgentId, string? Directory, string? AccountId, string? Label)> AgentRegisteredAccounts { get; } = [];
+
     /// <summary>The start title echoed on each registration, in call order.</summary>
     public List<(string AgentId, AgentStartTitle? Title)> AgentRegisteredTitles { get; } = [];
 
@@ -135,7 +146,8 @@ sealed class CaptureServerConnection() : ServerConnection(
     public override async Task<AgentRegisteredResponse> AgentRegisteredAsync(
         string  agentId,              string? prompt, string? model, string? effort, string? repoPath,
         string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null,
-        string? runtimeTransport = null, string? vendor = null, AgentStartTitle? title = null, string? continuesAgentId = null) {
+        string? runtimeTransport = null, string? vendor = null, AgentStartTitle? title = null, string? continuesAgentId = null,
+        string? accountDirectory = null, string? accountId = null, string? accountLabel = null) {
         AgentRegisteredCallCount++;
         lock (AgentRegisteredContinues) AgentRegisteredContinues.Add((agentId, continuesAgentId));
         lock (AgentRegisteredTitles) AgentRegisteredTitles.Add((agentId, title));
@@ -144,6 +156,7 @@ sealed class CaptureServerConnection() : ServerConnection(
         lock (AgentRegisteredPostures) AgentRegisteredPostures.Add((agentId, sandboxPolicy, approvalPolicy));
         lock (AgentRegisteredTransports) AgentRegisteredTransports.Add((agentId, runtimeTransport));
         lock (AgentRegisteredVendors) AgentRegisteredVendors.Add((agentId, vendor));
+        lock (AgentRegisteredAccounts) AgentRegisteredAccounts.Add((agentId, accountDirectory, accountId, accountLabel));
 
         AgentRegisteredEntered?.TrySetResult();
         if (AgentRegisteredGate is { } gate) await gate.Task.ConfigureAwait(false);
@@ -450,6 +463,20 @@ sealed class CaptureServerConnection() : ServerConnection(
     public override Task ReportAgentCommandsAsync(string agentId, IReadOnlyList<HostedAgentCommand> commands) {
         lock (CommandReports) CommandReports.Add(agentId);
         return Task.CompletedTask;
+    }
+
+    public List<(string AgentId, TerminalDialogDto? Dialog)> TerminalDialogReports { get; } = [];
+
+    /// <summary>Runs as each dialog report is sent, before the next one can be.</summary>
+    public Action<string, TerminalDialogDto?>? OnTerminalDialogReport { get; set; }
+
+    /// <summary>When set, each dialog report stays in flight until this completes.</summary>
+    public TaskCompletionSource? TerminalDialogReportHold { get; set; }
+
+    public override Task ReportAgentTerminalDialogAsync(string agentId, TerminalDialogDto? dialog) {
+        lock (TerminalDialogReports) TerminalDialogReports.Add((agentId, dialog));
+        OnTerminalDialogReport?.Invoke(agentId, dialog);
+        return TerminalDialogReportHold?.Task ?? Task.CompletedTask;
     }
 
     public override Task ReportAgentResolvedModelAsync(string agentId, string model) {

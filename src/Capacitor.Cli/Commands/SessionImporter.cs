@@ -141,12 +141,15 @@ static class SessionImporter {
         // lets chat/trace nest it), strict transcript delivery, and no subagent-stop after a
         // failed tail — a re-import retries (deterministic event ids make that idempotent).
         if (isCodex) {
+            var spawnCalls = CodexSubagentDiscovery.ReadSpawnCalls(transcriptPath);
+
             foreach (var sub in CodexSubagentDiscovery.EnumerateDescendantRollouts(transcriptPath, sessionId)) {
                 var subType    = CodexSubagentDiscovery.AgentTypeFrom(sub.AgentPath, sub.AgentNickname);
                 var subAgentId = sub.ChildDashlessId;
 
                 if (!await PostSubagentHookAsync(httpClient, baseUrl, "subagent-start",
-                        CodexSubagentDiscovery.BuildStartPayload(sessionId, subAgentId, subType, sub.FilePath), time)) {
+                        CodexSubagentDiscovery.BuildStartPayload(sessionId, subAgentId, subType, sub.FilePath,
+                            CodexSubagentDiscovery.SpawnCallFor(spawnCalls, sub.AgentPath)), time)) {
                     continue;
                 }
 

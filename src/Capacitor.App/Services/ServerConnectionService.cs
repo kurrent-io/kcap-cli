@@ -41,12 +41,14 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     readonly BehaviorSubject<ServerLaneStatus> _status = new(new(ServerLaneState.Dormant));
     readonly Subject<Unit> _agentsChanged = new();
     readonly Subject<Unit> _daemonsChanged = new();
+    readonly Subject<Unit> _daemonAccountsChanged = new();
     readonly Subject<LaunchFailure> _launchFailures = new();
     readonly Subject<string> _permissionPending = new();
     readonly Subject<PermissionRespondedPing> _permissionResponded = new();
     readonly Subject<ServerPermissionRequest> _permissionRequests = new();
     readonly Subject<ServerElicitationRequest> _elicitations = new();
     readonly Subject<string> _sessionAccessChanged = new();
+    readonly Subject<SessionPush> _sessionPushes = new();
     readonly Subject<PendingInputUpdate> _pendingInput = new();
     readonly Subject<TerminalOutputFrame> _terminalOutput = new();
     readonly Subject<TerminalSize> _terminalDimensions = new();
@@ -103,12 +105,14 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     public IObservable<ServerLaneStatus> Status => _status.AsObservable();
     public IObservable<Unit> AgentInstancesChanged => _agentsChanged.AsObservable();
     public IObservable<Unit> DaemonsChanged => _daemonsChanged.AsObservable();
+    public IObservable<Unit> DaemonAccountsChanged => _daemonAccountsChanged.AsObservable();
     public IObservable<LaunchFailure> LaunchFailures => _launchFailures.AsObservable();
     public IObservable<string> PermissionPending => _permissionPending.AsObservable();
     public IObservable<PermissionRespondedPing> PermissionResponded => _permissionResponded.AsObservable();
     public IObservable<ServerPermissionRequest> PermissionRequests => _permissionRequests.AsObservable();
     public IObservable<ServerElicitationRequest> ElicitationRequests => _elicitations.AsObservable();
     public IObservable<string> SessionAccessChanged => _sessionAccessChanged.AsObservable();
+    public IObservable<SessionPush> SessionPushes => _sessionPushes.AsObservable();
     public IObservable<PendingInputUpdate> PendingInputChanged => _pendingInput.AsObservable();
     public IObservable<TerminalOutputFrame> TerminalOutput => _terminalOutput.AsObservable();
     public IObservable<TerminalSize> TerminalDimensions => _terminalDimensions.AsObservable();
@@ -306,6 +310,7 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
             .Build();
         hub.On(HubBroadcasts.AgentInstancesChanged, () => _agentsChanged.OnNext(Unit.Default));
         hub.On(HubBroadcasts.DaemonsChanged, () => _daemonsChanged.OnNext(Unit.Default));
+        hub.On(HubBroadcasts.DaemonAccountsChanged, () => _daemonAccountsChanged.OnNext(Unit.Default));
         hub.On<string, string>(HubBroadcasts.LaunchFailed, (agentId, reason) => _launchFailures.OnNext(new(agentId, reason)));
         hub.On<string>(HubBroadcasts.PermissionPending, _permissionPending.OnNext);
         hub.On<string, string?>(HubBroadcasts.PermissionResponded, (sid, rid) => _permissionResponded.OnNext(new(sid, rid)));
@@ -317,6 +322,11 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         hub.On<string, string, string, JsonElement?, bool>(HubBroadcasts.AcpElicitationRequested,
             (sid, rid, prompt, options, multi) => _elicitations.OnNext(new(sid, rid, prompt, ServerPermissionRequest.ParseOptions(options) ?? [], multi)));
         hub.On<string>(HubBroadcasts.SessionAccessChanged, _sessionAccessChanged.OnNext);
+        hub.On<string>(HubBroadcasts.ActiveSessionAdded, id => _sessionPushes.OnNext(new(SessionPushKind.ActiveAdded, id)));
+        hub.On<string>(HubBroadcasts.ActiveSessionChanged, id => _sessionPushes.OnNext(new(SessionPushKind.ActiveChanged, id)));
+        hub.On<string>(HubBroadcasts.ActiveSessionRemoved, id => _sessionPushes.OnNext(new(SessionPushKind.ActiveRemoved, id)));
+        hub.On<string>(HubBroadcasts.SessionTitleChanged, id => _sessionPushes.OnNext(new(SessionPushKind.TitleChanged, id)));
+        hub.On<string>(HubBroadcasts.SessionDeleted, id => _sessionPushes.OnNext(new(SessionPushKind.Deleted, id)));
         hub.On<string, string, JsonElement?>(HubBroadcasts.PendingInputChanged, (_, sessionId, items) => {
             if (ParseQueue(items) is { } queue) _pendingInput.OnNext(new(sessionId, queue));
         });
@@ -334,9 +344,8 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         HubBroadcasts.FlowsChanged, HubBroadcasts.WorkItemsChanged, HubBroadcasts.ProjectsChanged, HubBroadcasts.WelcomeStateChanged,
     ];
     static readonly string[] UnusedPings = [
-        HubBroadcasts.SessionTitleChanged, HubBroadcasts.ActiveSessionAdded, HubBroadcasts.ActiveSessionChanged,
-        HubBroadcasts.ActiveSessionRemoved, HubBroadcasts.SessionDeleted, HubBroadcasts.SessionEvalCompleted,
-        HubBroadcasts.SessionWhatsDoneGenerated, HubBroadcasts.SubagentAdopted, HubBroadcasts.RawStreamAccessRevoked,
+        HubBroadcasts.SessionEvalCompleted, HubBroadcasts.SessionWhatsDoneGenerated, HubBroadcasts.SubagentAdopted,
+        HubBroadcasts.RawStreamAccessRevoked,
     ];
 
     /// Connected additionally requires `hub` to still be the live connection and still be connected
@@ -367,6 +376,16 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         if (hub is not { State: HubConnectionState.Connected }) return null;
         try {
             return await hub.InvokeAsync<List<DaemonInfo>>(HubMethods.GetConnectedDaemons, ct).ConfigureAwait(false);
+        } catch (Exception) {
+            return null;
+        }
+    }
+
+    public async Task<IReadOnlyList<DaemonAccountsDto>?> GetDaemonAccountsAsync(CancellationToken ct) {
+        var hub = _hub;
+        if (hub is not { State: HubConnectionState.Connected }) return null;
+        try {
+            return await hub.InvokeAsync<List<DaemonAccountsDto>>(HubMethods.GetDaemonAccounts, ct).ConfigureAwait(false);
         } catch (Exception) {
             return null;
         }
@@ -451,6 +470,8 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     // Three arguments always: the method's arity is frozen and SignalR does not backfill a
     // missing trailing one.
     public Task<HubCallOutcome> SendUserInputAsync(string agentId, string text, CancellationToken ct) => InvokeAsync(HubMethods.SendUserInput, ct, agentId, text, null);
+    public Task<HubCallOutcome> DiscardQueuedInputAsync(string agentId, Guid dispatchId, CancellationToken ct) =>
+        InvokeAsync(HubMethods.DiscardQueuedInput, ct, new DiscardQueuedInputRequest(agentId, dispatchId));
     public Task<HubCallOutcome> SendSpecialKeyAsync(string agentId, string key, CancellationToken ct) => InvokeAsync(HubMethods.SendSpecialKey, ct, agentId, key);
 
     /// Denied is the server's session-visibility refusal (HubException carrying WireTokens.
@@ -548,12 +569,14 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         _status.Dispose();
         _agentsChanged.Dispose();
         _daemonsChanged.Dispose();
+        _daemonAccountsChanged.Dispose();
         _launchFailures.Dispose();
         _permissionPending.Dispose();
         _permissionResponded.Dispose();
         _permissionRequests.Dispose();
         _elicitations.Dispose();
         _sessionAccessChanged.Dispose();
+        _sessionPushes.Dispose();
         _pendingInput.Dispose();
         _terminalOutput.Dispose();
         _terminalDimensions.Dispose();

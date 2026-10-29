@@ -15,8 +15,8 @@ public sealed class UpdateCoordinator {
     // Velopack's updater on Windows kills every process running from the install folder, and the
     // app's daemon runs from there; elsewhere the daemon restarts itself at a turn boundary.
     internal static string ReadyDisclosure(bool windows) => windows
-        ? "The app will restart to finish installing the update.\n\nInstalling stops the daemon, which interrupts any running agents mid-turn; the daemon resumes them when it next starts unless auto-resume is off."
-        : "The app will restart to finish installing the update.\n\nThe daemon then restarts on its own once its agents finish their current turn, and resumes them unless auto-resume is off.";
+        ? "The app will restart to finish installing the update.\n\nInstalling stops the daemon and interrupts running agents mid-turn. The daemon resumes them when it starts again, unless auto-resume is off."
+        : "The app will restart to finish installing the update.\n\nThe daemon restarts by itself once its agents finish their current turn. It resumes them unless auto-resume is off.";
 
     readonly IAppUpdater _updater;
     readonly ILifecycleSurface _surface;
@@ -26,14 +26,18 @@ public sealed class UpdateCoordinator {
     readonly TimeSpan _initialDelay;
     readonly TimeSpan _interval;
     readonly BehaviorSubject<UpdateMenuItem> _menu;
+    readonly Action<UpdateCandidate>? _handingOver;
+    readonly LifecycleLog? _log;
     readonly Lock _lock = new();
 
     Task? _inflight;
+    Task? _offer;
     bool _manualPending;
     UpdateCandidate? _ready;
     UpdateCandidate? _pendingApply;
 
-    /// The single-flight lane (`_inflight`) guarantees only one check ever writes this. Readers run
+    /// The single-flight lane (`_inflight`) guarantees only one check ever sets this; `Withdraw` only
+    /// clears it, by compare-and-swap. Readers run
     /// on the UI thread via `RunMenuActionAsync`, and `CheckAsync` holds `_lock` across
     /// `RunCheckAsync`'s synchronous prefix (which can reach `_menu.OnNext` and `ConfirmAsync`) — so
     /// this must never block on `_lock`, or a UI-thread caller blocked on the same dialog deadlocks.
@@ -42,9 +46,12 @@ public sealed class UpdateCoordinator {
         set => Volatile.Write(ref _ready, value);
     }
 
+    /// <param name="handingOver">Runs immediately before the updater takes over, so the next process can tell
+    /// it finishes this update.</param>
     public UpdateCoordinator(
             IAppUpdater updater, ILifecycleSurface surface, TimeProvider time, Action quit, CancellationToken lifetime,
-            TimeSpan? initialDelay = null, TimeSpan? interval = null) {
+            TimeSpan? initialDelay = null, TimeSpan? interval = null, Action<UpdateCandidate>? handingOver = null,
+            LifecycleLog? log = null) {
         _updater      = updater;
         _surface      = surface;
         _time         = time;
@@ -53,25 +60,38 @@ public sealed class UpdateCoordinator {
         _initialDelay = initialDelay ?? DefaultInitialDelay;
         _interval     = interval ?? DefaultInterval;
         _menu         = new BehaviorSubject<UpdateMenuItem>(new UpdateMenuItem(updater.IsAvailable, CheckLabel));
+        _handingOver  = handingOver;
+        _log          = log;
     }
 
     public IObservable<UpdateMenuItem> MenuItem => _menu.AsObservable();
+
+    /// The version a restart would install, once its package is downloaded.
+    public string? ReadyVersion => Ready?.Version;
 
     /// Applies a package left from a previous run, after the install-location guard and before any
     /// graph exists. Skipped on an update relaunch: a failed apply relaunches the old version with
     /// the same package still cached, and applying it again automatically would loop before any UI
     /// appeared. True means the process is being replaced.
-    public static bool TryApplyPendingAtStartup(IAppUpdater updater, bool updateRelaunch) {
+    public static bool TryApplyPendingAtStartup(IAppUpdater updater, bool updateRelaunch,
+            Action<UpdateCandidate>? handingOver = null, LifecycleLog? log = null) {
         if (!updater.IsAvailable || updateRelaunch) return false;
         if (updater.PendingRestart is not { } pending || !IsEligible(updater, pending)) return false;
 
         // A failed apply must fall through to the normal UI, where the schedule re-offers the
         // update visibly, rather than bricking every launch behind a repeating startup failure.
         try {
+            handingOver?.Invoke(pending);
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"kcap app: could not record the update handover: {ex.Message}");
+        }
+        try {
+            log?.Write("update_apply_pending", ("from", updater.InstalledVersion), ("to", pending.Version));
             updater.ApplyNow(pending);
             return true;
         } catch (Exception ex) {
             Console.Error.WriteLine($"kcap app: applying the pending update failed: {ex.Message}");
+            log?.Write("update_apply_failed", ("stage", "pending_at_startup"), ("to", pending.Version), ("error", ex.Message));
             return false;
         }
     }
@@ -79,14 +99,9 @@ public sealed class UpdateCoordinator {
     internal static bool IsEligible(IAppUpdater updater, UpdateCandidate candidate) {
         var installed = updater.InstalledVersion;
         if (installed is null) return false;
-        if (candidate.IsPrerelease && !IsPrerelease(installed)) return false;
+        if (candidate.IsPrerelease && !updater.AllowsPrerelease) return false;
 
         return PrereleaseSemver.IsNewer(candidate.Version, installed);
-    }
-
-    static bool IsPrerelease(string version) {
-        var core = version.Split('+', 2)[0];
-        return core.Contains('-');
     }
 
     public void Start() {
@@ -96,12 +111,49 @@ public sealed class UpdateCoordinator {
 
     /// The tray item's action: a check while idle, the restart once a package is ready.
     public Task RunMenuActionAsync() {
-        if (Ready is { } ready) {
+        if (Offerable is { } ready) {
             RequestRestart(ready);
             return Task.CompletedTask;
         }
 
         return CheckAsync(manual: true);
+    }
+
+    /// The app menu's item, whose label never changes: a manual check while idle, the ready prompt
+    /// again once a package is downloaded.
+    public async Task CheckForUpdatesAsync() {
+        if (Offerable is not { } ready) {
+            await CheckAsync(manual: true).ConfigureAwait(false);
+            return;
+        }
+        try {
+            await OfferOnceAsync(ready).ConfigureAwait(false);
+        } catch (OperationCanceledException) { }
+    }
+
+    /// A silent check now, after a change to which builds this install is offered. A downloaded
+    /// package the change made ineligible stops being offered.
+    public Task RecheckAsync() {
+        if (!_updater.IsAvailable) return Task.CompletedTask;
+        if (Ready is { } ready && !IsEligible(_updater, ready)) Withdraw(ready);
+        lock (_lock) {
+            // A check already running read the feed under the old choice, so this one runs after it.
+            if (_inflight is { IsCompleted: false } running) return CheckAfterAsync(running);
+            return CheckAsync(manual: false);
+        }
+    }
+
+    async Task CheckAfterAsync(Task running) {
+        await running.ConfigureAwait(false);
+        await CheckAsync(manual: false).ConfigureAwait(false);
+    }
+
+    UpdateCandidate? Offerable => Ready is { } ready && IsEligible(_updater, ready) ? ready : null;
+
+    void Withdraw(UpdateCandidate ready) {
+        if (Interlocked.CompareExchange(ref _ready, null, ready) != ready) return;
+        _log?.Write("update_withdrawn", ("to", ready.Version));
+        _menu.OnNext(new UpdateMenuItem(true, CheckLabel));
     }
 
     /// Called by the shutdown sequence immediately before the platform shutdown call, so the
@@ -112,7 +164,19 @@ public sealed class UpdateCoordinator {
             pending = _pendingApply;
             _pendingApply = null;
         }
-        if (pending is not null) _updater.ApplyOnExit(pending);
+        if (pending is null) return;
+        // The beta choice can change between accepting the restart and the exit.
+        if (!IsEligible(_updater, pending)) {
+            _log?.Write("update_withdrawn", ("to", pending.Version), ("stage", "on_exit"));
+            return;
+        }
+        try {
+            _handingOver?.Invoke(pending);
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"kcap: could not record the update handover: {ex.Message}");
+        }
+        _log?.Write("update_apply_on_exit", ("from", _updater.InstalledVersion), ("to", pending.Version));
+        _updater.ApplyOnExit(pending);
     }
 
     async Task RunScheduleAsync() {
@@ -120,7 +184,6 @@ public sealed class UpdateCoordinator {
             await Task.Delay(_initialDelay, _time, _lifetime).ConfigureAwait(false);
             while (!_lifetime.IsCancellationRequested) {
                 await CheckAsync(manual: false).ConfigureAwait(false);
-                if (Ready is not null) return;
                 await Task.Delay(_interval, _time, _lifetime).ConfigureAwait(false);
             }
         } catch (OperationCanceledException) { }
@@ -139,33 +202,69 @@ public sealed class UpdateCoordinator {
     }
 
     async Task RunCheckAsync(bool manual) {
+        var stage = "check";
         try {
             if (Ready is { } ready) {
-                if (manual) await ReportAsync($"kcap {ready.Version} is ready to install.").ConfigureAwait(false);
-                return;
+                if (IsEligible(_updater, ready)) {
+                    if (manual) await ReportAsync($"kcap {ready.Version} is ready to install.").ConfigureAwait(false);
+                    return;
+                }
+                // The beta choice changed as this package was published, past RecheckAsync's withdrawal.
+                Withdraw(ready);
             }
 
             var candidate = await _updater.CheckAsync(_lifetime).ConfigureAwait(false);
             if (candidate is null) {
+                if (manual) _log?.Write("update_check", ("result", "up_to_date"), ("manual", "true"));
                 if (ConsumeManual(manual)) await ReportAsync($"You're up to date ({_updater.InstalledVersion}).").ConfigureAwait(false);
                 return;
             }
 
+            _log?.Write("update_available", ("from", _updater.InstalledVersion), ("to", candidate.Version), ("manual", manual ? "true" : "false"));
+            stage = "download";
             await _updater.DownloadAsync(candidate, _lifetime).ConfigureAwait(false);
-            Ready = candidate;
+            _log?.Write("update_downloaded", ("to", candidate.Version));
+            stage = "prompt";
+            Interlocked.Exchange(ref _ready, candidate);
+            // The beta choice can change while the package downloads.
+            if (!IsEligible(_updater, candidate)) {
+                Withdraw(candidate);
+                ConsumeManual(manual);
+                return;
+            }
             _menu.OnNext(new UpdateMenuItem(true, $"Restart to update to {candidate.Version}"));
 
-            var prompt = new LifecyclePrompt(
-                LifecyclePrompt.KindUpdateReady, candidate.Version, _updater.InstalledVersion, false,
-                ReadyDisclosure(OperatingSystem.IsWindows()));
-            var accepted = await _surface.ConfirmAsync(prompt, _lifetime).ConfigureAwait(false);
+            await OfferOnceAsync(candidate).ConfigureAwait(false);
             ConsumeManual(manual);
-            if (accepted) RequestRestart(candidate);
         } catch (OperationCanceledException) {
         } catch (Exception ex) {
-            Console.Error.WriteLine($"kcap: update check failed: {ex.Message}");
-            if (ConsumeManual(manual)) await ReportAsync("Could not check for updates. Try again later.").ConfigureAwait(false);
+            Console.Error.WriteLine($"kcap: update {stage} failed: {ex.Message}");
+            _log?.Write("update_failed", ("stage", stage), ("manual", manual ? "true" : "false"), ("error", ex.Message));
+            if (ConsumeManual(manual))
+                await ReportAsync(stage == "download"
+                    ? "The update could not be downloaded. Try again later."
+                    : "Could not check for updates. Try again later.").ConfigureAwait(false);
         }
+    }
+
+    /// One ready prompt at a time: a caller arriving while it is open joins it rather than queueing
+    /// another behind it.
+    Task OfferOnceAsync(UpdateCandidate candidate) {
+        lock (_lock) {
+            if (_offer is { IsCompleted: false } open) return open;
+            _offer = OfferAsync(candidate);
+            return _offer;
+        }
+    }
+
+    async Task OfferAsync(UpdateCandidate candidate) {
+        var prompt = new LifecyclePrompt(
+            LifecyclePrompt.KindUpdateReady, candidate.Version, _updater.InstalledVersion, false,
+            ReadyDisclosure(OperatingSystem.IsWindows()));
+        var accepted = await _surface.ConfirmAsync(prompt, _lifetime).ConfigureAwait(false);
+        _log?.Write(accepted ? "update_accepted" : "update_deferred", ("to", candidate.Version));
+        // The beta choice can change while the prompt is open.
+        if (accepted && Offerable == candidate) RequestRestart(candidate);
     }
 
     bool ConsumeManual(bool manual) {

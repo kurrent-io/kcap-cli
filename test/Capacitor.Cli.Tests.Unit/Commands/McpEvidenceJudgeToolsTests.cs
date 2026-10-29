@@ -294,8 +294,9 @@ public class McpEvidenceJudgeToolsTests : IDisposable {
 
     [Test]
     public async Task An_http_timeout_is_a_retryable_unreachable_error() {
-        _stub.Route("GET", "evidence-turns", 200, EvidenceServerStub.TurnsPage(Root, [(0, 0, 4)]), delay: TimeSpan.FromSeconds(10));
-        using var http  = new HttpClient { Timeout = TimeSpan.FromMilliseconds(500) };
+        // What HttpClient.Timeout throws, raised on the one route: a real timeout would also bound the follow-up call.
+        var timedOut = new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout", new TimeoutException());
+        using var http  = new HttpClient(new ThrowingOn("evidence-turns", timedOut));
         using var tools = Tools(http: http);
 
         var (text, isError) = await tools.CallAsync("list_turns", Args($$"""{"source":"{{Root}}"}"""), CancellationToken.None);

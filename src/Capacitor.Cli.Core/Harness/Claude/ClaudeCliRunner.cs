@@ -16,10 +16,15 @@ record ClaudeCliResult(
         int     NumTurns
     );
 
-/// <summary>Outcome of <see cref="ClaudeCliRunner.RunDetailedAsync"/>: exactly one of
-/// <see cref="Result"/> and <see cref="Failure"/> is set. <see cref="Subtype"/> is the result
-/// envelope's <c>subtype</c> when the run failed with one.</summary>
-readonly record struct ClaudeCliOutcome(ClaudeCliResult? Result, ClaudeCliFailure? Failure, string? Subtype = null);
+/// <summary>Outcome of a headless runner: exactly one of <see cref="Result"/> and <see cref="Failure"/>
+/// is set. <see cref="Usage"/> is what a failed run reported before it stopped, null when it reported
+/// nothing. <see cref="Subtype"/> is the result envelope's <c>subtype</c> when the run failed with one.</summary>
+readonly record struct ClaudeCliOutcome(
+        ClaudeCliResult?  Result,
+        ClaudeCliFailure? Failure,
+        ClaudeCliUsage?   Usage   = null,
+        string?           Subtype = null
+    );
 
 enum ClaudeCliFailure {
     /// <summary>The internal per-call timeout elapsed; the subprocess was killed.</summary>
@@ -29,8 +34,11 @@ enum ClaudeCliFailure {
     ProcessFailure,
     /// <summary>The process exited zero but produced no parseable result.</summary>
     OutputUnparseable,
-    /// <summary>The run stopped at <c>--max-budget-usd</c> (an <c>error_max_budget_usd</c> envelope).</summary>
-    SpendBudget
+    /// <summary>The run stopped at a spend cap: <c>--max-budget-usd</c> (an <c>error_max_budget_usd</c>
+    /// envelope), or the account's usage limit or quota.</summary>
+    SpendBudget,
+    /// <summary>The vendor rejected the run's credentials, or found none.</summary>
+    NotSignedIn
 }
 
 static class ClaudeCliRunner {
@@ -233,10 +241,10 @@ static class ClaudeCliRunner {
         ) {
         // Resolve rather than pass "claude" verbatim: CreateProcess appends only .exe, so the
         // npm-installed claude.cmd shim on Windows would never be found.
-        var exePath = harnesses.ResolveExecutable(HarnessId.Claude);
+        var exePath = harnesses.ResolveLaunchable(HarnessId.Claude);
 
         if (exePath is null) {
-            log("claude not found on PATH");
+            log("claude not found on PATH or in the desktop app");
 
             return new(null, ClaudeCliFailure.ProcessFailure);
         }
@@ -251,7 +259,7 @@ static class ClaudeCliRunner {
             CreateNoWindow         = true,
             Environment = {
                 // Prevent the headless claude session from triggering kcap hooks (avoids infinite loop)
-                ["KCAP_SKIP"] = "1"
+                [HostedAgent.SkipVar] = "1"
             }
         };
         psi.Environment.Remove("CLAUDECODE");
@@ -408,8 +416,8 @@ static class ClaudeCliRunner {
             subtype = doc.RootElement.Str("subtype");
         } catch (JsonException) { }
 
-        if (subtype == "error_max_budget_usd") return new(null, ClaudeCliFailure.SpendBudget, subtype);
-        return new(null, nonZeroExit ? ClaudeCliFailure.ProcessFailure : ClaudeCliFailure.OutputUnparseable, subtype);
+        if (subtype == "error_max_budget_usd") return new(null, ClaudeCliFailure.SpendBudget, Subtype: subtype);
+        return new(null, nonZeroExit ? ClaudeCliFailure.ProcessFailure : ClaudeCliFailure.OutputUnparseable, Subtype: subtype);
     }
 
     /// <summary>

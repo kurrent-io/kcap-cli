@@ -93,8 +93,7 @@ public class CloudTerminalSinkTests {
         rig.Mirror.OnSend = (_, _) => {
             if (Interlocked.Decrement(ref fails) < 0) return Task.CompletedTask;
 
-            rig.Mirror.Ready = false;
-            _ = Task.Delay(20, CancellationToken.None).ContinueWith(_ => rig.Mirror.Ready = true, TaskScheduler.Default);
+            rig.Mirror.DropUntilNoticed();
 
             throw new InvalidOperationException("transport down");
         };
@@ -104,9 +103,6 @@ public class CloudTerminalSinkTests {
         rig.Emit("b");
         rig.Emit("c");
 
-        // Wait for the held chunks to actually land before stopping: a stop issued while a chunk
-        // is mid-retry now gives up on it the instant it next finds the connection not ready
-        // (the sink is already completing), racing the very recovery this test exercises.
         await WaitHarness.PollUntilAsync(() => rig.Mirror.Sent.Count == 3);
         await rig.Sink.StopAsync(HangGuard).WaitAsync(HangGuard);
 

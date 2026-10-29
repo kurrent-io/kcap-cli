@@ -21,13 +21,19 @@ sealed class PollingServiceVerify(
         TimeProvider time,
         Func<bool>? profileViable = null,
         TimeSpan? forwardBudget = null,
-        Func<string, CancellationToken, Task<AdmissionFenceAcquireResult>>? acquireFence = null) {
+        Func<string, CancellationToken, Task<AdmissionFenceAcquireResult>>? acquireFence = null,
+        Func<string, TimeSpan, Task>? endDaemon = null,
+        bool endsManualOwner = false) {
     static readonly TimeSpan LockWait     = TimeSpan.FromSeconds(10);
     static readonly TimeSpan FenceWait    = TimeSpan.FromSeconds(3);
     static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(500);
     static readonly TimeSpan KillWait     = TimeSpan.FromSeconds(5);
 
     readonly TimeSpan _forwardBudget = forwardBudget ?? ServiceVerify.DefaultForwardBudget;
+
+    /// <summary>Asks a daemon to end its agents and exit, within the wait it is given</summary>
+    readonly Func<string, TimeSpan, Task> _endDaemon = endDaemon ?? (async (name, wait) =>
+        await Commands.DaemonShutdownClient.StopAndWaitAsync(store, name, new ShutdownRequestDto("end", "final"), wait, time, CancellationToken.None));
 
     readonly Func<string, CancellationToken, Task<AdmissionFenceAcquireResult>> _acquireFence =
         acquireFence ?? ((name, ct) => AdmissionFenceClient.AcquireAsync(store, name, FenceWait, time, ct));
@@ -63,10 +69,16 @@ sealed class PollingServiceVerify(
             return Fail(VerifyExit.Contended, VerifyExit.ContendedToken);
 
         var pre = manager.Query(id);
+        if (pre.Probe == LabelProbe.Unknown) return Unanswered(id);
         if (!replace && (pre.Probe == LabelProbe.Loaded || pre.UnitPresent))
             return Fail(VerifyExit.Contended, VerifyExit.ContendedToken);
 
         if (replace && pre.Probe == LabelProbe.Loaded && !await StopConfirmedAsync(id))
+            return Fail(VerifyExit.StopUnconfirmed, VerifyExit.StopUnconfirmedToken);
+
+        // A daemon started by hand holds the name with no unit to stop it: left running, the service's own
+        // daemon would only be refused the name and the install would time out.
+        if (replace && endsManualOwner && pre.Probe != LabelProbe.Loaded && validatedDaemonPid(id) is not null && !await EndManualOwnerAsync(id))
             return Fail(VerifyExit.StopUnconfirmed, VerifyExit.StopUnconfirmedToken);
 
         string? installError;
@@ -86,7 +98,10 @@ sealed class PollingServiceVerify(
 
         if (retireServiceId is null) return VerifyExit.Ok;
 
-        if (fence is not null && !await fence.CommitAsync(FenceWait, CancellationToken.None)) {
+        // A manager whose install ended the old daemon has nothing left to fence; under any other, a daemon that
+        // is merely absent may be its supervisor's relaunch on the way.
+        if (fence is not null && !await fence.CommitAsync(FenceWait, CancellationToken.None)
+            && !(manager.InstallEndsReplacedDaemon && validatedDaemonPid(retireServiceId) is null)) {
             await fence.AbortAsync(FenceWait, CancellationToken.None);
             return RetireRefusal("fence_unavailable");
         }
@@ -121,6 +136,8 @@ sealed class PollingServiceVerify(
             return (RetireRefusal("unit_unknown"), true, null);
         }
 
+        // Its state says nothing when the supervisor did not answer, so it can be neither fenced nor called stopped.
+        if (old.Probe == LabelProbe.Unknown) return (RetireRefusal("unit_unknown"), true, null);
         if (old.Probe != LabelProbe.Loaded && !old.UnitPresent) return (null, false, null);
 
         IReadOnlyDictionary<string, string>? retiredEnv;
@@ -154,7 +171,9 @@ sealed class PollingServiceVerify(
         using var txn = await ServiceTxnLock.TryAcquireAsync(store, id, LockWait, time);
         if (txn is null) return Fail(VerifyExit.Contended, VerifyExit.ContendedToken);
 
-        if (manager.Query(id).Probe != LabelProbe.Loaded) {
+        var probe = manager.Query(id).Probe;
+        if (probe == LabelProbe.Unknown) return Unanswered(id);
+        if (probe != LabelProbe.Loaded) {
             Say($"Service '{id}' is not installed.");
             return 1;
         }
@@ -207,6 +226,16 @@ sealed class PollingServiceVerify(
         return true;
     }
 
+    async Task<bool> EndManualOwnerAsync(string id) {
+        await _endDaemon(id, KillWait);
+        var deadline = time.GetUtcNow() + KillWait;
+        while (validatedDaemonPid(id) is not null) {
+            if (time.GetUtcNow() >= deadline) return false;
+            await Task.Delay(PollInterval, time, CancellationToken.None);
+        }
+        return true;
+    }
+
     int RollBackInstall(string id, int reasonExit, string reasonToken) {
         if (!manager.Uninstall(id, out var error)) {
             Say($"uninstall: {error}");
@@ -222,6 +251,12 @@ sealed class PollingServiceVerify(
     static int RetireRefusal(string reason) {
         Say($"retire_reason={reason}");
         return Fail(VerifyExit.RetireRefused, VerifyExit.RetireRefusedToken);
+    }
+
+    // Nothing is known about the unit, so neither installing over it nor starting it is safe to attempt.
+    int Unanswered(string id) {
+        Say($"query: {manager.Describe()} did not report the state of '{id}'");
+        return Fail(VerifyExit.Contended, VerifyExit.ContendedToken);
     }
 
     static int Fail(int exit, string token) {

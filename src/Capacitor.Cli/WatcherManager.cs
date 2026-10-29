@@ -74,7 +74,7 @@ public sealed partial class WatcherManager(
     /// them for a retry to find; see <see cref="DeleteHeartbeatFiles"/> for why the spawn lock is
     /// intentionally left behind here.
     /// </summary>
-    public async Task<bool> KillWatcher(string key) {
+    public async Task<bool> KillWatcher(string key, TextWriter? stderr = null) {
         var pidFile = paths.PidFile(key);
 
         if (!File.Exists(pidFile)) {
@@ -84,7 +84,7 @@ public sealed partial class WatcherManager(
             return false;
         }
 
-        if (await KillProcess(key, pidFile) is not { } killed) return false;
+        if (await KillProcess(key, pidFile, stderr ?? Console.Error) is not { } killed) return false;
 
         try { File.Delete(pidFile); } catch {
             /* ignore */
@@ -97,14 +97,14 @@ public sealed partial class WatcherManager(
 
     /// <summary>True once no watcher for <paramref name="key"/> can still be running: killed, or gone
     /// already. False keeps its pid file, so calling again retries the kill.</summary>
-    public async Task<bool> TryStopWatcher(string key) {
-        await KillWatcher(key);
+    public async Task<bool> TryStopWatcher(string key, TextWriter? stderr = null) {
+        await KillWatcher(key, stderr);
 
         return !File.Exists(paths.PidFile(key));
     }
 
     /// <summary>True when killed, false when the watcher is conclusively gone, null when it may still be running.</summary>
-    async Task<bool?> KillProcess(string key, string pidFile) {
+    async Task<bool?> KillProcess(string key, string pidFile, TextWriter stderr) {
         int? pid   = null;
         var  token = "";
 
@@ -124,7 +124,7 @@ public sealed partial class WatcherManager(
             // watcher died and the OS recycled its pid onto an unrelated process — sweep the
             // stale file, never signal. A missing/uncomparable token falls through to the kill.
             if (token.Length > 0 && ProcessStartToken.Matches(parsed, token) == false) {
-                await Console.Error.WriteLineAsync($"Watcher {key} (PID {parsed}) was recycled by another process; sweeping stale pid file");
+                await stderr.WriteLineAsync($"Watcher {key} (PID {parsed}) was recycled by another process; sweeping stale pid file");
 
                 return false;
             }
@@ -144,27 +144,27 @@ public sealed partial class WatcherManager(
 
                 try {
                     await process.WaitForExitAsync(cts.Token);
-                    await Console.Error.WriteLineAsync($"Watcher {key} (PID {parsed}) exited gracefully");
+                    await stderr.WriteLineAsync($"Watcher {key} (PID {parsed}) exited gracefully");
                 } catch (OperationCanceledException) {
                     // Force kill if it didn't exit in time
                     process.Kill(entireProcessTree: true);
-                    await Console.Error.WriteLineAsync($"Watcher {key} (PID {parsed}) force-killed after timeout");
+                    await stderr.WriteLineAsync($"Watcher {key} (PID {parsed}) force-killed after timeout");
                 }
 
                 return true;
             } catch (ArgumentException) {
-                await Console.Error.WriteLineAsync($"Watcher {key} (PID {parsed}) already exited");
+                await stderr.WriteLineAsync($"Watcher {key} (PID {parsed}) already exited");
 
                 return false;
             }
         } catch (Exception ex) {
             if (pid is { } known && IsGone(known, token)) {
-                await Console.Error.WriteLineAsync($"Watcher {key} (PID {known}) exited while being killed");
+                await stderr.WriteLineAsync($"Watcher {key} (PID {known}) exited while being killed");
 
                 return false;
             }
 
-            await Console.Error.WriteLineAsync($"Error killing watcher {key}: {ex.Message}; keeping its pid file");
+            await stderr.WriteLineAsync($"Error killing watcher {key}: {ex.Message}; keeping its pid file");
 
             return null;
         }
@@ -192,7 +192,7 @@ public sealed partial class WatcherManager(
     /// child its final drain; its 5s force-kill bound keeps a wedged child from stalling the caller.
     /// </summary>
     public Task KillWatchers(IEnumerable<string> keys) =>
-        Task.WhenAll(keys.Select(KillWatcher));
+        Task.WhenAll(keys.Select(key => KillWatcher(key)));
 
     /// <summary>
     /// Retires this watcher's own pid file (+ heartbeat markers) on graceful exit, but only while
@@ -308,7 +308,8 @@ public sealed partial class WatcherManager(
             string? cwd               = null,
             bool    skipTitle         = false,
             string  vendor            = "claude",
-            int?    parentPid         = null
+            int?    parentPid         = null,
+            TextWriter? stderr        = null
         ) {
         if (agentId is null) ClaimAgentProcess(key, vendor, transcriptPath, cwd);
 
@@ -328,17 +329,20 @@ public sealed partial class WatcherManager(
                 // Alive but its heartbeat is stale: wedged. A watcher the reap could not stop
                 // keeps its pid file; spawning over it would leave two watchers on this key, the
                 // first one unaddressable. A later call retries the reap.
-                await Console.Error.WriteLineAsync($"Watcher {key} heartbeat stale; reaping wedged watcher and respawning");
+                var log = stderr ?? Console.Error;
+                await log.WriteLineAsync($"Watcher {key} heartbeat stale; reaping wedged watcher and respawning");
 
-                if (!await TryStopWatcher(key)) {
-                    await Console.Error.WriteLineAsync($"Watcher {key} could not be stopped; not respawning");
+                if (!await TryStopWatcher(key, log)) {
+                    await log.WriteLineAsync($"Watcher {key} could not be stopped; not respawning");
 
                     return;
                 }
             }
 
             await spawner.SpawnAsync(
-                new WatcherSpawnRequest(key, transcriptPath, agentId, sessionIdOverride, cwd, skipTitle, vendor, parentPid));
+                new WatcherSpawnRequest(key, transcriptPath, agentId, sessionIdOverride, cwd, skipTitle, vendor, parentPid) {
+                    Stderr = stderr,
+                });
         });
     }
 
@@ -347,10 +351,13 @@ public sealed partial class WatcherManager(
     public void ClaimAgentProcess(string key, string vendor, string? transcriptPath = null, string? cwd = null) {
         if (AgentSessions.HostsOneSession(vendor) && SessionId.Parse(key) is { } session
          && ProcessHelpers.GetCodingAgentPid(vendor, allowFallback: false) is { } agentPid)
-            AgentSessions.OnThisMachine(config).Claim(agentPid, session, new ClaimOrigin(vendor, Url, transcriptPath, cwd));
+            AgentSessions.OnThisMachine(config).Claim(agentPid, session, OriginOf(vendor, transcriptPath, cwd, HostedAgent.FromEnvironment()));
     }
 
-    public void SpawnWhatsDoneGenerator(string sessionId, string vendor = "claude") {
+    ClaimOrigin OriginOf(string vendor, string? transcriptPath, string? cwd, HostedAgent hosted) =>
+        new(vendor, Url, transcriptPath, cwd, hosted.AgentId, hosted.DaemonEpoch);
+
+    public void SpawnWhatsDoneGenerator(string sessionId, string vendor = "claude", TextWriter? stderr = null) {
         try {
             var kcapPath = Environment.ProcessPath ?? "kcap";
 
@@ -377,14 +384,14 @@ public sealed partial class WatcherManager(
             // Don't let this detached child inherit the agent's pipe descriptors —
             // same pipe-leak hazard as the watcher spawn above.
             if (starter.StartDetached(psi) is not { } pid) {
-                Console.Error.WriteLine($"Failed to spawn what's-done generator for {sessionId}");
+                (stderr ?? Console.Error).WriteLine($"Failed to spawn what's-done generator for {sessionId}");
 
                 return;
             }
 
-            Console.Error.WriteLine($"Spawned what's-done generator for {sessionId} (PID {pid})");
+            (stderr ?? Console.Error).WriteLine($"Spawned what's-done generator for {sessionId} (PID {pid})");
         } catch (Exception ex) {
-            Console.Error.WriteLine($"Failed to spawn what's-done generator for {sessionId}: {ex.Message}");
+            (stderr ?? Console.Error).WriteLine($"Failed to spawn what's-done generator for {sessionId}: {ex.Message}");
         }
     }
 

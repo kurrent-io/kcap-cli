@@ -26,12 +26,14 @@ public class RemoteSessionViewModelTests {
         public readonly FakePermissionService Permissions = new();
         public readonly FakeAgentDirectory Directory = new();
         public readonly AgentActionService Actions;
+        public readonly RecordingOpener Opener = new();
         public readonly FakeTimeProvider Time = new();
         public SessionDetailFetch Detail = new(RemoteFixtures.Detail());
 
         public Harness() {
-            Actions = new AgentActionService(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener(),
-                new ReplaySubject<Cli.Core.LocalIpc.DaemonStatusDto>(1), CancellationToken.None, NeverConfirm.Confirm, lane: Lane);
+            Actions = new AgentActionService(new ScriptedLocalControlOps(), new RecordingNotifier(), Opener,
+                new ReplaySubject<Cli.Core.LocalIpc.DaemonStatusDto>(1), CancellationToken.None, NeverConfirm.Confirm,
+                fallbackServerUrl: "https://a.kcap.ai", lane: Lane);
             Access = new SessionAccessService(Lane, Time);
             Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: "u1", Epoch: 1));
         }
@@ -42,11 +44,26 @@ public class RemoteSessionViewModelTests {
                 Vendor = vendor, OwnerUserId = "u1", RegisteredAt = DateTime.UtcNow,
             });
 
+        /// A row the server lists with no daemon behind it: ended, or live in a terminal.
+        public static AgentRow ServerRow(string sessionId = "s1", string status = "ended", bool hosted = false) =>
+            AgentRow.FromServer(new Capacitor.Remote.Models.RepoSessionDto {
+                SessionId = sessionId, Status = status, AccessLevel = "full", Vendor = "claude", Title = "Desktop app RAM growth",
+                Owner = new() { UserId = "u1", DisplayName = "Alexey" },
+                StartedAt = DateTimeOffset.UnixEpoch, LastActivityAt = DateTimeOffset.UnixEpoch.AddHours(1),
+                EndedAt = status == "ended" ? DateTimeOffset.UnixEpoch.AddHours(1) : null,
+                Repo = new() { Hash = "h", Owner = "kurrent-io", Name = "kcap-cli" },
+            }, hosted);
+
+        public readonly FakeRemoteAgents Remote = new();
+        public readonly FakeServerSessionsService Sessions = new();
+        public readonly RecordingNotifier Notifier = new();
+
         public RemoteSessionViewModel Build(AgentRow row, IPlanArtifactSource? planArtifacts = null,
                 Capacitor.Cli.Core.PullRequests.IPullRequestSource? pullRequests = null, IPlanSource? plans = null,
-                BackgroundCommandActivity? commands = null, SubagentEventsReader? readSubagent = null) {
+                BackgroundCommandActivity? commands = null, SubagentEventsReader? readSubagent = null, AccountReadings? readings = null) {
             Directory.Rows.AddOrUpdate(row);
-            return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), new RecordingOpener(), Time, WorkSource, () => new FakeTerminalSurface(), planArtifacts, commands, pullRequests: pullRequests, plans: plans, readSubagent: readSubagent);
+            return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), new RecordingOpener(), Time, WorkSource, () => new FakeTerminalSurface(), planArtifacts, commands, pullRequests: pullRequests, plans: plans, readSubagent: readSubagent, readings: readings,
+                remoteAgents: Remote, notifier: Notifier, serverSessions: Sessions);
         }
 
         /// One chat poll: the pane reads its feed on the timer this harness owns.
@@ -69,7 +86,70 @@ public class RemoteSessionViewModelTests {
             Access.Dispose();
             Permissions.Dispose();
             Directory.Dispose();
+            Remote.Dispose();
+            Sessions.Dispose();
         }
+    }
+
+    /// The strip's reading comes through the real gate: the service keeps the daemon's accounts,
+    /// so only the gate can take the bars away.
+    static (RemoteAgentsServiceTests.GateRig Rig, AccountReadings Readings) StripGate() {
+        var rig = new RemoteAgentsServiceTests.GateRig("work-mac");
+        rig.Accounts = [StripReadings.Remote("work-mac", StripReadings.Reading(StripReadings.Window(300, 42, TimeSpan.FromHours(2))))];
+        var readings = new AccountReadings(
+            Observable.Return<Capacitor.Cli.Core.Accounts.AccountsSnapshotDto?>(null), rig.Service.DrawableDaemonAccounts,
+            Observable.Return(StripReadings.Now));
+        return (rig, readings);
+    }
+
+    static AgentRow StripRow() => Harness.Row(vendor: "claude") with {
+        AccountDirectory = StripReadings.Directory, AccountId = "acc1", AccountLabel = "work",
+    };
+
+    [Test]
+    public async Task Remote_strip_drops_bars_on_lane_loss() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var (rig, readings) = StripGate();
+            using var _ = rig;
+            var vm = h.Build(StripRow(), readings: readings);
+            try {
+                rig.Connect();
+                await WaitUntilAsync(() => vm.Chat.ShowsAccountUsage, what: "the bars");
+                await Assert.That(vm.Chat.AccountStripUsage!.Bars[0].PercentText).IsEqualTo("42%");
+
+                rig.Lane.StatusSubject.OnNext(new(ServerLaneState.Retrying));
+                await WaitUntilAsync(() => !vm.Chat.ShowsAccountUsage, what: "the bars to go");
+
+                await Assert.That(rig.Retained()).IsEquivalentTo(["work-mac"]);
+                await Assert.That(vm.Chat.ShowsAccountDirectory).IsTrue();
+                await Assert.That(vm.Chat.AccountReadingNote).IsNull();
+            } finally { await vm.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    public async Task Remote_strip_drops_bars_when_the_daemon_leaves_and_reopens_after_a_fresh_fetch() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var (rig, readings) = StripGate();
+            using var _ = rig;
+            var vm = h.Build(StripRow(), readings: readings);
+            try {
+                rig.Connect();
+                await WaitUntilAsync(() => vm.Chat.ShowsAccountUsage, what: "the bars");
+
+                rig.Listing = [];
+                await rig.RelistAsync();
+                await WaitUntilAsync(() => !vm.Chat.ShowsAccountUsage, what: "the bars to go");
+                await Assert.That(rig.Retained()).IsEquivalentTo(["work-mac"]);
+                await Assert.That(vm.Chat.ShowsAccountDirectory).IsTrue();
+
+                rig.Listing = [RemoteAgentsServiceTests.Host("work-mac", connectedAt: RemoteAgentsServiceTests.FirstConnect.AddMinutes(5))];
+                await rig.RelistAsync();
+                await WaitUntilAsync(() => vm.Chat.ShowsAccountUsage, what: "the bars to return");
+            } finally { await vm.TeardownAsync(); }
+        });
     }
 
     [Test]
@@ -321,6 +401,20 @@ public class RemoteSessionViewModelTests {
         });
     }
 
+    /// The branch is what lets the PR readers find a PR opened since the listing was read.
+    [Test]
+    public async Task A_listed_sessions_branch_reaches_the_pr_readers() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var prs = new FakePullRequestSource(h.Time);
+            var vm = h.Build(Harness.ServerRow("s1", "active") with { Branch = "feature/x" }, pullRequests: prs);
+            vm.PullRequests!.SetForeground(true);
+            await WaitUntilAsync(() => prs.Descriptions.Count > 0, what: "session described");
+            await Assert.That(prs.Descriptions[^1].Branch).IsEqualTo("feature/x");
+            await vm.TeardownAsync();
+        });
+    }
+
     [Test]
     [Arguments(false)]
     [Arguments(true)]
@@ -375,6 +469,78 @@ public class RemoteSessionViewModelTests {
             await Assert.That(source.Pages).IsEqualTo(pages);
             await Assert.That(vm.PullRequests.Section).IsEqualTo("checks");
             await Assert.That(vm.PullRequests.Rows).IsEquivalentTo(rows);
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// The directory already folded the owner through the account's aliases; the raw owner id is
+    /// an older spelling of the same viewer.
+    [Test]
+    public async Task A_server_row_the_listing_marks_as_the_viewers_reads_as_owned() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.ServerRow("s1") with { OwnerUserId = "legacy-id", OwnerIsViewer = true });
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+
+            await Assert.That(vm.Chat.UserTitle).IsEqualTo("You");
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task A_session_only_workspace_cannot_stop() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.ServerRow("s1", "active"));
+
+            await Assert.That(await vm.StopCommand.CanExecute.FirstAsync()).IsFalse();
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// The listing shares a teammate's session at the level the server grants; below full there is no
+    /// chat to subscribe to, and the note says so instead of reporting a lost access.
+    [Test]
+    public async Task A_shared_server_row_below_full_access_opens_without_a_chat_lease() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.ServerRow("s1") with { AccessLevel = "overview" });
+
+            await Task.Delay(100);
+            await Assert.That(vm.Access).IsEqualTo(RemoteSessionAccess.Denied);
+            await Assert.That(vm.AccessNote).Contains("overview");
+            await Assert.That(h.Lane.ChatSubscribes).DoesNotContain("s1");
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task Open_in_web_on_a_session_only_workspace_opens_the_session_page() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.ServerRow("s1"));
+
+            vm.OpenInWebCommand.Execute().Subscribe();
+
+            await Assert.That(h.Opener.Opened).Count().IsEqualTo(1);
+            await Assert.That(h.Opener.Opened[0]).IsEqualTo("https://a.kcap.ai/sessions/s1");
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// A terminal or ended session has no agent here to answer for it: its server-lane requests
+    /// render no card in the read-only chat.
+    [Test]
+    public async Task A_session_only_workspace_renders_no_permission_cards() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.ServerRow("s1", "active"));
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+
+            h.Permissions.Add(PermissionEntries.ServerEntry(sessionId: "s1"));
+
+            await Task.Delay(100);
+            await Assert.That(vm.Chat.Cards.HasPendingCards).IsFalse();
             await vm.TeardownAsync();
         });
     }
@@ -1200,6 +1366,208 @@ public class RemoteSessionViewModelTests {
 
             h.Time.Advance(WorkContextViewModel.PollInterval);
             await Assert.That(source.Requested.Count).IsEqualTo(answered);
+            await vm.TeardownAsync();
+        });
+    }
+
+    // ── session-only rows ──────────────────────────────────────────────────────────────────────
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_session_only_ended_row_acquires_its_lease_and_shows_the_chat() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.ServerRow());
+            var ended = false;
+            using var _ = vm.Ended.Subscribe(_ => ended = true);
+
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "lease established for an ended session");
+
+            await Assert.That(vm.IsSessionOnly).IsTrue();
+            await Assert.That(vm.ShowsStop).IsFalse();
+            await Assert.That(vm.Terminal).IsNull();
+            await Assert.That(vm.ShowsTerminalTab).IsFalse();
+            await Assert.That(vm.SessionEnded).IsTrue();
+            await Assert.That(vm.ShowsChatPane).IsTrue();
+            await Assert.That(vm.Chat.ShowsComposer).IsFalse();
+            await Assert.That(vm.Chat.ReadOnlyNotice).IsEqualTo(RemoteSessionViewModel.EndedNote);
+            await Assert.That(vm.RepoLabelText).IsEqualTo("kurrent-io/kcap-cli · Alexey");
+            await Assert.That(h.Lane.ChatSubscribes).Contains("s1");
+            await Assert.That(ended).IsFalse();
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_live_terminal_row_shows_the_terminal_note_and_no_composer() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.ServerRow(status: "active"));
+
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+
+            await Assert.That(vm.SessionEnded).IsFalse();
+            await Assert.That(vm.Chat.ReadOnlyNotice).IsEqualTo(RemoteSessionViewModel.TerminalNote);
+            await Assert.That(vm.Chat.ShowsComposer).IsFalse();
+            await Assert.That(vm.ShowsStop).IsFalse();
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_session_only_row_ending_keeps_the_lease_and_the_workspace() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.ServerRow(status: "active"));
+            var ended = false;
+            using var _ = vm.Ended.Subscribe(_ => ended = true);
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+
+            h.Directory.Rows.AddOrUpdate(Harness.ServerRow(status: "ended"));
+
+            await Assert.That(vm.SessionEnded).IsTrue();
+            await Assert.That(vm.Access).IsEqualTo(RemoteSessionAccess.Ready);
+            await Assert.That(h.Lane.ChatUnsubscribes).IsEmpty();
+            await Assert.That(vm.Chat.ReadOnlyNotice).IsEqualTo(RemoteSessionViewModel.EndedNote);
+            await Assert.That(ended).IsFalse();
+
+            // The row leaving the loaded set is not the session ending: the workspace stays bound.
+            h.Directory.Rows.RemoveKey("server:s1");
+            await Assert.That(vm.Access).IsEqualTo(RemoteSessionAccess.Ready);
+            await Assert.That(ended).IsFalse();
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_hosted_remote_row_keeps_todays_release_on_terminal_status() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.Row(status: "Completed"));
+
+            await Assert.That(vm.IsSessionOnly).IsFalse();
+            await Assert.That(vm.ShowsStop).IsTrue();
+            await Assert.That(vm.SessionEnded).IsTrue();
+            await Assert.That(h.Lane.AccessWatches).IsEmpty();
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task An_owned_row_shows_the_pencil_and_renames_through_the_server() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var calls = new List<(string, string, string)>();
+            h.Remote.Rename = (agent, session, title) => {
+                calls.Add((agent, session, title));
+                return Task.FromResult(new SessionRenameResult(true, "New name", null));
+            };
+            var vm = h.Build(Harness.Row());
+
+            await Assert.That(vm.TitleEditor.ShowsPencil).IsTrue();
+            await vm.TitleEditor.BeginEditCommand.Execute();
+            vm.TitleEditor.Draft = "New name";
+            await vm.TitleEditor.SaveCommand.Execute();
+
+            await Assert.That(calls).IsEquivalentTo(new[] { ("a1", "s1", "New name") });
+            await Assert.That(vm.TitleEditor.Title).IsEqualTo("New name");
+            await Assert.That(vm.TitleEditor.IsEditing).IsFalse();
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task Another_owners_row_shows_no_pencil() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var row = Harness.Row() with { OwnerUserId = "someone-else" };
+            var vm = h.Build(row);
+
+            await Assert.That(vm.TitleEditor.ShowsPencil).IsFalse();
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task A_row_without_a_session_shows_no_pencil() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.Row(sessionId: null));
+
+            await Assert.That(vm.TitleEditor.ShowsPencil).IsFalse();
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task An_ended_session_shows_no_pencil() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.Row());
+            await Assert.That(vm.TitleEditor.ShowsPencil).IsTrue();
+
+            h.Directory.Rows.AddOrUpdate(Harness.Row(status: "Completed"));
+            await WaitUntilAsync(() => vm.SessionEnded, what: "ended");
+            await Assert.That(vm.TitleEditor.ShowsPencil).IsFalse();
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task Signing_in_as_another_user_hides_the_pencil() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.Row());
+            await Assert.That(vm.TitleEditor.ShowsPencil).IsTrue();
+
+            h.Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: "u2", Epoch: 2));
+            await WaitUntilAsync(() => !vm.TitleEditor.ShowsPencil, what: "pencil hidden");
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// The listing's own record of the session: renamable by its owner whether or not it ended, and
+    /// the applied title reaches the listing at once.
+    [Test]
+    [Arguments("ended")]
+    [Arguments("active")]
+    public async Task An_owned_server_row_shows_the_pencil_and_renames_through_the_server(string status) {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var calls = new List<(string, string, string)>();
+            h.Remote.Rename = (agent, session, title) => {
+                calls.Add((agent, session, title));
+                return Task.FromResult(new SessionRenameResult(true, "New name", null));
+            };
+            var vm = h.Build(Harness.ServerRow("s1", status));
+
+            await Assert.That(vm.TitleEditor.ShowsPencil).IsTrue();
+            await vm.TitleEditor.BeginEditCommand.Execute();
+            vm.TitleEditor.Draft = "New name";
+            await vm.TitleEditor.SaveCommand.Execute();
+
+            await Assert.That(calls).IsEquivalentTo(new[] { ("s1", "s1", "New name") });
+            await Assert.That(h.Sessions.Renames).IsEquivalentTo(new[] { ("s1", "New name") });
+            await Assert.That(vm.TitleEditor.Title).IsEqualTo("New name");
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [Arguments("another owner", false)]
+    [Arguments("viewer alias", true)]
+    public async Task A_server_rows_pencil_follows_the_listings_owner(string owner, bool shows) {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var row = owner == "viewer alias"
+                ? Harness.ServerRow("s1") with { OwnerUserId = "legacy-id", OwnerIsViewer = true }
+                : Harness.ServerRow("s1") with { OwnerUserId = "someone-else" };
+            var vm = h.Build(row);
+
+            await Assert.That(vm.TitleEditor.ShowsPencil).IsEqualTo(shows);
             await vm.TeardownAsync();
         });
     }

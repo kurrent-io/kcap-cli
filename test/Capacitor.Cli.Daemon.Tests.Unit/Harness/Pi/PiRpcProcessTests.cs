@@ -77,18 +77,21 @@ public class PiRpcProcessTests {
         var lineA = new string('a', 20_000);
         var lineB = new string('b', 20_000);
 
-        var writeA = proc.WriteLineAsync(lineA, CancellationToken.None);
-        var writeB = proc.WriteLineAsync(lineB, CancellationToken.None);
-        await Task.WhenAll(writeA, writeB);
-
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        var enumerator = proc.ReadLinesAsync(cts.Token).GetAsyncEnumerator(cts.Token);
+        var writeA = proc.WriteLineAsync(lineA, cts.Token);
+        var writeB = proc.WriteLineAsync(lineB, cts.Token);
+
+        // Drain stdout while writing: cat can otherwise block on its full output pipe and
+        // stop reading stdin, leaving both sides waiting for the other to make progress.
+        await using var enumerator = proc.ReadLinesAsync(cts.Token).GetAsyncEnumerator(cts.Token);
 
         await Assert.That(await enumerator.MoveNextAsync()).IsTrue();
         var first = enumerator.Current;
 
         await Assert.That(await enumerator.MoveNextAsync()).IsTrue();
         var second = enumerator.Current;
+
+        await Task.WhenAll(writeA, writeB).WaitAsync(cts.Token);
 
         var received = new[] { first, second }.OrderBy((string s) => s, StringComparer.Ordinal).ToArray();
         var expected = new[] { lineA, lineB }.OrderBy((string s) => s, StringComparer.Ordinal).ToArray();

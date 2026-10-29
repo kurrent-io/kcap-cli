@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.LocalIpc;
@@ -122,14 +123,33 @@ internal interface IHostedAgentRuntimeFactory {
     /// probe has passed for the vendor and transport.</summary>
     bool SupportsRestartResume(string? runtimeTransport) => false;
 
+    /// <summary>Whether a flow-participant launch of this shape reopens its session across a daemon
+    /// restart: the reviewer shape (its MCP config, HOME, snapshot) is not the interactive one. Declared
+    /// only once a live probe of that exact shape has passed.</summary>
+    bool SupportsReviewerRestartResume(string? runtimeTransport, WorkLocation work) => false;
+
+    /// <summary>Whether a restart resume of an agent that was waiting for input can start with no prompt at all.
+    /// Only a runtime that judges the resume by its process, not by a first turn, may say so.</summary>
+    bool ResumesIdleWithoutPrompt(string? runtimeTransport) => false;
+
     /// <summary>The models this vendor can launch on this machine, or null when it publishes no
     /// catalog. Null is also every probe failure: consumers then fall through to their other sources
     /// instead of reading an empty list as "nothing usable".</summary>
     Task<IReadOnlyList<VendorModelOption>?> ProbeModelsAsync(CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<VendorModelOption>?>(null);
 
+    /// <summary>The catalog of the account whose config directory is <paramref name="configDirectory"/>;
+    /// null is the daemon's own default. A vendor whose catalog does not depend on the account answers
+    /// its one catalog.</summary>
+    Task<IReadOnlyList<VendorModelOption>?> ProbeModelsAsync(string? configDirectory, CancellationToken ct) =>
+        ProbeModelsAsync(ct);
+
     /// <summary>Files whose fingerprint change means the catalog may have changed. Statted, never read.</summary>
     IReadOnlyList<string> CatalogFingerprintPaths => [];
+
+    /// <summary><see cref="CatalogFingerprintPaths"/> for the account whose config directory is
+    /// <paramref name="configDirectory"/>; null is the daemon's own default.</summary>
+    IReadOnlyList<string> CatalogFingerprintPathsFor(string? configDirectory) => CatalogFingerprintPaths;
 
     /// <summary>Where this runtime's attachments land for a launch of <paramref name="kind"/>. The
     /// question is whether the process can be running, write-contained, while a fetch for it happens:
@@ -290,7 +310,12 @@ internal sealed record RuntimeStartContext(
         // The transport a resumed or continued agent ran on, from its ledger entry; a factory with
         // more than one transport starts it on that one. Null for a fresh launch.
         string?             RequestedTransport = null,
+        // The transport the server will validate this launch's registration against. Null from an
+        // older server. A ledger transport above outranks it.
+        string?             ExpectedRuntimeTransport = null,
         // Which of the agent's user messages the server has stored, answered by its transcript forwarder once
         // one is bound. Null for constructions predating this field.
-        Func<IAcpPersistenceProbe?>? PersistenceProbe = null
+        Func<IAcpPersistenceProbe?>? PersistenceProbe = null,
+        // Null for a vendor without accounts.
+        ResolvedAccount?    Account = null
     );

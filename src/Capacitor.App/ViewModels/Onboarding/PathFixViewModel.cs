@@ -15,19 +15,33 @@ public sealed class PathFixViewModel : ReactiveObject {
     bool    _cancelled;
     bool    _fixed;
     string? _message;
+    IReadOnlyList<DisclosureSpan> _plan = [];
 
     public PathFixViewModel(ICliPathInstaller installer, IAppStateStore store, string? target, Func<bool>? onLocalPath = null) {
         _installer   = installer;
         _store       = store;
         _target      = target;
         _onLocalPath = onLocalPath ?? (() => false);
+        if (target is not null) _ = DescribeAsync(target);
     }
 
     // An inconclusive PATH probe never offers an install.
     public static bool ComputeApplicable(bool hasInstaller, string? target, bool? kcapOnPath) =>
         hasInstaller && target is not null && kcapOnPath == false;
 
-    public string Disclosure => _installer.Disclosure;
+    /// What installing will do on this machine; empty until the installer has looked.
+    public IReadOnlyList<DisclosureSpan> Plan {
+        get => _plan;
+        private set => this.RaiseAndSetIfChanged(ref _plan, value);
+    }
+
+    async Task DescribeAsync(string target) {
+        try {
+            Plan = await _installer.DescribeAsync(target, CancellationToken.None).ConfigureAwait(true);
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            Plan = [new(_installer.Disclosure)];
+        }
+    }
 
     public bool Fixed {
         get => _fixed;

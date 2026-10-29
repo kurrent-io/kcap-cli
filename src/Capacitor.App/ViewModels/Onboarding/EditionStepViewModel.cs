@@ -10,19 +10,18 @@ namespace Capacitor.App.ViewModels.Onboarding;
 /// to Sign-in, Local to Install.
 /// </summary>
 public sealed class EditionStepViewModel : ReactiveObject, IWizardStep {
-    public const string LocalTitle = "For you, locally";
+    public const string LocalTitle = "Create a local workspace";
     public const string LocalDetail =
-        "For a machine one person uses, no account. The server is downloaded to this machine and runs there, so your sessions " +
-        "never leave it. Free.";
-    public const string CloudTitle = "For your team, cloud";
+        "Keep your sessions on this machine for your own use. The local edition is free. No account is needed.";
+    public const string CloudTitle = "Create a cloud workspace";
     public const string CloudDetail =
-        "A Team workspace on kcap.ai that your team shares. Sign in with your work account; Team is free for 60 days.";
-    public const string ExistingTitle = "Already have a workspace?";
+        "Share sessions with your team in a workspace hosted on kcap.ai. Start with a 60-day free trial of the Team plan.";
+    public const string ExistingTitle = "Sign in to a workspace";
     public const string ExistingDetail =
-        "Sign in to one you created on kcap.ai or a teammate invited you to";
+        "Connect to a workspace you created or one your team invited you to.";
     public const string UnsupportedPlatform = "The local edition isn't available on this platform yet.";
     public const string CloudProfilePresent =
-        "This Mac is set up for a cloud workspace. Moving it to local comes in a later release.";
+        "This machine is set up for a cloud workspace. Switching to local setup isn't supported yet.";
 
     readonly SetupFunnel   _funnel;
     readonly Func<string?> _localUnavailableReason;
@@ -47,7 +46,7 @@ public sealed class EditionStepViewModel : ReactiveObject, IWizardStep {
     }
 
     public WizardStepId Id                => WizardStepId.Edition;
-    public string       Title             => "How do you want to use kcap?";
+    public string       Title             => "Set up kcap";
     public string       Eyebrow           => "Get started";
     public bool         Applicable        => true;
     public bool         Satisfied         => true;

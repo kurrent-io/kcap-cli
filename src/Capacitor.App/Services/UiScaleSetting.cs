@@ -27,7 +27,6 @@ public sealed class UiScaleSetting {
         if (next == _changes.Value) return Task.CompletedTask;
 
         _changes.OnNext(next);
-        // Off the caller's thread: an uncontended store reads and writes the file before its first await.
-        return Task.Run(() => _store.UpdateAsync(state => state with { UiScale = _changes.Value }));
+        return _store.UpdateAsync(state => state with { UiScale = _changes.Value });
     }
 }

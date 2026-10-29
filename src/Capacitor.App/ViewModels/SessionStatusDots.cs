@@ -47,6 +47,7 @@ public static class SessionStatusDots {
             requester: row.RequesterDisplay, borrowedFrom: row.BorrowedFrom, answerExpected: answerExpected,
             model: row.Model is { Length: > 0 } known ? HostedHarnessCatalog.ModelLabelFor(row.Vendor, known) : null,
             harness: string.IsNullOrEmpty(row.Vendor) ? null : HostedHarnessCatalog.LabelFor(row.Vendor),
+            ended: row.IsEndedSession,
             liveCommands: liveCommands,
             terminalDialog: row.TerminalDialog is not null, interruption: row.Interruption, agentId: row.Id);
 
@@ -57,7 +58,8 @@ public static class SessionStatusDots {
             string? usageLimitSummary, string? launchStage, string? elapsed,
             string? requester = null, string? borrowedFrom = null, bool answerExpected = false,
             string? model = null, string? harness = null, bool ended = false, int liveCommands = 0,
-            bool terminalDialog = false, string? interruption = null, string? agentId = null) {
+            bool terminalDialog = false, string? interruption = null, string? agentId = null,
+            bool turnAttested = false) {
         var kind =
             status == "Failed" ? AgentStatusKind.Failed
             : answerExpected ? AgentStatusKind.Answer
@@ -112,7 +114,9 @@ public static class SessionStatusDots {
         Add(facts, requester, "Requester");
         Add(facts, borrowedFrom, "Borrowed from");
         return new AgentStatusPresentation(kind, label, FormatTip(facts),
-            kind is AgentStatusKind.Working or AgentStatusKind.Starting or AgentStatusKind.Resuming, facts) { Ended = ended };
+            kind is AgentStatusKind.Working or AgentStatusKind.Starting or AgentStatusKind.Resuming, facts) {
+            Ended = ended, InForegroundTurn = kind == AgentStatusKind.Working && turnAttested,
+        };
     }
 
     static void Add(List<AgentStatusFact> facts, string? text, string? caption = null) {

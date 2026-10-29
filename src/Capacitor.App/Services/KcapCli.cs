@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Capacitor.App.Services.LocalSetup;
+using Capacitor.App.Services.Mutation;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 
@@ -8,10 +9,13 @@ namespace Capacitor.App.Services;
 
 /// The subset of Capacitor.Cli.Commands.ServiceStatusJson the app reads; snake_case on the wire.
 /// `LoadedSpawnType` is launchd's word for the loaded job, null when the label is not loaded or the
-/// CLI predates the field; read it through SpawnTypes.
+/// CLI predates the field; read it through SpawnTypes. The `Txn*` details of a leftover marker are
+/// null from a CLI that predates them.
 public sealed record ServiceSnapshot(
     string ServiceId, bool UnitPresent, string State, string? BinaryPath, string? InstallBinaryPath,
-    int? JobPid, int? DaemonPid, bool TxnMarker, bool TxnActive, string? LoadedSpawnType = null);
+    int? JobPid, int? DaemonPid, bool TxnMarker, bool TxnActive, string? LoadedSpawnType = null,
+    string? TxnOperation = null, string? TxnPhase = null, DateTimeOffset? TxnMarkedAt = null,
+    string? Supervisor = null, bool? ServiceUpgradeAvailable = null, bool? WindowsServiceInstallable = null);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
 [JsonSerializable(typeof(ServiceSnapshot))]
@@ -69,6 +73,10 @@ public interface IKcapCli {
 
     Task<ProcessResult> ServiceInstallVerifiedAsync(bool replace, CancellationToken ct, string? retireServiceId = null);
 
+    /// `daemon service install --system --verify`: installs or updates the machine's Windows service behind the
+    /// UAC prompt, then hands this daemon to it. Bounded by the time a person may take to answer the prompt.
+    Task<ProcessResult> ServiceInstallWindowsServiceAsync(CancellationToken ct);
+
     /// <c>daemon start -d --name &lt;name&gt;</c>, bounded + ProcessOnly-kill, stamped with a boot-attempt id
     /// for the daemon's own boot-carrier correlation — the lane always mints a fresh one per action.
     Task<ProcessResult> DetachedStartAsync(string bootAttemptId, CancellationToken ct);
@@ -76,6 +84,12 @@ public interface IKcapCli {
     /// `plugin install` (+ vendorFlag, when non-null, then <paramref name="options"/>); null = the
     /// flagless Claude default.
     Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct, IReadOnlyList<string>? options = null);
+
+    Task<ProcessResult> PluginRemoveAsync(string? vendorFlag, CancellationToken ct);
+
+    /// <c>accounts add|remove|rename|rewire … --json</c>, which prints one AccountActionResultDto line.
+    /// No server overlay: the account verbs touch nothing on the server.
+    Task<ProcessResult> AccountsAsync(MutationVerb verb, AccountArgs args, CancellationToken ct);
 
     /// `import` with scope/vendor flags, streamed live via onLine — unbounded internal timeout
     /// (imports are long; ct cancellation is the only bound).
@@ -105,6 +119,9 @@ public interface IKcapCli {
 public sealed class KcapCli : IKcapCli {
     // Covers forward/rollback budgets, lock wait, crash recovery and the manual-owner kill wait.
     static readonly TimeSpan MutationTimeout = TimeSpan.FromSeconds(60);
+
+    /// The UAC prompt waits on a person; past this the install is reported unconfirmed, not failed.
+    static readonly TimeSpan ElevationTimeout = TimeSpan.FromMinutes(10);
     /// The forced refresh may wait 10 s for the service transaction lock before its own 85 s deadline starts.
     static readonly TimeSpan ReloadTimeout = TimeSpan.FromSeconds(105);
     // Discovery reads every vendor's history off disk; a large Claude projects tree takes seconds.
@@ -232,6 +249,15 @@ public sealed class KcapCli : IKcapCli {
             Timeout: retireServiceId is null ? MutationTimeout : RenameTimeout), ct).ConfigureAwait(false);
     }
 
+    public async Task<ProcessResult> ServiceInstallWindowsServiceAsync(CancellationToken ct) {
+        var mutation = MutationEnv();
+        if (CliPath is not { } cliPath) return await NoCliResult().ConfigureAwait(false);
+
+        string[] args = ["daemon", "service", "install", "--system", "--name", _daemonName, "--profile", _profileName, "--verify"];
+        var env = await EnvWithTerminalPathAsync(mutation, ct).ConfigureAwait(false);
+        return await Run(cliPath, args, new RunOptions(EnvOverlay: env, Timeout: ElevationTimeout), ct).ConfigureAwait(false);
+    }
+
     public async Task<ProcessResult> DetachedStartAsync(string bootAttemptId, CancellationToken ct) {
         var env = MutationEnv(); // throws before any spawn if the instance carries no server
         env[BootAttemptVar] = bootAttemptId;
@@ -255,6 +281,31 @@ public sealed class KcapCli : IKcapCli {
 
         return await Run(cliPath, args.ToArray(),
             new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: MutationTimeout), ct).ConfigureAwait(false);
+    }
+
+    public async Task<ProcessResult> PluginRemoveAsync(string? vendorFlag, CancellationToken ct) {
+        if (CliPath is not { } cliPath) return await NoCliResult().ConfigureAwait(false);
+        string[] args = vendorFlag is null ? ["plugin", "remove"] : ["plugin", "remove", vendorFlag];
+        return await Run(cliPath, args,
+            new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: MutationTimeout), ct).ConfigureAwait(false);
+    }
+
+    public async Task<ProcessResult> AccountsAsync(MutationVerb verb, AccountArgs args, CancellationToken ct) {
+        string[] argv = verb switch {
+            MutationVerb.AccountAdd    => ["accounts", "add", Required(args.Vendor), Required(args.Directory), "--json"],
+            MutationVerb.AccountRemove => ["accounts", "remove", Required(args.AccountId), "--json"],
+            MutationVerb.AccountRename => ["accounts", "rename", Required(args.AccountId), Required(args.Label), "--json"],
+            MutationVerb.AccountRewire => args.AccountId is { } id ? ["accounts", "rewire", id, "--json"] : ["accounts", "rewire", "--json"],
+            MutationVerb.AccountRefresh => ["accounts", "refresh", Required(args.AccountId), "--json"],
+            _                          => throw new ArgumentOutOfRangeException(nameof(verb), verb, "not an account verb"),
+        };
+        if (CliPath is not { } cliPath) return await NoCliResult().ConfigureAwait(false);
+
+        return await Run(cliPath, argv,
+            new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: MutationTimeout), ct).ConfigureAwait(false);
+
+        static string Required(string? value) =>
+            value ?? throw new ArgumentException("The account verb is missing one of its arguments.", nameof(args));
     }
 
     public async Task<StreamingResult> ImportAsync(ImportRequest request, Action<StreamedLine> onLine, CancellationToken ct) {

@@ -25,6 +25,7 @@ public sealed class CursorHarness : IHarness<CursorHarness> {
     // No name to probe: Cursor ships as an editor, so its own state is the only signal.
     public HarnessSignals Signals => new() {
         UserDataSignal = Paths.HasUserData,
+        AppSignal      = apps => apps.Finds("Cursor.app", "cursor"),
         Wired          = () => CursorHooksInstaller.IsInstalled(Paths.UserHooksJson),
     };
 }

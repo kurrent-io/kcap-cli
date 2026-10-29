@@ -41,6 +41,20 @@ public class AccountStoreTests {
     }
 
     [Test]
+    public async Task MutateWithRevision_returns_the_revision_it_wrote() {
+        var store = Store();
+
+        var (_, first)  = store.MutateWithRevision(r => (r with { Accounts = [Claude("/h/.claude-a")] }, 0));
+        var (_, second) = store.MutateWithRevision(r => (r with { Accounts = [.. r.Accounts, Claude("/h/.claude-b")] }, 0));
+        var (_, none)   = store.MutateWithRevision(r => (r, 0));
+
+        await Assert.That(first).IsEqualTo(1L);
+        await Assert.That(second).IsEqualTo(2L);
+        await Assert.That(none).IsEqualTo(2L);
+        await Assert.That(store.Load().Revision).IsEqualTo(2L);
+    }
+
+    [Test]
     public async Task Concurrent_mutations_lose_no_account() {
         var store = Store();
 
@@ -200,6 +214,66 @@ public class AccountStoreTests {
 
         await Assert.That(AccountDiscovery.Find(home, registry, _ => null).Count).IsEqualTo(1);
         foreach (var account in registry.Accounts) AccountWiring.State(account, home);
+    }
+
+    [Test]
+    public async Task Registry_entry_without_new_fields_loads_with_generation_zero() {
+        Tmp.CreateFile("accounts/accounts.json", """
+            { "version": 1, "revision": 2, "accounts": [
+                { "id": "ok", "vendor": "Codex", "directory": "/h/.codex-work", "label": "work",
+                  "added_at": "2026-01-01T00:00:00Z", "wired_at": "2026-01-02T00:00:00Z", "wiring_failure": null }
+            ] }
+            """);
+
+        var account = Store().Load().Accounts.Single();
+
+        await Assert.That(account.Generation).IsEqualTo(0L);
+        await Assert.That(account.RetiredSessions).IsNull();
+        await Assert.That(account.StatusLine).IsNull();
+        await Assert.That(account.LabelSetByUser).IsNull();
+        await Assert.That(account.ProbeSeq).IsEqualTo(0L);
+    }
+
+    [Test]
+    public async Task A_registry_without_trust_fields_loads_them_null() {
+        Tmp.CreateFile("accounts/accounts.json", """
+            { "version": 1, "revision": 2, "accounts": [
+                { "id": "ok", "vendor": "Codex", "directory": "/h/.codex-work", "label": "work", "added_at": "2026-01-01T00:00:00Z" }
+            ] }
+            """);
+
+        var account = Store().Load().Accounts.Single();
+
+        await Assert.That(account.HookTrust).IsNull();
+        await Assert.That(account.HookTrustFingerprint).IsNull();
+    }
+
+    [Test]
+    public async Task New_fields_round_trip_with_snake_case_names() {
+        var store = Store();
+        var added = Claude("/h/.claude") with {
+            Generation = 3, RetiredSessions = ["s1"], StatusLine = new StatusLineBackup(null), LabelSetByUser = false,
+        };
+        store.Mutate(r => (r with { Accounts = [added] }, 0));
+
+        var json   = await File.ReadAllTextAsync(store.RegistryPath);
+        var loaded = store.Load().Accounts.Single();
+
+        await Assert.That(json).Contains("\"retired_sessions\"");
+        await Assert.That(json).Contains("\"status_line\"");
+        await Assert.That(loaded.Generation).IsEqualTo(3L);
+        await Assert.That(loaded.RetiredSessions!.Single()).IsEqualTo("s1");
+        await Assert.That(loaded.StatusLine).IsEqualTo(new StatusLineBackup(null));
+    }
+
+    [Test]
+    public async Task Legacy_label_counts_as_user_set_unless_it_is_the_directory_name() {
+        var legacy = Claude("/h/.claude-work");
+
+        await Assert.That(legacy.LabelIsUserSet).IsFalse();
+        await Assert.That((legacy with { Label = "work" }).LabelIsUserSet).IsTrue();
+        await Assert.That((legacy with { LabelSetByUser = true }).LabelIsUserSet).IsTrue();
+        await Assert.That((legacy with { Label = "a@b.c", LabelSetByUser = false }).LabelIsUserSet).IsFalse();
     }
 
     [Test]

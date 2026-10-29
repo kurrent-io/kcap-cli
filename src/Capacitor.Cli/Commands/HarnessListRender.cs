@@ -17,6 +17,7 @@ internal static class HarnessListRender {
                 agent.BinaryFound,
                 agent.InstallSignalFound,
                 harness.Signals.IsWired,
+                agent.DesktopAppFound,
                 ledger.Entry(harness.Id) is { Declined: true }));
         }
 

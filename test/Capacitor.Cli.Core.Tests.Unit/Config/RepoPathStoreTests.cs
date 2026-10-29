@@ -104,6 +104,50 @@ public class RepoPathStoreTests {
         await Assert.That(entries.Length).IsEqualTo(3);
     }
 
+    static readonly DateTimeOffset Earlier = new(2026, 3, 1, 0, 0, 0, TimeSpan.Zero);
+    static readonly DateTimeOffset Later   = new(2026, 3, 2, 0, 0, 0, TimeSpan.Zero);
+
+    [Test]
+    public async Task Record_NewPaths_KeepTheLatestTimeSeenPerPath() {
+        await Repos.RecordAsync([
+            new RepoEntry { Path = "/tmp/project-a", LastUsed = Earlier },
+            new RepoEntry { Path = "/tmp/project-a/", LastUsed = Later },
+            new RepoEntry { Path = "/tmp/project-b", LastUsed = Earlier },
+        ]);
+
+        var entries = await Repos.LoadAsync();
+        await Assert.That(entries.Length).IsEqualTo(2);
+        await Assert.That(entries.Single(e => e.Path.EndsWith("project-a", StringComparison.Ordinal)).LastUsed).IsEqualTo(Later);
+    }
+
+    [Test]
+    public async Task Record_OlderTimeThanExisting_DoesNotDemoteIt() {
+        await Repos.AddAsync("/tmp/project-a");
+        var added = (await Repos.LoadAsync())[0].LastUsed;
+
+        var changed = await Repos.RecordAsync([new RepoEntry { Path = "/tmp/project-a", LastUsed = Earlier }]);
+
+        await Assert.That(changed).IsFalse();
+        await Assert.That((await Repos.LoadAsync())[0].LastUsed).IsEqualTo(added);
+    }
+
+    [Test]
+    public async Task Record_FilesystemRoot_KeepsItsSeparator() {
+        var root = Path.GetPathRoot(Config.Directory)!;
+
+        await Repos.RecordAsync([new RepoEntry { Path = root, LastUsed = Earlier }]);
+
+        var entries = await Repos.LoadAsync();
+        await Assert.That(entries.Select(e => e.Path)).IsEquivalentTo([root]);
+    }
+
+    [Test]
+    public async Task Record_Nothing_WritesNoFile() {
+        await Repos.RecordAsync([]);
+
+        await Assert.That(File.Exists(ReposJsonPath)).IsFalse();
+    }
+
     // ── Path normalization ────────────────────────────────────────────────────
 
     [Test]

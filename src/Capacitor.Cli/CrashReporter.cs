@@ -53,7 +53,7 @@ internal static class CrashReporter {
     /// and write a single stderr line. Never throws — it runs while the process is
     /// already failing, possibly with a closed stderr pipe (detached process).
     /// </summary>
-    public static void Record(ConfigRoot config, string? command, Exception ex, TimeProvider time) {
+    public static void Record(ConfigRoot config, string? command, Exception ex, TimeProvider time, TextWriter? stderr = null) {
         string? writtenPath = null;
         try {
             var path = config.Path("crash.log");
@@ -72,7 +72,7 @@ internal static class CrashReporter {
             // Report the actual resolved path (honours KCAP_CONFIG_DIR) and only
             // claim it was logged when the write actually succeeded.
             var where = writtenPath is null ? "crash log unavailable" : $"logged to {writtenPath}";
-            Console.Error.WriteLine(
+            (stderr ?? Console.Error).WriteLine(
                 $"[kcap] {(string.IsNullOrEmpty(command) ? "command" : command)} failed: "
               + $"{ex.GetType().Name}: {ex.Message} ({where})");
         } catch {

@@ -13,6 +13,10 @@ public sealed record AgentStatusPresentation(
     public string AccessibleName => Tip.Length == 0 ? "" : Tip.Split('\n')[0];
 
     public bool HasLabel => Label.Length > 0;
+    /// Working, and the daemon has proof a turn is running rather than an idle prompt that never
+    /// reported a turn end. Only this makes a mid-turn keystroke like Escape safe to send.
+    public bool InForegroundTurn { get; init; }
+
     /// The daemon says Running but the turn is unknown (a remote row): live, yet not claimed as Working.
     public bool IsRunningUnknownTurn => !Ended && Kind == AgentStatusKind.Other && Label == "Running";
     public bool IsInFlight => Kind is AgentStatusKind.Working or AgentStatusKind.Starting or AgentStatusKind.Resuming || IsRunningUnknownTurn;

@@ -101,6 +101,25 @@ public class AgentOrchestratorResumeLedgerTests {
     }
 
     [Test]
+    [Arguments(null, true)]
+    [Arguments("Named by the caller", false)]
+    public async Task Both_ledger_writes_record_whether_the_start_title_was_cut_from_the_prompt(string? title, bool derived) {
+        using var repoPath = GitRepo.CreateWithCommit();
+        var factory = new ObservingAcpFactory();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
+            new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
+            allowedRepoPath: repoPath, extraRuntimeFactories: [factory]);
+        factory.Observe = () => orch.ResumeLedger!.TryRead("ledger-title");
+
+        await orch.HandleLaunchAgentForTest(
+            AgentOrchestratorHarness.NewCursorLaunch("ledger-title", repoPath) with { Title = title });
+
+        await Assert.That(orch.GetAgentForTest("ledger-title")).IsNotNull();
+        await Assert.That(factory.ObservedAtStart!.Launch.TitleDerived).IsEqualTo(derived);
+        await Assert.That(orch.ResumeLedger!.TryRead("ledger-title")!.Launch.TitleDerived).IsEqualTo(derived);
+    }
+
+    [Test]
     public async Task A_launch_that_fails_to_start_leaves_no_entry() {
         using var repoPath = GitRepo.CreateWithCommit();
         var factory = new ObservingThenFailingFactory();
@@ -228,7 +247,7 @@ public class AgentOrchestratorResumeLedgerTests {
     }
 
     [Test]
-    public async Task A_claude_launch_writes_the_pinned_id_as_vendor_and_kcap_session() {
+    public async Task A_claude_launch_keeps_its_unconfirmed_pin_only_as_the_vendor_session() {
         using var repoPath = GitRepo.CreateWithCommit();
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), AgentOrchestratorHarness.Launcher("claude"),
@@ -239,9 +258,9 @@ public class AgentOrchestratorResumeLedgerTests {
         var agent = orch.GetAgentForTest("pin-launch")!;
         var entry = orch.ResumeLedger!.TryRead("pin-launch")!;
         await Assert.That(Guid.TryParse(entry.VendorSession, out _)).IsTrue();
-        await Assert.That(entry.SessionId).IsEqualTo(entry.VendorSession);
+        await Assert.That(entry.SessionId).IsNull();
         await Assert.That(agent.VendorSession).IsEqualTo(entry.VendorSession);
-        await Assert.That(agent.SessionId).IsEqualTo(entry.VendorSession);
+        await Assert.That(agent.SessionId).IsNull();
     }
 
     static AgentOrchestrator Build() => AgentOrchestratorHarness.BuildOrchestrator(

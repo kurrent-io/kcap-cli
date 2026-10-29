@@ -82,6 +82,7 @@ public class LocalStackViewModelTests {
 
             await Assert.That(h.Vm.Upgrading).IsTrue();
             await Assert.That(h.Vm.BannerVisible).IsTrue();
+            await Assert.That(h.Vm.ActionsVisible).IsFalse();
             await Assert.That(h.Vm.Headline).IsEqualTo("Upgrading kcap local 1.2.0 to 1.3.0");
             await Assert.That(h.Vm.Detail).IsEqualTo("Downloading 1.3.0… 25%");
             await Assert.That(h.Vm.DownloadFraction).IsEqualTo(0.25);
@@ -166,6 +167,7 @@ public class LocalStackViewModelTests {
             await Assert.That(h.Vm.Headline).IsEqualTo("The upgrade to kcap local 1.3.0 is waiting");
             await Assert.That(h.Vm.Detail).IsEqualTo(LocalStackViewModel.BusyDetail);
             await Assert.That(h.Vm.TryAgainVisible).IsTrue();
+            await Assert.That(h.Vm.ActionsVisible).IsTrue();
         });
     }
 
@@ -230,6 +232,7 @@ public class LocalStackViewModelTests {
 
             await Assert.That(h.Vm.BannerVisible).IsTrue();
             await Assert.That(h.Vm.StartVisible).IsTrue();
+            await Assert.That(h.Vm.ActionsVisible).IsTrue();
             await Assert.That(h.Vm.SuppressesServerStart).IsTrue();
 
             await h.Vm.StartCommand.Execute().ToTask();

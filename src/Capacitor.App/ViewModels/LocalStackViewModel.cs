@@ -26,7 +26,7 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
     static readonly string[] Derived = [
         nameof(Version), nameof(StateText), nameof(Attention), nameof(Upgrading), nameof(BannerVisible), nameof(Headline),
         nameof(Detail), nameof(Guidance), nameof(DownloadFraction), nameof(ProgressIndeterminate), nameof(TryAgainVisible),
-        nameof(DismissVisible), nameof(IsNote), nameof(StartVisible), nameof(SuppressesServerStart),
+        nameof(DismissVisible), nameof(IsNote), nameof(StartVisible), nameof(ActionsVisible), nameof(SuppressesServerStart),
     ];
 
     readonly LocalUpgradeController _upgrade;
@@ -172,8 +172,9 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
         }
         : Waiting ? BusyDetail
         : _shown switch {
-            LocalUpgradeOutcome.Failed f => TerminalAdvice.Strip(f.Message),
+            LocalUpgradeOutcome.Failed f => TerminalAdvice.Strip(f.Message) ?? "The upgrade stopped before it finished.",
             LocalUpgradeOutcome.NotPublished when Progress.From is { } from => $"The local server stays at {from}.",
+            LocalUpgradeOutcome.NotPublished => "Try again later.",
             _ => null,
         };
 
@@ -195,6 +196,9 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
     public bool DismissVisible => !Upgrading && _shown is not null && !StartVisible;
 
     public bool StartVisible => !Upgrading && _shown is LocalUpgradeOutcome.Failed { Switched: true };
+
+    /// The action cluster. False while an upgrade is running, so that row is not left blank.
+    public bool ActionsVisible => StartVisible || TryAgainVisible || DismissVisible;
 
     /// While this banner or a search change owns the stack, the "not running" banner's own Start stays hidden: a search
     /// change can restart the server.

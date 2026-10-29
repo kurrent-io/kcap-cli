@@ -101,6 +101,8 @@ public sealed class LifecyclePromptViewModel : ReactiveObject {
         LifecyclePrompt.KindRemoveProfile => "Remove profile",
         LifecyclePrompt.KindSetup         => "Reopen setup",
         LifecyclePrompt.KindUninstall     => "Uninstall kcap",
+        LifecyclePrompt.KindWindowsService       => "Run kcap as a Windows service",
+        LifecyclePrompt.KindWindowsServiceUpdate => "Update the kcap Windows service",
         _                                 => "Repair daemon service", // KindRepair and any future kind
     };
 }

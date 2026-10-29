@@ -36,6 +36,9 @@ internal sealed partial class RestartCoordinator : BackgroundService {
 
     // Seams (assigned from DI in the production ctor; overridden directly in tests).
     internal Func<BinaryStat?> StatBinary = static () => null;
+    // The binary as it stood when this process started. An update that replaces it while the daemon is still
+    // booting lands before the poll begins, so a baseline taken then would already be the new binary.
+    internal BinaryStat? LaunchBinary;
     internal Func<bool>        IsBusy     = static () => false;
     // Busy for a forced restart, or a self-detected one past TurnWait: evals and launches in
     // admission, not flow participants.
@@ -79,6 +82,7 @@ internal sealed partial class RestartCoordinator : BackgroundService {
         Strategy   = strategy;
         WireGate(orchestrator, evalCache);
         StatBinary = StatProcessBinary;
+        LaunchBinary = config.LaunchBinary;
         HarnessInstalled = () => UnadvertisedNowAvailable(config.SupportedVendors, factories.Values);
     }
 
@@ -118,16 +122,16 @@ internal sealed partial class RestartCoordinator : BackgroundService {
     }
 
     internal void PrimeBaseline() {
-        lock (_gate) _baseline = StatBinary();
+        lock (_gate) _baseline = LaunchBinary ?? StatBinary();
     }
 
-    static BinaryStat? StatProcessBinary() => StatBinaryAt(Environment.ProcessPath, OperatingSystem.IsWindows(), File.Exists);
+    internal static BinaryStat? StatProcessBinary() => StatBinaryAt(Environment.ProcessPath, OperatingSystem.IsWindows(), File.Exists);
 
     /// <summary>
-    /// What the poll compares: the binary reached through a script install's <c>current</c>, which an
-    /// update switches rather than overwriting this file. Outside a script install Windows never replaces
-    /// a running binary in place, so there it returns null and BinaryChanged() never fires; explicit
-    /// restart requests still work.
+    /// What the poll compares: the binary reached through a script install's or a snap's <c>current</c>,
+    /// which an update switches rather than overwriting this file, plus where that link points. Outside a
+    /// script install Windows never replaces a running binary in place, so there it returns null and
+    /// BinaryChanged() never fires; explicit restart requests still work.
     /// </summary>
     internal static BinaryStat? StatBinaryAt(string? processPath, bool isWindows, Func<string, bool> fileExists) {
         if (processPath is null) return null;
@@ -135,13 +139,21 @@ internal sealed partial class RestartCoordinator : BackgroundService {
         if (isWindows && layout is null) return null;
 
         try {
-            var fi     = new FileInfo(ScriptInstallLayout.Stabilize(processPath, fileExists));
-            var target = layout is null ? null : new DirectoryInfo(layout.Current).LinkTarget;
+            var fi     = new FileInfo(InstallPaths.Stabilize(processPath, fileExists));
+            var target = CurrentTarget(processPath, layout, dir => new DirectoryInfo(dir).LinkTarget);
             return fi.Exists ? new BinaryStat(fi.Length, fi.LastWriteTimeUtc.Ticks, target) : null;
         } catch {
             return null; // transient (file being swapped mid-install)
         }
     }
+
+    /// <summary>Where the install's <c>current</c> link points, or null outside a script install or a snap.
+    /// A refresh can leave the binary's size and timestamp unchanged, so the revision it names is what
+    /// tells two snap revisions apart.</summary>
+    internal static string? CurrentTarget(string processPath, ScriptInstallLayout? layout, Func<string, string?> linkTarget) =>
+        layout is not null ? linkTarget(layout.Current)
+        : SnapLayout.FromBinary(processPath) is { } snap ? linkTarget(snap.Current)
+        : null;
 
     /// <summary>
     /// Explicit restart request from the control socket. <paramref name="force"/> bypasses

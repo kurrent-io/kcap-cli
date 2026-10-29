@@ -269,4 +269,167 @@ public class ClaudeTerminalDialogDetectorTests {
 
         await Assert.That(ClaudeTerminalDialogDetector.Parse(screen, 120)).IsNull();
     }
+
+    // The fullscreen TUI's settings panel as /status draws it, at the daemon's 120 columns.
+    static string Panel(params string[] rows) => string.Join('\n', new[] {
+        "❯ /status",
+        "",
+        new string('▔', 120),
+        "   Settings  Status   Config   Usage   Stats",
+        "",
+    }.Concat(rows));
+
+    /// /status and /cost open a panel that writes nothing to the transcript, and a prompt pasted
+    /// while it is open is swallowed. The panel takes no answer, so only its screen comes back.
+    [Test]
+    [Arguments("Esc to cancel")]
+    [Arguments("Enter/Space to change · / to search · Esc to close")]
+    [Arguments("Enter to set as default · s to use this session only · Esc to cancel")]
+    public async Task A_fullscreen_panel_comes_back_with_its_screen_and_no_choices(string footer) {
+        var screen = Panel(
+            "   Version:           2.1.310",
+            "   Session kind:      interactive",
+            "   Model:             Default",
+            "",
+            "   " + footer);
+
+        var dialog = ClaudeTerminalDialogDetector.Parse(screen, 120);
+
+        await Assert.That(dialog).IsNotNull();
+        await Assert.That(dialog!.Heading).IsEqualTo("Settings  Status   Config   Usage   Stats");
+        await Assert.That(dialog.Options).IsEmpty();
+        await Assert.That(dialog.Screen).Contains("Session kind:      interactive");
+        await Assert.That(dialog.Screen).DoesNotContain(footer);
+    }
+
+    /// The usage tab outgrows a 40-row screen, so its footer is scrolled off and the last row is
+    /// content ending in the scroll mark.
+    [Test]
+    public async Task A_panel_scrolled_past_its_footer_still_holds_the_keyboard() {
+        var screen = Panel(
+            "   Current session",
+            "   █████████████████████                             42% used",
+            "",
+            "   Trim ~/repo/CLAUDE.md" + new string(' ', 80) + "↓");
+
+        var dialog = ClaudeTerminalDialogDetector.Parse(screen, 120);
+
+        await Assert.That(dialog).IsNotNull();
+        await Assert.That(dialog!.Options).IsEmpty();
+        await Assert.That(dialog.Screen).Contains("Trim ~/repo/CLAUDE.md");
+    }
+
+    [Test]
+    [Arguments("   Build finished ↓")]
+    [Arguments("   ↓ Build details")]
+    [Arguments("   ↓")]
+    public async Task A_retained_panel_edge_does_not_make_ordinary_arrow_output_a_dialog(string output) {
+        var screen = Panel("   Build output", output);
+
+        await Assert.That(ClaudeTerminalDialogDetector.Parse(screen, 120)).IsNull();
+    }
+
+    [Test]
+    [Arguments(40)]
+    [Arguments(120)]
+    public async Task A_padded_scroll_marker_can_arrive_after_the_panel_content(int cols) {
+        var watcher = new ClaudeScreenWatcher(cols, 40);
+        var screen = string.Join('\n', new string('▔', cols), "   Usage", "", "   More details          ↓");
+        var arrow = screen.IndexOf('↓');
+
+        await Assert.That(watcher.Observe(Utf8(screen[..arrow])).Dialog).IsNull();
+        var dialog = watcher.Observe(Utf8(screen[arrow..])).Dialog;
+
+        await Assert.That(dialog).IsNotNull();
+        await Assert.That(dialog!.Screen).Contains("More details");
+        await Assert.That(dialog.Options).IsEmpty();
+    }
+
+    [Test]
+    [Arguments(120, 40)]
+    [Arguments(40, 12)]
+    public async Task A_short_external_rule_separates_a_select_dialog_from_a_retained_panel(int cols, int ruleLength) {
+        var screen = string.Join('\n',
+            new string('▔', cols),
+            "   Settings  Status",
+            new string('─', ruleLength),
+            "  Pick a server",
+            "",
+            "    Use this one",
+            "  ❯ Use the other",
+            "",
+            "  Enter to confirm · Esc to cancel");
+
+        var dialog = ClaudeTerminalDialogDetector.Parse(screen, cols);
+
+        await Assert.That(dialog).IsNotNull();
+        await Assert.That(dialog!.Heading).IsEqualTo("Pick a server");
+        await Assert.That(dialog.Options.ToArray()).IsEquivalentTo(new[] { "Use this one", "Use the other" }, CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task An_indented_separator_keeps_a_panel_list_screen_only() {
+        var screen = Panel(
+            "   Release notes",
+            "   " + new string('─', 40),
+            "   ❯ Version 2.1.310",
+            "     Version 2.1.309",
+            "",
+            "   Enter to confirm · Esc to cancel");
+
+        var dialog = ClaudeTerminalDialogDetector.Parse(screen, 120);
+
+        await Assert.That(dialog).IsNotNull();
+        await Assert.That(dialog!.Options).IsEmpty();
+        await Assert.That(dialog.Screen).Contains("Version 2.1.309");
+    }
+
+    /// The rows on screen are a window onto a list that scrolls, so they are not offered as the
+    /// panel's whole set of answers even under a select footer.
+    [Test]
+    public async Task A_list_in_a_panel_comes_back_as_its_screen() {
+        var screen = string.Join('\n',
+            new string('▔', 120),
+            "   Release notes",
+            "",
+            "   ❯ Version 2.1.310",
+            "     Version 2.1.309",
+            "     ↓ 402 more",
+            "",
+            "   Enter to confirm · Esc to cancel");
+
+        var dialog = ClaudeTerminalDialogDetector.Parse(screen, 120);
+
+        await Assert.That(dialog!.Heading).IsEqualTo("Release notes");
+        await Assert.That(dialog.Options).IsEmpty();
+        await Assert.That(dialog.Screen).Contains("Version 2.1.309");
+    }
+
+    /// A panel edge left in the scrollback is not the dialog: the prompt box below it, or a ruled
+    /// dialog drawn after it, is what the screen shows now.
+    [Test]
+    public async Task A_panel_edge_above_the_prompt_box_is_not_a_dialog() {
+        var idle = string.Join('\n',
+            new string('▔', 120),
+            "   Esc to cancel",
+            new string('─', 120),
+            "❯ ",
+            new string('─', 120),
+            "  Esc to cancel");
+        var ruled = string.Join('\n',
+            new string('▔', 120),
+            "   Settings  Status",
+            new string('─', 120),
+            "  Pick a server",
+            "",
+            "    Use this one",
+            "  ❯ Use the other",
+            "",
+            "  Enter to confirm · Esc to cancel");
+
+        await Assert.That(ClaudeTerminalDialogDetector.Parse(idle, 120)).IsNull();
+        var dialog = ClaudeTerminalDialogDetector.Parse(ruled, 120);
+        await Assert.That(dialog!.Heading).IsEqualTo("Pick a server");
+        await Assert.That(dialog.Options).Count().IsEqualTo(2);
+    }
 }

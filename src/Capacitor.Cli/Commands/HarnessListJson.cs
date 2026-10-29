@@ -9,14 +9,17 @@ namespace Capacitor.Cli.Commands;
 /// <param name="BinaryOnPath">The vendor's CLI resolves on the search path.</param>
 /// <param name="ConfigFound">The vendor's own user-level data exists here.</param>
 /// <param name="Wired">kcap's hook or extension is registered with the vendor.</param>
+/// <param name="DesktopApp">The vendor's desktop app, or the data it keeps, is on this machine.</param>
 /// <param name="Dismissed">Its setup nudge was turned down locally.</param>
 /// <remarks>
-/// The two detection signals stay apart, as they do in <see cref="Capacitor.Cli.Core.FirstRun.FirstRunHarnessReport"/>:
+/// The detection signals stay apart, as they do in <see cref="Capacitor.Cli.Core.FirstRun.FirstRunHarnessReport"/>:
 /// a caller offering the user a choice can say which signal it saw, and one that only needs "is it
 /// here" ORs them itself.
 /// </remarks>
 public sealed record HarnessListEntryJson(
-    string Vendor, string Label, bool BinaryOnPath, bool ConfigFound, bool Wired, bool Dismissed);
+    string Vendor, string Label, bool BinaryOnPath, bool ConfigFound, bool Wired,
+    bool DesktopApp,
+    bool Dismissed);
 
 /// <summary>Machine-readable payload for <c>kcap harness list --json</c>.</summary>
 /// <remarks>

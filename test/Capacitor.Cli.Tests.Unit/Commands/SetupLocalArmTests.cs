@@ -40,7 +40,10 @@ internal sealed class SetupLocalArmTests : IDisposable {
 
     FakeLocalServer Server => field ??= new(_log, Root);
 
-    FakeBundle Bundle => field ??= new(Tmp.PathTo("bundle.tar.gz"), Version);
+    /// <summary>The built-in model set the bundle offers and serves; none while empty. Filled before the first run.</summary>
+    readonly Dictionary<string, byte[]> _modelFiles = [];
+
+    FakeBundle Bundle => field ??= new(Tmp.PathTo("bundle.tar.gz"), Version) { ModelFiles = _modelFiles.Count > 0 ? _modelFiles : null };
 
     FakeOllama? _ollama;
 
@@ -335,6 +338,23 @@ internal sealed class SetupLocalArmTests : IDisposable {
     }
 
     [Test]
+    public async Task Json_without_ollama_downloads_and_records_the_builtin_model_the_manifest_offers() {
+        _modelFiles["model.onnx"] = [1, 2, 3, 4];
+        _modelFiles["vocab.txt"]  = [5, 6];
+
+        var (exit, stdout, _, stderr) = await Run("setup", "--local", "--json", "--single-user", "--yes");
+
+        await Assert.That(exit).IsEqualTo(0).Because(string.Join('\n', stdout) + stderr);
+        var events = Events(stdout);
+        await Assert.That(events).Contains("embeddings_builtin_downloading");
+        await Assert.That(Array.IndexOf(events, "embeddings_configured")).IsLessThan(Array.IndexOf(events, "starting"));
+
+        var configured = stdout.Select(l => JsonNode.Parse(l)!).Single(n => n["event"]!.GetValue<string>() == "embeddings_configured");
+        await Assert.That(configured["provider"]?.GetValue<string>()).IsEqualTo("builtin");
+        await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Builtin(Bundle.ModelSet));
+    }
+
+    [Test]
     public async Task Json_no_embeddings_leaves_ollama_alone() {
         Ollama.Running();
 
@@ -361,18 +381,15 @@ internal sealed class SetupLocalArmTests : IDisposable {
     }
 
     [Test]
-    public async Task No_prompt_with_ollama_running_and_no_embedding_answer_fails_before_installing() {
-        Ollama.Running();
+    public async Task No_prompt_with_ollama_running_and_no_embedding_answer_uses_ollama() {
+        Ollama.Running($"{OllamaClient.DefaultModel}:latest").Embeds(1024);
 
         var (exit, stdout, spectre, stderr) = await Run([
             "setup", "--local", "--single-user", "--yes", "--no-prompt", "--skip-import", .. SetupCommandTests.SkipAllAgentInstallFlags,
         ]);
 
-        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
-        await Assert.That(stderr).Contains("--embedding-model mxbai-embed-large");
-        await Assert.That(stderr).Contains("--no-embeddings");
-        await Assert.That(_log).DoesNotContain("install");
-        await Assert.That(string.Join('\n', stdout) + spectre).DoesNotContain("No sign-in needed");
+        await Assert.That(exit).IsEqualTo(0).Because(string.Join('\n', stdout) + spectre + stderr);
+        await Assert.That(LocalEmbeddingFile.Read(Root)?.Model).IsEqualTo(OllamaClient.DefaultModel);
     }
 
     [Test]
@@ -386,7 +403,7 @@ internal sealed class SetupLocalArmTests : IDisposable {
 
         await Assert.That(exit).IsEqualTo(0).Because(string.Join('\n', stdout) + spectre + stderr);
         await Assert.That(string.Join('\n', stdout) + spectre).Contains("Semantic search uses nomic-embed-text through Ollama");
-        await Assert.That(LocalEmbeddingFile.ReadModel(Root)).IsEqualTo("nomic-embed-text");
+        await Assert.That(LocalEmbeddingFile.Read(Root)?.Model).IsEqualTo("nomic-embed-text");
     }
 
     [Test]

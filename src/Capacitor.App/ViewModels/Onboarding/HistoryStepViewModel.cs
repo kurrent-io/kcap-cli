@@ -100,13 +100,13 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
 
     string? LocalEmptyMessage => State switch {
         HistoryState.NoHarness =>
-            "No harnesses were connected in this setup. Go back to connect one, or import later from Help and support → Set up kcap.",
+            $"No harnesses were connected in this setup. Go back to connect one, or import later from {SetupLocation.Path}.",
         HistoryState.NoHistory =>
             $"No history on {MachineName} to import. New sessions will record as they happen.",
         HistoryState.OnlyUnmatched =>
             $"Found {SessionCount(_unmatched)} on {MachineName}, but none matched a repository. Those sessions stay on this Mac.",
         HistoryState.Unreadable =>
-            $"Could not read history on {MachineName}. Import it later from Help and support → Set up kcap.",
+            $"Could not read history on {MachineName}. Import it later from {SetupLocation.Path}.",
         _ => null,
     };
 
@@ -115,8 +115,8 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     public bool CloudLevels => !_discoveredLocal;
 
     public string LevelsNote => _discoveredLocal
-        ? "Import adds this history to kcap on this Mac. Skip doesn't import it."
-        : "Shared uses your recording privacy setting for new imports. Only me keeps imported history private. Skip doesn't import it.";
+        ? "Checked repositories import into kcap on this Mac"
+        : "Checked repositories import with your recording privacy setting. Only me keeps a repository's history private";
 
     /// "from ✓ Claude Code ✓ Codex": the harnesses this page reads from.
     public IReadOnlyList<string> FromLabels { get; private set; } = [];
@@ -209,8 +209,8 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     public const string CloudDeclineNote =
         "Not now means kcap starts its history from today. Nothing is deleted either way, and you can widen the window later with kcap import.";
 
-    public const string LocalDeclineNote =
-        "Not now means kcap starts its history from today. Nothing is deleted either way, and you can import more later from Help and support → Set up kcap.";
+    public static string LocalDeclineNote { get; } =
+        $"Not now means kcap starts its history from today. Nothing is deleted either way, and you can import more later from {SetupLocation.Path}.";
 
     public string? DeclineNote => !DeclineVisible ? null : _onLocalPath() ? LocalDeclineNote : CloudDeclineNote;
 

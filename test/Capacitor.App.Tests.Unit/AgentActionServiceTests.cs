@@ -254,6 +254,16 @@ public class AgentActionServiceTests {
     // ---- open in web: local vs remote origin ----
 
     [Test]
+    public async Task OpenSessionInWeb_opens_the_session_page_on_the_app_server() {
+        var opener = new RecordingOpener();
+        var service = NewService(new ScriptedLocalControlOps(), new RecordingNotifier(), opener, fallbackServerUrl: "https://a.kcap.ai");
+
+        service.OpenSessionInWeb("0d1e2f30445566778899aabbccddeeff");
+
+        await Assert.That(opener.Opened).IsEquivalentTo(["https://a.kcap.ai/sessions/0d1e2f30445566778899aabbccddeeff"], CollectionOrdering.Matching);
+    }
+
+    [Test]
     public async Task OpenInWeb_and_OpenInWebRemote_use_different_servers() {
         var ops = new ScriptedLocalControlOps();
         var notifier = new RecordingNotifier();

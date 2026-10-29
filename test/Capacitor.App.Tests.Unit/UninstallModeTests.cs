@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Reactive.Linq;
+using Capacitor.App.Platform.Linux;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core;
@@ -26,7 +28,7 @@ public class UninstallModeTests {
     sealed class Removal : IAppRemoval {
         public bool Trashed;
         public Task<IReadOnlyList<string>> RemoveLinksAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>([]);
-        public void DeleteSupportFiles() { }
+        public bool DeleteSupportFiles() => true;
         public Task<bool> TrashBundleAsync(CancellationToken ct) {
             Trashed = true;
             return Task.FromResult(true);
@@ -52,6 +54,23 @@ public class UninstallModeTests {
         Tmp.CreateDir("kcap.app/Contents/MacOS");
         if (withInfoPlist) Tmp.CreateFile("kcap.app/Contents/Info.plist", "<plist/>");
         return Tmp.PathTo("kcap.app/Contents/MacOS/kcap-desktop");
+    }
+
+    /// <summary>Only an AppImage the running app came from, and that is still on disk, may reach the removal.</summary>
+    [Test]
+    public async Task A_linux_run_needs_the_appimage_it_came_from() {
+        var cli     = new FakeKcapCli();
+        var removal = new Removal();
+        var image   = Tmp.CreateFile("kcap-x86_64.AppImage", "image");
+        AppImageInstall? handed = null;
+
+        await Assert.That(new UninstallMode(false).BuildAppImageRun(null, _ => removal, cli, () => { })).IsNull();
+        await Assert.That(new UninstallMode(false).BuildAppImageRun(new AppImageInstall(Tmp.PathTo("gone.AppImage")), _ => removal, cli, () => { })).IsNull();
+
+        var run = new UninstallMode(false).BuildAppImageRun(new AppImageInstall(image), install => { handed = install; return removal; }, cli, () => { });
+
+        await Assert.That(run).IsNotNull();
+        await Assert.That(handed!.Image).IsEqualTo(image);
     }
 
     [Test]
@@ -97,6 +116,8 @@ public class UninstallModeTests {
         await Assert.That(run.State).IsEqualTo(UninstallRunState.Finished);
         await Assert.That(runner.StreamedArgs).Contains("--purge-local");
         await Assert.That(removal.Trashed).IsTrue();
+        await Assert.That(quit).IsFalse();
+        await run.CloseCommand.Execute();
         await Assert.That(quit).IsTrue();
         await Assert.That(Snapshot()).IsEquivalentTo(before);
     }

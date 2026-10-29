@@ -9,7 +9,7 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 /// <summary><c>daemon stop</c> asks the daemon to shut down with the operator's intent and kills it only
 /// when that request is not answered by an exit, marking the resume ledger interrupted on the kill.
 /// The "daemon" is a sleep child this test owns, named by a pid file carrying its real start token.</summary>
-[NotInParallel]
+[ParallelLimiter<SubprocessLimit>]
 public class DaemonCommandsStopTests {
     const string Name = "st";
 
@@ -17,9 +17,12 @@ public class DaemonCommandsStopTests {
     [TempConfigRoot]  public required TempConfigRoot  Config  { get; init; }
     [TempHome]        public required TempHome        Home    { get; init; }
 
+    StringWriter Out { get; } = new();
+    StringWriter Err { get; } = new();
+
     DaemonCommands Commands(TimeProvider time) =>
         new(Daemons.Store, Config.Root, Resolutions.None(Config.Root), Home,
-            TestHarnesses.All(), TestBinaries.None, time);
+            TestHarnesses.All(), TestBinaries.None, time, new StandardStreams(Out, Err, TextReader.Null));
 
     DummyProcess StartDaemon() {
         var child = DummyProcess.StartSleep(120);
@@ -56,14 +59,13 @@ public class DaemonCommandsStopTests {
         var ledger   = SeedLedger(("agent-1", ResumeState.Running, null));
         var received = FakeControlSocket.AnswerOnce(Daemons.Store, Name, LocalFrame.ShutdownAck("stopping"),
             afterReply: () => { child.Kill(); child.WaitForExit(); });
-        using var console = ConsoleOutput.StartCapture();
 
         var exit = await Commands(TimeProvider.System).HandleAsync(["daemon", "stop", "--name", Name]);
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(Request(await received.WaitAsync(TimeSpan.FromSeconds(30)))).IsEqualTo(new ShutdownRequestDto("end", "final"));
         await Assert.That(ledger.ReadAll().Single().State).IsEqualTo(ResumeState.Running);
-        await Assert.That(console.GetCapturedOutput()).Contains($"Daemon '{Name}' stopped (PID {child.Pid}).");
+        await Assert.That(Out.ToString()).Contains($"Daemon '{Name}' stopped (PID {child.Pid}).");
     }
 
     [Test]
@@ -72,7 +74,6 @@ public class DaemonCommandsStopTests {
         using var child = StartDaemon();
         var received = FakeControlSocket.AnswerOnce(Daemons.Store, Name, LocalFrame.ShutdownAck("queued"),
             afterReply: () => { child.Kill(); child.WaitForExit(); });
-        using var console = ConsoleOutput.StartCapture();
 
         var exit = await Commands(TimeProvider.System).HandleAsync(["daemon", "stop", "--name", Name, "--keep-agents"]);
 
@@ -86,7 +87,6 @@ public class DaemonCommandsStopTests {
         using var child = StartDaemon();
         var identity = PidIdentity.Capture(child.Pid);
         var ledger   = SeedLedger(("agent-1", ResumeState.Running, null), ("agent-2", ResumeState.Resuming, null));
-        using var console = ConsoleOutput.StartCapture();
 
         var exit = await Commands(TimeProvider.System).HandleAsync(["daemon", "stop", "--name", Name]);
 
@@ -106,7 +106,6 @@ public class DaemonCommandsStopTests {
         var identity = PidIdentity.Capture(child.Pid);
         var ledger   = SeedLedger(("agent-1", ResumeState.Running, null));
         var received = FakeControlSocket.AnswerOnce(Daemons.Store, Name, reply: null);
-        using var console = ConsoleOutput.StartCapture();
 
         var exit = await Commands(new FakeTimeProvider()).HandleAsync(["daemon", "stop", "--name", Name]);
 
@@ -126,7 +125,6 @@ public class DaemonCommandsStopTests {
         var received = FakeControlSocket.AnswerOnce(Daemons.Store, Name, LocalFrame.ShutdownAck("stopping"),
             afterReply: acked.SetResult);
         var time = new FakeTimeProvider();
-        using var console = ConsoleOutput.StartCapture();
 
         var run = Commands(time).HandleAsync(["daemon", "stop", "--name", Name]);
         await acked.Task.WaitAsync(TimeSpan.FromSeconds(30));
@@ -157,7 +155,6 @@ public class DaemonCommandsStopTests {
         var acked    = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _ = FakeControlSocket.AnswerOnce(Daemons.Store, Name, LocalFrame.ShutdownAck("stopping"), afterReply: acked.SetResult);
         var time = new FakeTimeProvider();
-        using var console = ConsoleOutput.StartCapture();
 
         string[] args = keep ? ["daemon", "stop", "--name", Name, "--keep-agents"] : ["daemon", "stop", "--name", Name];
         var run = Commands(time).HandleAsync(args);
@@ -186,7 +183,6 @@ public class DaemonCommandsStopTests {
         var received = FakeControlSocket.AnswerOnce(Daemons.Store, Name, LocalFrame.ShutdownAck("stopping"),
             afterReply: acked.SetResult);
         var time = new FakeTimeProvider();
-        using var console = ConsoleOutput.StartFullCapture();
 
         var run = Task.Run(() => Commands(time).HandleAsync(["daemon", "stop", "--name", Name, "--keep-agents"]));
         await acked.Task.WaitAsync(TimeSpan.FromSeconds(30));
@@ -202,7 +198,7 @@ public class DaemonCommandsStopTests {
         await Assert.That(await run.WaitAsync(TimeSpan.FromSeconds(30))).IsEqualTo(0);
         await Assert.That(Request(await received.WaitAsync(TimeSpan.FromSeconds(30)))).IsEqualTo(new ShutdownRequestDto("keep", "final"));
         await Assert.That(ledger.ReadAll().Single() is { State: ResumeState.Resuming, LastError: null }).IsTrue();
-        await Assert.That(console.GetCapturedOutput()).DoesNotContain("was not running");
+        await Assert.That(Out.ToString()).DoesNotContain("was not running");
     }
 
     [Test]
@@ -212,21 +208,19 @@ public class DaemonCommandsStopTests {
             ("agent-2", ResumeState.Interrupted, "stopped_by_operator"),
             ("agent-3", ResumeState.Interrupted, "runtime_exited"),
             ("agent-4", ResumeState.Running, null));
-        using var console = ConsoleOutput.StartCapture();
 
         var exit = await Commands(TimeProvider.System).HandleAsync(["daemon", "status", "--name", Name]);
 
         await Assert.That(exit).IsEqualTo(0);
-        await Assert.That(console.GetCapturedOutput())
+        await Assert.That(Out.ToString())
             .Contains("  resuming: 1  interrupted: 2 (runtime_exited, stopped_by_operator)");
     }
 
     [Test]
     public async Task Status_omits_the_ledger_line_when_nothing_is_resuming_or_interrupted() {
-        using var console = ConsoleOutput.StartCapture();
 
         await Commands(TimeProvider.System).HandleAsync(["daemon", "status", "--name", Name]);
 
-        await Assert.That(console.GetCapturedOutput()).DoesNotContain("resuming:");
+        await Assert.That(Out.ToString()).DoesNotContain("resuming:");
     }
 }

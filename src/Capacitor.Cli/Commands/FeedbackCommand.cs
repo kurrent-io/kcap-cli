@@ -11,8 +11,10 @@ namespace Capacitor.Cli.Commands;
 /// <para>Follows <see cref="ValidatePlanCommand"/>'s <c>Handle</c>/<c>HandleCore</c> split: <c>Handle</c>
 /// owns argument parsing and the interactive prompt; <c>HandleCore</c> takes an already-resolved
 /// category and message so tests can drive it without a real stdin.</para>
+/// <para>A local installation has no support intake, so there <paramref name="mail"/> is set and the
+/// report becomes an email draft instead.</para>
 /// </summary>
-public sealed class FeedbackCommand(IFeedbackApi feedbackApi) {
+public sealed class FeedbackCommand(IFeedbackApi feedbackApi, Func<FeedbackSubmission, FeedbackMailOutcome>? mail = null) {
     /// <summary>
     /// The pinned success line (post-spike variant: promises email replies). Printed to stdout so
     /// <c>kcap feedback ... | ...</c> can capture it; everything else in this command writes to stderr.
@@ -69,7 +71,32 @@ public sealed class FeedbackCommand(IFeedbackApi feedbackApi) {
             return 1;
         }
 
-        return await HandleCore(feedbackApi, category, message);
+        return mail is null ? await HandleCore(feedbackApi, category, message) : await HandleMail(mail, category, message);
+    }
+
+    internal static async Task<int> HandleMail(Func<FeedbackSubmission, FeedbackMailOutcome> mail, FeedbackCategory category, string message) {
+        var submission = new FeedbackSubmission(category, message, Guid.NewGuid(), FeedbackSource.Cli);
+        var outcome    = mail(submission);
+
+        var (opened, cutShort, copied) = (outcome.Opened, outcome.Draft.CutShort, outcome.Copied);
+
+        await Console.Error.WriteLineAsync((opened, cutShort, copied) switch {
+            (true, false, false) => $"Opened an email to {FeedbackMail.Address} in your mail app. Send it from there; the report is below in case no draft appeared:",
+            (true, false, true)  => $"Opened an email to {FeedbackMail.Address} in your mail app. Send it from there; a copy is on your clipboard.",
+            (true, true, true)   => $"Opened an email to {FeedbackMail.Address}, cut short to fit a mail link. The full report is on your clipboard: paste it over the draft's text.",
+            (true, true, false)  => $"Opened an email to {FeedbackMail.Address}, cut short to fit a mail link. Paste the full report below over the draft's text:",
+            (false, _, true)     => $"Couldn't open a mail app. The report is on your clipboard: paste it into an email to {FeedbackMail.Address}.",
+            (false, _, false)    => $"Couldn't open a mail app. Email the report below to {FeedbackMail.Address}:",
+        });
+
+        // A launched handler is no proof a draft appeared (xdg-open returns before it finds one), so
+        // without the clipboard the terminal is the one copy of the report that is sure to exist.
+        if (!copied) {
+            await Console.Out.WriteLineAsync();
+            await Console.Out.WriteLineAsync(FeedbackMail.Body(submission));
+        }
+
+        return opened || copied ? 0 : 1;
     }
 
     /// <summary>Test-friendly core: caller owns the <see cref="IFeedbackApi"/>. <paramref name="message"/>

@@ -27,7 +27,9 @@ public class HarnessesStepViewModelTests {
         public readonly HarnessesStepViewModel Vm;
 
         public Harness(ConfigRoot config, IReadOnlyDictionary<HarnessId, DetectedAgent>? detected = null,
-                IReadOnlySet<HarnessId>? declined = null, PathFixViewModel? pathFix = null, bool local = false) {
+                IReadOnlySet<HarnessId>? declined = null, PathFixViewModel? pathFix = null, bool local = false,
+                Func<CancellationToken, Task<VisibilityOptionsResponse?>>? visibilityOptions = null,
+                Func<int, IReadOnlyDictionary<HarnessId, DetectedAgent>>? detectOnCall = null) {
             detected ??= new Dictionary<HarnessId, DetectedAgent> {
                 [HarnessId.Claude] = new(true, true),
                 [HarnessId.Cursor] = new(false, true),
@@ -35,13 +37,14 @@ public class HarnessesStepViewModelTests {
             };
             Vm = new HarnessesStepViewModel(
                 Cli,
-                _ => { DetectCalls++; return Task.FromResult(detected); },
+                _ => { DetectCalls++; return Task.FromResult(detectOnCall?.Invoke(DetectCalls) ?? detected); },
                 () => declined ?? new HashSet<HarnessId>(),
                 Stamped.AddRange,
                 config, pathFix,
                 _ => Task.FromResult<IReadOnlySet<string>?>(ProviderKeys),
                 "test-mac",
-                onLocalPath: local ? () => true : null);
+                onLocalPath: local ? () => true : null,
+                visibilityOptions: visibilityOptions);
         }
 
         public HarnessRowViewModel Row(string label) => Vm.Rows.First(r => r.Label == label);
@@ -256,6 +259,101 @@ public class HarnessesStepViewModelTests {
         await Assert.That(satisfied).IsTrue();
     }
 
+    static VisibilityOptionsResponse Offer(string preselected, params string[] keys) => new() {
+        Options           = [.. keys.Select(k => new VisibilityOptionDto { Key = k, Label = $"label {k}", Detail = $"detail {k}" })],
+        DefaultVisibility = preselected,
+    };
+
+    public static IEnumerable<Func<(Func<CancellationToken, Task<VisibilityOptionsResponse?>>? Read, string[] Values, string? FirstLabel)>> OfferRows() => [
+        () => (_ => Task.FromResult<VisibilityOptionsResponse?>(Offer("private", "private", "public")), ["private", "public"], "label private"),
+        () => (_ => Task.FromResult<VisibilityOptionsResponse?>(Offer("project", "private", "project", "public")), ["private", "project", "public"], "label private"),
+        () => (_ => Task.FromResult<VisibilityOptionsResponse?>(Offer("org_public", "private", "project", "org_public", "public")),
+               ["private", "project", "org_public", "public"], "label private"),
+        () => (_ => Task.FromResult<VisibilityOptionsResponse?>(null), ["private", "project", "org_public", "public"], "Only me"),
+        () => (_ => Task.FromException<VisibilityOptionsResponse?>(new HttpRequestException("down")), ["private", "project", "org_public", "public"], "Only me"),
+        () => (null, ["private", "project", "org_public", "public"], "Only me"),
+    ];
+
+    /// The step offers the answers the server says this tenant can honour, in its order and copy, and every answer
+    /// when the server says nothing or the read fails. It still waits for an explicit choice
+    [Test]
+    [MethodDataSource(nameof(OfferRows))]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Who_can_read_offers_what_the_tenant_can_honour(
+            Func<CancellationToken, Task<VisibilityOptionsResponse?>>? read, string[] values, string? firstLabel) {
+        var (offered, label, visibility) = await AvaloniaSession.DispatchAsync(async () => {
+            var h = new Harness(Config.Root, visibilityOptions: read);
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+
+            return (h.Vm.VisibilityOptions.Select(o => o.Value).ToList(), h.Vm.VisibilityOptions[0].Label, h.Vm.Visibility);
+        });
+
+        await Assert.That(offered).IsEquivalentTo(values, CollectionOrdering.Matching);
+        await Assert.That(label).IsEqualTo(firstLabel);
+        await Assert.That(visibility).IsNull();
+    }
+
+    /// A revisit re-reads the offer without detecting the harnesses again: an answer chosen from an earlier offer that
+    /// the server no longer makes is cleared, so it cannot be saved.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_revisit_after_the_offer_shrank_clears_an_answer_no_longer_offered() {
+        var (offered, visibility, detections) = await AvaloniaSession.DispatchAsync(async () => {
+            var reads = 0;
+            var h = new Harness(Config.Root,
+                visibilityOptions: _ => Task.FromResult<VisibilityOptionsResponse?>(++reads == 1
+                    ? Offer("org_public", "private", "project", "org_public", "public")
+                    : Offer("private", "private", "public")));
+
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+            h.Vm.Visibility = "org_public";
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+
+            return (h.Vm.VisibilityOptions.Select(o => o.Value).ToList(), h.Vm.Visibility, h.DetectCalls);
+        });
+
+        await Assert.That(offered).IsEquivalentTo(["private", "public"], CollectionOrdering.Matching);
+        await Assert.That(visibility).IsNull();
+        await Assert.That(detections).IsEqualTo(1);
+    }
+
+    /// A revisit whose re-read fails falls back to every answer, as a first entry does, rather than keeping the
+    /// earlier, narrower offer.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_revisit_whose_read_fails_offers_every_answer() {
+        var (offered, visibility) = await AvaloniaSession.DispatchAsync(async () => {
+            var reads = 0;
+            var h = new Harness(Config.Root,
+                visibilityOptions: _ => ++reads == 1
+                    ? Task.FromResult<VisibilityOptionsResponse?>(Offer("private", "private", "public"))
+                    : Task.FromException<VisibilityOptionsResponse?>(new HttpRequestException("down")));
+
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+            h.Vm.Visibility = "public";
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+
+            return (h.Vm.VisibilityOptions.Select(o => o.Value).ToList(), h.Vm.Visibility);
+        });
+
+        await Assert.That(offered).IsEquivalentTo(["private", "project", "org_public", "public"], CollectionOrdering.Matching);
+        await Assert.That(visibility).IsEqualTo("public");
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_local_install_asks_the_server_nothing() {
+        var asked = await AvaloniaSession.DispatchAsync(async () => {
+            var calls = 0;
+            var h = new Harness(Config.Root, local: true, visibilityOptions: _ => { calls++; return Task.FromResult<VisibilityOptionsResponse?>(null); });
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+
+            return calls;
+        });
+
+        await Assert.That(asked).IsEqualTo(0);
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Next_saves_who_can_read_and_the_provider_key_answer_to_the_profile() {
@@ -340,7 +438,10 @@ public class HarnessesStepViewModelTests {
 
     async Task<(Harness, PathFixViewModel)> HarnessWithPathFix(ProcessResult installResult) {
         var dir = Path.GetDirectoryName(ConfigPath)!;
-        var probe = new FakeLoginShellProbe { KcapOnPathBehavior = _ => Task.FromResult<bool?>(true) };
+        var probe = new FakeLoginShellProbe {
+            KcapOnPathBehavior = _ => Task.FromResult<bool?>(true),
+            KcapPathBehavior = _ => Task.FromResult<string?>(Path.Combine(dir, "shim-kcap")),
+        };
         var fix = new PathFixViewModel(
             new PathShimInstaller(new ScriptedProcessRunner(installResult), probe, Path.Combine(dir, "shim-kcap")),
             new WizardFixtures.NoopAppStateStore(), Path.Combine(dir, "bundled-kcap"));
@@ -456,4 +557,96 @@ public class HarnessesStepViewModelTests {
         await Assert.That(rows).IsEqualTo(3);
         await Assert.That(toolBoxes).IsEqualTo(2); // Claude Code reads "bundled"
     }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Agent_controls_are_centered_under_headings_and_across_name_and_subtitle(bool succeeded) {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var h = new Harness(Config.Root);
+            var vm = new OnboardingViewModel([h.Vm, new DoneStepViewModel(() => DoneFacts.Empty)]);
+            await vm.PendingEnterForTesting;
+            if (succeeded) h.Row("Claude Code").Status = AgentInstallStatus.Succeeded;
+            var window = new MainWindow { Onboarding = vm, Width = 1024, Height = 1100 };
+            window.Show();
+            try {
+                Dispatcher.UIThread.RunJobs();
+                await Task.Delay(100);
+                Avalonia.Headless.AvaloniaHeadlessPlatform.ForceRenderTimerTick(3);
+                Dispatcher.UIThread.RunJobs();
+                using var bitmap = Avalonia.Headless.HeadlessWindowExtensions.CaptureRenderedFrame(window);
+                if (Environment.GetEnvironmentVariable("KCAP_ONBOARDING_PREVIEW") is { Length: > 0 } preview)
+                    bitmap!.Save(preview, Avalonia.Media.Imaging.PngBitmapEncoderOptions.Default);
+                foreach (var check in window.GetVisualDescendants().OfType<CheckBox>()
+                             .Where(c => c.IsVisible && c.Name is "RecordCheckBox" or "ToolsCheckBox")) {
+                    var column = check.Name == "RecordCheckBox" ? "RECORD" : "TOOLS";
+                    var heading = window.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Text == column);
+                    var headingCenter = heading.TranslatePoint(new Point(heading.Bounds.Width / 2, 0), window)!.Value.X;
+                    var square = check.GetVisualDescendants().OfType<Border>().Single(b => b.Name == "NormalRectangle");
+                    var center = square.TranslatePoint(new Point(square.Bounds.Width / 2, square.Bounds.Height / 2), window)!.Value;
+                    var glyph = check.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().Single(p => p.Name == "CheckGlyph");
+                    var glyphCenter = glyph.TranslatePoint(new Point(glyph.Bounds.Width / 2, glyph.Bounds.Height / 2), window)!.Value;
+                    await Assert.That(Math.Abs(glyphCenter.X - center.X) <= 0.5).IsTrue();
+                    await Assert.That(Math.Abs(glyphCenter.Y - center.Y) <= 0.5).IsTrue();
+                    var row = check.GetVisualAncestors().OfType<Grid>().First();
+                    var rowCenter = row.TranslatePoint(new Point(0, row.Bounds.Height / 2), window)!.Value.Y;
+                    await Assert.That(Math.Abs(center.Y - rowCenter) <= 0.5).IsTrue();
+                    await Assert.That(Math.Abs(center.X - headingCenter) <= 0.5).IsTrue();
+                }
+                foreach (var bundled in window.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsVisible && t.Text == "BUNDLED")) {
+                    var row = bundled.GetVisualAncestors().OfType<Grid>().First();
+                    var center = bundled.TranslatePoint(new Point(0, bundled.Bounds.Height / 2), row)!.Value.Y;
+                    await Assert.That(Math.Abs(center - row.Bounds.Height / 2) <= 0.5).IsTrue();
+                }
+            } finally {
+                window.Close();
+            }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Scrolling_hands_the_step_heading_to_the_title_bar_and_navigation_resets_it() =>
+        AvaloniaSession.RunOnUiAsync(async () => {
+            var h = new Harness(Config.Root);
+            var vm = new OnboardingViewModel([h.Vm, new DoneStepViewModel(() => DoneFacts.Empty)]);
+            await vm.PendingEnterForTesting;
+            var window = new MainWindow { Onboarding = vm, Width = 1024, Height = 640 };
+            window.Show();
+            try {
+                Dispatcher.UIThread.RunJobs();
+                var scroll = window.GetVisualDescendants().OfType<ScrollViewer>().Single(s => s.Name == "StepScroll");
+                var compact = window.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "CompactStepTitle");
+                var heading = window.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "StepTitleText");
+                await Assert.That(compact.Opacity).IsEqualTo(0);
+                scroll.Offset = new Vector(0, 400);
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(compact.Opacity).IsEqualTo(1);
+                await Assert.That(heading.Opacity).IsEqualTo(0);
+                await Assert.That(compact.Text).IsEqualTo(vm.Current.Title);
+                if (Environment.GetEnvironmentVariable("KCAP_ONBOARDING_PREVIEW") is { Length: > 0 } preview) {
+                    await Task.Delay(100);
+                    Avalonia.Headless.AvaloniaHeadlessPlatform.ForceRenderTimerTick(3);
+                    using var bitmap = Avalonia.Headless.HeadlessWindowExtensions.CaptureRenderedFrame(window);
+                    bitmap!.Save(preview, Avalonia.Media.Imaging.PngBitmapEncoderOptions.Default);
+                }
+                scroll.Offset = default;
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(compact.Opacity).IsEqualTo(0);
+                await Assert.That(heading.Opacity).IsEqualTo(1);
+                scroll.Offset = new Vector(0, 400);
+                Dispatcher.UIThread.RunJobs();
+                h.Vm.Visibility = "private";
+                await vm.NextCommand.Execute().ToTask();
+                await Assert.That(vm.Current.Id).IsEqualTo(WizardStepId.Done);
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(scroll.Offset.Y).IsEqualTo(0);
+                await Assert.That(compact.Opacity).IsEqualTo(0);
+                await Assert.That(compact.Text).IsEqualTo(vm.Current.Title);
+            } finally {
+                window.Close();
+            }
+        });
+
 }

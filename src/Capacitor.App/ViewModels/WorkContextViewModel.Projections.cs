@@ -19,6 +19,7 @@ public sealed partial class WorkContextViewModel {
     readonly AvaloniaList<WorkContextLinkViewModel> _issues = new();
     readonly List<WorkContextLinkViewModel> _summaryPrs = [];
     readonly AvaloniaList<WorkContextPersonViewModel> _contributors = new();
+    IReadOnlyList<WorkItemContributorDto> _contributorRows = [];
     // The card's identity is the id the server served, which for an absorbed item is the survivor's
     // rather than the assignment's; the requested id stands in when a read carried no item.
     string? _primaryId;
@@ -131,6 +132,10 @@ public sealed partial class WorkContextViewModel {
     public bool HasBlockers => _blockedBy.Count > 0;
     public bool HasTopologyNotes => HasBlockers || !string.IsNullOrEmpty(CycleNote);
     public bool HasContributors => _contributors.Count > 0;
+    public bool ShowsPeople => HasAgent && (_viewer is null
+        || (_contributorRows.Count > 0
+            ? _contributorRows.Any(c => !_viewer.Owns(c.UserId))
+            : _requesterId is not null && !_viewer.Owns(_requesterId)));
     /// The card carries the PR picker and the live checks and review rows, so it stays while it
     /// has a PR to select or something to say, including the empty-list message during discovery
     /// and polling. The pane's own empty copy is a fallback when there is no card content.
@@ -163,6 +168,13 @@ public sealed partial class WorkContextViewModel {
     public string RequesterInitial { get => _requesterInitial; private set => this.RaiseAndSetIfChanged(ref _requesterInitial, value); }
     string? _requesterId;
     ViewerIdentityDto? _viewer;
+    public ViewerIdentityDto? ViewerIdentity {
+        get => _viewer;
+        private set {
+            this.RaiseAndSetIfChanged(ref _viewer, value);
+            RefreshContributors();
+        }
+    }
     string? _requesterAvatarUrl;
     public string? RequesterAvatarUrl { get => _requesterAvatarUrl; private set => this.RaiseAndSetIfChanged(ref _requesterAvatarUrl, value); }
 
@@ -220,6 +232,7 @@ public sealed partial class WorkContextViewModel {
         RequesterInitial = WorkContextPersonViewModel.InitialOf(Requester);
         _requesterId = dto.Requester;
         ResolveRequesterAvatar();
+        this.RaisePropertyChanged(nameof(ShowsPeople));
     }
 
     /// A launch with no requester is the daemon owner's, and the viewer only sees their own daemons.
@@ -230,7 +243,7 @@ public sealed partial class WorkContextViewModel {
             : GitHubAvatarUrl(_requesterId);
 
     void ForgetViewer() {
-        _viewer = null;
+        ViewerIdentity = null;
         ResolveRequesterAvatar();
     }
 
@@ -269,6 +282,7 @@ public sealed partial class WorkContextViewModel {
         IssuesExpanded = false;
         Issue = null;
         _contributors.Clear();
+        _contributorRows = [];
         SessionCount = 0;
         RaiseCardCounts();
     }
@@ -286,6 +300,7 @@ public sealed partial class WorkContextViewModel {
         this.RaisePropertyChanged(nameof(HasBlockers));
         this.RaisePropertyChanged(nameof(HasTopologyNotes));
         this.RaisePropertyChanged(nameof(HasContributors));
+        this.RaisePropertyChanged(nameof(ShowsPeople));
     }
 
     void RaiseRelated() {
@@ -296,8 +311,10 @@ public sealed partial class WorkContextViewModel {
     }
 
     void ApplyReady(WorkContextRead read) {
-        _viewer = read.Viewer;
+        ViewerIdentity = read.Viewer;
         ResolveRequesterAvatar();
+        // A failed summary keeps the last figures, marked stale with the rest of the pane.
+        if (!read.SummaryFailed) ApplySessionFacts(read.Summary);
         if (read.Primary is null) {
             ClearCard();
             ApplyLinks(read);
@@ -329,6 +346,17 @@ public sealed partial class WorkContextViewModel {
         IsStale = read.ItemFailed || read.TopologyFailed || read.SummaryFailed;
     }
 
+    bool _hasSessionFacts;
+
+    void ApplySessionFacts(SessionSummaryDto? summary) {
+        _hasSessionFacts = summary is not null;
+        Tokens = SessionFactText.Tokens(summary?.Stats);
+        Cost = SessionFactText.Cost(summary?.Stats);
+        ContextUse = SessionFactText.Context(summary?.Stats);
+        SessionSharing = summary is null ? SessionFactText.Unknown : SessionFactText.SessionSharing(summary);
+        AgentSharing = SessionFactText.AgentSharing(summary?.AgentVisibility);
+    }
+
     static bool Same(string a, string? b) => string.Equals(a, b, StringComparison.Ordinal);
 
     void ApplyItem(WorkItemDto item, IReadOnlyList<SessionWorkItemAssignmentDto> assignments) {
@@ -348,24 +376,33 @@ public sealed partial class WorkContextViewModel {
 
         ApplyIssues(item.Links.Where(l => l.Kind == "issue" && l.LinkClass == "link"));
 
+        _contributorRows = item.Contributors;
+        RefreshContributors();
+        SessionCount = item.SessionCount;
+        RaiseCardCounts();
+    }
+
+    void RefreshContributors() {
         var now = _time.GetUtcNow();
-        var people = item.Contributors
-            .Select(c => new WorkContextPersonViewModel(PersonName(c), c.AvatarUrl, c.LastActivityAt, now, c.UserId))
+        var people = _contributorRows
+            .Select(c => new WorkContextPersonViewModel(PersonName(c),
+                _viewer?.Owns(c.UserId) == true ? _viewer.AvatarUrl ?? c.AvatarUrl : c.AvatarUrl,
+                c.LastActivityAt, now, c.UserId))
             .ToList();
         Replace(_contributors, people, c => (c.UserId, c.Name, c.AvatarUrl, c.LastActivityText));
-        SessionCount = item.SessionCount;
         RaiseCardCounts();
     }
 
     /// DisplayName is null for an owner with no user row; the session requester's email/name
     /// stands in when it is the same person, else the name this pane last showed for the id.
     string PersonName(WorkItemContributorDto contributor) {
+        if (_viewer?.Owns(contributor.UserId) == true) return "You";
         if (HumanLabel(contributor.DisplayName) is { } display) return display;
         if (string.Equals(contributor.UserId, _dto?.Requester, StringComparison.Ordinal)
             && HumanLabel(FirstNonBlank(_dto?.RequesterDisplay, _dto?.Requester)) is { } mine)
             return mine;
         if (_contributors.FirstOrDefault(p => string.Equals(p.UserId, contributor.UserId, StringComparison.Ordinal)) is { } previous
-            && HumanLabel(previous.Name) is { } kept)
+            && previous.Name != "You" && HumanLabel(previous.Name) is { } kept)
             return kept;
         return HumanLabel(contributor.UserId) ?? "Someone";
     }

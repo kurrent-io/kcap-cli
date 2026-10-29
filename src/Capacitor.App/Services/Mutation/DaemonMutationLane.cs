@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using System.Text.Json;
 using Capacitor.App.Services.Onboarding;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Setup;
 
@@ -46,6 +48,8 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
 
     // Injectable seam: defaults to the real per-verb classifier below; tests override to pin/observe without running full classification.
     internal MutationClassifier Classify { get; set; }
+
+    internal Func<long, CancellationToken, Task<bool>> AccountsRevisionReached { get; set; } = (_, _) => Task.FromResult(false);
 
     public DaemonMutationLane(
             DaemonStore store, ILoginShellProbe shellProbe, OutcomeChannel channel,
@@ -205,9 +209,13 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
         return next;
     }
 
+    // The channel feeds the daemon lifecycle surface; an account verb's outcome belongs to the Accounts tab,
+    // which presents what its RunAsync returns.
+    static bool ReachesChannel(MutationRequest request) => !request.Verb.IsAccountVerb();
+
     void Deliver(ActionSlot slot, MutationOutcome outcome) {
         var isSuccess = outcome is MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout;
-        if (!isSuccess) {
+        if (!isSuccess && ReachesChannel(slot.Request)) {
             _channel.Enqueue(new OutcomeEnvelope(slot.Request, outcome));
             slot.Completion.TrySetResult(outcome);
             return;
@@ -215,7 +223,7 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
         slot.Completion.TrySetResult(outcome); // resolve waiters FIRST, then decide waiterless — narrows the detach race
         bool waiterless;
         lock (_gate) { waiterless = slot.WaiterCount <= 0; }
-        if (waiterless) LogWaiterlessSuccess(slot.Request, outcome);
+        if (waiterless) LogWaiterlessOutcome(slot.Request, outcome);
     }
 
     // Lane-lifetime cancellation (Dispose) is not an actionable outcome: never enqueued, only logged when nobody is left to observe it directly.
@@ -230,7 +238,7 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
     void DeliverFaulted(ActionSlot slot, Exception ex) {
         LogUnexpectedFault(slot.Request, ex);
         var outcome = new MutationOutcome.Failed(UnexpectedExitCode, "internal_error", RecoverySurface.Attention);
-        _channel.Enqueue(new OutcomeEnvelope(slot.Request, outcome));
+        if (ReachesChannel(slot.Request)) _channel.Enqueue(new OutcomeEnvelope(slot.Request, outcome));
         slot.Completion.TrySetResult(outcome);
     }
 
@@ -290,6 +298,9 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
             MutationVerb.StartVerified => executor.ServiceStartVerifiedAsync(ct),
             MutationVerb.DetachedStart => executor.DetachedStartAsync(attemptId!, ct),
             MutationVerb.Reload        => executor.ServiceReloadAsync(ct),
+            MutationVerb.InstallWindowsService => executor.ServiceInstallWindowsServiceAsync(ct),
+            var verb when verb.IsAccountVerb() => executor.AccountsAsync(
+                verb, request.Account ?? throw new ArgumentException("An account verb carries its AccountArgs.", nameof(request)), ct),
             // Fail closed, never permissive: an unnamed enum value must halt, not silently pick a verb.
             _ => throw new ArgumentOutOfRangeException(nameof(request), request.Verb, "unknown MutationVerb"),
         };
@@ -302,8 +313,46 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
         request.Verb switch {
             MutationVerb.DetachedStart => ClassifyDetachedStartAsync(request, result, observation, attemptId, ct),
             MutationVerb.Reload        => ClassifyReloadAsync(request, result, executor, observation, predecessor, ct),
+            var verb when verb.IsAccountVerb() => ClassifyAccountVerbAsync(request, result, ct),
             _                          => ClassifyServiceVerbAsync(request, result, executor, observation, ct),
         };
+
+    // The CLI reports Succeeded with a failed non-fatal step; the lane counts any failed step as a failure.
+    async Task<MutationOutcome> ClassifyAccountVerbAsync(MutationRequest request, ProcessResult result, CancellationToken ct) {
+        // A killed run may or may not have committed, whatever it printed; the next snapshot shows which.
+        if (result.TimedOut) return new MutationOutcome.Unconfirmed("timeout");
+        // The CLI prints a result even for a failed action, so a nonzero exit without one never reached the command.
+        if (LastAccountResult(result.Stdout) is not { } dto)
+            return result.ExitCode == 0
+                ? new MutationOutcome.Unconfirmed("no_result")
+                : new MutationOutcome.Failed(result.ExitCode, FirstLine(result.Stderr), RecoverySurface.Attention);
+
+        var failedStep = dto.Steps.FirstOrDefault(s => !s.Succeeded);
+        if (result.ExitCode != 0 || !dto.Succeeded || failedStep is not null)
+            return new MutationOutcome.Failed(
+                result.ExitCode, dto.Error ?? (failedStep is null ? null : $"{failedStep.Name}: {failedStep.Detail}"), RecoverySurface.Attention);
+
+        if (dto.Revision is not { } revision) return new MutationOutcome.Succeeded();
+
+        return await AccountsRevisionReached(revision, ct).ConfigureAwait(false)
+            ? new MutationOutcome.Succeeded()
+            : new MutationOutcome.Unconfirmed("snapshot_not_seen");
+    }
+
+    // Deserialization fills a missing field with its default, so a line without its action or steps is noise, not a result.
+    static AccountActionResultDto? LastAccountResult(string stdout) {
+        var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        for (var i = lines.Length - 1; i >= 0; i--) {
+            try {
+                if (JsonSerializer.Deserialize(lines[i], AccountActionResultJsonContext.Default.AccountActionResultDto)
+                        is { Action: not null, Steps: { } steps } dto && steps.All(s => s is not null))
+                    return dto;
+            } catch (JsonException) {
+                // prose, or a truncated line
+            }
+        }
+        return null;
+    }
 
     // Install/Replace/StartVerified: the CLI's own ServiceVerify transaction engine already
     // performed its readiness poll — exit code alone routes every non-success case.
@@ -314,6 +363,9 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
         if (result.TimedOut) return new MutationOutcome.UnconfirmedNoAttach();
 
         if (result.ExitCode == 0) return await ClassifyServiceSuccessAsync(request, executor, observation, ct).ConfigureAwait(false);
+
+        if (result.ExitCode == VerifyExitCodes.ElevationDeclined)
+            return new MutationOutcome.Refused("elevation_declined", RecoverySurface.Attention);
 
         if (result.ExitCode == VerifyExitCodes.RetireRefused)
             return new MutationOutcome.Failed(result.ExitCode, ReasonLine.TrySingle(result.Stderr, "retire_reason="), RecoverySurface.Attention);
@@ -506,6 +558,14 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
         return null;
     }
 
+    static string? FirstLine(string text) {
+        foreach (var line in text.AsSpan().EnumerateLines()) {
+            var trimmed = line.Trim();
+            if (trimmed.Length > 0) return trimmed.ToString();
+        }
+        return null;
+    }
+
     static void LogReloadFailure(MutationRequest request, ProcessResult result) {
         var detail = result.Stderr.Trim();
         Console.Error.WriteLine(
@@ -513,7 +573,7 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
             (detail.Length == 0 ? "" : $": {detail}"));
     }
 
-    static void LogWaiterlessSuccess(MutationRequest request, MutationOutcome outcome) =>
+    static void LogWaiterlessOutcome(MutationRequest request, MutationOutcome outcome) =>
         Console.Error.WriteLine(
             $"DaemonMutationLane: waiterless {outcome.GetType().Name} verb={request.Verb} profile={request.Profile} " +
             $"server={request.CanonicalServer} daemon={request.DaemonName}");

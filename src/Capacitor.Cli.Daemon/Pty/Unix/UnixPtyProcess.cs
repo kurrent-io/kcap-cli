@@ -81,7 +81,8 @@ public sealed class UnixPtyProcess : IPtyProcess {
         return UnixPtyInterop.access(path, UnixPtyInterop.X_OK) == 0;
     }
 
-    internal static IReadOnlyDictionary<string, string> BuildChildEnv(Dictionary<string, string>? extraEnv, ushort cols, ushort rows) {
+    internal static IReadOnlyDictionary<string, string> BuildChildEnv(
+            Dictionary<string, string>? extraEnv, IReadOnlyCollection<string>? removeEnv, ushort cols, ushort rows) {
         var env = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
             if (entry is { Key: string key, Value: string value }) env[key] = value;
@@ -101,6 +102,9 @@ public sealed class UnixPtyProcess : IPtyProcess {
         // own ambient env at boot, so this loop should normally be a no-op — but a spawned agent
         // must never see the daemon's boot-local consent-seed/expectation/attempt vars either way.
         foreach (var key in DaemonRunner.BootCarriers.All) env.Remove(key);
+
+        if (removeEnv is not null)
+            foreach (var key in removeEnv) env.Remove(key);
 
         if (extraEnv is not null)
             foreach (var (key, value) in extraEnv) env[key] = value;
@@ -137,9 +141,10 @@ public sealed class UnixPtyProcess : IPtyProcess {
             TimeProvider                time,
             Dictionary<string, string>? extraEnv = null,
             ushort                      cols     = 120,
-            ushort                      rows     = 40
+            ushort                      rows     = 40,
+            IReadOnlyCollection<string>? removeEnv = null
         ) {
-        var childEnv = BuildChildEnv(extraEnv, cols, rows);
+        var childEnv = BuildChildEnv(extraEnv, removeEnv, cols, rows);
         var envpArr  = ToEnvpArray(childEnv);
 
         var resolvedPath = ResolveExecutableAbsolutePath(command, cwd, childEnv);
@@ -397,7 +402,8 @@ public class UnixPtyProcessFactory(UnixSpawnerThread spawner, TimeProvider time)
             string                      cwd,
             Dictionary<string, string>? extraEnv = null,
             ushort                      cols     = 120,
-            ushort                      rows     = 40
+            ushort                      rows     = 40,
+            IReadOnlyCollection<string>? removeEnv = null
         )
-        => UnixPtyProcess.Spawn(spawner, command, args, cwd, time, extraEnv, cols, rows);
+        => UnixPtyProcess.Spawn(spawner, command, args, cwd, time, extraEnv, cols, rows, removeEnv);
 }

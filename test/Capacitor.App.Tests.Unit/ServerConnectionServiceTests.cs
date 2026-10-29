@@ -93,6 +93,7 @@ public class ServerConnectionServiceTests {
     static readonly Dictionary<string, object?[]> WirePushes = new() {
         [HubBroadcasts.AgentInstancesChanged]   = [],
         [HubBroadcasts.DaemonsChanged]          = [],
+        [HubBroadcasts.DaemonAccountsChanged]   = [],
         [HubBroadcasts.LaunchFailed]            = ["a1", "reason"],
         [HubBroadcasts.PermissionPending]       = ["s1"],
         [HubBroadcasts.PermissionResponded]     = ["s1", "r1"],
@@ -593,11 +594,14 @@ public class ServerConnectionServiceTests {
         await lane.RequestResizeTerminalAsync("a1", 100, 30, CancellationToken.None);
         await lane.ReleaseResizeTerminalAsync("a1", CancellationToken.None);
         await lane.SendUserInputAsync("a1", "fix it", CancellationToken.None);
+        var discardedId = Guid.NewGuid();
+        await Assert.That((await lane.DiscardQueuedInputAsync("a1", discardedId, CancellationToken.None)).Result).IsEqualTo(HubCallResult.Ok);
         await lane.SendSpecialKeyAsync("a1", SpecialKeys.Escape, CancellationToken.None);
         await lane.UnsubscribeFromTerminalAsync("a1", CancellationToken.None);
         await Assert.That(HubTestHost.Resizes).Contains(("a1", 100, 30));
         await Assert.That(HubTestHost.ResizeReleases).Contains("a1");
         await Assert.That(HubTestHost.UserInputs).Contains(("a1", "fix it"));
+        await Assert.That(HubTestHost.Discards).Contains(new DiscardQueuedInputRequest("a1", discardedId));
         await Assert.That(HubTestHost.SpecialKeys).Contains(("a1", "Escape"));
         await Assert.That(HubTestHost.TerminalUnsubscribes).Contains("a1");
     }

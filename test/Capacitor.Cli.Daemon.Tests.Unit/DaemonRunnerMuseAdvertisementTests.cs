@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core.Harness.Muse;
+using Capacitor.Cli.Daemon.Harness.Codex;
 using Capacitor.Cli.Daemon.Harness.Muse;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -56,7 +57,7 @@ public class DaemonRunnerMuseAdvertisementTests {
         var config  = Config();
         var factory = Factory(config, binary: true);
 
-        var capability = DaemonRunner.ComputeUnattendedVendorCapabilities([factory], config).Single();
+        var capability = DaemonRunner.ComputeUnattendedVendorCapabilities([factory], config, CodexTransportResolution.Unresolved).Single();
 
         await Assert.That(capability.Vendor).IsEqualTo("muse");
         await Assert.That(capability.LauncherPolicyVersion).IsEqualTo("muse-unattended-v1");

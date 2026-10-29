@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core.FirstRun;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Setup;
 
 namespace Capacitor.Cli.Core.Tests.Unit.FirstRun;
@@ -27,6 +28,21 @@ public class FirstRunMachineReportTests {
 
         foreach (var harness in HarnessRegistry.Identities)
             await Assert.That(report.Harnesses.ContainsKey(harness.VendorId)).IsTrue();
+    }
+
+    // The server reads a vendor as present only through binary_on_path and config_found, so a vendor
+    // found by its desktop app alone must still arrive as detected.
+    [Test]
+    public async Task A_desktop_app_alone_reports_the_vendor_as_found() {
+        using var apps = new TempDir();
+        apps.CreateDir("Claude.app");
+
+        var report = Evaluate(HarnessRegistry.Over(
+            TestBinaries.None, DesktopAppProbe.Searching(apps.Path),
+            ClaudeHarness.Over(new ClaudePaths(new UserHome("/nonexistent-home"), null))));
+
+        await Assert.That(report.Harnesses["claude"].ConfigFound).IsTrue();
+        await Assert.That(report.Detected).Contains("claude");
     }
 
     // The one thing HarnessInventory cannot carry: it ORs these into a single Detected flag, which is

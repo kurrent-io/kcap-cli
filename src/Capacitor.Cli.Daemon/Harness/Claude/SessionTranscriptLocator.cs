@@ -1,23 +1,19 @@
 using System.Text.Json.Nodes;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Daemon.Harness.Claude;
 
 /// <summary>
-/// Locates the transcript a freshly spawned hosted Claude agent writes — and with it the agent's
-/// session id — by scanning the Claude Code project directory. The daemon reports the id over its
-/// own authenticated connection, so the server's link to the session does not depend on the
-/// agent's session-start hook reaching it.
+/// Locates the transcript a hosted Claude agent writes — and with it the agent's session id — in the
+/// Claude Code project directory, so the daemon can report the id over its own authenticated
+/// connection rather than depend on the agent's session-start hook reaching the server.
 ///
-/// Disambiguation: the daemon symlinks the worktree's project dir to the SOURCE repo's project
-/// dir (see <c>ClaudeLauncher.SymlinkClaudeProjectDir</c>), which is shared with the user's own
-/// sessions in that repo — so a new <c>.jsonl</c> there is not necessarily this agent's.
-/// Candidates are verified by reading the first lines of the file and requiring the JSON
-/// <c>"cwd"</c> field to equal the agent's worktree path (the worktree is created per-agent, so a
-/// cwd match is definitive).
-///
-/// The decision logic (cwd matching, filename → session id parsing, timestamp filtering) is pure
-/// and unit-tested without a filesystem; only <see cref="TryLocateWinner"/> — and
-/// <see cref="TryLocate"/> through it — touches disk.
+/// That directory is shared with every other Claude session in the same folder: an owned worktree's
+/// project dir is a symlink onto the source repo's (see <c>ClaudeLauncher.SymlinkClaudeProjectDir</c>),
+/// and a borrowed cwd is the user's own checkout. A session id the daemon already holds is therefore
+/// looked up by file name (<see cref="TryLocateSession"/>). Without one, a candidate's early
+/// <c>"cwd"</c> lines must equal the agent's worktree path (<see cref="TryLocateWinner"/>), which
+/// proves the file is the agent's only when that path is a worktree created for it.
 /// </summary>
 internal static class SessionTranscriptLocator {
     /// <summary>
@@ -30,8 +26,7 @@ internal static class SessionTranscriptLocator {
     /// <summary>
     /// Slack applied to the spawn-time filter to absorb filesystem timestamp
     /// granularity (e.g. FAT's 2 s) and small clock quirks. Safe to be generous:
-    /// the cwd check — against a worktree path created for this specific agent —
-    /// is the real disambiguator; the time filter only avoids re-reading old files.
+    /// the cwd check is the real disambiguator; the time filter only avoids re-reading old files.
     /// </summary>
     static readonly TimeSpan FileTimeSkewTolerance = TimeSpan.FromSeconds(5);
 
@@ -41,6 +36,43 @@ internal static class SessionTranscriptLocator {
     /// </summary>
     public static string? TryLocate(string projectDir, string worktreePath, DateTime spawnedAtUtc, ISet<string>? ruledOut = null) =>
         TryLocateWinner(projectDir, worktreePath, spawnedAtUtc, ruledOut)?.SessionId;
+
+    /// <summary>
+    /// Finds the named transcript in the current project first, then across sibling project directories.
+    /// Distinct cross-project copies are ambiguous. Spawn time and cwd cannot identify a resumed session;
+    /// its exact id names the file, with a dashed spelling as fallback for a dashless id.
+    /// </summary>
+    internal static (string SessionId, string Path)? TryLocateSession(string projectDir, string sessionId) {
+        if (SessionIds.Canonical(sessionId) is not { } wanted || !Guid.TryParseExact(wanted, "N", out var guid)) return null;
+
+        var names = new[] { sessionId.Trim(), guid.ToString("D") };
+        if (FindIn(projectDir) is { } own) return (wanted, own);
+
+        try {
+            if (Directory.GetParent(projectDir) is not { Exists: true } projects) return null;
+
+            string? winner = null;
+            foreach (var sibling in projects.EnumerateDirectories()) {
+                if (FindIn(sibling.FullName) is not { } candidate) continue;
+                if (winner is not null && !string.Equals(winner, candidate, DefaultPathComparison)) return null;
+                winner = candidate;
+            }
+
+            return winner is null ? null : (wanted, winner);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            return null;
+        }
+
+        string? FindIn(string directory) {
+            var resolved = ResolveDirectory(directory);
+            foreach (var name in names) {
+                var path = Path.Combine(resolved, name + ".jsonl");
+                if (File.Exists(path)) return path;
+            }
+
+            return null;
+        }
+    }
 
     /// <summary>
     /// Scans <paramref name="projectDir"/> for a transcript written at/after
@@ -63,7 +95,7 @@ internal static class SessionTranscriptLocator {
     internal static (string SessionId, string Path)? TryLocateWinner(string projectDir, string worktreePath, DateTime spawnedAtUtc, ISet<string>? ruledOut = null) {
         if (!Directory.Exists(projectDir)) return null;
 
-        foreach (var file in Directory.EnumerateFiles(projectDir, "*.jsonl")) {
+        foreach (var file in EnumerateTranscripts(projectDir)) {
             if (ruledOut?.Contains(file) == true) continue;
 
             try {
@@ -77,7 +109,7 @@ internal static class SessionTranscriptLocator {
                 }
 
                 switch (MatchTranscript(ReadFirstLines(file), worktreePath, DefaultPathComparison)) {
-                    case CwdMatch.Yes: return (sessionId, Path.Combine(ResolveDirectory(projectDir), Path.GetFileName(file)));
+                    case CwdMatch.Yes: return (sessionId, file);
                     case CwdMatch.No:  ruledOut?.Add(file); break; // another session's transcript — cwd is fixed
                     // CwdMatch.Unknown: no cwd yet (file still being written) — leave uncached, re-check next tick.
                 }
@@ -90,11 +122,19 @@ internal static class SessionTranscriptLocator {
         return null;
     }
 
+    /// <summary>The project dir's <c>.jsonl</c> files under its link-resolved path: the path a caller keeps,
+    /// and the one <c>ruledOut</c> is keyed by.</summary>
+    static IEnumerable<string> EnumerateTranscripts(string projectDir) {
+        var resolved = ResolveDirectory(projectDir);
+
+        return Directory.EnumerateFiles(projectDir, "*.jsonl").Select(file => Path.Combine(resolved, Path.GetFileName(file)));
+    }
+
     /// <summary>The directory a symlinked project dir points at (final target), or the directory itself.</summary>
     internal static string ResolveDirectory(string projectDir) {
         try {
             return new DirectoryInfo(projectDir).ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? projectDir;
-        } catch (IOException) {
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             return projectDir;
         }
     }

@@ -45,7 +45,7 @@ public static class FrameCodec {
     static byte[] Encode(LocalFrame f) => f.Type switch {
         FrameType.Stdin or FrameType.Stdout => f.Bytes,
         FrameType.Resize                    => Dims(f.Cols, f.Rows),
-        FrameType.Detach or FrameType.StatusSubscribe => [],
+        FrameType.Detach or FrameType.StatusSubscribe or FrameType.AccountsSubscribe => [],
         FrameType.Exited                    => BeInt(f.ExitCode),
         FrameType.RuntimeStarted            => BeLong(f.StartedAt.UtcTicks),
         FrameType.Error or FrameType.Attach or FrameType.AttachWithRuntime or FrameType.List or FrameType.AgentList
@@ -65,7 +65,9 @@ public static class FrameCodec {
             or FrameType.AdmissionFenceAck
             or FrameType.Shutdown or FrameType.ShutdownAck
             or FrameType.AgentResume or FrameType.AgentResumeAck
-            or FrameType.AgentSession or FrameType.AgentSessionReply => Encoding.UTF8.GetBytes(f.Text),
+            or FrameType.AgentSession or FrameType.AgentSessionReply
+            or FrameType.AccountsSnapshot
+            or FrameType.SessionRename or FrameType.SessionRenameAck => Encoding.UTF8.GetBytes(f.Text),
         FrameType.Attached or FrameType.Spawn
             or FrameType.StopV2 or FrameType.AttachedReadOnly => f.Bytes, // pre-encoded by the helpers below
         _ => throw new InvalidDataException($"unencodable frame {f.Type}"),
@@ -74,7 +76,7 @@ public static class FrameCodec {
     static LocalFrame Decode(FrameType t, byte[] p) => t switch {
         FrameType.Stdin or FrameType.Stdout => new(t) { Bytes = p },
         FrameType.Resize  => new(t) { Cols = Be16(p, 0), Rows = Be16(p, 2) },
-        FrameType.Detach or FrameType.StatusSubscribe => new(t),
+        FrameType.Detach or FrameType.StatusSubscribe or FrameType.AccountsSubscribe => new(t),
         FrameType.Exited  => new(t) { ExitCode = BinaryPrimitives.ReadInt32BigEndian(p) },
         FrameType.RuntimeStarted => new(t) { StartedAt = StartedAt(p) },
         FrameType.Error or FrameType.Attach or FrameType.AttachWithRuntime or FrameType.List or FrameType.AgentList
@@ -94,23 +96,25 @@ public static class FrameCodec {
             or FrameType.AdmissionFenceAck
             or FrameType.Shutdown or FrameType.ShutdownAck
             or FrameType.AgentResume or FrameType.AgentResumeAck
-            or FrameType.AgentSession or FrameType.AgentSessionReply => new(t) { Text = Encoding.UTF8.GetString(p) },
+            or FrameType.AgentSession or FrameType.AgentSessionReply
+            or FrameType.AccountsSnapshot
+            or FrameType.SessionRename or FrameType.SessionRenameAck => new(t) { Text = Encoding.UTF8.GetString(p) },
         FrameType.Attached or FrameType.Spawn
             or FrameType.StopV2 or FrameType.AttachedReadOnly => new(t) { Bytes = p },
         _ => throw new InvalidDataException($"undecodable frame {t}"),
     };
 
     // --- Spawn structured payload ---
-    // Layout: [work:1][cols:BE16][rows:BE16][vendor:LP][cwd:LP][argc:BE32][args:LP…][private:1][title:1][title text:LP].
-    // Every field after args is appended for wire compatibility: an older daemon ignores trailing
-    // bytes, and a frame from an older CLI simply ends early.
+    // Layout: [work:1][cols:BE16][rows:BE16][vendor:LP][cwd:LP][argc:BE32][args:LP…][private:1][title:1][title text:LP][account:LP].
+    // Every field after args is trailing: a reader ignores bytes past the fields it knows, and a
+    // frame may end before any of them.
     const byte SpawnNoTitle       = 0;
     const byte SpawnExplicitTitle = 1;
     const byte SpawnDerivedTitle  = 2;
 
     public static LocalFrame Spawn(
             string vendor, WorkLocation work, bool isPrivate, string cwd, IReadOnlyList<string> args, ushort cols, ushort rows,
-            AgentStartTitle? title = null) {
+            AgentStartTitle? title = null, string? accountId = null) {
         using var ms = new MemoryStream();
         ms.WriteByte((byte)work);
         WriteBe16(ms, cols); WriteBe16(ms, rows);
@@ -124,16 +128,17 @@ public static class FrameCodec {
         } else {
             ms.WriteByte(SpawnNoTitle);
         }
+        WriteLp(ms, accountId ?? "");
         return new(FrameType.Spawn) { Bytes = ms.ToArray(), Text = vendor, Work = work, Cols = cols, Rows = rows };
     }
     public static string SpawnCwd(LocalFrame f) => ParseSpawn(f.Bytes).cwd;
     public static string[] SpawnArgs(LocalFrame f) => ParseSpawn(f.Bytes).args;
-    public static (string vendor, WorkLocation work, bool isPrivate, string cwd, string[] args, ushort cols, ushort rows, AgentStartTitle? title) Spawn(LocalFrame f)
+    public static (string vendor, WorkLocation work, bool isPrivate, string cwd, string[] args, ushort cols, ushort rows, AgentStartTitle? title, string? accountId) Spawn(LocalFrame f)
         => ParseSpawn(f.Bytes);
 
     const int MaxSpawnArgs = 4096; // sane cap; the wire arg-count is untrusted (local 0600 socket, same-user)
 
-    static (string vendor, WorkLocation work, bool isPrivate, string cwd, string[] args, ushort cols, ushort rows, AgentStartTitle? title) ParseSpawn(byte[] p) {
+    static (string vendor, WorkLocation work, bool isPrivate, string cwd, string[] args, ushort cols, ushort rows, AgentStartTitle? title, string? accountId) ParseSpawn(byte[] p) {
         var o = 0;
         Require(p, o, 5); // work(1) + cols(2) + rows(2)
         var work = (WorkLocation)p[o++];
@@ -155,12 +160,27 @@ public static class FrameCodec {
 
         // A frame without the title byte, or with a kind this build does not know, carries no title.
         AgentStartTitle? title = null;
-        if (o < p.Length && p[o] is SpawnExplicitTitle or SpawnDerivedTitle) {
-            var derived = p[o++] == SpawnDerivedTitle;
-            title = new AgentStartTitle(ReadLp(p, ref o), derived);
+        var titleKindKnown = true;
+        if (o < p.Length) {
+            var kind = p[o];
+            if (kind is SpawnExplicitTitle or SpawnDerivedTitle) {
+                o++;
+                title = new AgentStartTitle(ReadLp(p, ref o), kind == SpawnDerivedTitle);
+            } else if (kind == SpawnNoTitle) {
+                o++;
+            } else {
+                titleKindKnown = false;
+            }
         }
 
-        return (vendor, work, isPrivate, cwd, args, cols, rows, title);
+        // A title kind this build does not know may lay out its own bytes, so nothing after it is read.
+        string? accountId = null;
+        if (titleKindKnown && o < p.Length) {
+            var id = ReadLp(p, ref o);
+            if (id.Length > 0) accountId = id;
+        }
+
+        return (vendor, work, isPrivate, cwd, args, cols, rows, title, accountId);
     }
 
     /// <summary>Throws <see cref="InvalidDataException"/> unless <paramref name="count"/> bytes
@@ -169,6 +189,9 @@ public static class FrameCodec {
     static void Require(byte[] p, int o, int count) {
         if (o < 0 || count < 0 || (long)o + count > p.Length) throw new InvalidDataException("Frame payload truncated");
     }
+
+    // --- AccountsSnapshot: Text = AccountsSnapshotDto JSON (snake_case via AccountsSnapshotJsonContext) ---
+    public static LocalFrame AccountsSnapshot(string json) => new(FrameType.AccountsSnapshot) { Text = json };
 
     // --- Attached structured payload: [4B agentIdLen][agentId][snapshot...] ---
     public static LocalFrame Attached(string agentId, byte[] snapshot) {

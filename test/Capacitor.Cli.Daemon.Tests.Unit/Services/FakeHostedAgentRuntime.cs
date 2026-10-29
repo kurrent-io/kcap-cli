@@ -28,7 +28,13 @@ sealed class FakeHostedAgentRuntime(string vendor, bool emitsTerminalOutput) : I
         yield break;
     }
 
-    public Task SendUserInputAsync(string  text) => Task.CompletedTask;
+    public List<string> UserInputs { get; } = [];
+
+    public Task SendUserInputAsync(string text) {
+        lock (UserInputs) UserInputs.Add(text);
+
+        return Task.CompletedTask;
+    }
     public List<string> SpecialKeys { get; } = [];
 
     public Task SendSpecialKeyAsync(string key) {

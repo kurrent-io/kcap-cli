@@ -68,7 +68,7 @@ public sealed class LocalInstallController(
         if (Running) return Task.CompletedTask;
 
         funnel.LocalInstallRetried();
-        return StartAsync(Embeddings ?? LocalEmbeddingChoice.Default, ct);
+        return StartAsync(Embeddings ?? LocalEmbeddingChoice.Recommended(LocalEmbeddingChoice.Builtin), ct);
     }
 
     /// Settles a refusal decided before any child would start, through the same path a run's failure takes.
@@ -78,6 +78,14 @@ public sealed class LocalInstallController(
         var durable = Durable();
         Publish(new LocalInstallOutcome.Failed(code, message, LocalInstallAffordance.Permanent, durable.Pending || durable.CommittedLocal),
             durable, code, quitting: false, _exited);
+    }
+
+    /// Forgets a failure the installer refused before changing anything, so the page can check again and start a fresh run.
+    public void Forget() {
+        if (Running || Outcome is not LocalInstallOutcome.Failed) return;
+
+        Progress = new LocalSetupProgress();
+        Outcome  = null;
     }
 
     /// Asks the child to stop and clean up. Every request after the first reuses it.

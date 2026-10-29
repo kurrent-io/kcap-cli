@@ -8,7 +8,8 @@ namespace Capacitor.App.Views;
 /// in MenuItem chrome. Each flyout is shared the way Fluent shares its own, so a row acts on
 /// whichever control opened it.
 public static class TextContextMenu {
-    sealed record Row(string Label, Func<Control, bool> CanRun, Action<Control> Run);
+    /// A row `IsShown` withholds is left out of the menu rather than greyed.
+    sealed record Row(string Label, Func<Control, bool> CanRun, Action<Control> Run, Func<Control, bool>? IsShown = null);
 
     public static FlyoutBase ForTextBox { get; } = Build<TextBox>(
         new("Cut", c => ((TextBox)c).CanCut, c => ((TextBox)c).Cut()),
@@ -21,6 +22,7 @@ public static class TextContextMenu {
         new("Select all", c => !string.IsNullOrEmpty(((SelectableTextBlock)c).Text), c => ((SelectableTextBlock)c).SelectAll()));
 
     public static FlyoutBase ForMarkdown { get; } = Build<MarkdownView>(
+        new("Copy link", _ => true, c => _ = ((MarkdownView)c).CopyLinkAsync(), c => ((MarkdownView)c).ContextLinkUrl is not null),
         new("Copy", c => ((MarkdownView)c).HasSelection, c => _ = ((MarkdownView)c).CopySelectionAsync()),
         new("Select all", _ => true, c => ((MarkdownView)c).SelectAll()));
 
@@ -48,7 +50,10 @@ public static class TextContextMenu {
         }
         flyout.Content = panel;
         flyout.Opening += (_, _) => {
-            foreach (var (button, row) in buttons) button.IsEnabled = flyout.Target is T target && row.CanRun(target);
+            foreach (var (button, row) in buttons) {
+                button.IsVisible = row.IsShown is null || flyout.Target is T shown && row.IsShown(shown);
+                button.IsEnabled = flyout.Target is T target && row.CanRun(target);
+            }
         };
         return flyout;
     }

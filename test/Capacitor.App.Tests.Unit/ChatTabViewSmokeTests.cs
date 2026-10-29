@@ -124,12 +124,13 @@ public class ChatTabViewSmokeTests {
         /// `show: false` leaves the window unshown, so the view has no template and no
         /// ScrollViewer until Show() is called — the order production takes, where the tab's
         /// first read starts before the workspace view exists.
-        public Host(bool show = true, IObservable<string?>? sessionId = null) {
+        public Host(bool show = true, IObservable<string?>? sessionId = null, IObservable<Capacitor.Cli.Core.Accounts.AccountsSnapshotDto?>? accountReadings = null) {
             Runs = new SessionRuns(Time);
             Terminal = new TerminalTabViewModel("a1", Daemon, Attach.Factory, () => new FakeTerminalSurface(), Time);
             Chat = new ChatTabViewModel(
                 "a1", Daemon, new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), _presence), new NoAttachmentUploader(), TranscriptChat.For("claude"), Opener, Time, Permissions, Runs,
-                sessionId: sessionId, localDaemonOnAppServer: Observable.Return(true));
+                sessionId: sessionId, localDaemonOnAppServer: Observable.Return(true),
+                accountReadings: accountReadings, usageClock: Observable.Return(StripReadings.Now));
             View = new ChatTabView { DataContext = Chat };
             Window = new Window { Content = View, Width = 800, Height = 600 };
             if (!show) return;
@@ -262,6 +263,132 @@ public class ChatTabViewSmokeTests {
                 await host.Chat.TerminalMenuChoices[2].Choose.Execute().ToTask();
                 host.Settle();
                 await Assert.That(client.SentInput.Any(bytes => bytes is [(byte)'3'])).IsTrue();
+            } finally { await host.CloseAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_ended_session_hides_stale_terminal_controls_and_shows_the_ended_hint() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            var path = Tmp.CreateFile("ended-dialog.jsonl", [UserLine]);
+            await host.AttachAsync(path);
+            var opened = false;
+            host.Chat.ShowTerminal = () => opened = true;
+            var agent = Agent("a1", "claude", hasTerminal: true) with {
+                TranscriptPath = path, Status = "Running",
+                TerminalDialog = new TerminalDialogDto("", "", [], -1, "Choose an MCP server"),
+            };
+            try {
+                host.Daemon.Agents.AddOrUpdate(agent);
+                host.Settle();
+                var openTerminal = host.View.FindControl<Button>("TerminalMenuOpenTerminal")!;
+                await Assert.That(openTerminal.IsEffectivelyVisible).IsTrue();
+                Click(host, openTerminal);
+                await Assert.That(opened).IsTrue();
+
+                host.Daemon.Agents.AddOrUpdate(agent with { Status = "Completed" });
+                host.Settle();
+
+                await Assert.That(host.Composer.IsEffectivelyVisible).IsFalse();
+                await Assert.That(host.View.FindControl<Border>("ComposerCard")!.IsEffectivelyVisible).IsFalse();
+                await Assert.That(openTerminal.IsEffectivelyVisible).IsFalse();
+                await Assert.That(openTerminal.Focus()).IsFalse();
+                var hint = host.View.FindControl<TextBlock>("EndedComposerHint")!;
+                await Assert.That(hint.IsEffectivelyVisible).IsTrue();
+                await Assert.That(hint.Text).IsEqualTo("This session has ended");
+            } finally { await host.CloseAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_account_strip_sits_under_the_composer_card_inside_the_band() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            var path = Tmp.CreateFile("account.jsonl", [UserLine]);
+            try {
+                var strip = host.View.FindControl<Border>("AccountStrip")!;
+                var card = host.View.FindControl<Border>("ComposerCard")!;
+                var band = host.View.FindControl<Border>("ComposerBand")!;
+                await Assert.That(strip.IsVisible).IsFalse();
+
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
+                    TranscriptPath = path, AccountDirectory = "/home/me/.claude-work", AccountId = "acc1", AccountLabel = "work",
+                });
+                await (host.Chat.PendingReadForTesting ?? Task.CompletedTask);
+                host.Settle();
+
+                await Assert.That(strip.IsVisible).IsTrue();
+                await Assert.That(strip.Parent).IsSameReferenceAs(card.Parent);
+                await Assert.That(strip.GetVisualAncestors()).Contains(band);
+                var cardBottom = card.TranslatePoint(new Point(0, card.Bounds.Height), host.Window)!.Value.Y;
+                await Assert.That(strip.TranslatePoint(default, host.Window)!.Value.Y).IsGreaterThanOrEqualTo(cardBottom);
+                var texts = strip.GetVisualDescendants().OfType<TextBlock>().Select(t => t.Text).ToArray();
+                await Assert.That(texts).Contains("work");
+                await Assert.That(texts).Contains("/home/me/.claude-work");
+                await Assert.That(strip.GetVisualDescendants().OfType<ContentControl>().First().Content).IsNotNull();
+
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path });
+                host.Settle();
+                await Assert.That(strip.IsVisible).IsFalse();
+            } finally { await host.CloseAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_strip_draws_a_danger_pill_for_a_blocked_account() {
+        await RunOnUiAsync(async () => {
+            var readings = new BehaviorSubject<Capacitor.Cli.Core.Accounts.AccountsSnapshotDto?>(StripReadings.Snapshot(
+                StripReadings.Account("acc1", StripReadings.Blocked(TimeSpan.FromMinutes(65),
+                    StripReadings.Window(300, 100, TimeSpan.FromMinutes(65)), StripReadings.Window(10080, 81, TimeSpan.FromDays(3))))));
+            var host = new Host(accountReadings: readings);
+            var path = Tmp.CreateFile("blocked.jsonl", [UserLine]);
+            try {
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
+                    TranscriptPath = path, AccountDirectory = StripReadings.Directory, AccountId = "acc1", AccountLabel = "work",
+                });
+                await (host.Chat.PendingReadForTesting ?? Task.CompletedTask);
+                await WaitUntilAsync(() => { host.Settle(); return host.Chat.ShowsAccountUsage; }, what: "the bars");
+
+                var strip = host.View.FindControl<Border>("AccountStrip")!;
+                var pill = host.View.FindControl<Border>("AccountStripBlocked")!;
+                await Assert.That(pill.IsEffectivelyVisible).IsTrue();
+                await Assert.That(pill.GetVisualDescendants().OfType<TextBlock>().Single().Text).IsEqualTo("Limit hit · resets in 1h 05m");
+                await Assert.That(host.View.FindControl<TextBlock>("AccountStripDirectory")!.IsEffectivelyVisible).IsFalse();
+                await Assert.That(host.View.FindControl<TextBlock>("AccountStripReset")!.IsEffectivelyVisible).IsFalse();
+                var shown = strip.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToArray();
+                await Assert.That(shown).Contains("100%");
+                await Assert.That(shown).Contains("81%");
+            } finally { await host.CloseAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_strip_shows_an_exhausted_model_limit_beside_healthy_bars() {
+        await RunOnUiAsync(async () => {
+            var modelHit = new Capacitor.Cli.Core.Accounts.Readings.AccountReadingDto(1,
+                [StripReadings.Window(300, 20, TimeSpan.FromHours(2)), new("claude_opus", 10080, 100, StripReadings.Now + TimeSpan.FromDays(2), StripReadings.Now)],
+                null, null,
+                new(StripReadings.Now.AddMinutes(-5), null, [new("claude_opus", 10080, StripReadings.Now + TimeSpan.FromDays(2), StripReadings.Now.AddMinutes(-5))]));
+            var readings = new BehaviorSubject<Capacitor.Cli.Core.Accounts.AccountsSnapshotDto?>(
+                StripReadings.Snapshot(StripReadings.Account("acc1", modelHit)));
+            var host = new Host(accountReadings: readings);
+            var path = Tmp.CreateFile("model-hit.jsonl", [UserLine]);
+            try {
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
+                    TranscriptPath = path, AccountDirectory = StripReadings.Directory, AccountId = "acc1", AccountLabel = "work",
+                });
+                await (host.Chat.PendingReadForTesting ?? Task.CompletedTask);
+                await WaitUntilAsync(() => { host.Settle(); return host.Chat.ShowsAccountUsage; }, what: "the bars");
+
+                var perModel = host.View.FindControl<TextBlock>("AccountStripPerModel")!;
+                await Assert.That(perModel.IsEffectivelyVisible).IsTrue();
+                await Assert.That(perModel.Text).IsEqualTo("+1 per model · 1 hit");
+                await Assert.That(host.View.FindControl<Border>("AccountStripBlocked")!.IsEffectivelyVisible).IsFalse();
             } finally { await host.CloseAsync(); }
         });
     }
@@ -952,7 +1079,9 @@ public class ChatTabViewSmokeTests {
             try {
                 var path = Tmp.CreateFile("escape.jsonl", [UserLine]);
                 var client = await host.AttachAsync(path);
-                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path, Status = "Running", AwaitingInput = false });
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
+                    TranscriptPath = path, Status = "Running", AwaitingInput = false, TurnAttested = true,
+                });
                 host.Type("keep this draft");
                 host.Chat.Tray.AddAll([new StagedAttachment("notes.txt", "text/plain", new byte[] { 1 })]);
                 if (button) Click(host, host.View.FindControl<Button>("InterruptButton")!);
@@ -967,6 +1096,119 @@ public class ChatTabViewSmokeTests {
         });
     }
 
+    /// A Working status is not proof of a turn: an idle PTY prompt reports AwaitingInput false
+    /// until a Stop lands. The button stays, so the shortcut's own gate is what keeps Escape off it.
+    [Test]
+    [Arguments(false, null, 0)]
+    [Arguments(false, false, 0)]
+    [Arguments(true, false, 1)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Escape_does_not_reach_a_prompt_without_a_confirmed_foreground_turn(
+            bool? awaitingInput, bool? turnAttested, int liveSubagents) {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            try {
+                var path = Tmp.CreateFile("escape-idle.jsonl", [UserLine]);
+                var client = await host.AttachAsync(path);
+                var ancestorSawEscape = false;
+                host.Window.KeyDown += (_, e) => ancestorSawEscape |= e.Key == Key.Escape;
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
+                    TranscriptPath = path, Status = "Running", AwaitingInput = awaitingInput, TurnAttested = turnAttested,
+                    LiveSubagents = liveSubagents,
+                });
+                host.Settle();
+                await Assert.That(host.Chat.ShowsInterrupt).IsTrue();
+                await Assert.That(host.Chat.CanInterruptWithEscape).IsFalse();
+                await Assert.That(host.View.FindControl<Button>("InterruptButton")!.Content).IsEqualTo("Interrupt");
+                host.Type("keep this draft");
+                host.Press(PhysicalKey.Escape);
+                await Assert.That(client.SentInput).IsEmpty();
+                await Assert.That(ancestorSawEscape).IsFalse();
+                await Assert.That(host.Composer.Text).IsEqualTo("keep this draft");
+                // An attested turn may be interrupted; the same shortcut goes inert as soon as it ends.
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
+                    TranscriptPath = path, Status = "Running", AwaitingInput = false, TurnAttested = true,
+                    LiveSubagents = liveSubagents,
+                });
+                host.Settle();
+                await Assert.That(host.View.FindControl<Button>("InterruptButton")!.Content).IsEqualTo("Interrupt (Esc)");
+                host.Press(PhysicalKey.Escape);
+                await Assert.That(client.SentInput).Count().IsEqualTo(1);
+                await Assert.That(client.SentInput[0]).IsEquivalentTo(new byte[] { 0x1b });
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
+                    TranscriptPath = path, Status = "Running", AwaitingInput = true, TurnAttested = false,
+                    LiveSubagents = liveSubagents,
+                });
+                host.Settle();
+                host.Press(PhysicalKey.Escape);
+                await Assert.That(client.SentInput).Count().IsEqualTo(1);
+                await Assert.That(host.Terminal.State.Phase).IsEqualTo(TerminalSessionPhase.Attached);
+                await Assert.That(host.Composer.Text).IsEqualTo("keep this draft");
+            } finally { await host.CloseAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_child_control_can_consume_Escape_before_the_chat_interrupts() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            try {
+                var path = Tmp.CreateFile("escape-child.jsonl", [UserLine]);
+                var client = await host.AttachAsync(path);
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
+                    TranscriptPath = path, Status = "Running", AwaitingInput = false, TurnAttested = true,
+                });
+                host.Settle();
+                await Assert.That(host.Chat.CanInterruptWithEscape).IsTrue();
+                host.Type("keep this draft");
+                var consumed = false;
+                host.Composer.KeyDown += (_, e) => {
+                    if (e.Key != Key.Escape) return;
+                    consumed = true;
+                    e.Handled = true;
+                };
+                host.Press(PhysicalKey.Escape);
+                await Assert.That(consumed).IsTrue();
+                await Assert.That(client.SentInput).IsEmpty();
+                await Assert.That(host.Composer.Text).IsEqualTo("keep this draft");
+            } finally { await host.CloseAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Escape_dismisses_the_composer_context_menu_before_interrupting_the_turn() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            try {
+                var path = Tmp.CreateFile("escape-menu.jsonl", [UserLine]);
+                var client = await host.AttachAsync(path);
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
+                    TranscriptPath = path, Status = "Running", AwaitingInput = false, TurnAttested = true,
+                });
+                host.Settle();
+                await Assert.That(host.Chat.CanInterruptWithEscape).IsTrue();
+                host.Type("keep this draft");
+                var item = new MenuItem { Header = "Copy" };
+                var menu = new ContextMenu { ItemsSource = new[] { item } };
+                host.Composer.ContextMenu = menu;
+                menu.Open(host.Composer);
+                host.Settle();
+                item.Focus();
+                await Assert.That(menu.IsOpen).IsTrue();
+                host.Press(PhysicalKey.Escape);
+                await Assert.That(menu.IsOpen).IsFalse();
+                await Assert.That(client.SentInput).IsEmpty();
+                host.Composer.Focus();
+                host.Press(PhysicalKey.Escape);
+                await Assert.That(client.SentInput).Count().IsEqualTo(1);
+                await Assert.That(client.SentInput[0]).IsEquivalentTo(new byte[] { 0x1b });
+                await Assert.That(host.Composer.Text).IsEqualTo("keep this draft");
+            } finally { await host.CloseAsync(); }
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_queue_banner_shows_sent_text_until_the_transcript_echoes_it() {
@@ -974,6 +1216,7 @@ public class ChatTabViewSmokeTests {
             var host = new Host();
             var path = Tmp.CreateFile("queue.jsonl", [UserLine]);
             var client = await host.AttachAsync(path);
+            host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path, Status = "Running", AwaitingInput = true });
             host.Type("queued follow-up");
             host.PressEnter(RawInputModifiers.None);
             host.Settle();
@@ -989,6 +1232,7 @@ public class ChatTabViewSmokeTests {
             await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == QueuedChatMessage.AwaitingPickupNote && t.IsVisible)).IsFalse();
             var queued = host.Chat.QueuedMessages.Single();
             var send = banner.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "SendQueuedButton" && b.IsVisible);
+            await Assert.That(send.Content).IsEqualTo("Send again");
             host.Type("queued follow-up");
             Click(host, send);
             await WaitUntilAsync(() => client.SentInput.Count == 3, what: "queued text pasted a second time");
@@ -1212,6 +1456,10 @@ public class ChatTabViewSmokeTests {
             var you = host.View.GetVisualDescendants().OfType<TextBlock>()
                 .Single(t => t.Classes.Contains("toolKindChip") && t.Text == "You");
             await Assert.That(you.HorizontalAlignment).IsEqualTo(Avalonia.Layout.HorizontalAlignment.Left);
+
+            host.Chat.Items.OfType<UserTurnItem>().Single().Sender.Title = "Tony";
+            host.Settle();
+            await Assert.That(you.Text).IsEqualTo("Tony");
             await host.CloseAsync();
         });
     }

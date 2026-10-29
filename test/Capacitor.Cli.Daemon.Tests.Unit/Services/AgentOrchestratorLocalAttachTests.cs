@@ -12,6 +12,7 @@ using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Pty;
 using Microsoft.Extensions.Logging.Abstractions;
+using TUnit.Assertions.Enums;
 using TUnit.Core.Enums;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
@@ -72,10 +73,27 @@ public class AgentOrchestratorLocalAttachTests {
     }
 
     [Test]
-    public async Task Claude_passthrough_forwards_user_args_verbatim() {
+    public async Task Claude_passthrough_pins_a_fresh_session_ahead_of_the_user_args() {
         var launcher = new ClaudeLauncher(LauncherCfg(), TestHarnesses.Under(Home), NullLogger<ClaudeLauncher>.Instance);
         var a = launcher.BuildPassthrough(CtxFor("/r"), ["--model", "opus", "fix it"]);
-        await Assert.That(a.Args).IsEquivalentTo(new[] { "--model", "opus", "fix it" });
+
+        await Assert.That(Guid.TryParseExact(a.SessionId, "D", out _)).IsTrue();
+        await Assert.That(a.Args).IsEquivalentTo(new[] { "--session-id", a.SessionId!, "--model", "opus", "fix it" }, CollectionOrdering.Matching);
+    }
+
+    /// <summary>Claude refuses <c>--session-id</c> beside a flag that picks the session itself.</summary>
+    [Test]
+    public async Task Claude_passthrough_forwards_args_that_choose_the_session_verbatim() {
+        var launcher = new ClaudeLauncher(LauncherCfg(), TestHarnesses.Under(Home), NullLogger<ClaudeLauncher>.Instance);
+        const string resumed = "0123abcd-0000-4000-8000-0123456789ab";
+
+        var continued = launcher.BuildPassthrough(CtxFor("/r"), ["-c"]);
+        var resume    = launcher.BuildPassthrough(CtxFor("/r"), ["--resume", resumed]);
+
+        await Assert.That(continued.Args).IsEquivalentTo(new[] { "-c" });
+        await Assert.That(continued.SessionId).IsNull();
+        await Assert.That(resume.Args).IsEquivalentTo(new[] { "--resume", resumed });
+        await Assert.That(resume.SessionId).IsEqualTo(resumed);
     }
 
     [Test]
@@ -184,7 +202,9 @@ public class AgentOrchestratorLocalAttachTests {
         using var tmp = new TempDir();
         var server    = new TripwireServerConnection();
         var pty       = new EnvCapturingPtyFactory();
-        var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", "spy-claude") };
+        var launchers = new Dictionary<string, IHostedAgentLauncher> {
+            ["claude"] = new SpyHostedAgentLauncher("claude", "spy-claude") { PassthroughSessionId = "0123abcd-0000-4000-8000-0123456789ab" }
+        };
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, pty, launchers);
 
         foreach (var isPrivate in new[] { false, true }) {
@@ -790,7 +810,7 @@ public class AgentOrchestratorLocalAttachTests {
             });
 
             var config = new DaemonConfig { Store = daemons.Store, Name = "test", ServerUrl = "http://127.0.0.1:1" };
-            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), TestFences.Ipc(config, orch), TestShutdown.Ipc(orch, TestCoordinator(daemons.Store)), NullLogger<LocalControlServer>.Instance);
+            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), TestFences.Ipc(config, orch), TestShutdown.Ipc(orch, TestCoordinator(daemons.Store)), TestAccountsIpc.Inert(), NullLogger<LocalControlServer>.Instance);
             await listener.StartAsync(cts.Token);
 
             var sockPath = daemons.Store.SocketPath("test");
@@ -839,7 +859,7 @@ public class AgentOrchestratorLocalAttachTests {
             });
 
             var config = new DaemonConfig { Store = daemons.Store, Name = "test", ServerUrl = "http://127.0.0.1:1" };
-            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), TestFences.Ipc(config, orch), TestShutdown.Ipc(orch, TestCoordinator(daemons.Store)), NullLogger<LocalControlServer>.Instance);
+            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), TestFences.Ipc(config, orch), TestShutdown.Ipc(orch, TestCoordinator(daemons.Store)), TestAccountsIpc.Inert(), NullLogger<LocalControlServer>.Instance);
             await listener.StartAsync(cts.Token);
 
             var sockPath = daemons.Store.SocketPath("test");
@@ -877,7 +897,7 @@ public class AgentOrchestratorLocalAttachTests {
             orch.SeedAgentForTest("flow-1", kind: LaunchKind.ReviewFlow, flowRunId: "flow-7f3a", flowRole: "reviewer");
 
             var config = new DaemonConfig { Store = daemons.Store, Name = daemonName, ServerUrl = "http://127.0.0.1:1" };
-            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), TestFences.Ipc(config, orch), TestShutdown.Ipc(orch, TestCoordinator(daemons.Store)), NullLogger<LocalControlServer>.Instance);
+            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), TestFences.Ipc(config, orch), TestShutdown.Ipc(orch, TestCoordinator(daemons.Store)), TestAccountsIpc.Inert(), NullLogger<LocalControlServer>.Instance);
             await listener.StartAsync(cts.Token);
 
             var sockPath = daemons.Store.SocketPath(daemonName);
@@ -1051,7 +1071,7 @@ public class AgentOrchestratorLocalAttachTests {
     sealed class EnvCapturingPtyFactory : IPtyProcessFactory {
         public Dictionary<string, string>? LastEnv { get; private set; }
 
-        public IPtyProcess Spawn(string command, string[] args, string cwd, Dictionary<string, string>? extraEnv = null, ushort cols = 120, ushort rows = 40) {
+        public IPtyProcess Spawn(string command, string[] args, string cwd, Dictionary<string, string>? extraEnv = null, ushort cols = 120, ushort rows = 40, IReadOnlyCollection<string>? removeEnv = null) {
             LastEnv = extraEnv;
 
             return new StubPtyProcess();
@@ -1146,7 +1166,7 @@ public class AgentOrchestratorLocalAttachTests {
         public override Task SendTerminalDimensionsAsync(string agentId, int cols, int rows) { LastDims = (cols, rows); Calls.Add(nameof(SendTerminalDimensionsAsync)); return Task.CompletedTask; }
         public override Task LaunchFailedAsync(string agentId, string reason) { Calls.Add(nameof(LaunchFailedAsync)); return Task.CompletedTask; }
         public ConcurrentBag<AgentStartTitle?> RegisteredTitles { get; } = [];
-        public override Task<AgentRegisteredResponse> AgentRegisteredAsync(string agentId, string? prompt, string? model, string? effort, string? repoPath, string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null, string? runtimeTransport = null, string? vendor = null, AgentStartTitle? title = null, string? continuesAgentId = null) { Calls.Add(nameof(AgentRegisteredAsync)); RegisteredTitles.Add(title); return Task.FromResult(AgentRegisteredResponse.Accepted); }
+        public override Task<AgentRegisteredResponse> AgentRegisteredAsync(string agentId, string? prompt, string? model, string? effort, string? repoPath, string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null, string? runtimeTransport = null, string? vendor = null, AgentStartTitle? title = null, string? continuesAgentId = null, string? accountDirectory = null, string? accountId = null, string? accountLabel = null) { Calls.Add(nameof(AgentRegisteredAsync)); RegisteredTitles.Add(title); return Task.FromResult(AgentRegisteredResponse.Accepted); }
         public override Task AgentStatusChangedAsync(string agentId, string status, string? sessionId) { Calls.Add(nameof(AgentStatusChangedAsync)); return Task.CompletedTask; }
         public override Task AgentUnregisteredAsync(string agentId, string? stopReason = null) { Calls.Add(nameof(AgentUnregisteredAsync)); return Task.CompletedTask; }
         public override Task UpdateRepoPathsAsync() { Calls.Add(nameof(UpdateRepoPathsAsync)); return Task.CompletedTask; }

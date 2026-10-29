@@ -21,6 +21,21 @@ public class SessionStatusDotsTests {
         await Assert.That(SessionStatusDots.IsWorking(status, awaitingInput, liveSubagents)).IsEqualTo(expected);
     }
 
+    /// Working is not a foreground turn on its own; it takes the daemon's attestation, and a
+    /// pending card outranks both.
+    [Test]
+    [Arguments(false, true, false, true)]
+    [Arguments(false, false, false, false)]
+    [Arguments(true, true, false, false)]
+    [Arguments(false, true, true, false)]
+    public async Task A_foreground_turn_needs_working_and_the_daemons_attestation(
+            bool awaitingInput, bool turnAttested, bool pending, bool expected) {
+        var status = SessionStatusDots.Present("Running", awaitingInput, waitsOnUser: false, liveSubagents: null, pending,
+            usageLimitSummary: null, launchStage: null, elapsed: null, turnAttested: turnAttested);
+
+        await Assert.That(status.InForegroundTurn).IsEqualTo(expected);
+    }
+
     [Test]
     public async Task A_remote_row_carries_no_count_and_never_works_by_it() {
         var row = AgentRow.FromRemote(new AgentInstanceDto {
@@ -29,6 +44,21 @@ public class SessionStatusDotsTests {
 
         await Assert.That(row.LiveSubagents).IsNull();
         await Assert.That(SessionStatusDots.IsWorking(row.Status, row.AwaitingInput, row.LiveSubagents)).IsFalse();
+    }
+
+    [Test]
+    public async Task A_row_carries_the_account_its_lane_reports() {
+        var remote = AgentRow.FromRemote(new AgentInstanceDto {
+            AgentId = "r1", Status = "Running", DaemonName = "d", OwnerUserId = "u", Vendor = "claude",
+            AccountDirectory = "/home/me/.claude-work", AccountId = "acc1", AccountLabel = "work",
+        });
+        var local = AgentRow.FromLocal(
+            new("a1", "agent", "claude", "/repo", "Running", null, null, null, DateTime.UtcNow, null, null,
+                AccountDirectory: "/home/me/.claude", AccountId: null, AccountLabel: ".claude"),
+            new("path:/repo", "repo"));
+
+        await Assert.That((remote.AccountDirectory, remote.AccountId, remote.AccountLabel)).IsEqualTo(("/home/me/.claude-work", "acc1", "work"));
+        await Assert.That((local.AccountDirectory, local.AccountId, local.AccountLabel)).IsEqualTo(("/home/me/.claude", (string?)null, ".claude"));
     }
 
     static readonly RepoIdentity Repo = new("path:/repo", "repo");

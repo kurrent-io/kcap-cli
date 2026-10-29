@@ -1,0 +1,38 @@
+name: kcap
+title: kcap
+summary: Run and watch coding agents
+description: |
+  kcap records coding-agent sessions (Claude Code, Codex, Cursor and others) to a Capacitor
+  server, runs agents remotely through a local daemon, and gives pull-request reviews the
+  context of the sessions that produced them.
+
+  This snap ships the kcap desktop app together with the `kcap` CLI and daemon it drives, so
+  the two always match.
+adopt-info: kcap
+base: core26
+grade: devel
+# Classic: kcap runs the agent CLIs installed on the host, reads and writes their session and
+# hook files under the home directory, works in repositories anywhere on disk, and manages its
+# daemon through `systemctl --user`.
+confinement: classic
+
+platforms:
+  amd64:
+  arm64:
+
+apps:
+  kcap:
+    command: bin/kcap
+  desktop:
+    command: kcap-desktop
+
+parts:
+  kcap:
+    # Staged by scripts/build-snap.sh in the layout the release's Linux app directory uses.
+    plugin: dump
+    source: .publish/snap
+    override-build: |
+      craftctl default
+      craftctl set version="$(cat "$CRAFT_PART_SRC/VERSION")"
+    stage:
+      - -VERSION

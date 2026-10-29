@@ -20,7 +20,7 @@ public static class SessionIds {
 
     /// Must match the server's encoding byte for byte: `senc1` and the first 27 lowercase base32 characters
     /// of the id's SHA-256.
-    static string ServerToken(string id) {
+    public static string ServerToken(string id) {
         const string alphabet = "abcdefghijklmnopqrstuvwxyz234567";
         var digest = SHA256.HashData(Encoding.UTF8.GetBytes(id));
         var token = new StringBuilder("senc1", 32);

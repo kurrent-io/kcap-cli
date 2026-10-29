@@ -20,6 +20,7 @@ public sealed record LocalFrame(FrameType Type) {
     public static LocalFrame Exited(int code)           => new(FrameType.Exited) { ExitCode = code };
     public static LocalFrame Error(string m)            => new(FrameType.Error)  { Text = m };
     public static LocalFrame RuntimeStarted(DateTimeOffset at) => new(FrameType.RuntimeStarted) { StartedAt = at };
+    public static LocalFrame AccountsSubscribe()        => new(FrameType.AccountsSubscribe);
 
     /// <summary>The refusal for an id the daemon is not running; an attach to a resuming agent retries on
     /// this text and on no other.</summary>
@@ -75,4 +76,7 @@ public sealed record LocalFrame(FrameType Type) {
     public static LocalFrame SettingsJson(FrameType type, string json) => new(type) { Text = json };
 
     public static LocalFrame FenceJson(FrameType type, string json) => new(type) { Text = json };
+    /// Constructs a SessionRename or SessionRenameAck frame, whose payload is UTF-8 JSON
+    /// (snake_case via RenameIpcJsonContext) carried in Text — see RenameIpc.cs.
+    public static LocalFrame RenameJson(FrameType type, string json) => new(type) { Text = json };
 }

@@ -26,11 +26,19 @@ public sealed class WatchAckCursor(ConfigRoot config) {
         }
     }
 
-    public int? TryRead(string sessionId) {
+    public int? TryRead(string sessionId) => TryRead(sessionId, out _);
+
+    /// <param name="missing">True only when no cursor file exists. A file that cannot be read is not missing:
+    /// Windows refuses a reader while a new count is renamed into place.</param>
+    public int? TryRead(string sessionId, out bool missing) {
+        missing = false;
         try {
             return int.TryParse(File.ReadAllText(Path(sessionId)).Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var lines)
                 ? lines
                 : null;
+        } catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) {
+            missing = true;
+            return null;
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             return null;
         }

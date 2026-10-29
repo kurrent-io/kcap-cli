@@ -1,8 +1,10 @@
 using System.Reactive;
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Avalonia.Media;
 using Capacitor.App.Services;
@@ -29,9 +31,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     /// Shown the moment Reconnect is pressed. Cleared on Connected; replaced if attach stays unreachable.
     internal const string ReconnectingMessage = "Reconnecting…";
+    internal const string UpdatingDisplay = "Updating…";
 
     internal const string ReconnectFailedMessage =
-        "Could not reconnect. If the daemon isn't running, press Start daemon.";
+        "Couldn't reconnect. If the daemon isn't running, press Start daemon.";
 
     internal static bool IsInFlightReconnectMessage(string? message) =>
         message == ReconnectingMessage
@@ -39,12 +42,16 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     static readonly IBrush ConnectedBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Connected));
     static readonly IBrush InProgressBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.InProgress));
+    static readonly IBrush UpdatingBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Updating));
+    static readonly IBrush PendingBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Pending));
     static readonly IBrush DisruptedBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Disrupted));
     static readonly IBrush UnavailableBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Unavailable));
 
     static IBrush Paint(string hex) => hex switch {
         StatusColors.Connected => ConnectedBrush,
         StatusColors.InProgress => InProgressBrush,
+        StatusColors.Updating => UpdatingBrush,
+        StatusColors.Pending => PendingBrush,
         StatusColors.Disrupted => DisruptedBrush,
         _ => UnavailableBrush,
     };
@@ -161,11 +168,18 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public HomeViewModel? Home { get; }
 
     readonly NavigationGate _navigation;
+    bool _shutdownLatched;
     readonly Action<Func<Task>> _trackTeardown;
     readonly Func<string, WorkspaceViewModel>? _workspaceFactory;
     readonly Func<string, AgentOrigin?> _originOf;
     readonly Func<string, RemoteSessionViewModel?>? _remoteFactory;
+    readonly Func<string, RemoteSessionViewModel?>? _serverFactory;
     readonly IAgentDirectory? _directory;
+    readonly IServerSessionsService? _sessions;
+    readonly IDisposable _onAppServer;
+    /// A session id names a session only within one server: a hand-off to the server's row is
+    /// sound only while the local daemon reports the app's server.
+    bool _localOnAppServer = true;
     readonly SerialDisposable _rebind = new();
 
     ISessionWorkspace? _currentWorkspace;
@@ -211,6 +225,23 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// use.
     public ReactiveCommand<Unit, Unit> OpenSettingsCommand { get; }
     volatile Action? _openSettings;
+
+    /// Off macOS, the in-window menu's way to the uninstall; shown only where the app can remove itself.
+    public ReactiveCommand<Unit, Unit> CheckForUpdatesCommand { get; }
+    volatile Func<Task>? _checkForUpdates;
+
+    public bool ShowsCheckForUpdates {
+        get;
+        private set => this.RaiseAndSetIfChanged(ref field, value);
+    }
+
+    public ReactiveCommand<Unit, Unit> UninstallCommand { get; }
+    volatile Action? _uninstall;
+
+    public bool ShowsUninstall {
+        get;
+        private set => this.RaiseAndSetIfChanged(ref field, value);
+    }
 
     /// Off macOS no native app menu is drawn, so Settings, the changelog and the version ride the
     /// rail's help flyout instead.
@@ -339,11 +370,15 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             IAgentDirectory? directory = null,
             Action<FeedbackCategory>? openFeedback = null, IUrlOpener? opener = null,
             Action? requestSignIn = null, IObservable<Action?>? settingsAction = null,
-            bool? appMenuInWindow = null, Action? requestSetup = null,
+            IObservable<Func<Task>?>? checkForUpdatesAction = null,
+            IObservable<Action?>? uninstallAction = null, bool? appMenuInWindow = null, Action? requestSetup = null,
             HistoryImportRun? historyImport = null,
             IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
-            IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null, Action? openLaunchApprovals = null) {
+            IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null, Action? openLaunchApprovals = null,
+            IObservable<bool>? movingToWindowsService = null,
+            Func<string, RemoteSessionViewModel?>? serverWorkspaceFactory = null, IServerSessionsService? sessions = null) {
         _service = service;
+        _serverFactory = serverWorkspaceFactory;
         Time = time;
         Activity = activity;
         OpenLaunchApprovalsCommand = ReactiveCommand.Create(openLaunchApprovals ?? (() => { }),
@@ -355,6 +390,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         _originOf = originOf ?? (_ => AgentOrigin.Local);
         _remoteFactory = remoteWorkspaceFactory;
         _directory = directory;
+        _sessions = sessions;
+        _onAppServer = directory?.LocalDaemonOnAppServer.Subscribe(on => _localOnAppServer = on) ?? Disposable.Empty;
         Rail = rail;
         TenantName = ProfileLabelForRail(tenantName);
         CloseWorkspaceCommand = ReactiveCommand.Create(CloseWorkspace);
@@ -372,6 +409,18 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         OpenSettingsCommand = ReactiveCommand.Create(
             () => _openSettings?.Invoke(),
             settings.Select(open => open is not null).ObserveOn(RxSchedulers.MainThreadScheduler));
+        var checkForUpdates = (checkForUpdatesAction ?? Observable.Return<Func<Task>?>(null)).ObserveOn(RxSchedulers.MainThreadScheduler);
+        checkForUpdates.Subscribe(check => {
+            _checkForUpdates     = check;
+            ShowsCheckForUpdates = check is not null;
+        });
+        CheckForUpdatesCommand = ReactiveCommand.Create(() => { _ = _checkForUpdates?.Invoke(); }, checkForUpdates.Select(check => check is not null));
+        var uninstall       = (uninstallAction ?? Observable.Return<Action?>(null)).ObserveOn(RxSchedulers.MainThreadScheduler);
+        uninstall.Subscribe(run => {
+            _uninstall     = run;
+            ShowsUninstall = run is not null;
+        });
+        UninstallCommand    = ReactiveCommand.Create(() => _uninstall?.Invoke(), uninstall.Select(run => run is not null));
         SignInCommand       = ReactiveCommand.Create(() => { requestSignIn?.Invoke(); });
         CanOpenSetup = requestSetup is not null;
         SetupCommand = ReactiveCommand.Create(() => requestSetup?.Invoke());
@@ -391,13 +440,16 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         // commands must exist and be assertable pre-activation — see the class doc comment.
         // One primary action at a time: Start when nothing is listening (spawn/reattach via the
         // lifecycle); Reconnect when Start is not the right next step (skew, or still connecting).
+        // The move to the Windows service takes the daemon down and brings it back itself: a Start offered
+        // in that gap reads as a failure the user must fix.
         var canStart = service.Status
-            .Select(s => s.State == AttachState.Unreachable && s.Reason == UnreachableReason)
+            .CombineLatest(movingToWindowsService ?? Observable.Return(false),
+                (s, moving) => s.State == AttachState.Unreachable && s.Reason == UnreachableReason && !moving)
             .ObserveOn(RxSchedulers.MainThreadScheduler);
         var canRetry = service.Status
             .Select(s =>
                 s.State == AttachState.Connecting
-                || (s.State == AttachState.Unreachable && s.Reason != UnreachableReason))
+                || (s.State == AttachState.Unreachable && s.Reason is not (UnreachableReason or ExpectedDaemonRestart.Reason)))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
 
         var start = startAction ?? RunStartAsync;
@@ -483,11 +535,22 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .ToProperty(this, x => x.SignInVisible, false)
                 .DisposeWith(disposables);
 
-            _connectionDisplay = status.CombineLatest(daemonConnection, signedOut, ConnectionDisplayFor)
+            // The daemon restarting and redialing is what an update still finishing does, not an outage.
+            var updating = (Home?.UpdateFinishing ?? Observable.Return(false)).StartWith(false).DistinctUntilChanged();
+            _connectionDisplay = status.CombineLatest(daemonConnection, signedOut, updating, ConnectionDisplayFor)
                 .ToProperty(this, x => x.ConnectionDisplay, "")
                 .DisposeWith(disposables);
 
-            _statusBrush = status.CombineLatest(daemonConnection, signedOut, StatusBrushFor)
+            // The rail describes the local daemon even while the launcher targets a remote machine.
+            // Keep its lifecycle failure independent of the selected machine's banner.
+            var localFailed = status.CombineLatest(_startMessageChanges,
+                (st, message) => st.State == AttachState.Unreachable
+                    && HomeViewModel.BannerFailedFor((HomeViewModel.DaemonDownNotice, message)));
+            var failed = localFailed.CombineLatest(
+                    Home is { } home ? home.WhenAnyValue(x => x.BannerFailed) : Observable.Return(false),
+                    (local, banner) => local || banner)
+                .DistinctUntilChanged();
+            _statusBrush = status.CombineLatest(daemonConnection, signedOut, updating, failed, StatusBrushFor)
                 .ToProperty(this, x => x.StatusBrush, Paint(StatusColors.Unavailable))
                 .DisposeWith(disposables);
 
@@ -649,9 +712,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             return true;
         }
 
-        ISessionWorkspace? next = lane == AgentOrigin.Remote && _remoteFactory is { } remote
-            ? remote(agentId)
-            : _workspaceFactory is { } local ? local(agentId) : null;
+        ISessionWorkspace? next = lane switch {
+            AgentOrigin.Remote => _remoteFactory?.Invoke(agentId),
+            AgentOrigin.Server => _serverFactory?.Invoke(agentId),
+            _ => _workspaceFactory?.Invoke(agentId),
+        };
         if (next is null) return false;
 
         SwapTo(next);
@@ -668,7 +733,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     static bool Superseded(ISessionWorkspace open, AgentOrigin lane) =>
         open is RemoteSessionViewModel remote
-            ? lane != AgentOrigin.Remote || remote.OriginChangedToLocal
+            ? remote.IsSessionOnly ? lane != AgentOrigin.Server : lane != AgentOrigin.Remote || remote.OriginChangedToLocal
             : lane != AgentOrigin.Local;
 
     /// The launch auto-open. `generation` is what the launch captured BEFORE its call: a success
@@ -688,9 +753,13 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             CloseWorkspace();
     }
 
-    /// The coordinator's close paths. Bumps unconditionally — a close-to-hide with no workspace
-    /// open must still retire an in-flight launch's captured generation.
-    public void CloseWorkspace() => SwapTo(null);
+    /// The coordinator's close paths. Before shutdown, even a close-to-hide with no workspace
+    /// open must retire an in-flight launch's captured generation. Shutdown already released the
+    /// workspace; its final window-close notification must not touch disposed dependencies.
+    public void CloseWorkspace() {
+        if (_shutdownLatched || _navigation.ShutdownLatched) return;
+        SwapTo(null);
+    }
 
     static IObservable<bool> CanRefreshOpenWork(ISessionWorkspace? workspace) =>
         workspace is { WorkContext: var work }
@@ -708,9 +777,14 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// seals the tracker, then latch so no later window opens another. A workspace that never
     /// closed would otherwise register teardown after drain against already-disposed deps.
     public void LatchShutdown() {
+        // The confirmed shutdown pass runs after the shared rail has been disposed.
+        // Each window releases its workspace once, even though the app latches on every pass.
+        if (_shutdownLatched) return;
+        _shutdownLatched = true;
         var live = CurrentWorkspace;
         CurrentWorkspace = null;
         _rebind.Disposable = Disposable.Empty;
+        _handoff.Disposable = Disposable.Empty;
         if (Rail is not null) Rail.SelectedSessionKey = null;
         _navigation.Latch();
         if (live is not null) _trackTeardown(live.TeardownAsync);
@@ -720,36 +794,76 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         var outgoing = CurrentWorkspace;
         CurrentWorkspace = next;
         if (Rail is not null) Rail.SelectedSessionKey = next switch {
+            RemoteSessionViewModel { IsSessionOnly: true } session => $"server:{session.AgentId}",
             RemoteSessionViewModel remote => $"remote:{remote.AgentId}",
             null => null,
             _ => $"local:{next.AgentId}",
         };
         _navigation.Bump();
         if (outgoing is not null) _trackTeardown(outgoing.TeardownAsync);
+        _handoff.Disposable = Disposable.Empty;
         // Last, so a watch that fires synchronously on its first element cannot have the swap it
         // caused overwritten by the arming that is still returning.
         WatchOpen(next);
     }
 
-    /// An open workspace follows its row across lanes, both directions, carrying the tab in use,
-    /// and closes once its session ends: the rail has already dropped it.
+    /// An open workspace follows its row across lanes, both directions, carrying the tab in use.
+    /// Once its session ends it hands off to the server's row for that session, which opens the
+    /// ended session read-only; a session the server never lists closes as the rail has dropped it,
+    /// and a failed local agent closes at once so its reason stays where the rail shows it. A
+    /// session-only workspace closes on the server's own word that the session is gone, and follows
+    /// the session onto a daemon row that takes it up; a row removed by a page cut or a scope switch
+    /// is neither, and the workspace outlives it.
     void WatchOpen(ISessionWorkspace? workspace) {
         var moves = workspace switch {
-            RemoteSessionViewModel remote => remote.OriginChangedChanges
+            RemoteSessionViewModel { IsSessionOnly: false } remote => remote.OriginChangedChanges
                 .Where(moved => moved)
                 .Take(1)
                 .ObserveOn(RxSchedulers.MainThreadScheduler)
-                .Subscribe(_ => Rebind(remote, AgentOrigin.Local, remote.IsTerminalActive, remote.IsPullRequestActive)),
+                .Subscribe(_ => Rebind(remote, AgentOrigin.Local, remote.AgentId, remote.IsTerminalActive, remote.IsPullRequestActive)),
             // Not a one-shot: a swap the host cannot complete leaves the watch armed for the next
             // proof, and one that completes retires it through the swap's own re-arming.
             WorkspaceViewModel local when _directory is { } directory => LocalRowMoves(directory, local.AgentId)
-                .Subscribe(_ => Rebind(local, AgentOrigin.Remote, local.IsTerminalActive, local.IsPullRequestActive)),
+                .Subscribe(_ => Rebind(local, AgentOrigin.Remote, local.AgentId, local.IsTerminalActive, local.IsPullRequestActive)),
             _ => Disposable.Empty,
         };
-        var ended = workspace?.Ended
-            .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(_ => { if (ReferenceEquals(CurrentWorkspace, workspace)) CloseWorkspace(); });
-        var watch = new CompositeDisposable(moves, ended ?? Disposable.Empty);
+        var ended = workspace switch {
+            WorkspaceViewModel local => local.Ended
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(_ => {
+                    if (!ReferenceEquals(CurrentWorkspace, workspace)) return;
+                    if (local.LastStatus == "Completed" && _localOnAppServer && local.SessionId is { Length: > 0 } sessionId && _directory is { } directory)
+                        ArmHandoff(local, directory, sessionId, $"local:{local.AgentId}", closeWithout: true);
+                    else CloseWorkspace();
+                }),
+            RemoteSessionViewModel { IsSessionOnly: true } session when _directory is { } directory => new CompositeDisposable(
+                (_sessions?.Dropped ?? Observable.Empty<string>())
+                    .Where(id => id == session.AgentId)
+                    .Take(1)
+                    .ObserveOn(RxSchedulers.MainThreadScheduler)
+                    .Subscribe(_ => { if (ReferenceEquals(CurrentWorkspace, workspace)) CloseWorkspace(); }),
+                directory.Rows.Connect()
+                    .ObserveOn(RxSchedulers.MainThreadScheduler)
+                    .SelectMany(changes => changes)
+                    .Where(change => change.Key == $"server:{session.AgentId}" && change.Reason == ChangeReason.Remove)
+                    .Subscribe(_ => {
+                        if (!ReferenceEquals(CurrentWorkspace, workspace)) return;
+                        if (DaemonRowFor(directory, session.AgentId) is { } row)
+                            Rebind(session, row.Origin, row.Id, terminal: false, pullRequest: session.IsPullRequestActive);
+                    })),
+            RemoteSessionViewModel { IsSessionOnly: false } remote => remote.SessionEndedChanges
+                .DistinctUntilChanged()
+                .Where(ended => ended)
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(_ => {
+                    if (!ReferenceEquals(CurrentWorkspace, workspace) || remote.OriginChangedToLocal) return;
+                    if (_directory is { } directory && _directory.Rows.Lookup($"remote:{remote.AgentId}") is { HasValue: false }
+                        && SessionOf(remote) is { Length: > 0 } sessionId)
+                        ArmHandoff(remote, directory, sessionId, $"remote:{remote.AgentId}", closeWithout: false);
+                }),
+            _ => Disposable.Empty,
+        };
+        var watch = new CompositeDisposable(moves, ended);
         // A watch that fired while it was still being armed has already swapped the workspace and
         // armed the next one: keeping this subscription would retire that one unwatched.
         if (ReferenceEquals(CurrentWorkspace, workspace)) _rebind.Disposable = watch;
@@ -788,12 +902,65 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         && !SessionStatusDots.IsTerminal(twin.Status)
         && twin.SessionId == droppedSession;
 
-    void Rebind(ISessionWorkspace open, AgentOrigin origin, bool terminal, bool pullRequest) {
+    static string? SessionOf(RemoteSessionViewModel remote) => remote.SessionId is { Length: > 0 } id ? id : null;
+
+    /// The daemon row that has taken up a session the server lists under its own spelling of the id:
+    /// one its lane vouches for now. A completed row, or a cached one whose socket or registry is
+    /// gone, is history the server row's removal exposes again, not a takeover.
+    static AgentRow? DaemonRowFor(IAgentDirectory directory, string serverSessionId) =>
+        directory.Rows.Items.FirstOrDefault(r => directory.IsHostedNow(r) && SessionIds.SameSession(serverSessionId, r.SessionId));
+
+    enum HandoffOutcome { ServerRow, Returned, Lapsed }
+
+    /// Waits for the server's row for the session, within the grace, unless the daemon row comes
+    /// back live first. `closeWithout` is the local workspace's rule: nothing arrived, so close as
+    /// the rail already dropped it; a hosted remote workspace keeps its retained transcript instead.
+    void ArmHandoff(ISessionWorkspace open, IAgentDirectory directory, string sessionId, string daemonKey, bool closeWithout) {
+        // The server spells the id its own way, so its row is found by identity rather than by key.
+        AgentRow? EndedServerRow() => directory.Rows.Items.FirstOrDefault(r => r.IsEndedSession && SessionIds.SameSession(r.SessionId, sessionId));
+        // The daemon row has returned only when a change to that row after arming shows it live and
+        // the directory still says so when the change is read: the directory can carry the row as
+        // running at the instant the workspace learns it completed, another row's revision proves
+        // nothing about it, and a burst can queue a live revision ahead of the end.
+        var outcomes = directory.Rows.Connect(suppressEmptyChangeSets: false)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Skip(1)
+            .Select(changes => changes.Any(change => change.Key == daemonKey
+                    && change.Reason is ChangeReason.Add or ChangeReason.Update or ChangeReason.Refresh
+                    && !SessionStatusDots.IsTerminal(change.Current.Status))
+                && directory.Rows.Lookup(daemonKey) is { HasValue: true, Value: var back } && !SessionStatusDots.IsTerminal(back.Status))
+            .StartWith(false)
+            .Select(returned => returned
+                ? HandoffOutcome.Returned
+                : EndedServerRow() is not null
+                    ? HandoffOutcome.ServerRow
+                    : (HandoffOutcome?)null)
+            .Where(outcome => outcome is not null)
+            .Select(outcome => outcome!.Value)
+            .Merge(After(Time, AgentDirectory.HandoverGrace).Select(_ => HandoffOutcome.Lapsed))
+            .Take(1);
+        _handoff.Disposable = outcomes.Subscribe(outcome => {
+            if (!ReferenceEquals(CurrentWorkspace, open)) return;
+            switch (outcome) {
+                case HandoffOutcome.ServerRow when EndedServerRow() is { } row: Rebind(open, AgentOrigin.Server, row.Id, terminal: false, pullRequest: false); break;
+                case HandoffOutcome.Lapsed when closeWithout: CloseWorkspace(); break;
+            }
+        });
+    }
+
+    readonly SerialDisposable _handoff = new();
+
+    static IObservable<Unit> After(TimeProvider time, TimeSpan due) => Observable.Create<Unit>(observer => {
+        var timer = time.CreateTimer(_ => RxSchedulers.MainThreadScheduler.Schedule(() => observer.OnNext(Unit.Default)), null, due, Timeout.InfiniteTimeSpan);
+        return timer;
+    });
+
+    void Rebind(ISessionWorkspace open, AgentOrigin origin, string id, bool terminal, bool pullRequest) {
         if (!ReferenceEquals(CurrentWorkspace, open)) return;
         var subject = open.PullRequests?.Selected?.Subject;
-        OpenSessionCore(open.AgentId, origin, revealInRail: false);
+        OpenSessionCore(id, origin, revealInRail: false);
         if (ReferenceEquals(CurrentWorkspace, open)) return;
-        open.HandDraftTo(origin);
+        if (origin != AgentOrigin.Server) open.HandDraftTo(origin);
         if (terminal) {
             switch (CurrentWorkspace) {
                 case WorkspaceViewModel local: local.ShowTerminalCommand.Execute().Subscribe(); break;
@@ -818,6 +985,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     static string? ReasonText(AttachStatus status) => status.State switch {
         AttachState.Unreachable when status.Reason == IncompatibleReason => HomeViewModel.DaemonIncompatibleNotice,
+        AttachState.Unreachable when status.Reason == ExpectedDaemonRestart.Reason => HomeViewModel.DaemonRestartingNotice,
         AttachState.Unreachable => HomeViewModel.DaemonDownNotice,
         _ => null,
     };
@@ -858,29 +1026,42 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     // daemonConnection seam comment above); an Unreachable/Connecting attach state always wins
     // regardless of whatever Connection word a stale retained snapshot might carry.
     internal static string ConnectionDisplayFor(
-            AttachStatus status, string daemonConnection, bool signInExpired = false) {
+            AttachStatus status, string daemonConnection, bool signInExpired = false, bool updating = false) {
         if (signInExpired) return SignedOutDisplay;
+        if (updating) return UpdatingDisplay;
         if (status.State == AttachState.Connecting) return "Connecting…";
         if (status.State == AttachState.Unreachable)
-            return status.Reason == IncompatibleReason ? "Incompatible" : "Unreachable";
+            return status.Reason switch {
+                IncompatibleReason => "Incompatible",
+                ExpectedDaemonRestart.Reason => "Restarting…",
+                _ => "Unreachable",
+            };
 
         var word = Capitalize(daemonConnection);
         return daemonConnection is "connecting" or "reconnecting" ? word + "…" : word;
     }
 
-    // Same bucketing as ConnectionDisplayFor, kept as a parallel switch (not derived from the text)
-    // so a future wording tweak there can never silently detune the color.
+    /// The launcher's tones: red when something broke, amber when it needs the user, the spinner's grey while
+    /// work is in progress, and purple while an update finishes. Kept as its own switch, not derived from the text,
+    /// so a wording change there cannot retune it.
+    /// <param name="failed">The launcher's card reports a failure: versions that cannot work together, a local
+    /// server that refused the app, or a daemon still down after a start that did not work.</param>
     internal static IBrush StatusBrushFor(
-            AttachStatus status, string daemonConnection, bool signInExpired = false) {
-        if (signInExpired) return Paint(StatusColors.Disrupted);
-        if (status.State == AttachState.Connecting) return Paint(StatusColors.InProgress);
+            AttachStatus status, string daemonConnection, bool signInExpired = false, bool updating = false, bool failed = false) {
+        if (signInExpired) return Paint(failed ? StatusColors.Disrupted : StatusColors.InProgress);
+        if (updating) return Paint(StatusColors.Updating);
+        if (status.State == AttachState.Connecting) return Paint(StatusColors.Pending);
         if (status.State == AttachState.Unreachable)
-            return status.Reason == IncompatibleReason ? Paint(StatusColors.Disrupted) : Paint(StatusColors.Unavailable);
+            return status.Reason switch {
+                IncompatibleReason => Paint(StatusColors.Disrupted),
+                ExpectedDaemonRestart.Reason => Paint(StatusColors.Pending),
+                _ => Paint(failed ? StatusColors.Disrupted : StatusColors.InProgress),
+            };
 
         return daemonConnection switch {
             "connected" => Paint(StatusColors.Connected),
-            "connecting" or "reconnecting" => Paint(StatusColors.InProgress),
-            "disconnected" => Paint(StatusColors.Disrupted),
+            "connecting" or "reconnecting" => Paint(StatusColors.Pending),
+            "disconnected" => Paint(StatusColors.InProgress),
             _ => Paint(StatusColors.Unavailable),
         };
     }
@@ -899,7 +1080,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         try {
             var result = await _service.StartDaemonAsync(ct);
             if (!result.Ok) StartMessage = result.Message;
-            else StartMessage = "Daemon start requested. Waiting to connect…";
+            else StartMessage = "Starting the daemon. Waiting for it to connect…";
         } catch (OperationCanceledException) {
             // App is quitting: OnShutdownRequested cancelled `ct` while this start was still in
             // flight, and StartDaemonAsync deliberately rethrows OCE for exactly that case —
