@@ -1,4 +1,5 @@
 using Capacitor.Cli.Services;
+using TUnit.Core.Enums;
 
 namespace Capacitor.Cli.Tests.Unit.Services;
 
@@ -25,8 +26,22 @@ public class ServiceManagerFactoryTests {
 
     [Test]
     public async Task ForCurrentOs_does_not_throw_on_this_host() {
-        var mgr = ServiceManagerFactory.ForCurrentOs(Config.Root, Home, TimeProvider.System);
+        var mgr = ServiceManagerFactory.ForCurrentOs(Config.Root, Home, TimeProvider.System, systemdRunning: () => true);
         await Assert.That(mgr.Describe()).IsNotNull();
+    }
+
+    [Test]
+    [RunOn(OS.Linux)]
+    public async Task ForCurrentOs_on_Linux_without_systemd_has_no_service_manager() {
+        await Assert.That(() => ServiceManagerFactory.ForCurrentOs(Config.Root, Home, TimeProvider.System, systemdRunning: () => false))
+            .Throws<PlatformNotSupportedException>().WithMessageContaining("kcap daemon start -d");
+    }
+
+    [Test]
+    [RunOn(OS.Linux)]
+    public async Task ForCurrentOs_on_Linux_with_systemd_is_the_systemd_manager() {
+        await Assert.That(ServiceManagerFactory.ForCurrentOs(Config.Root, Home, TimeProvider.System, systemdRunning: () => true))
+            .IsTypeOf<SystemdServiceManager>();
     }
 
     [Test]

@@ -2,6 +2,7 @@ using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.LocalEdition;
+using Capacitor.Cli.Services;
 
 namespace Capacitor.Cli.LocalEdition;
 
@@ -12,6 +13,9 @@ sealed class LocalInstallerFactory(
     public LocalInstaller Create() {
         if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux())
             throw new LocalInstallFailure(LocalInstallFailureCode.UnsupportedPlatform, "The local edition runs on macOS for now.");
+        if (OperatingSystem.IsLinux() && !ServiceManagerFactory.SystemdRunning())
+            throw new LocalInstallFailure(LocalInstallFailureCode.UnsupportedPlatform,
+                "The local edition on Linux needs systemd, which is not running on this machine.");
 
         var service = LocalServerServices.ForCurrentOs(home, time);
         var local   = http.CreateClient(CapacitorClients.LocalInstallation);
