@@ -1,28 +1,26 @@
-using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Setup;
 
-namespace Capacitor.Cli.LocalEdition;
+namespace Capacitor.Cli.Core.LocalEdition;
 
 /// <summary>
 /// The kcap that <c>PATH</c> runs and the desktop app's bundled one, each asked for its version. The running kcap is
 /// left out, and a copy reached by both is counted once, as the app's: updating the app is what moves it.
 /// </summary>
-sealed class LocalClientCopies(IProcessRunner runner, string? searchPath, string? self, IReadOnlyList<string> appClis) : ILocalClientCopies {
+public sealed class LocalClientCopies(IProcessRunner runner, string? searchPath, string? self, IReadOnlyList<string> appClis) : ILocalClientCopies {
     static readonly TimeSpan VersionTimeout = TimeSpan.FromSeconds(10);
 
     const int OutputLimit = 4096;
 
     IReadOnlyList<ClientCopy>? _found;
 
-    public static LocalClientCopies ForCurrentProcess(UserHome home, TimeProvider time) {
-        string[] apps = OperatingSystem.IsMacOS()
-            ? [AppCli("/Applications"), AppCli(Path.Combine(home.Path, "Applications"))]
-            : [];
+    public static LocalClientCopies ForCurrentProcess(UserHome home, TimeProvider time) =>
+        new(new ProcessRunner(time), Environment.GetEnvironmentVariable("PATH"), Environment.ProcessPath, AppClis(home));
 
-        return new(new ProcessRunner(time), Environment.GetEnvironmentVariable("PATH"), Environment.ProcessPath, apps);
-    }
+    /// <summary>Where a desktop app's bundled kcap can be.</summary>
+    public static IReadOnlyList<string> AppClis(UserHome home) =>
+        OperatingSystem.IsMacOS() ? [AppCli("/Applications"), AppCli(Path.Combine(home.Path, "Applications"))] : [];
 
-    internal static string AppCli(string applications) => Path.Combine(applications, "kcap.app", "Contents", "MacOS", "kcap");
+    public static string AppCli(string applications) => Path.Combine(applications, "kcap.app", "Contents", "MacOS", "kcap");
 
     public IReadOnlyList<ClientCopy> Find() => _found ??= Locate().Select(c => c with { Version = VersionOf(c.Path) }).ToList();
 

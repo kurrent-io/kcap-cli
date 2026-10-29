@@ -80,6 +80,14 @@ public sealed class LocalInstallController(
             durable, code, quitting: false, _exited);
     }
 
+    /// Forgets a failure the installer refused before changing anything, so the page can check again and start a fresh run.
+    public void Forget() {
+        if (Running || Outcome is not LocalInstallOutcome.Failed) return;
+
+        Progress = new LocalSetupProgress();
+        Outcome  = null;
+    }
+
     /// Asks the child to stop and clean up. Every request after the first reuses it.
     public void Interrupt() {
         if (Running) _interrupt?.Cancel();
