@@ -494,8 +494,8 @@ public partial class App : Application {
 
     AppUpdateTransition? _updateNotApplied;
     Action? _closeUpdateFinishWindow;
-    // Completes once no update is being finished: at once on an ordinary launch, else when its window hands over.
-    // The command-line tool offer waits for it, since its prompt would otherwise replace that window mid-upgrade.
+    // Completes once no update is being finished: at once on an ordinary launch, else when its steps settle.
+    // The command-line tool offer waits for it, since its prompt would otherwise land in the middle of the update.
     readonly TaskCompletionSource _updateHandedOver = new(TaskCreationOptions.RunContinuationsAsynchronously);
     bool _holdingMainWindow;
 
@@ -503,6 +503,7 @@ public partial class App : Application {
             IObservable<(string? Version, string? Connection)> daemon, IObservable<bool> restartPending, IObservable<LocalStepInput?> local) {
         var vm = new UpdateFinishViewModel(transition, status, daemon, restartPending, local, _time);
         var window = new UpdateFinishWindow { DataContext = vm };
+        _home?.AttachUpdateProgress(vm.Progress);
         var opened = false;
         void BringForward() {
             if (opened) return;
@@ -521,6 +522,11 @@ public partial class App : Application {
                 ("seconds", (_time.GetUtcNow() - _startedAt).TotalSeconds.ToString("0.0", CultureInfo.InvariantCulture)));
             if (!_shutdownStarted) _coordinator?.ShowMainWindow();
             window.Close();
+            // Opened early, it keeps following the steps for the launcher until they settle.
+            if (vm.IsSettled) Settled();
+            else vm.Progress.Where(p => !p.Finishing).Take(1).Subscribe(_ => Dispatcher.UIThread.Post(Settled));
+        }
+        void Settled() {
             vm.Dispose();
             _updateHandedOver.TrySetResult();
         }

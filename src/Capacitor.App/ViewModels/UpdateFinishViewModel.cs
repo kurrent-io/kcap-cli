@@ -33,12 +33,14 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
     readonly Lock _patienceGate = new();
     int _patienceGeneration;
     bool _patienceStopped;
+    readonly BehaviorSubject<(bool Finishing, string? Detail)> _progress = new((true, null));
     readonly AppUpdateTransition _transition;
     readonly TimeProvider _time;
     IReadOnlyList<UpdateStep> _steps = [];
     bool _settled;
     bool _clean;
-    bool _closed;
+    bool _handedOver;
+    bool _disposed;
     readonly bool _closing;
 
     /// What the process being replaced shows from the moment the update is accepted until it exits: quitting
@@ -108,8 +110,12 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
     /// Raised once, when the user goes on or every step is done.
     public event Action? Completed;
 
+    /// Whether steps are still running, and the first of them in one line. Kept current after an early hand-over,
+    /// so the main window can hold back what the update is still changing.
+    public IObservable<(bool Finishing, string? Detail)> Progress => _progress.DistinctUntilChanged();
+
     void Apply((IReadOnlyList<UpdateStep> Steps, bool Settled, bool Clean) state) {
-        if (_closed) return;
+        if (_disposed) return;
         Steps = state.Steps;
         var cleanNow = state.Clean && !_clean;
         _settled = state.Settled;
@@ -118,6 +124,7 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
         this.RaisePropertyChanged(nameof(Description));
         this.RaisePropertyChanged(nameof(IsSettled));
         this.RaisePropertyChanged(nameof(OpenLabel));
+        _progress.OnNext((!state.Settled, ProgressDetail(state.Steps)));
         if (cleanNow) _ = CloseAfterAsync();
     }
 
@@ -143,9 +150,14 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
         RxSchedulers.MainThreadScheduler.Schedule(() => { if (_clean) Close(); });
     }
 
+    internal static string? ProgressDetail(IReadOnlyList<UpdateStep> steps) =>
+        steps.FirstOrDefault(step => step.State is UpdateStepState.Running or UpdateStepState.Pending) is { } step
+            ? step.Detail is { Length: > 0 } detail ? $"{step.Title} · {detail}" : step.Title
+            : null;
+
     void Close() {
-        if (_closed) return;
-        _closed = true;
+        if (_handedOver) return;
+        _handedOver = true;
         Completed?.Invoke();
     }
 
@@ -236,12 +248,16 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
     static string Display(string version) => version.Split('+', 2)[0];
 
     public void Dispose() {
-        _closed = true;
+        if (_disposed) return;
+        _disposed = true;
         _disposables.Dispose();
         lock (_patienceGate) {
             _patienceStopped = true;
             _patience.Dispose();
             _waitedLong.Dispose();
         }
+        _progress.OnNext((false, null));
+        _progress.OnCompleted();
+        _progress.Dispose();
     }
 }

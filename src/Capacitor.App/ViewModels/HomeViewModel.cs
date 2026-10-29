@@ -102,6 +102,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// hub is down; never on the wire.
     internal const string DaemonSignedOutWord = "signed out";
     internal const string LocalServerRefusedNotice = "The local server refused the connection. Restart kcap.";
+    internal const string FinishingUpdateNotice    = "Finishing the update…";
     internal const string LocalServerLostNotice    = "Lost the connection to the local server. kcap keeps retrying.";
 
     /// A service-run daemon restarts itself for a harness installed on its PATH; setup fixes a PATH that
@@ -293,6 +294,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     // A local server takes no sign-in: its recovery is the Start banner.
     readonly BehaviorSubject<bool> _localServer = new(false);
     readonly BehaviorSubject<bool> _localServerDown = new(false);
+    readonly BehaviorSubject<bool> _updateFinishing = new(false);
+    string? _updateDetail;
     readonly Action? _requestSignIn;
 
     readonly ObservableAsPropertyHelper<string?> _connectionNotice;
@@ -815,13 +818,17 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .StartWith(0);
         // Staged chips the target cannot take block Start rather than launching without them, and
         // an upload in flight owns the composer until it settles.
+        // An update still bringing this machine's local server and daemon back holds local launches until it settles.
+        var updateHolds = _updateFinishing.CombineLatest(_machineSelectionChanges, (finishing, sel) => finishing && !sel.Remote)
+            .DistinctUntilChanged();
         var canLaunch = selectedAvailability.Select(a => a == LaunchAvailability.Ready)
             .CombineLatest(
                 stagedCount.CombineLatest(canAttach, (count, attach) => count == 0 || attach),
                 _uploadingChanges,
                 noHarnesses,
                 _accountPending.DistinctUntilChanged(),
-                (ready, attachable, uploading, none, pending) => ready && attachable && !uploading && !none && !pending);
+                updateHolds,
+                (ready, attachable, uploading, none, pending, held) => ready && attachable && !uploading && !none && !pending && !held);
 
         // Explicit ObserveOn: ReactiveCommand does NOT reschedule the supplied canExecute, and a
         // Status event arrives on the daemon client's pump thread (MainWindowViewModel's canStart
@@ -933,7 +940,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .DisposeWith(_disposables);
 
         _startButtonTip = _selectedRepoPathChanges
-            .CombineLatest(notices, _accountTip, TipFor)
+            .CombineLatest(notices, _accountTip, updateHolds,
+                (repo, notice, account, held) => TipFor(repo, held ? FinishingUpdateNotice : notice, account))
             .ToProperty(this, x => x.StartButtonTip, TipFor(SelectedRepoPath, ConnectingNotice, null))
             .DisposeWith(_disposables);
 
@@ -1020,6 +1028,24 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     /// Which of the launcher's problem notices show.
     public LauncherNotices Notices { get; } = new();
+
+    /// The update's remaining step, while one still runs after the main window opened early.
+    public string? UpdateDetail {
+        get => _updateDetail;
+        private set => this.RaiseAndSetIfChanged(ref _updateDetail, value);
+    }
+
+    /// Follows an update the user went on from before it finished: with this machine selected, one card stands in
+    /// for the others and launches wait, until every step has settled.
+    public void AttachUpdateProgress(IObservable<(bool Finishing, string? Detail)> progress) {
+        progress.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(p => {
+            UpdateDetail = p.Detail;
+            _updateFinishing.OnNext(p.Finishing);
+        }).DisposeWith(_disposables);
+        // A remote machine's own notices still show: the update is changing only this one.
+        Notices.TrackUpdate(_updateFinishing.CombineLatest(_machineSelectionChanges, (finishing, sel) => finishing && !sel.Remote)
+            .DistinctUntilChanged());
+    }
 
     public void AttachLocalServerRecovery(LocalServerRecoveryViewModel recovery) {
         LocalServer = recovery;
@@ -1191,6 +1217,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         _daemonRetryVisibleFeed.Dispose();
         _daemonRepairVisibleFeed.Dispose();
         _uploadingChanges.Dispose();
+        _updateFinishing.Dispose();
         _retentionTimer.Dispose();
         _catchUpTimer.Dispose();
         _catchUpTimedOut.Dispose();

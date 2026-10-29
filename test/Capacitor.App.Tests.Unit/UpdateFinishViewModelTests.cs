@@ -197,6 +197,26 @@ public class UpdateFinishViewModelTests {
         });
     }
 
+    /// Going on early hands over the window but not the update: its progress keeps following the steps.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Progress_keeps_following_the_steps_after_an_early_hand_over() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var status = new BehaviorSubject<AttachStatus>(Restarting);
+            var daemon = new BehaviorSubject<(string?, string?)>((null, null));
+            using var vm = new UpdateFinishViewModel(Update, status, daemon, Observable.Return(false), Observable.Return<LocalStepInput?>(null), new FakeTimeProvider());
+            var progress = new List<(bool Finishing, string? Detail)>();
+            using var _ = vm.Progress.Subscribe(progress.Add);
+
+            vm.OpenCommand.Execute().Subscribe();
+            await Assert.That(progress[^1]).IsEqualTo((true, "Daemon · Restarting into 1.4.1"));
+
+            status.OnNext(Connected);
+            daemon.OnNext(("1.4.1", "connected"));
+            await Assert.That(progress[^1]).IsEqualTo((false, (string?)null));
+        });
+    }
+
     static async Task WaitUntilAsync(Func<bool> condition) {
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
         while (!condition()) {
