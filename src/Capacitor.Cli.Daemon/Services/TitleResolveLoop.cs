@@ -34,6 +34,10 @@ internal sealed class TitleResolveLoop {
     /// stayed silent this long.
     static readonly TimeSpan GenerationGrace = TimeSpan.FromMinutes(5);
 
+    /// Projection lag is seconds; the bound stops a rename the server superseded before showing
+    /// it from being held forever.
+    static readonly TimeSpan RenameLagHold = TimeSpan.FromMinutes(2);
+
     sealed class AgentTitleState {
         public string? Applied;
         /// Latest non-null native title. Cached so a transient extraction gap (an unreadable
@@ -63,6 +67,7 @@ internal sealed class TitleResolveLoop {
         /// Whether a server read has returned <see cref="Renamed"/>. The server's title is a
         /// projected read model, so until it shows the rename any other title is a lagging read.
         public bool RenameSeen;
+        public DateTimeOffset RenamedAt;
         /// The tick epoch the state was created in; a removal pass spares a state created after
         /// its snapshot, whose agent the snapshot could not have seen.
         public long Born;
@@ -128,6 +133,7 @@ internal sealed class TitleResolveLoop {
             var state = StateFor(agentId);
             state.Renamed     = renamed;
             state.RenameSeen  = false;
+            state.RenamedAt   = _time.GetUtcNow();
             state.ServerTitle = renamed;
             state.Applied     = renamed;
             state.Revision++;
@@ -270,13 +276,18 @@ internal sealed class TitleResolveLoop {
             if (serverTitle is not null && serverTitle == state.Renamed) {
                 serverReal       = serverTitle;
                 state.RenameSeen = true;
-            } else if (state.Renamed is not null && !state.RenameSeen) {
-                serverReal = state.Renamed;
             } else if (serverTitle is not null && !state.PushAttempts.Contains(serverTitle)
                     && !IsPromptEcho(serverTitle, agent.Prompt)) {
-                serverReal       = serverTitle;
-                state.Renamed    = null;
-                state.RenameSeen = false;
+                if (state.Renamed is not null && !state.RenameSeen
+                 && _time.GetUtcNow() - state.RenamedAt < RenameLagHold) {
+                    serverReal = state.Renamed;
+                } else {
+                    serverReal       = serverTitle;
+                    state.Renamed    = null;
+                    state.RenameSeen = false;
+                }
+            } else if (state.Renamed is not null && !state.RenameSeen) {
+                serverReal = state.Renamed;
             }
 
             state.ServerTitle = serverReal;

@@ -618,4 +618,22 @@ public class TitleResolveLoopTests {
         await Assert.That(h.Applied.Where(a => a.AgentId == "a2").Select(a => a.Title))
             .IsEquivalentTo(["New"], CollectionOrdering.Matching);
     }
+
+    [Test]
+    public async Task A_rename_the_server_superseded_before_showing_it_yields_after_the_hold() {
+        var h = new Harness();
+        h.Agents.Add(Agent());
+        h.Server.Get = _ => "Other";
+        var loop = h.Build();
+
+        loop.ApplyRename("a1", "New");
+        h.Time.Advance(TimeSpan.FromSeconds(30));
+        await loop.TickAsync(CancellationToken.None); // inside the hold: read as lag
+        await Assert.That(h.Applied.Select(a => a.Title)).IsEquivalentTo(["New"], CollectionOrdering.Matching);
+
+        h.Time.Advance(TimeSpan.FromMinutes(2));
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(h.Applied.Select(a => a.Title)).IsEquivalentTo(["New", "Other"], CollectionOrdering.Matching);
+    }
 }
