@@ -20,15 +20,20 @@ public interface IServerLane {
     IObservable<ServerLaneStatus> Status { get; }
     IObservable<System.Reactive.Unit> AgentInstancesChanged { get; }
     IObservable<System.Reactive.Unit> DaemonsChanged { get; }
+    IObservable<System.Reactive.Unit> DaemonAccountsChanged { get; }
     IObservable<LaunchFailure> LaunchFailures { get; }
     IObservable<string> PermissionPending { get; }
     IObservable<PermissionRespondedPing> PermissionResponded { get; }
     IObservable<ServerPermissionRequest> PermissionRequests { get; }
     IObservable<ServerElicitationRequest> ElicitationRequests { get; }
     IObservable<string> SessionAccessChanged { get; }
+    /// A session the server lists started, changed, ended, was renamed or was deleted.
+    IObservable<SessionPush> SessionPushes { get; }
     IObservable<PendingInputUpdate> PendingInputChanged { get; }
     /// Null when the lane has no live connection right now.
     Task<IReadOnlyList<Capacitor.Remote.Models.DaemonInfo>?> GetConnectedDaemonsAsync(CancellationToken ct);
+    /// Null when the lane has no live connection right now, or the call failed.
+    Task<IReadOnlyList<Capacitor.Remote.Models.DaemonAccountsDto>?> GetDaemonAccountsAsync(CancellationToken ct);
     Task<HubCallOutcome> RequestStopAgentAsync(string agentId, CancellationToken ct);
     Task<HubCallOutcome> SubscribeToChatAsync(string sessionId, CancellationToken ct);
     Task<HubCallOutcome> UnsubscribeFromChatAsync(string sessionId, CancellationToken ct);
@@ -44,5 +49,6 @@ public interface IServerLane {
     Task<HubCallOutcome> RequestResizeTerminalAsync(string agentId, int cols, int rows, CancellationToken ct);
     Task<HubCallOutcome> ReleaseResizeTerminalAsync(string agentId, CancellationToken ct);
     Task<HubCallOutcome> SendUserInputAsync(string agentId, string text, CancellationToken ct);
+    Task<HubCallOutcome> DiscardQueuedInputAsync(string agentId, Guid dispatchId, CancellationToken ct);
     Task<HubCallOutcome> SendSpecialKeyAsync(string agentId, string key, CancellationToken ct);
 }

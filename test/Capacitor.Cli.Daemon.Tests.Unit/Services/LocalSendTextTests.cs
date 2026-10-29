@@ -74,17 +74,43 @@ public class LocalSendTextTests {
     [Test]
     public async Task Protected_kind_and_not_running_are_refused_before_the_core() {
         await using var orch = Build();
-        AgentOrchestratorHarness.SeedAcpAgent(orch, "rev", new FakeAcpRuntime(), kind: LaunchKind.Review);
+        AgentOrchestratorHarness.SeedAcpAgent(orch, "flow", new FakeAcpRuntime(), kind: LaunchKind.ReviewFlow);
 
-        var ack = await Send(orch, Payload("rev", "hi"));
+        var ack = await Send(orch, Payload("flow", "hi"));
 
         await Assert.That(ack.Reason).IsEqualTo(SendTextReasons.ProtectedKind);
-        await Assert.That(ack.Error).Contains("review");
+        await Assert.That(ack.Error).Contains("review-flow");
 
         AgentOrchestratorHarness.SeedAcpAgent(orch, "starting", new FakeAcpRuntime(), status: "Starting");
         await Assert.That((await Send(orch, Payload("starting", "hi"))).Reason).IsEqualTo(SendTextReasons.NotRunning);
         AgentOrchestratorHarness.SeedAcpAgent(orch, "done", new FakeAcpRuntime(), status: "Completed");
         await Assert.That((await Send(orch, Payload("done", "hi"))).Reason).IsEqualTo(SendTextReasons.NotRunning);
+    }
+
+    [Test]
+    public async Task A_review_agent_accepts_composer_text() {
+        await using var orch = Build();
+        var rt = new FakeAcpRuntime();
+        AgentOrchestratorHarness.SeedAcpAgent(orch, "rev", rt, kind: LaunchKind.Review);
+
+        var ack = await Send(orch, Payload("rev", "what does roots.go change?"));
+
+        await Assert.That(ack).IsEqualTo(new SendTextAckDto(true, null, null, SendTextOutcomes.Delivered));
+        await Assert.That(rt.SentInputs).IsEquivalentTo(new[] { "what does roots.go change?" });
+    }
+
+    /// A composer quit would otherwise stop a review agent without the confirmation Stop asks for.
+    [Test]
+    public async Task A_quit_typed_at_a_review_agent_is_refused_and_leaves_it_running() {
+        await using var orch = Build();
+        var rt    = new FakeAcpRuntime();
+        var agent = AgentOrchestratorHarness.SeedAcpAgent(orch, "rev", rt, kind: LaunchKind.Review);
+
+        var ack = await Send(orch, Payload("rev", "/quit"));
+
+        await Assert.That(ack.Reason).IsEqualTo(SendTextReasons.ProtectedKind);
+        await Assert.That(agent.Status).IsEqualTo("Running");
+        await Assert.That(rt.SentInputs).IsEmpty();
     }
 
     [Test]

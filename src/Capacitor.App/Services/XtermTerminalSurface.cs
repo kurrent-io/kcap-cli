@@ -5,14 +5,9 @@ using SvcSystems.UI.Terminal;
 
 /// Production ITerminalSurface wrapping SvcSystems.UI.Terminal's TerminalControlModel.
 ///
-/// InputProduced fans in TWO distinct sources, neither re-exposing the other:
-/// TerminalControlModel.UserInput (keyboard/mouse-originated bytes, ReadOnlyMemory&lt;byte&gt;
-/// already) and Terminal.Engine.DataReceived (terminal-originated protocol replies, e.g. a
-/// DSR/CPR answer — only reachable via the raw XTerm.NET engine object, which neither the
-/// SvcSystems Terminal wrapper nor the model re-expose; its payload is a string that must be
-/// UTF-8 encoded before it can join the same byte[] event). Both are needed for a correct PTY
-/// round trip: dropping either one silently breaks either keystrokes or terminal-side
-/// query/response protocols (cursor position reports, etc.).
+/// InputProduced fans in two sources, and a PTY round trip needs both: the model's UserInput
+/// (keyboard and mouse) and the engine's DataReceived (terminal-originated replies such as a
+/// cursor position report), which neither the SvcSystems wrapper nor the model re-expose.
 public sealed class XtermTerminalSurface : ITerminalSurface {
     /// The VM-owned model handle the view binds.
     public TerminalControlModel Model { get; }
@@ -20,13 +15,11 @@ public sealed class XtermTerminalSurface : ITerminalSurface {
     public event Action<byte[]>? InputProduced;
     public event Action<int, int>? Resized;
 
-    // Terminal (the SvcSystems wrapper), not the model itself — the model exposes no Cols/Rows of
-    // its own, while Terminal.Cols/Rows are live, tracking every resize applied via
-    // Model.Terminal.Resize(cols, rows).
+    // The model exposes no Cols/Rows of its own; the wrapper's track every resize.
     public (int Cols, int Rows) CurrentSize => (Model.Terminal.Cols, Model.Terminal.Rows);
 
-    readonly TerminalFeedSanitizer _sanitizer = new();
     readonly string? _dumpPath;
+    bool _replaying;
 
     /// <paramref name="dumpPath"/>: a file every fed frame is appended to as received, before
     /// any rewriting — the only record of what the emulator was given.
@@ -38,24 +31,48 @@ public sealed class XtermTerminalSurface : ITerminalSurface {
             ReflowOnResize = false,
         });
 
+        // The control encodes keys with the legacy generators only, so the engine must not
+        // advertise the kitty keyboard protocol: an agent that reads the advertisement expects
+        // encodings the pane never sends.
+        Model.Terminal.Engine.Options.KittyKeyboardEnabled = false;
+
         Model.UserInput += OnUserInput;
         Model.SizeChanged += OnSizeChanged;
         Model.Terminal.Engine.DataReceived += OnDataReceived;
     }
 
-    public void Feed(string text) {
-        if (_dumpPath is not null) File.AppendAllText(_dumpPath, text);
-        Model.Feed(_sanitizer.Sanitize(text));
+    /// Characters parsed per call: each piece's rewritten copy stays under the 85 KB large-object threshold.
+    const int ParseChars = 32 * 1024;
+
+    public void Feed(string text, bool replay = false) => Feed([text], replay);
+
+    /// The body of the model's own Feed, minus its UTF-8 encode and decode of the whole text: on a
+    /// reattach's megabytes of ring those two copies land on the large-object heap.
+    public void Feed(IReadOnlyList<string> pieces, bool replay = false) {
+        Model.SearchService?.Invalidate();
+        var atBottom = Model.Terminal.Buffer.IsAtBottom;
+        var previous = _replaying;
+        _replaying = replay;
+        try {
+            foreach (var piece in pieces) {
+                if (_dumpPath is not null) File.AppendAllText(_dumpPath, piece);
+                for (var start = 0; start < piece.Length; start += ParseChars)
+                    Model.Terminal.Feed(TerminalGlyphSubstitution.Apply(piece, start, Math.Min(ParseChars, piece.Length - start)));
+            }
+        } finally {
+            _replaying = previous;
+        }
+        Model.UpdateDisplay();
+        if (atBottom) Model.EnsureCaretIsVisible();
     }
 
     void OnUserInput(object? sender, TerminalUserInputEventArgs e) =>
         InputProduced?.Invoke(e.Data.ToArray());
 
-    // Terminal-originated protocol reply (DSR/CPR etc.) — the engine hands back a decoded
-    // string, not bytes; the PTY side needs bytes, so encode here rather than push the
-    // encoding concern onto every consumer of InputProduced.
-    void OnDataReceived(object? sender, XTerm.Events.TerminalEvents.DataEventArgs e) =>
-        InputProduced?.Invoke(Encoding.UTF8.GetBytes(e.Data));
+    // The engine hands a reply back as a decoded string; the PTY side needs bytes.
+    void OnDataReceived(object? sender, XTerm.Events.TerminalEvents.DataEventArgs e) {
+        if (!_replaying) InputProduced?.Invoke(Encoding.UTF8.GetBytes(e.Data));
+    }
 
     void OnSizeChanged(object? sender, TerminalSizeChangedEventArgs e) =>
         Resized?.Invoke(e.Cols, e.Rows);

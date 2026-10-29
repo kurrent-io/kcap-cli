@@ -101,6 +101,33 @@ public class PluginCommandClaudeTests {
     }
 
     [Test]
+    public async Task Same_version_refresh_relocates_the_marketplace_and_an_existing_git_hook() {
+        using var home = new TempDir();
+        using var plugin = new TempDir();
+        var settings = home.PathTo(".claude", "settings.json");
+        SetupCommand.InstallPlugin(settings, "/Users/someone/Applications/kcap.app/Contents/Resources/kcap");
+        var old = new GitHookInstaller(new UserHome(home.Path), () => "/Users/someone/Applications/kcap.app/Contents/MacOS/kcap");
+        old.Install();
+        var env = TestEnv(home.Path, plugin.Path) with { ResolveMcpBinaryPath = () => "/Applications/kcap.app/Contents/MacOS/kcap" };
+        var exit = await new PluginCommand(env, new WorkingDirectory(home.Path)).HandleAsync(
+            ["plugin", "install", "--if-installed", "--strict-refresh"]);
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(JsonNode.Parse(File.ReadAllText(settings))!["extraKnownMarketplaces"]!["kcap"]!["source"]!["path"]!.GetValue<string>())
+            .IsEqualTo(plugin.Path);
+        await Assert.That(File.ReadAllText(home.PathTo(".gitconfig"))).DoesNotContain("/Users/someone/Applications/kcap.app");
+        await Assert.That(File.ReadAllText(home.PathTo(".gitconfig"))).Contains("/Applications/kcap.app/Contents/MacOS/kcap");
+    }
+
+    [Test]
+    public async Task Strict_refresh_reports_an_unresolvable_marketplace() {
+        using var home = new TempDir();
+        SetupCommand.InstallPlugin(home.PathTo(".claude", "settings.json"), "/old/marketplace");
+        var exit = await new PluginCommand(TestEnv(home.Path), new WorkingDirectory(home.Path)).HandleAsync(
+            ["plugin", "install", "--if-installed", "--strict-refresh"]);
+        await Assert.That(exit).IsEqualTo(1);
+    }
+
+    [Test]
     public async Task Install_claude_fresh_prints_restart_reminder() {
         using var fakeHome  = new TempDir();
         using var pluginDir = new TempDir();

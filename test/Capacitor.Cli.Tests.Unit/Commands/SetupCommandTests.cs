@@ -2,19 +2,24 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.FirstRun;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Muse;
+using Capacitor.Cli.Core.Harness.Codex;
+using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.PrDetection;
+using Spectre.Console;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
 public class SetupCommandTests {
     // Never reached: these tests drive the import and discovery steps, which do not provision.
-    static readonly TenantProvisioningClient Provisioning = new(new HttpClient());
+    static readonly TenantProvisioningClient Provisioning = new(new HttpClient(), ClientAgent.Cli);
     static readonly WorkOSClient Workos = new(new PlainHttpClientFactory(), TimeProvider.System);
     static readonly GitHubOAuthClient Github = new(new PlainHttpClientFactory());
     static readonly IHttpClientFactory HttpFactory = new PlainHttpClientFactory();
@@ -28,19 +33,98 @@ public class SetupCommandTests {
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
-    /// <summary>The command under test, with the import runner each test is pinning.</summary>
+    // Where a step-6 test's PathsWithEvalWatchFor stages a vendor's CLI, and what every Command(...)
+    // harness registry is built to search — so a test can make a vendor detected AND launchable just
+    // by staging its binary here, through the real per-vendor detection signal rather than a fake one.
+    [TempDir] public required TempDir Bin { get; init; }
+
+    /// <summary>The command under test, with the import runner each test is pinning. Step 6's
+    /// collaborators default to a fake that never spawns/launches anything real and a picker that
+    /// always answers Skip, so an ordinary test never has to know they exist.</summary>
     SetupCommand Command(ISetupImportRunner imports, string workdir) =>
+        Command(imports, FakeBackgroundImportSpawner.Running(), FakeHandoffAgentLauncher.Ran(), workdir);
+
+    SetupCommand Command(
+            ISetupImportRunner imports, IBackgroundImportSpawner spawner, IHandoffAgentLauncher launcher,
+            string workdir, Func<IReadOnlyList<string>, string?>? pick = null) =>
         new(Config.Root, Resolutions.None(Config.Root),
-            AuthFixtures.NewTokenStore(Config.Root), new RecordingBrowser(), Home, TestHarnesses.Under(Home),
+            AuthFixtures.NewTokenStore(Config.Root), new RecordingBrowser(), Home,
+            TestHarnesses.Under(Home, TestBinaries.Searching(Bin)),
             new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery,
-            NoTelemetry.Facade, AuthEndpoints.Defaults, RealFacades(), imports,
-            new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None), router: new GitProviderRouter(), workdir: new WorkingDirectory(workdir), TimeProvider.System,
-            TestBinaries.None);
+            NoTelemetry.Facade, AuthEndpoints.Defaults, RealFacades(), imports, spawner, launcher,
+            new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, NoLocalInstallation.Root), router: new GitProviderRouter(), workdir: new WorkingDirectory(workdir), TimeProvider.System,
+            TestBinaries.None, TestAccounts.None, TestPluginEnvironment.For(Home, Home.PathTo("plugin")), NoLocalInstallation.Root, FakeLocalInstallerFactory.Unused) {
+            PickHandoffVendor = pick ?? (_ => "Skip")
+        };
 
     /// <summary>The real façade: these tests drive the import and argv legs, not a substituted login.</summary>
     IOnboardingFacadeFactory RealFacades() =>
         new SetupFacadeFactory(Config.Root, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy,
-            Github, Workos, new RecordingBrowser(), NoTelemetry.Facade, AuthEndpoints.Defaults, TimeProvider.System);
+            Github, Workos, new RecordingBrowser(), NoTelemetry.Facade, AuthEndpoints.Defaults, TimeProvider.System, Provisioning);
+
+    /// <summary>A vendor's CLI name, matching <c>HandoffLaunchRecipe</c>'s own vendor list.</summary>
+    static string CliBinaryFor(HarnessId id) => id switch {
+        HarnessId.Claude      => "claude",
+        HarnessId.Codex       => "codex",
+        HarnessId.Cursor      => "cursor-agent",
+        HarnessId.Copilot     => "copilot",
+        HarnessId.Gemini      => "gemini",
+        HarnessId.Kiro        => "kiro-cli",
+        HarnessId.Pi          => "pi",
+        HarnessId.OpenCode    => "opencode",
+        HarnessId.Antigravity => "agy",
+        _ => throw new ArgumentOutOfRangeException(nameof(id), id, "No launch recipe for this vendor.")
+    };
+
+    /// <summary>Stages <paramref name="vendor"/>'s CLI on <see cref="Bin"/> (the search path every
+    /// <c>Command(...)</c> harness registry uses) and the eval-watch skill under the shared skills
+    /// tree, so the vendor comes out both detected and eligible through the real production
+    /// oracles — no fake registry, since <c>HandleAsync</c> elsewhere needs the real typed
+    /// harnesses.</summary>
+    CodingAgentsStep.Paths PathsWithEvalWatchFor(HarnessId vendor) {
+        TestBinaries.Searching(Bin, CliBinaryFor(vendor));
+
+        var skillsDir = Home.PathTo("agents-skills");
+        Home.CreateFile(["agents-skills", $"kcap-{HandoffVendorEligibility.SkillName}", "SKILL.md"], "skill");
+
+        return new CodingAgentsStep.Paths(
+            ClaudeSettingsPath:   Home.PathTo("claude-settings.json"),
+            ClaudeScopeLabel:     "user",
+            PluginDir:            null,
+            CodexHooksPath:       Home.PathTo("codex-hooks.json"),
+            CursorHooksPath:      Home.PathTo("cursor-hooks.json"),
+            CopilotHooksPath:     Home.PathTo("copilot-hooks.json"),
+            GeminiSettingsPath:   Home.PathTo("gemini-settings.json"),
+            AgentsSkillsDir:      skillsDir,
+            LegacyCodexSkillsDir: Home.PathTo("legacy-codex-skills"),
+            KiroSkillsDir:        Home.PathTo("kiro-skills"),
+            AntigravitySkillsDir: Home.PathTo("antigravity-skills"));
+    }
+
+    /// <summary>Stages <paramref name="vendor"/>'s CLI, same as <see cref="PathsWithEvalWatchFor"/>,
+    /// but never writes the skill file — so the vendor comes out detected and ineligible, the
+    /// <c>skill_not_installed</c> row.</summary>
+    CodingAgentsStep.Paths PathsWithoutEvalWatchFor(HarnessId vendor) {
+        TestBinaries.Searching(Bin, CliBinaryFor(vendor));
+
+        return NoVendorPaths();
+    }
+
+    /// <summary>No CLI staged and no skill anywhere — every vendor comes out undetected, the
+    /// <c>no_agent_detected</c> row.</summary>
+    CodingAgentsStep.Paths NoVendorPaths() =>
+        new(
+            ClaudeSettingsPath:   Home.PathTo("claude-settings.json"),
+            ClaudeScopeLabel:     "user",
+            PluginDir:            null,
+            CodexHooksPath:       Home.PathTo("codex-hooks.json"),
+            CursorHooksPath:      Home.PathTo("cursor-hooks.json"),
+            CopilotHooksPath:     Home.PathTo("copilot-hooks.json"),
+            GeminiSettingsPath:   Home.PathTo("gemini-settings.json"),
+            AgentsSkillsDir:      Home.PathTo("agents-skills"),
+            LegacyCodexSkillsDir: Home.PathTo("legacy-codex-skills"),
+            KiroSkillsDir:        Home.PathTo("kiro-skills"),
+            AntigravitySkillsDir: Home.PathTo("antigravity-skills"));
 
     // --- The browser leg's one outcome line ---
 
@@ -261,9 +345,84 @@ public class SetupCommandTests {
         await Assert.That(string.Join("\n", lines)).DoesNotContain("[green]");
     }
 
+    static BackgroundImportLaunch Launch(BackgroundImportStatus status) =>
+        new(status, "/logs/import-run1.log", status is BackgroundImportStatus.Failed ? 3 : null,
+            status is BackgroundImportStatus.Failed ? "exit 3" : null);
+
+    [Test]
+    public async Task BrowserImportSummary_while_the_child_runs_claims_only_the_newest_sessions() {
+        var text = string.Join("\n", SetupCommand.BrowserImportSummary(
+            ImportAnswer(repos: "kcap"), background: Launch(BackgroundImportStatus.Running)));
+
+        await Assert.That(text).Contains("Imported your newest sessions from 1 repository");
+        await Assert.That(text).Contains("the rest is importing in the background");
+        await Assert.That(text).Contains("/logs/import-run1.log");
+    }
+
+    [Test]
+    public async Task BrowserImportSummary_a_partial_run_names_no_remedy_while_the_child_runs() {
+        var text = string.Join("\n", SetupCommand.BrowserImportSummary(
+            ImportAnswer(repos: "kcap"), failed: true, background: Launch(BackgroundImportStatus.Running)));
+
+        await Assert.That(text).Contains("Partly imported");
+        await Assert.That(text).Contains("importing in the background");
+        await Assert.That(text).DoesNotContain("kcap setup");
+    }
+
+    [Test]
+    public async Task BrowserImportSummary_a_child_that_did_not_start_is_partial_with_the_setup_remedy() {
+        var text = string.Join("\n", SetupCommand.BrowserImportSummary(
+            ImportAnswer(repos: "kcap"), background: Launch(BackgroundImportStatus.Failed)));
+
+        await Assert.That(text).Contains("Partly imported");
+        await Assert.That(text).Contains("kcap setup");
+        await Assert.That(text).DoesNotContain("[green]");
+    }
+
+    [Test]
+    public async Task BrowserImportSummary_keeps_the_tick_when_no_child_is_still_running() {
+        foreach (var status in new[] { BackgroundImportStatus.NotNeeded, BackgroundImportStatus.ExitedZero }) {
+            var text = string.Join("\n", SetupCommand.BrowserImportSummary(ImportAnswer(repos: "kcap"), background: Launch(status)));
+
+            await Assert.That(text).Contains("[green]✓[/] Imported 1 repository");
+            await Assert.That(text).DoesNotContain("background");
+        }
+    }
+
+    [Test, NotInParallel]
+    public async Task Browser_import_step_passes_the_running_child_to_its_summary() {
+        using var console = new SpectreCapture();
+
+        await Command(FakeImportRunner.Succeeding(), Config.Directory)
+            .RunImportStepAsync(Inputs(browser: ImportAnswer(repos: "kcap")) with {
+                BrowserBackground = Launch(BackgroundImportStatus.Running)
+            });
+
+        await Assert.That(console.Flat).Contains("the rest is importing in the background");
+    }
+
     [Test]
     public async Task BrowserImportSummary_an_answer_it_read_whole_gets_one_line() {
         await Assert.That(SetupCommand.BrowserImportSummary(ImportAnswer(repos: "kcap")).Count).IsEqualTo(1);
+    }
+
+    /// <summary>Plain import applies the profile's default visibility, which can be wider than an
+    /// "only me" choice; setup re-applies each repository's chosen level.</summary>
+    [Test]
+    public async Task Browser_summary_never_names_kcap_import() {
+        var arms = new[] {
+            SetupCommand.BrowserImportSummary(ImportAnswer(repos: "kcap"), failed: true),
+            SetupCommand.BrowserImportSummary(ImportAnswer(repos: "kcap") with { Vendors = [] }),
+            SetupCommand.BrowserImportSummary(ImportAnswer(unreadable: 1, repos: "kcap")),
+            SetupCommand.BrowserImportSummary(ImportAnswer(repos: "kcap")),
+            SetupCommand.BrowserImportSummary(ImportAnswer()),
+        };
+
+        foreach (var lines in arms)
+            await Assert.That(string.Join("\n", lines)).DoesNotContain("kcap import");
+
+        foreach (var lines in arms.Take(3))
+            await Assert.That(string.Join("\n", lines)).Contains("kcap setup");
     }
 
     static FirstRunAgentsAnswer VisibilityAnswer(string? visibility) =>
@@ -468,21 +627,16 @@ public class SetupCommandTests {
     }
 
     [Test]
-    public async Task InstallPlugin_MalformedJson_StartsFromScratch() {
-        using var    tmp          = new TempDir();
-        var          settingsPath = tmp.PathTo("settings.json");
-        const string marketplace  = "/opt/kcap";
+    public async Task InstallPlugin_MalformedJson_LeavesFileUntouched() {
+        using var    tmp                    = new TempDir();
+        var          settingsPath           = tmp.PathTo("settings.json");
+        const string marketplace            = "/opt/kcap";
+        const string originalMalformedText = "not json {{{";
 
-        await File.WriteAllTextAsync(settingsPath, "not json {{{");
+        await File.WriteAllTextAsync(settingsPath, originalMalformedText);
 
-        var result = SetupCommand.InstallPlugin(settingsPath, marketplace);
-
-        await Assert.That(result).IsTrue();
-
-        var root = JsonNode.Parse(await File.ReadAllTextAsync(settingsPath))!.AsObject();
-
-        await Assert.That(root["enabledPlugins"]?["kcap@kcap"]?.GetValue<bool>() ?? false)
-            .IsTrue();
+        await Assert.That(SetupCommand.InstallPlugin(settingsPath, marketplace)).IsFalse();
+        await Assert.That(File.ReadAllText(settingsPath)).IsEqualTo(originalMalformedText);
     }
 
     [Test]
@@ -501,6 +655,150 @@ public class SetupCommandTests {
         var reloaded = await AppConfig.LoadProfileConfig(Config.Root);
         await Assert.That(reloaded.ActiveProfile).IsEqualTo("acme");
         await Assert.That(reloaded.Profiles["acme"].ServerUrl).IsEqualTo("https://a.example");
+    }
+
+    /// <summary>A service in place replaces the start-it-yourself advice, which would otherwise start a
+    /// second daemon beside it.</summary>
+    [Test]
+    [Arguments(FirstRunMachineActionOutcomes.Enabled)]
+    [Arguments(FirstRunMachineActionOutcomes.AlreadyEnabled)]
+    [Arguments(FirstRunMachineActionOutcomes.EnabledUnverified)]
+    public async Task DaemonClosingLine_drops_the_start_hint_once_a_service_runs(string outcome) {
+        var line = SetupCommand.DaemonClosingLine(new FirstRunMachineActionResult(outcome, null));
+
+        await Assert.That(line).DoesNotContain("kcap daemon start");
+        await Assert.That(line).Contains("background service");
+    }
+
+    /// <summary>A failed ensure is retried as a service; only a platform without one gets the plain start.</summary>
+    [Test]
+    public async Task DaemonClosingLine_offers_a_plain_start_only_without_a_service_manager() {
+        await Assert.That(SetupCommand.DaemonClosingLine(
+                new FirstRunMachineActionResult(FirstRunMachineActionOutcomes.Failed, null)))
+            .Contains("kcap daemon service ensure");
+        await Assert.That(SetupCommand.DaemonClosingLine(
+                new FirstRunMachineActionResult(
+                    FirstRunMachineActionOutcomes.Refused, FirstRunMachineActionReasons.UnsupportedPlatform)))
+            .Contains("kcap daemon start -d");
+    }
+
+    [Test]
+    [Arguments(null)]
+    [Arguments("")]
+    [Arguments(" ")]
+    [Arguments("--no-prompt")]
+    public async Task DaemonNameArgumentError_refuses_a_flag_with_no_usable_value(string? value) =>
+        await Assert.That(SetupCommand.DaemonNameArgumentError(
+            value is null ? ["setup", "--daemon-name"] : ["setup", "--daemon-name", value])).IsNotNull();
+
+    [Test]
+    public async Task DaemonNameArgumentError_accepts_a_name_or_no_flag() {
+        await Assert.That(SetupCommand.DaemonNameArgumentError(["setup", "--daemon-name", "laptop"])).IsNull();
+        await Assert.That(SetupCommand.DaemonNameArgumentError(["setup", "--no-prompt"])).IsNull();
+    }
+
+    /// <summary>A refusal no retry can change says why instead of sending the user to the same refusal.</summary>
+    [Test]
+    [Arguments(FirstRunMachineActionReasons.NotConfigured)]
+    [Arguments(FirstRunMachineActionReasons.NeedsAttention)]
+    public async Task DaemonClosingLine_suggests_no_retry_for_a_stable_refusal(string reason) =>
+        await Assert.That(SetupCommand.DaemonClosingLine(
+                new FirstRunMachineActionResult(FirstRunMachineActionOutcomes.Refused, reason)))
+            .DoesNotContain("retry");
+
+    /// <summary>The browser path keeps the stored setting rather than asking, and names the command that
+    /// changes it, in the direction that would change it.</summary>
+    [Test]
+    public async Task ProviderApiKeyKeptLine_names_the_command_that_flips_the_kept_value() {
+        await Assert.That(SetupCommand.ProviderApiKeyKeptLine(false)).Contains("use_provider_api_key true");
+        await Assert.That(SetupCommand.ProviderApiKeyKeptLine(true)).Contains("use_provider_api_key false");
+    }
+
+    /// <summary>The tick is a claim that commits will be filed, so only a git known to run config hooks
+    /// earns it; an unreadable version is a warning, not a pass.</summary>
+    [Test]
+    public async Task GitHookLine_ticks_only_a_git_known_to_run_config_hooks() {
+        await Assert.That(SetupCommand.GitHookLine(new Version(2, 50, 1))).Contains("ignores it");
+        await Assert.That(SetupCommand.GitHookLine(new Version(2, 54, 0))).Contains("[green]✓[/]");
+        await Assert.That(SetupCommand.GitHookLine(null)).Contains("could not read");
+        await Assert.That(SetupCommand.GitHookLine(null)).DoesNotContain("[green]✓[/]");
+    }
+
+    [Test]
+    public async Task CodexTrustReminder_appears_only_when_codex_hooks_were_installed() {
+        var withCodex = new CodingAgentsStep.Result(
+            ClaudeInstalled: false, CodexHooksInstalled: true, AgentSkillsInstalled: false,
+            CursorHooksInstalled: false, CopilotHooksInstalled: false);
+        var withoutCodex = withCodex with { CodexHooksInstalled = false, ClaudeInstalled = true };
+
+        await Assert.That(SetupCommand.CodexTrustReminder(withCodex)).Contains("trust");
+        await Assert.That(SetupCommand.CodexTrustReminder(withoutCodex)).IsNull();
+    }
+
+    [Test]
+    public async Task InstalledInLines_lists_each_path_with_home_shortened() {
+        var home  = Path.Combine("users", "kcap-home");
+        var lines = SetupCommand.InstalledInLines(
+            [Path.Combine(home, ".gitconfig"), "/etc/elsewhere"], home).ToList();
+
+        await Assert.That(lines.Count).IsEqualTo(3);
+        await Assert.That(lines[1]).Contains($"~{Path.DirectorySeparatorChar}.gitconfig");
+        await Assert.That(lines[2]).Contains("/etc/elsewhere");
+        await Assert.That(SetupCommand.InstalledInLines([], home)).IsEmpty();
+    }
+
+    [Test]
+    public async Task InstalledPaths_lists_reported_writes_once() {
+        var paths = new CodingAgentsStep.Paths(
+            ClaudeSettingsPath: "/h/.claude/settings.json", ClaudeScopeLabel: "user", PluginDir: null,
+            CodexHooksPath: "/h/.codex/hooks.json", CursorHooksPath: "/h/.cursor/hooks.json",
+            CopilotHooksPath: "/h/.copilot/kcap.json", GeminiSettingsPath: "/h/.gemini/settings.json",
+            AgentsSkillsDir: "/h/.agents/skills", LegacyCodexSkillsDir: "/h/.codex/skills",
+            CodexConfigTomlPath: "/h/.codex/config.toml");
+        var result = new CodingAgentsStep.Result(
+            ClaudeInstalled: true, CodexHooksInstalled: false, AgentSkillsInstalled: false,
+            CursorHooksInstalled: false, CopilotHooksInstalled: false,
+            GeminiHooksInstalled: true, GeminiMcpRegistered: true);
+
+        var listed = CodingAgentsStep.InstalledPaths(result, paths);
+
+        await Assert.That(listed).IsEquivalentTo(["/h/.claude/settings.json", "/h/.gemini/settings.json"]);
+    }
+
+    /// <summary>Kiro's install also switches the default agent in cli.json, and Antigravity's writes the
+    /// plugin.json it cannot load without; both are second files the hook flag alone does not name.</summary>
+    [Test]
+    public async Task InstalledPaths_names_the_second_file_kiro_and_antigravity_write() {
+        var kiroAgent = Path.Combine("h", ".kiro", "agents", "kcap.json");
+        var agyHooks  = Path.Combine("h", ".gemini", "antigravity", "plugins", "kcap", "hooks.json");
+        var paths = new CodingAgentsStep.Paths(
+            ClaudeSettingsPath: "", ClaudeScopeLabel: "user", PluginDir: null,
+            CodexHooksPath: "", CursorHooksPath: "", CopilotHooksPath: "", GeminiSettingsPath: "",
+            AgentsSkillsDir: "", LegacyCodexSkillsDir: "",
+            KiroHooksPath: kiroAgent, AntigravityHooksPath: agyHooks);
+        var result = new CodingAgentsStep.Result(
+            ClaudeInstalled: false, CodexHooksInstalled: false, AgentSkillsInstalled: false,
+            CursorHooksInstalled: false, CopilotHooksInstalled: false,
+            KiroHooksInstalled: true, AntigravityHooksInstalled: true);
+
+        var listed = CodingAgentsStep.InstalledPaths(result, paths);
+
+        await Assert.That(listed).Contains(PluginCommand.KiroSettingsPathFor(kiroAgent));
+        await Assert.That(listed).Contains(Path.Combine(Path.GetDirectoryName(agyHooks)!, "plugin.json"));
+        await Assert.That(listed.Count).IsEqualTo(4);
+    }
+
+    [Test]
+    public async Task PathShimNotice_mentions_a_password_only_on_macOS() {
+        await Assert.That(SpectreFirstRunFlowProgress.PathShimNotice(macOS: true)).Contains("password");
+        await Assert.That(SpectreFirstRunFlowProgress.PathShimNotice(macOS: false)).DoesNotContain("password");
+    }
+
+    [Test]
+    public async Task PathShimNotice_names_the_profile_line_a_standard_user_gets() {
+        var notice = SpectreFirstRunFlowProgress.PathShimNotice(macOS: true, "export PATH=\"$PATH:/Users/a/.local/bin\" (in ~/.zprofile)");
+
+        await Assert.That(notice).Contains("without admin rights, kcap adds export PATH=\"$PATH:/Users/a/.local/bin\" (in ~/.zprofile)");
     }
 
     [Test]
@@ -570,15 +868,15 @@ public class SetupCommandTests {
         // prompt it names must appear verbatim in that skill's description (asserted below)
         // or the phrase we tell users to type won't reliably fire it.
         await Assert.That(SetupCommand.GuidedTourCallToAction).IsEqualTo(
-            "New to Capacitor? Prompt \"Start kcap guided tour\" in your coding agent to see what "
-          + "Capacitor can do for you");
+            "New to kcap? Prompt \"Start kcap guided tour\" in your coding agent to see what "
+          + "kcap can do for you");
     }
 
     [Test]
     public async Task ServerSetupCallToAction_is_the_exact_agreed_wording() {
         // Pinned wording: a question the reader self-selects on, then the instruction itself.
         await Assert.That(SetupCommand.ServerSetupQuestion).IsEqualTo(
-            "Did you create this Capacitor server?");
+            "Did you create this kcap server?");
 
         await Assert.That(SetupCommand.ServerSetupAction).IsEqualTo(
             "Complete server setup with instructions here:");
@@ -607,6 +905,17 @@ public class SetupCommandTests {
     }
 
     [Test]
+    public async Task NextSteps_for_the_local_installation_points_at_its_web_ui_instead_of_server_setup() {
+        var items = SetupCommand.NextStepItems(offerGuidedTour: true, localServerUrl: "http://localhost:9473");
+
+        await Assert.That(items.Count).IsEqualTo(2);
+        await Assert.That(items.Any(i => i.Question == SetupCommand.ServerSetupQuestion)).IsFalse();
+        await Assert.That(items[0].Question).IsEqualTo(SetupCommand.LocalServerQuestion);
+        await Assert.That(items[0].Answer).Contains("[cyan]http://localhost:9473[/]");
+        await Assert.That(items[1].Question).IsEqualTo(SetupCommand.GuidedTourQuestion);
+    }
+
+    [Test]
     public async Task GuidedTourCallToAction_prompt_is_a_trigger_in_the_skill_description() {
         // Vendors match a user's message against the frontmatter `description:` only — the body
         // is read after the skill fires. So asserting the phrase is somewhere in the file would
@@ -618,6 +927,14 @@ public class SetupCommandTests {
         var description = FrontmatterDescription(await File.ReadAllTextAsync(skill));
 
         await Assert.That(description).Contains(SetupCommand.GuidedTourPrompt);
+    }
+
+    [Test]
+    public async Task Eval_watch_skill_frontmatter_carries_the_pinned_handoff_prompt() {
+        var skill = Path.Combine(RepoTree.SkillsSource(), SetupCommand.EvalWatchSkillName, "SKILL.md");
+        var description = FrontmatterDescription(await File.ReadAllTextAsync(skill));
+
+        await Assert.That(description).Contains(SetupCommand.EvalWatchPrompt);
     }
 
     /// <summary>
@@ -868,115 +1185,278 @@ public class SetupCommandTests {
             PiMcpExtensionPath:   Path.Combine(root, "pi-mcp.ts"),
             PiAgentsMdPath:       Path.Combine(root, "pi-AGENTS.md"));
 
-    // --- Step 6 (RunImportStepAsync) wiring ---
+    // --- Step 6 (RunImportStepAsync): discovery, prompt, foreground, background, handoff, picker ---
+
+    SetupCommand.ImportStepInputs Inputs(
+            bool noPrompt = false, Func<bool>? prompt = null, FirstRunImportAnswer? browser = null,
+            bool auth = true, bool skip = false, string visibility = "org_public",
+            CodingAgentsStep.Paths? paths = null, bool browserFinished = false) => new(
+        AuthSatisfied: auth, SkipImport: skip, NoPrompt: noPrompt, PromptYesNo: prompt ?? (() => true),
+        Profiles: Resolutions.At("https://example.test", Config.Root), ProfileName: "work", ServerUrl: "https://example.test",
+        DefaultVisibility: visibility, CurrentRepo: null, WorkingDirectory: Config.Directory,
+        Paths: paths ?? PathsWithEvalWatchFor(HarnessId.Codex), BrowserImport: browser, BrowserImportFailed: false,
+        BrowserFinished: browserFinished);
+
+    /// <summary>Synthetic discovery figures: <paramref name="attributed"/> sessions spread round-robin
+    /// over <paramref name="repos"/> repositories, plus <paramref name="unmatched"/> sessions with no
+    /// repository at all.</summary>
+    static ImportCommand.ImportDiscoveryResult Discovered(int repos, int attributed, int unmatched) {
+        var sessions      = new List<(string SessionId, DateTimeOffset? StartedAt)>();
+        var repoBySession = new Dictionary<string, (string Owner, string Name)?>();
+        var now           = DateTimeOffset.UtcNow;
+
+        for (var i = 0; i < attributed; i++) {
+            var id = $"attributed-{i}";
+            sessions.Add((id, now.AddDays(-i)));
+            if (repos > 0) repoBySession[id] = ($"owner{i % repos}", $"repo{i % repos}");
+        }
+
+        for (var i = 0; i < unmatched; i++) sessions.Add(($"unmatched-{i}", now.AddDays(-i)));
+
+        var summary = ImportDiscoverySummary.Build(sessions, repoBySession, []);
+
+        return new ImportCommand.ImportDiscoveryResult(summary, [.. HarnessRegistry.Identities.Select(i => i.Id)]);
+    }
+
+    /// <summary>A finished browser flow with no import answer must not leave a terminal prompt behind
+    /// the browser's Done screen, and must not import by default either.</summary>
+    [Test]
+    public async Task A_browser_flow_that_finished_without_an_import_answer_neither_prompts_nor_imports() {
+        var runner   = FakeImportRunner.Succeeding().Discovering(Discovered(3, 20, 5));
+        var prompted = false;
+
+        var result = await Command(runner, FakeBackgroundImportSpawner.Running(), FakeHandoffAgentLauncher.Ran(), Config.Directory)
+            .RunImportStepAsync(Inputs(prompt: () => prompted = true, browserFinished: true));
+
+        await Assert.That(prompted).IsFalse();
+        await Assert.That(result.Ran).IsFalse();
+        await Assert.That(runner.Captured).IsNull();
+    }
 
     [Test]
-    public async Task RunImportStepAsync_RunDecision_InvokesRunnerWithPinnedArgs() {
+    public async Task Interactive_accept_runs_a_capped_machine_wide_import_and_offers_the_handoff() {
+        var runner   = FakeImportRunner.Succeeding().Discovering(Discovered(3, 20, 5));
+        var spawner  = FakeBackgroundImportSpawner.Running();
+        var launcher = FakeHandoffAgentLauncher.Ran();
+
+        var result = await Command(runner, spawner, launcher, Config.Directory).RunImportStepAsync(Inputs());
+
+        var inv = runner.Captured!;
+        await Assert.That(inv.Scope).IsEqualTo(new ImportScope.All());
+        await Assert.That(inv.MaxSessions).IsEqualTo(5);
+        await Assert.That(inv.SkipTitle).IsFalse();
+        await Assert.That(inv.DefaultVisibility).IsEqualTo("org_public");
+        await Assert.That(spawner.Spawns).IsEqualTo(1);
+        await Assert.That(spawner.Seen!.ProfileName).IsEqualTo("work");
+        await Assert.That(spawner.Seen.DefaultVisibility).IsEqualTo("org_public");
+        await Assert.That(result.Handoff!.Offered).IsTrue();
+        var file = Directory.GetFiles(Config.Directory, "import-handoff-*.json").Single();
+        await Assert.That(await File.ReadAllTextAsync(file)).Contains("\"handoff_offered\": true");
+    }
+
+    [Test, NotInParallel]
+    public async Task An_unwritable_config_dir_warns_on_the_handoff_file_and_still_completes_the_step() {
+        if (OperatingSystem.IsWindows()) return; // no mode bits to take away
+        if (Environment.UserName == "root") return; // root ignores the missing write bit
+        var runner   = FakeImportRunner.Succeeding().Discovering(Discovered(3, 20, 5));
+        var spawner  = FakeBackgroundImportSpawner.Running();
+        var launcher = FakeHandoffAgentLauncher.Ran();
+        using var capture = new SpectreCapture();
+
+        File.SetUnixFileMode(Config.Directory, UnixFileMode.UserRead);
+        SetupCommand.ImportStepResult result;
+        try {
+            result = await Command(runner, spawner, launcher, Config.Directory).RunImportStepAsync(Inputs());
+        } finally {
+            File.SetUnixFileMode(Config.Directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        await Assert.That(capture.Text).Contains("Could not write the import handoff file");
+        await Assert.That(result.Handoff!.Offered).IsTrue();
+        await Assert.That(Directory.GetFiles(Config.Directory, "import-handoff-*.json")).IsEmpty();
+    }
+
+    [Test]
+    public async Task No_prompt_imports_everything_uncapped_with_no_child_no_file_no_handoff() {
         var runner = FakeImportRunner.Succeeding();
-        var passed = Resolutions.At("https://example.test", Config.Root);
+        var spawner = FakeBackgroundImportSpawner.Running();
 
-        await Command(runner, Config.Directory).RunImportStepAsync(
-            currentRepo:       ("acme", "widgets"),
-            authSatisfied:     true,
-            skipImport:        false,
-            noPrompt:          true,
-            promptYesNo:       () => throw new InvalidOperationException("must not prompt under --no-prompt"),
-            profiles:          passed,
-            defaultVisibility: "org_public");
+        var result = await Command(runner, spawner, FakeHandoffAgentLauncher.Ran(), Config.Directory)
+            .RunImportStepAsync(Inputs(noPrompt: true, prompt: () => throw new InvalidOperationException("must not prompt")));
 
-        var captured = runner.Captured;
-
-        await Assert.That(captured).IsNotNull();
-        await Assert.That(captured!.Profiles.Resolution.ServerUrl).IsEqualTo("https://example.test");
-        await Assert.That(captured.Repo).IsEqualTo(("acme", "widgets"));
-        await Assert.That(captured.DefaultVisibility).IsEqualTo("org_public");
-        await Assert.That(captured.AutoSkipExclusions).IsTrue();
-        await Assert.That(captured.ForcePrivate).IsFalse();
-        await Assert.That(captured.Profiles).IsSameReferenceAs(passed);
+        await Assert.That(runner.DiscoverCalls).IsEqualTo(0);
+        await Assert.That(runner.Captured!.MaxSessions).IsNull();
+        await Assert.That(spawner.Spawns).IsEqualTo(0);
+        await Assert.That(result.Handoff).IsNull();
+        await Assert.That(Directory.GetFiles(Config.Directory, "import-handoff-*.json")).IsEmpty();
     }
 
     [Test]
-    public async Task RunImportStepAsync_InteractiveAccept_InvokesRunner() {
-        var runner = FakeImportRunner.Succeeding();
+    public async Task Declined_prompt_and_skip_flag_run_nothing_and_write_nothing() {
+        var runner = FakeImportRunner.Succeeding().Discovering(Discovered(1, 2, 0));
 
-        await Command(runner, Config.Directory).RunImportStepAsync(
-            currentRepo:       ("acme", "widgets"),
-            authSatisfied:     true,
-            skipImport:        false,
-            noPrompt:          false,
-            promptYesNo:       () => true,
-            profiles:          Resolutions.At("https://example.test", Config.Root),
-            defaultVisibility: "org_public");
-
-        await Assert.That(runner.Calls).IsEqualTo(1);
-    }
-
-    [Test]
-    public async Task RunImportStepAsync_RunnerReturnsNonZero_DoesNotThrowAndCompletes() {
-        var runner = FakeImportRunner.Returning(1);
-
-        // Completing without an unhandled exception is the assertion: a non-zero exit
-        // code must be swallowed (warned about, not propagated) so setup still finishes.
-        await Command(runner, Config.Directory).RunImportStepAsync(
-            currentRepo:       ("acme", "widgets"),
-            authSatisfied:     true,
-            skipImport:        false,
-            noPrompt:          true,
-            promptYesNo:       () => throw new InvalidOperationException("must not prompt"),
-            profiles:          Resolutions.At("https://example.test", Config.Root),
-            defaultVisibility: "org_public");
-
-        await Assert.That(runner.Calls).IsEqualTo(1);
-    }
-
-    [Test]
-    public async Task RunImportStepAsync_RunnerThrows_DoesNotPropagateAndCompletes() {
-        var runner = FakeImportRunner.Throwing(new InvalidOperationException("boom"));
-
-        // Completing without the InvalidOperationException escaping is the assertion —
-        // import is best-effort and must never fail setup.
-        await Command(runner, Config.Directory).RunImportStepAsync(
-            currentRepo:       ("acme", "widgets"),
-            authSatisfied:     true,
-            skipImport:        false,
-            noPrompt:          true,
-            promptYesNo:       () => throw new InvalidOperationException("must not prompt"),
-            profiles:          Resolutions.At("https://example.test", Config.Root),
-            defaultVisibility: "org_public");
-
-        await Assert.That(runner.Calls).IsEqualTo(1);
-    }
-
-    [Test]
-    public async Task RunImportStepAsync_NoCurrentRepo_SkipsWithoutInvokingRunnerOrPrompting() {
-        var runner = FakeImportRunner.Throwing(new InvalidOperationException("must not run import"));
-
-        await Command(runner, Config.Directory).RunImportStepAsync(
-            currentRepo:       null,
-            authSatisfied:     true,
-            skipImport:        false,
-            noPrompt:          false,
-            promptYesNo:       () => throw new InvalidOperationException("must not prompt"),
-            profiles:          Resolutions.At("https://example.test", Config.Root),
-            defaultVisibility: "org_public");
+        await Command(runner, FakeBackgroundImportSpawner.Running(), FakeHandoffAgentLauncher.Ran(), Config.Directory)
+            .RunImportStepAsync(Inputs(prompt: () => false));
+        await Command(runner, FakeBackgroundImportSpawner.Running(), FakeHandoffAgentLauncher.Ran(), Config.Directory)
+            .RunImportStepAsync(Inputs(skip: true));
 
         await Assert.That(runner.Calls).IsEqualTo(0);
+        await Assert.That(Directory.GetFiles(Config.Directory, "import-handoff-*.json")).IsEmpty();
     }
 
     [Test]
-    public async Task RunImportStepAsync_SkipImportFlag_SkipsWithoutInvokingRunner() {
-        var runner = FakeImportRunner.Throwing(new InvalidOperationException("must not run import"));
+    public async Task Browser_summary_hands_back_the_prompt_as_a_paste_block() {
+        var prompt = SetupCommand.HandoffPromptText("0123456789abcdef0123456789abcdef");
 
-        await Command(runner, Config.Directory).RunImportStepAsync(
-            currentRepo:       ("acme", "widgets"),
-            authSatisfied:     true,
-            skipImport:        true,
-            noPrompt:          true,
-            promptYesNo:       () => throw new InvalidOperationException("must not prompt"),
-            profiles:          Resolutions.At("https://example.test", Config.Root),
-            defaultVisibility: "org_public");
+        var result = await Command(FakeImportRunner.Succeeding(), Config.Directory)
+            .RunImportStepAsync(Inputs(browser: ImportAnswer(repos: "kcap")) with { BrowserHandoffPrompt = prompt });
 
+        await Assert.That(result.PasteBlock).IsEqualTo(prompt);
+        await Assert.That(result.Ran).IsFalse();
+    }
+
+    [Test, NotInParallel]
+    public async Task A_browser_prompt_no_agent_can_answer_after_install_is_withheld() {
+        var prompt  = SetupCommand.HandoffPromptText("0123456789abcdef0123456789abcdef");
+        var noSkill = PathsWithEvalWatchFor(HarnessId.Codex) with { AgentsSkillsDir = Home.PathTo("no-skills") };
+        using var console = new SpectreCapture();
+
+        var result = await Command(FakeImportRunner.Succeeding(), Config.Directory)
+            .RunImportStepAsync(Inputs(browser: ImportAnswer(repos: "kcap"), paths: noSkill) with { BrowserHandoffPrompt = prompt });
+
+        await Assert.That(result.PasteBlock).IsNull();
+        await Assert.That(console.Flat).Contains("/sessions?status=ended");
+    }
+
+    [Test, NotInParallel]
+    public async Task Terminal_flow_background_failure_still_names_kcap_import_all() {
+        var runner = FakeImportRunner.Succeeding().Discovering(Discovered(3, 20, 5));
+        using var console = new SpectreCapture();
+
+        await Command(runner, FakeBackgroundImportSpawner.Failing(), FakeHandoffAgentLauncher.Ran(), Config.Directory)
+            .RunImportStepAsync(Inputs());
+
+        await Assert.That(console.Flat).Contains("kcap import --all --yes");
+    }
+
+    [Test, NotInParallel]
+    public async Task Browser_flow_background_failure_names_kcap_setup() {
+        using var console = new SpectreCapture();
+
+        SetupCommand.PrintBackground(new(BackgroundImportStatus.Failed, null, null, "exit 3"), browser: true);
+
+        await Assert.That(console.Text).Contains("kcap setup");
+        await Assert.That(console.Text).DoesNotContain("kcap import");
+    }
+
+    [Test, NotInParallel]
+    public async Task Discovery_fault_prints_the_hint_and_asks_nothing() {
+        var runner = FakeImportRunner.Succeeding().DiscoveryFaulting(new IOException("corrupt db"));
+        using var console = new SpectreCapture();
+
+        var result = await Command(runner, FakeBackgroundImportSpawner.Running(), FakeHandoffAgentLauncher.Ran(), Config.Directory)
+            .RunImportStepAsync(Inputs(prompt: () => throw new InvalidOperationException("must not prompt")));
+
+        await Assert.That(result.Ran).IsFalse();
         await Assert.That(runner.Calls).IsEqualTo(0);
+        await Assert.That(console.Text).Contains("corrupt db").And.Contains("kcap import --all");
+    }
+
+    [Test]
+    public async Task Browser_answered_import_is_reported_and_nothing_else_runs() {
+        var runner = FakeImportRunner.Succeeding();
+        var answer = new FirstRunImportAnswer([], FirstRunImportWindows.Everything, FirstRunImportTitles.Server, null, DateTimeOffset.UtcNow, 0);
+
+        var result = await Command(runner, FakeBackgroundImportSpawner.Running(), FakeHandoffAgentLauncher.Ran(), Config.Directory)
+            .RunImportStepAsync(Inputs(browser: answer));
+
+        await Assert.That(result.Ran).IsFalse();
+        await Assert.That(runner.Calls + runner.DiscoverCalls).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Failed_run_with_nothing_landed_spawns_the_child_but_suppresses_the_handoff_as_import_failed() {
+        var runner  = FakeImportRunner.Faulting(new InvalidOperationException("boom")).Discovering(Discovered(1, 2, 0));
+        var spawner = FakeBackgroundImportSpawner.Running();
+
+        var result = await Command(runner, spawner, FakeHandoffAgentLauncher.Ran(), Config.Directory).RunImportStepAsync(Inputs());
+
+        await Assert.That(spawner.Spawns).IsEqualTo(1);
+        await Assert.That(result.Handoff!.Reason).IsEqualTo(HandoffSuppressedReason.ImportFailed);
+        await Assert.That(await File.ReadAllTextAsync(Directory.GetFiles(Config.Directory, "import-handoff-*.json").Single()))
+            .Contains("\"cohort\": \"unknown\"");
+    }
+
+    [Test]
+    public async Task Vanished_corpus_is_complete_no_new_sessions_and_spawns_nothing() {
+        var runner = FakeImportRunner.Of(_ => new SetupImportRun(
+                0, ImportRunSelection.Empty,
+                new ImportCommand.ImportRunOutcome(FakeImportRunner.ZeroCounts, 0, ImportRunPartition.Empty), null))
+            .Discovering(Discovered(1, 2, 0));
+        var spawner = FakeBackgroundImportSpawner.Running();
+
+        var result = await Command(runner, spawner, FakeHandoffAgentLauncher.Ran(), Config.Directory).RunImportStepAsync(Inputs());
+
+        await Assert.That(spawner.Spawns).IsEqualTo(0);
+        await Assert.That(result.Handoff!.Reason).IsEqualTo(HandoffSuppressedReason.NoNewSessions);
+    }
+
+    [Test, NotInParallel]
+    public async Task Skill_not_installed_points_at_the_web_ui_alongside_the_plugin_install_hint() {
+        var runner  = FakeImportRunner.Succeeding().Discovering(Discovered(1, 2, 0));
+        var spawner = FakeBackgroundImportSpawner.Running();
+        using var console = new SpectreCapture();
+
+        var inputs = Inputs(paths: PathsWithoutEvalWatchFor(HarnessId.Codex));
+        var result = await Command(runner, spawner, FakeHandoffAgentLauncher.Ran(), Config.Directory).RunImportStepAsync(inputs);
+
+        await Assert.That(result.Handoff!.Reason).IsEqualTo(HandoffSuppressedReason.SkillNotInstalled);
+        await Assert.That(console.Text).Contains("https://example.test/sessions?status=ended");
+        await Assert.That(console.Text).Contains("kcap plugin install");
+    }
+
+    [Test, NotInParallel]
+    public async Task No_agent_detected_points_at_the_web_ui() {
+        var runner  = FakeImportRunner.Succeeding().Discovering(Discovered(1, 2, 0));
+        var spawner = FakeBackgroundImportSpawner.Running();
+        using var console = new SpectreCapture();
+
+        var inputs = Inputs(paths: NoVendorPaths());
+        var result = await Command(runner, spawner, FakeHandoffAgentLauncher.Ran(), Config.Directory).RunImportStepAsync(inputs);
+
+        await Assert.That(result.Handoff!.Reason).IsEqualTo(HandoffSuppressedReason.NoAgentDetected);
+        await Assert.That(console.Text).Contains("https://example.test/sessions?status=ended");
+    }
+
+    [Test]
+    public async Task Launch_failure_falls_back_to_the_paste_block_with_the_run_id() {
+        var runner   = FakeImportRunner.Succeeding().Discovering(Discovered(1, 2, 0));
+        var launcher = FakeHandoffAgentLauncher.Failing();
+
+        var result = await Command(runner, FakeBackgroundImportSpawner.Running(), launcher, Config.Directory, pick: labels => labels[0])
+            .RunImportStepAsync(Inputs());
+
+        await Assert.That(launcher.Launches).IsEqualTo(1);
+        await Assert.That(result.PasteBlock).StartsWith(SetupCommand.EvalWatchPrompt + "\n(run: ");
+        await Assert.That(result.PasteBlock).Contains(result.RunId!);
+    }
+
+    [Test]
+    public async Task Pinned_prompts() {
+        await Assert.That(SetupCommand.ImportPrompt).IsEqualTo("Import past sessions from this machine?");
+        await Assert.That(SetupCommand.EvalWatchPrompt).IsEqualTo("Follow my kcap import");
+        await Assert.That(SetupCommand.HandoffPromptText("abc")).IsEqualTo("Follow my kcap import\n(run: abc)");
+    }
+
+    [Test]
+    public async Task NextStepItems_puts_the_handoff_item_above_the_tour_and_omits_it_when_null() {
+        var with    = SetupCommand.NextStepItems(offerGuidedTour: true, handoffPaste: "Follow my kcap import\n(run: x)");
+        var without = SetupCommand.NextStepItems(offerGuidedTour: true, handoffPaste: null);
+
+        await Assert.That(with.Count).IsEqualTo(3);
+        await Assert.That(with[1].Answer).Contains("Follow my kcap import");
+        await Assert.That(with[2].Question).IsEqualTo(SetupCommand.GuidedTourQuestion);
+        await Assert.That(without.Count).IsEqualTo(2);
     }
 
     // HandleAsync-level acceptance coverage for the import wiring: the whole wizard — flag parsing,
@@ -994,7 +1474,7 @@ public class SetupCommandTests {
     // The environment they probe and the /auth/config cache they stub are both process-global, so no
     // cohort of key-holders can exclude the readers: bare.
 
-    static string[] SkipAllAgentInstallFlags => [
+    internal static string[] SkipAllAgentInstallFlags => [
         "--skip-claude-hooks", "--skip-codex-hooks", "--skip-codex-network-access",
         "--skip-cursor-hooks", "--skip-cursor-mcp",
         "--skip-copilot-hooks", "--skip-copilot-mcp", "--skip-copilot-instructions",
@@ -1031,7 +1511,7 @@ public class SetupCommandTests {
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(captured).IsNotNull();
-        await Assert.That(captured!.Repo).IsEqualTo(("acme-auto-import", "widgets"));
+        await Assert.That(captured!.CurrentRepo).IsEqualTo(("acme-auto-import", "widgets"));
         await Assert.That(captured.AutoSkipExclusions).IsTrue();
         await Assert.That(captured.ForcePrivate).IsFalse();
         await Assert.That(captured.DefaultVisibility).IsEqualTo("org_public");
@@ -1045,6 +1525,52 @@ public class SetupCommandTests {
             captured.Profiles.Name)).IsNull();
     }
 
+    static VisibilityOptionsResponse Offer(string preselected, params string[] keys) => new() {
+        Options           = [.. keys.Select(k => new VisibilityOptionDto { Key = k, Label = $"label {k}", Detail = $"detail {k}" })],
+        DefaultVisibility = preselected,
+    };
+
+    public static IEnumerable<Func<(VisibilityOptionsResponse? Offer, string[] Keys, string Preselected)>> VisibilityOfferRows() => [
+        () => (Offer("private", "private", "public"), ["private", "public"], "private"),
+        () => (Offer("project", "private", "project", "public"), ["private", "project", "public"], "project"),
+        () => (Offer("org_public", "private", "project", "org_public", "public"), ["private", "project", "org_public", "public"], "org_public"),
+        () => (null, ["private", "project", "org_public", "public"], "org_public"),
+    ];
+
+    /// <summary>Step 3 offers the stops the server says the tenant can honour, in its order and with its copy, and
+    /// preselects its default; with no answer it offers every stop from <c>org_public</c></summary>
+    [Test]
+    [MethodDataSource(nameof(VisibilityOfferRows))]
+    public async Task Step_three_offers_what_the_tenant_can_honour(VisibilityOptionsResponse? offer, string[] keys, string preselected) {
+        var choices = SetupCommand.VisibilityChoices(offer);
+
+        await Assert.That(choices.Keys).IsEquivalentTo(keys, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+        await Assert.That(choices.Preselected).IsEqualTo(preselected);
+        await Assert.That(choices.Label(keys[0])).IsEqualTo(offer is null ? SetupCommand.VisibilityLabel(keys[0]) : $"label {keys[0]} [dim]— detail {keys[0]}[/]");
+    }
+
+    /// <summary>A scripted run that names no visibility takes the server's default, and <c>org_public</c> from a
+    /// server that answers 404 for the read or fails it</summary>
+    [Test]
+    [Arguments(200, """{"options":[{"key":"private","label":"Only me"},{"key":"project","label":"Project"}],"default_visibility":"project"}""", "project")]
+    [Arguments(404, "", "org_public")]
+    [Arguments(500, "", "org_public")]
+    [NotInParallel]
+    public async Task HandleAsync_NoPrompt_without_a_visibility_takes_the_servers_default(int status, string body, string expected) {
+        using var server = WireMockServer.Start();
+        StubAuthProviderNone(server);
+        server.Given(Request.Create().WithPath("/api/users/me/visibility-options").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(status).WithHeader("Content-Type", "application/json").WithBody(body));
+
+        await using var fixture = await HandleAsyncE2EFixture.CreateAsync("acme-visibility", "widgets", Config.Root);
+
+        var runner = FakeImportRunner.Succeeding();
+        var exit   = await Command(runner, fixture.RepoDir).HandleAsync(BuildArgs("--server-url", server.Url!, "--no-prompt"));
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(runner.Captured?.DefaultVisibility).IsEqualTo(expected);
+    }
+
     [Test]
     [NotInParallel]
     public async Task HandleAsync_SkipImportFlag_SuppressesAutoImport() {
@@ -1053,7 +1579,7 @@ public class SetupCommandTests {
 
         await using var fixture = await HandleAsyncE2EFixture.CreateAsync("acme-skip-import", "widgets", Config.Root);
 
-        var runner = FakeImportRunner.Throwing(new InvalidOperationException("must not run import"));
+        var runner = FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import"));
 
         var args = BuildArgs("--server-url", server.Url!, "--no-prompt", "--skip-import");
 
@@ -1061,6 +1587,91 @@ public class SetupCommandTests {
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(runner.Calls).IsEqualTo(0);
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task HandleAsync_MuseAssistant_wires_no_harness_and_keeps_sessions_private() {
+        using var server = WireMockServer.Start();
+        StubAuthProviderNone(server);
+
+        await using var fixture = await HandleAsyncE2EFixture.CreateAsync("acme-muse", "widgets", Config.Root);
+
+        // The image's Codex, on PATH: plain setup would detect it and write ~/.codex.
+        _ = TestBinaries.Searching(Bin, "codex");
+
+        // The same resolution Command(...) hands the wizard, so a CODEX_HOME in the developer's
+        // shell cannot make these assertions look at a different file than setup wrote.
+        var codex  = TestHarnesses.Under(Home, TestBinaries.Searching(Bin)).Of<CodexHarness>().Paths;
+        var skills = new AgentsPaths(Home).UserSkillsDir;
+
+        using var capture = ConsoleOutput.StartCapture();
+
+        var runner = FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import"));
+
+        var exit = await Command(runner, fixture.RepoDir).HandleAsync(["setup", "--server-url", server.Url!, "--muse-assistant"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(runner.Calls).IsEqualTo(0);
+
+        var saved = await AppConfig.LoadProfileConfig(Config.Root);
+        await Assert.That(saved.Profiles[saved.ActiveName].DefaultVisibility).IsEqualTo("private");
+
+        await Assert.That(File.Exists(codex.ConfigToml)).IsFalse();
+        await Assert.That(File.Exists(codex.UserHooksJson)).IsFalse();
+        await Assert.That(Directory.Exists(skills)).IsFalse();
+
+        // Detected but never offered, so the later new-harness nudge must still be free to ask.
+        await Assert.That(new HarnessOfferStore(Config.Root, TimeProvider.System).Load().Entry(HarnessId.Codex)?.LastOffered).IsNull();
+
+        var output = capture.GetCapturedOutput();
+        await Assert.That(output).Contains(new Uri(server.Url!).Host);
+        await Assert.That(output).Contains("phog.kurrent.io");
+        await Assert.That(output).Contains("Always allow this site");
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task HandleAsync_MuseAssistant_honours_an_explicit_default_visibility() {
+        using var server = WireMockServer.Start();
+        StubAuthProviderNone(server);
+
+        await using var fixture = await HandleAsyncE2EFixture.CreateAsync("acme-muse-vis", "widgets", Config.Root);
+
+        var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), fixture.RepoDir)
+            .HandleAsync(["setup", "--server-url", server.Url!, "--muse-assistant", "--default-visibility", "org_public"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+
+        var saved = await AppConfig.LoadProfileConfig(Config.Root);
+        await Assert.That(saved.Profiles[saved.ActiveName].DefaultVisibility).IsEqualTo("org_public");
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task HandleAsync_MuseAssistant_without_a_tenant_is_refused() {
+        using var capture = ConsoleOutput.StartErrorCapture();
+
+        var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory)
+            .HandleAsync(["setup", "--muse-assistant"]);
+
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
+        await Assert.That(capture.GetCapturedError()).Contains("--muse-assistant");
+        await Assert.That(capture.GetCapturedError()).Contains("<tenant>");
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task HandleAsync_MuseAssistant_reads_an_unreachable_server_as_not_yet_approved() {
+        using var capture = ConsoleOutput.StartCapture();
+
+        // A closed loopback port: the probe fails the way an unapproved host does on the VM.
+        var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory)
+            .HandleAsync(["setup", "--server-url", "http://127.0.0.1:9", "--muse-assistant"]);
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(capture.GetCapturedOutput()).Contains("not yet approved");
+        await Assert.That(capture.GetCapturedOutput()).Contains("run the same command again");
     }
 
     [Test]
@@ -1175,6 +1786,62 @@ public class SetupCommandTests {
         await Assert.That(workspace.Origin).IsEqualTo("https://acme.kcap.ai");
     }
 
+    // Null records that no plan was named, which is what lets provisioning ask for Team when Free is closed.
+    [Test]
+    public async Task ParseRequestedWorkspace_leaves_an_unnamed_plan_unset() {
+        await Assert.That(Parse("setup", "--org", "Acme", "--slug", "acme").Workspace!.Tier).IsNull();
+    }
+
+    [Test]
+    [Arguments("team", WorkspaceTier.Team)]
+    [Arguments("TEAM", WorkspaceTier.Team)]
+    [Arguments("free", WorkspaceTier.Free)]
+    public async Task ParseRequestedWorkspace_carries_the_tier_through(string value, WorkspaceTier expected) {
+        var (workspace, error) = Parse("setup", "--org", "Acme", "--slug", "acme", "--tier", value);
+
+        await Assert.That(error).IsNull();
+        await Assert.That(workspace!.Tier).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task ParseRequestedWorkspace_refuses_a_tier_it_does_not_know() {
+        await Assert.That(Parse("setup", "--org", "Acme", "--slug", "acme", "--tier", "enterprise").Error!).Contains("team");
+        await Assert.That(Parse("setup", "--org", "Acme", "--slug", "acme", "--tier").Error!).Contains("team");
+    }
+
+    // A tier with nothing to create would otherwise be dropped in silence on a run that joins a workspace.
+    [Test]
+    public async Task ParseRequestedWorkspace_refuses_a_tier_with_no_workspace_to_create() {
+        var (workspace, error) = Parse("setup", "--tier", "team");
+
+        await Assert.That(workspace).IsNull();
+        await Assert.That(error!).Contains("--org and --slug");
+    }
+
+    [Test]
+    public async Task ParseRequestedWorkspace_carries_the_invite_code_through() {
+        var (workspace, error) = Parse("setup", "--org", "Acme", "--slug", "acme", "--invite-code", "  ABCD  ");
+
+        await Assert.That(error).IsNull();
+        await Assert.That(workspace!.InviteCode).IsEqualTo("ABCD");
+        await Assert.That(Parse("setup", "--org", "Acme", "--slug", "acme").Workspace!.InviteCode).IsNull();
+    }
+
+    // An invite code with nothing to create would otherwise be dropped in silence.
+    [Test]
+    public async Task ParseRequestedWorkspace_refuses_an_invite_code_with_no_workspace_to_create() {
+        var (workspace, error) = Parse("setup", "--invite-code", "ABCD");
+
+        await Assert.That(workspace).IsNull();
+        await Assert.That(error!).Contains("--org and --slug");
+    }
+
+    [Test]
+    public async Task ParseRequestedWorkspace_refuses_an_invite_code_with_no_value() {
+        await Assert.That(Parse("setup", "--org", "Acme", "--slug", "acme", "--invite-code").Error!)
+            .Contains("--invite-code needs a value");
+    }
+
     [Test]
     public async Task ParseRequestedWorkspace_refuses_half_a_pair() {
         await Assert.That(Parse("setup", "--org", "Acme").Error).Contains("--slug");
@@ -1276,14 +1943,43 @@ public class SetupCommandTests {
 
     // These drive argv. The three rejections return before any config read, network call or console
     // rule, so they need none of the E2E fixture below.
+    /// <summary>A removed workspace's host answers 404; setup must stop there rather than finish
+    /// against it and report success.</summary>
+    [Test]
+    [NotInParallel]
+    public async Task WaitForWorkspaceAsync_stops_setup_when_the_workspace_does_not_answer() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/auth/config").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(404));
+        using var capture = ConsoleOutput.StartErrorCapture();
+
+        var answering = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory)
+            .WaitForWorkspaceAsync(server.Urls[0], TimeSpan.Zero);
+
+        await Assert.That(answering).IsFalse();
+        await Assert.That(capture.GetCapturedError()).Contains("is not answering");
+    }
+
+    [Test]
+    public async Task WaitForWorkspaceAsync_passes_a_workspace_that_answers() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/auth/config").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"provider":"WorkOS"}"""));
+
+        var answering = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory)
+            .WaitForWorkspaceAsync(server.Urls[0], TimeSpan.Zero);
+
+        await Assert.That(answering).IsTrue();
+    }
+
     [Test]
     [NotInParallel]
     public async Task HandleAsync_rejects_half_a_pair_before_doing_anything() {
         using var capture = ConsoleOutput.StartErrorCapture();
 
-        var exit = await Command(FakeImportRunner.Throwing(new InvalidOperationException("must not run import")), Config.Directory).HandleAsync(["setup", "--org", "Acme"]);
+        var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory).HandleAsync(["setup", "--org", "Acme"]);
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
         await Assert.That(capture.GetCapturedError()).Contains("--slug");
     }
 
@@ -1292,10 +1988,10 @@ public class SetupCommandTests {
     public async Task HandleAsync_rejects_creating_and_pointing_at_a_server_at_once() {
         using var capture = ConsoleOutput.StartErrorCapture();
 
-        var exit = await Command(FakeImportRunner.Throwing(new InvalidOperationException("must not run import")), Config.Directory).HandleAsync(
+        var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory).HandleAsync(
             ["setup", "--org", "Acme", "--slug", "acme", "--server-url", "https://other.kcap.ai"]);
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
         await Assert.That(capture.GetCapturedError()).Contains("--server-url");
     }
 
@@ -1304,9 +2000,9 @@ public class SetupCommandTests {
     public async Task HandleAsync_rejects_a_provider_that_cannot_create() {
         using var capture = ConsoleOutput.StartErrorCapture();
 
-        var exit = await Command(FakeImportRunner.Throwing(new InvalidOperationException("must not run import")), Config.Directory).HandleAsync(["setup", "--org", "Acme", "--slug", "acme", "--github"]);
+        var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory).HandleAsync(["setup", "--org", "Acme", "--slug", "acme", "--github"]);
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
         await Assert.That(capture.GetCapturedError()).Contains("--github");
     }
 
@@ -1315,11 +2011,47 @@ public class SetupCommandTests {
     public async Task HandleAsync_still_requires_a_server_url_with_no_prompt_and_no_answers() {
         using var capture = ConsoleOutput.StartErrorCapture();
 
-        var exit = await Command(FakeImportRunner.Throwing(new InvalidOperationException("must not run import")), Config.Directory).HandleAsync(["setup", "--no-prompt"]);
+        var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory).HandleAsync(["setup", "--no-prompt"]);
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
         await Assert.That(capture.GetCapturedError()).Contains("--server-url is required");
         await Assert.That(capture.GetCapturedError()).Contains("--org");
+    }
+
+    /// <summary>Both values are only read after sign-in, so a bad one must stop the run before the server is
+    /// even contacted, or the script is told "refused" after a login was committed.</summary>
+    [Test]
+    [NotInParallel]
+    [Arguments("--default-visibility", "everyone")]
+    [Arguments("--use-provider-api-key", "maybe")]
+    public async Task HandleAsync_refuses_an_invalid_answer_before_contacting_the_server(string flag, string value) {
+        using var server  = WireMockServer.Start();
+        using var capture = ConsoleOutput.StartErrorCapture();
+
+        var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory)
+            .HandleAsync(BuildArgs("--server-url", server.Url!, "--no-prompt", flag, value));
+
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
+        await Assert.That(capture.GetCapturedError()).Contains(flag);
+        await Assert.That(server.LogEntries).IsEmpty();
+    }
+
+    /// <summary>A flag left as the last argument has no value; reading that as absent would apply the default the
+    /// script never chose.</summary>
+    [Test]
+    [NotInParallel]
+    [Arguments("--default-visibility")]
+    [Arguments("--use-provider-api-key")]
+    public async Task HandleAsync_refuses_an_answer_flag_with_no_value(string flag) {
+        using var server  = WireMockServer.Start();
+        using var capture = ConsoleOutput.StartErrorCapture();
+
+        var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory)
+            .HandleAsync([.. BuildArgs("--server-url", server.Url!, "--no-prompt"), flag]);
+
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
+        await Assert.That(capture.GetCapturedError()).Contains($"{flag} needs a value");
+        await Assert.That(server.LogEntries).IsEmpty();
     }
 
     // Presence, not value: a valueless --server-url parses as absent, and taking that as "no conflict"
@@ -1339,5 +2071,29 @@ public class SetupCommandTests {
 
         await Assert.That(workspace).IsNull();
         await Assert.That(error!).Contains("--github");
+    }
+
+    [Test]
+    public async Task InstallMuseHooks_reports_roots_it_could_not_write_without_failing_the_hooks() {
+        var muse     = new MusePaths(Home, null, Home.PathTo("data"));
+        var settings = Home.PathTo(".config", "muse", "settings.json");
+        Home.CreateFile(".config/kcap", "a file where kcap's config directory belongs");
+        var lines = new List<string>();
+
+        await Assert.That(SetupCommand.InstallMuseHooks(settings, Home, muse, lines.Add)).IsTrue();
+
+        await Assert.That(lines).HasSingleItem();
+        await Assert.That(lines[0]).Contains("Could not write");
+    }
+
+    [Test]
+    public async Task InstallMuseHooks_persists_the_roots_beside_a_partial_install_it_reports_as_failed() {
+        var muse     = new MusePaths(Home, null, Home.PathTo("data"));
+        var settings = Home.CreateFile(".config/muse/settings.json",
+            """{"schema_version":1,"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"kcap hook --muse --no-update-check","timeout":5}]}],"Stop":"nope"}}""");
+
+        await Assert.That(SetupCommand.InstallMuseHooks(settings, Home, muse, _ => { })).IsFalse();
+
+        await Assert.That(MuseHookRoots.Read(Home).DataHome).IsEqualTo(Home.PathTo("data"));
     }
 }

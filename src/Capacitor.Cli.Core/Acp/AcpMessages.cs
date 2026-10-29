@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 namespace Capacitor.Cli.Core.Acp;
@@ -104,12 +105,12 @@ public sealed record AcpMcpServerEnvVar(
 );
 
 /// <summary><c>session/new</c> params. <c>Cwd</c> must be an absolute path (the worktree root).
-/// <c>McpServers</c> is always sent as an array (never omitted) — empty for every launch until a
-/// caller populates RuntimeStartContext.McpServers (no caller does yet — the reviewer path is
-/// the first planned consumer).</summary>
+/// <c>McpServers</c> is always sent as an array, never omitted.</summary>
 public sealed record SessionNewParams(
     [property: JsonPropertyName("cwd")]        string             Cwd,
-    [property: JsonPropertyName("mcpServers")] AcpMcpServerSpec[] McpServers
+    [property: JsonPropertyName("mcpServers")] AcpMcpServerSpec[] McpServers,
+    [property: JsonPropertyName("_meta"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    JsonObject? Meta = null
 );
 
 /// <summary><c>session/load</c> params — protocol-native resume of a prior session on a freshly

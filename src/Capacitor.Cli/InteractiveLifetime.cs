@@ -4,28 +4,11 @@ using Capacitor.Cli.Core.FirstRun;
 namespace Capacitor.Cli;
 
 /// <summary>
-/// Interrupt / abandonment safety net for interactive commands.
-///
-/// Commands such as <c>setup</c>, <c>login</c>, <c>profile</c>, <c>use</c>,
-/// <c>import</c>, and <c>uninstall</c> block on synchronous Spectre.Console
-/// prompts (<c>ConfirmationPrompt</c>, <c>SelectionPrompt</c>, <c>TextPrompt</c>).
-/// A blocking console read has no timeout and observes neither Ctrl+C nor a
-/// detached/closed console, so when the controlling terminal or the launching
-/// agent goes away mid-prompt the read never returns and the process is
-/// orphaned alive — the reported stray <c>kcap.exe</c> processes left behind
-/// after a user abandons <c>kcap setup</c> partway through.
-///
-/// Redirected/piped stdin is already safe: the prompt read throws
-/// "Failed to read input in non-interactive mode" and the process exits. This
-/// closes the two gaps that piped stdin doesn't cover:
-///   1. Ctrl+C / SIGTERM / SIGHUP while blocked in a prompt.
-///   2. The launching parent (shell or coding agent) exiting while we wait for
-///      input — a detached pseudo-console delivers no signal at all, so a
-///      liveness watchdog is the only thing that reaps it.
-///
-/// This mirrors what <see cref="Commands.WatchCommand"/> already does for the
-/// long-lived watcher; every other interactive command previously had no such
-/// protection. Idempotent — safe to call once per process.
+/// Interrupt and abandonment handling for interactive commands. A blocking Spectre.Console prompt observes neither
+/// Ctrl+C nor a closed console, so without this a command whose terminal or launching agent went away mid-prompt
+/// stays alive forever. Ctrl+C, SIGTERM and SIGHUP exit 130, and a watchdog exits the same way once the parent
+/// process is gone, since a detached pseudo-console delivers no signal at all. Inside a <see cref="Defer"/> scope an
+/// interrupt cancels the scope's token instead, and the exit waits until the scope ends. Idempotent.
 /// </summary>
 static class InteractiveLifetime {
     // Exit code for an interrupted interactive command (128 + SIGINT).
@@ -59,7 +42,7 @@ static class InteractiveLifetime {
     /// same "no timeout, no signal awareness" gap as a Spectre prompt.
     /// </summary>
     public static bool IsInteractiveCommand(string command) => command is
-        "setup" or "login" or "profile" or "use" or "import" or "uninstall" or "feedback";
+        "setup" or "login" or "profile" or "use" or "import" or "uninstall" or "feedback" or "local";
 
     /// <summary>
     /// Installs the interrupt handlers and the parent-liveness watchdog. Best
@@ -76,7 +59,7 @@ static class InteractiveLifetime {
         try {
             Console.CancelKeyPress += static (_, e) => {
                 e.Cancel = true; // we own termination below
-                Interrupt();
+                Interrupt(InterruptSource.Signal);
             };
         } catch {
             // Some hosts don't support CancelKeyPress; the watchdog still covers us.
@@ -87,7 +70,7 @@ static class InteractiveLifetime {
         try {
             _sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, static ctx => {
                 ctx.Cancel = true;
-                Interrupt();
+                Interrupt(InterruptSource.Signal);
             });
         } catch {
             // best effort
@@ -96,7 +79,7 @@ static class InteractiveLifetime {
         try {
             _sighup = PosixSignalRegistration.Create(PosixSignal.SIGHUP, static ctx => {
                 ctx.Cancel = true;
-                Interrupt();
+                Interrupt(InterruptSource.Signal);
             });
         } catch {
             // best effort
@@ -115,13 +98,103 @@ static class InteractiveLifetime {
     }
 
     /// <summary>Written raw rather than through Spectre: this runs on the way out of a signal handler,
-    /// where taking a renderer's locks is the last thing worth doing.</summary>
-    static void ShowCursor() {
+    /// where taking a renderer's locks is the last thing worth doing. It goes to stderr so a machine
+    /// reader of stdout (<c>--json</c>) never sees an escape sequence.</summary>
+    static void ShowCursor() =>
+        ShowCursor(Console.Error, Console.IsErrorRedirected, Console.Out, Console.IsOutputRedirected);
+
+    /// <summary>Prefers stderr, so <c>--json</c> stdout carries nothing but event lines; falls back to a terminal
+    /// stdout when stderr is redirected, since that is where the cursor was hidden.</summary>
+    internal static void ShowCursor(TextWriter error, bool errorRedirected, TextWriter output, bool outputRedirected) {
         try {
-            if (!Console.IsOutputRedirected) Console.Out.Write("\u001b[?25h");
+            if (!errorRedirected) error.Write("\u001b[?25h");
+            else if (!outputRedirected) output.Write("\u001b[?25h");
         } catch {
-            // A closed or detached stdout is exactly the case with no cursor to restore.
+            // A closed or detached stream is exactly the case with no cursor to restore.
         }
+    }
+
+    internal enum InterruptSource {
+        /// <summary>Ctrl+C, SIGTERM or SIGHUP: a person or supervisor asking us to stop.</summary>
+        Signal,
+
+        /// <summary>The parent-liveness poll, which repeats every interval for as long as the parent is gone.</summary>
+        Watchdog
+    }
+
+    // Test seam; Environment.Exit in production.
+    internal static Action<int> Exit = Environment.Exit;
+
+    static readonly object DeferralLock = new();
+    static Deferral?       _live;
+
+    /// <summary>
+    /// Turns interrupts into a cancelled <see cref="Deferral.Token"/> so a command can roll back and say its
+    /// last words; disposing the scope then exits 130 if one arrived. A second signal exits at once, and
+    /// watchdog repeats only cancel again. Only one scope may be live.
+    /// </summary>
+    internal static Deferral Defer() {
+        lock (DeferralLock) {
+            if (_live is not null) throw new InvalidOperationException("An interrupt deferral is already live.");
+
+            return _live = new Deferral();
+        }
+    }
+
+    internal sealed class Deferral : IDisposable {
+        readonly CancellationTokenSource _cts = new();
+        int                              _interrupted;
+        int                              _disposed;
+
+        internal Deferral() { }
+
+        public CancellationToken Token => _cts.Token;
+
+        public bool Interrupted => Volatile.Read(ref _interrupted) != 0;
+
+        /// <summary>True when this was the first interrupt received.</summary>
+        internal bool MarkInterrupted() => Interlocked.Exchange(ref _interrupted, 1) == 0;
+
+        internal void Cancel() {
+            try {
+                // Async so the command's rollback never runs on the signal or watchdog thread.
+                _ = _cts.CancelAsync().ContinueWith(static t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+            } catch (ObjectDisposedException) {
+                // Raced a Dispose that already took the exit.
+            }
+        }
+
+        public void Dispose() {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+
+            bool exit;
+            lock (DeferralLock) {
+                if (ReferenceEquals(_live, this)) _live = null;
+                exit = Interrupted;
+            }
+
+            _cts.Dispose();
+
+            if (exit) ExitNow();
+        }
+    }
+
+    internal static void Interrupt(InterruptSource source) {
+        Deferral? live;
+        bool      first = false;
+
+        lock (DeferralLock) {
+            live = _live;
+            if (live is not null) first = live.MarkInterrupted();
+        }
+
+        if (live is not null) {
+            live.Cancel();
+
+            if (first || source == InterruptSource.Watchdog) return;
+        }
+
+        ExitNow();
     }
 
     /// <summary>
@@ -130,7 +203,7 @@ static class InteractiveLifetime {
     /// server this machine has stopped listening, which is what stops the page going on to offer decisions
     /// nobody will act on.
     /// </summary>
-    static void Interrupt() {
+    static void ExitNow() {
         // First, and before the notice spends its budget on the network: a live region hides the cursor
         // for the duration of a render and gives it back on dispose, and no exit from here unwinds far
         // enough to dispose one - which leaves the shell with no cursor after an interrupted import or
@@ -139,7 +212,7 @@ static class InteractiveLifetime {
 
         FirstRunInterruptRelinquish.RunBeforeExit(ExitNoticeBudget);
 
-        Environment.Exit(InterruptExitCode);
+        Exit(InterruptExitCode);
     }
 
     static void StartParentWatchdog(int? parentPid) {
@@ -154,7 +227,7 @@ static class InteractiveLifetime {
                 Thread.Sleep(ParentPollInterval);
 
                 if (!ProcessHelpers.IsProcessAlive(ppid)) {
-                    Interrupt();
+                    Interrupt(InterruptSource.Watchdog);
                 }
             }
         }) {

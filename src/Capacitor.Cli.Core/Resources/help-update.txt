@@ -6,8 +6,36 @@ For npm-global installs, upgrades to the latest published version on your
 active release channel (npm install -g @kurrent/kcap@<tag>) and then
 refreshes your opted-in agent plugins (skills, Codex/Cursor/Copilot hooks,
 Claude plugin). This works even when your package manager blocks install
-scripts. Exits early if already up to date. For non-npm installs (e.g.
-Homebrew), prints the command to run instead.
+scripts. Exits early if already up to date.
+
+For script installs (curl -fsSL https://www.kurrent.io/install | bash, or
+install.ps1 on Windows), reads the installer's channel manifest instead of
+npm, downloads this platform's archive from GitHub Releases and checks its
+sha256 against the manifest; any mismatch installs nothing. The release
+goes into its own versions/<version> directory and the `current` link is
+switched to it, so running processes keep the files they started from.
+The new binary then runs `kcap refresh`. The version it replaced stays;
+every other version is deleted unless something still runs from it. macOS
+cannot tell, so there it is deleted anyway, and a process already running
+from it keeps working. A daemon
+started from a script install restarts on the new version once it is idle,
+Windows included, provided it was started on a release that watches for
+updates there; restart an older Windows daemon once with kcap daemon restart.
+A daemon service installed from a script install is moved onto the `current`
+path, so it follows updates.
+A daemon service installed under npm keeps running the npm binary after a
+switch to the script install: run `kcap daemon service install` again.
+
+For other installs (e.g. Homebrew), prints the command to run instead.
+
+When this machine has a local installation (kcap setup --local), npm and
+script installs then run the new binary's kcap local upgrade, which moves
+the local stack to the new version; a failed upgrade makes kcap update
+exit 1. A release whose server bundle is not published yet only says so:
+the stack stays on its version until kcap local upgrade is run again. Other installs run kcap local upgrade themselves after updating.
+
+On macOS and Linux a running daemon restarts on the new version by itself;
+its agents are stopped and resumed.
 
 On Windows the update also works while agent sessions or the daemon keep
 the binary locked: the old executable is moved aside and cleaned up later.
@@ -33,7 +61,8 @@ tenant's server trails npm (rollouts are manual and can lag by days), they
 target the server's version — shown with a "(server version)" marker —
 rather than a CLI newer than the server supports, and kcap update installs
 exactly that version. The cap applies on the stable channel only; beta
-deliberately rides ahead.
+deliberately rides ahead. It does not apply to a local installation, whose
+stack moves with the CLI.
 
 update_check (kcap config set update_check false):
   Controls ALL kcap update nudging, not just the local stderr hint. With

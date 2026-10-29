@@ -77,4 +77,45 @@ public class PendingLaunchStatusTests {
 
         await Assert.That(orch.StatusNotifierForTest.Version).IsGreaterThan(v0);
     }
+
+    /// <summary>A launch keeps the daemon busy whether it is still pending, published while still pending, or published
+    /// alone, so an uninstall's idle check never sees a running launch as nothing.</summary>
+    [Test]
+    public async Task The_busy_count_holds_a_launch_through_its_publish() {
+        await using var orch = Build();
+        var clock = new AgentActivityClock(TimeProvider.System);
+
+        await Assert.That(orch.BusyForStatus()).IsFalse();
+
+        var pending = orch.TrackPendingLaunch("p1", LaunchKind.Default, null, null, clock);
+        await Assert.That(orch.BusyForStatus()).IsTrue();
+
+        orch.SeedAgentForTest("p1", status: "Starting", activityClock: clock);
+        await Assert.That(orch.BusyForStatus()).IsTrue();
+
+        pending.Dispose();
+        await Assert.That(orch.BusyForStatus()).IsTrue();
+    }
+
+    [Test]
+    public async Task The_busy_count_holds_a_launch_that_overlaps_another_ending() {
+        await using var orch = Build();
+        var running = orch.SeedAgentForTest("a", status: "Running");
+        using var pending = orch.TrackPendingLaunch("b", LaunchKind.Default, null, null, new AgentActivityClock(TimeProvider.System));
+
+        orch.SetAgentStatus(running, "Exited");
+
+        await Assert.That(orch.BusyForStatus()).IsTrue();
+    }
+
+    /// <summary>Consent, worktree and attachments run before a launch is pending; it is admitted throughout.</summary>
+    [Test]
+    public async Task The_busy_count_holds_an_admitted_launch_before_it_is_pending() {
+        await using var orch = Build();
+
+        using (orch.Admission.TryAdmit())
+            await Assert.That(orch.BusyForStatus()).IsTrue();
+
+        await Assert.That(orch.BusyForStatus()).IsFalse();
+    }
 }

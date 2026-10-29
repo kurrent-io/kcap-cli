@@ -12,7 +12,7 @@ namespace Capacitor.Cli.Core.Http;
 /// <para>The request path is relative, so the client it is given must carry the registry's base
 /// address — the registration sets it.</para>
 /// </summary>
-public sealed class NpmRegistryClient(HttpClient http) {
+public sealed class NpmRegistryClient(HttpClient http) : IReleaseFeed {
     /// <summary>The version a dist-tag currently points at.</summary>
     public async Task<NpmDistTag> GetDistTagAsync(string channel, CancellationToken ct) {
         try {

@@ -189,4 +189,37 @@ public class HookSpoolTests {
         await Assert.That(ids).Contains(29);
         await Assert.That(ids).DoesNotContain(0);
     }
+
+    const string SnapshotUpload = """{"session_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","snapshot_id":"abc123","documents":[]}""";
+
+    /// <summary>The judge stops sending a snapshot inline once any drain has delivered it — the
+    /// route-agnostic one and the ordered one alike, whichever vendor's hook ran it.</summary>
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task a_delivered_policy_snapshot_is_recorded_by_either_drain(bool ordered) {
+        using var tmp = new TempDir();
+        var spool = new HookSpool(tmp.Path, time: TimeProvider.System);
+        spool.Append(SidA, HookSpool.PolicySnapshotRoute, SnapshotUpload);
+        static Task<DrainOutcome> Delivered(string route, string body) => Task.FromResult(DrainOutcome.Delivered);
+
+        if (ordered) await spool.DrainRoutesAsync(SidA, isTerminal: false, Delivered, () => false, CancellationToken.None);
+        else await spool.DrainAllAsync(SidA, Delivered, TimeSpan.FromSeconds(5), CancellationToken.None);
+
+        await Assert.That(spool.IsPolicySnapshotDelivered(SidA, "abc123")).IsTrue();
+        await Assert.That(spool.SessionIdsWithBacklog()).IsEmpty();
+    }
+
+    [Test]
+    [Arguments(DrainOutcome.TransientStop)]
+    [Arguments(DrainOutcome.Drop)]
+    public async Task an_undelivered_policy_snapshot_is_not_recorded(DrainOutcome outcome) {
+        using var tmp = new TempDir();
+        var spool = new HookSpool(tmp.Path, time: TimeProvider.System);
+        spool.Append(SidA, HookSpool.PolicySnapshotRoute, SnapshotUpload);
+
+        await spool.DrainAllAsync(SidA, (_, _) => Task.FromResult(outcome), TimeSpan.FromSeconds(5), CancellationToken.None);
+
+        await Assert.That(spool.IsPolicySnapshotDelivered(SidA, "abc123")).IsFalse();
+    }
 }

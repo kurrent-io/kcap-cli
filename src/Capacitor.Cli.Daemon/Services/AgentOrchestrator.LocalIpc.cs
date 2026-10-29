@@ -1,21 +1,38 @@
+using System.Collections.Frozen;
 using System.Text;
 using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.Resume;
 using Microsoft.Extensions.Logging;
 
 namespace Capacitor.Cli.Daemon.Services;
 
 /// Local-socket entry points invoked by <see cref="LocalControlServer"/>.
 internal partial class AgentOrchestrator {
-    /// <summary>Reply to a <c>kcap agent ls</c> request with a tab-separated agent table.</summary>
-    public Task HandleLocalListAsync(Stream stream, CancellationToken ct) {
-        var lines = _agents.Values.Select(a =>
-            $"{a.Id}\t{a.Status}\t{Cell(a.RepoPath)}\t{KindText(a.Kind)}\t{Cell(a.FlowRunId)}\t{Cell(a.FlowRole)}");
+    /// <summary>Reply to a <c>kcap agent ls</c> request with a tab-separated agent table. The state
+    /// column also lists the ledger entries that have no live agent.</summary>
+    public Task HandleLocalListAsync(bool withTitles, bool withState, Stream stream, CancellationToken ct) {
+        withTitles |= withState;
 
-        return FrameCodec.WriteAsync(stream, new LocalFrame(FrameType.AgentList) { Text = string.Join('\n', lines) }, ct);
+        var lines = _agents.Values.Select(a => ListRow(
+            a.Id, a.Status, a.RepoPath, KindText(a.Kind), a.FlowRunId, a.FlowRole, withTitles ? a.ResolvedTitle ?? a.Title : null,
+            withState ? (_resumeCandidates.ContainsKey(a.Id) ? "resuming" : "running") : null));
+
+        if (withState) {
+            lines = lines.Concat(LedgerOnlyAgents().Select(l => ListRow(
+                l.Entry.AgentId, l.Status, l.Entry.Launch.RepoPath, KindText(l.Entry.Participant?.Kind ?? LaunchKind.Default), l.Entry.Launch.FlowRunId,
+                l.Entry.Launch.FlowRole, l.Entry.Launch.Title, l.State)));
+        }
+
+        return FrameCodec.WriteAsync(stream, new LocalFrame(FrameType.AgentList) { Text = string.Join('\n', lines.ToList()) }, ct);
+
+        string ListRow(string id, string status, string? repo, string kind, string? flowRunId, string? flowRole, string? title, string? state) =>
+            $"{id}\t{status}\t{Cell(repo)}\t{kind}\t{Cell(flowRunId)}\t{Cell(flowRole)}"
+            + (withTitles ? $"\t{Cell(title)}" : "")
+            + (state is null ? "" : $"\t{Cell(state)}");
     }
 
     /// <summary>
@@ -55,9 +72,73 @@ internal partial class AgentOrchestrator {
             .OrderBy(p => p.CreatedAt)
             .ThenBy(p => p.Id, StringComparer.Ordinal)
             .Select(p => new PendingLaunchDto(
-                p.Id, p.Vendor ?? "", p.RepoPath, p.Title, p.CreatedAt, p.ActivityClock.LaunchStage))];
+                p.Id, p.Vendor ?? "", p.RepoPath, p.Title, p.CreatedAt, p.ActivityClock.LaunchStage, KindText(p.Kind)))];
 
-    internal List<AgentStatusDto> SnapshotAgentsForStatus() =>
+    /// <summary>Whether any agent is running or starting, as one observation: an admitted launch still before its
+    /// runtime starts (consent, worktree, attachments), a pending one, or a published one. A launch is admitted before
+    /// it is pending and leaves admission only after it is published, so reading the admissions under the lock misses
+    /// none. A launch still queued has not been admitted; it is no different from one that arrives after this.</summary>
+    internal bool BusyForStatus() {
+        lock (_membership)
+            return _admission.InFlight > 0
+                || !_pendingLaunches.IsEmpty
+                || _agents.Values.Any(a => a.Status is "Starting" or "Running");
+    }
+
+    /// <summary>The live agents, then the ledger entries with no live agent. The ledger is read whole, before
+    /// the live agents, and reconciled against that one live observation, so an agent that is published or
+    /// cleaned up in between is listed once rather than in neither part.</summary>
+    internal List<AgentStatusDto> SnapshotAgentsForStatus() {
+        var ledger = LedgerOnlyAgents(includeLive: true);
+        var live   = LiveStatusRows();
+        var listed = live.Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
+
+        return [.. live, .. ledger.Where(l => !listed.Contains(l.Entry.AgentId)).Select(l => LedgerStatusRow(l.Entry, l.Status))];
+    }
+
+    /// <summary>The session the server files the agent under: the one it was launched or resumed into, else
+    /// the ACP session its runtime opened. Null until the agent has one.</summary>
+    static string? SessionOf(AgentInstance agent) =>
+        agent.SessionId ?? SessionIds.Canonical((agent.Runtime as IAcpTranscriptSource)?.AcpSessionId);
+
+    /// <summary>How long a session query waits for a launching agent's session to be bound on the server.
+    /// An ACP agent's first turn is queued before the agent is published and bound, so its first tool
+    /// call can arrive inside that window.</summary>
+    internal static readonly TimeSpan AgentSessionBindWait = TimeSpan.FromSeconds(10);
+
+    static readonly TimeSpan AgentSessionBindPoll = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>Answers a hosted agent's own kcap MCP servers, which start before the agent's session
+    /// exists and so cannot be handed it in their environment. An empty reply means no such agent, or no
+    /// session the server holds yet; the caller asks again on its next call.</summary>
+    public async Task HandleLocalAgentSessionAsync(string agentId, Stream stream, CancellationToken ct) {
+        var started = _time.GetTimestamp();
+        while (!AgentSessionSettled(agentId) && _time.GetElapsedTime(started) < AgentSessionBindWait)
+            await Task.Delay(AgentSessionBindPoll, _time, ct);
+
+        await FrameCodec.WriteAsync(stream, LocalFrame.AgentSessionReply(HeldSessionOf(agentId)), ct);
+    }
+
+    /// <summary>The agent's session once the server holds it. A transcript's session is held only once its
+    /// bind succeeded: answering it before, or after a failed bind, would have the caller keep an id the
+    /// server refuses for good.</summary>
+    string? HeldSessionOf(string agentId) =>
+        _agents.TryGetValue(agentId, out var agent)
+     && (agent.Runtime is not IAcpTranscriptSource || agent.TranscriptBound is true)
+            ? SessionOf(agent)
+            : null;
+
+    /// <summary>False while the agent is still launching, or its transcript's bind is still in flight.</summary>
+    bool AgentSessionSettled(string agentId) =>
+        _agents.TryGetValue(agentId, out var agent)
+            ? agent.Runtime is not IAcpTranscriptSource || agent.TranscriptBound is not null
+              || agent.Status is not ("Starting" or "Running")
+            : !_pendingLaunches.ContainsKey(agentId);
+
+    internal static string TranscriptFormatOf(AgentInstance agent) =>
+        agent.Runtime is IAcpTranscriptSource ? TranscriptFormats.Envelopes : TranscriptFormats.Vendor;
+
+    List<AgentStatusDto> LiveStatusRows() =>
         [.. _agents.Values
             .OrderBy(a => a.CreatedAt)
             .ThenBy(a => a.Id, StringComparer.Ordinal)
@@ -74,13 +155,41 @@ internal partial class AgentOrchestrator {
                 WorktreePath: a.Checkout.Worktree,
                 WorkLocation: a.Checkout.BorrowedFrom is null ? WorkLocationText.Owned : WorkLocationText.Borrowed,
                 BorrowedFrom: a.Checkout.BorrowedFrom,
-                SessionId: a.SessionId ?? SessionIds.Canonical((a.Runtime as IAcpTranscriptSource)?.AcpSessionId),
+                SessionId: SessionOf(a),
                 Branch: string.IsNullOrWhiteSpace(a.Worktree.Branch) ? null : a.Worktree.Branch,
                 // Only a live agent can wait on the user; a terminal one keeps whatever its clock
                 // last recorded, which must not read as a pending ask.
                 AwaitingInput: a.Status == "Running" && a.ActivityClock.AwaitingInput,
-                TranscriptFormat: a.Runtime is IAcpTranscriptSource ? TranscriptFormats.Envelopes : TranscriptFormats.Vendor,
+                TranscriptFormat: TranscriptFormatOf(a),
+                // Null until the agent's first subagent report, a number from then on: the clock's
+                // count only while the agent is live, since nothing runs under a terminal one.
+                LiveSubagents: a.ActivityClock.LiveSubagents is { } live ? (a.Status == "Running" ? live : 0) : null,
+                UsageLimit: a.Status == "Running" ? a.UsageLimit : null,
+                TerminalDialog: a.Status == "Running" ? a.TerminalDialog : null,
+                WorkingSince: a.Status == "Running" && a.ActivityClock.WorkingFor is { } working
+                    ? (_time.GetUtcNow() - working).UtcDateTime : null,
+                AccountDirectory: a.Account?.Directory, AccountId: a.Account?.AccountId, AccountLabel: a.Account?.Label,
+                TurnAttested: a.Status == "Running" && a.ActivityClock.TurnAttested,
                 IsPrivate: a.IsPrivate))];
+
+    /// The checkout is resolved as the live agent's is, so a row keeps its rail group across the handoff.
+    static AgentStatusDto LedgerStatusRow(ResumeLedgerEntry entry, string status) {
+        var worktree = ResumedWorktree(entry);
+        var checkout = AgentCheckout.Resolve(worktree, entry.Launch.Work, borrowedSnapshotSource: null);
+
+        return new(
+            entry.AgentId, KindText(entry.Participant?.Kind ?? LaunchKind.Default), entry.Vendor, checkout.Repository, status,
+            entry.Launch.FlowRunId, entry.Launch.FlowRole, entry.Launch.RequesterUserId, entry.CreatedAt.UtcDateTime,
+            string.IsNullOrWhiteSpace(entry.Launch.Model) ? null : entry.Launch.Model, entry.Launch.RequesterDisplay,
+            HasTerminal: entry.HasTerminal, Title: entry.Launch.Title, WorktreePath: checkout.Worktree,
+            WorkLocation: checkout.BorrowedFrom is null ? WorkLocationText.Owned : WorkLocationText.Borrowed,
+            BorrowedFrom: checkout.BorrowedFrom,
+            SessionId: entry.SessionId,
+            Branch: string.IsNullOrWhiteSpace(worktree.Branch) ? null : worktree.Branch,
+            TranscriptFormat: entry.TranscriptFormat,
+            Interruption: entry.State == ResumeState.Interrupted ? entry.LastError : null,
+            AccountDirectory: entry.Launch.AccountDirectory, AccountId: entry.Launch.AccountId, AccountLabel: entry.Launch.AccountLabel);
+    }
 
     /// <summary>
     /// Serves the legacy <c>Stop</c> frame from older clients that predate --force. That frame
@@ -89,7 +198,7 @@ internal partial class AgentOrchestrator {
     /// way to override.
     /// </summary>
     public Task HandleLocalStopAsync(string agentId, Stream stream, CancellationToken ct) =>
-        HandleLocalStopV2Async(force: true, agentId, stream, ct);
+        HandleLocalStopCoreAsync(force: true, agentId, stream, ct, reportMissing: false);
 
     /// <summary>
     /// `kcap agent stop` with protection. A review or flow agent is refused unless the user
@@ -99,7 +208,10 @@ internal partial class AgentOrchestrator {
     /// 0600 socket is the owner's. Stops run concurrently — each can take up to 25s (graceful
     /// wait plus terminate), so serial teardown would be unusable.
     /// </summary>
-    public async Task HandleLocalStopV2Async(bool force, string agentId, Stream stream, CancellationToken ct) {
+    public Task HandleLocalStopV2Async(bool force, string agentId, Stream stream, CancellationToken ct) =>
+        HandleLocalStopCoreAsync(force, agentId, stream, ct, reportMissing: true);
+
+    async Task HandleLocalStopCoreAsync(bool force, string agentId, Stream stream, CancellationToken ct, bool reportMissing) {
         if (agentId.Length == 0) {
             var all       = _agents.Values.ToList();
             var eligible  = all.Where(a => force || a.Kind == LaunchKind.Default).ToList();
@@ -112,10 +224,20 @@ internal partial class AgentOrchestrator {
             // draining from the WhenAll above, and could misreport a stopped agent as skipped too.
             var skipped = all.Where(a => !force && a.Kind != LaunchKind.Default).Select(a => $"{a.Id}\tskipped");
 
-            await FrameCodec.WriteAsync(stream, LocalFrame.StopAck(string.Join('\n', stopped.Concat(skipped))), ct);
+            // A participant still resuming has no agent yet, but the same protection.
+            var resuming = PendingParticipantIds().Where(id => !_agents.ContainsKey(id)).ToList();
+            var pending  = force
+                ? await Task.WhenAll(resuming.Select(async id => $"{id}\t{StatusText(await WithdrawPendingAsync(id))}"))
+                : [.. resuming.Select(id => $"{id}\tskipped")];
+
+            await FrameCodec.WriteAsync(stream, LocalFrame.StopAck(string.Join('\n', stopped.Concat(skipped).Concat(pending))), ct);
 
             return;
         }
+
+        // Read before the live agent: a launch publishes its agent before it leaves this set, so one that
+        // settles between the two reads is still found live.
+        var starting = CancellableLaunchesFor(agentId);
 
         if (_agents.TryGetValue(agentId, out var agent)) {
             if (!force && agent.Kind != LaunchKind.Default) {
@@ -131,8 +253,33 @@ internal partial class AgentOrchestrator {
                 return;
             }
 
-            var ok = await StopAgentCoreAsync(agent);
+            if (await RefuseProtectedStartingAsync(force, agentId, starting, stream, ct)) return;
+
+            // A launch under the same id would otherwise start under the id just stopped; the one that
+            // published this agent may still be finishing, so the agent is stopped once they settle. One
+            // that outlasts the wait stops the agent under this id itself when it settles.
+            var ok = await SettleCancelledLaunchesAsync(starting)
+                && (_agents.GetValueOrDefault(agentId) is not { } current || await StopAgentCoreAsync(current));
             await FrameCodec.WriteAsync(stream, LocalFrame.StopAck($"{agentId}\t{StatusText(ok)}"), ct);
+
+            return;
+        }
+
+        // A launch queued or starting has no agent yet: cancel it, and answer once it has settled. Before
+        // the resume discard below, which would otherwise remove a starting launch's worktree under it.
+        if (await RefuseProtectedStartingAsync(force, agentId, starting, stream, ct)) return;
+
+        if (starting.Length > 0) {
+            var ok = await CancelStartingLaunchesAsync(agentId, starting);
+            await FrameCodec.WriteAsync(stream, LocalFrame.StopAck($"{agentId}\t{StatusText(ok)}"), ct);
+
+            return;
+        }
+
+        if (!force && TryReadLedger(agentId) is { Participant: { } participant } ledgered) {
+            await FrameCodec.WriteAsync(stream, LocalFrame.Error(
+                $"{agentId} is a {ProtectionReason(participant.Kind.ToString(), ledgered.Launch.FlowRunId, ledgered.Launch.FlowRole)}. "
+              + "Stopping it mid-round leaves the flow without a participant. Pass --force to stop it anyway."), ct);
 
             return;
         }
@@ -141,9 +288,44 @@ internal partial class AgentOrchestrator {
         // record can still reap. This is why the client sends full ids verbatim. The record
         // carries the same Kind/FlowRunId/FlowRole the live agent would have, so protection still
         // applies — a review-flow survivor from a prior incarnation is refused exactly like a
-        // live one. TryStopByPidRecordAsync itself stays policy-free (it's shared with the
+        // live one. StopByPidRecordAsync itself stays policy-free (it's shared with the
         // server-origin HandleStopAgent path); the decision is made here, before it ever runs.
-        if (!force && FindPidRecord(agentId) is { Kind: not nameof(LaunchKind.Default) } record) {
+        // An agent a restart left resuming or interrupted has no process, only its ledger entry.
+        var discard   = DiscardResumeEntry(agentId);
+        var discarded = discard.Discarded;
+
+        if (discard.Live is { } late) {
+            // Its resume published between the live check above and the discard.
+            var ok = await StopAgentCoreAsync(late);
+            await FrameCodec.WriteAsync(stream, LocalFrame.StopAck($"{agentId}\t{StatusText(ok)}"), ct);
+
+            return;
+        }
+
+        // Only once no survivor of the agent can still be working in the worktree.
+        Task ReleaseDiscardedAsync() =>
+            discard is { LeavesResourcesToStop: true, Entry: { } entry } ? RemoveDiscardedResourcesAsync(entry) : Task.CompletedTask;
+
+        if (_pidRecords is null || !_pidRecords.TryRead(agentId, out var found)) {
+            await ReleaseDiscardedAsync();
+            await FrameCodec.WriteAsync(stream, LocalFrame.StopAck($"{agentId}\t{StatusText(discarded)}"), ct);
+
+            return;
+        }
+
+        if (found is not { } record) {
+            await ReleaseDiscardedAsync();
+
+            // A confirmed snapshot target may have finished while the owner read the prompt.
+            await FrameCodec.WriteAsync(stream,
+                discarded     ? LocalFrame.StopAck($"{agentId}\tstopped")
+              : reportMissing ? LocalFrame.StopAck($"{agentId}\tmissing")
+              :                 LocalFrame.NoSuchAgent(agentId), ct);
+
+            return;
+        }
+
+        if (!force && record.Kind != nameof(LaunchKind.Default)) {
             var consequence = record.Kind == nameof(LaunchKind.ReviewFlow)
                 ? "Stopping it mid-round leaves the flow without a participant."
                 : "Stopping it discards the review before it can report back.";
@@ -154,15 +336,52 @@ internal partial class AgentOrchestrator {
             return;
         }
 
-        var reaped = await TryStopByPidRecordAsync(agentId);
+        var reaped = await StopByPidRecordAsync(record);
+        if (reaped) await ReleaseDiscardedAsync();
 
-        await FrameCodec.WriteAsync(
-            stream,
-            reaped ? LocalFrame.StopAck($"{agentId}\t{StatusText(true)}") : LocalFrame.Error($"no such agent {agentId}"),
-            ct);
+        await FrameCodec.WriteAsync(stream, LocalFrame.StopAck($"{agentId}\t{StatusText(reaped)}"), ct);
     }
 
     static string StatusText(bool confirmedStopped) => confirmedStopped ? "stopped" : "failed";
+
+    /// <summary>How long a local stop waits for a cancelled launch to settle: a handshake stage cancels at
+    /// once, but worktree creation takes no token and finishes first.</summary>
+    static readonly TimeSpan LaunchCancelSettleWait = TimeSpan.FromSeconds(60);
+
+    /// <summary>Refuses a stop without force that would cancel a protected launch, as its agent would be.</summary>
+    static async Task<bool> RefuseProtectedStartingAsync(
+            bool force, string agentId, CancellableLaunch[] starting, Stream stream, CancellationToken ct) {
+        if (force || starting.FirstOrDefault(l => l.Kind != LaunchKind.Default) is not { } protectedLaunch) return false;
+
+        await FrameCodec.WriteAsync(stream, LocalFrame.Error(
+            $"{agentId} is a starting {KindText(protectedLaunch.Kind)} launch. Pass --force to cancel it anyway."), ct);
+
+        return true;
+    }
+
+    /// <summary>Cancels the launches for this id and stops any agent one published anyway, past its last
+    /// cancellation point.</summary>
+    async Task<bool> CancelStartingLaunchesAsync(string agentId, CancellableLaunch[] launches) =>
+        await SettleCancelledLaunchesAsync(launches)
+        && (_agents.GetValueOrDefault(agentId) is not { } published || await StopAgentCoreAsync(published));
+
+    /// <summary>Cancels launches: one still queued is refused when the lane reaches it, and one already
+    /// started is waited for. False when one outlasts the wait; it then stops whatever it publishes itself.</summary>
+    async Task<bool> SettleCancelledLaunchesAsync(CancellableLaunch[] launches) {
+        foreach (var launch in launches) launch.Cancel();
+        var started = launches.Where(l => l.HasStarted).ToArray();
+        if (started.Length == 0) return true;
+
+        try {
+            await Task.WhenAll(started.Select(l => l.Settled)).WaitAsync(LaunchCancelSettleWait, _time);
+        } catch (TimeoutException) {
+            var outlasted = false;
+            foreach (var launch in started) outlasted |= launch.Abandon();
+            if (outlasted) return false;
+        }
+
+        return true;
+    }
 
     /// <summary>Composer input from the owner's socket. Every outcome is one ack the composer can
     /// word — never an Error frame, never an escaped exception — and it is written only once the
@@ -238,17 +457,16 @@ internal partial class AgentOrchestrator {
 
     /// A resolution that proves the account changes the subject; an expired token says nothing
     /// about which account is signed in, so it leaves the last one.
-    internal TokenResolution ObserveTokenResolution(TokenResolution resolution) {
-        switch (resolution.Status) {
+    void ObserveCredential(CredentialState state) {
+        switch (state.Status) {
+            // A machine credential carries no token-store resolution and names no user.
             case AuthStatus.Ok:
-                SetUserSubject(SubjectOf(resolution.Tokens?.AccessToken));
+                SetUserSubject(SubjectOf(state.Resolution?.Tokens?.AccessToken));
                 break;
             case AuthStatus.NotAuthenticated or AuthStatus.WrongServer or AuthStatus.NoAuthRequired:
                 SetUserSubject(null);
                 break;
         }
-
-        return resolution;
     }
 
     internal static string? SubjectOf(string? accessToken) =>
@@ -315,8 +533,11 @@ internal partial class AgentOrchestrator {
         if (Encoding.UTF8.GetByteCount(text) > InputWire.MaxTextBytes)
             return Refuse(SendTextReasons.TooLarge, $"text exceeds {InputWire.MaxTextBytes} bytes");
         if (!_agents.TryGetValue(agentId, out var agent)) return Refuse(SendTextReasons.NoSuchAgent, $"no agent {agentId}");
-        if (agent.Kind != LaunchKind.Default) return Refuse(SendTextReasons.ProtectedKind, ProtectionReason(agent));
+        if (!AcceptsTypedInput(agent.Kind)) return Refuse(SendTextReasons.ProtectedKind, ProtectionReason(agent));
         if (agent.Status is "Starting" or "Completed" or "Failed") return Refuse(SendTextReasons.NotRunning, $"agent is {agent.Status}");
+        // A quit becomes a daemon-side stop, which for a review agent would skip the confirmed Stop.
+        if (agent.Kind != LaunchKind.Default && !agent.Runtime.EmitsTerminalOutput && IsQuitCommand(text))
+            return Refuse(SendTextReasons.ProtectedKind, $"{ProtectionReason(agent)}: use Stop to end it");
 
         // Named refusals rather than the delivery core's one drop token: the composer shows the
         // wording to the person who picked the files, and can keep their text to retry without them.
@@ -362,7 +583,17 @@ internal partial class AgentOrchestrator {
     /// owned worktree (<c>--worktree</c>) or the user's borrowed cwd (default in-place).
     /// </summary>
     public async Task HandleLocalSpawnAsync(LocalFrame spawn, Stream stream, CancellationToken ct) {
-        var (vendor, work, isPrivate, cwd, args, cols, rows) = FrameCodec.Spawn(spawn);
+        using var admission = _admission.TryAdmit();
+        if (admission is null) {
+            await FrameCodec.WriteAsync(stream, LocalFrame.Error("This daemon is being renamed; start the agent on the renamed daemon."), ct);
+            return;
+        }
+
+        await HandleAdmittedLocalSpawnAsync(spawn, stream, ct);
+    }
+
+    async Task HandleAdmittedLocalSpawnAsync(LocalFrame spawn, Stream stream, CancellationToken ct) {
+        var (vendor, work, isPrivate, cwd, args, cols, rows, startTitle, accountId) = FrameCodec.Spawn(spawn);
 
         if (!_launchers.TryGetValue(vendor, out var launcher)) {
             await FrameCodec.WriteAsync(stream, LocalFrame.Error($"Unknown vendor: {vendor}"), ct);
@@ -371,6 +602,13 @@ internal partial class AgentOrchestrator {
 
         if (!Directory.Exists(cwd)) {
             await FrameCodec.WriteAsync(stream, LocalFrame.Error($"Directory does not exist: {cwd}"), ct);
+            return;
+        }
+
+        var resolution = ResolveAccount(vendor, accountId);
+
+        if (resolution.Refusal is { } refusal) {
+            await FrameCodec.WriteAsync(stream, LocalFrame.Error(refusal), ct);
             return;
         }
 
@@ -386,12 +624,15 @@ internal partial class AgentOrchestrator {
 
             var ctx = new LauncherContext(
                 agentId, cwd, worktree, Prompt: null, Model: "", Effort: null,
-                Tools: null, IsReview: false, IsReviewFlow: false, Review: null, ReviewLaunch: null
+                Tools: null, IsReview: false, IsReviewFlow: false, Review: null, ReviewLaunch: null,
+                Account: resolution.Account
             ) {
                 Work = work
             };
 
-            launcher.Prepare(ctx);
+            var before = work == WorkLocation.OwnedWorktree ? WorktreeManager.StampDaemonPaths(worktree.Path) : null;
+            try { launcher.Prepare(ctx); }
+            finally { if (before is not null) WorktreeManager.RecordDaemonBaseline(worktree.Path, before); }
             var built = launcher.BuildPassthrough(ctx, args);
 
             // Records to the account either way. Keep KCAP_URL and re-add ANTHROPIC_API_KEY so
@@ -408,24 +649,28 @@ internal partial class AgentOrchestrator {
                 // through the daemon bridge. --private omits all of this.
                 env[HostedAgent.RenderedVar] = HostedAgent.Rendered;
                 env[HostedAgent.AgentIdVar]  = agentId;
+                HostedLaunchMarkers.ApplyLocal(env, agentId, _config.Name);
                 if (_permissionBridge.BaseUrl is { } bridgeUrl) env[HostedAgent.BridgeUrlVar] = bridgeUrl;
             }
 
+            var removeEnv = resolution.Account is { } account
+                ? VendorHomeEnv.Apply(env, vendor, account, _config.Home)
+                : FrozenSet<string>.Empty;
+
             spawnedAtUtc = _time.GetUtcNow().UtcDateTime;
-            var pty     = _ptyFactory.Spawn(launcher.CliPath, built.Args, worktree.Path, env, cols, rows);
-            var runtime = new PtyHostedAgentRuntime(vendor, pty, _time);
+            var pty     = _ptyFactory.Spawn(launcher.CliPath, built.Args, worktree.Path, env, cols, rows, removeEnv);
+            var runtime = new PtyHostedAgentRuntime(vendor, pty, _time, logger: _logger);
 
             var startedAtUtc = _time.GetUtcNow().UtcDateTime;
 
-            agent = new AgentInstance(agentId, null, "", null, cwd, vendor, runtime, worktree, new CancellationTokenSource()) {
+            agent = new AgentInstance(agentId, null, "", null, cwd, vendor, runtime, worktree, new CancellationTokenSource(), resolution.Account) {
                 CreatedAt = startedAtUtc, LastOutputAt = startedAtUtc,
-                // Every launch path must go through CreateActivityClock() so the stage-advance report
-                // wiring is attached by construction. Inert here today (a local spawn is PTY-only and
-                // stamps no stage) — but a hand-built clock is exactly how that wiring goes silently
-                // missing the day this path grows an ACP runtime.
+                VendorSession = built.SessionId,
+                // Every launch path goes through CreateActivityClock(), even this PTY-only one that stamps
+                // no stage: a hand-built clock is how the stage-report wiring goes silently missing.
                 ActivityClock  = CreateActivityClock(),
                 IsPrivate      = isPrivate,
-                IsLocalSpawned = true,
+                StartTitle     = startTitle,
                 Work           = work,
                 McpConfigPath  = built.McpConfigPath,
                 CurrentCols    = cols,
@@ -439,12 +684,14 @@ internal partial class AgentOrchestrator {
             // Don't leak a daemon-created worktree if Prepare / passthrough-arg building /
             // spawn fails after the worktree was created (mirrors the server launch path).
             if (ownedWorktree is { } leaked) {
-                try { await WorktreeManager.RemoveAsync(leaked, _time); } catch { /* best-effort */ }
+                try { await RemoveOwnedWorktreeAsync(leaked, agentId); } catch { /* best-effort */ }
             }
 
             await FrameCodec.WriteAsync(stream, LocalFrame.Error($"Launch failed: {ex.Message}"), ct);
             return;
         }
+
+        WriteLedger(agent, cmd: null, "local", consent: null);
 
         // Register like a UI launch (no-op for --private). Best-effort: a registration hiccup
         // must not break the local terminal session.
@@ -457,9 +704,9 @@ internal partial class AgentOrchestrator {
     }
 
     /// <summary>Attach an existing agent to a local client (used by <c>kcap agent attach</c>).</summary>
-    public Task HandleLocalAttachAsync(string agentId, Stream stream, CancellationToken ct) {
+    public Task HandleLocalAttachAsync(string agentId, Stream stream, CancellationToken ct, bool reportRuntime = false) {
         if (!_agents.TryGetValue(agentId, out var agent))
-            return FrameCodec.WriteAsync(stream, LocalFrame.Error($"no such agent {agentId}"), ct);
+            return FrameCodec.WriteAsync(stream, LocalFrame.NoSuchAgent(agentId), ct);
 
         // A runtime that emits no terminal output has nothing for a terminal to attach TO: its
         // stdout is protocol traffic (agy's NDJSON, ACP's JSON-RPC), and its output buffer is
@@ -473,10 +720,14 @@ internal partial class AgentOrchestrator {
                 $"{agentId} is a hosted {agent.Runtime.Vendor} agent — it has no terminal to attach to. "
               + "Drive it from the dashboard."), ct);
 
-        // A review or flow agent is addressed through the flow protocol, never by typing at it,
-        // so the daemon — not the client — decides this attach carries no input.
-        return AttachClientLoopAsync(agent, stream, ct, readOnly: agent.Kind != LaunchKind.Default);
+        // The daemon, not the client, decides whether this attach carries input.
+        return AttachClientLoopAsync(agent, stream, ct, readOnly: !AcceptsTypedInput(agent.Kind), reportRuntime);
     }
+
+    /// A PR-review agent is a dialogue the reviewer types into; a flow participant is driven only
+    /// through the flow protocol. Any other kind fails safe as read-only. Stop protection is a
+    /// separate rule: both review kinds still need --force to stop.
+    internal static bool AcceptsTypedInput(LaunchKind kind) => kind is LaunchKind.Default or LaunchKind.Review;
 
     /// Human-readable "why is this read-only/refused", carried on the AttachedReadOnly frame and
     /// the not-live StopV2 refusal below (which reads the same kind from a persisted PID record
@@ -505,7 +756,7 @@ internal partial class AgentOrchestrator {
     /// running either way — the sink is just removed.
     /// </summary>
     internal async Task AttachClientLoopAsync(
-            AgentInstance agent, Stream stream, CancellationToken ct, bool readOnly = false) {
+            AgentInstance agent, Stream stream, CancellationToken ct, bool readOnly = false, bool reportRuntime = false) {
         // One NetworkStream, two writers (the sink's Stdout frames + Attached/Exited here):
         // serialise all writes through this lock. Reads (the input loop) are independent.
         var writeLock = new SemaphoreSlim(1, 1);
@@ -528,6 +779,7 @@ internal partial class AgentOrchestrator {
 
         try {
             // Bounded replay BEFORE any live chunk so the client paints a coherent screen.
+            if (reportRuntime) await Send(LocalFrame.RuntimeStarted(StartedAtOf(agent)));
             await Send(readOnly
                 ? FrameCodec.AttachedReadOnly(agent.Id, ProtectionReason(agent), snapshot)
                 : FrameCodec.Attached(agent.Id, snapshot));
@@ -562,9 +814,12 @@ internal partial class AgentOrchestrator {
                         // before the write so a wait that begins during it survives.
                         var waitGeneration = agent.ActivityClock.WaitGeneration;
 
+                        var submit = IsSubmit(f.Bytes);
+                        if (!submit) agent.ActivityClock.NoteViewerInput();
+
                         try {
                             await agent.Runtime.SendRawInputAsync(f.Bytes);
-                            if (IsSubmit(f.Bytes)) agent.ActivityClock.ClearAwaitingInputSince(waitGeneration);
+                            if (submit) agent.ActivityClock.ClearAwaitingInputSince(waitGeneration);
                         } catch (NotSupportedException) {
                             // ACP-backed runtimes (e.g. cursor) have no raw-input surface —
                             // AcpHostedAgentRuntime.SendRawInputAsync throws by design. Tell the
@@ -609,7 +864,7 @@ internal partial class AgentOrchestrator {
         }
     }
 
-    static bool IsSubmit(byte[] input) => Array.IndexOf(input, (byte) '\r') >= 0 || Array.IndexOf(input, (byte) '\n') >= 0;
+    internal static bool IsSubmit(byte[] input) => Array.IndexOf(input, (byte) '\r') >= 0 || Array.IndexOf(input, (byte) '\n') >= 0;
 
     void ApplyResizeClamp(AgentInstance agent, ITerminalSink sink, ushort cols, ushort rows) {
         lock (agent.SinksLock) {
@@ -647,6 +902,9 @@ internal partial class AgentOrchestrator {
         }
 
         if (c > 0 && r > 0) {
+            // Arm before Resize: a PTY can produce the redraw on another thread immediately.
+            // All viewers (local, web, and a departing smaller viewer) share this path.
+            agent.ActivityClock.NoteViewerInput();
             agent.Runtime.Resize(c, r);
             agent.CurrentCols = c;
             agent.CurrentRows = r;

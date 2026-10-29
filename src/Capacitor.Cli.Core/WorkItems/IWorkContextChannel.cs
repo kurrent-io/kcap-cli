@@ -12,4 +12,5 @@ public interface IWorkContextChannel {
     Task<WorkContextOutcome<WorkItemDto>>                         GetWorkItemAsync(string workItemId, CancellationToken ct);
     Task<WorkContextOutcome<WorkItemTopologyDto>>                 GetTopologyAsync(string workItemId, CancellationToken ct);
     Task<WorkContextOutcome<SessionSummaryDto>>                   GetSessionSummaryAsync(string sessionId, CancellationToken ct);
+    Task<WorkContextOutcome<ViewerIdentityDto>>                   GetViewerIdentityAsync(CancellationToken ct);
 }

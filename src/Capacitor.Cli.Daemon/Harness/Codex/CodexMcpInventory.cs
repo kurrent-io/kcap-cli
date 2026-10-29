@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json.Nodes;
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Daemon.Services;
 
 namespace Capacitor.Cli.Daemon.Harness.Codex;
@@ -41,13 +43,13 @@ internal static class CodexMcpInventory {
         int    exitCode;
 
         try {
-            using var process = Process.Start(new ProcessStartInfo {
+            using var process = Process.Start(WindowsLaunchCommand.Apply(new ProcessStartInfo {
                 FileName               = codexPath,
                 UseShellExecute        = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError  = true,
                 ArgumentList           = { "mcp", "list", "--json" }
-            }) ?? throw new CodexReviewerMcpIsolationException(
+            }, BinaryProbe.FromEnvironment())) ?? throw new CodexReviewerMcpIsolationException(
                 $"Could not start '{codexPath} mcp list --json' to enumerate the reviewer's inherited MCP servers.");
 
             // Read to end BEFORE WaitForExit to avoid a full-pipe deadlock on large output.

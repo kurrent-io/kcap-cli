@@ -345,7 +345,7 @@ public class ServerBackedCommandContractTests : IDisposable {
 
         await Assert.That(run.ExitCode).IsEqualTo(1);
         await Assert.That(run.Stderr).Contains("No review context found for acme/widget#42.");
-        await Assert.That(run.Stderr).Contains("sessions tracked in Capacitor");
+        await Assert.That(run.Stderr).Contains("sessions tracked in kcap");
 
         var gets = _server.FindLogEntries(
             Request.Create().WithPath("/api/review/acme/widget/pulls/42").UsingGet());

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Pty;
@@ -21,7 +22,8 @@ public class LocalRenameIpcTests {
         public List<(string SessionId, string Title)> Renames { get; } = [];
 
         public Task<string?> GetTitleAsync(string sessionId, CancellationToken ct) => Task.FromResult(ServerTitle);
-        public Task<bool> PushTitleAsync(string sessionId, string title, CancellationToken ct) => Task.FromResult(false);
+        public Task<HarnessTitleOutcome> PushTitleAsync(string sessionId, HarnessTitlePost post, CancellationToken ct) =>
+            Task.FromResult(HarnessTitleOutcome.Failed);
 
         public Task<TitleRenameOutcome> RenameAsync(string sessionId, string title, CancellationToken ct) {
             Renames.Add((sessionId, title));
@@ -239,25 +241,27 @@ public class LocalRenameIpcTests {
         await Assert.That(AgentOrchestrator.SubjectOf("not-a-jwt")).IsNull();
     }
 
-    /// The connection's token reads feed the cached subject, so a re-login shows on the next read.
+    /// Every credential the connection's lanes resolve feeds the cached subject, so a re-login shows on the next read.
     [Test]
-    public async Task A_token_read_on_the_connection_updates_the_subject() {
+    public async Task A_credential_resolved_on_the_connection_updates_the_subject() {
         var (orch, _, connection) = BuildWithConnection();
         await using var __ = orch;
 
-        connection.OnTokenResolved!(Resolution(AuthStatus.Ok, Jwt("""{"sub":"user_new"}""")));
+        connection.OnCredentialResolved!(Credential(AuthStatus.Ok, Jwt("""{"sub":"user_new"}""")));
         await Assert.That(orch.UserSubject).IsEqualTo("user_new");
 
-        connection.OnTokenResolved!(Resolution(AuthStatus.Expired, null));
+        connection.OnCredentialResolved!(Credential(AuthStatus.Expired, null));
         await Assert.That(orch.UserSubject).IsEqualTo("user_new");
 
-        connection.OnTokenResolved!(Resolution(AuthStatus.NotAuthenticated, null));
+        connection.OnCredentialResolved!(Credential(AuthStatus.NotAuthenticated, null));
         await Assert.That(orch.UserSubject).IsNull();
     }
 
-    static TokenResolution Resolution(AuthStatus status, string? accessToken) => new(
-        accessToken is null ? null : new StoredTokens { AccessToken = accessToken, ExpiresAt = DateTimeOffset.MaxValue, GitHubUsername = "u" },
-        status, null, "default");
+    static CredentialState Credential(AuthStatus status, string? accessToken) => new(
+        accessToken, status,
+        new TokenResolution(
+            accessToken is null ? null : new StoredTokens { AccessToken = accessToken, ExpiresAt = DateTimeOffset.MaxValue, GitHubUsername = "u" },
+            status, null, "default"));
 
     static string Jwt(string payload) {
         static string B64(string s) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(s)).TrimEnd('=').Replace('+', '-').Replace('/', '_');

@@ -78,8 +78,8 @@ internal sealed record ElicitationClassification(
 /// </summary>
 internal static class ElicitationSchemaClassifier {
     const int MaxSchemaCodeUnits = 32 * 1024;
-    const int MaxOptions         = 32;
-    const int MaxOptionCodeUnits = 1024;
+    internal const int MaxOptions         = 32;
+    internal const int MaxOptionCodeUnits = 1024;
 
     public static bool TryClassify(
         JsonElement requestedSchema,

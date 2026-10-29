@@ -1,7 +1,7 @@
 kcap import — Import local sessions from every detected coding agent
 
-Discovers Claude, Codex, Cursor, Copilot, Gemini, Kiro, Pi, OpenCode, and
-Antigravity sessions on this machine and imports them in a single run. Most agents
+Discovers Claude, Codex, Cursor, Copilot, Gemini, Kiro, Pi, OpenCode, Antigravity,
+Mistral Vibe, Grok, and Muse Code sessions on this machine and imports them in a single run. Most agents
 ship a per-session .jsonl transcript (OpenCode is a SQLite db):
   Claude   — ~/.claude/projects/<encoded-cwd>/<sid>.jsonl
   Codex    — ~/.codex/sessions/.../rollout-<sid>.jsonl
@@ -13,7 +13,12 @@ ship a per-session .jsonl transcript (OpenCode is a SQLite db):
   Pi       — ~/.pi/agent/sessions/.../<timestamp>_<sid>.jsonl (badlogic/pi-mono)
   OpenCode — ~/.local/share/opencode/opencode.db (SQLite; sessions + parts tables)
   Antigravity — ~/.gemini/antigravity/brain/<id>/.system_generated/logs/transcript_full.jsonl
-kcap walks all nine the same way.
+  Vibe     — ~/.vibe/logs/session/unified/<id>/ (current store) and the legacy
+             ~/.vibe/logs/session/session_<ts>/messages.jsonl (honours $VIBE_HOME)
+  Grok     — ~/.grok/sessions/<encoded-cwd>/<sid>/updates.jsonl (honours $GROK_HOME)
+  Muse     — ~/.local/share/muse/sessions/YYYY/MM/DD/<id>/session.jsonl (+ subagent/<id>/
+             child logs; honours $XDG_DATA_HOME)
+kcap walks all twelve the same way.
 
 Usage: kcap import [vendor-filters] [scope] [options]
 
@@ -31,6 +36,9 @@ Vendor filters (additive — pass one or more to restrict the run):
   --pi                    Import Pi (badlogic/pi-mono) session transcripts
   --opencode              Import SST OpenCode sessions (~/.local/share/opencode/opencode.db)
   --antigravity           Import Google Antigravity conversations (~/.gemini/antigravity/brain)
+  --mistral-vibe          Import Mistral Vibe sessions (~/.vibe/logs/session)
+  --grok                  Import Grok Build sessions and their subagents (~/.grok/sessions)
+  --muse                  Import Muse Code sessions (~/.local/share/muse/sessions)
 
 Scope (one of, required for non-interactive use):
   --all                   Import every discovered session
@@ -64,9 +72,14 @@ Options:
                           sessions. Titling shells out to your own `claude` /
                           `codex`, once per session, on your subscription — the
                           same opt-out `kcap watch` takes. Sessions are searchable
-                          without a title, and the other seven agents never title
+                          without a title, and the other eight agents never title
                           locally, so this changes nothing for them.
   --generate-summaries    Also generate per-session what's-done summaries
+  --repair-capture        Recover omitted file-tool records for one ended session
+                          you own. Requires --session; Claude and Codex only.
+                          Scans the root and discovered child transcripts.
+  --dry-run               With --repair-capture: compare and report candidates,
+                          without durable repair writes
   --reimport              Force OpenCode sessions to re-import even if a local
                           ledger records them as complete (use after deleting a
                           session server-side); scope it with the vendor/--repo/
@@ -74,3 +87,30 @@ Options:
 
 Re-running the same command is idempotent — a server-side watermark dedupes
 already-imported lines so nothing is double-loaded.
+
+Transcript records are secret-redacted before upload, with a 4 MiB UTF-8 limit
+per record and batch. Records that cannot be safely processed produce a warning
+and a numbered capture-loss marker; other records continue importing. Install
+server capture-loss support first so session details can show these warnings.
+
+Targeted capture recovery:
+  kcap import --session <id> --repair-capture --dry-run
+  kcap import --session <id> --repair-capture
+
+Install server recovery support first; the CLI checks it before reading sources.
+Repair mode rejects normal import scope/filter/action flags (including --all,
+--repo, --org, --reimport and --private). It preserves ownership and visibility.
+Missing, changed or unsupported sources are reported. Only existing root/child
+streams are eligible; unsupported gaps can remain after file records recover.
+
+Uploads contain at most 100 lines and 4 MiB of serialized JSON, including escaping.
+An individual line exceeding that encoded limit refuses the operation. Staging
+allows at most 128 sources, 4,096 candidates and 64 MiB of candidate payload, and
+expires after 20 minutes without activity. A cancelled scan can be rerun from its
+start; validated repairs continue durably even after this CLI exits.
+
+Exit codes: 0 = complete accounting with no remaining gaps (or a clean dry-run
+preview); 2 = completed recovery/preview with residual gaps; 1 = refused, failed,
+or still incomplete. Output includes the repair ID and latest phase when work
+continues on the server. The CLI waits up to two minutes for accounting; check the
+session's capture status if it is still running.

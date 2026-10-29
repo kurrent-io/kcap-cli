@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace Capacitor.Cli.Core.Setup;
 
 /// What users mean by "the terminal" is an *interactive login* shell: `-lic` reads both
@@ -23,9 +25,14 @@ public interface ILoginShellProbe {
     /// with the same retry-on-process-start-failure and <paramref name="forceRefresh"/> rules as
     /// KcapOnPathAsync.
     Task<string?> KcapPathAsync(CancellationToken ct, bool forceRefresh = false);
+
+    /// Which of <paramref name="names"/> the terminal's environment sets to a non-empty value, or
+    /// null when the shell could not be asked. Never the values themselves.
+    Task<IReadOnlySet<string>?> SetVariablesAsync(IReadOnlyList<string> names, CancellationToken ct) =>
+        Task.FromResult<IReadOnlySet<string>?>(null);
 }
 
-public sealed class LoginShellProbe(IProcessRunner runner, Func<string, string?> getEnv) : ILoginShellProbe {
+public sealed partial class LoginShellProbe(IProcessRunner runner, Func<string, string?> getEnv) : ILoginShellProbe {
     internal const string Sentinel = "<<KCAP-PATH>>";
     static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(5);
 
@@ -78,6 +85,20 @@ public sealed class LoginShellProbe(IProcessRunner runner, Func<string, string?>
         return value;
     }
 
+    public async Task<IReadOnlySet<string>?> SetVariablesAsync(IReadOnlyList<string> names, CancellationToken ct) {
+        // Names reach the script verbatim, so anything that is not a plain identifier is refused
+        // rather than quoted.
+        if (names.Any(name => !VariableName().IsMatch(name))) throw new ArgumentException("not a variable name", nameof(names));
+
+        var tests = string.Concat(names.Select(name => $"[ -n \"${{{name}}}\" ] && printf '{name} '; "));
+        var (raw, _, _) = await RunScript($"printf '{Sentinel}'; {tests}printf '{Sentinel}'").WaitAsync(ct).ConfigureAwait(false);
+
+        return raw?.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToHashSet(StringComparer.Ordinal);
+    }
+
+    [GeneratedRegex("^[A-Za-z_][A-Za-z0-9_]*$")]
+    private static partial Regex VariableName();
+
     async Task<(string? Value, bool Cacheable)> ProbeKcapPath() {
         // $(...) captures `command -v kcap` raw (alias line, function body, path, or nothing on
         // a nonzero exit) without letting its own exit code flip the enclosing script's — the
@@ -126,13 +147,16 @@ public sealed class LoginShellProbe(IProcessRunner runner, Func<string, string?>
         return (null, first.Ran && second.Ran, true);
     }
 
-    // stdin is not connected by our runner (RedirectStandardInput=false → the child reads
-    // /dev/null). A process-start failure (bad/non-executable $SHELL) is caught here rather than
-    // left to propagate, so the fallback attempt still runs and the caller above still gets a
-    // clean null instead of a crash.
+    // An interactive shell takes the controlling terminal for job control, which stops a parent
+    // launched from that terminal with SIGTTIN; setsid gives it none. macOS ships no setsid.
+    // A process-start failure (bad/non-executable $SHELL) is caught here rather than left to
+    // propagate, so the fallback attempt still runs and the caller above still gets a clean null.
     async Task<(bool Ran, ProcessResult? Result)> Attempt(string shell, string flag, string script) {
         try {
-            var result = await runner.RunAsync(shell, [flag, script], new RunOptions(Timeout: ProbeTimeout), CancellationToken.None)
+            var setsid = BinaryProbe.Searching(getEnv("PATH")).Resolve("setsid");
+            var result = await (setsid is null
+                ? runner.RunAsync(shell, [flag, script], new RunOptions(Timeout: ProbeTimeout), CancellationToken.None)
+                : runner.RunAsync(setsid, ["-w", shell, flag, script], new RunOptions(Timeout: ProbeTimeout), CancellationToken.None))
                 .ConfigureAwait(false);
             return (true, result);
         } catch (Exception) {

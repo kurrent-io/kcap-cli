@@ -1,3 +1,4 @@
+using System.Net;
 using Capacitor.Cli.Core.Auth;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Auth;
@@ -46,5 +47,69 @@ public class TokenStoreRefreshLaneTests {
 
         var persisted = await store.LoadAsync("default");
         await Assert.That(persisted!.RefreshToken).IsEqualTo("rotated");
+    }
+
+    /// A refresh token WorkOS refused is retired on disk, so the next read reports Expired without
+    /// presenting it again, while the identity stays for `kcap status` to name.
+    [Test]
+    public async Task A_refused_refresh_token_is_retired_and_never_sent_again() {
+        using var script = new AuthHttpScript(
+            _ => AuthHttp.Status(HttpStatusCode.BadRequest, """{"error":"invalid_grant"}"""));
+        var store = AuthFixtures.NewTokenStore(Config.Root, script);
+        await store.SaveAsync("default", Expired);
+
+        await Assert.That(await store.GetValidTokensForProfileAsync("default")).IsNull();
+
+        var later = await store.GetValidTokensForServerAsync("default", "https://kcap.example.com");
+
+        await Assert.That(later.Status).IsEqualTo(AuthStatus.Expired);
+        await Assert.That(script.Seen.Count(s => s.EndsWith("/user_management/authenticate", StringComparison.Ordinal))).IsEqualTo(1);
+
+        var persisted = await store.LoadAsync("default");
+        await Assert.That(persisted!.RefreshToken).IsNull();
+        await Assert.That(persisted.GitHubUsername).IsEqualTo("alice");
+    }
+
+    /// Once WorkOS has refused the token, the retirement is written even if the caller cancels:
+    /// a cancelled write would leave the refused token on disk to be sent again.
+    [Test]
+    public async Task A_refused_refresh_token_is_retired_when_the_caller_cancels_after_the_refusal() {
+        using var cts    = new CancellationTokenSource();
+        using var script = new AuthHttpScript(_ => {
+            cts.Cancel();
+
+            return AuthHttp.Status(HttpStatusCode.BadRequest, """{"error":"invalid_grant"}""");
+        });
+        var store = AuthFixtures.NewTokenStore(Config.Root, script);
+        await store.SaveAsync("default", Expired);
+
+        try {
+            await store.ForceRefreshAsync("default", "stale", ct: cts.Token);
+        } catch (OperationCanceledException) { }
+
+        await Assert.That(script.Seen.Count).IsEqualTo(1);
+        await Assert.That((await store.LoadAsync("default"))!.RefreshToken).IsNull();
+    }
+
+    /// A reader that saw a refresh token before the lock, and finds it retired by a peer once it holds
+    /// the lock, reports the token expired without sending anything.
+    [Test]
+    public async Task A_reader_queued_behind_a_retirement_sends_nothing() {
+        using var script = new AuthHttpScript(
+            _ => AuthHttp.Json("""{"access_token":"fresh","refresh_token":"rotated"}"""));
+        var store = AuthFixtures.NewTokenStore(Config.Root, script);
+        await store.SaveAsync("default", Expired);
+        var tokenFile = store.TokenPath("default");
+        var retired   = (await File.ReadAllTextAsync(tokenFile)).Replace("\"rt\"", "null", StringComparison.Ordinal);
+
+        Task<StoredTokens?> reader;
+        using (new FileStream(Path.ChangeExtension(tokenFile, ".lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) {
+            reader = store.GetValidTokensForProfileAsync("default");
+            await Task.Delay(200);
+            await File.WriteAllTextAsync(tokenFile, retired);
+        }
+
+        await Assert.That(await reader).IsNull();
+        await Assert.That(script.Seen).IsEmpty();
     }
 }

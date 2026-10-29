@@ -221,16 +221,12 @@ public class AcpHostedAgentRuntimePermissionTests {
     }
 
     /// <summary>
-    /// Spec-review Finding 3(b): the runtime disposing (connection closing) WHILE a
-    /// <c>session/request_permission</c> is genuinely pending — <c>requestInteraction</c>
-    /// never completes on its own — must resolve the pending request to the well-formed ACP
-    /// <c>cancelled</c> response exactly once, not hang forever and not surface as an unhandled
-    /// exception anywhere in the dispose path. <see cref="AcpHostedAgentRuntime.DisposeAsync"/>
-    /// cancels its own <c>_cts</c>, which is the SAME token threaded all the way through
-    /// <see cref="AcpConnection"/>'s read loop into this bridge's <c>ct</c> parameter — so the
-    /// injected delegate below observes that same cancellation and the bridge (Task B3's fix)
-    /// converts it to <c>cancelled</c> rather than letting it propagate as an unhandled
-    /// <see cref="OperationCanceledException"/> out of <c>AcpConnection.HandleServerRequestAsync</c>.
+    /// Disposing the runtime while <c>session/request_permission</c> is blocked inside
+    /// <c>requestInteraction</c> must answer that request with a <c>cancelled</c> outcome.
+    /// <see cref="AcpHostedAgentRuntime.DisposeAsync"/> cancels the token the connection read
+    /// loop passes into the bridge, and the bridge maps that cancellation to <c>cancelled</c>
+    /// instead of leaving the request unanswered or propagating
+    /// <see cref="OperationCanceledException"/>.
     /// </summary>
     [Test]
     public async Task PermissionRequest_ConnectionDisposedWhilePending_ResolvesToCancelledExactlyOnce() {
@@ -238,12 +234,22 @@ public class AcpHostedAgentRuntimePermissionTests {
         var conn    = new AcpConnection(fake.ClientWriteStream, fake.ClientReadStream, NullLogger.Instance);
         var process = new FakeAcpProcess();
 
+        // SentServerRequests is recorded before the frame is written, so it can flip while the
+        // read loop has not entered this delegate yet. Dispose only once the request is blocked
+        // here — cancelling earlier tears the loop down before any cancelled response is written.
+        var permissionBlocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
         var runtime = new AcpHostedAgentRuntime(
             conn,
             process,
             NullLogger.Instance, TimeProvider.System,
-            // Never resolves on its own — only cancellation (from DisposeAsync below) ends this.
-            requestInteraction: (req, ct) => Task.Delay(Timeout.Infinite, ct).ContinueWith(_ => default(AcpInteractionDecision), TaskScheduler.Default));
+            // Only cancellation ends this. A successful completion would hand dispose a decision
+            // the delegate chose, so the cancelled outcome would not be dispose's.
+            requestInteraction: async (_, ct) => {
+                permissionBlocked.TrySetResult();
+                await Task.Delay(Timeout.Infinite, ct).ConfigureAwait(false);
+                return new AcpInteractionDecision("cancel", null, null, null, null, null);
+            });
 
         using var cts = new CancellationTokenSource();
         var fakeRunTask = fake.RunAsync(cts.Token);
@@ -256,15 +262,10 @@ public class AcpHostedAgentRuntimePermissionTests {
 
         await runtime.SendUserInputAsync("run ls").WaitAsync(HangGuard);
 
-        // Confirm the request genuinely went out and is genuinely still pending before disposing.
-        var sentDeadline = DateTime.UtcNow + HangGuard;
-        while (!fake.SentServerRequests.Any(r => r.Method == "session/request_permission") && DateTime.UtcNow < sentDeadline)
-            await Task.Delay(10);
-        await Assert.That(fake.SentServerRequests.Any(r => r.Method == "session/request_permission")).IsTrue();
+        await permissionBlocked.Task.WaitAsync(HangGuard);
         await Assert.That(fake.LastServerRequestResponse).IsNull();
         await Assert.That(fake.LastServerRequestError).IsNull();
 
-        // Dispose while pending — this is the disconnect this finding covers.
         await runtime.DisposeAsync().AsTask().WaitAsync(HangGuard);
 
         // The bridge must have written back a well-formed `cancelled` response before/as part of

@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Local-control IPC is append-only: new `FrameType` values `SessionRename = 25`, `SessionRenameAck = 82`; capability `"rename/1"` is added to `LocalControlCapabilities.Current` only beside its live routing case.
+- Local-control IPC is append-only: new `FrameType` values `SessionRename = 33`, `SessionRenameAck = 88`; capability `"rename/1"` is added to `LocalControlCapabilities.Current` only beside its live routing case.
 - New DTO members are trailing and nullable; status JSON always emits every member (no `DefaultIgnoreCondition`).
 - JSON goes through source-generated contexts, snake_case on the wire. No reflection JSON (AOT).
 - Titles are trimmed and capped at 120 characters.

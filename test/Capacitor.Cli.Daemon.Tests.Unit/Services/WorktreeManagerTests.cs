@@ -68,6 +68,350 @@ public class WorktreeManagerTests {
         }
     }
 
+    /// <summary>
+    /// Fetching a head that moves a submodule makes git fetch the submodule too, from the submodule's own
+    /// remote. That remote is the user's business, not the review's: unreachable here, it must not fail
+    /// the launch.
+    /// </summary>
+    [Test]
+    public async Task CreateAsync_fetches_a_head_that_moves_a_submodule_whose_remote_is_unreachable() {
+        using var sub = GitRepo.CreateWithCommit("sub");
+        using var up = GitRepo.CreateWithCommit("upstream");
+        up.Do("-c", "protocol.file.allow=always", "submodule", "add", sub, "vendored");
+        up.Commit("add submodule");
+        up.Config("uploadpack.allowAnySHA1InWant", "true");
+
+        using var cloneDir = new TempDir("clone");
+        var clone = up.Clone(cloneDir.PathTo("repo"));
+        clone.Do("-c", "protocol.file.allow=always", "submodule", "update", "--init");
+
+        sub.CreateFile("moved.txt", "moved");
+        sub.CommitAll("moved");
+        var vendored = GitRepo.At(up.PathTo("vendored"));
+        vendored.Do("fetch", "-q", "origin");
+        vendored.Do("checkout", "-q", sub.Head);
+        up.Add("vendored");
+        up.Commit("move the submodule");
+        up.Do("update-ref", "refs/pull/7/head", up.Head);
+        var head = up.Head;
+        // The clone's submodule remote must not exist: a recursing fetch that could reach the moved commit would make
+        // the HEAD assertion prove nothing. Repointed rather than deleted, since Windows keeps git's read-only files.
+        var missing = cloneDir.PathTo("no-such-remote");
+        GitRepo.At(clone.PathTo("vendored")).Do("remote", "set-url", "origin", missing);
+        clone.Do("config", "submodule.vendored.url", missing);
+        await Assert.That(Directory.Exists(missing)).IsFalse();
+
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var worktree = await manager.CreateAsync(clone, name: "review-pr-7", baseRef: "refs/pull/7/head");
+
+        try {
+            await Assert.That(GitRepo.At(worktree.Path).Head).IsEqualTo(head);
+        } finally {
+            await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
+        }
+    }
+
+    /// <summary>A commit is named whole when kcap's git hook recorded it, and by the abbreviation git printed when
+    /// the server read it off a shell <c>git commit</c>.</summary>
+    [Test]
+    [Arguments(40)]
+    [Arguments(7)]
+    public async Task CreateAsync_with_a_local_only_sha_checks_it_out_without_a_remote(int shaLength) {
+        using var repo = GitRepo.Create("local-only");
+
+        repo.CreateFile("a.txt", "a");
+        repo.CommitAll("first");
+        var first = repo.Head;
+        repo.CreateFile("b.txt", "b");
+        repo.CommitAll("second");
+
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var worktree = await manager.CreateAsync(repo, name: "local-sha", baseRef: first[..shaLength]);
+
+        try {
+            await Assert.That(GitRepo.At(worktree.Path).Head).IsEqualTo(first);
+            await Assert.That(worktree.FetchedRef).IsNull();
+        } finally {
+            await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
+        }
+    }
+
+    /// <summary>A branch whose name is all hex starts from that branch, not from a same-named tag that rev-parse
+    /// would resolve first when the name is read as a sha.</summary>
+    [Test]
+    public async Task CreateAsync_with_a_hex_named_branch_starts_from_the_branch_not_a_same_named_tag() {
+        using var repo = GitRepo.Create("hex-branch");
+
+        repo.CreateFile("a.txt", "a");
+        repo.CommitAll("first");
+        var first = repo.Head;
+        repo.Do("branch", "cafe1234");
+        repo.CreateFile("b.txt", "b");
+        repo.CommitAll("second");
+        repo.Do("tag", "cafe1234");
+
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var worktree = await manager.CreateAsync(repo, name: "hex-branch", baseRef: "cafe1234");
+
+        try {
+            await Assert.That(GitRepo.At(worktree.Path).Head).IsEqualTo(first);
+        } finally {
+            await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
+        }
+    }
+
+    [Test]
+    public async Task CreateAsync_with_an_unknown_sha_falls_back_to_the_origin_fetch() {
+        using var repo = MakeUpstreamWithSideRef("refs/pull/9/head", out _);
+
+        // Committed after the clone, so the clone's object store cannot have it.
+        repo.Upstream.CreateFile("late.txt", "late");
+        repo.Upstream.CommitAll("late commit");
+        var lateSha = repo.Upstream.Head;
+        repo.Upstream.Do("update-ref", "refs/pull/10/head", lateSha);
+
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var worktree = await manager.CreateAsync(repo.Clone, name: "remote-sha", baseRef: lateSha);
+
+        try {
+            await Assert.That(GitRepo.At(worktree.Path).Head).IsEqualTo(lateSha);
+            await Assert.That(worktree.FetchedRef).IsEqualTo("refs/kcap/review/remote-sha");
+        } finally {
+            await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
+        }
+    }
+
+    /// <summary>An abbreviation made on another machine and pushed is found among origin's branches, which a fetch
+    /// of the abbreviation itself cannot do.</summary>
+    [Test]
+    public async Task CreateAsync_with_an_abbreviation_pushed_to_origin_starts_from_that_commit() {
+        using var repo = MakeUpstreamWithSideRef("refs/pull/11/head", out _);
+
+        // Committed after the clone, so the clone's object store cannot have it.
+        repo.Upstream.CreateFile("pushed.txt", "pushed");
+        repo.Upstream.CommitAll("pushed commit");
+        var pushed = repo.Upstream.Head;
+
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var worktree = await manager.CreateAsync(repo.Clone, name: "pushed-short-sha", baseRef: pushed[..7]);
+
+        try {
+            await Assert.That(GitRepo.At(worktree.Path).Head).IsEqualTo(pushed);
+            await Assert.That(worktree.FetchedRef).IsNull();
+        } finally {
+            await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
+        }
+    }
+
+    [Test]
+    public async Task CreateAsync_with_a_ref_name_keeps_the_fetch_path() {
+        using var repo = MakeUpstreamWithSideRef("refs/pull/8/head", out _);
+
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var worktree = await manager.CreateAsync(repo.Clone, name: "ref-name", baseRef: "refs/pull/8/head");
+
+        try {
+            await Assert.That(worktree.FetchedRef).IsEqualTo("refs/kcap/review/ref-name");
+        } finally {
+            await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
+        }
+    }
+
+    [Test]
+    public async Task CreateAsync_with_a_local_branch_name_starts_from_that_branch_head() {
+        using var repo = GitRepo.Create("local-branch");
+
+        repo.CreateFile("a.txt", "a");
+        repo.CommitAll("first");
+        var defaultBranch = repo.CurrentBranch;
+        repo.Checkout("feature/agent-work", create: true);
+        repo.CreateFile("b.txt", "b");
+        repo.CommitAll("agent commit");
+        var branchHead = repo.Head;
+        repo.Checkout(defaultBranch);
+
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var worktree = await manager.CreateAsync(repo, name: "local-branch", baseRef: "feature/agent-work");
+
+        try {
+            await Assert.That(GitRepo.At(worktree.Path).Head).IsEqualTo(branchHead);
+            await Assert.That(worktree.FetchedRef).IsNull();
+            await Assert.That(worktree.Branch).IsEqualTo("capacitor/local-branch");
+        } finally {
+            await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
+        }
+    }
+
+    [Test]
+    public async Task CreateAsync_with_a_branch_name_missing_locally_fetches_it_from_origin() {
+        using var repo = MakeUpstreamWithSideRef("refs/pull/11/head", out var sideSha);
+
+        // Created after the clone, so only origin has it.
+        repo.Upstream.Do("branch", "remote-only", sideSha);
+
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var worktree = await manager.CreateAsync(repo.Clone, name: "remote-branch", baseRef: "remote-only");
+
+        try {
+            await Assert.That(GitRepo.At(worktree.Path).Head).IsEqualTo(sideSha);
+            await Assert.That(worktree.FetchedRef).IsEqualTo("refs/kcap/review/remote-branch");
+        } finally {
+            await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
+        }
+    }
+
+    [Test]
+    [Arguments("bad..name")]
+    [Arguments("-delete-me")]
+    [Arguments("@{-1}")]
+    [Arguments("with space")]
+    public async Task CreateAsync_refuses_a_base_ref_that_is_not_a_valid_ref_name(string baseRef) {
+        using var repo = GitRepo.Create("invalid-ref");
+
+        repo.CreateFile("a.txt", "a");
+        repo.CommitAll("first");
+
+        var manager = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await manager.CreateAsync(repo, name: "invalid-ref", baseRef: baseRef));
+
+        await Assert.That(ex!.Message).Contains("invalid_base_ref");
+        await Assert.That(Directory.Exists(Path.Combine(repo, ".capacitor", "worktrees", "invalid-ref"))).IsFalse();
+    }
+
+    public enum WorktreeState { Clean, ChangedFile, UntrackedFile, UniqueCommit, CommitOnAnotherBranch, DaemonEditsOnly, LinkToOverlay, LaunchWrittenConfig, LaunchConfigEditedAfter, AgentEditBeforeRelaunch, StagedConfigChange, CommitThenSwitchedAway }
+
+    /// <summary>Removal never destroys work that exists only in the worktree: a change, an untracked
+    /// file or a commit no other ref has, on HEAD or on the worktree's own branch, keeps the worktree and
+    /// its branch. The daemon's own edits (the MCP config it deletes at creation, the config a launch
+    /// writes, a file identical to the source checkout's) are not work; that config edited after the
+    /// daemon recorded it is, as is a staged change to it, and so is a link, even to an identical file,
+    /// since the link itself would be lost.</summary>
+    [Test]
+    [Arguments(WorktreeState.Clean, false)]
+    [Arguments(WorktreeState.ChangedFile, true)]
+    [Arguments(WorktreeState.UntrackedFile, true)]
+    [Arguments(WorktreeState.UniqueCommit, true)]
+    [Arguments(WorktreeState.CommitOnAnotherBranch, false)]
+    [Arguments(WorktreeState.DaemonEditsOnly, false)]
+    [Arguments(WorktreeState.LinkToOverlay, true)]
+    [Arguments(WorktreeState.LaunchWrittenConfig, false)]
+    [Arguments(WorktreeState.LaunchConfigEditedAfter, true)]
+    [Arguments(WorktreeState.AgentEditBeforeRelaunch, true)]
+    [Arguments(WorktreeState.StagedConfigChange, true)]
+    [Arguments(WorktreeState.CommitThenSwitchedAway, true)]
+    public async Task RemoveAsync_keeps_a_worktree_holding_work_that_exists_nowhere_else(WorktreeState state, bool kept) {
+        using var repo = MakeUpstreamWithSideRef("refs/pull/1/head", out _);
+        var source = repo.Clone;
+        source.CreateFile(".mcp.json", "{}");
+        source.CommitAll("ship an mcp config");
+        source.CreateFile("notes.txt", "overlay");
+
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var worktree = await manager.CreateAsync(source);
+        var tree     = GitRepo.At(worktree.Path);
+
+        switch (state) {
+            case WorktreeState.ChangedFile:
+                tree.CreateFile("main.txt", "edited");
+                break;
+            case WorktreeState.UntrackedFile:
+                tree.CreateFile("new.txt", "work");
+                break;
+            case WorktreeState.UniqueCommit:
+                tree.CreateFile("new.txt", "work");
+                tree.Do("add", "new.txt");
+                tree.Commit("agent work");
+                break;
+            case WorktreeState.CommitThenSwitchedAway:
+                tree.CreateFile("new.txt", "work");
+                tree.Do("add", "new.txt");
+                tree.Commit("agent work");
+                tree.Do("checkout", "-q", "--detach", "HEAD~1");
+                break;
+            case WorktreeState.CommitOnAnotherBranch:
+                tree.CreateFile("new.txt", "work");
+                tree.Do("add", "new.txt");
+                tree.Commit("agent work");
+                source.Do("branch", "saved", tree.Head);
+                break;
+            case WorktreeState.DaemonEditsOnly:
+                tree.CreateFile("notes.txt", "overlay");
+                break;
+            case WorktreeState.LaunchWrittenConfig:
+            case WorktreeState.LaunchConfigEditedAfter:
+            case WorktreeState.AgentEditBeforeRelaunch: {
+                // As a launch's Prepare does: stamp, write the config, record.
+                var before = WorktreeManager.StampDaemonPaths(worktree.Path);
+                tree.CreateFile(".mcp.json", """{"mcpServers":{"kcap":{}}}""");
+                tree.CreateFile(".claude/settings.local.json", """{"permissions":{"allow":["Bash"]}}""");
+                WorktreeManager.RecordDaemonBaseline(worktree.Path, before);
+                if (state != WorktreeState.LaunchWrittenConfig)
+                    tree.CreateFile(".mcp.json", """{"mcpServers":{"kcap":{},"mine":{}}}""");
+                if (state == WorktreeState.AgentEditBeforeRelaunch) {
+                    // A resume prepares again and keeps the agent's edit; recording must not adopt it.
+                    var again = WorktreeManager.StampDaemonPaths(worktree.Path);
+                    WorktreeManager.RecordDaemonBaseline(worktree.Path, again);
+                }
+                break;
+            }
+            case WorktreeState.StagedConfigChange:
+                tree.CreateFile(".mcp.json", """{"mcpServers":{"mine":{}}}""");
+                tree.Do("add", ".mcp.json");
+                break;
+            case WorktreeState.LinkToOverlay:
+                Skip.When(OperatingSystem.IsWindows(), "creating a symlink needs privileges Windows CI lacks");
+                File.CreateSymbolicLink(Path.Combine(worktree.Path, "notes.txt"), source.PathTo("notes.txt"));
+                break;
+        }
+
+        try {
+            var removal = await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
+
+            await Assert.That(removal.Kept).IsEqualTo(kept);
+            await Assert.That(Directory.Exists(worktree.Path)).IsEqualTo(kept);
+            await Assert.That(source.Try("rev-parse", "--verify", $"refs/heads/{worktree.Branch}").ExitCode == 0).IsEqualTo(kept);
+        } finally {
+            source.Try("worktree", "remove", "--force", worktree.Path);
+            source.Try("branch", "-D", worktree.Branch);
+        }
+    }
+
+    /// <summary>The startup sweep of left-behind worktrees keeps one holding work, as teardown does, and
+    /// still clears one that holds none: a review worktree whose head only its fetched ref has, and a
+    /// standalone snapshot, are the daemon's own.</summary>
+    [Test]
+    public async Task CleanupOrphaned_keeps_a_left_behind_worktree_holding_work() {
+        using var repo = MakeUpstreamWithSideRef("refs/pull/1/head", out _);
+        using var worktreeRoot = new TempDir();
+        var manager = new WorktreeManager(new DaemonConfig { AllowedRepoPaths = [repo.Clone.Path], WorktreeRoot = worktreeRoot.Path },
+            NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var working = await manager.CreateAsync(repo.Clone, name: "working");
+        var clean   = await manager.CreateAsync(repo.Clone, name: "clean");
+        var review  = await manager.CreateAsync(repo.Clone, name: "review", baseRef: "refs/pull/1/head");
+        GitRepo.At(working.Path).CreateFile("new.txt", "work");
+        var standalone = Path.Combine(repo.Clone.Path, ".capacitor", "worktrees", "standalone");
+        Directory.CreateDirectory(standalone);
+        GitRepo.At(standalone).Do("init", "-q");
+        GitRepo.At(standalone).Do("config", "user.email", "test@example.com");
+        GitRepo.At(standalone).Do("config", "user.name", "Test");
+        GitRepo.At(standalone).CreateFile("a.txt", "snapshot");
+        GitRepo.At(standalone).CommitAll("Initial snapshot");
+
+        try {
+            await manager.CleanupOrphanedAsync([]);
+
+            await Assert.That(Directory.Exists(working.Path)).IsTrue();
+            await Assert.That(Directory.Exists(clean.Path)).IsFalse();
+            await Assert.That(Directory.Exists(review.Path)).IsFalse();
+            await Assert.That(Directory.Exists(standalone)).IsFalse();
+        } finally {
+            repo.Clone.Try("worktree", "remove", "--force", working.Path);
+            repo.Clone.Try("worktree", "prune");
+        }
+    }
+
     [Test]
     public async Task CreateAsync_WithoutBaseRef_StillWorks() {
         using var repo = MakeUpstreamWithSideRef("refs/pull/1/head", out _);
@@ -611,5 +955,12 @@ public class WorktreeManagerTests {
 
         await Assert.That(Directory.Exists(activeCwd)).IsTrue()
             .Because("an active snapshot must survive regardless of what its name happens to end with");
+    }
+
+    /// Parallel checkout is a Windows-only change: macOS and Linux keep git's default checkout.
+    [Test]
+    public async Task Parallel_checkout_is_asked_for_on_windows_only() {
+        await Assert.That(WorktreeManager.ParallelCheckoutFor(isWindows: true)).IsEquivalentTo([new GitConfigOverride("checkout.workers", "0")]);
+        await Assert.That(WorktreeManager.ParallelCheckoutFor(isWindows: false)).IsEmpty();
     }
 }

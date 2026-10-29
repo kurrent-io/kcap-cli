@@ -29,7 +29,7 @@ public sealed class QuestionOptionViewModel : ReactiveObject {
     // Notifies the owning group directly rather than via this.WhenAnyValue: that call routes
     // through ReactiveUI's ObservableForProperty/RxAppBuilder global init, only reliably primed
     // once some other test has already pumped the headless dispatcher first (see
-    // SessionRailViewModel and RailWorktreeViewModel for the same avoidance).
+    // SessionRailViewModel for the same avoidance).
     internal QuestionOptionViewModel(ElicitationOption option, bool isMulti, Func<QuestionOptionViewModel, Task> pick, IObservable<bool> idle, Action selectionChanged) {
         Label = option.Label;
         Description = option.Description;

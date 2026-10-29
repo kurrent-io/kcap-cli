@@ -11,7 +11,7 @@ namespace Capacitor.Cli.Core.Harness.Codex;
 /// the marker already matches.
 /// </summary>
 /// <remarks>
-/// The hooks.json itself is written by <c>PluginCommand.InstallCodexHooks</c>;
+/// The hooks.json itself is written by <see cref="CodexHooksWriter"/>;
 /// this type owns only the marker side-channel and pre-marker detection.
 /// </remarks>
 public static class CodexHooksInstaller {
@@ -79,6 +79,24 @@ public static class CodexHooksInstaller {
             return false;
         }
     }
+
+    /// <summary>
+    /// True when <paramref name="hooksPath"/> starts with a UTF-8 byte-order mark. Codex parses the
+    /// raw bytes, rejects the whole file on one and runs no hook at all, while every .NET reader here
+    /// strips it silently, so the file reads as wired to kcap and nothing else.
+    /// </summary>
+    public static bool StartsWithByteOrderMark(string hooksPath) {
+        try {
+            using var stream = new FileStream(hooksPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            Span<byte> head = stackalloc byte[3];
+
+            return stream.ReadAtLeast(head, 3, throwOnEndOfStream: false) == 3 && head.SequenceEqual(Utf8ByteOrderMark);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            return false;
+        }
+    }
+
+    static ReadOnlySpan<byte> Utf8ByteOrderMark => [0xEF, 0xBB, 0xBF];
 
     /// <summary>
     /// Returns the version string from the marker, or null when absent or

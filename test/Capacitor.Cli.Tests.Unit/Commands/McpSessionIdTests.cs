@@ -55,6 +55,32 @@ public class McpSessionIdTests {
     }
 
     [Test]
+    public async Task Falls_back_to_the_hosted_agents_session() {
+        var id = McpSessionId.Resolve(new JsonObject(), Env(new() { ["KCAP_DAEMON_AGENT_ID"] = "agent-7" }), _ => "ses_01JC7QY3VZ8K");
+
+        await Assert.That(id).IsEqualTo("ses_01JC7QY3VZ8K");
+    }
+
+    [Test]
+    public async Task An_explicit_argument_wins_without_asking_the_daemon() {
+        var asked = false;
+        var id    = McpSessionId.Resolve(
+            Args("""{"session_id":"explicit1"}"""), Env(new() { ["KCAP_DAEMON_AGENT_ID"] = "agent-7" }),
+            _ => { asked = true; return "ses_01JC7QY3VZ8K"; });
+
+        await Assert.That(id).IsEqualTo("explicit1");
+        await Assert.That(asked).IsFalse();
+    }
+
+    [Test]
+    public async Task An_unbound_hosted_agent_keeps_the_no_session_message() {
+        var ex = Assert.Throws<ArgumentException>(() =>
+            McpSessionId.Resolve(new JsonObject(), Env(new() { ["KCAP_DAEMON_AGENT_ID"] = "agent-7" }), _ => null));
+
+        await Assert.That(ex!.Message).IsEqualTo(McpSessionId.NoSessionIdMessage);
+    }
+
+    [Test]
     public async Task Rejects_a_dot_segment_from_either_source() {
         // "." survives escaping, so a dot segment in a session URL would be normalized out of the route.
         var ambient = Assert.Throws<ArgumentException>(() =>

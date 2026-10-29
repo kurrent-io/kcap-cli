@@ -8,8 +8,8 @@ namespace Capacitor.Cli.Commands;
 // answers up front), provisions via kcap-web, polls until live. OWNS all user-facing messaging for
 // its non-Created outcomes.
 /// <param name="requested">
-/// Supplied by <c>--org</c>/<c>--slug</c>. Present means no prompt is raised at all, so this is the
-/// only route through the fork that a session with no terminal can take.
+/// Supplied by <c>--org</c>/<c>--slug</c>/<c>--tier</c>/<c>--invite-code</c>. Present means no prompt
+/// is raised at all, so this is the only route through the fork that a session with no terminal can take.
 /// </param>
 /// <param name="isInteractive">
 /// Test seam. The ambient value is a property of the host the suite runs under, so a test that read it
@@ -25,16 +25,21 @@ public sealed class SpectreTenantProvisioner(
     const int PollIntervalMs = 4000;
     const int MaxPolls       = 150; // ~10 minutes (server budget is 15)
 
+    const int MaxInviteCodeAttempts = 3;
+
     const string CreateChoice   = "Create a new workspace";
     const string ExistingChoice = "I already have a workspace";
     const string CancelChoice   = "Cancel";
+
+    const string TeamChoice = "Team trial (30 days, no credit card)";
+    const string FreeChoice = "Free";
 
     public async Task<ProvisionOffer> OfferCreateAsync(WorkOSTokenSource tokens, CancellationToken ct = default) {
         // Says what was actually established, not more: single sign-on returned nothing. Claiming
         // "no tenant is linked to your account" is the very falsehood this prompt exists to stop —
         // a GitHub-App workspace IS linked to the user and simply cannot appear in this lane.
-        Note("Single sign-on found no Capacitor workspace for your account.",
-             markup: "[yellow]Single sign-on found no Capacitor workspace for your account.[/]");
+        Note("Single sign-on found no kcap workspace for your account.",
+             markup: "[yellow]Single sign-on found no kcap workspace for your account.[/]");
         Note("A workspace that signs in with the GitHub App won't appear here.");
 
         // The answers are already in hand, so nothing is offered and nothing is asked — including on
@@ -92,16 +97,22 @@ public sealed class SpectreTenantProvisioner(
             return ProvisionOffer.Declined;
         }
 
+        // Team first, and safe to pick: an account that cannot have the trial falls back to Free.
+        var tier = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("  Plan:")
+                .AddChoices(TeamChoice, FreeChoice)) == TeamChoice ? WorkspaceTier.Team : WorkspaceTier.Free;
+
         var origin = $"https://{slug}.kcap.ai";
         var confirm = AnsiConsole.Prompt(
-            new ConfirmationPrompt($"  Create tenant [cyan]{Markup.Escape(orgName)}[/] at [cyan]{origin}[/]?") { DefaultValue = true });
+            new ConfirmationPrompt($"  Create tenant [cyan]{Markup.Escape(orgName)}[/] at [cyan]{origin}[/] on {PlanName(tier)}?") { DefaultValue = true });
         if (!confirm) {
             AnsiConsole.MarkupLine("  [dim]No tenant created.[/]");
             telemetry.Funnel.WorkspaceDeclined();
             return ProvisionOffer.Declined;
         }
 
-        return await ProvisionAsync(orgName, slug, origin, tokens, ct);
+        return await ProvisionAsync(orgName, slug, origin, tier, tokens, ct, tierChosen: true);
     }
 
     /// <summary>
@@ -138,9 +149,10 @@ public sealed class SpectreTenantProvisioner(
 
         // The interactive path confirms the name and hostname before committing to them. Nothing can
         // be confirmed here, so the same two values are at least stated before the workspace exists.
-        Note($"Creating {want.OrgName} at {want.Origin}…");
+        var tier = want.Tier ?? WorkspaceTier.Free;
+        Note($"Creating {want.OrgName} at {want.Origin} on {PlanName(tier)}…");
 
-        return await ProvisionAsync(want.OrgName, slug, want.Origin, tokens, ct);
+        return await ProvisionAsync(want.OrgName, slug, want.Origin, tier, tokens, ct, tierChosen: want.Tier is not null);
     }
 
     /// <summary>
@@ -185,31 +197,144 @@ public sealed class SpectreTenantProvisioner(
         else          AnsiConsole.MarkupLine($"  [yellow]![/] {markup ?? Markup.Escape(plain)}");
     }
 
+    static string PlanName(WorkspaceTier tier) => tier == WorkspaceTier.Team ? "the Team trial" : "the Free plan";
+
+    /// <param name="tierChosen">False when no plan was named: a Free refusal while Free cloud workspaces are closed
+    /// then asks for the Team trial instead.</param>
     async Task<ProvisionOffer> ProvisionAsync(
-            string orgName, string slug, string origin, WorkOSTokenSource tokens, CancellationToken ct) {
+            string orgName, string slug, string origin, WorkspaceTier tier, WorkOSTokenSource tokens, CancellationToken ct,
+            bool tierChosen) {
         telemetry.Funnel.WorkspaceRequested();
-        var outcome = await client.ProvisionAsync(
-            baseUrl, await tokens.GetAsync(ct), orgName, slug, telemetry.Join.Current, ct);
-        switch (outcome.StatusCode) {
-            case 200 when outcome.Body?.WorkosOrgId is { Length: > 0 } orgId:
-                telemetry.Funnel.WorkspaceProvisioned();
-                return ProvisionOffer.Created(new ProvisionedTenant(orgId, slug, orgName, outcome.Body.Url ?? origin));
-            case 202 or 200:
-                return await PollAsync(tokens, slug, orgName, origin, ct);
-            case 400:
-                Fail(Reason400(outcome.Body?.Reason, slug, RetryTail), outcome.Body?.Reason ?? "invalid_request");
-                return ProvisionOffer.Failed;
-            case 409:
-                Fail(Reason409(outcome.Body?.Reason, slug, RetryTail), outcome.Body?.Reason ?? "conflict");
-                return ProvisionOffer.Failed;
-            case 0:
-                Fail("Couldn't reach the provisioning service. Check your connection and try again.", "unreachable");
-                return ProvisionOffer.Failed;
-            default:
-                Fail($"Provisioning failed (HTTP {outcome.StatusCode}). Try again later.", $"http_{outcome.StatusCode}");
-                return ProvisionOffer.Failed;
+
+        var code       = requested?.InviteCode;
+        var wrongCodes = 0;
+        // Why the Team trial was refused this run, so a closed Free plan does not send the user back to it.
+        string? teamRefused = null;
+
+        while (true) {
+            var outcome = await client.ProvisionAsync(
+                baseUrl, await tokens.GetAsync(ct), orgName, slug, tier, telemetry.Join.Current, code, ct);
+
+            if (tier == WorkspaceTier.Free && !tierChosen && IsFreeUnavailable(outcome)) {
+                Retry("Free cloud workspaces aren't open right now. Asking for the Team trial instead.");
+                tier    = WorkspaceTier.Team;
+                outcome = await client.ProvisionAsync(
+                    baseUrl, await tokens.GetAsync(ct), orgName, slug, tier, telemetry.Join.Current, code, ct);
+            }
+
+            // Both refusals land before kcap-web reserves anything, so asking again for Free is a fresh
+            // request rather than a resume. The user has already approved a sign-in to get this far.
+            if (tier == WorkspaceTier.Team && TeamRefusal(outcome) is { } refusal) {
+                teamRefused = refusal;
+                Retry($"{refusal} Creating the workspace on the Free plan instead.");
+                tier    = WorkspaceTier.Free;
+                outcome = await client.ProvisionAsync(
+                    baseUrl, await tokens.GetAsync(ct), orgName, slug, tier, telemetry.Join.Current, code, ct);
+            }
+
+            switch (outcome.StatusCode) {
+                case 200 when outcome.Body?.WorkosOrgId is { Length: > 0 } orgId:
+                    telemetry.Funnel.WorkspaceProvisioned();
+                    return ProvisionOffer.Created(new ProvisionedTenant(orgId, slug, orgName, outcome.Body.Url ?? origin));
+                case 202 or 200:
+                    return await PollAsync(tokens, slug, orgName, origin, tier, ct);
+                case 403 when outcome.Body?.Reason == "invite_required": {
+                    var requestUrl = outcome.Body.RequestUrl;
+
+                    // Passing the flags means no prompt is raised, so the code has to come as a flag too.
+                    if (Scripted) {
+                        Fail(requestUrl is { Length: > 0 }
+                                 ? $"kcap is invite-only right now. Request an invite at {requestUrl}, then re-run with --invite-code <code>."
+                                 : "kcap is invite-only right now. Re-run with --invite-code <code>.",
+                             "invite_required");
+                        return ProvisionOffer.Failed;
+                    }
+
+                    // A server that keeps asking for a code it was just given must not re-prompt forever.
+                    if (code is not null && ++wrongCodes >= MaxInviteCodeAttempts) {
+                        Fail($"That invite code wasn't accepted.{RequestAt(requestUrl, u => $" Request an invite at {u}.")}", "invite_required");
+                        return ProvisionOffer.Failed;
+                    }
+
+                    Note($"kcap is invite-only right now. Enter your invite code{RequestAt(requestUrl, u => $", or request one at {u}")}.");
+                    code = PromptInviteCode();
+
+                    if (code is null) {
+                        Fail(RunAgainLine(requestUrl), "invite_required");
+                        return ProvisionOffer.Failed;
+                    }
+
+                    continue;
+                }
+                case 400 when outcome.Body?.Reason == "invalid_code":
+                case 409 when outcome.Body?.Reason == "code_exhausted": {
+                    var reason     = outcome.Body.Reason;
+                    var requestUrl = outcome.Body.RequestUrl;
+                    var why        = reason == "invalid_code" ? "That invite code isn't valid." : "That invite code has been used up.";
+
+                    if (Scripted) {
+                        Fail(requestUrl is { Length: > 0 }
+                                 ? $"{why} Request an invite at {requestUrl}, or pass a different --invite-code."
+                                 : $"{why} Pass a different --invite-code.",
+                             reason);
+                        return ProvisionOffer.Failed;
+                    }
+
+                    if (++wrongCodes >= MaxInviteCodeAttempts) {
+                        Fail($"{why}{RequestAt(requestUrl, u => $" Request an invite at {u}.")}", reason);
+                        return ProvisionOffer.Failed;
+                    }
+
+                    Retry($"{why} Try another code{RequestAt(requestUrl, u => $", or request an invite at {u}")}.");
+                    code = PromptInviteCode();
+
+                    if (code is null) {
+                        Fail(RunAgainLine(requestUrl), reason);
+                        return ProvisionOffer.Failed;
+                    }
+
+                    continue;
+                }
+                case 400:
+                    Fail(Reason400(outcome.Body?.Reason, slug, RetryTail), outcome.Body?.Reason ?? "invalid_request");
+                    return ProvisionOffer.Failed;
+                case 409 when IsFreeUnavailable(outcome):
+                    Fail(teamRefused is not null
+                             ? $"Free cloud workspaces aren't open right now either. {(Scripted ? "Re-run with --local" : "Run `kcap setup --local`")} to run kcap on this machine."
+                             : Scripted
+                                 ? "Free cloud workspaces aren't open right now. Re-run with --tier team --invite-code <code>, or with --local to run kcap on this machine."
+                                 : "Free cloud workspaces aren't open right now. Re-run and choose the Team trial, which needs an invite code, or run `kcap setup --local` to run kcap on this machine.",
+                         "free_unavailable");
+                    return ProvisionOffer.Failed;
+                case 409:
+                    Fail(Reason409(outcome.Body?.Reason, slug, RetryTail), outcome.Body?.Reason ?? "conflict");
+                    return ProvisionOffer.Failed;
+                case 0:
+                    Fail("Couldn't reach the provisioning service. Check your connection and try again.", "unreachable");
+                    return ProvisionOffer.Failed;
+                default:
+                    Fail($"Provisioning failed (HTTP {outcome.StatusCode}). Try again later.", $"http_{outcome.StatusCode}");
+                    return ProvisionOffer.Failed;
+            }
         }
     }
+
+    // The unscripted path reaches provisioning only after its own prompts, so a terminal is there.
+    static string? PromptInviteCode() {
+        // Anything typed while the provision call was out would otherwise be read as the code.
+        PromptHygiene.DiscardTypeAhead();
+        var answer = AnsiConsole.Prompt(new TextPrompt<string>("  Invite code:").AllowEmpty()).Trim();
+
+        return answer.Length == 0 ? null : answer;
+    }
+
+    // Where to request an invite is the server's to say; with no URL the clause is left out.
+    static string RequestAt(string? requestUrl, Func<string, string> clause) =>
+        requestUrl is { Length: > 0 } ? clause(requestUrl) : "";
+
+    static string RunAgainLine(string? requestUrl) => requestUrl is { Length: > 0 }
+        ? $"Request an invite at {requestUrl} and run kcap setup again."
+        : "Run kcap setup again once you have an invite code.";
 
     async Task<string?> PromptSlugAsync(string orgName, WorkOSTokenSource tokens, CancellationToken ct) {
         var suggestion = SlugValidator.Derive(orgName);
@@ -239,7 +364,8 @@ public sealed class SpectreTenantProvisioner(
         }
     }
 
-    async Task<ProvisionOffer> PollAsync(WorkOSTokenSource tokens, string slug, string orgName, string origin, CancellationToken ct) {
+    async Task<ProvisionOffer> PollAsync(
+            WorkOSTokenSource tokens, string slug, string orgName, string origin, WorkspaceTier tier, CancellationToken ct) {
         // Two different re-runs. A workspace still being built will exist, so naming it is right; one
         // that failed does not, and `kcap setup <slug>` treats a positional as an existing server and
         // never reaches creation at all. The scripted forms name --no-prompt, without which the first
@@ -249,11 +375,13 @@ public sealed class SpectreTenantProvisioner(
         // The slug is safe to embed — it is validated down to [a-z0-9-] — but an organization name is
         // arbitrary text, and a quote or a backtick in one turns a command meant for copying into a
         // different command. The reader knows their own name; the shape is what they need.
+        // The code is a credential, so the command names the flag and leaves its value to the reader.
+        var inviteFlag   = requested?.InviteCode is null ? "" : " --invite-code <code>";
         var createPlain  = Scripted
-            ? $"Re-run kcap setup --org \"<name>\" --slug {slug} --no-prompt"
+            ? $"Re-run kcap setup --org \"<name>\" --slug {slug} --tier {tier.Wire()}{inviteFlag} --no-prompt"
             : "Re-run kcap setup";
         var createMarkup = Scripted
-            ? $"Re-run [cyan]kcap setup --org \"<name>\" --slug {Markup.Escape(slug)} --no-prompt[/]"
+            ? $"Re-run [cyan]kcap setup --org \"<name>\" --slug {Markup.Escape(slug)} --tier {tier.Wire()}{Markup.Escape(inviteFlag)} --no-prompt[/]"
             : "Re-run [cyan]kcap setup[/]";
         // The live display is a terminal affordance; on a scripted run its fallback renderer would put
         // a hundred-odd progress lines on stdout, which is the stream that run's failures avoid.
@@ -300,16 +428,26 @@ public sealed class SpectreTenantProvisioner(
         }
     }
 
+    static bool IsFreeUnavailable(ProvisionOutcome outcome) => outcome is { StatusCode: 409, Body.Reason: "free_unavailable" };
+
+    static string? TeamRefusal(ProvisionOutcome outcome) => (outcome.StatusCode, outcome.Body?.Reason) switch {
+        (400, "work_email_required") => "The Team trial needs a work email, and this account uses a personal address.",
+        (409, "trial_exists")        => "Your organization already has a Team trial.",
+        _                            => null
+    };
+
     // The availability check and the provision call refuse a slug for the same reasons in different
     // vocabularies; both reach one reader in one run, so both speak through SlugRejection.
     static string Reason400(string? reason, string slug, string tail) => reason switch {
         "disposable_email" => "Provisioning requires a non-disposable email address.",
+        "flagged"          => "We couldn't create this workspace. Email team@kcap.ai if you think this is a mistake.",
         "blocked"          => SlugRejection(slug, "blocked", tail),
         _                  => "Invalid organization name or slug."
     };
 
     static string Reason409(string? reason, string slug, string tail) => reason switch {
         "owned_by_other" => SlugRejection(slug, "reserved", tail),
+        "free_limit"     => "This account already owns a Free workspace. Email team@kcap.ai if you need another.",
         _                => SlugRejection(slug, "taken", tail)
     };
 }

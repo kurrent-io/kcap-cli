@@ -1,3 +1,5 @@
+using Capacitor.Cli.Core.Install;
+
 namespace Capacitor.Cli.Core.Mcp;
 
 /// <summary>
@@ -15,7 +17,9 @@ public static class KcapBinaryCommand {
         string? path = null;
         try { path = resolveBinaryPath is null ? Environment.ProcessPath : resolveBinaryPath(); }
         catch { /* fall back to the PATH-resolved wrapper command */ }
-        return string.IsNullOrWhiteSpace(path) ? KcapMcpServers.Command : path;
+        if (string.IsNullOrWhiteSpace(path)) return KcapMcpServers.Command;
+
+        return resolveBinaryPath is null ? InstallPaths.Stabilize(path) : path;
     }
 
     /// <summary>
@@ -40,12 +44,25 @@ public static class KcapBinaryCommand {
         if (string.IsNullOrWhiteSpace(processPath)) return null;
 
         if (string.Equals(Path.GetFileNameWithoutExtension(processPath), "kcap", StringComparison.OrdinalIgnoreCase))
-            return processPath;
+            return InstallPaths.Stabilize(processPath);
 
         var dir = Path.GetDirectoryName(processPath);
         if (string.IsNullOrEmpty(dir)) return null;
 
         var sibling = Path.Combine(dir, OperatingSystem.IsWindows() ? "kcap.exe" : "kcap");
-        return File.Exists(sibling) ? sibling : null;
+        return File.Exists(sibling) ? InstallPaths.Stabilize(sibling) : null;
+    }
+
+    /// <summary>Whether a registered command runs kcap: the bare literal, or an absolute path (either
+    /// OS's flavour) whose file is named <c>kcap</c>.</summary>
+    public static bool IsKcap(string command) {
+        if (command == KcapMcpServers.Command) return true;
+
+        var windowsRooted = command.Length >= 3 && char.IsAsciiLetter(command[0]) && command[1] == ':' && command[2] is '\\' or '/';
+        if (!command.StartsWith('/') && !command.StartsWith('\\') && !windowsRooted) return false;
+
+        var name = command[(command.LastIndexOfAny(['/', '\\']) + 1)..];
+
+        return name.Equals("kcap", StringComparison.OrdinalIgnoreCase) || name.Equals("kcap.exe", StringComparison.OrdinalIgnoreCase);
     }
 }

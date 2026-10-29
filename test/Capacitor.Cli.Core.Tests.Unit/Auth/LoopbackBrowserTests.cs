@@ -362,7 +362,7 @@ public class LoopbackBrowserTests {
 
         await Assert.That(body).IsEqualTo(
             "<html><body style='font-family:system-ui;max-width:480px;margin:80px auto;text-align:center'>"
-          + "<h2>Authentication successful!</h2><p>You can close this window and return to the terminal.</p></body></html>");
+          + "<h2>Authentication successful!</h2><p>You can close this window and return to kcap.</p></body></html>");
         await Assert.That(await EventuallyFree(port)).IsTrue();
     }
 

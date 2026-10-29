@@ -1,0 +1,42 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:Capacitor.App.Views">
+    <!-- Width comes from the surrounding ChatCardRow; MaxWidth is the desktop cap. -->
+    <Style Selector="Border.chatSystemCard">
+        <Setter Property="HorizontalAlignment" Value="Left" />
+        <Setter Property="MaxWidth" Value="660" />
+        <Setter Property="Padding" Value="14,10" />
+        <Setter Property="CornerRadius" Value="10" />
+        <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+    </Style>
+    <Style Selector="Border.chatPromptCard">
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="Padding" Value="14,10" />
+        <Setter Property="CornerRadius" Value="10" />
+        <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Margin" Value="0,0,0,6" />
+    </Style>
+    <Style Selector="ContentControl.chatPromptCard">
+        <Setter Property="HorizontalAlignment" Value="Left" />
+        <Setter Property="MaxWidth" Value="660" />
+    </Style>
+
+    <Style Selector="Border.toolCard">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Margin" Value="0,4,0,4" />
+    </Style>
+    <Style Selector="views|AppIcon.toolCardOpenArrow">
+        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.kcapGhost:pointerover views|AppIcon.toolCardOpenArrow,
+                     Button.kcapGhost:pressed views|AppIcon.toolCardOpenArrow">
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+    </Style>
+</Styles>

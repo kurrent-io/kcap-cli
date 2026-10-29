@@ -189,8 +189,7 @@ public class ProcessRunnerTests {
                 new RunOptions(CancelMode: CancelMode.KillTree, TimeoutKill: TimeoutKillScope.ProcessOnly),
                 cts.Token);
 
-            await WaitUntilAsync(() => File.Exists(startedMarker), TimeSpan.FromSeconds(5), "the grandchild to start and record its PID");
-            grandchildPid = int.Parse((await File.ReadAllTextAsync(startedMarker)).Trim(), CultureInfo.InvariantCulture);
+            await WaitUntilAsync(() => TryReadPid(startedMarker, out grandchildPid), TimeSpan.FromSeconds(5), "the grandchild to start and record its PID");
             cts.Cancel();
 
             await Assert.ThrowsAsync<OperationCanceledException>(() => runTask);
@@ -200,6 +199,18 @@ public class ProcessRunnerTests {
                 try { Process.GetProcessById(grandchildPid).Kill(); }
                 catch (ArgumentException) { /* already gone */ }
             }
+        }
+    }
+
+    // The shell creates the marker before echo finishes writing the pid.
+    static bool TryReadPid(string path, out int pid) {
+        pid = 0;
+        try {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(fs);
+            return int.TryParse(reader.ReadToEnd().Trim(), CultureInfo.InvariantCulture, out pid) && pid > 0;
+        } catch (IOException) {
+            return false;
         }
     }
 
@@ -214,5 +225,74 @@ public class ProcessRunnerTests {
             if (DateTime.UtcNow > deadline) throw new TimeoutException($"Timed out waiting for: {what}");
             await Task.Delay(10);
         }
+    }
+
+    [Test, ParallelLimiter<SubprocessLimit>]
+    public async Task Interrupt_lets_the_child_finish_its_own_cleanup_and_report() {
+        Skip.When(OperatingSystem.IsWindows(), "sends SIGINT to a POSIX shell");
+
+        using var tmp = new TempDir();
+        var script = tmp.CreateExecutable("trap.sh", "#!/bin/sh\ntrap 'echo rolled_back; exit 130' INT\necho started\nwhile :; do sleep 0.05; done\n");
+        using var interrupt = new CancellationTokenSource();
+        var lines = new List<string>();
+
+        var result = await new ProcessRunner(TimeProvider.System).RunStreamingAsync(script, [], new RunOptions(Interrupt: interrupt.Token),
+            l => {
+                lock (lines) lines.Add(l.Text);
+                if (l.Text == "started") interrupt.Cancel();
+            }, CancellationToken.None);
+
+        await Assert.That(result.ExitCode).IsEqualTo(130);
+        await Assert.That(lines).Contains("rolled_back");
+    }
+
+    [Test, ParallelLimiter<SubprocessLimit>]
+    public async Task Interrupt_kills_the_tree_after_the_grace_when_the_child_ignores_it() {
+        Skip.When(OperatingSystem.IsWindows(), "sends SIGINT to a POSIX shell");
+
+        using var tmp = new TempDir();
+        var script = tmp.CreateExecutable("ignore.sh", "#!/bin/sh\ntrap '' INT\necho started\nwhile :; do sleep 0.05; done\n");
+        using var interrupt = new CancellationTokenSource();
+
+        var result = await new ProcessRunner(TimeProvider.System).RunStreamingAsync(script, [],
+            new RunOptions(Interrupt: interrupt.Token, InterruptGrace: TimeSpan.FromMilliseconds(300)),
+            l => {
+                if (l.Text == "started") interrupt.Cancel();
+            }, CancellationToken.None);
+
+        await Assert.That(result.ExitCode).IsNotEqualTo(0);
+        await Assert.That(result.TimedOut).IsFalse();
+    }
+
+    /// An interrupt that cannot be delivered (always so on Windows) has nothing to wait for, so the
+    /// grace must not hold the caller.
+    [Test, ParallelLimiter<SubprocessLimit>]
+    public async Task An_undeliverable_interrupt_kills_the_tree_without_waiting_for_the_grace() {
+        var (fileName, args) = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+            ? ("cmd.exe", new[] { "/c", "echo started & ping -n 600 127.0.0.1 >nul" })
+            : ("/bin/sh", new[] { "-c", "echo started; while :; do sleep 0.05; done" });
+        using var interrupt = new CancellationTokenSource();
+
+        var run = new ProcessRunner(TimeProvider.System, interrupt: _ => false).RunStreamingAsync(fileName, args,
+            new RunOptions(Interrupt: interrupt.Token, InterruptGrace: TimeSpan.FromMinutes(10)),
+            l => {
+                if (l.Text.Trim() == "started") interrupt.Cancel();
+            }, CancellationToken.None);
+        var result = await run.WaitAsync(TimeSpan.FromSeconds(20));
+
+        await Assert.That(result.ExitCode).IsNotEqualTo(0);
+        await Assert.That(result.TimedOut).IsFalse();
+    }
+
+    /// A GUI parent on Windows gives every console child its own window unless told not to, so each
+    /// CLI call from the desktop app would flash a terminal.
+    [Test]
+    public async Task Children_are_started_without_a_console_window() {
+        var psi = ProcessRunner.StartInfo("kcap", ["--version"], new RunOptions(EnvOverlay: new Dictionary<string, string> { ["X"] = "1" }));
+
+        await Assert.That(psi.CreateNoWindow).IsTrue();
+        await Assert.That(psi.UseShellExecute).IsFalse();
+        await Assert.That(psi.ArgumentList).IsEquivalentTo(["--version"]);
+        await Assert.That(psi.Environment["X"]).IsEqualTo("1");
     }
 }

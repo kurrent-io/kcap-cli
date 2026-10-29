@@ -1,6 +1,8 @@
+using System.Runtime.Versioning;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
@@ -18,8 +20,9 @@ internal sealed partial class ClaudeLauncher(
     ) : IHostedAgentLauncher {
 
     public string Vendor  => "claude";
-    public string CliPath => config.ClaudePath;
+    public string CliPath => harnesses.LaunchCommand(HarnessId.Claude, config.ClaudePath);
     public bool   SupportsUnattended => true;
+    public bool   SupportsPrReview   => true;
 
     // True only for an OWNED review-flow worktree, where BuildArgs forces bypassPermissions. A
     // borrowed review-flow keeps the default mode (and is rejected upstream anyway). An interactive
@@ -34,7 +37,8 @@ internal sealed partial class ClaudeLauncher(
 
     public bool IsAvailable() => config.Binaries.Finds(CliPath);
 
-    readonly ClaudePaths _paths = harnesses.Of<ClaudeHarness>().Paths;
+    ClaudePaths PathsFor(ResolvedAccount? account) =>
+        account is null ? harnesses.Of<ClaudeHarness>().Paths : AccountLayouts.Claude(config.Home, account.Directory);
 
     static readonly Lock                  TrustWriteLock   = new();
     static readonly JsonSerializerOptions IndentedJsonOpts = new() { WriteIndented = true };
@@ -51,8 +55,10 @@ internal sealed partial class ClaudeLauncher(
                 "Claude borrowed review flows are not certified; retry with an owned review worktree.");
         // A borrowed cwd is the user's own, already-trusted, already-configured repo — do
         // NOT overlay settings, write .mcp.json, edit settings.local.json, or write
-        // ~/.claude.json trust into it (local in-place launch). Touch nothing.
+        // .claude.json trust for it (local in-place launch). Touch nothing.
         if (ctx.Work == WorkLocation.BorrowedCwd) return;
+
+        var paths = PathsFor(ctx.Account);
 
         // Overlay .claude/ local settings from source repo into worktree.
         try {
@@ -63,33 +69,28 @@ internal sealed partial class ClaudeLauncher(
                 FileSystemOverlay.OverlayDirectory(sourceClaudeDir, destClaudeDir);
             }
 
-            SymlinkClaudeProjectDir(ctx.SourceRepoPath, ctx.Worktree.Path, _paths);
+            SymlinkClaudeProjectDir(ctx.SourceRepoPath, ctx.Worktree.Path, paths);
         } catch (Exception ex) {
             LogOverlayFailed(ex, ctx.AgentId);
         }
 
         try {
-            WriteMcpConfig(ctx.SourceRepoPath, ctx.Worktree.Path, _paths, config.KcapCliPath);
+            WriteMcpConfig(ctx.SourceRepoPath, ctx.Worktree.Path, paths, config.KcapCliPath);
         } catch (Exception ex) {
             LogMcpConfigFailed(ex, ctx.AgentId);
         }
 
         try {
-            TrustWorktreeInClaudeConfig(ctx.Worktree.Path, _paths);
+            TrustWorktreeInClaudeConfig(ctx.Worktree.Path, paths);
         } catch (Exception ex) {
             LogTrustWorktreeFailed(ex, ctx.AgentId);
         }
 
-        // Unattended review-flow reviewers launch with `--permission-mode bypassPermissions`
-        // (see BuildArgs). On a host that hasn't accepted bypass mode, Claude blocks on a
-        // one-time consent dialog and the launch dies silently at the server's timeout.
-        // Pre-accept it here in user settings so the reviewer starts cleanly — only for the
-        // bypass path, since interactive agents never pass it and a human can dismiss any
-        // prompt. Best-effort: the PTY dialog detector is the fail-fast backstop if this didn't
-        // take.
+        // A review-flow reviewer runs under bypassPermissions (see BuildArgs), and until that mode is
+        // accepted Claude blocks on a consent dialog nobody answers. The PTY dialog detector is the backstop.
         if (ctx.IsReviewFlow) {
             try {
-                AcceptBypassPermissionsMode(_paths.UserSettings);
+                AcceptBypassPermissionsMode(paths.UserSettings);
             } catch (Exception ex) {
                 LogBypassAcceptFailed(ex, ctx.AgentId);
             }
@@ -103,6 +104,10 @@ internal sealed partial class ClaudeLauncher(
             LogToolPermissionsFailed(ex, ctx.AgentId);
         }
     }
+
+    public bool SupportsResume => true;
+
+    public bool SupportsReviewerResume => true;
 
     public LaunchArgs BuildArgs(LauncherContext ctx) {
         var args = new List<string>();
@@ -128,6 +133,16 @@ internal sealed partial class ClaudeLauncher(
             // prompts (writes stay confined to the daemon-owned, throwaway worktree) and NO
             // MCP servers, so the reviewer can't recursively start a nested review flow.
             // Interactive (Default) agents keep prompts + their configured MCP servers.
+            if (ctx.ResumeSessionId is { Length: > 0 } resumeId) {
+                // Transcript discovery records the id dashless. Claude reads anything but a dashed
+                // UUID as a picker search term, and the pasted prompt then lands in that search box.
+                args.Add("--resume");
+                args.Add(Guid.TryParse(resumeId, out var resumeGuid) ? resumeGuid.ToString("D") : resumeId);
+            } else if (ctx.PinnedSessionId is { Length: > 0 } pinnedId) {
+                args.Add("--session-id");
+                args.Add(pinnedId);
+            }
+
             if (ctx.IsReviewFlow) {
                 // A borrowed reviewer runs in the user's REAL checkout (not a daemon-owned,
                 // throwaway worktree) — bypassPermissions would auto-approve writes there.
@@ -247,13 +262,19 @@ internal sealed partial class ClaudeLauncher(
         return new JsonObject { ["mcpServers"] = mcpServers }.ToJsonString();
     }
 
-    /// Claude needs no mandatory daemon-level flags (cwd is set via forkpty chdir), so a
-    /// local launch forwards the user's post-`--` args verbatim.
-    public LaunchArgs BuildPassthrough(LauncherContext ctx, IReadOnlyList<string> userArgs)
-        => new([.. userArgs], McpConfigPath: null);
+    /// Forwards the user's post-`--` args (cwd is set via forkpty chdir), pinning a fresh session id
+    /// in front of them unless they already choose the session: in place, every Claude session in the
+    /// folder shares the cwd, so only the id tells this agent's transcript from the user's own.
+    public LaunchArgs BuildPassthrough(LauncherContext ctx, IReadOnlyList<string> userArgs) {
+        if (ClaudeSessionArgs.SelectsSession(userArgs, out var chosen)) return new([.. userArgs], McpConfigPath: null, chosen);
+
+        var pinned = Guid.NewGuid().ToString();
+
+        return new(["--session-id", pinned, .. userArgs], McpConfigPath: null, pinned);
+    }
 
     public void Cleanup(AgentInstance agent) {
-        try { RemoveClaudeProjectSymlink(agent.Worktree.Path, _paths); } catch (Exception ex) {
+        try { RemoveClaudeProjectSymlink(agent.Worktree.Path, PathsFor(agent.Account)); } catch (Exception ex) {
             LogCleanupSymlinkFailed(ex, agent.Id);
         }
 
@@ -263,8 +284,6 @@ internal sealed partial class ClaudeLauncher(
             }
         }
     }
-
-    // === Moved verbatim from AgentOrchestrator.cs ===
 
     /// <summary>
     /// Merges dialog-selected tool names into the worktree's .claude/settings.local.json
@@ -316,9 +335,8 @@ internal sealed partial class ClaudeLauncher(
     }
 
     /// <summary>
-    /// Creates a symlink at ~/.claude/projects/{worktree-path-hash} pointing to
-    /// ~/.claude/projects/{source-path-hash} so project-level permissions, settings,
-    /// and memory are shared with the hosted agent.
+    /// Links the layout's <c>projects/</c> entry for the worktree to the source repository's, so
+    /// project-level permissions, settings and memory are shared with the hosted agent.
     /// </summary>
     static void SymlinkClaudeProjectDir(string sourceRepoPath, string worktreePath, ClaudePaths paths) {
         if (!Directory.Exists(paths.Projects)) {
@@ -338,12 +356,18 @@ internal sealed partial class ClaudeLauncher(
             return;
         }
 
-        Directory.CreateSymbolicLink(worktreeProjDir, sourceProjDir);
+        if (OperatingSystem.IsWindows()) CreateJunction(worktreeProjDir, sourceProjDir);
+        else Directory.CreateSymbolicLink(worktreeProjDir, sourceProjDir);
     }
 
+    /// A symlink on Windows needs Developer Mode or elevation, so the link is refused ("A required
+    /// privilege is not held") and the agent loses the project's memory and permissions. A directory
+    /// junction needs neither, and .NET reads and deletes it as the link it is.
+    [SupportedOSPlatform("windows")]
+    internal static void CreateJunction(string link, string target) => WindowsJunction.Create(link, target);
+
     /// <summary>
-    /// Removes the ~/.claude/projects/{worktree-path-hash} symlink if it exists.
-    /// Only removes symlinks, never real directories.
+    /// Removes the layout's <c>projects/</c> entry for the worktree when it is a link, never a real directory.
     /// </summary>
     static void RemoveClaudeProjectSymlink(string worktreePath, ClaudePaths paths) {
         var info = new DirectoryInfo(paths.ProjectDir(worktreePath));
@@ -365,22 +389,17 @@ internal sealed partial class ClaudeLauncher(
     }
 
     internal static void TrustWorktreeInClaudeConfig(string worktreePath, ClaudePaths paths) {
-        // Serialize against concurrent agent launches. ~/.claude.json is shared
-        // across the whole user and {worktree}/.claude/settings.local.json is
-        // touched by MergeToolPermissions on the same path; interleaved reads and
-        // writes could drop updates or write truncated JSON.
+        // Serialize against concurrent agent launches. paths.UserConfigJson is shared by every
+        // launch under the layout and {worktree}/.claude/settings.local.json is touched by
+        // MergeToolPermissions on the same path; interleaved reads and writes could drop updates
+        // or write truncated JSON.
         lock (TrustWriteLock) {
-            // Workspace trust (the "Do you trust the files in this folder?" dialog)
-            // is stored globally in ~/.claude.json under projects[path]. On a fresh
-            // machine the file may not exist yet — create a minimal object so trust
-            // is always persisted.
-            // The spawned `claude` inherits CLAUDE_CONFIG_DIR from the daemon's
-            // environment, so it reads/writes the same file we resolve here —
-            // $CLAUDE_CONFIG_DIR/.claude.json when set, else ~/.claude.json.
+            // Workspace trust lives in the layout's .claude.json under projects[path]; the file may
+            // not exist yet.
             var claudeJsonPath = paths.UserConfigJson;
 
             // The in-process lock above serializes only THIS daemon; every kcap writer of
-            // ~/.claude.json must also take the shared cross-process lock, or this write can
+            // paths.UserConfigJson must also take the shared cross-process lock, or this write can
             // land between another writer's inside-lock re-read and its rename (e.g. doctor
             // --clean) and be silently overwritten. See ConfigFileLock.
             using var _ = ConfigFileLock.Acquire(claudeJsonPath);
@@ -416,7 +435,7 @@ internal sealed partial class ClaudeLauncher(
 
             // MCP server approval (the "New MCP server found in .mcp.json" dialog)
             // is stored per-project in {worktree}/.claude/settings.local.json, NOT in
-            // ~/.claude.json. Claude requires BOTH fields: the blanket flag AND each
+            // .claude.json. Claude requires BOTH fields: the blanket flag AND each
             // server listed by name (the blanket flag alone still shows a per-server
             // discovery prompt on first encounter).
             var serverNames = ReadMcpJsonServerNames(worktreePath);
@@ -450,7 +469,10 @@ internal sealed partial class ClaudeLauncher(
                 }
             }
 
-            if (serverNames.Any(known.Add)) {
+            var before = known.Count;
+            known.UnionWith(serverNames);
+
+            if (known.Count > before) {
                 // Rebuild the array via JSON parsing to avoid AOT issues with
                 // JsonArray.Add(string) / JsonValue.Create<string>.
                 var json = "[" + string.Join(",", known.Select(n => $"\"{JsonEncodedText.Encode(n)}\"")) + "]";
@@ -473,13 +495,6 @@ internal sealed partial class ClaudeLauncher(
     /// </summary>
     internal const string BypassPermissionsAcceptedKey = "skipDangerousModePermissionPrompt";
 
-    /// <summary>
-    /// Records acceptance of Claude's Bypass-Permissions consent dialog in the user settings file
-    /// Claude reads (<c>$CLAUDE_CONFIG_DIR/settings.json</c> when set, else <c>~/.claude/settings.json</c>) —
-    /// the same effect as accepting the dialog once interactively, so an unattended reviewer never
-    /// wedges on it. The spawned Claude inherits <c>CLAUDE_CONFIG_DIR</c> from the daemon, so it reads
-    /// the same file this resolves.
-    /// </summary>
     /// <summary>
     /// Sets <see cref="BypassPermissionsAcceptedKey"/> = true in the settings file at
     /// <paramref name="settingsPath"/>, merging into any existing settings and preserving every other
@@ -634,14 +649,13 @@ internal sealed partial class ClaudeLauncher(
 
         var mcpJsonPath = Path.Combine(worktreePath, ".mcp.json");
 
-        // Read existing .mcp.json if present (e.g. committed to git)
-        JsonObject merged;
+        // Merged into the existing document (e.g. committed to git) so its other keys survive.
+        var wrapper = (File.Exists(mcpJsonPath) ? JsonNode.Parse(File.ReadAllText(mcpJsonPath)) as JsonObject : null)
+                   ?? new JsonObject();
 
-        if (File.Exists(mcpJsonPath)) {
-            var existing = JsonNode.Parse(File.ReadAllText(mcpJsonPath));
-            merged = existing?["mcpServers"]?.AsObject() ?? new JsonObject();
-        } else {
-            merged = new JsonObject();
+        if (wrapper["mcpServers"] is not JsonObject merged) {
+            merged                = new JsonObject();
+            wrapper["mcpServers"] = merged;
         }
 
         // The kcap Claude plugin already ships its servers session-wide, so a semantically
@@ -655,7 +669,7 @@ internal sealed partial class ClaudeLauncher(
         // registration.
         var pluginInstalled = ClaudePluginInstaller.IsEffectivelyInstalled(paths.UserSettings);
 
-        // Add servers from ~/.claude.json (don't overwrite repo-committed ones)
+        // Add the layout's .claude.json servers; a repo-committed entry of the same name wins.
         foreach (var (name, value) in servers) {
             // nativeKcapPath comes from DaemonConfig (the CLI binary sibling of this daemon):
             // Environment.ProcessPath here would be kcap-daemon, misclassifying a canonical
@@ -671,7 +685,6 @@ internal sealed partial class ClaudeLauncher(
             }
         }
 
-        var wrapper = new JsonObject { ["mcpServers"] = merged };
         File.WriteAllText(mcpJsonPath, wrapper.ToJsonString(IndentedJsonOpts));
     }
 

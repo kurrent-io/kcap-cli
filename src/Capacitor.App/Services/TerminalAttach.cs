@@ -10,19 +10,22 @@ public interface ITerminalAttachClient : IAsyncDisposable {
     Task DetachAsync();
 }
 
-/// One client per attach attempt — the factory is the unit tests' scripting seam.
+/// One client per attach attempt — the factory is the unit tests' scripting seam. `requestRuntime`
+/// asks for the runtime's start stamp; only a daemon advertising AgentAttachClient.RuntimeCapability
+/// understands that request.
 public delegate ITerminalAttachClient TerminalAttachClientFactory(
-    string agentId,
-    Func<byte[], string?, CancellationToken, Task> onAttached,
+    string agentId, bool requestRuntime,
+    Func<AttachAck, CancellationToken, Task> onAttached,
     Func<byte[], CancellationToken, Task> onOutput);
 
 /// Production adapter: Core client, diagnostics to Console.Error (the app's
 /// teardown-diagnostic convention — never AppNotifier toasts).
 public sealed class CoreTerminalAttachClient(AgentAttachClient inner) : ITerminalAttachClient {
     public static TerminalAttachClientFactory Factory(Func<string> socketPath) =>
-        (agentId, onAttached, onOutput) => new CoreTerminalAttachClient(new AgentAttachClient(
+        (agentId, requestRuntime, onAttached, onOutput) => new CoreTerminalAttachClient(new AgentAttachClient(
             socketPath(), agentId, onAttached, onOutput,
-            (ctx, ex) => Console.Error.WriteLine($"kcap: terminal attach {ctx}: {ex.Message}")));
+            (ctx, ex) => Console.Error.WriteLine($"kcap: terminal attach {ctx}: {ex.Message}"), requestRuntime,
+            resizeOnAttach: false));
     public Task<AttachOutcome> RunAsync(int c, int r, CancellationToken ct) => inner.RunAsync(c, r, ct);
     public Task SendInputAsync(byte[] b) => inner.SendInputAsync(b);
     public Task ResizeAsync(int c, int r) => inner.ResizeAsync(c, r);
@@ -31,8 +34,8 @@ public sealed class CoreTerminalAttachClient(AgentAttachClient inner) : ITermina
 }
 
 /// Deliberately NOT named *Attach*State — AttachStatus/AttachState already
-/// describe the daemon status subscription (spec naming note).
-public enum TerminalSessionPhase { Resolving, NoTerminal, NotFound, Connecting, Attached, Detached, Exited, Failed, SessionEnded }
+/// describe the daemon status subscription.
+public enum TerminalSessionPhase { Resolving, NoTerminal, NotFound, Connecting, Attached, Detached, Exited, Failed, SessionEnded, Resuming, Interrupted }
 
 /// What the composer can do right now, folding the send gate into the terminal state so a hint
 /// built from it is true in every window — including the ones where State still reads Attached
@@ -49,4 +52,8 @@ public sealed record TerminalSessionState(TerminalSessionPhase Phase, string? De
     public static TerminalSessionState Exited(int code) => new(TerminalSessionPhase.Exited, ExitCode: code);
     public static TerminalSessionState Failed(string message) => new(TerminalSessionPhase.Failed, message);
     public static readonly TerminalSessionState SessionEnded = new(TerminalSessionPhase.SessionEnded);
+    /// The daemon restarted and the agent is being brought back on its successor.
+    public static readonly TerminalSessionState Resuming = new(TerminalSessionPhase.Resuming);
+    /// The daemon could not bring the agent back after a restart; Detail is the ledger's reason.
+    public static TerminalSessionState Interrupted(string? reason) => new(TerminalSessionPhase.Interrupted, reason);
 }

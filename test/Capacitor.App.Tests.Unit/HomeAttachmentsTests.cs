@@ -3,6 +3,7 @@ using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Remote.Models;
 using DynamicData;
@@ -72,6 +73,8 @@ public class HomeAttachmentsTests {
         public BehaviorSubject<IReadOnlyList<DaemonInfo>> Daemons { get; } = new([]);
         public FakeAgentDirectory Directory { get; } = new();
         public string? ViewerId { get; set; } = "viewer-1";
+        public BehaviorSubject<DaemonListing>? Listing { get; set; }
+        public BehaviorSubject<AccountsSnapshotDto?> LocalAccounts { get; } = new(null);
         public CancellationTokenSource Shutdown { get; } = new();
         public HomeViewModel Vm { get; private set; } = null!;
 
@@ -83,12 +86,15 @@ public class HomeAttachmentsTests {
                 Daemon, new AppStateStore(statePath), launch ?? Launch, () => Task.FromResult<string[]>([]), Time,
                 shutdown: Shutdown.Token,
                 daemons: Daemons, viewerId: _ => Task.FromResult(ViewerId), laneStatus: Lane,
-                launchFailures: Failures, directory: Directory, uploader: Uploader);
+                launchFailures: Failures, directory: Directory, uploader: Uploader,
+                listing: Listing, localAccounts: LocalAccounts);
             return Vm;
         }
 
         public void Dispose() {
             Vm?.Dispose();
+            Listing?.Dispose();
+            LocalAccounts.Dispose();
             Shutdown.Dispose();
             Directory.Dispose();
             Failures.Dispose();
@@ -107,9 +113,11 @@ public class HomeAttachmentsTests {
     /// Stages one chip and a goal, then runs an accepted launch. `duringUpload` runs while the
     /// upload is still in flight — the window a draft has to be edited out from under.
     static async Task<StagedAttachment> LaunchWithDraftAsync(
-            Rig rig, string statePath, Func<HomeViewModel, Task>? duringUpload = null) {
+            Rig rig, string statePath, Func<HomeViewModel, Task>? duringUpload = null,
+            Func<HomeViewModel, Task>? beforeStart = null) {
         var vm = rig.Start(statePath);
         await vm.SelectRepositoryAsync("/repo/a");
+        if (beforeStart is not null) await beforeStart(vm);
         var chip = Chip("a.png");
         vm.Attachments.Accept(new IntakeResult([chip], []));
         vm.Goal = "g";
@@ -125,6 +133,90 @@ public class HomeAttachmentsTests {
         gate.SetResult(new UploadOutcome(UploadKind.Uploaded, ["u1"], null));
         await run;
         return chip;
+    }
+
+    static readonly AccountsSnapshotDto HomeAndWork = new("h1", 1, [
+        new("a1", "claude", "/u/.claude", "/u/.claude", "home", "recording"),
+        new("a2", "claude", "/u/.claude-work", "/u/.claude-work", "work", "recording"),
+    ], [new("claude", "/u/.claude", "/u/.claude")]);
+
+    const string WorkRefusal = "work is not available on this machine. Use the default account or pick another.";
+
+    static DaemonListing LocalListing(bool accounts) => new([
+        new DaemonInfo { Name = "daemon-a", OwnerUserId = "viewer-1", Connected = true, SupportsAccountLaunches = accounts },
+    ], 1, false);
+
+    /// LaunchWithDraftAsync with this machine listed under the account flag and work picked.
+    static Task<StagedAttachment> LaunchWithAccountAsync(Rig rig, string statePath, Func<HomeViewModel, Task> duringUpload) {
+        rig.Listing = new(LocalListing(accounts: true));
+        rig.LocalAccounts.OnNext(HomeAndWork);
+        return LaunchWithDraftAsync(rig, statePath, duringUpload, beforeStart: async vm => {
+            await vm.AccountMemoryLoadedForTesting;
+            await vm.PickAccountAsync("a2");
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_account_removed_during_the_upload_fails_named_with_no_request_and_the_draft_kept() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            using var rig = new Rig();
+
+            await LaunchWithAccountAsync(rig, path, _ => {
+                rig.LocalAccounts.OnNext(HomeAndWork with { Revision = 2, Accounts = [HomeAndWork.Accounts[0]] });
+                return Task.CompletedTask;
+            });
+
+            await Assert.That(rig.Launch.Last).IsNull();
+            await Assert.That(rig.Vm.StartError).IsEqualTo(WorkRefusal);
+            await Assert.That(rig.Vm.StartErrorOffersDefault).IsTrue();
+            await Assert.That(rig.Vm.Tray.Count).IsEqualTo(1);
+            await Assert.That(rig.Vm.Goal).IsEqualTo("g");
+
+            // The refusal named Claude's account; it does not follow the switch to Codex.
+            await rig.Vm.ChooseHarnessAsync("codex");
+            await Assert.That(rig.Vm.StartError).IsNull();
+            await Assert.That(rig.Vm.StartErrorOffersDefault).IsFalse();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_snapshot_arriving_during_an_in_flight_upload_changes_nothing_about_the_launch() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            using var rig = new Rig();
+
+            // The default moves onto work's directory and the person picks home while the files go up.
+            await LaunchWithAccountAsync(rig, path, async vm => {
+                rig.LocalAccounts.OnNext(HomeAndWork with { Revision = 2, Defaults = [new("claude", "/u/.claude-work", "/u/.claude-work")] });
+                await vm.PickAccountAsync("a1");
+            });
+
+            await Assert.That(rig.Launch.Last!.AccountId).IsEqualTo("a2");
+            await Assert.That(rig.Launch.Last!.AttachmentIds).IsEquivalentTo(new[] { "u1" });
+            await Assert.That(rig.Vm.StartError).IsNull();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_target_that_loses_the_flag_during_the_upload_fails_named_and_sends_nothing() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            using var rig = new Rig();
+
+            await LaunchWithAccountAsync(rig, path, _ => {
+                rig.Listing!.OnNext(LocalListing(accounts: false));
+                return Task.CompletedTask;
+            });
+
+            await Assert.That(rig.Launch.Last).IsNull();
+            await Assert.That(rig.Vm.StartError).IsEqualTo(WorkRefusal);
+            await Assert.That(rig.Vm.StartErrorOffersDefault).IsTrue();
+            await Assert.That(rig.Vm.Tray.Count).IsEqualTo(1);
+        });
     }
 
     [Test]
@@ -192,6 +284,23 @@ public class HomeAttachmentsTests {
             await Assert.That(rig.Launch.Last!.Prompt).IsEqualTo("g");
             await Assert.That(rig.Launch.Last!.AttachmentIds).IsEquivalentTo(new[] { "u1" });
             await Assert.That(vm.Uploading).IsFalse();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_harness_withdrawn_during_the_upload_is_not_launched() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            using var rig = new Rig();
+
+            await LaunchWithDraftAsync(rig, path, _ => {
+                rig.Daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "connected", supportedVendors: []));
+                return Task.CompletedTask;
+            });
+
+            await Assert.That(rig.Launch.Last).IsNull();
+            await Assert.That(rig.Vm.StartError).IsEqualTo(HomeViewModel.NoHarnessesNotice(null));
         });
     }
 

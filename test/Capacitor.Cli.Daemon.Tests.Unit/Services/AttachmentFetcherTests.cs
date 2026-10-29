@@ -1,10 +1,10 @@
-using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
+using TUnit.Assertions.Enums;
 using WireMock.Server;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
@@ -33,8 +33,7 @@ public class AttachmentFetcherTests : IDisposable {
             throw fail(ct);
     }
 
-    static Task<TokenResolution> NoTokens() =>
-        Task.FromResult(new TokenResolution(null, AuthStatus.NotAuthenticated, null, "default"));
+    static readonly ICredentialSource NoTokens = new FixedCredentialSource();
 
     AttachmentFetcher Fetcher() => new(new Factory(_server.Url!), NoTokens, NullLogger.Instance);
 
@@ -102,6 +101,23 @@ public class AttachmentFetcherTests : IDisposable {
         await Assert.That(Directory.GetDirectories(Tmp.PathTo("b"))).IsEmpty();
         await Assert.That(Directory.GetFiles(Tmp.PathTo("b"), "*", SearchOption.AllDirectories)
             .Select(f => Path.GetFileName(f))).IsEquivalentTo([".gitignore"]);
+    }
+
+    /// <summary>The bearer is the credential source's, so a local installation's no-credential answer
+    /// sends none whatever the token store holds.</summary>
+    [Test]
+    public async Task A_download_carries_the_credential_sources_bearer_and_none_when_it_has_none() {
+        Serve(Id(0), [1]);
+
+        await new AttachmentFetcher(new Factory(_server.Url!), new FixedCredentialSource("b-1"), NullLogger.Instance)
+            .FetchAsync(Tmp.PathTo("with"), AttachmentPlacement.DaemonStore, [Id(0)], CancellationToken.None);
+        await Fetcher().FetchAsync(Tmp.PathTo("without"), AttachmentPlacement.DaemonStore, [Id(0)], CancellationToken.None);
+
+        var sent = _server.LogEntries
+            .Select(e => e.RequestMessage.Headers!.TryGetValue("Authorization", out var value) ? value[0] : null)
+            .ToList();
+
+        await Assert.That(sent).IsEquivalentTo(["Bearer b-1", null], CollectionOrdering.Matching);
     }
 
     [Test]

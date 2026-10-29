@@ -1,5 +1,7 @@
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Capture;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -196,7 +198,7 @@ public class SessionImporterProgressTests : IDisposable {
     }
 
     [Test]
-    public async Task SendTranscriptBatches_skips_a_line_over_the_budget_and_reports_it() {
+    public async Task SendTranscriptBatches_marks_capture_loss_and_preserves_source_numbers() {
         _server.Given(Request.Create().WithPath("/hooks/transcript").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200));
 
@@ -213,20 +215,20 @@ public class SessionImporterProgressTests : IDisposable {
             agentId: null, startLine: 0, progress: progress
         , time: TimeProvider.System);
 
-        await Assert.That(totalSent).IsEqualTo(2);
+        await Assert.That(totalSent).IsEqualTo(3);
 
-        var skipped = events.OfType<LineSkipped>().Single();
-        await Assert.That(skipped.SessionId).IsEqualTo("s1");
-        await Assert.That(skipped.AgentId).IsNull();
-        await Assert.That(skipped.LineNumber).IsEqualTo(1);
-        await Assert.That(skipped.Bytes).IsGreaterThan(TranscriptBatchBuffer.MaxBytes);
-        await Assert.That(skipped.Message).Contains("line 1 skipped");
+        var loss = events.OfType<CaptureLineLost>().Single();
+        await Assert.That(loss.SessionId).IsEqualTo("s1");
+        await Assert.That(loss.AgentId).IsNull();
+        await Assert.That(loss.LineNumber).IsEqualTo(1);
+        await Assert.That(loss.Reason).IsEqualTo(RedactionLossReason.InputLimit);
+        await Assert.That(loss.Message).Contains("could not be captured");
 
         var body = _server.LogEntries.Single().RequestMessage.Body;
-        await Assert.That(body).Contains("\"line_numbers\":[0,2]");
+        await Assert.That(body).Contains("\"line_numbers\":[0,1,2]");
 
         // The progress denominator counts what will actually be posted.
-        await Assert.That(SessionImporter.CountSendableLines(path)).IsEqualTo(2);
+        await Assert.That(SessionImporter.CountSendableLines(path)).IsEqualTo(3);
     }
 
     [Test]
@@ -251,6 +253,31 @@ public class SessionImporterProgressTests : IDisposable {
         await Assert.That(dropped[0]).IsEqualTo(new BatchDropped("s1", "agent-1", 0, 99, "HTTP 413"));
         await Assert.That(dropped[1]).IsEqualTo(new BatchDropped("s1", "agent-1", 100, 149, "HTTP 413"));
         await Assert.That(dropped[0].Message).IsEqualTo("subagent agent-1 lines 0-99 dropped: HTTP 413");
+    }
+
+    /// A Cursor 409 frontier can name a blank source line, which was never posted: the drop starts at
+    /// the next line that was, and the accepted prefix counts as flushed.
+    [Test]
+    public async Task SendTranscriptBatches_starts_a_blocked_drop_at_a_line_that_was_sent() {
+        _server.Given(Request.Create().WithPath("/hooks/transcript").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(409).WithBody("""{"processed":40,"next_line_number":40,"blocked":"RetryBlocked"}"""));
+
+        using var tmp = TempDir.WithPathTo("transcript.tmp", out var path);
+        await File.WriteAllLinesAsync(path, Enumerable.Range(0, 60).Select(i => i == 40 ? "" : LineOf(10)));
+
+        var events   = new List<ImportProgress>();
+        var progress = new SyncProgress<ImportProgress>(events.Add);
+
+        using var client = new HttpClient();
+        await Assert.ThrowsAsync<SessionImporter.TranscriptDeliveryAbortedException>(async () =>
+            await SessionImporter.SendTranscriptBatches(
+                client, _server.Url!, sessionId: "s1", filePath: path,
+                agentId: null, startLine: 0, progress: progress, vendor: HarnessId.Cursor, time: TimeProvider.System));
+
+        await Assert.That(events.OfType<BatchFlushed>().Sum(e => e.LinesAdded)).IsEqualTo(40);
+        var dropped = events.OfType<BatchDropped>().Single();
+        await Assert.That(dropped.FirstLineNumber).IsEqualTo(41);
+        await Assert.That(dropped.LastLineNumber).IsEqualTo(59);
     }
 
     [Test]

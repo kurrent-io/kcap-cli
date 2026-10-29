@@ -62,6 +62,15 @@ public static class AgentInstructionsWriter {
         }
     }
 
+    /// <summary>Whether the file at <paramref name="path"/> holds kcap's block.</summary>
+    public static bool IsInstalled(string path) {
+        try {
+            return File.Exists(path) && FindBlock(File.ReadAllText(path)).State == BlockState.Present;
+        } catch {
+            return false;
+        }
+    }
+
     static string AppendBlock(string content, string block) {
         if (content.Length == 0) return block + "\n";        // fresh file
         var sep = content.EndsWith('\n') ? "\n" : "\n\n";    // one blank line before ours

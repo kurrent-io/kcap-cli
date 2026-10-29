@@ -88,15 +88,15 @@ public class WorkOSFlowLadderTests {
         var       workos = new WorkOSClient(new PlainHttpClientFactory(stub), TimeProvider.System);
         var       browser = new FakeBrowser(_ => throw new InvalidOperationException("the browser must not be invoked"));
 
-        var opener = new RecordingBrowser(opens: false);
+        var opener = new RecordingBrowser(opens: true);
 
         var result = await OAuthLoginFlow.AcquireWorkOSAsync(
-            workos, "client_d", organizationId: null, forceDevice: true, opener, NoTelemetry.Join, TimeProvider.System, browser,
+            workos, WorkOSClient.ApiBase, "client_d", organizationId: null, forceDevice: true, opener, NoTelemetry.Join, TimeProvider.System, browser,
             progress: new RecordingAuthProgress(), keys: ScriptedKeyWatcher.Blind());
 
         await Assert.That(result!.AccessToken).IsEqualTo("acc");
-        // The device page, never the authorize URL: "opens no browser" means no LOOPBACK browser.
-        await Assert.That(opener.Urls).IsEquivalentTo(["https://signin.example/device"]);
+        // Not the device page either: the person entering the code is at another device.
+        await Assert.That(opener.Urls).IsEmpty();
     }
 
     [Test]
@@ -108,7 +108,7 @@ public class WorkOSFlowLadderTests {
         var       progress = new RecordingAuthProgress();
 
         var result = await OAuthLoginFlow.AcquireWorkOSAsync(
-            workos, "client_d", organizationId: null, forceDevice: false, new RecordingBrowser(opens: false),
+            workos, WorkOSClient.ApiBase, "client_d", organizationId: null, forceDevice: false, new RecordingBrowser(opens: false),
             NoTelemetry.Join, TimeProvider.System, new HangingBrowser(),
             progress: progress, keys: keys);
 
@@ -133,7 +133,7 @@ public class WorkOSFlowLadderTests {
         var       keys   = new ScriptedKeyWatcher('d', '\r', '\n');
 
         await OAuthLoginFlow.AcquireWorkOSAsync(
-            workos, "client_d", organizationId: null, forceDevice: false, new RecordingBrowser(opens: false),
+            workos, WorkOSClient.ApiBase, "client_d", organizationId: null, forceDevice: false, new RecordingBrowser(opens: false),
             NoTelemetry.Join, TimeProvider.System, new HangingBrowser(),
             progress: new RecordingAuthProgress(), keys: keys);
 
@@ -150,7 +150,7 @@ public class WorkOSFlowLadderTests {
         var       workos = new WorkOSClient(new PlainHttpClientFactory(stub), TimeProvider.System);
 
         var result = await OAuthLoginFlow.AcquireWorkOSAsync(
-            workos, "client_d", organizationId: null, forceDevice: false, new RecordingBrowser(), NoTelemetry.Join, TimeProvider.System,
+            workos, WorkOSClient.ApiBase, "client_d", organizationId: null, forceDevice: false, new RecordingBrowser(), NoTelemetry.Join, TimeProvider.System,
             FakeBrowser.NonSuccess(Duende.IdentityModel.OidcClient.Browser.BrowserResultType.UserCancel),
             progress: new RecordingAuthProgress(), keys: ScriptedKeyWatcher.Blind());
 
@@ -168,7 +168,7 @@ public class WorkOSFlowLadderTests {
         var       progress = new RecordingAuthProgress();
 
         var result = await OAuthLoginFlow.AcquireWorkOSAsync(
-            workos, "client_d", organizationId: null, forceDevice: false, new RecordingBrowser(opens: false),
+            workos, WorkOSClient.ApiBase, "client_d", organizationId: null, forceDevice: false, new RecordingBrowser(opens: false),
             NoTelemetry.Join, TimeProvider.System, new FakeBrowser(_ => throw new HttpListenerException(5, "Access is denied")),
             progress: progress, keys: ScriptedKeyWatcher.Blind());
 
@@ -190,7 +190,7 @@ public class WorkOSFlowLadderTests {
         var       progress = new RecordingAuthProgress();
 
         var result = await OAuthLoginFlow.AcquireWorkOSAsync(
-            workos, "client_d", organizationId: null, forceDevice: false,
+            workos, WorkOSClient.ApiBase, "client_d", organizationId: null, forceDevice: false,
             new RecordingBrowser(opens: false), NoTelemetry.Join, TimeProvider.System,
             new FakeBrowser(_ => throw new BrowserLaunchException()),
             progress: progress, keys: ScriptedKeyWatcher.Blind());
@@ -233,9 +233,9 @@ public class WorkOSFlowLadderTests {
         await cts.CancelAsync();
 
         await Assert.That(async () => await OAuthLoginFlow.AcquireWorkOSAsync(
-                  workos, "client_d", organizationId: null, forceDevice: false,
+                  workos, server.Urls[0], "client_d", organizationId: null, forceDevice: false,
                   new RecordingBrowser(), NoTelemetry.Join, TimeProvider.System, new HangingBrowser(),
-                  server.Urls[0], cts.Token, new RecordingAuthProgress(), ScriptedKeyWatcher.Blind()))
+                  cts.Token, new RecordingAuthProgress(), ScriptedKeyWatcher.Blind()))
             .Throws<OperationCanceledException>();
     }
 }

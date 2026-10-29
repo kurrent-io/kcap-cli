@@ -23,10 +23,34 @@ public class CanonicalEventJsonTests {
     }
 
     [Test]
+    public async Task ReadsTheServersSubagentCompletion() {
+        var completed = CanonicalEventJson.TryParse(CanonicalEventTypes.SubagentCompleted,
+            """{"agent_id":"a9f262478e032f427","timestamp":"2026-09-17T10:01:00Z"}""");
+        await Assert.That(completed).IsTypeOf<SubagentCompleted>();
+        await Assert.That(((SubagentCompleted)completed!).AgentId).IsEqualTo("a9f262478e032f427");
+    }
+
+    [Test]
+    public async Task ReadsTheServersSubagentStart() {
+        var started = CanonicalEventJson.TryParse(CanonicalEventTypes.SubagentStarted, """{"agent_id":"a9f262478e032f427","agent_type":"Explore"}""");
+        await Assert.That(started).IsTypeOf<SubagentStarted>();
+        await Assert.That(((SubagentStarted)started!).AgentId).IsEqualTo("a9f262478e032f427");
+    }
+
+    [Test]
     public async Task UnknownTypesAndMalformedPayloadsReadAsNull() {
         await Assert.That(CanonicalEventJson.TryParse("InterruptIssued", """{"request_id":"r1"}""")).IsNull();
         await Assert.That(CanonicalEventJson.TryParse(CanonicalEventTypes.SessionStarted, """{}""")).IsNull();
         await Assert.That(CanonicalEventJson.TryParse(CanonicalEventTypes.UserMessageReceived, "not json")).IsNull();
         await Assert.That(CanonicalEventJson.TryParse(CanonicalEventTypes.UserMessageReceived, """{"content":42}""")).IsNull();
+    }
+
+    /// <summary>A stored compaction reaches a remote chat as the note a local one shows.</summary>
+    [Test]
+    public async Task A_stored_compaction_reads_back_as_its_record() {
+        var parsed = CanonicalEventJson.TryParse(CanonicalEventTypes.ContextCompacted, """{"encrypted_content":"x","replacement_history":[]}""");
+
+        await Assert.That(parsed).IsTypeOf<ContextCompactedEvent>();
+        await Assert.That(((ContextCompactedEvent)parsed!).EncryptedContent).IsEqualTo("x");
     }
 }

@@ -82,4 +82,93 @@ public class ClaudeNativeTitleTests {
 
         await Assert.That(ClaudeNativeTitle.TryExtract(path)).IsEqualTo("Live title");
     }
+
+    [Test]
+    public async Task Custom_title_beats_ai_title_and_is_timed_by_the_start_of_its_run() {
+        var path = Transcript(
+            """{"type":"user","timestamp":"2026-09-29T10:00:00Z"}""",
+            """{"type":"ai-title","aiTitle":"Auto","sessionId":"s"}""",
+            """{"type":"assistant","timestamp":"2026-09-29T10:05:00Z"}""",
+            """{"type":"custom-title","customTitle":"Mine","sessionId":"s"}""",
+            """{"type":"assistant","timestamp":"2026-09-29T11:00:00Z"}""",
+            """{"type":"custom-title","customTitle":"Mine","sessionId":"s"}""",
+            """{"type":"ai-title","aiTitle":"Auto 2","sessionId":"s"}""");
+
+        await Assert.That(ClaudeNativeTitle.TryExtractWithKind(path))
+            .IsEqualTo(new ClaudeTitle("Mine", IsRename: true, DateTimeOffset.Parse("2026-09-29T10:05:00Z", System.Globalization.CultureInfo.InvariantCulture)));
+    }
+
+    [Test]
+    public async Task Legacy_summary_only_yields_an_auto_title() {
+        var path = Transcript("""{"type":"summary","summary":"Legacy title","leafUuid":"u1"}""");
+
+        await Assert.That(ClaudeNativeTitle.TryExtractWithKind(path))
+            .IsEqualTo(new ClaudeTitle("Legacy title", IsRename: false, null));
+    }
+
+    [Test]
+    public async Task A_custom_title_preceding_any_timestamped_line_has_no_changed_at() {
+        var path = Transcript(
+            """{"type":"custom-title","customTitle":"Mine","sessionId":"s"}""",
+            """{"type":"assistant","timestamp":"2026-09-29T10:05:00Z"}""");
+
+        await Assert.That(ClaudeNativeTitle.TryExtractWithKind(path))
+            .IsEqualTo(new ClaudeTitle("Mine", IsRename: true, null));
+    }
+
+    /// A rename back to an earlier value is a genuine switch, not a re-append: timing it by the
+    /// value's first-ever occurrence would post the final "A" with a changed_at earlier than
+    /// "B"'s, and the server would keep "B" — losing the operator's rename back to "A".
+    [Test]
+    public async Task A_rename_back_to_an_earlier_value_is_timed_by_its_own_return_not_its_first_occurrence() {
+        var path = Transcript(
+            """{"type":"user","timestamp":"2026-09-29T10:00:00Z"}""",
+            """{"type":"custom-title","customTitle":"A","sessionId":"s"}""",
+            """{"type":"assistant","timestamp":"2026-09-29T10:05:00Z"}""",
+            """{"type":"custom-title","customTitle":"B","sessionId":"s"}""",
+            """{"type":"assistant","timestamp":"2026-09-29T10:10:00Z"}""",
+            """{"type":"custom-title","customTitle":"A","sessionId":"s"}""");
+
+        await Assert.That(ClaudeNativeTitle.TryExtractWithKind(path))
+            .IsEqualTo(new ClaudeTitle("A", IsRename: true, DateTimeOffset.Parse("2026-09-29T10:10:00Z", System.Globalization.CultureInfo.InvariantCulture)));
+    }
+
+    [Test]
+    public async Task TryExtractWithKind_returns_a_long_title_whole() {
+        var longTitle = new string('r', 150);
+        var path = Transcript($$"""{"type":"custom-title","customTitle":"{{longTitle}}","sessionId":"s"}""");
+
+        await Assert.That(ClaudeNativeTitle.TryExtractWithKind(path)!.Title).IsEqualTo(longTitle);
+        await Assert.That(ClaudeNativeTitle.TryExtract(path)).IsEqualTo(new string('r', 120));
+    }
+
+    /// <summary>A line whose only timestamp is nested (inside <c>message</c>) does not time a later rename run; the
+    /// last top-level stamp does.</summary>
+    [Test]
+    public async Task A_nested_timestamp_in_the_preceding_line_is_not_used() {
+        var path = Transcript(
+            """{"type":"user","timestamp":"2026-09-29T10:00:00Z"}""",
+            """{"type":"custom-title","customTitle":"A","sessionId":"s"}""",
+            """{"type":"assistant","message":{"timestamp":"2026-09-29T10:30:00Z"}}""",
+            """{"type":"custom-title","customTitle":"B","sessionId":"s"}""");
+
+        await Assert.That(ClaudeNativeTitle.TryExtractWithKind(path))
+            .IsEqualTo(new ClaudeTitle("B", IsRename: true, DateTimeOffset.Parse("2026-09-29T10:00:00Z", System.Globalization.CultureInfo.InvariantCulture)));
+    }
+
+    /// <summary>A nested-only or malformed stamp line between the last top-level stamp and the first rename must not
+    /// displace that stamp.</summary>
+    [Test]
+    [Arguments("""{"type":"assistant","message":{"timestamp":"2026-09-29T10:30:00Z"}}""")]
+    [Arguments("""{"type":"assistant","timestamp":"2026-09-29T10:30:00Z" oops""")]
+    [Arguments("""{"type":"assistant","timestamp":"not a time"}""")]
+    public async Task A_first_rename_is_timed_by_the_last_valid_top_level_stamp(string between) {
+        var path = Transcript(
+            """{"type":"user","timestamp":"2026-09-29T10:00:00Z"}""",
+            between,
+            """{"type":"custom-title","customTitle":"A","sessionId":"s"}""");
+
+        await Assert.That(ClaudeNativeTitle.TryExtractWithKind(path))
+            .IsEqualTo(new ClaudeTitle("A", IsRename: true, DateTimeOffset.Parse("2026-09-29T10:00:00Z", System.Globalization.CultureInfo.InvariantCulture)));
+    }
 }

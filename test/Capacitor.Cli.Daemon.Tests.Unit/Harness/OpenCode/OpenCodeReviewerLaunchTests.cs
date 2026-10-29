@@ -225,13 +225,21 @@ public class OpenCodeReviewerLaunchTests {
     /// user's own does. The plugin suppression is the ONE setting both share.
     /// </summary>
     [Test]
+    [NotInParallel]
     public async Task AnInteractiveLaunch_GetsNoneOfTheReviewerContainment() {
+        using var permission = EnvScope.Exclusive(OpenCodeLaunchEnvironment.PermissionVariable, "inherited-permission");
+        using var configDir  = EnvScope.Exclusive(OpenCodeLaunchEnvironment.ConfigDirVariable, "/tmp/kcap-opencode-dir-probe");
+        using var project    = EnvScope.Exclusive(OpenCodeLaunchEnvironment.ProjectConfigVariable, "inherited-project");
+
         var psi = Psi(isReviewFlow: false);
 
         await Assert.That(psi.Environment[OpenCodeLaunchEnvironment.PureVariable]).IsEqualTo("1");
-        await Assert.That(psi.Environment.ContainsKey(OpenCodeLaunchEnvironment.PermissionVariable)).IsFalse();
-        await Assert.That(psi.Environment.ContainsKey(OpenCodeLaunchEnvironment.ConfigDirVariable)).IsFalse();
-        await Assert.That(psi.Environment.ContainsKey(OpenCodeLaunchEnvironment.ProjectConfigVariable)).IsFalse();
+        await Assert.That(psi.Environment.TryGetValue(OpenCodeLaunchEnvironment.PermissionVariable, out var p) ? p : null)
+            .IsEqualTo("inherited-permission");
+        await Assert.That(psi.Environment.TryGetValue(OpenCodeLaunchEnvironment.ConfigDirVariable, out var d) ? d : null)
+            .IsEqualTo("/tmp/kcap-opencode-dir-probe");
+        await Assert.That(psi.Environment.TryGetValue(OpenCodeLaunchEnvironment.ProjectConfigVariable, out var c) ? c : null)
+            .IsEqualTo("inherited-project");
     }
 
     /// <summary>

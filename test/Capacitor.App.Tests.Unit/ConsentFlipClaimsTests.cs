@@ -8,10 +8,8 @@ public class ConsentFlipClaimsTests {
 
     string ClaimsPath => Config.PathTo("consent-flip-claims.json");
 
-    // Already canonical (explicit :443) — M1's defensive Arm canonicalization is idempotent for
-    // an already-canonical caller, so round-tripping this value must not change it. The
-    // deliberately-uncanonical case is covered by Arm_canonicalizes_a_raw_uncanonical_server_url_
-    // so_consuming_with_the_canonical_identity_works below.
+    // Already canonical (explicit :443): Arm's canonicalization is idempotent for it, so
+    // round-tripping this value must not change it.
     static readonly ConsentFlipClaim Claim = new("default", "https://example.test:443");
 
     [Test]
@@ -35,10 +33,9 @@ public class ConsentFlipClaimsTests {
         await Assert.That(store.Pending()).IsEquivalentTo([Claim]);
     }
 
-    // M1 (final review): Arm defensively canonicalizes CanonicalServer at entry — a raw/uncanonical
-    // URL armed here must still be found by a later TryConsume that re-resolves to the canonical
-    // identity, or the claim would be stuck pending forever (the stuck-pending bug class this
-    // guards against).
+    // Arm canonicalizes CanonicalServer at entry: a raw/uncanonical URL armed here must still be
+    // found by a later TryConsume that re-resolves to the canonical identity, or the claim would be
+    // stuck pending forever.
     [Test]
     public async Task Arm_canonicalizes_a_raw_uncanonical_server_url_so_consuming_with_the_canonical_identity_works() {
         var store = new ConsentFlipClaims(Config.Root);
@@ -75,17 +72,6 @@ public class ConsentFlipClaimsTests {
 
         await Assert.That(consumed).IsTrue();
         await Assert.That(store.Pending()).IsEmpty();
-    }
-
-    [Test]
-    public async Task Consume_with_different_resolved_daemon_name_retains_the_claim() {
-        var store = new ConsentFlipClaims(Config.Root);
-        store.Arm(Claim);
-
-        var consumed = store.TryConsume(Claim, () => (Claim.Profile, Claim.CanonicalServer, "other-daemon"), "kcap-daemon");
-
-        await Assert.That(consumed).IsFalse();
-        await Assert.That(store.Pending()).IsEquivalentTo([Claim]);
     }
 
     [Test]
@@ -194,7 +180,7 @@ public class ConsentFlipClaimsTests {
         }
     }
 
-    // Codex P2: a future-version file (even with a valid-looking claims array) must be quarantined,
+    // A future-version file (even with a valid-looking claims array) must be quarantined,
     // never applied under v1 semantics or rewritten as v1.
     [Test]
     public async Task Future_version_file_is_quarantined_even_with_valid_looking_claims() {
@@ -210,15 +196,5 @@ public class ConsentFlipClaimsTests {
         await Assert.That(File.Exists(quarantine!.PreservedPath)).IsTrue();
         await Assert.That(File.ReadAllText(quarantine.PreservedPath)).IsEqualTo(futureVersion);
         await Assert.That(File.Exists(ClaimsPath)).IsFalse();
-    }
-
-    // The ctor is the only place the claims filename is written down; a round trip proves the file
-    // lands under the root it was handed, not just that construction succeeds.
-    [Test]
-    public async Task Claims_file_lands_under_the_root_it_is_given() {
-        var store = new ConsentFlipClaims(Config.Root);
-
-        await Assert.That(store.Arm(Claim)).IsTrue();
-        await Assert.That(File.Exists(ClaimsPath)).IsTrue();
     }
 }

@@ -83,6 +83,9 @@ public class AcpHostedAgentRuntimeTests {
 
         public void StartFakeAgentLoop() => _fakeRunTask = Fake.RunAsync(Cts.Token);
 
+        /// <summary>Completes when the fake reads EOF on its stdin, or is cancelled.</summary>
+        public Task FakeRunTask => _fakeRunTask;
+
         public async ValueTask DisposeAsync() {
             Cts.Cancel();
             try {
@@ -367,8 +370,23 @@ public class AcpHostedAgentRuntimeTests {
             .IsEqualTo("more");
     }
 
+    /// <summary>A stop during startup has no session to cancel, but the agent is already running and
+    /// still has to be asked to exit.</summary>
     [Test]
-    public async Task RequestGracefulStopAsync_sends_session_cancel_notification() {
+    public async Task RequestGracefulStopAsync_before_a_session_still_closes_stdin() {
+        await using var h = new Harness();
+        h.StartFakeAgentLoop();
+
+        await h.Runtime.RequestGracefulStopAsync().WaitAsync(HangGuard);
+
+        await h.FakeRunTask.WaitAsync(HangGuard);
+        await Assert.That(h.Fake.ReceivedCalls.Any(c => c.Method == "session/cancel")).IsFalse();
+    }
+
+    /// <summary>An ACP agent exits when its stdin closes, and session/cancel alone leaves it running,
+    /// so a stop that only cancelled would always wait out the orchestrator's grace and be killed.</summary>
+    [Test]
+    public async Task RequestGracefulStopAsync_cancels_the_turn_then_closes_stdin() {
         await using var h = new Harness();
         h.StartFakeAgentLoop();
 
@@ -376,10 +394,8 @@ public class AcpHostedAgentRuntimeTests {
 
         await h.Runtime.RequestGracefulStopAsync().WaitAsync(HangGuard);
 
-        // session/cancel is a notification (no id) — give the fake's read loop a moment to record it.
-        var deadline = DateTime.UtcNow + HangGuard;
-        while (!h.Fake.ReceivedCalls.Any(c => c.Method == "session/cancel") && DateTime.UtcNow < deadline)
-            await Task.Delay(10);
+        // The fake's read loop ends only on EOF, and it has read every frame written before that.
+        await h.FakeRunTask.WaitAsync(HangGuard);
 
         var cancelCall = h.Fake.ReceivedCalls.SingleOrDefault(c => c.Method == "session/cancel");
         await Assert.That(cancelCall.Method).IsEqualTo("session/cancel");
@@ -552,6 +568,24 @@ public class AcpHostedAgentRuntimeTests {
         await Assert.That(h.Fake.ReceivedCalls.Count(c => c.Method == "session/prompt")).IsEqualTo(1);
 
         h.Fake.HoldPromptResponses.TrySetResult();
+    }
+
+    [Test]
+    public async Task A_dispatched_prompt_stamps_its_dispatch_on_its_user_message_and_the_launch_prompt_carries_none() {
+        await using var h = new Harness();
+        h.StartFakeAgentLoop();
+        var dispatch = Guid.NewGuid();
+
+        await h.Runtime.StartAsync("/abs/worktree", "prompt-A", h.Cts.Token).WaitAsync(HangGuard);
+        await h.Runtime.SendDispatchedInputAsync("prompt-B", dispatch, waitForWrite: false).WaitAsync(HangGuard);
+
+        var userMessages = new List<AcpEventEnvelope>();
+        while (userMessages.Count < 2) {
+            var env = await h.Runtime.Envelopes.ReadAsync(h.Cts.Token).AsTask().WaitAsync(HangGuard);
+            if (env.Kind == AcpEventKind.UserMessage) userMessages.Add(env);
+        }
+
+        await Assert.That(userMessages.Select(e => e.DispatchId)).IsEquivalentTo(new Guid?[] { null, dispatch }, CollectionOrdering.Matching);
     }
 
     // ── Test plan item 9: cancellation propagates out of StartAsync ───────────────────
@@ -875,6 +909,17 @@ public class AcpHostedAgentRuntimeTests {
         await Assert.That(result).IsEqualTo("…");
     }
 
+    static string JournalText(string path) {
+        try { return JournalFiles.ReadText(path); }
+        catch (IOException) { return ""; }
+    }
+
+    static bool ChunksLanded(Harness h, string path) {
+        var seen = (h.Runtime.OpenRunTextForTest ?? "") + JournalText(path);
+        return seen.Contains("marker-a", StringComparison.Ordinal)
+            && seen.Contains("marker-b", StringComparison.Ordinal);
+    }
+
     static List<AcpEventEnvelope> JournalEnvelopes(string path) {
         var list = new List<AcpEventEnvelope>();
         foreach (var line in JournalFiles.ReadLines(path)) if (EnvelopeJournalFormat.TryRead(line, out var e)) list.Add(e);
@@ -884,7 +929,7 @@ public class AcpHostedAgentRuntimeTests {
     [Test]
     public async Task Journal_receives_every_accepted_envelope_in_channel_order_including_the_initial_user_message() {
         using var tmp = new TempDir();
-        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance, TimeProvider.System);
+        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance, TimeProvider.System, TimeSpan.FromSeconds(15));
         journal.Open("/abs/worktree", null);
         await using var h = new Harness(journal);
         h.StartFakeAgentLoop();
@@ -893,6 +938,11 @@ public class AcpHostedAgentRuntimeTests {
         var fromChannel = new List<AcpEventEnvelope>();
         while (fromChannel.Count < 2) fromChannel.Add(await h.Runtime.Envelopes.ReadAsync(h.Cts.Token).AsTask().WaitAsync(HangGuard));
 
+        // The runtime records an envelope just after the channel write a reader can already see, so
+        // the journal completes only once the runtime is gone, as teardown orders it.
+        await h.Runtime.DisposeAsync();
+        using var drainGuard = new CancellationTokenSource(HangGuard);
+        await foreach (var e in h.Runtime.Envelopes.ReadAllAsync(drainGuard.Token)) fromChannel.Add(e);
         await journal.CompleteAsync();
         var fromJournal = JournalEnvelopes(journal.Path).Skip(1).ToList(); // header first
 
@@ -909,16 +959,21 @@ public class AcpHostedAgentRuntimeTests {
     [Test]
     public async Task Envelope_evicted_by_drop_oldest_is_still_in_the_journal_and_one_after_completion_is_not() {
         using var tmp = new TempDir();
-        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance, TimeProvider.System);
+        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance, TimeProvider.System, TimeSpan.FromSeconds(15));
         journal.Open("/abs/worktree", null);
         await using var h = new Harness(journal, transcriptCapacity: 1);
         h.StartFakeAgentLoop();
         await h.Runtime.StartAsync("/abs/worktree", "p", h.Cts.Token).WaitAsync(HangGuard);
         h.Fake.EmitAgentText("marker-a"); h.Fake.EmitAgentText("marker-b"); // capacity 1: earlier envelopes are evicted from the live channel
-        await Task.Delay(100);
-        await h.Runtime.DisposeAsync();  // flushes any open run, then completes the channel
+        // A prompt that ends flushes the open run, so the chunks may already be in the journal
+        // rather than still buffered. Either place means the read loop has them. Assert the
+        // observation, not a second read: mid-flush they are briefly in neither.
+        var deadline = DateTime.UtcNow + HangGuard;
+        var landed = false;
+        while (DateTime.UtcNow < deadline && !(landed = ChunksLanded(h, journal.Path))) await Task.Delay(10);
+        await Assert.That(landed).IsTrue();
+        await h.Runtime.DisposeAsync();  // flushes whatever is still open, then completes the channel
         h.Fake.EmitAgentText("marker-late");
-        await Task.Delay(100);
         await journal.CompleteAsync();
 
         var joined = string.Join("\n", JournalEnvelopes(journal.Path).Select(e => e.Text));

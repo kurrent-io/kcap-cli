@@ -16,6 +16,9 @@ public sealed class UiAuthProgress(Action<Action> post) : IAuthProgress {
     public event Action<string, string, bool>? DeviceCodeReceived;
     public event Action?                 PollTicked;
 
+    /// A discovered workspace is still being created; sign-in waits for it rather than leaving it out.
+    public event Action<string>?         WorkspaceProvisioning;
+
     public void Notice(string message) => post(() => NoticeReceived?.Invoke(message));
 
     public void Error(string message) => post(() => ErrorReceived?.Invoke(message));
@@ -28,6 +31,17 @@ public sealed class UiAuthProgress(Action<Action> post) : IAuthProgress {
         post(() => DeviceCodeReceived?.Invoke(code, verificationUri, prefilled));
 
     public void PollTick() => post(() => PollTicked?.Invoke());
+
+    public void ProvisioningWait(string workspace) => post(() => WorkspaceProvisioning?.Invoke(workspace));
+
+    string? _failedWorkspace;
+
+    /// kcap.ai stopped creating a discovered workspace, or it is no longer this account's. Held rather than
+    /// posted, so the attempt's own result can never be handled before it.
+    public void ProvisioningFailed(string workspace) => Volatile.Write(ref _failedWorkspace, workspace);
+
+    /// The workspace the last attempt saw fail to provision, or null; reading clears it.
+    public string? TakeProvisioningFailure() => Interlocked.Exchange(ref _failedWorkspace, null);
 }
 
 /// <summary>
@@ -88,229 +102,23 @@ public sealed class WizardTenantPicker(IAuthProgress progress) : ITenantPicker {
     }
 }
 
-/// The three ways out of a zero-tenant discovery — the CLI's mode menu, GUI-shaped.
-public abstract record ProvisionMode {
-    public sealed record Create : ProvisionMode;
-
-    /// The slug or URL the user would rather point at; resolved by the caller, not here.
-    public sealed record Existing(string Input) : ProvisionMode;
-
-    public sealed record Cancel : ProvisionMode;
-}
-
-/// <summary>
-/// The CLI's Spectre provisioner flow with its prompts hoisted into hooks the Sign-in step
-/// implements: same funnel events, same slug/availability loop, same 4 s × 150 poll contract
-/// and the same terminal outcomes. Messaging for every non-Created outcome stays here (the
-/// interface's contract) and reaches the user through <paramref name="progress"/>.
-/// </summary>
-public sealed class WizardTenantProvisioner(
-        TenantProvisioningClient client,
-        string                   baseUrl,
-        IAuthProgress            progress,
-        CliTelemetry             telemetry,
-        TimeProvider            time) : ITenantProvisioner {
-    internal const int PollIntervalMs = 4000;
-    internal const int MaxPolls       = 150; // ~10 minutes (server budget is 15)
-
-    readonly TimeProvider _time = time;
-
-    /// Null hooks answer as "backed out": an unwired provisioner must never provision.
-    public Func<CancellationToken, Task<ProvisionMode>>?               OfferMode     { get; set; }
-    public Func<CancellationToken, Task<string?>>?                     PromptOrgName { get; set; }
-    public Func<string, string?, CancellationToken, Task<string?>>?    PromptSlug    { get; set; }
-    public Func<string, string, CancellationToken, Task<bool>>?        ConfirmCreate { get; set; }
-    public Action<int, int>?                                           PollProgress  { get; set; }
-
-    public async Task<ProvisionOffer> OfferCreateAsync(WorkOSTokenSource tokens, CancellationToken ct = default) {
-        // Says what was actually established, not more: single sign-on returned nothing.
-        progress.Notice("Single sign-on found no Capacitor workspace for your account.");
-        progress.Notice("A workspace that signs in with the GitHub App won't appear here.");
-        telemetry.Funnel.WorkspaceOffered();
-
-        var mode = OfferMode is null ? new ProvisionMode.Cancel() : await OfferMode(ct);
-
-        switch (mode) {
-            case ProvisionMode.Existing existing when !string.IsNullOrWhiteSpace(existing.Input):
-                telemetry.Funnel.WorkspaceRedirected();
-
-                return ProvisionOffer.ExistingWorkspace(existing.Input.Trim());
-            case ProvisionMode.Create:
-                break;
-            default:
-                return Declined();
-        }
-
-        var orgName = PromptOrgName is null ? null : await PromptOrgName(ct);
-
-        if (string.IsNullOrWhiteSpace(orgName)) return Declined();
-
-        orgName = orgName.Trim();
-
-        var slug = await ResolveSlugAsync(orgName, tokens, ct);
-
-        if (slug is null) return Declined();
-
-        var origin = $"https://{slug}.kcap.ai";
-
-        if (ConfirmCreate is null || !await ConfirmCreate(slug, origin, ct)) return Declined();
-
-        telemetry.Funnel.WorkspaceRequested();
-
-        var outcome = await client.ProvisionAsync(
-            baseUrl, await tokens.GetAsync(ct), orgName, slug, telemetry.Join.Current, ct);
-
-        switch (outcome.StatusCode) {
-            case 200 when outcome.Body?.WorkosOrgId is { Length: > 0 } orgId:
-                telemetry.Funnel.WorkspaceProvisioned();
-
-                return ProvisionOffer.Created(new ProvisionedTenant(orgId, slug, orgName, outcome.Body.Url ?? origin));
-            case 202 or 200:
-                return await PollAsync(tokens, slug, orgName, origin, ct);
-            case 400:
-                return Failed(Reason400(outcome.Body?.Reason), outcome.Body?.Reason ?? "invalid_request");
-            case 409:
-                return Failed(Reason409(outcome.Body?.Reason, slug), outcome.Body?.Reason ?? "conflict");
-            case 0:
-                return Failed("Couldn't reach the provisioning service. Check your connection and try again.", "unreachable");
-            default:
-                return Failed($"Provisioning failed (HTTP {outcome.StatusCode}). Try again later.", $"http_{outcome.StatusCode}");
-        }
-    }
-
-    async Task<string?> ResolveSlugAsync(string orgName, WorkOSTokenSource tokens, CancellationToken ct) {
-        var     suggestion = SlugValidator.Derive(orgName);
-        string? error      = null;
-
-        while (true) {
-            if (PromptSlug is null) return null;
-
-            var input = await PromptSlug(suggestion, error, ct);
-
-            if (input is null) return null;
-
-            var slug  = SlugValidator.Canonicalize(input);
-            var check = SlugValidator.Validate(slug);
-
-            suggestion = slug;
-
-            if (!check.Ok) {
-                error = check.Reason == "blocked"
-                    ? $"'{slug}' is reserved — pick another."
-                    : "Use lowercase letters, digits and single hyphens (no leading/trailing hyphen), max 40 characters.";
-
-                continue;
-            }
-
-            var availability = await client.CheckAvailabilityAsync(baseUrl, await tokens.GetAsync(ct), slug, ct);
-
-            if (availability is null) {
-                error = "Couldn't check availability. Try again.";
-
-                continue;
-            }
-
-            if (availability.Available || availability.Reason == "yours") return slug;
-
-            error = availability.Reason switch {
-                "reserved" => $"'{slug}' is being provisioned by someone else — pick another.",
-                "taken"    => $"'{slug}' is taken — pick another.",
-                "blocked"  => $"'{slug}' is reserved — pick another.",
-                _          => $"'{slug}' is unavailable — pick another."
-            };
-        }
-    }
-
-    async Task<ProvisionOffer> PollAsync(
-            WorkOSTokenSource tokens, string slug, string orgName, string origin, CancellationToken ct) {
-        var retry = $"join '{slug}' from the Connect step";
-
-        for (var attempt = 0; attempt < MaxPolls; attempt++) {
-            await Task.Delay(TimeSpan.FromMilliseconds(PollIntervalMs), _time, ct);
-
-            var status = await client.GetStatusAsync(baseUrl, await tokens.GetAsync(ct), slug, ct);
-
-            switch (ProvisioningPoll.Classify(status.StatusCode, status.Body?.State, status.Body?.WorkosOrgId)) {
-                case PollVerdict.Active:
-                    telemetry.Funnel.WorkspaceProvisioned();
-
-                    return ProvisionOffer.Created(
-                        new ProvisionedTenant(status.Body!.WorkosOrgId!, slug, orgName, status.Body.Url ?? origin));
-                case PollVerdict.ActiveNoOrg:
-                    return Failed($"{slug}.kcap.ai is live but isn't linked to an organization. Contact support.", "active_no_org");
-                case PollVerdict.Failed:
-                    return Failed($"Provisioning failed — {retry} to retry.", "provisioning_failed");
-                case PollVerdict.Forbidden:
-                    return Failed($"Verify your email address, then {retry}.", "forbidden");
-                case PollVerdict.NotFound:
-                    return Failed($"'{slug}' isn't linked to your account — {retry}.", "not_found");
-                case PollVerdict.Wait:
-                    PollProgress?.Invoke(attempt + 1, MaxPolls);
-
-                    break;
-            }
-        }
-
-        // Notice, not Error: the workspace is being created, nothing has gone wrong. The reason on the
-        // result is what lets the step headline it as pending rather than failed.
-        progress.Notice($"Still provisioning — finish later by joining '{slug}' from the Connect step.");
-        telemetry.Funnel.WorkspaceFailed("poll_timeout");
-
-        return ProvisionOffer.InProgress(slug);
-    }
-
-    // The interface hands the provisioner every non-Created message, so a decline must say so here
-    // or the step renders a bare failure for something the user chose.
-    ProvisionOffer Declined() {
-        progress.Notice("No workspace created.");
-        telemetry.Funnel.WorkspaceDeclined();
-
-        return ProvisionOffer.Declined;
-    }
-
-    ProvisionOffer Failed(string message, string reason) {
-        progress.Error(message);
-        telemetry.Funnel.WorkspaceFailed(reason);
-
-        return ProvisionOffer.Failed;
-    }
-
-    static string Reason400(string? reason) => reason switch {
-        "disposable_email" => "Provisioning requires a non-disposable email address.",
-        "blocked"          => "That slug is reserved. Pick another and try again.",
-        _                  => "Invalid organization name or slug."
-    };
-
-    static string Reason409(string? reason, string slug) => reason switch {
-        "owned_by_other" => $"'{slug}' is owned by someone else. Pick another and try again.",
-        _                => $"'{slug}' is already taken. Pick another and try again."
-    };
-}
-
-/// <summary>
 /// The bridge set one wizard run shares; the composition root builds the façade over exactly
-/// these. The sink is built from this object's own <see cref="Post"/> and handed to the
-/// provisioner factory, so a bridge marshalling through a different dispatcher than the rest is
-/// not representable.
-/// </summary>
+/// these. The sink is built from this object's own <see cref="Post"/>, so a bridge marshalling
+/// through a different dispatcher than the rest is not representable.
 public sealed class WizardBridges {
-    public WizardBridges(
-            Action<Action> post, CliTelemetry telemetry, AuthEndpoints endpoints,
-            Func<IAuthProgress, WizardTenantProvisioner> provisioner) {
-        Post        = post;
-        Telemetry   = telemetry;
-        Endpoints   = endpoints;
-        Progress    = new UiAuthProgress(post);
-        Picker      = new WizardTenantPicker(Progress);
-        Provisioner = provisioner(Progress);
+    public WizardBridges(Action<Action> post, CliTelemetry telemetry, AuthEndpoints endpoints) {
+        Post      = post;
+        Telemetry = telemetry;
+        Endpoints = endpoints;
+        Progress  = new UiAuthProgress(post);
+        Picker    = new WizardTenantPicker(Progress);
     }
 
-    public Action<Action>          Post        { get; }
-    public CliTelemetry            Telemetry   { get; }
-    public AuthEndpoints           Endpoints   { get; }
-    public UiAuthProgress          Progress    { get; }
-    public WizardTenantPicker      Picker      { get; }
-    public WizardTenantProvisioner Provisioner { get; }
+    public Action<Action>     Post      { get; }
+    public CliTelemetry       Telemetry { get; }
+    public AuthEndpoints      Endpoints { get; }
+    public UiAuthProgress     Progress  { get; }
+    public WizardTenantPicker Picker    { get; }
 }
 
 /// <summary>
@@ -319,16 +127,32 @@ public sealed class WizardBridges {
 /// carries <see cref="OnboardingGate"/> to Complete.
 /// </summary>
 public static class WizardSignInOperation {
+    /// <param name="funnel">Where a paste sign-in's outcome is recorded; discovery records its own.</param>
     public static Func<ConnectIntent, CancellationToken, Task<AuthResult>> For(
-            OnboardingFacade facade, string profile) =>
+            OnboardingFacade facade, string profile, CommitPrecondition? precondition = null, SetupFunnel? funnel = null) =>
         async (intent, ct) => intent switch {
-            ConnectIntent.Paste paste => await facade.LoginAsync(
-                ResolveServer(paste.ServerInput), forceDevice: false, profile, ct, adoptServer: true),
-            ConnectIntent.Discover discover => await facade.DiscoverAsync(discover.Provider, forceDevice: false, ct),
-            // Creation runs inside WorkOS discovery, after the org-less sign-in finds no tenant.
-            ConnectIntent.Create => await facade.DiscoverAsync(AuthProvider.WorkOS, forceDevice: false, ct),
-            _                    => new AuthResult.Failed("No connection was chosen.")
+            ConnectIntent.Paste paste => Recorded(await facade.LoginAsync(
+                ResolveServer(paste.ServerInput), forceDevice: false, profile, ct, adoptServer: true, precondition: precondition), funnel),
+            ConnectIntent.Discover discover =>
+                await facade.DiscoverAsync(AuthProvider.WorkOS, discover.ForceDevice, ct, discover.ConfirmPick),
+            _ => new AuthResult.Failed("No connection was chosen.")
         };
+
+    /// A paste outcome as the CLI's funnel counts one: only a real sign-in completes and only a refused one
+    /// fails. A server that could not be reached, that needs no sign-in, or whose credential could not be
+    /// saved records nothing: the wizard does not count that last one as signed in either.
+    internal static AuthResult Recorded(AuthResult result, SetupFunnel? funnel) {
+        switch (result) {
+            case AuthResult.Committed { Provider: not AuthProvider.None, CredentialSaved: true } committed:
+                funnel?.SigninCompleted(committed.Provider);
+                break;
+            case AuthResult.Failed { Reason: AuthFailureReason.SigninDenied }:
+                funnel?.SigninFailed("signin_denied");
+                break;
+        }
+
+        return result;
+    }
 
     /// <summary>
     /// Origin first, then slug expansion: a pasted page URL must lose its path before

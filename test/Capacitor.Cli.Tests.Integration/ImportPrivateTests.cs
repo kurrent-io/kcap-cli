@@ -47,13 +47,13 @@ public class ImportPrivateTests : IDisposable {
     [Test]
     public async Task SetVisibilityNoneForAll_continues_on_per_session_failure() {
         _server.Given(Request.Create().WithPath("/api/sessions/sess2/visibility").UsingPut())
-            .RespondWith(Response.Create().WithStatusCode(500));
+            .RespondWith(Response.Create().WithStatusCode(400));
         _server.Given(Request.Create().WithPath("/api/sessions/sess*/visibility").UsingPut())
             .RespondWith(Response.Create().WithStatusCode(200));
 
         using var client = new HttpClient();
 
-        // Should not throw even though sess2 returns 500.
+        // Should not throw even though sess2 returns 400.
         await ImportCommand.SetVisibilityNoneForAll(
             client,
             _server.Url!,
@@ -74,7 +74,7 @@ public class ImportPrivateTests : IDisposable {
     [NotInParallel]
     public async Task SetVisibilityForAll_reports_a_failure_on_the_margin_it_was_given() {
         _server.Given(Request.Create().WithPath("/api/sessions/*/visibility").UsingPut())
-            .RespondWith(Response.Create().WithStatusCode(500));
+            .RespondWith(Response.Create().WithStatusCode(400));
 
         using var client  = new HttpClient();
         using var capture = ConsoleOutput.StartErrorCapture("\n");
@@ -84,7 +84,7 @@ public class ImportPrivateTests : IDisposable {
 
         await Assert.That(lost).IsEquivalentTo(new[] { "sess1" });
         await Assert.That(capture.GetCapturedError())
-                    .StartsWith("    ! visibility=org failed for sess1: HTTP 500");
+                    .StartsWith("    ! visibility=org failed for sess1: HTTP 400");
     }
 }
 

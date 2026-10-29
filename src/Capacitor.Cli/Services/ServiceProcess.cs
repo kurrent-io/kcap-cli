@@ -53,13 +53,18 @@ static class ServiceProcess {
         var stdoutTask = p.StandardOutput.ReadToEndAsync();
         var stderrTask = p.StandardError.ReadToEndAsync();
 
-        var exited = p.WaitForExit((int)timeout.TotalMilliseconds);
-        if (!exited) {
-            p.Kill(entireProcessTree: true);
+        var timedOut = false;
+        if (!p.WaitForExit((int)timeout.TotalMilliseconds)) {
+            try {
+                p.Kill(entireProcessTree: true);
+                timedOut = true;
+            } catch (InvalidOperationException) {
+                // It exited between the wait and the kill, so it finished on its own.
+            }
             p.WaitForExit();
         }
 
         Task.WaitAll(stdoutTask, stderrTask);
-        return (p.ExitCode, stdoutTask.Result, stderrTask.Result, !exited);
+        return (p.ExitCode, stdoutTask.Result, stderrTask.Result, timedOut);
     }
 }

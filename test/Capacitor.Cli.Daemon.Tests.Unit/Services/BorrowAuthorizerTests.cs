@@ -136,6 +136,29 @@ public class BorrowAuthorizerTests {
         await Assert.That(result.CanonicalCwd).IsEqualTo(BorrowAuthorizer.Canonicalize(realLeaf));
     }
 
+    /// <summary>The escape sits below a tree deep enough to have exhausted a budget charged per
+    /// component, which would have left the link unfollowed and the path textually inside the
+    /// allowlisted tree.</summary>
+    [Test]
+    public async Task Deep_ancestor_symlink_escaping_nonempty_allowlist_is_not_allowed() {
+        using var tmp = new TempDir("deepborrow");
+        var allowedRoot = tmp.CreateDir("allowed");
+        var outsideRoot = tmp.CreateDir("outside", "x");
+        var deep        = allowedRoot.Nest(45);
+
+        Directory.CreateSymbolicLink(deep.PathTo("linkdir"), tmp.PathTo("outside"));
+
+        var authorizer = new BorrowAuthorizer(
+            new DaemonConfig { AllowedRepoPaths = [BorrowAuthorizer.Canonicalize(allowedRoot) + "/*"] }
+        );
+
+        var result = await authorizer.AuthorizeBorrowAsync(deep.PathTo("linkdir", "x"));
+
+        await Assert.That(Directory.Exists(outsideRoot)).IsTrue();
+        await Assert.That(result.Allowed).IsFalse();
+        await Assert.That(result.Reason).IsEqualTo("not_allowed");
+    }
+
     static TempDir MakeTempRepo() {
         var repo = new TempDir();
         GitRepo.At(repo.Path).Do("init", "-q");

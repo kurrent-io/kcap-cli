@@ -92,7 +92,7 @@ public class AcpLaunchStageTests {
 
             var connection = new ServerConnection(
                 new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1" },
-                AuthFixtures.NewTokenStore(configRoot),
+                new FixedCredentialSource(),
                 NullLoggerFactory.Instance,
                 NullLogger<ServerConnection>.Instance, TimeProvider.System);
 
@@ -318,7 +318,7 @@ public class AcpLaunchStageTests {
 
         var connection = new ServerConnection(
             new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1" },
-            AuthFixtures.NewTokenStore(Config.Root),
+            new FixedCredentialSource(),
             NullLoggerFactory.Instance,
             NullLogger<ServerConnection>.Instance, TimeProvider.System);
 

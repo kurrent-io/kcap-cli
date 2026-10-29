@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -42,6 +43,43 @@ public class LocalPermissionBridgeToolSettledTests {
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NoContent);
         await Assert.That(h.Seen.Single()).IsEqualTo(("agent-1", new ToolSettledNotice(Session, "toolu_1", null)));
+    }
+
+    /// Claude's prompt carries no tool id, so the notice also hands on the call's name and input,
+    /// the subagent that ran it, and when the hook sent it.
+    [Test, NotInParallel(nameof(LocalPermissionBridgeToolSettledTests))]
+    public async Task A_settled_tool_hands_on_its_name_input_and_subagent() {
+        await using var h = new Harness();
+        await h.StartAsync();
+
+        var response = await h.PostAsync(new {
+            session_id = Session, agent_id = "agent-1", tool_use_id = "toolu_1", subagent_id = "sub-1",
+            tool_name = "Bash", tool_input = new { command = "ls" }, sent_at = 1_760_000_000_000L,
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NoContent);
+        var notice = h.Seen.Single().Notice;
+        await Assert.That((notice.ToolUseId, notice.SubagentId, notice.ToolName)).IsEqualTo(("toolu_1", "sub-1", "Bash"));
+        await Assert.That(notice.SentAt).IsEqualTo(DateTimeOffset.FromUnixTimeMilliseconds(1_760_000_000_000L));
+        await Assert.That(notice.ToolInput is { } input && JsonElement.DeepEquals(input, JsonDocument.Parse("""{"command":"ls"}""").RootElement)).IsTrue();
+    }
+
+    /// A name or input past the prompt's caps was never held, so it is dropped, and the notice still
+    /// retires by id rather than being refused.
+    [Test, NotInParallel(nameof(LocalPermissionBridgeToolSettledTests))]
+    public async Task An_oversized_match_key_is_dropped_and_the_notice_kept() {
+        await using var h = new Harness();
+        await h.StartAsync();
+
+        var longName = await h.PostAsync(new { session_id = Session, agent_id = "agent-1", tool_use_id = "toolu_1",
+            tool_name = new string('x', 513), tool_input = new { command = "ls" } });
+        var bigInput = await h.PostAsync(new { session_id = Session, agent_id = "agent-1", tool_use_id = "toolu_2",
+            tool_name = "Bash", tool_input = new { command = new string('x', 64 * 1024) } });
+
+        await Assert.That(longName.StatusCode).IsEqualTo(HttpStatusCode.NoContent);
+        await Assert.That(bigInput.StatusCode).IsEqualTo(HttpStatusCode.NoContent);
+        await Assert.That(string.Join(";", h.Seen.Select(s => $"{s.Notice.ToolUseId},{s.Notice.ToolName},{s.Notice.ToolInput is null}")))
+            .IsEqualTo("toolu_1,,True;toolu_2,Bash,True");
     }
 
     [Test, NotInParallel(nameof(LocalPermissionBridgeToolSettledTests))]

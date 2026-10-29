@@ -18,7 +18,7 @@ public sealed partial class TranscriptSpool(string spoolDir, TimeProvider time, 
     public const long DefaultCapBytes = 8_388_608; // 8 MB per session
 
     // Named here rather than on ConfigRoot, for the same reason as HookSpool's.
-    const string DirName = "transcript-spool";
+    public const string DirName = "transcript-spool";
 
     /// <summary>The spool under a config root. The directory overload is for a spool that is not
     /// under one — a test's own throwaway directory.</summary>
@@ -45,13 +45,14 @@ public sealed partial class TranscriptSpool(string spoolDir, TimeProvider time, 
     string? MarkerPathFor(string sessionId) =>
         SafeSessionId.IsMatch(sessionId) ? Path.Combine(spoolDir, $"{EncodeKey(sessionId)}.needs-import") : null;
 
-    public AppendResult Append(string sessionId, string batchJson) {
+    /// <summary>With <paramref name="reserving"/>, refuses the batch unless that one still fits after it.</summary>
+    public AppendResult Append(string sessionId, string batchJson, string? reserving = null) {
         var path = LivePathFor(sessionId);
         if (path is null) return AppendResult.Ignored; // malformed id — nothing we can key on
         try {
             Directory.CreateDirectory(spoolDir);
             var line = batchJson.Replace("\n", "").Replace("\r", "");
-            var incoming = Encoding.UTF8.GetByteCount(line) + 1;
+            var incoming = Encoding.UTF8.GetByteCount(line) + 1 + (reserving is null ? 0 : Encoding.UTF8.GetByteCount(reserving) + 1);
             var existing = File.Exists(path) ? new FileInfo(path).Length : 0;
             if (existing + incoming > capBytes) {
                 // NO drop-oldest: preserve what we have and surface the gap honestly.

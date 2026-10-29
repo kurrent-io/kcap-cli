@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.FirstRun;
+using Capacitor.Cli.Core.Install;
 using Capacitor.Cli.Core.Setup;
 
 namespace Capacitor.Cli.Commands;
@@ -15,7 +16,7 @@ internal enum ShimEnsureAction {
     /// <summary>kcap already resolves from the terminal — nothing to do.</summary>
     AlreadyOnPath,
 
-    /// <summary>Probe positively found no kcap; macOS shim install is the fix.</summary>
+    /// <summary>Probe positively found no kcap; this OS's PATH installer is the fix.</summary>
     Install,
 
     /// <summary>Nothing was mutated; <see cref="ShimEnsureDecision.Reason"/> names the row.</summary>
@@ -27,16 +28,15 @@ internal enum ShimEnsureAction {
 internal readonly record struct ShimEnsureDecision(ShimEnsureAction Action, string? Reason = null);
 
 /// <summary>
-/// Pure ladder classifier for the PATH shim (spec §5): only a POSITIVE probe finding no
-/// <c>kcap</c> on the terminal PATH, on macOS, is installable. A positive "already on PATH" is
-/// terminal on any platform; off-macOS there is no shim to install (the osascript-based writer is
-/// macOS-only), so the platform refusal beats an unknown probe — the flow expects non-macOS to be
-/// a stable <c>unsupported_platform</c> row, not a probe-dependent one.
+/// Pure ladder classifier for the PATH fix: only a POSITIVE probe finding no <c>kcap</c> on the
+/// terminal PATH, on an OS with an installer, is installable. A positive "already on PATH" is
+/// terminal on any platform. Where there is no installer the platform refusal beats an unknown
+/// probe, so the flow sees a stable <c>unsupported_platform</c> row rather than a probe-dependent one.
 /// </summary>
 internal static class ShimEnsureClassifier {
-    public static ShimEnsureDecision Classify(bool? onPath, bool isMacOs) {
+    public static ShimEnsureDecision Classify(bool? onPath, bool installable) {
         if (onPath == true)  return new ShimEnsureDecision(ShimEnsureAction.AlreadyOnPath);
-        if (!isMacOs)        return new ShimEnsureDecision(ShimEnsureAction.Refuse, FirstRunMachineActionReasons.UnsupportedPlatform);
+        if (!installable)    return new ShimEnsureDecision(ShimEnsureAction.Refuse, FirstRunMachineActionReasons.UnsupportedPlatform);
         if (onPath is null)  return new ShimEnsureDecision(ShimEnsureAction.Refuse, FirstRunMachineActionReasons.ProbeUnknown);
         return new ShimEnsureDecision(ShimEnsureAction.Install);
     }
@@ -45,8 +45,9 @@ internal static class ShimEnsureClassifier {
 /// <summary>
 /// <c>kcap daemon shim ensure</c> — the flow's named PATH-fix capability. The CLI composes the
 /// whole operation itself: it resolves its own binary path (never a server-supplied path), probes
-/// the login shell, and on a positive absence installs the shim via <see cref="PathShimInstaller"/>
-/// (osascript admin prompt, non-forcing symlink, post-install re-probe). Machine-readable result
+/// the terminal PATH, and on a positive absence installs through <see cref="CliPathInstallers"/>:
+/// a <c>/usr/local/bin</c> symlink behind an osascript admin prompt on macOS, a user PATH entry on
+/// Windows, each followed by a re-probe. Machine-readable result
 /// via <c>--json</c>; human output otherwise. Exit 0 only when the terminal now resolves
 /// <c>kcap</c>; every refusal and every not-on-path outcome exits non-zero with a coded token.
 /// </summary>
@@ -65,19 +66,15 @@ public static class DaemonShimCommands {
     /// <param name="resolveTarget">Test seam: the shim link target. Production resolves via
     /// <see cref="ResolveLinkTarget"/> — the npm launcher when this CLI is part of an npm-global
     /// install, else the running binary. The server never supplies one.</param>
-    /// <param name="probe">Test seam for the login-shell probe (the production probe spawns the
-    /// real <c>$SHELL</c>).</param>
-    /// <param name="install">Test seam for the shim install (the production installer prompts via
-    /// osascript).</param>
-    /// <param name="preflight">Test seam for the destination preflight — the production default
-    /// refuses on any non-target filesystem entry at <see cref="PathShimInstaller.Destination"/>.
-    /// Injected independently of <paramref name="install"/> so the conflict row is stubbable.</param>
-    /// <param name="isMacOs">Test seam — the shim is osascript-based, so the classifier refuses
-    /// off-macOS. A bool cannot distinguish "unspecified" from "explicitly false" on a macOS host,
-    /// so this is nullable: null resolves to the real OS, false forces the off-macOS arm.</param>
+    /// <param name="probe">Test seam for the terminal PATH probe.</param>
+    /// <param name="install">Test seam for the install.</param>
+    /// <param name="preflight">Test seam for the installer's preflight that turns a failed install
+    /// into the conflict row when a non-target entry sits at the destination.</param>
+    /// <param name="installable">Test seam for whether this OS has an installer; null resolves to
+    /// the real OS.</param>
     internal static async Task<int> Ensure(string[] args, TimeProvider time, Func<string?>? resolveTarget = null,
             ILoginShellProbe? probe = null, Func<string, CancellationToken, Task<ShimResult>>? install = null,
-            Func<string, ShimPreflight>? preflight = null, bool? isMacOs = null) {
+            Func<string, ShimPreflight>? preflight = null, bool? installable = null) {
         // Only --json is a legal flag; anything else (including --help and typos) is rejected
         // before the first probe or prompt — this verb's own ladder principle is fail-closed, and
         // an unknown flag must not be silently ignored into a mutation. (-h/--help never reach
@@ -85,9 +82,11 @@ public static class DaemonShimCommands {
         if (args.Any(a => a != "--json"))
             return Usage();
 
-        var result = await EvaluateAsync(time, resolveTarget, probe, install, preflight, isMacOs, CancellationToken.None);
+        var json   = args.Contains("--json");
+        var result = await EvaluateAsync(time, resolveTarget, probe, install, preflight, installable,
+            disclose: json ? Console.Error.WriteLine : Console.Out.WriteLine);
 
-        return await Report(result, args.Contains("--json"));
+        return await Report(result, json);
     }
 
     /// <summary>
@@ -101,20 +100,22 @@ public static class DaemonShimCommands {
     internal static async Task<ShimEnsureJson> EvaluateAsync(
             TimeProvider time, Func<string?>? resolveTarget = null, ILoginShellProbe? probe = null,
             Func<string, CancellationToken, Task<ShimResult>>? install = null,
-            Func<string, ShimPreflight>? preflight = null, bool? isMacOs = null,
-            CancellationToken ct = default) {
-        isMacOs ??= OperatingSystem.IsMacOS();
-
-        var target = (resolveTarget ?? (() => ResolveLinkTarget(() => Environment.ProcessPath, File.Exists)))();
+            Func<string, ShimPreflight>? preflight = null, bool? installable = null,
+            Action<string>? disclose = null, CancellationToken ct = default) {
+        var target = (resolveTarget ?? (() => ResolveLinkTarget(
+            () => Environment.ProcessPath is { } exe ? InstallPaths.Stabilize(exe) : null, File.Exists,
+            OperatingSystem.IsWindows())))();
 
         if (string.IsNullOrEmpty(target))
             return new ShimEnsureJson(Capability, null, null, null, "none",
                 FirstRunMachineActionOutcomes.Refused, FirstRunMachineActionReasons.NoCliPath);
 
-        probe ??= new LoginShellProbe(new ProcessRunner(time), Environment.GetEnvironmentVariable);
+        var runner = new ProcessRunner(time);
+        probe ??= TerminalPathProbe.Create(runner, Environment.GetEnvironmentVariable);
+        var installer = CliPathInstallers.Create(runner, probe, UserHome.FromEnvironment());
         var onPath = await probe.KcapOnPathAsync(ct).ConfigureAwait(false);
 
-        var decision = ShimEnsureClassifier.Classify(onPath, isMacOs.Value);
+        var decision = ShimEnsureClassifier.Classify(onPath, installable ?? installer is not null);
 
         return decision.Action switch {
             ShimEnsureAction.AlreadyOnPath =>
@@ -125,7 +126,7 @@ public static class DaemonShimCommands {
                 new ShimEnsureJson(Capability, target, onPath != null, onPath, "none",
                     FirstRunMachineActionOutcomes.Refused, decision.Reason),
 
-            _ => await Install(target, probe, time, install, preflight, ct),
+            _ => await Install(target, installer, install, preflight, disclose, ct),
         };
     }
 
@@ -142,10 +143,15 @@ public static class DaemonShimCommands {
     /// <c>@kurrent/kcap-&lt;platform&gt;</c>), so its path is derivable from the running binary's
     /// own location with no environment lookup. When the derived launcher is absent (dev build,
     /// standalone binary), the running image is the target.</para>
+    ///
+    /// <para>npm on Windows nests the platform package under the wrapper's own node_modules, and
+    /// <c>kcap.js</c> cannot run from PATH there: the target is the <c>kcap.cmd</c> npm wrote beside
+    /// the prefix's node_modules, which runs the launcher.</para>
     /// </summary>
-    internal static string? ResolveLinkTarget(Func<string?> processPath, Func<string, bool> fileExists) {
+    internal static string? ResolveLinkTarget(Func<string?> processPath, Func<string, bool> fileExists, bool windows = false) {
         var native = processPath();
         if (string.IsNullOrEmpty(native)) return null;
+        if (windows) return NpmPrefixShim(native, fileExists) ?? native;
 
         // .../node_modules/@kurrent/kcap-<platform>/bin/kcap  →  launcher:
         // .../node_modules/@kurrent/kcap/bin/kcap.js
@@ -157,26 +163,29 @@ public static class DaemonShimCommands {
         return fileExists(launcher) ? launcher : native;
     }
 
-    static async Task<ShimEnsureJson> Install(string target, ILoginShellProbe probe, TimeProvider time,
+    static string? NpmPrefixShim(string native, Func<string, bool> fileExists) {
+        for (var dir = Path.GetDirectoryName(native); !string.IsNullOrEmpty(dir); dir = Path.GetDirectoryName(dir)) {
+            if (!string.Equals(Path.GetFileName(dir), "node_modules", StringComparison.OrdinalIgnoreCase)) continue;
+            if (Path.GetDirectoryName(dir) is not { Length: > 0 } prefix) return null;
+            var shim = Path.Combine(prefix, "kcap.cmd");
+            if (fileExists(shim) && fileExists(Path.Combine(dir, "@kurrent", "kcap", "bin", "kcap.js"))) return shim;
+        }
+        return null;
+    }
+
+    static async Task<ShimEnsureJson> Install(string target, ICliPathInstaller? installer,
             Func<string, CancellationToken, Task<ShimResult>>? install, Func<string, ShimPreflight>? preflight,
-            CancellationToken ct) {
-        // Preflight is checked here (before the admin prompt) so a conflict is a coded refusal
-        // with what was found, not a prompt that then fails. AlreadyInstalled and Installable
-        // both flow into InstallAsync, which re-probes fresh and maps the same way. The preflight
-        // seam is independent of the install seam so the conflict row is stubbable in tests.
-        preflight ??= target => PathShimInstaller.Preflight(PathShimInstaller.Destination, target);
-        if (preflight(target) == ShimPreflight.Conflict)
-            return ConflictRefusal(target);
+            Action<string>? disclose, CancellationToken ct) {
+        // The macOS installer tries a writable PATH folder first, so an entry at /usr/local/bin is
+        // not a refusal until that fails. It refuses a conflicting entry without prompting, and a
+        // foreign entry there after a failed install is the coded conflict row the flow was promised.
+        preflight ??= installer!.Preflight;
+        if (installer is not null) disclose?.Invoke(installer.Disclosure);
 
         var result = install is not null
             ? await install(target, ct).ConfigureAwait(false)
-            : await new PathShimInstaller(new ProcessRunner(time), probe)
-                .InstallAsync(target, ct).ConfigureAwait(false);
+            : await installer!.InstallAsync(target, ct).ConfigureAwait(false);
 
-        // The outer preflight and the installer's own checks are not atomic: an entry can appear
-        // between them, or the non-forcing `ln -s` can lose the race against one. Re-preflight
-        // now — a foreign entry present after a failed install is the coded conflict row the flow
-        // was promised, not a generic failure.
         if (result.Outcome == ShimOutcome.Failed && preflight(target) == ShimPreflight.Conflict)
             return ConflictRefusal(target);
 
@@ -242,7 +251,7 @@ public static class DaemonShimCommands {
                     FirstRunMachineActionReasons.ProbeUnknown =>
                         "Could not determine whether kcap is on your terminal PATH.",
                     FirstRunMachineActionReasons.UnsupportedPlatform =>
-                        "The command-line tool install is only available on macOS.",
+                        "The command-line tool install is only available on macOS and Windows.",
                     FirstRunMachineActionReasons.Conflict => Sanitize(dto.Detail),
                     _                                    => "Path fix refused.",
                 });
@@ -262,9 +271,12 @@ public static class DaemonShimCommands {
     static int Usage() {
         Console.Error.WriteLine("Usage: kcap daemon shim <ensure> [--json]");
         Console.Error.WriteLine();
-        Console.Error.WriteLine("  ensure [--json]   Probe the login shell; if kcap is absent from the");
-        Console.Error.WriteLine("                    terminal PATH, link /usr/local/bin/kcap to this CLI");
-        Console.Error.WriteLine("                    (macOS; prompts once for your admin password).");
+        Console.Error.WriteLine("  ensure [--json]   Probe the terminal PATH; if kcap is absent, link kcap");
+        Console.Error.WriteLine("                    to this CLI in a writable PATH folder, else");
+        Console.Error.WriteLine("                    /usr/local/bin (macOS; prompts once for your admin");
+        Console.Error.WriteLine("                    password, or without admin rights links ~/.local/bin/kcap");
+        Console.Error.WriteLine("                    and adds that folder to PATH in your shell profile), or");
+        Console.Error.WriteLine("                    add its folder to your user PATH (Windows).");
         return 1;
     }
 }

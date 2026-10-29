@@ -75,7 +75,7 @@ public class UpdateCommandServerRefreshTests : IDisposable {
 
         var command = new UpdateCommand(
             Config.Root, profiles, new NpmRegistryClient(registry),
-            _sp.GetRequiredService<CapacitorServer>(), _sp.GetRequiredService<ICapacitorHttpClient>(), TimeProvider.System, appBundled: false);
+            _sp.GetRequiredService<CapacitorServer>(), _sp.GetRequiredService<ICapacitorHttpClient>(), TimeProvider.System, kind: InstallKind.Npm);
 
         using var output = ConsoleOutput.StartCapture();
         await command.HandleAsync(["--check"]);

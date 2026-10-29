@@ -1,7 +1,12 @@
+using System.Collections.Frozen;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Daemon.Harness.Claude;
+using Capacitor.Cli.Daemon.Services;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.Cli.Daemon;
 
@@ -10,6 +15,25 @@ public class DaemonConfig {
     public string   ServerUrl           { get; set; } = "";
     public string[] AllowedRepoPaths    { get; set; } = [];
     public int      MaxConcurrentAgents { get; set; } = 5;
+
+    /// <summary>The daemon's own binary as it stood at process start, the restart poll's first baseline.</summary>
+    public BinaryStat? LaunchBinary { get; set; }
+
+    /// <summary>How long a self-detected restart waits for interactive agents to reach a turn boundary.</summary>
+    public TimeSpan RestartTurnWait { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>How many ledgered agents a booting daemon relaunches at once.</summary>
+    public int ResumeConcurrency { get; set; } = 2;
+
+    /// <summary>A ledgered agent last alive longer ago than this is interrupted rather than resumed.</summary>
+    public TimeSpan ResumeMaxAge { get; set; } = TimeSpan.FromHours(24);
+
+    /// <summary>Whether a booting daemon resumes its ledgered agents at all.</summary>
+    public bool AutoResume { get; set; } = true;
+
+    /// <summary>How long a resumed runtime must stay alive after publishing for the resume to count;
+    /// for a PTY vendor this is the whole handshake.</summary>
+    public TimeSpan ResumeReadinessWindow { get; set; } = TimeSpan.FromSeconds(10);
 
     /// <summary>
     /// Absolute path of the native <c>kcap</c> CLI binary, resolved as the daemon's sibling
@@ -69,10 +93,25 @@ public class DaemonConfig {
     /// <summary>The profile this daemon resolved at boot. A separate process from the CLI, so it
     /// resolves its own; nothing re-resolves later, which is what keeps its token reads and its
     /// daemon identity naming one profile for the daemon's whole life.</summary>
+    /// <summary>The local installation's root, so every transport to the server is checked against its registry.</summary>
+    public LocalRoot? LocalRoot { get; set; }
+
     public ProfileContext Profiles {
-        get => field ?? throw new InvalidOperationException($"DaemonConfig.Profiles was never set; pass a {nameof(ProfileContext)} in from the entry point.");
-        set;
+        get => _profiles ?? throw new InvalidOperationException($"DaemonConfig.Profiles was never set; pass a {nameof(ProfileContext)} in from the entry point.");
+        set => _profiles = value;
     }
+
+    ProfileContext? _profiles;
+
+    /// <summary>The profile name, or null where no <see cref="ProfileContext"/> was passed in.</summary>
+    public string? ProfileNameOrNull => _profiles?.Name;
+
+    /// <summary>Why <see cref="ServerUrl"/> may not be sent to, as resolved at boot; null when it may, or when nothing
+    /// was resolved.</summary>
+    public string? DestinationRefusal => _profiles is null ? null : LocalDestination.Refusal(ServerUrl, _profiles.Resolution.Endpoint);
+
+    /// <summary>Whether the resolved profile opted out of the update check; false when nothing was resolved.</summary>
+    public bool UpdateCheckOff => _profiles?.Effective?.UpdateCheck == false;
 
     /// <summary>Phase B (D4): a fresh per-boot epoch (GUID). Written into each spawned child's
     /// <c>KCAP_DAEMON_EPOCH</c> env marker; the startup env-marker scan kills same-daemon children
@@ -101,6 +140,10 @@ public class DaemonConfig {
     /// acquisition.
     /// </summary>
     public string? InstanceId { get; set; }
+
+    /// <summary>The instance of the boot just before this one, as the daemon lock witnessed it; null when
+    /// the lock could not tell. A flow participant resumes only from that instance's planned stop.</summary>
+    public string? PriorInstanceId { get; set; }
 
     /// <summary>
     /// Daemon binary version (<c>AssemblyInformationalVersion</c>). Sent
@@ -131,11 +174,46 @@ public class DaemonConfig {
     /// yet or in tests that bypass the runner.
     /// </summary>
     public string[]? UnattendedVendors { get; set; }
-    public IReadOnlyList<UnattendedVendorCapability>? UnattendedVendorCapabilities { get; set; }
+
+    /// <summary>Setting this keeps the Codex resolution already paired with the capabilities; a caller
+    /// that computed them from a resolution publishes both through <see cref="Advertise"/>.</summary>
+    public IReadOnlyList<UnattendedVendorCapability>? UnattendedVendorCapabilities {
+        get => Advertisement.Capabilities;
+        set => Advertisement = Advertisement with { Capabilities = value };
+    }
+
+    internal UnattendedAdvertisement Advertisement {
+        get => Volatile.Read(ref _advertisement);
+        private set => Volatile.Write(ref _advertisement, value);
+    }
+
+    UnattendedAdvertisement _advertisement = UnattendedAdvertisement.None;
+
+    internal void Advertise(IReadOnlyList<UnattendedVendorCapability> capabilities, Harness.Codex.CodexTransportResolution codex) =>
+        Advertisement = new(capabilities, codex);
+
+    /// <summary>Installed vendors whose runtime can host a single-pass PR review — the server offers and
+    /// admits only these for one. <c>null</c> before the runner has probed.</summary>
+    public string[]? PrReviewVendors { get; set; }
 
     /// <summary>Per-vendor fingerprint of the binary <see cref="UnattendedVendorCapabilities"/> was
     /// probed from, taken before that probe; the vendor CLI watcher's starting point.</summary>
     public IReadOnlyDictionary<string, Services.CliBinaryStat?>? UnattendedVendorBaselines { get; set; }
+
+    /// <summary>Per-vendor launchable models probed from the installed CLIs. Replaced by reference on
+    /// every refresh, never mutated: serializers on other threads may be enumerating the current
+    /// instance.</summary>
+    public Dictionary<string, VendorModelOption[]>? VendorModels { get; set; }
+
+    /// <summary>Each registered Codex account's launchable models, keyed by registry id. An unregistered
+    /// default has no id, so its catalog is only in <see cref="VendorModels"/>. Replaced by reference,
+    /// like <see cref="VendorModels"/>.</summary>
+    public Dictionary<string, VendorModelOption[]>? VendorModelsByAccount { get; set; }
+
+    /// <summary>Fingerprints of each vendor's catalog files, taken before the startup probe, and of each
+    /// account's, taken before its latest probe; the vendor CLI watcher's starting point for an entry
+    /// it begins watching. Replaced by reference.</summary>
+    public IReadOnlyDictionary<string, Services.CatalogPathStat[]>? VendorCatalogBaselines { get; set; }
 
     /// <summary>
     /// Vendor tokens this daemon accepts a launch-time ACP permission preset for — the installed
@@ -159,6 +237,12 @@ public class DaemonConfig {
         set;
     }
 
+    /// <summary>The host's account registry; null leaves the accounts publisher inert.</summary>
+    public AccountStore? Accounts { get; set; }
+
+    /// <summary>The config directory each account-bearing vendor uses when no account is chosen.</summary>
+    public IReadOnlyDictionary<HarnessId, string> DefaultDirectories { get; set; } = FrozenDictionary<HarnessId, string>.Empty;
+
     /// <summary>The PATH probe resolved at boot, the one the <c>HarnessRegistry</c> is built over. A
     /// configured vendor path is not a harness question, so its resolvers take this.</summary>
     public BinaryProbe Binaries {
@@ -171,28 +255,64 @@ public class DaemonConfig {
     public string ClaudePath { get; set; } = Core.Harness.Claude.ClaudeHarness.CliBinary;
     public string CodexPath  { get; set; } = Core.Harness.Codex.CodexHarness.CliBinary;
 
-    /// <summary>Transport for hosted Codex reviewers: <c>pty</c> (default) or <c>app-server</c>.
-    /// Set via <c>KCAP_CODEX_TRANSPORT</c>. Governs NEW review-flow launches only; interactive
-    /// launches always take the PTY path in this phase. The effective decision (this selection AND
-    /// the version floor) is resolved once into <see cref="CodexAppServerActive"/>.</summary>
-    public string CodexTransport { get; set; } = "pty";
+    /// <summary>The Codex resolution this daemon routes on and advertises. Swapped whole by the
+    /// capability refresh; readers on other threads take the reference once.</summary>
+    internal Harness.Codex.CodexTransportResolution CodexResolution {
+        get => Volatile.Read(ref _codexResolution);
+        set => Volatile.Write(ref _codexResolution, value);
+    }
 
-    /// <summary>Resolved once at startup: true when <see cref="CodexTransport"/> is <c>app-server</c>
-    /// AND the installed Codex meets the app-server version floor. Read by BOTH the launch router and
-    /// the certification advertisement so the advertised policy and the transport used are one fact.
-    /// Never set from config directly.</summary>
-    public bool CodexAppServerActive { get; set; }
+    Harness.Codex.CodexTransportResolution _codexResolution = Harness.Codex.CodexTransportResolution.Unresolved;
 
-    /// <summary>Per-daemon opt-in: also host INTERACTIVE Codex agents over app-server, not just
-    /// unattended reviewers. Requires <see cref="CodexAppServerActive"/> — this widens which launches
-    /// take that transport, it does not select it. Off unless an operator sets
-    /// <c>KCAP_CODEX_APPSERVER_INTERACTIVE</c> on this daemon, so turning it on moves one host.
-    ///
-    /// <para>Scope: INTERACTIVE launches the SERVER dispatches (the web launch dialog). PR review and
-    /// review flows are untouched by this switch — review flows already take app-server wherever it is
-    /// selected, and PR review stays on PTY. `kcap agent start` spawns an attachable terminal through the
-    /// local control socket, which never reaches the runtime factory, so it stays PTY regardless.</para></summary>
-    public bool CodexAppServerInteractive { get; set; }
+    /// <summary>The last resolution a registration carried to the server. A launch that names no
+    /// transport follows this one, since it is what the server dispatched against.</summary>
+    internal Harness.Codex.CodexTransportResolution AcknowledgedCodexResolution {
+        get => Volatile.Read(ref _acknowledgedCodexResolution);
+        set => Volatile.Write(ref _acknowledgedCodexResolution, value);
+    }
+
+    Harness.Codex.CodexTransportResolution _acknowledgedCodexResolution = Harness.Codex.CodexTransportResolution.Unresolved;
+
+    /// <summary>Records that a registration carried <paramref name="sent"/>. Only a newer generation
+    /// moves it, since registrations from different paths can finish out of order.</summary>
+    /// <returns>True when the acknowledgement moved.</returns>
+    internal bool AcknowledgeCodex(Harness.Codex.CodexTransportResolution sent) {
+        while (true) {
+            var current = AcknowledgedCodexResolution;
+            if (sent.Generation <= current.Generation) return false;
+            if (ReferenceEquals(Interlocked.CompareExchange(ref _acknowledgedCodexResolution, sent, current), current)) return true;
+        }
+    }
+
+    public long ServerAcknowledgedCodexGeneration => AcknowledgedCodexResolution.Generation;
+
+    /// <summary>The newest Codex generation a registration attempt carried and failed to deliver. It
+    /// stands for the committed resolution only while that one is still unacknowledged.</summary>
+    internal long FailedCodexGeneration => Volatile.Read(ref _failedCodexGeneration);
+
+    long _failedCodexGeneration;
+
+    /// <returns>True when the failed generation moved.</returns>
+    internal bool CodexRegistrationFailed(Harness.Codex.CodexTransportResolution sent) {
+        while (true) {
+            var current = FailedCodexGeneration;
+            if (sent.Generation <= current) return false;
+            if (Interlocked.CompareExchange(ref _failedCodexGeneration, sent.Generation, current) == current) return true;
+        }
+    }
+
+    /// <summary>Why <c>experimental.json</c> could not be read on the last resolution pass; null when it was.</summary>
+    internal string? ExperimentalSettingsProblem {
+        get => Volatile.Read(ref _experimentalSettingsProblem);
+        set => Volatile.Write(ref _experimentalSettingsProblem, value);
+    }
+
+    string? _experimentalSettingsProblem;
+
+    /// <summary>This daemon's profile's experimental switches, read from disk now. Empty when no
+    /// profile was resolved.</summary>
+    public ExperimentalSettingsRead ReadExperimentalSettings() =>
+        ProfileNameOrNull is { } profile ? new ExperimentalSettingsStore(ConfigRoot).Load(profile) : ExperimentalSettingsRead.Empty;
 
     /// <summary>Seconds an interactive hosted Codex approval (<c>*/requestApproval</c>) waits for the
     /// user before failing closed (deny). Overridable via <c>KCAP_CODEX_APPSERVER_APPROVAL_TIMEOUT_SECONDS</c>.
@@ -354,6 +474,10 @@ public class DaemonConfig {
     /// </summary>
     public bool OpenCodeUnattendedReviewerEnabled { get; set; } = true;
 
+    /// <summary>Whether this daemon may run Grok Build as an unattended review-flow reviewer. Default
+    /// true; <c>KCAP_GROK_UNATTENDED_REVIEWER=0</c> disables. See <c>GrokReviewerCapability</c>.</summary>
+    public bool GrokUnattendedReviewerEnabled { get; set; } = true;
+
     /// <summary>
     /// One absolute budget, in seconds, for an OpenCode reviewer launch: spawn through the first prompt
     /// completing. On expiry the child is terminated, its isolated config dir removed, and the launch
@@ -366,9 +490,9 @@ public class DaemonConfig {
     public int OpenCodeReviewerLaunchTimeoutSeconds { get; set; } = 120;
 
     /// <summary>Path or bare command for Pi's RPC entry point, spawned as
-    /// <c>{PiPath} --mode rpc</c> by <c>PiRpcHostedAgentRuntimeFactory</c>. Interactive hosting only
-    /// in PR-1 — the reviewer lane is not implemented yet. Availability is
-    /// <c>Binaries.Finds(PiPath)</c>. Overridable via <c>KCAP_PI_PATH</c>.</summary>
+    /// <c>{PiPath} --mode rpc</c> by <c>PiRpcHostedAgentRuntimeFactory</c> for both interactive hosting
+    /// and the gated unattended reviewer. Availability is <c>Binaries.Finds(PiPath)</c>. Overridable
+    /// via <c>KCAP_PI_PATH</c>.</summary>
     public string PiPath { get; set; } = Core.Harness.Pi.PiHarness.CliBinary;
 
     /// <summary>
@@ -384,11 +508,39 @@ public class DaemonConfig {
     /// </summary>
     public string? PiModel { get; set; }
 
+    /// <summary>Whether THIS daemon may run Pi as an unattended review-flow reviewer. **Default TRUE —
+    /// the variable is an opt-OUT** (<c>KCAP_PI_UNATTENDED_REVIEWER=0</c> disables), matching the other
+    /// gated reviewers and the never-gated Claude/Codex/Cursor/Copilot ones that carry the same
+    /// authority. See <c>PiReviewerCapability</c>.</summary>
+    public bool PiUnattendedReviewerEnabled { get; set; } = true;
+
+    /// <summary>How long a Pi reviewer round may go without a frame from Pi before it is reaped.</summary>
+    public int PiReviewerTurnTimeoutSeconds { get; set; } = 600;
+
     /// <summary>Path or bare command for Google Gemini CLI's ACP entry point, spawned as
     /// <c>{GeminiPath} --experimental-acp …</c> by <c>AcpHostedAgentRuntimeFactory</c>. It drives
     /// interactive hosting AND the gated unattended reviewer, whose build-affirmation probe reads
     /// whichever binary this names. Overridable via <c>KCAP_GEMINI_PATH</c>.</summary>
     public string GeminiPath { get; set; } = Core.Harness.Gemini.GeminiHarness.CliBinary;
+
+    /// <summary>Path or bare command for the Mistral Vibe CLI. Overridable via <c>KCAP_MISTRAL_VIBE_PATH</c>.
+    /// Vibe is a recording-only harness — the daemon never launches it — so this exists only to give
+    /// <c>kcap config</c> a slot for the binary path; it is not read by any launcher.</summary>
+    public string MistralVibePath { get; set; } = Core.Harness.MistralVibe.MistralVibeHarness.CliBinary;
+
+    /// <summary>Path or bare command for Grok Build. Overridable via <c>KCAP_GROK_PATH</c>.</summary>
+    public string GrokPath { get; set; } = Core.Harness.Grok.GrokHarness.CliBinary;
+
+    /// <summary>Path or bare command for the Muse Code CLI. Overridable via <c>KCAP_MUSE_PATH</c>.</summary>
+    public string MusePath { get; set; } = Core.Harness.Muse.MuseHarness.CliBinary;
+
+    /// <summary>Daemon-wide default model for Muse; null keeps Muse's own default. Overridable via
+    /// <c>KCAP_MUSE_MODEL</c>.</summary>
+    public string? MuseModel { get; set; }
+
+    /// <summary>Whether THIS daemon may run Muse as an unattended review-flow reviewer. Default TRUE;
+    /// <c>KCAP_MUSE_UNATTENDED_REVIEWER=0</c> opts out, as for every gated reviewer.</summary>
+    public bool MuseUnattendedReviewerEnabled { get; set; } = true;
 
     /// <summary>
     /// Opt-in, off-by-default ACP wire/content debug logging (<c>KCAP_ACP_DEBUG_FRAMES</c>). When

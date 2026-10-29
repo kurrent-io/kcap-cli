@@ -49,7 +49,13 @@ public sealed class ReposCommand(ConfigRoot config, TimeProvider time) {
             return 1;
         }
 
-        await Repos.AddAsync(resolved);
+        try {
+            await Repos.AddAsync(resolved);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TimeoutException) {
+            await Console.Error.WriteLineAsync($"Could not update the repository list: {ex.Message}");
+
+            return 1;
+        }
         await Console.Out.WriteLineAsync($"Added: {resolved}");
 
         return 0;
@@ -57,7 +63,14 @@ public sealed class ReposCommand(ConfigRoot config, TimeProvider time) {
 
     async Task<int> Remove(string path) {
         var resolved = Path.GetFullPath(path);
-        var removed  = await Repos.RemoveAsync(resolved);
+        bool removed;
+        try {
+            removed = await Repos.RemoveAsync(resolved);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TimeoutException) {
+            await Console.Error.WriteLineAsync($"Could not update the repository list: {ex.Message}");
+
+            return 1;
+        }
 
         if (removed) {
             await Console.Out.WriteLineAsync($"Removed: {resolved}");

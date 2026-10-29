@@ -5,12 +5,16 @@ const path = require("node:path");
 const {
   resolveInstallSpec,
   npmInstallArgs,
+  npmUpdateArgs,
   probeArgs,
   trashDirFor,
   trashDirFromLauncher,
   filterKcapProcesses,
   describeRole,
   restoreMoved,
+  localUpgradeArgs,
+  localRegistryPath,
+  localUpgradeSucceeded,
 } = require("./kcap.js");
 
 assert.strictEqual(resolveInstallSpec({ install_tag: "beta" }), "@kurrent/kcap@beta");
@@ -22,9 +26,27 @@ assert.strictEqual(resolveInstallSpec({ install_tag: "1.0.1" }), "@kurrent/kcap@
 
 // Revalidates npm's cached packument, so a platform package published minutes ago is not skipped.
 assert.deepStrictEqual(npmInstallArgs("@kurrent/kcap@1.0.2"), ["install", "-g", "@kurrent/kcap@1.0.2", "--prefer-online"]);
+// kcap update refreshes on its own; the printed repair command must leave postinstall to do it.
+assert.deepStrictEqual(npmUpdateArgs("@kurrent/kcap@1.0.2"), ["install", "-g", "@kurrent/kcap@1.0.2", "--prefer-online", "--ignore-scripts"]);
 {
   const src = fs.readFileSync(path.join(__dirname, "kcap.js"), "utf8");
-  assert(src.includes('spawnSync("npm", npmInstallArgs('), "kcap update must install through npmInstallArgs");
+  assert(src.includes('spawnSync("npm", npmUpdateArgs('), "kcap update must install through npmUpdateArgs");
+}
+
+// The new binary's coordinator runs after the CLI moves, silent where there is no installation.
+assert.deepStrictEqual(localUpgradeArgs(), ["local", "upgrade", "--if-installed", "--no-update-check"]);
+// Host-native absolute roots: path.resolve gives a POSIX-style root a drive letter on Windows.
+assert.strictEqual(localRegistryPath({}, path.resolve("/home/u")), path.join(path.resolve("/home/u"), ".config", "kcap", "local", "install.json"));
+assert.strictEqual(localRegistryPath({ KCAP_LOCAL_ROOT: path.resolve("/r") }, path.resolve("/home/u")), path.join(path.resolve("/r"), "install.json"));
+assert.strictEqual(localUpgradeSucceeded(0), true);
+assert.strictEqual(localUpgradeSucceeded(3), true);
+assert.strictEqual(localUpgradeSucceeded(4), true);   // bundle not published yet: the CLI update still succeeded
+assert.strictEqual(localUpgradeSucceeded(1), false);
+assert.strictEqual(localUpgradeSucceeded(2), false);
+assert.strictEqual(localUpgradeSucceeded(null), false);
+{
+  const src = fs.readFileSync(path.join(__dirname, "kcap.js"), "utf8");
+  assert(src.indexOf("spawnSync(binaryPath, localUpgradeArgs()") > src.indexOf('spawnSync("npm", npmUpdateArgs('), "local upgrade must run the binary npm installed");
 }
 
 assert.deepStrictEqual(probeArgs([]), ["update", "--check", "--no-update-check"]);
@@ -128,13 +150,13 @@ assert.strictEqual(describeRole("kcap.exe watch"), "kcap process");
 
   const refreshIdx = runUpdateBody.indexOf("runRefreshes(");
   const reportIdx  = runUpdateBody.indexOf("report-version");
-  const exitIdx    = runUpdateBody.lastIndexOf("process.exit(0)");
+  const exitIdx    = runUpdateBody.lastIndexOf("process.exit(exitCode)");
 
   assert(refreshIdx >= 0, "expected runUpdate to call runRefreshes(...)");
   assert(reportIdx >= 0, "expected runUpdate to spawn report-version");
-  assert(exitIdx >= 0, "expected runUpdate to still exit 0 on its success path");
+  assert(exitIdx >= 0, "expected runUpdate to end on its success path's exit code");
   assert(refreshIdx < reportIdx, "report-version must be spawned AFTER the refresh step");
-  assert(reportIdx < exitIdx, "report-version must be spawned BEFORE runUpdate's process.exit(0)");
+  assert(reportIdx < exitIdx, "report-version must be spawned BEFORE runUpdate's final process.exit");
 
   // Guarded by its own try/catch: the nearest preceding `try {` must be closer than any `} catch`.
   const precedingSlice = runUpdateBody.slice(0, reportIdx);

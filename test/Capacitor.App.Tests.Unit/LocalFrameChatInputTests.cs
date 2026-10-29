@@ -49,6 +49,22 @@ public class LocalFrameChatInputTests {
         });
     }
 
+    /// An agent with no process says why the composer cannot send, rather than that it is connecting.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_resuming_or_interrupted_agent_explains_itself() {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig(); rig.Connected("input/1");
+            rig.Presence.OnNext(new AgentPresence(Agent("a1", "pi", hasTerminal: false) with { Status = "Resuming" }, false));
+            await Assert.That(rig.Input.CanAcceptText).IsFalse();
+            await Assert.That(rig.Input.Hint).IsEqualTo("Waiting for the agent to resume after a daemon restart…");
+
+            rig.Presence.OnNext(new AgentPresence(Agent("a1", "pi", hasTerminal: false) with { Status = "Interrupted", Interruption = "too_old" }, false));
+            await Assert.That(rig.Input.CanAcceptText).IsFalse();
+            await Assert.That(rig.Input.Hint).IsEqualTo("Not resumed after a daemon restart (too_old). Retry with `kcap agent resume`, or stop it to discard it.");
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task One_send_in_flight_until_the_ack_and_a_delivered_ack_clears() {

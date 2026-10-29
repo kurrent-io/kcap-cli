@@ -9,13 +9,13 @@
       "command": "kcap",
       "args": ["mcp", "sessions"],
       "cwd": "${CLAUDE_PROJECT_DIR}",
-      "description": "Search and recall past Kurrent Capacitor sessions — the reasoning behind prior work (why / what-was-tried / who-decided / when). For 'have we done X before' or 'why did we' questions, reach for search_sessions before git log or grep. Repo-aware: cd into a project and search_sessions defaults to that repo's sessions."
+      "description": "Search and recall past kcap sessions — the reasoning behind prior work (why / what-was-tried / who-decided / when). For 'have we done X before' or 'why did we' questions, reach for search_sessions before git log or grep. Repo-aware: cd into a project and search_sessions defaults to that repo's sessions."
     },
     "kcap-flows": {
       "command": "kcap",
       "args": ["mcp", "flows"],
       "cwd": "${CLAUDE_PROJECT_DIR}",
-      "description": "Structured AI agent flows — start_review_flow, submit_review_round, get_review_flow_status, close_review_flow (review-specific) plus their generic equivalents start_flow, send_to_participant, get_flow_status, close_flow (any flow-definition catalog id). Launches a SEPARATE hosted participant agent through your daemon and iterates to sign-off; requires `kcap login` and a running daemon with this repo checked out (the tools are inert otherwise). Use only when the user explicitly asks for a review flow / agent flow / to submit for review — for an ordinary 'review my PR' or 'code review' request, review directly and do not call these tools."
+      "description": "Structured AI agent flows — start_review_flow, submit_review_round, get_review_flow_status, close_review_flow (review-specific) plus their generic equivalents start_flow, send_to_participant, get_flow_status, close_flow (any flow-definition catalog id). Launches a SEPARATE hosted participant agent through your daemon and iterates to sign-off; requires `kcap login` and a running daemon with this repo checked out (the tools are inert otherwise). Use the flow tools only when the user explicitly asks for a review flow / agent flow / to submit for review — for an ordinary 'review my PR' or 'code review' request, review directly and do not call these tools. Also list_start_agent_options and start_agent: when the user asks to start a separate hosted agent that works on its own, use these — not your harness's own subagent tool, a flow, or the `kcap agent start` CLI. In a hosted agent, schedule_wakeup, list_wakeups and cancel_wakeup have a prompt delivered to you later instead of waiting in your turn."
     },
     "kcap-memory": {
       "command": "kcap",
@@ -27,7 +27,7 @@
       "command": "kcap",
       "args": ["mcp", "workitems"],
       "cwd": "${CLAUDE_PROJECT_DIR}",
-      "description": "Attach the current session to a work item (issue, PR, or a brand-new item) on the Capacitor server, and list the work items a session is attached to."
+      "description": "Attach the current session to a work item (issue, PR, or a brand-new item) on the kcap server, and list the work items a session is attached to."
     },
     "kcap-plans": {
       "command": "kcap",
@@ -35,11 +35,28 @@
       "cwd": "${CLAUDE_PROJECT_DIR}",
       "description": "Plan ledger — declare the plan, spec or design document this session works from (declare_plan_document), declare its task list (set_plan_tasks), record each task's status change (update_plan_task) and read the plan back after compaction (get_plan)."
     },
+    "kcap-handoff": {
+      "command": "kcap",
+      "args": ["mcp", "handoff"],
+      "description": "Continue a session whose agent is gone — continue_session attaches this session to that session's work items and unfinished plans, refusing while it may still be running."
+    },
+    "kcap-pages": {
+      "command": "kcap",
+      "args": ["mcp", "pages"],
+      "cwd": "${CLAUDE_PROJECT_DIR}",
+      "description": "Publish a self-contained HTML page — a plan, a report, a comparison, the artifact the user asked for — and get back a link to share. The page is sandboxed with no network access, so inline everything as data URIs. Private until you set visibility."
+    },
     "kcap-analytics": {
       "command": "kcap",
       "args": ["mcp", "analytics"],
       "cwd": "${CLAUDE_PROJECT_DIR}",
       "description": "Query the org's AI coding-agent analytics (sessions, tools, tokens, cost, commits, PRs, evals) with governed read-only SQL. For 'what did we spend', 'which tools/models do we use', 'how many sessions' questions: call get_analytics_schema once, then query_analytics. Repo-aware: defaults to the current repo; pass scope 'global' for org-wide."
+    },
+    "kcap-knowledge": {
+      "command": "kcap",
+      "args": ["mcp", "knowledge"],
+      "cwd": "${CLAUDE_PROJECT_DIR}",
+      "description": "Read retained facts and curated skills (list_facts, search_facts, list_skills, get_skill) and fine-tune skills through edit, transition, membership and fact curation tools. Repo-aware: reads default to the current repo."
     }
   }
 }

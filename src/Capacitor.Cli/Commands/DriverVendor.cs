@@ -23,9 +23,24 @@ public static class DriverVendor {
     /// <summary>Env-only seam kept for the existing precedence tests.</summary>
     internal static string? Infer(Func<string, string?> getEnv) => Infer(null, getEnv);
 
-    internal static string? Infer(string? driverArg, Func<string, string?> getEnv) {
+    internal static string? Infer(string? driverArg, Func<string, string?> getEnv) =>
+        Infer(driverArg, getEnv, ProcessHelpers.NearestCodingAgent);
+
+    /// <param name="nearestAgent">Asked only when a Grok session is in the environment: Grok's id is
+    /// passed on to everything its processes start, so it names the driver only when Grok is nearest.</param>
+    internal static string? Infer(string? driverArg, Func<string, string?> getEnv, Func<CodingAgentAncestor?> nearestAgent) {
         // Stamp wins when present and recognised — it is deterministic, unlike inherited env.
         if (Normalize(driverArg) is { } stamped) return stamped;
+
+        // Under a Grok id the walk decides; only a Claude Code ancestor goes on to the env check below.
+        if (HarnessRequesterContext.GrokSessionIn(getEnv) is not null) {
+            switch (nearestAgent()?.Vendor) {
+                case "grok":   return "grok";
+                case "codex":  return "codex";
+                case "claude": break;
+                default:       return null;
+            }
+        }
 
         var claude = !string.IsNullOrWhiteSpace(getEnv(HarnessRequesterContext.ClaudeSessionIdVar));
         var codex  = !string.IsNullOrWhiteSpace(getEnv(HarnessRequesterContext.CodexThreadIdVar));
@@ -37,11 +52,13 @@ public static class DriverVendor {
         return null;
     }
 
-    // The closed set of tokens that may name a driver: the stamped JSON harnesses plus the two
-    // env-inferred vendors. Validating here keeps a malformed or stale registration from echoing
-    // arbitrary text as driver_vendor to the model.
+    // The closed set of tokens that may name a driver: the stamped JSON harnesses, the two
+    // env-inferred vendors (claude/codex), and Vibe — a TOML harness outside DriverStampVendors that
+    // kcap nonetheless stamps, since it exports no distinctive env var. Validating here keeps a
+    // malformed or stale registration from echoing arbitrary text as driver_vendor to the model.
     static readonly HashSet<string> NameableVendors =
-        new(HarnessMcpProjections.DriverStampVendors.Append("claude").Append("codex"), StringComparer.Ordinal);
+        new(HarnessMcpProjections.DriverStampVendors.Append("claude").Append("codex").Append("mistral-vibe").Append("grok"),
+            StringComparer.Ordinal);
 
     static string? Normalize(string? v) =>
         !string.IsNullOrWhiteSpace(v) && NameableVendors.Contains(v.Trim()) ? v.Trim() : null;

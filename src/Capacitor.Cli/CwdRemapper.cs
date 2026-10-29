@@ -14,9 +14,12 @@ namespace Capacitor.Cli;
 /// - <c>~</c> or <c>~/</c> (or <c>~\</c> on Windows) at the start of
 ///   <c>from</c>/<c>to</c> is expanded to the given home directory
 ///   (transcript cwds are absolute).
-/// - Path-boundary prefix: <c>cwd == from</c> or <c>cwd starts with from + sep</c>
-///   where <c>sep</c> is either <c>/</c> or <c>\</c>; so <c>/dev/kapacitor</c>
-///   does NOT spuriously match <c>/dev/kapacitor-cli</c>.
+/// - Path-boundary prefix: <c>cwd == from</c> or <c>cwd starts with from + sep</c>;
+///   so <c>/dev/kapacitor</c> does NOT spuriously match <c>/dev/kapacitor-cli</c>.
+/// - On a Windows-shaped cwd (drive letter or UNC) <c>/</c> and <c>\</c> are both
+///   separators and compare equal, so a rule typed as <c>~/dev/repo</c> still matches
+///   a backslashed cwd. Elsewhere only <c>/</c> is: <c>\</c> is a filename character
+///   there, and treating it as a separator would match a different directory.
 /// - <c>from</c> may carry one <c>*</c> standing as a whole segment, which
 ///   matches exactly one segment of the cwd — <c>~/dev/repo/worktrees/*</c>
 ///   covers every worktree under that directory.
@@ -44,12 +47,13 @@ static class CwdRemapper {
         string? bestTo      = null;
         var     bestLen     = -1;
         var     bestLiteral = false;
+        var     windows     = IsWindowsPath(cwd);
 
         foreach (var rule in rules) {
             if (string.IsNullOrEmpty(rule.From) || rule.To is null) continue;
             if (!TryParseFrom(ExpandHome(rule.From, home), out var pattern, out _)) continue;
 
-            var matched = pattern.Match(cwd, comparison);
+            var matched = pattern.Match(cwd, comparison, windows);
 
             if (matched < 0) continue;
 
@@ -68,6 +72,10 @@ static class CwdRemapper {
 
         if (bestTo is null) return cwd;
 
+        // A '/'-typed `to` on a backslashed cwd would otherwise yield a mixed path, which the
+        // ordinal repo cache counts as a second cwd.
+        if (windows && cwd.IndexOfAny(['/', '\\']) is var sep and >= 0 && cwd[sep] == '\\') bestTo = bestTo.Replace('/', '\\');
+
         return bestLen == cwd.Length ? bestTo : bestTo + cwd[bestLen..];
     }
 
@@ -83,12 +91,12 @@ static class CwdRemapper {
         /// How many characters of <paramref name="cwd"/> this pattern consumes,
         /// or -1 when it does not match. The caller keeps the remainder.
         /// </summary>
-        public int Match(string cwd, StringComparison comparison) {
-            if (Tail is null) return IsPrefixMatch(cwd, Head, comparison) ? Head.Length : -1;
-            if (!cwd.StartsWith(Head, comparison)) return -1;
+        public int Match(string cwd, StringComparison comparison, bool windows) {
+            if (Tail is null) return IsPrefixMatch(cwd, Head, comparison, windows) ? Head.Length : -1;
+            if (!StartsWithPath(cwd, Head, comparison, windows)) return -1;
 
             var segEnd = Head.Length;
-            while (segEnd < cwd.Length && !IsSeparator(cwd[segEnd])) segEnd++;
+            while (segEnd < cwd.Length && !IsSeparator(cwd[segEnd], windows)) segEnd++;
 
             if (segEnd == Head.Length) return -1;             // the wildcard matches one segment, never none
             if (Tail.Length == 0) return segEnd;
@@ -96,9 +104,9 @@ static class CwdRemapper {
             var end = segEnd + Tail.Length;
 
             if (end > cwd.Length) return -1;
-            if (!cwd.AsSpan(segEnd, Tail.Length).Equals(Tail, comparison)) return -1;
+            if (!PathEquals(cwd.AsSpan(segEnd, Tail.Length), Tail, comparison, windows)) return -1;
 
-            return end == cwd.Length || IsSeparator(cwd[end]) ? end : -1;
+            return end == cwd.Length || IsSeparator(cwd[end], windows) ? end : -1;
         }
     }
 
@@ -142,11 +150,32 @@ static class CwdRemapper {
         return path;                                        // "~user" / "~foo" — leave alone
     }
 
-    static bool IsPrefixMatch(string cwd, string from, StringComparison comparison) {
-        if (!cwd.StartsWith(from, comparison)) return false;
+    static bool IsPrefixMatch(string cwd, string from, StringComparison comparison, bool windows) {
+        if (!StartsWithPath(cwd, from, comparison, windows)) return false;
         if (cwd.Length == from.Length) return true;
-        return IsSeparator(cwd[from.Length]);
+        return IsSeparator(cwd[from.Length], windows);
+    }
+
+    static bool StartsWithPath(string cwd, string prefix, StringComparison comparison, bool windows) =>
+        cwd.Length >= prefix.Length && PathEquals(cwd.AsSpan(0, prefix.Length), prefix, comparison, windows);
+
+    static bool PathEquals(ReadOnlySpan<char> a, ReadOnlySpan<char> b, StringComparison comparison, bool windows) {
+        if (a.Length != b.Length) return false;
+
+        for (var i = 0; i < a.Length; i++) {
+            if (windows && IsSeparator(a[i]) && IsSeparator(b[i])) continue;
+            if (!a.Slice(i, 1).Equals(b.Slice(i, 1), comparison)) return false;
+        }
+
+        return true;
     }
 
     internal static bool IsSeparator(char c) => c == '/' || c == '\\';
+
+    static bool IsSeparator(char c, bool windows) => c == '/' || (windows && c == '\\');
+
+    /// <summary>A drive-letter (<c>C:</c>) or UNC (<c>\\server</c>) path. Decided from the path,
+    /// not the host, so a transcript is read the way it was recorded.</summary>
+    static bool IsWindowsPath(string cwd) =>
+        (cwd.Length >= 2 && char.IsAsciiLetter(cwd[0]) && cwd[1] == ':') || cwd.StartsWith(@"\\", StringComparison.Ordinal);
 }

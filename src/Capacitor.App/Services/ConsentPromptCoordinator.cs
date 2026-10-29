@@ -3,7 +3,7 @@ using Capacitor.App.Views;
 
 namespace Capacitor.App.Services;
 
-/// Owns the single consent prompt window (spec §6): at most one instance at a time; closing
+/// Owns the single consent prompt window: at most one instance at a time; closing
 /// releases it (an explicit defer — the queue is untouched) and a later raise re-creates it.
 /// The service knows nothing about windows — THIS class filters the unconditional EntryAdded
 /// signal by visibility and marshals to the UI thread, because the signal originates on a socket

@@ -40,6 +40,22 @@ public static class TelemetryDeviceId {
         }
     }
 
+    /// <summary>False when the file is there but cannot be read right now; true with a null id when there is none.</summary>
+    public static bool TryReadPersisted(ConfigRoot config, out string? id) {
+        id = null;
+        try {
+            var file = JsonSerializer.Deserialize(File.ReadAllText(DevicePath(config)), CapacitorJsonContext.Default.TelemetryDeviceIdFile);
+            // A file holding no id is damaged, not absent: unreadable for now.
+            if (string.IsNullOrWhiteSpace(file.Id)) return false;
+            id = file.Id;
+            return true;
+        } catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) {
+            return true;
+        } catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) {
+            return false;
+        }
+    }
+
     /// <summary>
     /// Reads the persisted id straight off disk — what a fresh process (or a fresh call after a
     /// peer process wrote it) would see. Returns null if the file doesn't exist yet or is corrupt.

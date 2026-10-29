@@ -1,7 +1,9 @@
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Controls.Presenters;
 using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.Threading;
@@ -18,9 +20,9 @@ using static Capacitor.App.Tests.Unit.WorkspaceFixtures;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// Headless rendering acceptance for the session workspace: WorkspaceView is a UserControl (like
-/// HomeView), so each test hosts it inside a plain Window purely to give headless something to
-/// Show() -- see HomeViewSmokeTests' identical header comment. Unlike HomeView, this VIEW is
+/// Headless rendering acceptance for the session workspace: WorkspaceView is a UserControl, so
+/// each test hosts it inside a plain Window purely to give headless something to Show(). This
+/// VIEW is
 /// normally handed its DataContext through MainWindow's ContentControl/DataTemplate swap
 /// (WorkspaceNavigationTests exercises that path); a smoke test instead sets DataContext directly,
 /// bypassing the template so the view under test is exactly WorkspaceView, not MainWindow's swap
@@ -39,13 +41,13 @@ public class WorkspaceViewSmokeTests {
         WorkspaceFixtures.Agent(id, vendor, hasTerminal, "/repo/myproj");
 
     static (WorkspaceView View, WorkspaceViewModel Vm, FakeDaemonClientService Daemon, FakeTerminalAttachClientFactory Attach) Build(
-            string agentId = AgentId, Func<ITerminalSurface>? surface = null) {
+            string agentId = AgentId, Func<ITerminalSurface>? surface = null, IPlanArtifactSource? planArtifacts = null) {
         var daemon = new FakeDaemonClientService();
         var attach = new FakeTerminalAttachClientFactory();
         var vm = new WorkspaceViewModel(
             agentId, daemon, NewActions(), attach.Factory, surface ?? (() => new FakeTerminalSurface()),
             new FakeTimeProvider(), new RecordingOpener(), new FakePermissionService(), new FakeWorkContextSource(),
-            new ScriptedLocalControlOps(), new NoAttachmentUploader());
+            new ScriptedLocalControlOps(), new NoAttachmentUploader(), planArtifacts: planArtifacts);
         return (new WorkspaceView { DataContext = vm }, vm, daemon, attach);
     }
 
@@ -65,6 +67,45 @@ public class WorkspaceViewSmokeTests {
         Dispatcher.UIThread.RunJobs();
         window.UpdateLayout();
         return (window, vm, daemon, attach);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_idle_chat_resized_before_opening_terminal_uses_the_measured_terminal_size() {
+        await RunOnUiAsync(async () => {
+            var surface = new XtermTerminalSurface(80, 24);
+            var (view, vm, daemon, attach) = Build(surface: () => surface);
+            var window = new Window { Content = view, Width = 900, Height = 600 };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            daemon.Agents.AddOrUpdate(Agent(AgentId, hasTerminal: true) with { AwaitingInput = true });
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            var client = attach.Created.Single();
+            await client.TriggerAttached("ready"u8.ToArray());
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            var initialSize = surface.CurrentSize;
+
+            window.Width = 1200;
+            window.Height = 760;
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(surface.CurrentSize).IsNotEqualTo(initialSize);
+            await Assert.That(client.Resizes).IsEmpty();
+
+            await vm.ShowTerminalCommand.Execute();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            await Assert.That(client.Resizes.Last()).IsEqualTo(surface.CurrentSize);
+            await Assert.That(surface.Model.Terminal.Engine.GetLine(0)).IsEqualTo("ready");
+
+            window.Width = 1000;
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(client.Resizes.Last()).IsEqualTo(surface.CurrentSize);
+            await vm.TeardownAsync();
+            window.Close();
+        });
     }
 
     /// Effectively visible under this window. A name that never gets realized into the visual
@@ -89,70 +130,9 @@ public class WorkspaceViewSmokeTests {
         return ring;
     }
 
-    /// Pins that every x:Name the view's code-behind and the suite reach for resolves before any
-    /// dto arrives — the Terminal tab button and pane included, which are collapsed in this state
-    /// and must still be in the tree for the code-behind to find. The chat surface's own names are
-    /// resolved through its name scope, which holds whether or not it has been measured.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task WorkspaceView_resolves_all_named_controls() {
-        await RunOnUiAsync(async () => {
-            var (view, vm, _, _) = Build();
-            var window = new Window { Content = view };
-            window.Show();
-            Dispatcher.UIThread.RunJobs();
-
-            var names = new[] {
-                "WorkspaceTitle", "WorkspaceSubtitle", "ChatTabButton",
-                "TerminalTabButton", "TerminalHost", "TerminalBanners",
-                "DetachButton", "ReattachButton", "SessionEndedNote", "ChatHost", "WorkContextHost",
-            };
-            foreach (var name in names)
-                await Assert.That(Find<Control>(window, name)).IsNotNull().Because($"{name} should resolve");
-
-            var chatHost = Find<ChatTabView>(window, "ChatHost")!;
-            foreach (var name in new[] { "ChatItems", "ChatPhaseNote", "ComposerInput", "SendButton" })
-                await Assert.That(chatHost.FindControl<Control>(name)).IsNotNull().Because($"{name} should resolve");
-
-            var pane = Find<WorkContextView>(window, "WorkContextHost")!;
-            foreach (var name in new[] {
-                "RefreshButton", "StaleDot", "StatePill", "WorkContextKey", "WorkContextTitle", "OverviewText", "PartOfLine", "PartsToggle", "PartsList",
-                "BlockedByBlock", "CycleNoteText", "PhaseNoteText", "SignInButton", "RetryButton", "LinkCards", "IssueCard",
-                "WhoToggle", "ContributorStack", "ContributorList", "WhoCountText", "RequesterRow", "SessionToggle", "SessionSummaryText", "SessionFacts",
-            })
-                await Assert.That(pane.FindControl<Control>(name)).IsNotNull().Because($"{name} should resolve");
-
-            window.Close();
-            Dispatcher.UIThread.RunJobs();
-            await vm.TeardownAsync();
-        });
-    }
-
-    /// The pane takes its fixed 320 and the terminal the rest, so the PTY size the terminal
-    /// reports is the real center-pane width.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task The_pane_is_320_wide_and_the_terminal_takes_the_remainder() {
-        await RunOnUiAsync(async () => {
-            var (window, vm, _, _) = await ShowPtyAsync();
-
-            try {
-                var pane = Find<WorkContextView>(window, "WorkContextHost")!;
-                var terminal = Find<TerminalControl>(window, "TerminalHost")!;
-                await Assert.That(pane.Bounds.Width).IsEqualTo(320);
-                await Assert.That(terminal.Bounds.Width).IsEqualTo(window.Bounds.Width - 320);
-            } finally {
-                window.Close();
-                Dispatcher.UIThread.RunJobs();
-                await vm.TeardownAsync();
-            }
-        });
-    }
-
     /// Run-and-observe: drives ONE workspace through both has_terminal values for the same agent
-    /// id. Chat is offered either way; only the Terminal button and pane follow the PTY gate, and
-    /// nothing stands in their place. The tab buttons share one IsVisible-bound strip, so a button
-    /// is read through IsEffectivelyVisible.
+    /// id. Chat is the default surface either way; the Chat/Terminal switch and the Terminal pane
+    /// follow the PTY gate, and nothing stands in their place.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Chat_is_always_offered_and_the_terminal_pair_follows_ShowsTerminalTab() {
@@ -172,8 +152,8 @@ public class WorkspaceViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
 
             await Assert.That(vm.ShowsTerminalTab).IsFalse();
-            await Assert.That(chatButton.IsEffectivelyVisible).IsTrue();
-            await Assert.That(chatHost.IsVisible).IsTrue(); // Chat is the default tab
+            await Assert.That(vm.ShowsSurfaceSwitch).IsFalse();
+            await Assert.That(chatHost.IsVisible).IsTrue(); // Chat is the default surface
             await Assert.That(tabButton.IsEffectivelyVisible).IsFalse();
             await Assert.That(terminalHost.IsVisible).IsFalse();
             await Assert.That(Find<Control>(window, "NoTerminalNote")).IsNull();
@@ -186,6 +166,7 @@ public class WorkspaceViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
 
             await Assert.That(vm.ShowsTerminalTab).IsTrue();
+            await Assert.That(vm.ShowsSurfaceSwitch).IsTrue();
             await Assert.That(chatButton.IsEffectivelyVisible).IsTrue();
             await Assert.That(tabButton.IsEffectivelyVisible).IsTrue();
             await Assert.That(terminalHost.IsVisible).IsTrue();
@@ -381,6 +362,54 @@ public class WorkspaceViewSmokeTests {
         });
     }
 
+    /// A launch the daemon has not published has no chat view model, and a chat surface bound to
+    /// nothing draws every banner and the composer as empty shells: the starting panel stands
+    /// alone until the first dto.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_starting_workspace_shows_the_starting_panel_and_no_chat_surface() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            using var directory = new FakeAgentDirectory();
+            directory.Rows.AddOrUpdate(AgentRow.FromPending(
+                new PendingLaunchDto(AgentId, "claude", "/repo/myproj", "Fix the flaky test", DateTime.UtcNow, "spawned"),
+                new RepoIdentity("path:/repo/myproj", "myproj")));
+            var vm = new WorkspaceViewModel(
+                AgentId, daemon, NewActions(), new FakeTerminalAttachClientFactory().Factory, () => new FakeTerminalSurface(),
+                new FakeTimeProvider(), new RecordingOpener(), new FakePermissionService(), new FakeWorkContextSource(),
+                new ScriptedLocalControlOps(), new NoAttachmentUploader(), directory: directory);
+            var window = new Window { Content = new WorkspaceView { DataContext = vm }, Width = 900, Height = 600 };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+
+            var chatHost = Find<ChatTabView>(window, "ChatHost")!;
+            await Assert.That(Visible(window, "StartingPanel")).IsTrue();
+            await Assert.That(chatHost.IsVisible).IsFalse();
+            await Assert.That(IsOffscreen(chatHost)).IsTrue();
+            await Assert.That(Visible(window, "OpenInWebButton")).IsFalse();
+            await Assert.That(Visible(window, "StopButton")).IsTrue().Because("a starting launch can be cancelled");
+            foreach (var name in new[] { "ChatActivityNote", "SubagentsBanner", "QueuedMessagesBanner", "ComposerCard", "ReadOnlyBanner", "SendButton" })
+                await Assert.That(Visible(window, name)).IsFalse().Because($"{name} has nothing to show yet");
+
+            daemon.Agents.AddOrUpdate(Agent(AgentId, hasTerminal: false));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+
+            await Assert.That(Visible(window, "StartingPanel")).IsFalse();
+            await Assert.That(Visible(window, "OpenInWebButton")).IsTrue();
+            await Assert.That(Visible(window, "StopButton")).IsTrue();
+            await Assert.That(chatHost.IsEffectivelyVisible).IsTrue();
+            await Assert.That(Visible(window, "ComposerInput")).IsTrue();
+            await Assert.That(Visible(window, "SubagentsBanner")).IsFalse();
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            await vm.TeardownAsync();
+        });
+    }
+
     /// Pins why the off-tab terminal is faded rather than collapsed: the PTY is sized from the
     /// laid-out pane, so opening on Chat must not hand the daemon the surface's ctor default.
     [Test]
@@ -465,6 +494,188 @@ public class WorkspaceViewSmokeTests {
             await vm.TeardownAsync();
         });
     }
+
+    /// Fluent hover paints PART_ContentPresenter near-white; Stop must keep the danger colour.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Stop_keeps_danger_foreground_on_hover() {
+        await RunOnUiAsync(async () => {
+            var (window, vm, _, _) = await ShowPtyAsync();
+            try {
+                var stop = Find<Button>(window, "StopButton")!;
+                await Assert.That(stop.Classes.Contains("kcapDanger")).IsTrue();
+                var centre = stop.TranslatePoint(new Point(stop.Bounds.Width / 2, stop.Bounds.Height / 2), window)!.Value;
+                window.MouseMove(centre);
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(stop.Classes.Contains(":pointerover")).IsTrue()
+                    .Because("the hover must register for the assertion to mean anything");
+
+                var presenter = stop.GetVisualDescendants().OfType<ContentPresenter>().First(p => p.Name == "PART_ContentPresenter");
+                await Assert.That(ReferenceEquals(presenter.Foreground, window.FindResource("KcapDangerBrush"))).IsTrue();
+            } finally {
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+                await vm.TeardownAsync();
+            }
+        });
+    }
+
+    /// The header mark is the session status: a word, the same sentence for the screen reader
+    /// and the tooltip's first line, and the extra fact only on hover.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Header_status_names_working_idle_and_needs_you() {
+        await RunOnUiAsync(async () => {
+            var (window, vm, daemon, _) = await ShowPtyAsync();
+            try {
+                daemon.Agents.AddOrUpdate(Agent(AgentId, hasTerminal: true) with { AwaitingInput = false });
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+                var working = StatusMark(window);
+                await Assert.That(working.IsEffectivelyVisible).IsTrue();
+                var workingWord = working.FindControl<TextBlock>("StatusWord")!;
+                await Assert.That(workingWord.Text).IsEqualTo("Working");
+                await Assert.That(workingWord.Foreground).IsSameReferenceAs(window.FindResource("KcapPurpleBrush"));
+                await Assert.That(workingWord.Bounds.Width).IsGreaterThan(workingWord.Bounds.Height);
+                var path = Find<TextBlock>(window, "WorkspaceSubtitle")!;
+                double LeftOf(Control control) => control.TranslatePoint(default, window)!.Value.X;
+                double RightOf(Control control) => control.TranslatePoint(new Point(control.Bounds.Width, 0), window)!.Value.X;
+                await Assert.That(RightOf(workingWord)).IsLessThanOrEqualTo(RightOf(working) + 1);
+                await Assert.That(LeftOf(path)).IsGreaterThanOrEqualTo(RightOf(working) - 1);
+                var workingLines = TipLines(working);
+                await Assert.That(workingLines[0]).StartsWith("Working for ");
+                await Assert.That(workingLines[1]).IsEqualTo("Status");
+                await Assert.That(AutomationProperties.GetName(working)).IsEqualTo(workingLines[0]);
+                await Assert.That(Visible(window, "ChatActivityNote")).IsFalse();
+
+                daemon.Agents.AddOrUpdate(Agent(AgentId, hasTerminal: true) with { AwaitingInput = true });
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+                await AssertStatus(window, "Idle", "Idle", window.FindResource("KcapWarningBrush")!);
+                var idleMark = StatusMark(window);
+                var idleWord = idleMark.FindControl<TextBlock>("StatusWord")!;
+                var subtitle = Find<TextBlock>(window, "WorkspaceSubtitle")!;
+                await Assert.That(idleWord.FontSize).IsEqualTo(subtitle.FontSize);
+                await Assert.That(idleWord.FontWeight).IsEqualTo(subtitle.FontWeight);
+                await Assert.That(double.IsNaN(idleWord.LineHeight)).IsTrue();
+                await Assert.That(double.IsNaN(subtitle.LineHeight)).IsTrue();
+                double Mid(Control control) => control.TranslatePoint(new Point(0, control.Bounds.Height / 2), window)!.Value.Y;
+                double Baseline(TextBlock text) => text.TranslatePoint(new Point(0, text.TextLayout.Baseline), window)!.Value.Y;
+                var glyph = idleMark.FindControl<Panel>("Glyph")!;
+                var title = Find<TextBlock>(window, "TitleText")!;
+                double Bottom(Control control) => control.TranslatePoint(new Point(0, control.Bounds.Height), window)!.Value.Y;
+                double Top(Control control) => control.TranslatePoint(default, window)!.Value.Y;
+                await Assert.That(Top(subtitle) - Bottom(title)).IsGreaterThan(4);
+                await Assert.That(Math.Abs(Mid(idleWord) - Mid(subtitle))).IsLessThan(2);
+                await Assert.That(Math.Abs(Baseline(idleWord) - Baseline(subtitle))).IsLessThan(1);
+                var capCentre = Baseline(idleWord) - idleWord.FontSize * 0.36;
+                await Assert.That(Math.Abs(Mid(glyph) - capCentre)).IsLessThan(1);
+
+                var limit = new UsageLimitNoticeDto(
+                    UsageLimitKinds.Blocked, "Weekly limit reached", "Pick one", [new UsageLimitOptionDto(1, "Stop")]);
+                daemon.Agents.AddOrUpdate(Agent(AgentId, hasTerminal: true) with { AwaitingInput = false, UsageLimit = limit });
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+                await AssertStatus(window, "Needs you", "Needs you", window.FindResource("KcapWarningBrush")!);
+                var needsYou = string.Join('\n', TipLines(StatusMark(window)));
+                await Assert.That(needsYou).Contains("Weekly limit reached");
+                await Assert.That(needsYou).Contains("Usage limit");
+            } finally {
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+                await vm.TeardownAsync();
+            }
+        });
+    }
+
+    static AgentStatusMark StatusMark(Window window) =>
+        window.GetVisualDescendants().OfType<AgentStatusMark>().Single(mark => mark.Name == "WorkspaceStatus");
+
+    static async Task AssertStatus(Window window, string word, string accessibleName, object brush) {
+        var mark = StatusMark(window);
+        await Assert.That(mark.IsEffectivelyVisible).IsTrue();
+        var text = mark.FindControl<TextBlock>("StatusWord")!;
+        await Assert.That(text.Text).IsEqualTo(word);
+        await Assert.That(text.Foreground).IsSameReferenceAs(brush);
+        await Assert.That(AutomationProperties.GetName(mark)).IsEqualTo(accessibleName);
+        await Assert.That(TipLines(mark)[0]).IsEqualTo(accessibleName);
+    }
+
+    static string[] TipLines(Control control) {
+        ToolTip.SetIsOpen(control, true);
+        Dispatcher.UIThread.RunJobs();
+        var tip = (Control)ToolTip.GetTip(control)!;
+        tip.UpdateLayout();
+        var lines = tip.GetVisualDescendants().OfType<TextBlock>()
+            .Where(t => t.IsVisible)
+            .Select(t => t.Text ?? "")
+            .ToArray();
+        ToolTip.SetIsOpen(control, false);
+        return lines;
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_artefacts_position_shows_with_a_document_and_hosts_the_list_and_reader() {
+        await RunOnUiAsync(async () => {
+            var source = new FakePlanArtifactSource();
+            source.Enqueue(Ready(Doc("docs/x-design.md") with { Source = "discovered" }));
+            var (view, vm, daemon, _) = Build(planArtifacts: source);
+            var window = new Window { Content = view, Width = 1000, Height = 640 };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(Find<Button>(window, "ArtefactsTabButton")!.IsEffectivelyVisible).IsFalse();
+
+            daemon.Agents.AddOrUpdate(WorkspaceFixtures.Agent(AgentId, "claude", hasTerminal: true, repoPath: "/repo/myproj", sessionId: AgentId));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            await Assert.That(Find<Button>(window, "ArtefactsTabButton")!.IsEffectivelyVisible).IsTrue();
+            await Assert.That(Find<ContentControl>(window, "ArtefactsHost")!.Content).IsNull();
+
+            await vm.ShowArtefactsCommand.Execute();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            await Assert.That(Find<ContentControl>(window, "ArtefactsHost")!.Content).IsTypeOf<ArtefactsView>();
+            await Assert.That(Find<ItemsControl>(window, "DocumentList")!.IsEffectivelyVisible).IsTrue();
+            await Assert.That(Find<ContentControl>(window, "DocumentReaderHost")!.IsEffectivelyVisible).IsTrue();
+
+            await vm.Artefacts.SelectCommand.Execute(vm.Artefacts.Documents[0]);
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            var docPath = Find<TextBlock>(window, "DocumentPath")!;
+            var docKind = Find<TextBlock>(window, "DocumentKind")!;
+            var docMeta = Find<TextBlock>(window, "DocumentMeta")!;
+            await Assert.That(docPath.Text).IsEqualTo("docs/x-design.md");
+            await Assert.That(docKind.Text).IsEqualTo("Design");
+            await Assert.That(docKind.TranslatePoint(default, window)!.Value.X)
+                .IsGreaterThan(docPath.TranslatePoint(default, window)!.Value.X);
+            await Assert.That(docMeta.TranslatePoint(default, window)!.Value.Y)
+                .IsEqualTo(docPath.TranslatePoint(default, window)!.Value.Y).Within(2.0);
+            await Assert.That(Find<ScrollViewer>(window, "DocumentScroll")!.IsEffectivelyVisible).IsTrue();
+            await Assert.That(Find<Border>(window, "DocumentNotice")!.IsEffectivelyVisible).IsFalse();
+
+            window.Close();
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// The header's right side is icons: the segment is what grows.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Open_in_web_is_an_icon_button_with_a_tooltip() {
+        await RunOnUiAsync(async () => {
+            var (window, vm, _, _) = await ShowPtyAsync();
+            var button = Find<Button>(window, "OpenInWebButton")!;
+            await Assert.That(button.Content).IsNotTypeOf<string>();
+            await Assert.That(ToolTip.GetTip(button)).IsEqualTo("Open in web");
+            await Assert.That(button.Classes.Contains("kcapIcon")).IsTrue();
+            window.Close();
+            await vm.TeardownAsync();
+        });
+    }
+
     /// A workspace the app may rename: the daemon advertises rename, shares the app's server and
     /// account, and the agent is public with a session.
     static async Task<(Window Window, WorkspaceViewModel Vm, ScriptedLocalControlOps Ops)> ShowRenamableAsync() {

@@ -300,8 +300,8 @@ public sealed class LoopbackBrowser(
     /// </summary>
     static async Task WritePageAsync(HttpListenerContext ctx, bool success, string? redirectTo, bool joined) {
         var (title, message) = success
-            ? ("Authentication successful!", "You can close this window and return to the terminal.")
-            : ("Authentication failed", "Return to the terminal for details.");
+            ? ("Authentication successful!", "You can close this window and return to kcap.")
+            : ("Authentication failed", "Return to kcap for details.");
 
         // JsonEncodedText escapes <, > and & , so a </script> break-out or an escape out of the JS
         // string literal is structurally impossible — and it needs no reflection, so it stays

@@ -14,6 +14,17 @@ public class ClaudeTranscriptEventsTests {
     static IReadOnlyList<CanonicalEvent> E(string line, int lineNumber = 1) => P(line, lineNumber).Events;
 
     [Test]
+    public async Task A_structured_local_command_keeps_its_id_and_exact_receipt_in_the_vendor_extension() {
+        var events = E($$$"""{"type":"system","subtype":"local_command","uuid":"{{{Uuid}}}","timestamp":"2026-08-26T12:00:00Z","commandRun":{"command":"rename","args":"a < b & c"}}""");
+        await Assert.That(events).Count().IsEqualTo(1);
+        await Assert.That(events[0].EventId).IsEqualTo(Guid.Parse(Uuid));
+        var message = (UserMessageReceived)events[0].Payload;
+        await Assert.That(message.Content).IsEqualTo("<command-name>/rename</command-name><command-args>a &lt; b &amp; c</command-args>");
+        await Assert.That(SchemaExtensions.Text(SchemaExtensions.Slug(message, ClaudeCodeExtension.Slug), ClaudeCodeExtension.LocalCommand)).IsEqualTo("/rename a < b & c");
+        await Assert.That(message.Timestamp.ToDateTimeOffset()).IsEqualTo(new DateTimeOffset(2026, 8, 26, 12, 0, 0, TimeSpan.Zero));
+    }
+
+    [Test]
     public async Task String_user_content_is_one_user_message_on_the_record_id_with_its_timestamps() {
         var e = E($$$"""{"type":"user","uuid":"{{{Uuid}}}","parentUuid":"p1","message":{"role":"user","content":"hello"},"timestamp":"2026-08-26T12:00:00Z"}""");
         await Assert.That(e).Count().IsEqualTo(1);
@@ -69,8 +80,8 @@ public class ClaudeTranscriptEventsTests {
         await Assert.That(e[0].EventId).IsEqualTo(Guid.Parse(Uuid));
 
         var second = (ToolResultReceived)e[1].Payload;
-        await Assert.That(second.Result).IsEqualTo("a\nb");
-        await Assert.That(SchemaExtensions.Slug(second, "claude_code")).IsNull();
+        await Assert.That(second.Result).IsEqualTo("a\n\nb");
+        await Assert.That(SchemaExtensions.Slug(second, "claude_code")!.Fields.Keys).IsEquivalentTo(["output_raw"]);
         await Assert.That(e[1].EventId).IsEqualTo(TranscriptIds.ClaudeBlock(Guid.Parse(Uuid), 2));
     }
 
@@ -152,13 +163,86 @@ public class ClaudeTranscriptEventsTests {
 
     [Test]
     public async Task Every_other_record_type_is_ignored_not_rejected() {
-        foreach (var type in new[] { "attachment", "summary", "system", "file-history-snapshot", "file-history-delta", "mode", "permission-mode", "last-prompt", "ai-title", "atis-latch", "worktree-state", "queue-operation", "progress", "unknown-future" }) {
+        foreach (var type in new[] { "summary", "system", "file-history-snapshot", "file-history-delta", "mode", "permission-mode", "last-prompt", "ai-title", "atis-latch", "worktree-state", "queue-operation", "progress", "unknown-future" }) {
             var r = P($$$"""{"type":"{{{type}}}","message":{"content":"x"}}""");
             await Assert.That(r.Events).IsEmpty().Because(type);
             await Assert.That(r.Rejected).IsNull().Because(type);
         }
         await Assert.That(P("""{"type":"user","message":{"content":42}}""").Events).IsEmpty();
         await Assert.That(P("""{"type":"assistant","message":{"content":[{"type":"text","text":7}]}}""").Events).IsEmpty();
+    }
+
+    [Test]
+    public async Task An_attachment_that_is_not_a_queued_command_is_ignored() {
+        foreach (var line in new[] {
+            """{"type":"attachment","message":{"content":"x"}}""",
+            """{"type":"attachment","attachment":{"type":"queued_command","prompt":"","commandMode":"prompt"}}""",
+            """{"type":"attachment","attachment":{"type":"queued_command","prompt":"go","commandMode":"bash"}}""",
+            """{"type":"attachment","attachment":{"type":"prompt_snapshot","prompt":"x","commandMode":"task-notification"}}""",
+            """{"type":"attachment","attachment":{"type":"file","prompt":"x","commandMode":"task-notification"}}""",
+            """{"type":"attachment","attachment":{"type":"queued_command","commandMode":"task-notification"}}""",
+        }) {
+            var r = P(line);
+            await Assert.That(r.Events).IsEmpty().Because(line);
+            await Assert.That(r.Rejected).IsNull().Because(line);
+        }
+    }
+
+    [Test]
+    public async Task A_queued_command_task_notification_attachment_projects_one_user_message() {
+        var line = $$$"""{"parentUuid":"p1","isSidechain":false,"attachment":{"type":"queued_command","prompt":"<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<status>completed</status>\n<summary>Agent \"X\" finished</summary>\n</task-notification>","source_uuid":"s1","commandMode":"task-notification","timestamp":"2026-09-17T11:53:57.948Z"},"type":"attachment","uuid":"{{{Uuid}}}","timestamp":"2026-09-17T11:53:58.000Z"}""";
+        var e = E(line);
+        await Assert.That(e).Count().IsEqualTo(1);
+        await Assert.That(e[0].EventType).IsEqualTo(CanonicalEventTypes.UserMessageReceived);
+        await Assert.That(((UserMessageReceived)e[0].Payload).Content).IsEqualTo("<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<status>completed</status>\n<summary>Agent \"X\" finished</summary>\n</task-notification>");
+        await Assert.That(e[0].EventId).IsEqualTo(Guid.Parse(Uuid));
+        await Assert.That(e[0].CausedBy).IsEqualTo("p1");
+        await Assert.That(e[0].RecordTimestamp).IsEqualTo("2026-09-17T11:53:58.000Z");
+
+        var slug = SchemaExtensions.Slug(e[0].Payload, "claude_code");
+        await Assert.That(SchemaExtensions.Text(slug, "origin_kind")).IsEqualTo("task-notification");
+        await Assert.That(slug!.Fields.ContainsKey("is_meta")).IsFalse();
+    }
+
+    /// A prompt typed while the agent is mid-turn has no user line: this attachment is its only
+    /// record, and its event id is the record's own uuid.
+    [Test]
+    public async Task A_queued_command_prompt_attachment_projects_the_users_message() {
+        var line = $$$"""{"parentUuid":"p1","attachment":{"type":"queued_command","prompt":"also check the toggle","commandMode":"prompt","origin":{"kind":"human"}},"type":"attachment","uuid":"{{{Uuid}}}"}""";
+        var e = E(line).Single();
+        await Assert.That(((UserMessageReceived)e.Payload).Content).IsEqualTo("also check the toggle");
+        await Assert.That(e.EventId).IsEqualTo(Guid.Parse(Uuid));
+        await Assert.That(SchemaExtensions.Text(SchemaExtensions.Slug(e.Payload, "claude_code"), "origin_kind")).IsEqualTo("human");
+
+        var blocks = E("""{"type":"attachment","attachment":{"type":"queued_command","commandMode":"prompt","prompt":[{"type":"text","text":"[Image #2] look"},{"type":"image","source":{}}]}}""").Single();
+        await Assert.That(((UserMessageReceived)blocks.Payload).Content).IsEqualTo("[Image #2] look");
+    }
+
+    [Test]
+    public async Task A_sidechain_attachment_notification_carries_is_sidechain() {
+        var line = """{"type":"attachment","isSidechain":true,"attachment":{"type":"queued_command","prompt":"<task-notification></task-notification>","commandMode":"task-notification"}}""";
+        var e = E(line);
+        await Assert.That(SchemaExtensions.Flag(SchemaExtensions.Slug(e[0].Payload, "claude_code"), "is_sidechain")).IsTrue();
+    }
+
+    [Test]
+    public async Task A_meta_attachment_notification_carries_is_meta() {
+        var line = """{"type":"attachment","isMeta":true,"attachment":{"type":"queued_command","prompt":"<task-notification></task-notification>","commandMode":"task-notification"}}""";
+        var e = E(line);
+        await Assert.That(SchemaExtensions.Flag(SchemaExtensions.Slug(e[0].Payload, "claude_code"), "is_meta")).IsTrue();
+    }
+
+    /// The id contract binds the records the projection reads: an attachment carrying anything but
+    /// a notification is settled before the uuid is looked at, so a malformed one costs it nothing.
+    [Test]
+    public async Task A_uuid_matters_only_on_the_attachment_the_projection_reads() {
+        var ignored = P("""{"type":"attachment","uuid":42,"attachment":{"type":"file","filename":"x"}}""");
+        await Assert.That(ignored.Rejected).IsNull();
+        await Assert.That(ignored.Events).IsEmpty();
+
+        var notification = P("""{"type":"attachment","uuid":42,"attachment":{"type":"queued_command","commandMode":"task-notification","prompt":"<task-notification></task-notification>"}}""");
+        await Assert.That(notification.Rejected).IsNotNull();
+        await Assert.That(notification.Events).IsEmpty();
     }
 
     [Test]
@@ -190,5 +274,74 @@ public class ClaudeTranscriptEventsTests {
         await Assert.That(first).IsNotNull();
         await Assert.That(second).IsNotNull();
         await Assert.That(ReferenceEquals(first, second)).IsFalse();
+    }
+
+    const string LaunchLine = """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_A","content":[{"type":"text","text":"Async agent launched successfully."}]}]},"toolUseResult":{"isAsync":true,"status":"async_launched","agentId":"a9f262478e032f427","description":"Map desktop chat UI surfaces","prompt":"go"}}""";
+
+    [Test]
+    public async Task A_single_result_lines_toolUseResult_object_rides_the_extension_unchanged() {
+        var e = E(LaunchLine);
+        await Assert.That(e).Count().IsEqualTo(1);
+        var slug = SchemaExtensions.Slug(e[0].Payload, "claude_code");
+        await Assert.That(slug).IsNotNull();
+        var result = slug!.Fields["tool_use_result"].StructValue;
+        await Assert.That(result.Fields["status"].StringValue).IsEqualTo("async_launched");
+        await Assert.That(result.Fields["agentId"].StringValue).IsEqualTo("a9f262478e032f427");
+        await Assert.That(result.Fields["isAsync"].BoolValue).IsTrue();
+        await Assert.That(result.Fields["description"].StringValue).IsEqualTo("Map desktop chat UI surfaces");
+        await Assert.That(result.Fields["prompt"].StringValue).IsEqualTo("go");
+        await Assert.That(result.Fields.Count).IsEqualTo(5);
+        await Assert.That(((ToolResultReceived)e[0].Payload).Result).IsEqualTo("Async agent launched successfully.");
+    }
+
+    [Test]
+    public async Task A_line_without_toolUseResult_or_with_a_non_object_one_adds_no_key() {
+        var none = E("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}""");
+        await Assert.That(SchemaExtensions.Slug(none[0].Payload, "claude_code")).IsNull();
+
+        foreach (var value in new[] { "\"text\"", "42", "[1]", "null", "true" }) {
+            var e = E($$$"""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]},"toolUseResult":{{{value}}}}""");
+            await Assert.That(SchemaExtensions.Slug(e[0].Payload, "claude_code")).IsNull().Because(value);
+        }
+
+        var error = E("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"x","is_error":true}]},"toolUseResult":"Error: x"}""");
+        var slug = SchemaExtensions.Slug(error[0].Payload, "claude_code");
+        await Assert.That(SchemaExtensions.Flag(slug, "is_error")).IsTrue();
+        await Assert.That(slug!.Fields.ContainsKey("tool_use_result")).IsFalse();
+    }
+
+    [Test]
+    public async Task A_multi_result_line_puts_toolUseResult_on_no_result() {
+        var e = E("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"a"},{"type":"tool_result","tool_use_id":"t2","content":"b"}]},"toolUseResult":{"status":"async_launched","agentId":"x"}}""");
+        await Assert.That(e).Count().IsEqualTo(2);
+        await Assert.That(SchemaExtensions.Slug(e[0].Payload, "claude_code")).IsNull();
+        await Assert.That(SchemaExtensions.Slug(e[1].Payload, "claude_code")).IsNull();
+    }
+
+    /// The ids hash the record id and block index only, so the extension can never move one.
+    [Test]
+    public async Task The_tool_use_result_extension_leaves_event_ids_alone() {
+        var withUuid = E($$$"""{"type":"user","uuid":"{{{Uuid}}}","message":{"content":[{"type":"text","text":"x"},{"type":"tool_result","tool_use_id":"t1","content":"ok"}]},"toolUseResult":{"status":"async_launched","agentId":"x"}}""");
+        await Assert.That(withUuid[0].EventId).IsEqualTo(Guid.Parse(Uuid));
+        await Assert.That(SchemaExtensions.Slug(withUuid[0].Payload, "claude_code")).IsNotNull();
+
+        const string fallback = """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]},"toolUseResult":{"status":"async_launched","agentId":"x"}}""";
+        await Assert.That(E(fallback, 9)[0].EventId).IsEqualTo(TranscriptIds.ClaudeFallback(9, fallback));
+    }
+
+    [Test]
+    public async Task A_compaction_summary_carries_is_compact_summary_in_both_content_shapes() {
+        const string lead = "This session is being continued from a previous conversation that ran out of context.";
+        var text   = E($$$"""{"type":"user","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"role":"user","content":"{{{lead}}}"}}""");
+        var blocks = E($$$"""{"type":"user","isCompactSummary":true,"message":{"role":"user","content":[{"type":"text","text":"{{{lead}}}"}]}}""");
+
+        foreach (var e in new[] { text, blocks }) {
+            await Assert.That(e).Count().IsEqualTo(1);
+            await Assert.That(SchemaExtensions.Flag(SchemaExtensions.Slug(e[0].Payload, "claude_code"), "is_compact_summary")).IsTrue();
+            await Assert.That(SchemaExtensions.Flag(SchemaExtensions.Slug(e[0].Payload, "claude_code"), "is_meta")).IsFalse();
+        }
+
+        var plain = E("""{"type":"user","message":{"content":"x"}}""");
+        await Assert.That(SchemaExtensions.Slug(plain[0].Payload, "claude_code")).IsNull();
     }
 }

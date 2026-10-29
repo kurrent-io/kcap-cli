@@ -365,7 +365,7 @@ public class OutcomeChannelTests {
         await enumeratorB.DisposeAsync();
     }
 
-    // P1-1: an envelope dequeued-but-never-presented before the transfer must not be permanently
+    // An envelope dequeued-but-never-presented before the transfer must not be permanently
     // leased and lost — when the OLD (transferred-away) enumeration itself terminates without ever
     // acking, the still-unresolved lease gets its one requeue, same as any other implicit-cancel
     // teardown.

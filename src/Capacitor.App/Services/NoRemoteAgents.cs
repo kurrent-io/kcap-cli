@@ -13,6 +13,11 @@ internal sealed class NoRemoteAgents : IRemoteAgentsService {
     public IObservableCache<AgentInstanceDto, string> Agents { get; } =
         new SourceCache<AgentInstanceDto, string>(a => a.AgentId).AsObservableCache();
     public IObservable<IReadOnlyList<DaemonInfo>> Daemons { get; } = Observable.Return<IReadOnlyList<DaemonInfo>>([]);
+    public IObservable<DaemonListing> Listing { get; } = Observable.Return(new DaemonListing(null, 0, false));
+    public IObservable<IReadOnlyList<DaemonAccountsDto>> DaemonAccounts { get; } = Observable.Return<IReadOnlyList<DaemonAccountsDto>>([]);
+    public IObservable<IReadOnlyList<DaemonAccountsDto>> DrawableDaemonAccounts { get; } = Observable.Return<IReadOnlyList<DaemonAccountsDto>>([]);
+    public Task RefreshDaemonsAsync() => Task.CompletedTask;
+    public IObservable<bool> Current { get; } = Observable.Return(false);
     public Task<SessionRenameResult> RenameAsync(string agentId, string sessionId, string title, CancellationToken ct) =>
         Task.FromResult(new SessionRenameResult(false, null, Capacitor.Cli.Core.LocalIpc.SessionRenameReasons.Unauthenticated));
 }
@@ -22,15 +27,19 @@ internal sealed class NoServerLane : IServerLane {
     public IObservable<ServerLaneStatus> Status { get; } = Observable.Return(new ServerLaneStatus(ServerLaneState.Dormant));
     public IObservable<Unit> AgentInstancesChanged => Observable.Never<Unit>();
     public IObservable<Unit> DaemonsChanged => Observable.Never<Unit>();
+    public IObservable<Unit> DaemonAccountsChanged => Observable.Never<Unit>();
     public IObservable<LaunchFailure> LaunchFailures => Observable.Never<LaunchFailure>();
     public IObservable<string> PermissionPending => Observable.Never<string>();
     public IObservable<PermissionRespondedPing> PermissionResponded => Observable.Never<PermissionRespondedPing>();
     public IObservable<ServerPermissionRequest> PermissionRequests => Observable.Never<ServerPermissionRequest>();
     public IObservable<ServerElicitationRequest> ElicitationRequests => Observable.Never<ServerElicitationRequest>();
     public IObservable<string> SessionAccessChanged => Observable.Never<string>();
+    public IObservable<SessionPush> SessionPushes => Observable.Never<SessionPush>();
     public IObservable<PendingInputUpdate> PendingInputChanged => Observable.Never<PendingInputUpdate>();
     public Task<IReadOnlyList<DaemonInfo>?> GetConnectedDaemonsAsync(CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<DaemonInfo>?>(null);
+    public Task<IReadOnlyList<DaemonAccountsDto>?> GetDaemonAccountsAsync(CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<DaemonAccountsDto>?>(null);
     public Task<HubCallOutcome> RequestStopAgentAsync(string agentId, CancellationToken ct) =>
         Task.FromResult(HubCallOutcome.NotConnected);
     public Task<HubCallOutcome> SubscribeToChatAsync(string sessionId, CancellationToken ct) =>
@@ -48,5 +57,6 @@ internal sealed class NoServerLane : IServerLane {
     public Task<HubCallOutcome> RequestResizeTerminalAsync(string agentId, int cols, int rows, CancellationToken ct) => Task.FromResult(HubCallOutcome.NotConnected);
     public Task<HubCallOutcome> ReleaseResizeTerminalAsync(string agentId, CancellationToken ct) => Task.FromResult(HubCallOutcome.NotConnected);
     public Task<HubCallOutcome> SendUserInputAsync(string agentId, string text, CancellationToken ct) => Task.FromResult(HubCallOutcome.NotConnected);
+    public Task<HubCallOutcome> DiscardQueuedInputAsync(string agentId, Guid dispatchId, CancellationToken ct) => Task.FromResult(HubCallOutcome.NotConnected);
     public Task<HubCallOutcome> SendSpecialKeyAsync(string agentId, string key, CancellationToken ct) => Task.FromResult(HubCallOutcome.NotConnected);
 }

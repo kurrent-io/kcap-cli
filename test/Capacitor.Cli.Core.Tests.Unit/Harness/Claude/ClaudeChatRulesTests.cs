@@ -30,6 +30,67 @@ public class ClaudeChatRulesTests {
         await Assert.That(result.Envelopes.Any(e => e.Kind == AcpEventKind.UserMessage)).IsFalse();
     }
 
+    /// The record's uuid is the id the server stores the message under, and it survives the rules' rewrites.
+    [Test]
+    [Arguments("hello")]
+    [Arguments("<bash-input>ls</bash-input>")]
+    public async Task A_user_message_carries_the_records_uuid_as_its_source_event(string content) {
+        const string Uuid = "5f0c1d7e-9a63-4c1b-8f3e-2b7d4a9e6c10";
+        var user = P($$$"""{"type":"user","uuid":"{{{Uuid}}}","message":{"content":"{{{content}}}"}}""").Single();
+        await Assert.That(user.Kind).IsEqualTo(AcpEventKind.UserMessage);
+        await Assert.That(user.SourceEventId).IsEqualTo(Guid.Parse(Uuid));
+    }
+
+    [Test]
+    public async Task A_bang_command_shows_the_command_and_acknowledges_it() {
+        var chat = TranscriptChat.For("claude")!;
+        var result = chat.ProjectWithInputs("""{"type":"user","message":{"content":"<bash-input>kubectl get pods</bash-input>"}}""", 1, Received, chat.CreateContext("a1", null));
+        await Assert.That(result.Envelopes).Count().IsEqualTo(1);
+        await Assert.That(result.Envelopes[0].Kind).IsEqualTo(AcpEventKind.UserMessage);
+        await Assert.That(result.Envelopes[0].ToolKind).IsEqualTo(ChatDisplayKind.Shell);
+        await Assert.That(result.Envelopes[0].Text).IsEqualTo("! kubectl get pods");
+        await Assert.That(result.SubmittedInputs).IsEquivalentTo(new[] { "!kubectl get pods" });
+    }
+
+    [Test]
+    public async Task An_attached_bang_command_shows_the_typed_command_and_keeps_the_trailer_for_the_queue() {
+        var chat = TranscriptChat.For("claude")!;
+        var result = chat.ProjectWithInputs("""{"type":"user","message":{"content":"<bash-input>kubectl get pods\n\n[Attached files: .attached/x/a.png]</bash-input>"}}""", 1, Received, chat.CreateContext("a1", null));
+        await Assert.That(result.Envelopes).Count().IsEqualTo(1);
+        await Assert.That(result.Envelopes[0].ToolKind).IsEqualTo(ChatDisplayKind.Shell);
+        await Assert.That(result.Envelopes[0].Text).IsEqualTo("! kubectl get pods");
+        await Assert.That(result.SubmittedInputs).IsEquivalentTo(new[] { "!kubectl get pods\n\n[Attached files: .attached/x/a.png]" });
+    }
+
+    [Test]
+    public async Task Bang_output_is_a_system_note_and_a_blank_one_is_dropped() {
+        var shown = P("""{"type":"user","message":{"content":"<bash-stdout>NAME\nweb</bash-stdout><bash-stderr></bash-stderr>"}}""");
+        await Assert.That(shown).Count().IsEqualTo(1);
+        await Assert.That(shown[0].Kind).IsEqualTo(AcpEventKind.SystemNote);
+        await Assert.That(shown[0].ToolKind).IsEqualTo(ChatDisplayKind.Shell);
+        await Assert.That(shown[0].Text).IsEqualTo("NAME\nweb");
+
+        var stderr = P("""{"type":"user","message":{"content":"<bash-stdout></bash-stdout><bash-stderr>denied</bash-stderr>"}}""");
+        await Assert.That(stderr).Count().IsEqualTo(1);
+        await Assert.That(stderr[0].Kind).IsEqualTo(AcpEventKind.SystemNote);
+        await Assert.That(stderr[0].Text).IsEqualTo("denied");
+
+        var both = P("""{"type":"user","message":{"content":"<bash-stdout>ok</bash-stdout><bash-stderr>warn</bash-stderr>"}}""");
+        await Assert.That(both[0].Text).IsEqualTo("ok\nwarn");
+
+        await Assert.That(P("""{"type":"user","message":{"content":"<bash-stdout></bash-stdout><bash-stderr></bash-stderr>"}}""")).IsEmpty();
+    }
+
+    [Test]
+    public async Task Quoted_bash_tags_stay_a_user_message_and_do_not_acknowledge_a_bang() {
+        var chat = TranscriptChat.For("claude")!;
+        var result = chat.ProjectWithInputs("""{"type":"user","message":{"content":"see <bash-input>ls</bash-input> below"}}""", 1, Received, chat.CreateContext("a1", null));
+        await Assert.That(result.Envelopes).Count().IsEqualTo(1);
+        await Assert.That(result.Envelopes[0].Kind).IsEqualTo(AcpEventKind.UserMessage);
+        await Assert.That(result.Envelopes[0].Text).IsEqualTo("see <bash-input>ls</bash-input> below");
+        await Assert.That(result.SubmittedInputs).IsEquivalentTo(new[] { "see <bash-input>ls</bash-input> below" });
+    }
+
     [Test]
     public async Task String_user_content_is_one_user_message_with_its_timestamp() {
         var e = P("""{"type":"user","message":{"role":"user","content":"hello"},"timestamp":"2026-08-26T12:00:00Z"}""");
@@ -38,6 +99,31 @@ public class ClaudeChatRulesTests {
         await Assert.That(e[0].Text).IsEqualTo("hello");
         await Assert.That(e[0].TimestampIso).IsEqualTo("2026-08-26T12:00:00Z");
     }
+
+    /// The summary is Claude Code's, not the user's, even when it quotes a slash command the user ran.
+    [Test]
+    public async Task A_compaction_summary_is_a_note_and_never_acknowledges_input() {
+        var chat = TranscriptChat.For("claude")!;
+        var result = chat.ProjectWithInputs("""{"type":"user","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"content":"This session is being continued from a previous conversation.\n\n<command-name>/review</command-name>\n"}}""", 1, Received, chat.CreateContext("a1", null));
+        var note = result.Envelopes.Single();
+        await Assert.That(note.Kind).IsEqualTo(AcpEventKind.SystemNote);
+        await Assert.That(note.ToolKind).IsEqualTo(ChatDisplayKind.CompactSummary);
+        await Assert.That(note.Text).IsEqualTo("This session is being continued from a previous conversation.\n\n<command-name>/review</command-name>");
+        await Assert.That(result.SubmittedInputs).IsEmpty();
+    }
+
+    /// Claude Code also flags a message queued while compaction runs; a peer's hand-back keeps its own label.
+    [Test]
+    public async Task A_queued_handback_flagged_as_compact_summary_stays_a_subagent_report() {
+        var note = P("""{"type":"attachment","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"<agent-message from=\"a1\">\n[Subagent hand-back] Preamble. The report follows:\n  **Done.**\n</agent-message>","isMeta":true,"isCompactSummary":true,"origin":{"kind":"peer","from":"a1"}}}""").Single();
+        await Assert.That(note.Kind).IsEqualTo(AcpEventKind.SystemNote);
+        await Assert.That(note.ToolKind).IsEqualTo(ChatDisplayKind.AgentReport);
+        await Assert.That(note.Text).IsEqualTo("**Done.**");
+    }
+
+    [Test]
+    public async Task A_blank_compaction_summary_projects_to_nothing() =>
+        await Assert.That(P("""{"type":"user","isCompactSummary":true,"message":{"content":"  "}}""")).IsEmpty();
 
     [Test]
     public async Task Meta_and_sidechain_records_project_to_nothing() {
@@ -54,6 +140,48 @@ public class ClaudeChatRulesTests {
 
         var onlyWrappers = P("""{"type":"user","message":{"content":[{"type":"text","text":"<command-name>/clear</command-name><local-command-stdout>ok</local-command-stdout>"}]}}""");
         await Assert.That(onlyWrappers).IsEmpty();
+    }
+
+    /// The record shape Claude Code writes for a paste: the queue must see the same text the
+    /// bubble shows, or an attached prompt never leaves it.
+    [Test]
+    public async Task A_paste_shows_its_text_and_trailer_without_the_wrapper() {
+        var chat = TranscriptChat.For("claude")!;
+        var result = chat.ProjectWithInputs("""{"type":"user","message":{"role":"user","content":"\n\n<pasted_content id=\"97c1\">\nchecks are slow\n\n\n[Attached files: .attached/b1/Screenshot 1.png]\n</pasted_content id=\"97c1\">\n"}}""", 1, Received, chat.CreateContext("a1", null));
+        const string expected = "checks are slow\n\n\n[Attached files: .attached/b1/Screenshot 1.png]";
+        await Assert.That(result.Envelopes.Single().Text).IsEqualTo(expected);
+        await Assert.That(result.SubmittedInputs).IsEquivalentTo(new[] { expected });
+
+        var quoted = P("""{"type":"user","message":{"content":"why does <pasted_content id=\"a\"> never close with </pasted_content id=\"b\">?"}}""");
+        await Assert.That(quoted.Single().Text).IsEqualTo("why does <pasted_content id=\"a\"> never close with </pasted_content id=\"b\">?");
+
+        var matching = P("""{"type":"user","message":{"content":"why does <pasted_content id=\"a\">x</pasted_content id=\"a\">?"}}""");
+        await Assert.That(matching.Single().Text).IsEqualTo("why does <pasted_content id=\"a\">x</pasted_content id=\"a\">?");
+    }
+
+    [Test]
+    public async Task An_embedded_paste_keeps_the_spaces_at_its_edges() {
+        var chat = TranscriptChat.For("claude")!;
+        var result = chat.ProjectWithInputs("""{"type":"user","message":{"content":"before\n\n<pasted_content id=\"p\">\n  keep  \n</pasted_content id=\"p\">\nafter"}}""", 1, Received, chat.CreateContext("a1", null));
+        const string expected = "before\n\n  keep  \nafter";
+        await Assert.That(result.Envelopes.Single().Text).IsEqualTo(expected);
+        await Assert.That(result.SubmittedInputs).IsEquivalentTo(new[] { expected });
+    }
+
+    [Test]
+    public async Task Unmatched_paste_openings_stay_in_the_message() {
+        var opens = string.Concat(Enumerable.Repeat("<pasted_content id=\"a\">", 64));
+        var shown = P("{\"type\":\"user\",\"message\":{\"content\":" + System.Text.Json.JsonSerializer.Serialize(opens + " tail") + "}}");
+        await Assert.That(shown.Single().Text).IsEqualTo(opens + " tail");
+    }
+
+    /// <summary>An empty block adds no separator ahead of the first text kept, as the chat always joined.</summary>
+    [Test]
+    [Arguments("""[{"type":"text","text":""},{"type":"text","text":"a"}]""", "a")]
+    [Arguments("""[{"type":"text","text":"a"},{"type":"text","text":""}]""", "a\n")]
+    public async Task Empty_result_blocks_join_as_the_chat_always_joined(string content, string expected) {
+        var e = P($$$"""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t","content":{{{content}}}}]}}""");
+        await Assert.That(e[0].ToolResult).IsEqualTo(expected);
     }
 
     [Test]
@@ -107,8 +235,10 @@ public class ClaudeChatRulesTests {
 
     [Test]
     public async Task Every_other_record_type_and_malformed_input_project_to_nothing() {
-        foreach (var type in new[] { "attachment", "summary", "system", "file-history-snapshot", "file-history-delta", "mode", "permission-mode", "last-prompt", "ai-title", "atis-latch", "worktree-state", "queue-operation", "progress", "unknown-future" })
+        foreach (var type in new[] { "summary", "system", "file-history-snapshot", "file-history-delta", "mode", "permission-mode", "last-prompt", "ai-title", "atis-latch", "worktree-state", "queue-operation", "progress", "unknown-future" })
             await Assert.That(P($$$"""{"type":"{{{type}}}","message":{"content":"x"}}""")).IsEmpty().Because(type);
+
+        await Assert.That(P("""{"type":"attachment","message":{"content":"x"}}""")).IsEmpty();
 
         await Assert.That(P("not json")).IsEmpty();
         await Assert.That(P("[1,2]")).IsEmpty();
@@ -158,5 +288,331 @@ public class ClaudeChatRulesTests {
     public async Task A_bash_call_that_reads_a_file_is_still_execute() {
         var e = P("""{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t","name":"Bash","input":{"command":"sed -n '1,20p' src/Program.cs"}}]}}""");
         await Assert.That(e[0].ToolKind).IsEqualTo(AcpToolKind.Execute);
+    }
+
+    static ChatProjectionResult R(string line) {
+        var chat = TranscriptChat.For("claude")!;
+        return chat.ProjectWithInputs(line, 1, Received, chat.CreateContext("a1", null));
+    }
+
+    const string AgentCall = """{"type":"assistant","timestamp":"2026-09-17T10:00:00Z","message":{"content":[{"type":"tool_use","id":"toolu_A","name":"Agent","input":{"description":"Map desktop chat UI surfaces","prompt":"go","subagent_type":"Explore"}}]}}""";
+    const string LaunchResult = """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_A","content":[{"type":"text","text":"Async agent launched successfully."}]}]},"toolUseResult":{"isAsync":true,"status":"async_launched","agentId":"a9f262478e032f427","description":"Map desktop chat UI surfaces","prompt":"go"}}""";
+    const string NotificationText = "<task-notification>\n<task-id>a9f262478e032f427</task-id>\n<tool-use-id>toolu_A</tool-use-id>\n<output-file>/tmp/x.output</output-file>\n<status>completed</status>\n<summary>Agent \"Map desktop chat UI surfaces\" finished</summary>\n</task-notification>";
+
+    static string Notification(bool originKind, string status = "completed", string flags = "") =>
+        $$$"""{"type":"user","timestamp":"2026-09-17T10:05:00Z",{{{(originKind ? "\"origin\":{\"kind\":\"task-notification\"}," : "")}}}{{{flags}}}"message":{"role":"user","content":"{{{NotificationText.Replace("\n", "\\n").Replace("\"", "\\\"").Replace("completed", status)}}}"}}""";
+
+    [Test]
+    public async Task Started_for_Agent_and_Task_calls_names_the_type_and_falls_back_to_agent() {
+        var agent = R(AgentCall);
+        await Assert.That(agent.Envelopes).Count().IsEqualTo(1);
+        var started = (RunSignal.Started)agent.Runs.Single();
+        await Assert.That(started.CallId).IsEqualTo("toolu_A");
+        await Assert.That(started.Name).IsEqualTo("Explore");
+        await Assert.That(started.Description).IsEqualTo("Map desktop chat UI surfaces");
+        await Assert.That(started.At).IsEqualTo(new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero));
+
+        var task = R("""{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_B","name":"Task","input":{"description":"Review","prompt":"go"}}]}}""");
+        var bare = (RunSignal.Started)task.Runs.Single();
+        await Assert.That(bare.CallId).IsEqualTo("toolu_B");
+        await Assert.That(bare.Name).IsEqualTo("agent");
+        await Assert.That(bare.Description).IsEqualTo("Review");
+    }
+
+    [Test]
+    public async Task No_signal_for_a_sidechain_call_a_sidechain_notification_or_any_other_tool() {
+        await Assert.That(R(AgentCall.Replace("\"type\":\"assistant\",", "\"type\":\"assistant\",\"isSidechain\":true,")).Runs).IsEmpty();
+        await Assert.That(R(Notification(originKind: true, flags: "\"isSidechain\":true,")).Runs).IsEmpty();
+        await Assert.That(R(LaunchResult.Replace("\"type\":\"user\",", "\"type\":\"user\",\"isSidechain\":true,")).Runs).IsEmpty();
+        await Assert.That(R("""{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t","name":"Read","input":{"file_path":"/x","subagent_type":"Explore"}}]}}""").Runs).IsEmpty();
+        await Assert.That(R(ShellCall.Replace("\"type\":\"assistant\",", "\"type\":\"assistant\",\"isSidechain\":true,")).Runs).IsEmpty();
+    }
+
+    const string ShellCall = """{"type":"assistant","timestamp":"2026-09-17T10:00:00Z","message":{"content":[{"type":"tool_use","id":"toolu_B","name":"Bash","input":{"command":"dotnet test --solution Capacitor.slnx\n  --no-build","description":"Run the full suite","run_in_background":true}}]}}""";
+    const string ShellLaunchResult = """{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_B","type":"tool_result","content":"Command running in background with ID: bcyix00ks. Output is being written to: /tmp/x/tasks/bcyix00ks.output.","is_error":false}]},"toolUseResult":{"stdout":"","stderr":"","interrupted":false,"isImage":false,"noOutputExpected":false,"backgroundTaskId":"bcyix00ks"}}""";
+    const string ShellTimedOutResult = """{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_C","type":"tool_result","content":"Command running in background with ID: b7k2. Output is being written to: /tmp/x/tasks/b7k2.output.","is_error":false}]},"toolUseResult":{"stdout":"","stderr":"","interrupted":false,"isImage":false,"noOutputExpected":false,"backgroundTaskId":"b7k2","timedOutAfterMs":120000}}""";
+
+    [Test]
+    public async Task A_Bash_call_is_a_provisional_shell_start_named_by_its_description() {
+        var started = (RunSignal.Started)R(ShellCall).Runs.Single();
+        await Assert.That(started.CallId).IsEqualTo("toolu_B");
+        await Assert.That(started.Kind).IsEqualTo(RunKind.Shell);
+        await Assert.That(started.Provisional).IsTrue();
+        await Assert.That(started.Name).IsEqualTo("Run the full suite");
+        await Assert.That(started.Description).IsEqualTo("dotnet test --solution Capacitor.slnx");
+        await Assert.That(started.At).IsEqualTo(new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero));
+    }
+
+    /// A call without the flag still starts provisionally: a foreground command that hits its
+    /// timeout is moved to the background, and only its result says so.
+    [Test]
+    public async Task An_unflagged_Bash_call_without_a_description_is_named_by_its_first_command_line() {
+        var call = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_C","name":"Bash","input":{"command":"  make check\nmake lint"}}]}}""";
+        var started = (RunSignal.Started)R(call).Runs.Single();
+        await Assert.That(started.Provisional).IsTrue();
+        await Assert.That(started.Name).IsEqualTo("make check");
+        await Assert.That(started.Description).IsEmpty();
+    }
+
+    /// A cut name keeps the whole line under it, so nothing of the command is lost.
+    [Test]
+    public async Task A_long_command_name_is_cut_to_eighty_characters() {
+        var command = new string('x', 120);
+        var started = (RunSignal.Started)R($$$"""{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_C","name":"Bash","input":{"command":"{{{command}}}"}}]}}""").Runs.Single();
+        await Assert.That(started.Name).IsEqualTo(new string('x', 79) + "…");
+        await Assert.That(started.Description).IsEqualTo(command);
+    }
+
+    [Test]
+    [Arguments(ShellLaunchResult, "toolu_B", "bcyix00ks")]
+    [Arguments(ShellTimedOutResult, "toolu_C", "b7k2")]
+    public async Task A_result_with_a_background_task_id_detaches_the_call(string line, string callId, string taskId) {
+        var detached = (RunSignal.Detached)R(line).Runs.Single();
+        await Assert.That(detached.CallId).IsEqualTo(callId);
+        await Assert.That(detached.AgentId).IsEqualTo(taskId);
+    }
+
+    [Test]
+    public async Task A_plain_Bash_result_is_no_signal() {
+        var result = """{"type":"user","message":{"content":[{"tool_use_id":"toolu_B","type":"tool_result","content":"ok"}]},"toolUseResult":{"stdout":"ok","stderr":"","interrupted":false,"isImage":false,"noOutputExpected":false}}""";
+        await Assert.That(R(result).Runs).IsEmpty();
+    }
+
+    [Test]
+    [Arguments("running")]
+    [Arguments("pending")]
+    public async Task A_running_or_unknown_notification_status_ends_nothing(string status) {
+        await Assert.That(R(Notification(originKind: true, status: status)).Runs).IsEmpty();
+    }
+
+    [Test]
+    public async Task Detached_with_the_agent_id_only_for_an_async_launched_result() {
+        var launch = R(LaunchResult);
+        await Assert.That(launch.Envelopes.Single().Kind).IsEqualTo(AcpEventKind.ToolResult);
+        var detached = (RunSignal.Detached)launch.Runs.Single();
+        await Assert.That(detached.CallId).IsEqualTo("toolu_A");
+        await Assert.That(detached.AgentId).IsEqualTo("a9f262478e032f427");
+
+        await Assert.That(R("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_A","content":"done"}]},"toolUseResult":{"status":"async_launched"}}""").Runs).IsEmpty();
+        await Assert.That(R("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_A","content":"done"}]}}""").Runs).IsEmpty();
+    }
+
+    /// A subagent's own transcript is all sidechain records: hidden in the parent's chat, shown in its own,
+    /// along with the runs it starts.
+    [Test]
+    public async Task Sidechain_records_show_only_in_a_subagents_own_view() {
+        const string line = """{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"Found it"}]}}""";
+        var nested = ShellCall.Replace("\"type\":\"assistant\",", "\"type\":\"assistant\",\"isSidechain\":true,");
+        var own = TranscriptChat.ForSubagent("claude")!;
+
+        await Assert.That(R(line).Envelopes).IsEmpty();
+        await Assert.That(own.ProjectWithInputs(line, 1, Received, own.CreateContext("a1", "s1")).Envelopes.Single().Text).IsEqualTo("Found it");
+        await Assert.That(own.ProjectWithInputs(nested, 2, Received, own.CreateContext("a1", "s1")).Runs.Single()).IsTypeOf<RunSignal.Started>();
+    }
+
+    /// A foreground subagent's result names the agent that ran, which is how its row learns the id its
+    /// transcript is filed under.
+    [Test]
+    public async Task A_completed_foreground_result_identifies_its_agent() {
+        var identified = (RunSignal.Identified)R("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_A","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"a9f262478e032f427"}}""").Runs.Single();
+        await Assert.That(identified.CallId).IsEqualTo("toolu_A");
+        await Assert.That(identified.AgentId).IsEqualTo("a9f262478e032f427");
+    }
+
+    /// Runs twice: identified by origin_kind as the local leaf writes it, and by text alone as the
+    /// server's events present it. Both yield the note row, the finish and no submitted input.
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task Finished_from_a_notification_keyed_by_both_ids_with_the_status_as_its_outcome(bool originKind) {
+        var done = R(Notification(originKind));
+        await Assert.That(done.Envelopes.Single().Kind).IsEqualTo(AcpEventKind.SystemNote);
+        await Assert.That(done.Envelopes.Single().Text).IsEqualTo("**Agent \"Map desktop chat UI surfaces\" finished**");
+        await Assert.That(done.SubmittedInputs).IsEmpty();
+        var finished = (RunSignal.Finished)done.Runs.Single();
+        await Assert.That(finished.CallId).IsEqualTo("toolu_A");
+        await Assert.That(finished.AgentId).IsEqualTo("a9f262478e032f427");
+        await Assert.That(finished.Outcome).IsEqualTo(RunOutcome.Done);
+        await Assert.That(finished.At).IsEqualTo(new DateTimeOffset(2026, 9, 17, 10, 5, 0, TimeSpan.Zero));
+
+        var failed = (RunSignal.Finished)R(Notification(originKind, status: "failed")).Runs.Single();
+        await Assert.That(failed.Outcome).IsEqualTo(RunOutcome.Failed);
+        var killed = (RunSignal.Finished)R(Notification(originKind, status: "killed")).Runs.Single();
+        await Assert.That(killed.Outcome).IsEqualTo(RunOutcome.Stopped);
+    }
+
+    /// Claude Code delivers a notification that lands mid-turn as a queued_command attachment
+    /// rather than the user line the rules above read; the leaf projects it as that line, so it
+    /// finishes the subagent and shows its note the same way.
+    [Test]
+    public async Task An_attachment_delivered_notification_finishes_the_subagent_and_shows_its_note() {
+        var line = """{"type":"attachment","attachment":{"type":"queued_command","commandMode":"task-notification","prompt":"<task-notification>\n<task-id>a8c6e38f425550515</task-id>\n<tool-use-id>toolu_A</tool-use-id>\n<status>completed</status>\n<summary>Agent \"Trace subagent data to desktop\" finished</summary>\n</task-notification>"}}""";
+        var result = R(line);
+        await Assert.That(result.Envelopes.Single().Kind).IsEqualTo(AcpEventKind.SystemNote);
+        await Assert.That(result.Envelopes.Single().Text).IsEqualTo("**Agent \"Trace subagent data to desktop\" finished**");
+        var finished = (RunSignal.Finished)result.Runs.Single();
+        await Assert.That(finished.CallId).IsEqualTo("toolu_A");
+        await Assert.That(finished.AgentId).IsEqualTo("a8c6e38f425550515");
+        await Assert.That(finished.Outcome).IsEqualTo(RunOutcome.Done);
+
+        var prompt = R("""{"type":"attachment","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"go do x"}}""");
+        await Assert.That(prompt.Envelopes.Single().Kind).IsEqualTo(AcpEventKind.UserMessage);
+        await Assert.That(prompt.SubmittedInputs.Single()).IsEqualTo("go do x");
+        await Assert.That(prompt.Runs).IsEmpty();
+    }
+
+    /// Meta hides a notification's row on either delivery: the flag rides the attachment as it
+    /// rides the user line, and the finish lands either way.
+    [Test]
+    public async Task A_meta_attachment_notification_yields_its_finish_but_neither_row_nor_input() {
+        var meta = R("""{"type":"attachment","isMeta":true,"attachment":{"type":"queued_command","commandMode":"task-notification","prompt":"<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>toolu_A</tool-use-id>\n<status>completed</status>\n<summary>Agent \"X\" finished</summary>\n</task-notification>"}}""");
+        await Assert.That(meta.Envelopes).IsEmpty();
+        await Assert.That(meta.SubmittedInputs).IsEmpty();
+        await Assert.That(meta.Runs.Single()).IsTypeOf<RunSignal.Finished>();
+    }
+
+    [Test]
+    public async Task A_notification_marked_meta_yields_its_finish_but_neither_row_nor_input() {
+        var meta = R(Notification(originKind: true, flags: "\"isMeta\":true,"));
+        await Assert.That(meta.Envelopes).IsEmpty();
+        await Assert.That(meta.SubmittedInputs).IsEmpty();
+        await Assert.That(meta.Runs.Single()).IsTypeOf<RunSignal.Finished>();
+    }
+
+    [Test]
+    public async Task A_notification_recognised_by_text_alone_is_not_a_user_turn() {
+        var byText = R(Notification(originKind: false));
+        await Assert.That(byText.Envelopes.Single().Kind).IsEqualTo(AcpEventKind.SystemNote);
+        await Assert.That(byText.SubmittedInputs).IsEmpty();
+        var indented = R("""{"type":"user","message":{"content":"  \n<task-notification>\n<summary>done</summary>\n</task-notification>"}}""");
+        await Assert.That(indented.Envelopes.Single().Kind).IsEqualTo(AcpEventKind.SystemNote);
+        await Assert.That(indented.Runs).IsEmpty();
+        var mention = R("""{"type":"user","message":{"content":"what does <task-notification> mean?"}}""");
+        await Assert.That(mention.Envelopes.Single().Kind).IsEqualTo(AcpEventKind.UserMessage);
+        await Assert.That(mention.SubmittedInputs).IsEquivalentTo(new[] { "what does <task-notification> mean?" });
+    }
+
+    const string Handback = "<agent-message from=\\\"a1d0fa10be8d6d5ce\\\">\\n[Subagent hand-back] The text below is the final report of a subagent. The report follows:\\n  Could not post it.\\n  \\n  - **What happened:** a classifier stopped me.\\n  ```sh\\n  ls -O -\\n  ```\\n</agent-message>";
+    const string HandbackBody = "Could not post it.\n\n- **What happened:** a classifier stopped me.\n```sh\nls -O -\n```";
+
+    /// A subagent's hand-back is that agent's report, never the user's turn: it shows without the
+    /// wrapper, the harness preamble or the two-space indent the harness adds to every line.
+    [Test]
+    public async Task A_handback_delivered_mid_turn_is_the_subagents_report() {
+        var result = R($$$"""{"type":"attachment","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"{{{Handback}}}","origin":{"kind":"peer","from":"a1d0fa10be8d6d5ce","handback":true},"isMeta":true}}""");
+        var note = result.Envelopes.Single();
+        await Assert.That(note.Kind).IsEqualTo(AcpEventKind.SystemNote);
+        await Assert.That(note.ToolKind).IsEqualTo(ChatDisplayKind.AgentReport);
+        await Assert.That(note.Text).IsEqualTo(HandbackBody);
+        await Assert.That(result.SubmittedInputs).IsEmpty();
+    }
+
+    /// Delivered while the session is idle, the hand-back is a meta record with a lead line and the
+    /// harness's guidance after the close; it is the only record of the report, so it still shows.
+    [Test]
+    public async Task A_handback_delivered_while_idle_shows_despite_the_meta_flag() {
+        var result = R($$$"""{"type":"user","isMeta":true,"origin":{"kind":"peer","from":"a1d0fa10be8d6d5ce","handback":true},"message":{"role":"user","content":"Another Claude session sent a message:\n{{{Handback}}}\n\nThat \"other Claude session\" is an agent working inside this same session."}}""");
+        var note = result.Envelopes.Single();
+        await Assert.That(note.ToolKind).IsEqualTo(ChatDisplayKind.AgentReport);
+        await Assert.That(note.Text).IsEqualTo(HandbackBody);
+        await Assert.That(result.SubmittedInputs).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_peer_message_recognised_by_text_alone_is_not_a_user_turn() {
+        var byText = R("""{"type":"user","message":{"content":"<agent-message from=\"reviewer\">\nLooks good to me.\n</agent-message>"}}""");
+        await Assert.That(byText.Envelopes.Single().Kind).IsEqualTo(AcpEventKind.SystemNote);
+        await Assert.That(byText.Envelopes.Single().ToolKind).IsEqualTo(ChatDisplayKind.AgentMessage);
+        await Assert.That(byText.Envelopes.Single().Text).IsEqualTo("Looks good to me.");
+        await Assert.That(byText.SubmittedInputs).IsEmpty();
+
+        var mention = R("""{"type":"user","message":{"content":"why did <agent-message from=\"x\"> show up?"}}""");
+        await Assert.That(mention.Envelopes.Single().Kind).IsEqualTo(AcpEventKind.UserMessage);
+        await Assert.That(mention.SubmittedInputs).IsEquivalentTo(new[] { "why did <agent-message from=\"x\"> show up?" });
+
+        var typed = R("""{"type":"user","origin":{"kind":"human"},"message":{"content":"<agent-message from=\"x\">\nwhat is this?\n</agent-message>"}}""");
+        await Assert.That(typed.Envelopes.Single().Kind).IsEqualTo(AcpEventKind.UserMessage);
+        await Assert.That(typed.SubmittedInputs.Single()).StartsWith("<agent-message");
+
+        var oneLine = R("""{"type":"user","message":{"content":"<agent-message from=\"x\"> is what?"}}""");
+        await Assert.That(oneLine.Envelopes.Single().Kind).IsEqualTo(AcpEventKind.UserMessage);
+        await Assert.That(oneLine.SubmittedInputs).IsEquivalentTo(new[] { "<agent-message from=\"x\"> is what?" });
+    }
+
+    [Test]
+    public async Task A_close_tag_on_the_last_line_of_text_still_ends_the_message() {
+        var note = R("""{"type":"user","message":{"content":"<agent-message from=\"reviewer\">\nDone.</agent-message>\n\nGuidance for the model."}}""").Envelopes.Single();
+        await Assert.That(note.ToolKind).IsEqualTo(ChatDisplayKind.AgentMessage);
+        await Assert.That(note.Text).IsEqualTo("Done.");
+    }
+
+    /// The notification that follows a hand-back points at the report instead of repeating it; the
+    /// pointer is dropped and the subagent still finishes.
+    [Test]
+    public async Task A_notification_pointing_at_a_handback_shows_only_its_summary() {
+        var result = R("""{"type":"attachment","attachment":{"type":"queued_command","commandMode":"task-notification","prompt":"<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>toolu_A</tool-use-id>\n<status>completed</status>\n<summary>Agent \"Post plan\" finished</summary>\n<result>This agent's report was delivered to you as a message from \"a1\" (its SubagentHandback call). Read it there; it is not repeated here.\n</result>\n</task-notification>"}}""");
+        await Assert.That(result.Envelopes.Single().Text).IsEqualTo("**Agent \"Post plan\" finished**");
+        await Assert.That(result.Runs.Single()).IsTypeOf<RunSignal.Finished>();
+    }
+
+    [Test]
+    public async Task Stopped_from_a_TaskStop_success_result_and_nothing_from_a_TaskOutput_probe() {
+        var stop = R("""{"type":"user","timestamp":"2026-09-17T10:07:00Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_S","content":"Successfully stopped task: a9f262478e032f427"}]},"toolUseResult":{"task_id":"a9f262478e032f427","task_type":"local_agent","message":"Successfully stopped task: a9f262478e032f427"}}""");
+        var stopped = (RunSignal.Finished)stop.Runs.Single();
+        await Assert.That(stopped.CallId).IsNull();
+        await Assert.That(stopped.AgentId).IsEqualTo("a9f262478e032f427");
+        await Assert.That(stopped.Outcome).IsEqualTo(RunOutcome.Stopped);
+        await Assert.That(stopped.At).IsEqualTo(new DateTimeOffset(2026, 9, 17, 10, 7, 0, TimeSpan.Zero));
+
+        var probe = R("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_O","content":"…"}]},"toolUseResult":{"task_id":"a9f262478e032f427","task_type":"local_agent","message":"Task output (last 10 lines)","retrieval_status":"partial"}}""");
+        await Assert.That(probe.Runs).IsEmpty();
+        var shell = (RunSignal.Finished)R("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_S","content":"Successfully stopped task: b1"}]},"toolUseResult":{"task_id":"b1","task_type":"local_bash","message":"Successfully stopped task: b1","command":"sleep 100"}}""").Runs.Single();
+        await Assert.That(shell.AgentId).IsEqualTo("b1");
+        await Assert.That(shell.Outcome).IsEqualTo(RunOutcome.Stopped);
+        var shellProbe = R("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_O","content":"…"}]},"toolUseResult":{"task_id":"b1","task_type":"local_bash","message":"Task output (last 10 lines)"}}""");
+        await Assert.That(shellProbe.Runs).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_launch_acknowledgement_spelled_agent_id_still_detaches() {
+        var launch = R(LaunchResult.Replace("\"agentId\":\"a9f262478e032f427\"", "\"agent_id\":\"a9f262478e032f427\""));
+        var detached = (RunSignal.Detached)launch.Runs.Single();
+        await Assert.That(detached.CallId).IsEqualTo("toolu_A");
+        await Assert.That(detached.AgentId).IsEqualTo("a9f262478e032f427");
+    }
+
+    [Test]
+    public async Task A_notification_cut_off_before_its_closing_tag_still_finishes() {
+        var line = """{"type":"user","message":{"content":"<task-notification>\n<task-id>a9f262478e032f427</task-id>\n<tool-use-id>toolu_A"}}""";
+        var finished = (RunSignal.Finished)R(line).Runs.Single();
+        await Assert.That(finished.CallId).IsEqualTo("toolu_A");
+        await Assert.That(finished.AgentId).IsEqualTo("a9f262478e032f427");
+        await Assert.That(finished.Outcome).IsNull();
+    }
+
+    /// A resumed Claude Code reports a background agent the previous process left running this way:
+    /// keyed by the agent id alone, with a status of its own.
+    [Test]
+    public async Task A_notification_for_an_agent_the_previous_process_left_running_finishes_it_as_stopped() {
+        var line = """{"type":"user","timestamp":"2026-10-22T13:42:55.148Z","origin":{"kind":"task-notification"},"promptSource":"system","message":{"role":"user","content":"<task-notification>\n<task-id>a9202cd3d93195cce</task-id>\n<output-file>/tmp/a9202cd3d93195cce.output</output-file>\n<status>stopped</status>\n<summary>Background agent \"Review Task 12 (spec + quality)\" didn't finish before the previous session ended</summary>\n<note>No completion record was found for it in the previous session.</note>\n</task-notification>"}}""";
+        var finished = (RunSignal.Finished)R(line).Runs.Single();
+        await Assert.That(finished.CallId).IsNull();
+        await Assert.That(finished.AgentId).IsEqualTo("a9202cd3d93195cce");
+        await Assert.That(finished.Outcome).IsEqualTo(RunOutcome.Stopped);
+    }
+
+    [Test]
+    public async Task A_notification_status_is_matched_without_regard_to_case() {
+        var finished = (RunSignal.Finished)R(Notification(originKind: true, status: "Completed")).Runs.Single();
+        await Assert.That(finished.Outcome).IsEqualTo(RunOutcome.Done);
+    }
+
+    [Test]
+    public async Task A_stop_message_is_matched_after_leading_whitespace_without_regard_to_case() {
+        var stop = R("""{"type":"user","timestamp":"2026-09-17T10:07:00Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_S","content":"successfully stopped task: a9f262478e032f427"}]},"toolUseResult":{"task_id":"a9f262478e032f427","task_type":"local_agent","message":"  successfully stopped task: a9f262478e032f427"}}""");
+        var stopped = (RunSignal.Finished)stop.Runs.Single();
+        await Assert.That(stopped.CallId).IsNull();
+        await Assert.That(stopped.AgentId).IsEqualTo("a9f262478e032f427");
+        await Assert.That(stopped.Outcome).IsEqualTo(RunOutcome.Stopped);
     }
 }

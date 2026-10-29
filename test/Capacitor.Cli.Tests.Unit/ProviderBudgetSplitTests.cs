@@ -105,4 +105,22 @@ public class ProviderBudgetSplitTests {
         await Assert.That(pr).IsNull();
         await Assert.That(calls.Select(c => c.Args)).IsEquivalentTo(["gh pr view --json number,title,url,headRefName"]);
     }
+
+    /// <summary>A branch with no upstream whose push went under another name: both name lookups
+    /// miss, and the PR is still found through HEAD's history.</summary>
+    [Test]
+    public async Task Falls_back_to_the_history_lookup_when_no_name_matches() {
+        CommandRunner run = (cmd, args, _, _) => Task.FromResult<string?>((cmd, args) switch {
+            ("git", "rev-list -n 100 HEAD --not --remotes=*/HEAD") => "local\npushed",
+            ("gh", _) when args.StartsWith("pr list ", StringComparison.Ordinal)
+                => """[{"number":1500,"headRefName":"fix/renamed","headRefOid":"pushed","isCrossRepository":false}]""",
+            _ => null
+        });
+
+        var pr = await RepositoryDetection.ResolveAndDetectPrAsync(
+            new GitProviderRouter(),
+            "github.com", "acme", "widget", "capacitor/agent-x", "/cwd", TimeSpan.FromSeconds(2), run, new FakeTimeProvider());
+
+        await Assert.That(pr!.Number).IsEqualTo(1500);
+    }
 }

@@ -4,9 +4,12 @@ Usage: kcap daemon <subcommand>
 
 Subcommands:
   start [-d]              Start the daemon (foreground, or -d for background)
-  stop [--name N] [--yes] Stop a running daemon (prompts on multi unless --yes)
-  restart [--name N]      Restart the daemon (now if idle; --when-idle queues;
-                          --force overrides while busy)
+  stop [--name N] [--yes] [--keep-agents]
+                          Stop a running daemon and end its hosted agents
+                          (prompts on multi unless --yes)
+  restart [--name N]      Restart the daemon now; its hosted agents are stopped
+                          and resumed (--when-idle queues; --force skips the
+                          flow-round wait)
   status [--name N]       Show daemon status, incl. the running daemon's
                           version (lists all when --name omitted)
   logs                    Show recent daemon log output
@@ -32,17 +35,44 @@ Options for stop:
                           before stopping them (unless --yes is passed).
   --yes, -y               Unattended mode: stop all running daemons without
                           prompting. Useful in cleanup scripts.
+  --keep-agents           Keep the hosted agents for the next start to resume.
+  --direct                Windows only: ask the daemon itself even when a service
+                          manages it. The Windows service uses it for its own
+                          graceful stop; to stop a supervised daemon, use
+                          `daemon service stop`.
 
 Options for restart:
-  --when-idle             Queue the restart; it applies once the daemon is idle
-                          (no running hosted agents or eval). Returns immediately.
-  --force                 Restart now even if busy (running agents are torn down).
+  (none)                  Restart now. Interactive agents and Claude flow
+                          reviewers are stopped and resumed on the new daemon.
+                          Refused while an eval, a launch or a flow
+                          participant's round is in progress.
+  --when-idle             Queue the restart; it applies once the daemon hosts no
+                          agents at all and no eval or launch is in progress.
+                          Returns immediately.
+  --force                 Restart without waiting for a flow round: a flow
+                          participant mid-round is resumed with its round (a
+                          Claude reviewer), parked (Codex) or ended. An eval or a
+                          launch in progress still holds the restart.
 
 Updating: after `kcap update`, a running daemon on macOS/Linux detects the new
-binary and restarts itself when idle. `kcap daemon status` reports the running
+binary and restarts itself, stopping its hosted agents and resuming them on the
+new version. It waits until no eval, launch or flow round is in progress and
+every interactive agent is waiting on input, the last for at most
+KCAP_RESTART_TURN_WAIT_SECONDS. `kcap daemon status` reports the running
 daemon's version plus any pending restart, so you can confirm a self-update took
 effect. On Windows, stop the daemon before `kcap update` (a running daemon locks
 its binary).
+
+Resume after a restart: `kcap agent ls` shows each agent's state (running,
+resuming, interrupted), and `kcap agent resume <id>` retries an interrupted one.
+`kcap config set daemon.auto_resume false` leaves agents interrupted instead of
+resuming them at start. Tuning, read from the environment:
+  KCAP_RESTART_TURN_WAIT_SECONDS  Turn-boundary wait for a self-update (default 300)
+  KCAP_RESUME_MAX_AGE_SECONDS     Oldest agent a starting daemon resumes (default 86400; 0 for no bound)
+  KCAP_RESUME_CONCURRENCY         Agents resumed at once (default 2)
+  KCAP_RESUME_READINESS_SECONDS   How long a resumed agent must stay up (default 10)
+  KCAP_ATTACH_RECONNECT_SECONDS   How long `kcap agent attach` waits for its agent
+                                  to come back (default 90)
 
 Options for doctor:
   --clean                 Remove stale entries (lock files whose holder is
@@ -54,8 +84,8 @@ Subcommands for service (per-user; auto-restarts on crash/SIGKILL, starts at log
                           Register the daemon as an OS service and start it.
                           Pins the profile via KCAP_PROFILE and captures PATH so
                           claude/codex resolve as they do in your shell. --verify
-                          (macOS/launchd only; rejected elsewhere) polls readiness
-                          (hello), version, and ownership (job pid) before
+                          polls readiness (hello), version, and ownership (job
+                          pid) before
                           exiting 0, rolling back (uninstalling the unit) and
                           exiting with a coded stderr token (e.g.
                           verify_hello_validation) if that never happens within
@@ -69,17 +99,28 @@ Subcommands for service (per-user; auto-restarts on crash/SIGKILL, starts at log
                           contended, never taken over.
                           --no-start cannot be combined with --verify (verify
                           proves the STARTED daemon is ready).
+  install --system [...]  Windows: first install or update the machine's
+                          kcap-service (one administrator prompt), then hand
+                          this daemon to it. Needs the desktop app's install,
+                          which carries kcap-service.exe. A declined prompt
+                          exits 1223 and changes nothing.
   uninstall [--name N]    Stop and remove the service unit.
+  uninstall --system      Windows: hand this daemon back, then remove the
+                          machine's kcap-service (one administrator prompt).
+  uninstall --under DIR   Stop and remove every unit whose daemon binary is
+                          inside DIR, and no other. The desktop app's
+                          uninstaller runs this for its own folder.
   start [--name N] [--verify]
-                          Start the installed service now. --verify (macOS/
-                          launchd only; rejected elsewhere) polls readiness
-                          (hello) and ownership (job pid) before exiting 0,
+                          Start the installed service now. --verify polls
+                          readiness (hello) and ownership (job pid) before exiting 0,
                           rolling back and exiting with a coded stderr token
                           (e.g. verify_readiness_timeout) if the service never
                           comes up within the poll budget.
-  stop [--name N]         Stop the running service (unloads/deregisters it with
+  stop [--name N] [--keep-agents]
+                          Stop the running service (unloads/deregisters it with
                           the OS supervisor; stays installed — returns at next
-                          login or `service start`).
+                          login or `service start`). Ends its hosted agents;
+                          --keep-agents keeps them for the next start to resume.
   ensure [--name N] [--profile P] [--json]
                           Flow-driven ladder: from a fresh status read, install
                           when there is no unit (baking the born-prompt consent
@@ -107,17 +148,25 @@ Subcommands for service (per-user; auto-restarts on crash/SIGKILL, starts at log
                           binary paths, transaction-marker state) and exits
                           non-zero if the underlying service state can't be
                           determined.
+  refresh [--force]       Bring installed units up to this version. A reload
+                          stops the daemon with its hosted agents kept, and the
+                          reloaded daemon resumes them; --force reloads the
+                          named daemon and prints refresh_outcome=<token> on
+                          stderr; launchd only.
 
 Subcommands for shim (the command-line tool — kcap on your terminal PATH):
-  ensure [--json]         Probe the login shell. If kcap already resolves
-                          from the terminal, report already_on_path and exit
-                          0. If it is absent, link /usr/local/bin/kcap to this
-                          CLI (macOS only; prompts once for your admin
-                          password, then re-probes so success is never
-                          reported on the symlink alone). Every ambiguous row
-                          fails closed with a coded reason: an unknown probe
-                          (probe_unknown), a different filesystem entry at the
-                          destination (conflict), or an unsupported platform
+  ensure [--json]         Probe a new terminal's PATH. If kcap already
+                          resolves, report already_on_path and exit 0. If it
+                          is absent, link kcap to this CLI in the first PATH
+                          folder you can write to, else in /usr/local/bin
+                          (macOS; that prompts once for your admin password)
+                          or ~/.local/bin (Linux), or add its folder to your
+                          user PATH (Windows), then
+                          re-probe so success is never reported on the change
+                          alone. Every ambiguous row fails closed with a coded
+                          reason: an unknown probe (probe_unknown), a
+                          different filesystem entry at the destination
+                          (conflict), or a platform with no installer
                           (unsupported_platform) — nothing is ever guessed or
                           overwritten. --json emits the outcome + coded reason
                           the flow keys off (e.g. installed, refused).

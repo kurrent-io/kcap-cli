@@ -91,16 +91,40 @@ public class AntigravityActivityClockTests {
             logger: NullLogger.Instance, timeProvider: TimeProvider.System);
         rt.ActivityClock = clock;
 
-        await rt.SendUserInputAsync("hello").WaitAsync(HangGuard);
-        await rt.WaitForExitAsync(HangGuard);
+        try {
+            await rt.SendUserInputAsync("hello").WaitAsync(HangGuard);
 
-        // Proves Terminal was genuinely entered — WaitForExitAsync returns silently on timeout, so
-        // without this the clock assertion below could be read off a turn that never finished.
-        await Assert.That(rt.HasExited).IsTrue();
+            // Without a timeout argument WaitForExitAsync completes only on Terminal, and WaitAsync
+            // throws if that never happens. HasExited cannot prove it: while the turn is still
+            // Executing it reports this fake's own exit.
+            await rt.WaitForExitAsync().WaitAsync(HangGuard);
 
-        await Assert.That(clock.TurnInFlight).IsFalse();
+            await Assert.That(clock.TurnInFlight).IsFalse();
+        } finally {
+            process.ReleaseDisposal();
+        }
+    }
 
-        process.ReleaseDisposal();
+    /// <summary>The flag is cleared before the exit signal, so a clock callback that throws there
+    /// must still let every exit waiter resume.</summary>
+    [Test]
+    public async Task A_throwing_turn_ended_callback_still_signals_exit() {
+        var clock   = new AgentActivityClock(new FakeTimeProvider()) { OnTurnEnded = () => throw new InvalidOperationException("callback") };
+        var process = new HeldDisposalTurnProcess();
+
+        await using var rt = new AntigravityHostedAgentRuntime(
+            spawnTurn: (_, _, _) => Task.FromResult<IAgyTurnProcess>(process),
+            logger: NullLogger.Instance, timeProvider: TimeProvider.System);
+        rt.ActivityClock = clock;
+
+        try {
+            await rt.SendUserInputAsync("hello").WaitAsync(HangGuard);
+            await rt.WaitForExitAsync().WaitAsync(HangGuard);
+
+            await Assert.That(clock.TurnInFlight).IsFalse();
+        } finally {
+            process.ReleaseDisposal();
+        }
     }
 
     /// <summary>A stop landing while a turn is genuinely in flight must clear it too — and, again,

@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Pty;
 
@@ -26,5 +27,18 @@ public class LiveAgentsSnapshotTests {
         await Assert.That(live[0].Kind).IsEqualTo("ReviewFlow");
         await Assert.That(live[0].FlowRunId).IsEqualTo("flow-1");
         await Assert.That(live[0].FlowRole).IsEqualTo("reviewer");
+    }
+
+    [Test]
+    public async Task BuildLiveAgents_names_the_account_of_a_launch_still_in_its_handshake() {
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
+            new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var clock = new AgentActivityClock(TimeProvider.System);
+        using var pending = orch.TrackPendingLaunch("p1", LaunchKind.Default, null, null, clock, vendor: "claude", account: new ResolvedAccount("/home/.claude-work", "work-id", "Work"));
+
+        var live = orch.BuildLiveAgents().Single();
+
+        await Assert.That(live.Id).IsEqualTo("p1");
+        await Assert.That((live.AccountDirectory, live.AccountId, live.AccountLabel)).IsEqualTo(((string?)"/home/.claude-work", (string?)"work-id", (string?)"Work"));
     }
 }

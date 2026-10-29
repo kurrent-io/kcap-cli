@@ -12,4 +12,8 @@ public interface ITelemetrySink {
 
     /// <summary>Drops everything queued, unsent, when telemetry is turned off mid-run.</summary>
     void Discard();
+
+    /// <summary>Stops this process sending and drops what it queued, but leaves the spool other processes share:
+    /// for a stop that is this process's own, not an opt-out.</summary>
+    void Abandon() => Discard();
 }

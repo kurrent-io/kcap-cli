@@ -45,7 +45,7 @@ public sealed partial class HookSpool(string spoolDir, TimeProvider time, int ca
 
     // The subdirectory name belongs to the spool, not to ConfigRoot: a root that enumerated its
     // tenants' directories would change every time one of them gained a file.
-    const string DirName = "spool";
+    public const string DirName = "spool";
 
     /// <summary>The spool under a config root. The directory overload is for a spool that is not
     /// under one — a test's own throwaway directory, or a vendor's legacy location.</summary>
@@ -142,6 +142,7 @@ public sealed partial class HookSpool(string spoolDir, TimeProvider time, int ca
             TimeSpan                                  budget,
             CancellationToken                         ct) {
         if (!Directory.Exists(spoolDir)) return;
+        poster = RecordingDeliveries(poster);
         var started = time.GetTimestamp();
         bool Expired() => time.GetElapsedTime(started) >= budget;
 
@@ -281,6 +282,7 @@ public sealed partial class HookSpool(string spoolDir, TimeProvider time, int ca
             string sid, bool isTerminal, Func<string, string, Task<DrainOutcome>> poster,
             Func<bool> expired, CancellationToken ct) {
         if (!SafeSessionId.IsMatch(sid) || !Directory.Exists(spoolDir)) return 0;
+        poster = RecordingDeliveries(poster);
 
         var consumed = 0;
 
@@ -373,6 +375,13 @@ public sealed partial class HookSpool(string spoolDir, TimeProvider time, int ca
         } catch { }
     }
 
+    /// <summary>Lifts <see cref="MarkEnded"/> for a session known to have run again, so its next end is
+    /// delivered rather than discarded as a straggler.</summary>
+    public void ClearEnded(string sessionId) {
+        if (!SafeSessionId.IsMatch(sessionId)) return;
+        try { File.Delete(EndedMarkerPath(sessionId)); } catch { }
+    }
+
     /// <summary>
     /// Deletes any lifecycle entries remaining for a session already <see cref="MarkEnded"/> —
     /// a post-end straggler (e.g. a subagent-stop that arrived after session-end was already
@@ -394,6 +403,36 @@ public sealed partial class HookSpool(string spoolDir, TimeProvider time, int ca
     }
 
     string EndedMarkerPath(string sessionId) => Path.Combine(spoolDir, $".ended-{EncodeKey(sessionId)}");
+
+    public const string PolicySnapshotRoute = "policy-snapshot";
+
+    string? PolicySnapshotMarkerPath(string sessionId, string snapshotId) =>
+        SafeSessionId.IsMatch(sessionId)
+            ? Path.Combine(spoolDir, $".policy-snapshot-{EncodeKey(sessionId)}-{snapshotId[..Math.Min(16, snapshotId.Length)]}")
+            : null;
+
+    /// <summary>Whether a drain has had this session's policy snapshot accepted by the server.
+    /// Every drain path records it, whichever vendor's hook ran the drain.</summary>
+    public bool IsPolicySnapshotDelivered(string sessionId, string snapshotId) =>
+        PolicySnapshotMarkerPath(sessionId, snapshotId) is { } path && File.Exists(path);
+
+    Func<string, string, Task<DrainOutcome>> RecordingDeliveries(Func<string, string, Task<DrainOutcome>> poster) =>
+        async (route, body) => {
+            var outcome = await poster(route, body);
+            if (outcome == DrainOutcome.Delivered && route == PolicySnapshotRoute) RecordPolicySnapshotDelivered(body);
+            return outcome;
+        };
+
+    void RecordPolicySnapshotDelivered(string body) {
+        try {
+            var node = JsonNode.Parse(body);
+            if (node?["session_id"]?.GetValue<string>() is not { Length: > 0 } sid
+             || node["snapshot_id"]?.GetValue<string>() is not { Length: > 0 } snap
+             || PolicySnapshotMarkerPath(sid, snap) is not { } path)
+                return;
+            File.WriteAllText(path, "");
+        } catch { }
+    }
 
     public void ReapOlderThan(TimeSpan age) {
         try {

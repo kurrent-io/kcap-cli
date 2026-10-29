@@ -341,18 +341,31 @@ public class PiRpcTests {
     // ---- ToEnvelopes: extension_ui_request ----
 
     [Test]
-    public async Task Extension_ui_request_yields_one_system_note_naming_the_method() {
-        const string line = """
-            {"type":"extension_ui_request","id":"uuid-1","method":"select","title":"Allow dangerous command?","options":["Allow","Block"],"timeout":10000}
-            """;
+    public async Task A_notify_request_yields_its_message_as_a_system_note() {
+        var frame = PiRpc.TryParseLine("""{"type":"extension_ui_request","id":"u","method":"notify","message":"Saved"}""");
 
-        var frame = PiRpc.TryParseLine(line);
         var envelopes = PiRpc.ToEnvelopes(frame!, fallbackModel: null);
 
         await Assert.That(envelopes.Count).IsEqualTo(1);
         await Assert.That(envelopes[0].Kind).IsEqualTo(AcpEventKind.SystemNote);
-        await Assert.That(envelopes[0].Text).Contains("select");
-        await Assert.That(envelopes[0].Text).Contains("hosted sessions cannot answer");
+        await Assert.That(envelopes[0].Text).IsEqualTo("Saved");
+    }
+
+    /// <summary>A dialog is answered through the elicitation route, which records it; the rest have no
+    /// transcript meaning.</summary>
+    [Test]
+    [Arguments("select")]
+    [Arguments("confirm")]
+    [Arguments("input")]
+    [Arguments("editor")]
+    [Arguments("setStatus")]
+    [Arguments("setWidget")]
+    [Arguments("setTitle")]
+    [Arguments("set_editor_text")]
+    public async Task Any_other_ui_request_yields_nothing(string method) {
+        var frame = PiRpc.TryParseLine(PiRpcRuntimeFakes.DialogRequest(method));
+
+        await Assert.That(PiRpc.ToEnvelopes(frame!, fallbackModel: null)).IsEmpty();
     }
 
     // ---- ToEnvelopes: known-but-untranslated / unknown events ----
@@ -441,4 +454,14 @@ public class PiRpcTests {
     // ({"type":"set_model","provider":..,"modelId":..}, rpc.md ~222) will be added with the reviewer
     // / model-selection lane; PR-1 never called SetModelCommand, so it was dead code carrying the
     // WRONG shape ({"model":..}) and has been removed along with this test.
+
+    /// <summary>Pi's RPC `bash` runs a shell whatever the tool allowlist says, and `export_html` writes a
+    /// host-named path. This runtime must never be able to send either.</summary>
+    [Test]
+    public async Task PiRpc_builds_only_get_state_prompt_and_abort() {
+        var builders = typeof(PiRpc).GetMethods(System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic)
+            .Where(m => m.Name.EndsWith("Command", StringComparison.Ordinal)).Select(m => m.Name).OrderBy(n => n).ToArray();
+
+        await Assert.That(builders).IsEquivalentTo(new[] { "AbortCommand", "GetStateCommand", "PromptCommand" });
+    }
 }

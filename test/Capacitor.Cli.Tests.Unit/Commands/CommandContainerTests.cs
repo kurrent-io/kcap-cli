@@ -23,7 +23,7 @@ public class CommandContainerTests {
                 Config.Root, Home, new WorkingDirectory(AppContext.BaseDirectory), Daemons.Store,
                 baseUrl is null ? Resolutions.None(Config.Root) : Resolutions.At(baseUrl, Config.Root),
                 ProfileOverrides.None, MachineAuth.None, AuthEndpoints.Defaults,
-                new HookClock(TimeProvider.System), baseUrl, NoTelemetry.Startup)
+                new HookClock(TimeProvider.System), baseUrl, NoTelemetry.Startup, NoLocalInstallation.Root)
             // What Program.cs builds with, so a registration this rejects is one a run would too.
             .BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
 

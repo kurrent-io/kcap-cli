@@ -11,12 +11,14 @@ namespace Capacitor.Cli.Core;
 public static class TranscriptEnvelopes {
     public const int ToolResultCap = 4096;
     const string CapMarker = "…";
+    public const string CompactedNote = "Context compacted";
 
     public static IReadOnlyList<AcpEventEnvelope> From(CanonicalEvent evt) {
         var ts = evt.RecordTimestamp ?? evt.Timestamp.ToString("O", CultureInfo.InvariantCulture);
         switch (evt.Payload) {
             case UserMessageReceived m:
-                return [new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: m.Content, TimestampIso: ts)];
+                return [new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: m.Content, TimestampIso: ts,
+                    SourceEventId: evt.EventId == Guid.Empty ? null : evt.EventId)];
             case AssistantTextGenerated m:
                 return [new AcpEventEnvelope(Kind: AcpEventKind.AssistantText, Text: m.Content, TimestampIso: ts)];
             case AssistantThinkingGenerated m: {
@@ -31,6 +33,8 @@ public static class TranscriptEnvelopes {
             }
             case ToolResultReceived m:
                 return [new AcpEventEnvelope(Kind: AcpEventKind.ToolResult, ToolCallId: m.CallId, ToolResult: Cap(m.Result), TimestampIso: ts)];
+            case ContextCompactedEvent:
+                return [new AcpEventEnvelope(Kind: AcpEventKind.SystemNote, Text: CompactedNote, TimestampIso: ts)];
             default:
                 return [];
         }

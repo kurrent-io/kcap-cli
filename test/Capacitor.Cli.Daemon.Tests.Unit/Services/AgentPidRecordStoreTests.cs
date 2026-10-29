@@ -13,6 +13,44 @@ public class AgentPidRecordStoreTests {
         new(agentId, pid, "lx:boot:999", PidIdentityKind.Present, "ReviewFlow", "codex", "flow-1", "reviewer", "daemon-id", "epoch-1", DateTimeOffset.UtcNow);
 
     [Test]
+    public async Task TryRead_distinguishes_a_record_from_confirmed_absence() {
+        using var tmp = new TempDir();
+        var store = new AgentPidRecordStore(tmp.Path, NullLogger.Instance);
+        await Assert.That(store.TryRead("a1", out var absent)).IsTrue();
+        await Assert.That(absent).IsNull();
+
+        var expected = Rec("a1", pid: 4242);
+        store.Write(expected);
+        await Assert.That(store.TryRead("a1", out var found)).IsTrue();
+        await Assert.That(found).IsEqualTo(expected);
+        await Assert.That(store.TryRead("another", out absent)).IsTrue();
+        await Assert.That(absent).IsNull();
+    }
+
+    [Test]
+    public async Task TryRead_rejects_a_record_for_a_different_agent() {
+        using var tmp = new TempDir();
+        var store = new AgentPidRecordStore(tmp.Path, NullLogger.Instance);
+        store.Write(Rec("other"));
+        var agentsDir = tmp.PathTo("agents");
+        File.Move(Path.Combine(agentsDir, AgentFileNames.For("other") + ".json"),
+            Path.Combine(agentsDir, AgentFileNames.For("requested") + ".json"));
+
+        await Assert.That(store.TryRead("requested", out var record)).IsFalse();
+        await Assert.That(record).IsNull();
+    }
+
+    [Test]
+    public async Task TryRead_rejects_a_directory_in_place_of_a_record() {
+        using var tmp = new TempDir();
+        var store = new AgentPidRecordStore(tmp.Path, NullLogger.Instance);
+        Directory.CreateDirectory(Path.Combine(tmp.Path, "agents", AgentFileNames.For("a1") + ".json"));
+
+        await Assert.That(store.TryRead("a1", out var record)).IsFalse();
+        await Assert.That(record).IsNull();
+    }
+
+    [Test]
     public async Task Write_ReadAll_Delete_roundtrip_preserves_exact_identity() {
         using var tmp = new TempDir();
         var store = new AgentPidRecordStore(tmp.Path, NullLogger.Instance);

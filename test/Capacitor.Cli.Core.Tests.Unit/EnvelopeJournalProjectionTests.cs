@@ -33,6 +33,24 @@ public class EnvelopeJournalProjectionTests {
         await Assert.That(Sut.Project(line, 2, DateTimeOffset.UnixEpoch, context)).Count().IsEqualTo(1);
     }
 
+    /// A hosted ACP agent's subagents reach the local lane only through these journal records.
+    [Test]
+    public async Task A_journaled_subagent_start_and_end_start_and_finish_its_row() {
+        var context = Sut.CreateContext("s", null);
+        var start = Sut.ProjectWithInputs(EnvelopeJournalFormat.Write(new AcpEventEnvelope(
+            Kind: AcpEventKind.SubagentStarted, AgentId: "a1", AgentType: "explorer", TimestampIso: "2026-10-21T09:00:00Z")), 1, DateTimeOffset.UnixEpoch, context);
+        var end = Sut.ProjectWithInputs(EnvelopeJournalFormat.Write(new AcpEventEnvelope(
+            Kind: AcpEventKind.SubagentCompleted, AgentId: "a1", TimestampIso: "2026-10-21T09:05:00Z")), 2, DateTimeOffset.UnixEpoch, context);
+
+        var started  = (RunSignal.Started)start.Runs[0];
+        var finished = (RunSignal.Finished)end.Runs.Single();
+        await Assert.That(started.Name).IsEqualTo("explorer");
+        await Assert.That(started.At).IsEqualTo(new DateTimeOffset(2026, 10, 21, 9, 0, 0, TimeSpan.Zero));
+        await Assert.That(((RunSignal.Identified)start.Runs[1]).AgentId).IsEqualTo("a1");
+        await Assert.That(finished.AgentId).IsEqualTo("a1");
+        await Assert.That(finished.At).IsEqualTo(new DateTimeOffset(2026, 10, 21, 9, 5, 0, TimeSpan.Zero));
+    }
+
     [Test]
     public async Task Vendor_registry_is_unchanged() {
         await Assert.That(TranscriptChat.For("claude")).IsNotNull();

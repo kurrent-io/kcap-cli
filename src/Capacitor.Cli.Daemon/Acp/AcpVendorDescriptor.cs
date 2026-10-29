@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
+using System.Text.Json.Nodes;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Daemon.Harness.Grok;
 using Capacitor.Cli.Daemon.Harness.Kiro;
 using Capacitor.Cli.Daemon.Harness.OpenCode;
 
@@ -133,6 +135,11 @@ internal sealed record AcpVendorDescriptor {
     public AcpUnattendedInteractionPolicy UnattendedInteractionPolicy { get; }
     public IAcpModelSelector           ModelSelector          { get; }
     public bool                        SupportsMcpServers     { get; }
+
+    /// <summary>Whether an interactive launch is handed kcap's own MCP servers in <c>session/new</c>.
+    /// Declared only for a vendor measured to run such a server in place of a same-named one from its own
+    /// config: one that ran both would spawn every kcap server twice.</summary>
+    public bool                        InjectsKcapMcpServers  { get; }
     public AcpReviewFlowMcpTransport   ReviewFlowMcpTransport { get; }
     public bool                        SupportsBorrowedReviewFlow { get; }
     public AcpBorrowedReviewContainment BorrowedReviewContainment { get; }
@@ -144,7 +151,7 @@ internal sealed record AcpVendorDescriptor {
     /// capability — all four registered vendors advertise it, and two measurably cannot honor it
     /// across a crashed owner (<c>docs/probes/2026-08-04-acp-reconnect-c0/</c>): Kiro refuses with a
     /// durable stale-owner lock ("Session is active in another process", identical at 0/15/60s), and
-    /// Gemini never persists a crash-killed session ("No previous sessions found"). Flipping a
+    /// Gemini answers session/load before most of its replay. Flipping a
     /// vendor to <see langword="true"/> requires a passing re-run of that probe, because the resume
     /// path additionally relies on the vendor honoring the ACP session/load response-after-replay
     /// barrier — a violation would duplicate transcript content. Runtime eligibility is conjunctive
@@ -152,6 +159,33 @@ internal sealed record AcpVendorDescriptor {
     /// launch, and the <c>KCAP_ACP_RECONNECT</c> kill switch.
     /// </summary>
     public bool                        SupportsReconnectResume { get; }
+
+    /// <summary>Whether a daemon restart may reopen this vendor's session with <c>session/load</c>
+    /// instead of falling back to kcap continue. Set only for a vendor that passes the graceful-stop probe
+    /// in <c>docs/probes/2026-10-19-acp-restart-resume/</c>: a vendor persists its session differently on a
+    /// graceful stop than on a crash, so this is decided apart from <see cref="SupportsReconnectResume"/>.</summary>
+    public bool                        SupportsRestartResume { get; }
+
+    /// <summary>Builds the <c>_meta</c> sent on <c>session/new</c> for an interactive (false) or review
+    /// (true) launch, fresh per launch so no launch can alter another's. Null sends none.</summary>
+    public Func<bool, JsonObject>?      SessionNewMeta { get; }
+
+    /// <summary>The vendor's admission rule under <see cref="AcpUnattendedInteractionPolicy.AllowlistedAutoApprove"/>;
+    /// required by that policy and unused by every other.</summary>
+    public UnattendedToolAdmitter?      ToolAdmitter { get; }
+
+    /// <summary>Reads a turn's token usage from a notification other than <c>session/update</c>, for a
+    /// vendor that reports it on its own extension method. Null for every vendor that does not.</summary>
+    public Func<Core.Acp.AcpNotification, IReadOnlyList<Core.AcpEventEnvelope>>? TurnUsageReader { get; }
+
+    /// <summary>Reads a subagent's start or finish from a vendor notification, for a vendor that runs
+    /// subagents as child sessions on the same connection. Null for every vendor that does not, whose
+    /// updates all belong to the hosted agent.</summary>
+    public Func<Core.Acp.AcpNotification, AcpSubagentSignal?>? SubagentReader { get; }
+
+    /// <summary>The vendor's own client method for asking the user questions, for a vendor that does not
+    /// use ACP's <c>elicitation/create</c>. Null leaves such a request unhandled.</summary>
+    public AcpQuestionProtocol? QuestionProtocol { get; }
 
     public AcpVendorDescriptor(
             HarnessId                   Harness,
@@ -165,8 +199,17 @@ internal sealed record AcpVendorDescriptor {
             AcpUnattendedInteractionPolicy UnattendedInteractionPolicy = AcpUnattendedInteractionPolicy.Disabled,
             AcpBorrowedReviewContainment BorrowedReviewContainment = AcpBorrowedReviewContainment.None,
             bool                        SupportsReconnectResume = false,
+            bool                        SupportsRestartResume = false,
             Func<IReadOnlyList<Core.Acp.AcpMcpServerSpec>, LaunchIdentity, ImmutableArray<string>>?
-                                        UnattendedTrustArgvBuilder = null
+                                        UnattendedTrustArgvBuilder = null,
+            Func<bool, JsonObject>?     SessionNewMeta = null,
+            UnattendedToolAdmitter?     ToolAdmitter = null,
+            Func<Core.Acp.AcpNotification, IReadOnlyList<Core.AcpEventEnvelope>>?
+                                        TurnUsageReader = null,
+            Func<Core.Acp.AcpNotification, AcpSubagentSignal?>?
+                                        SubagentReader = null,
+            AcpQuestionProtocol?        QuestionProtocol = null,
+            bool                        InjectsKcapMcpServers = false
         ) {
         // Before the checks below, every one of which names {Vendor} in its message: that is derived
         // from this, so reporting a malformed descriptor would otherwise accuse whichever vendor the
@@ -219,9 +262,21 @@ internal sealed record AcpVendorDescriptor {
         this.UnattendedInteractionPolicy = UnattendedInteractionPolicy;
         this.ModelSelector       = ModelSelector;
         this.SupportsMcpServers  = SupportsMcpServers;
+        this.InjectsKcapMcpServers = InjectsKcapMcpServers;
         this.SupportsBorrowedReviewFlow = SupportsBorrowedReviewFlow;
         this.BorrowedReviewContainment = BorrowedReviewContainment;
         this.SupportsReconnectResume = SupportsReconnectResume;
+        this.SupportsRestartResume   = SupportsRestartResume;
+        this.SessionNewMeta = SessionNewMeta;
+        this.ToolAdmitter   = ToolAdmitter;
+        this.TurnUsageReader = TurnUsageReader;
+        this.SubagentReader  = SubagentReader;
+        this.QuestionProtocol = QuestionProtocol;
+
+        if (UnattendedInteractionPolicy == AcpUnattendedInteractionPolicy.AllowlistedAutoApprove && ToolAdmitter is null)
+            throw new ArgumentException(
+                $"{nameof(AcpUnattendedInteractionPolicy.AllowlistedAutoApprove)} requires a {nameof(ToolAdmitter)} (vendor: {Vendor}).",
+                nameof(ToolAdmitter));
         this.ReviewFlowMcpTransport = ReviewFlowMcpTransport switch {
             AcpReviewFlowMcpTransport.Default when SupportsMcpServers => AcpReviewFlowMcpTransport.SessionNew,
             AcpReviewFlowMcpTransport.Default                         => AcpReviewFlowMcpTransport.Unsupported,
@@ -232,6 +287,11 @@ internal sealed record AcpVendorDescriptor {
             throw new ArgumentException(
                 $"{nameof(AcpReviewFlowMcpTransport.SessionNew)} requires {nameof(SupportsMcpServers)} (vendor: {Vendor}).",
                 nameof(ReviewFlowMcpTransport));
+
+        if (InjectsKcapMcpServers && !SupportsMcpServers)
+            throw new ArgumentException(
+                $"{nameof(InjectsKcapMcpServers)} requires {nameof(SupportsMcpServers)} (vendor: {Vendor}).",
+                nameof(InjectsKcapMcpServers));
     }
 }
 
@@ -256,7 +316,9 @@ internal static class AcpVendorDescriptors {
         // prompts normally. Note the same probe found Cursor's replay REWRITES toolCallIds and
         // drops the interrupted turn — both irrelevant to the suppress-the-replay resume, but they
         // are why per-envelope replay matching stays impossible for this vendor.
-        SupportsReconnectResume: true
+        SupportsReconnectResume: true,
+        // Ignores stdin EOF, so a restart always SIGKILLs it after the grace; session/load works across that.
+        SupportsRestartResume: true
     );
 
     /// <summary>GitHub Copilot CLI as an ACP hosted agent (<c>copilot --acp --stdio</c>).
@@ -298,7 +360,8 @@ internal static class AcpVendorDescriptors {
         // across a SIGKILLed owner, the barrier holds, toolCallIds are stable, and — unlike
         // Cursor — Copilot PERSISTS a mid-turn-killed prompt agent-side, which is why the
         // interrupted-turn disposition keys on local send facts, never on replay content.
-        SupportsReconnectResume: true
+        SupportsReconnectResume: true,
+        SupportsRestartResume: true
     );
 
     /// <summary>AWS Kiro CLI as an ACP hosted agent (<c>kiro-cli acp</c>). Hosted interactively and as
@@ -366,6 +429,7 @@ internal static class AcpVendorDescriptors {
         // the tools THIS launch injected and reaps anything else, which keeps the scoped posture --
         // still no fs_write, still no execute_bash -- while surviving the vendor's prompt leak.
         UnattendedInteractionPolicy: AcpUnattendedInteractionPolicy.AllowlistedAutoApprove,
+        ToolAdmitter:        UnattendedToolAdmitter.Kiro,
         ModelSelector:       SetModelSelector.Instance,
         SupportsMcpServers:  true,
         ReviewFlowMcpTransport: AcpReviewFlowMcpTransport.SessionNew,
@@ -460,7 +524,8 @@ internal static class AcpVendorDescriptors {
         // Borrowed review is deliberately NOT declared: nothing here has established a containment
         // boundary for a reviewer running in the caller's live checkout. The default fails closed to an
         // owned worktree, which is the safe direction.
-        SupportsReconnectResume: false
+        SupportsReconnectResume: false,
+        SupportsRestartResume: true
     );
 
     /// <summary>
@@ -478,6 +543,48 @@ internal static class AcpVendorDescriptors {
     /// reason unrelated to MCP and reports nothing loaded.</para>
     /// </summary>
     internal const string UnmatchableMcpNamePlaceholder = "__kcap_unmatchable_mcp_name__";
+
+    /// <summary>Grok Build over <c>grok agent stdio</c> (<c>docs/probes/2026-10-13-grok-acp/</c>). Its
+    /// MCP servers go through <c>session/new</c> and its model through <c>configOptions</c>, both
+    /// verified at effect level.
+    ///
+    /// <para>An interactive launch is given kcap's own servers there. Grok runs a <c>session/new</c>
+    /// server in place of the same-named one it imports from the user's Cursor config, so a registration left on a removed binary
+    /// cannot take a kcap tool away from a hosted session. They need no session variable: Grok sets
+    /// <c>GROK_SESSION_ID</c> on every server it starts.</para>
+    ///
+    /// <para><c>yoloMode: false</c> is not optional: Grok applies the user's own
+    /// <c>permission_mode = "always-approve"</c> to an ACP session unless <c>session/new</c> overrides
+    /// it, and then never sends <c>session/request_permission</c>, so neither the permission broker nor
+    /// a launch preset would decide anything.</para>
+    ///
+    /// <para>As a reviewer it declares no containment, like Claude, so it reviews owned worktrees only. Of
+    /// the frames Grok raises, only a call on a server this launch injected is approved, and the
+    /// <see cref="GrokReviewerLaunch.AgentProfile"/> clamp removes the edit tools. That is a guard, not a
+    /// boundary: the user's own Grok permission rules, hooks and MCP servers still act without asking,
+    /// and no per-process switch turns them off short of moving <c>GROK_HOME</c>, which would mean
+    /// handling the user's credential.</para>
+    ///
+    /// <para>Reconnect stays off: <c>session/load</c> worked from a fresh process after a SIGKILL, with
+    /// stable tool-call ids, but the reconnect probe has not passed against Grok.</para></summary>
+    public static readonly AcpVendorDescriptor Grok = new(
+        Harness:             HarnessId.Grok,
+        // A configured leader would hand the session to a shared process the daemon does not own.
+        Argv:                ["agent", "--no-leader", "stdio"],
+        UnattendedTrustArgv: [],
+        SupportsUnattended:  true,
+        UnattendedInteractionPolicy: AcpUnattendedInteractionPolicy.AllowlistedAutoApprove,
+        ToolAdmitter:        GrokToolAdmission.Admitter,
+        ModelSelector:       ConfigOptionModelSelector.Instance,
+        SupportsMcpServers:  true,
+        ReviewFlowMcpTransport: AcpReviewFlowMcpTransport.SessionNew,
+        SupportsReconnectResume: false,
+        SessionNewMeta:      GrokReviewerLaunch.SessionNewMeta,
+        TurnUsageReader:     GrokTurnUsage.Read,
+        SubagentReader:      GrokSubagentSignals.Read,
+        QuestionProtocol:    GrokQuestions.Protocol,
+        InjectsKcapMcpServers: true
+    );
 
     /// <summary>Google Gemini CLI as an ACP hosted agent (<c>gemini --experimental-acp</c>).
     /// Hosted interactively and as an unattended review-flow reviewer.
@@ -547,12 +654,13 @@ internal static class AcpVendorDescriptors {
         // so receiving one means the launch contract regressed (a dropped flag, a vendor change) and the
         // honest response is to reap the reviewer rather than auto-approve whatever it asked for (§3.4).
         UnattendedInteractionPolicy: AcpUnattendedInteractionPolicy.Fail,
-        // Measured INELIGIBLE 2026-08-04 (docs/probes/2026-08-04-acp-reconnect-c0/): Gemini
-        // advertises loadSession but a crash-killed session is never persisted — session/load
-        // refuses with "No previous sessions found for this project", so there is nothing to
-        // resume. Gemini also self-re-execs (a sandbox wrapper spawns an inner process with
-        // identical argv), so "the spawned pid exited" and "the agent died" are different events;
-        // any future enablement must re-probe BOTH persistence and process-tree semantics.
+        // Ineligible: Gemini answers session/load before most of its replay, and replay suppression
+        // ends once that response is in, so the rest would reach the transcript as live output.
+        // Gemini also self-re-execs, so "the spawned pid exited" and "the agent died" are different
+        // events.
+        // TODO: enable once a gemini-cli release fixes google-gemini/gemini-cli#29707 and the probe
+        // in docs/probes/2026-08-04-acp-reconnect-c0/ passes on it, with that release as a version
+        // floor.
         SupportsReconnectResume: false
     );
 }

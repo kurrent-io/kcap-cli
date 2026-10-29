@@ -7,7 +7,9 @@ namespace Capacitor.App.Tests.Unit;
 /// recorders.
 sealed class FakeTerminalSurface : ITerminalSurface {
     public List<string> Fed { get; } = [];
-    public void Feed(string text) => Fed.Add(text);
+    public void Feed(string text, bool replay = false) => Fed.Add(text);
+    /// One entry per draw, as the control would show it.
+    public void Feed(IReadOnlyList<string> pieces, bool replay = false) => Fed.Add(string.Concat(pieces));
     public event Action<byte[]>? InputProduced;
     public event Action<int, int>? Resized;
     public void RaiseInput(byte[] bytes) => InputProduced?.Invoke(bytes);

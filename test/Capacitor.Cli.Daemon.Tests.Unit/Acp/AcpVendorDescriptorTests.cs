@@ -185,6 +185,32 @@ public class AcpVendorDescriptorTests {
     }
 
     [Test]
+    public async Task Constructor_Throws_WhenKcapServersAreInjectedWithoutMcpServerSupport() {
+        await Assert.That(() => new AcpVendorDescriptor(
+            Harness:               HarnessId.Pi,
+            Argv:                  ["acp"],
+            UnattendedTrustArgv:   [],
+            SupportsUnattended:    false,
+            ModelSelector:         NoOpModelSelector.Instance,
+            SupportsMcpServers:    false,
+            InjectsKcapMcpServers: true
+        )).Throws<ArgumentException>();
+    }
+
+    /// <summary>Injection is declared only where a <c>session/new</c> server was measured to replace the
+    /// vendor's own same-named one; elsewhere it could start every kcap server twice, and Gemini's
+    /// interactive name gate admits nothing it would have to be widened for.</summary>
+    [Test]
+    public async Task Only_Grok_is_handed_kcaps_servers_on_an_interactive_launch() {
+        AcpVendorDescriptor[] all = [
+            AcpVendorDescriptors.Cursor, AcpVendorDescriptors.Copilot, AcpVendorDescriptors.Kiro,
+            AcpVendorDescriptors.OpenCode, AcpVendorDescriptors.Grok, AcpVendorDescriptors.Gemini,
+        ];
+
+        await Assert.That(all.Where(d => d.InjectsKcapMcpServers).Select(d => d.Vendor)).IsEquivalentTo(["grok"]);
+    }
+
+    [Test]
     public async Task Constructor_Throws_WhenSessionNewTransportLacksMcpServerSupport() {
         await Assert.That(() => new AcpVendorDescriptor(
             Harness:                HarnessId.Pi,
@@ -365,6 +391,20 @@ public class AcpVendorDescriptorTests {
         await Assert.That(AcpVendorDescriptors.Copilot.SupportsReconnectResume).IsTrue();
         await Assert.That(AcpVendorDescriptors.Kiro.SupportsReconnectResume).IsFalse();
         await Assert.That(AcpVendorDescriptors.Gemini.SupportsReconnectResume).IsFalse();
+        await Assert.That(AcpVendorDescriptors.Grok.SupportsReconnectResume).IsFalse();
+    }
+
+    /// <summary>Restart resume is enabled on its own probe (docs/probes/2026-10-19-acp-restart-resume/),
+    /// a graceful stop rather than a crash, so it is pinned apart from reconnect: OpenCode passes one and
+    /// not the other.</summary>
+    [Test]
+    public async Task Restart_resume_is_probe_verified_per_vendor() {
+        await Assert.That(AcpVendorDescriptors.Cursor.SupportsRestartResume).IsTrue();
+        await Assert.That(AcpVendorDescriptors.Copilot.SupportsRestartResume).IsTrue();
+        await Assert.That(AcpVendorDescriptors.OpenCode.SupportsRestartResume).IsTrue();
+        await Assert.That(AcpVendorDescriptors.Kiro.SupportsRestartResume).IsFalse();
+        await Assert.That(AcpVendorDescriptors.Gemini.SupportsRestartResume).IsFalse();
+        await Assert.That(AcpVendorDescriptors.Grok.SupportsRestartResume).IsFalse();
     }
 
     /// <summary>

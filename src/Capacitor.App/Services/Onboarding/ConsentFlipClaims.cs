@@ -10,7 +10,7 @@ namespace Capacitor.App.Services.Onboarding;
 /// Key = {Profile, CanonicalServer}; both are assumed already-canonicalized by the caller.
 public sealed record ConsentFlipClaim(string Profile, string CanonicalServer);
 
-/// Durable decision-7 claim store; every mutation is a synchronous ConfigFileLock critical section (no await while held).
+/// Durable consent-flip claim store; every mutation is a synchronous ConfigFileLock critical section (no await while held).
 public sealed partial class ConsentFlipClaims(ConfigRoot config) {
     const string ClaimsFileName = "consent-flip-claims.json";
 
@@ -22,7 +22,7 @@ public sealed partial class ConsentFlipClaims(ConfigRoot config) {
         return ReadFreshLocked().Claims.Select(c => new ConsentFlipClaim(c.Profile, c.Server)).ToList();
     }
 
-    /// Upsert by key + durable flush. False (any pre-durability failure) blocks the sign-in commit (decision 7).
+    /// Upsert by key + durable flush. False (any pre-durability failure) blocks the sign-in commit.
     /// Defensively canonicalizes CanonicalServer at entry (idempotent for an already-canonical
     /// caller) — a raw/uncanonical URL armed here would otherwise never match TryConsume's
     /// canonical-identity re-resolve, stranding the claim as permanently pending.
@@ -37,7 +37,7 @@ public sealed partial class ConsentFlipClaims(ConfigRoot config) {
         return Publish(new ClaimsFile(1, claims));
     }
 
-    /// Two-lock conditional clear (spec §6): config lock → re-resolve → claims lock, fixed order, no await inside.
+    /// Two-lock conditional clear: config lock → re-resolve → claims lock, fixed order, no await inside.
     public bool TryConsume(
             ConsentFlipClaim claim,
             Func<(string Profile, string Server, string DaemonName)> reResolveUnderConfigLock,
@@ -58,6 +58,11 @@ public sealed partial class ConsentFlipClaims(ConfigRoot config) {
     }
 
     public QuarantineState? Quarantine() => _quarantine;
+
+    /// Every match against a claim and TryConsume's re-resolve must see the same canonical server;
+    /// TryConsume compares the resolved identity as given.
+    public static (string Profile, string Server, string DaemonName) Canonical((string Profile, string Server, string DaemonName) identity) =>
+        (identity.Profile, ServerIdentity.Canonicalize(identity.Server) ?? identity.Server, identity.DaemonName);
 
     // Corruption on any read quarantines the file aside and returns a fresh state (caller holds the lock).
     ClaimsFile ReadFreshLocked() {

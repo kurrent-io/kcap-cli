@@ -1,0 +1,168 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels.Onboarding"
+             xmlns:views="clr-namespace:Capacitor.App.Views.Onboarding"
+             xmlns:icons="clr-namespace:Capacitor.App.Views"
+             x:Class="Capacitor.App.Views.Onboarding.HarnessesPaneView"
+             x:DataType="vm:HarnessesStepViewModel">
+    <StackPanel Spacing="14">
+        <Border x:Name="PrivacyCard" Classes="onboardingCard" IsVisible="{Binding VisibilityVisible}">
+            <StackPanel Spacing="8">
+                <TextBlock Classes="onboardingMicro" Text="WHO CAN READ NEW SESSIONS" />
+                <TextBlock Classes="onboardingDetail" Text="Choose a privacy setting before continuing, even if you connect your harnesses later." />
+                <TextBlock Classes="onboardingDetail">
+                    <Run Text="Applies to sessions recorded on " /><Run Text="{Binding MachineName}" FontFamily="{StaticResource OnboardingMonoFont}"
+                        Foreground="{StaticResource OnboardingTextBrush}" /><Run Text=". Sessions can still be shared or hidden individually." />
+                </TextBlock>
+                <ItemsControl x:Name="VisibilityOptions" ItemsSource="{Binding VisibilityOptions}"
+                              IsEnabled="{Binding Idle}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:VisibilityOption">
+                            <RadioButton Classes="onboardingOption" GroupName="Visibility" Margin="0,0,0,2"
+                                         Tag="{Binding Value}" IsCheckedChanged="OnVisibilityChecked"
+                                         Loaded="OnVisibilityLoaded" AutomationProperties.Name="{Binding Label}"
+                                         AutomationProperties.HelpText="{Binding Detail}">
+                                <StackPanel Spacing="2">
+                                    <TextBlock Classes="onboardingLabel" FontSize="13" Text="{Binding Label}" />
+                                    <TextBlock Classes="onboardingDetail" Text="{Binding Detail}" />
+                                </StackPanel>
+                            </RadioButton>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </Border>
+        <Border Classes="onboardingCard">
+            <StackPanel Spacing="12">
+                <TextBlock x:Name="HarnessesMessageText" Classes="onboardingError" Text="{Binding CliMissingNote}"
+                           IsVisible="{Binding !CliAvailable}" />
+
+                <StackPanel Spacing="14" IsVisible="{Binding IsDetecting}">
+                    <StackPanel Orientation="Horizontal" Spacing="14">
+                        <Border Width="40" Height="40" CornerRadius="20" Background="{StaticResource OnboardingAccentWashBrush}">
+                            <Panel Classes="onboardingSpinner">
+                                <icons:AppIcon Kind="LoaderCircle" Size="20" Classes.kcapSpinning="{Binding IsDetecting}"
+                                               Foreground="{StaticResource OnboardingAccentBrush}" />
+                            </Panel>
+                        </Border>
+                        <StackPanel VerticalAlignment="Center" Spacing="2">
+                            <TextBlock Classes="onboardingLabel" FontSize="15" Text="Looking for harnesses" />
+                            <TextBlock Classes="onboardingBody" FontSize="13">
+                                <Run Text="on " /><Run Text="{Binding MachineName}" FontFamily="{StaticResource OnboardingMonoFont}" /><Run Text=" — usually a moment" />
+                            </TextBlock>
+                        </StackPanel>
+                    </StackPanel>
+                    <StackPanel Spacing="6">
+                        <Border Height="44" CornerRadius="4" BorderThickness="1" BorderBrush="{StaticResource OnboardingPanelBorderBrush}"
+                                Background="{StaticResource OnboardingSkeletonBrush}" Classes="pulsing" />
+                        <Border Height="44" CornerRadius="4" BorderThickness="1" BorderBrush="{StaticResource OnboardingPanelBorderBrush}"
+                                Background="{StaticResource OnboardingSkeletonBrush}" Classes="pulsing" />
+                    </StackPanel>
+                </StackPanel>
+
+                <TextBlock Classes="onboardingBody" IsVisible="{Binding NoneFound}">
+                    <Run Text="No harnesses were found on " /><Run Text="{Binding MachineName}" FontFamily="{StaticResource OnboardingMonoFont}"
+                        Foreground="{StaticResource OnboardingTextBrush}" /><Run Text="{x:Static vm:SetupLocation.NoneFoundTail}" />
+                </TextBlock>
+
+                <!-- The table: one row per detected harness, record and tools in fixed cells. -->
+                <StackPanel IsVisible="{Binding ShowsTable}">
+                    <Border Classes="onboardingRowRule" Padding="2,0,2,8">
+                        <Grid ColumnDefinitions="*,68,68" ColumnSpacing="8">
+                            <TextBlock Classes="onboardingMicro">
+                                <Run Text="FOUND ON " /><Run Text="{Binding MachineName}" Foreground="{StaticResource OnboardingTextBrush}" />
+                            </TextBlock>
+                            <TextBlock Grid.Column="1" Classes="onboardingMicro" Text="RECORD" HorizontalAlignment="Center" />
+                            <TextBlock Grid.Column="2" Classes="onboardingMicro" Text="TOOLS" HorizontalAlignment="Center" />
+                        </Grid>
+                    </Border>
+                    <ItemsControl x:Name="HarnessRows" ItemsSource="{Binding Rows}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:HarnessRowViewModel">
+                                <Border Classes="onboardingRowRule" Padding="2,11">
+                                    <StackPanel Spacing="6">
+                                        <!-- Center controls across the name and subtitle, above any consent note. -->
+                                        <Grid ColumnDefinitions="*,68,68" RowDefinitions="Auto,Auto" ColumnSpacing="8">
+                                            <TextBlock Grid.Row="0" x:Name="HarnessLabelText" Classes="onboardingLabel" VerticalAlignment="Center"
+                                                       Text="{Binding Label}" />
+                                            <WrapPanel Grid.Row="1" Grid.Column="0" Orientation="Horizontal" Margin="0,2,0,0">
+                                                <TextBlock Classes="onboardingSignal" Margin="0,0,12,0" VerticalAlignment="Center"
+                                                           Text="{Binding SignalLine}" />
+                                                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                                    <TextBlock Classes="onboardingSignal" Text="installing…" IsVisible="{Binding Installing}" />
+                                                    <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding Succeeded}">
+                                                        <icons:AppIcon Kind="Check" Size="12" VerticalAlignment="Center" Foreground="{StaticResource KcapSuccessBrush}" />
+                                                        <TextBlock Classes="onboardingSignal" VerticalAlignment="Center" Text="turned on" Foreground="{StaticResource KcapSuccessBrush}" />
+                                                    </StackPanel>
+                                                    <Button x:Name="HarnessRetryButton" Classes="onboardingSecondary onboardingCompact" Content="Retry"
+                                                            Command="{Binding RetryCommand}" IsVisible="{Binding Failed}" />
+                                                </StackPanel>
+                                            </WrapPanel>
+                                            <CheckBox Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" x:Name="RecordCheckBox" Classes="onboardingCheck onboardingTableCheck"
+                                                      HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                      IsEnabled="{Binding $parent[UserControl].((vm:HarnessesStepViewModel)DataContext).ChoicesEditable}"
+                                                      IsChecked="{Binding Record, Mode=TwoWay}"
+                                                      ToolTip.Tip="{Binding Label, StringFormat='Record {0} sessions'}"
+                                                      AutomationProperties.Name="{Binding Label, StringFormat='Record {0} sessions'}" />
+                                            <CheckBox Grid.Row="0" Grid.RowSpan="2" Grid.Column="2" x:Name="ToolsCheckBox" Classes="onboardingCheck onboardingTableCheck"
+                                                      HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                      IsEnabled="{Binding $parent[UserControl].((vm:HarnessesStepViewModel)DataContext).ChoicesEditable}"
+                                                      IsChecked="{Binding Tools, Mode=TwoWay}" IsVisible="{Binding !ToolsBundled}"
+                                                      ToolTip.Tip="{Binding Label, StringFormat='Give {0} kcap tools'}"
+                                                      AutomationProperties.Name="{Binding Label, StringFormat='Give {0} kcap tools'}" />
+                                            <TextBlock Grid.Row="0" Grid.RowSpan="2" Grid.Column="2" Text="BUNDLED" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                       FontSize="9.5" FontWeight="SemiBold" LetterSpacing="0.6"
+                                                       Foreground="{StaticResource OnboardingDimBrush}" IsVisible="{Binding ToolsBundled}" />
+                                        </Grid>
+                                        <TextBlock Classes="onboardingDetail" Text="{Binding ConsentNote}" Margin="0,0,152,0"
+                                                   IsVisible="{Binding ConsentNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                        <TextBlock x:Name="HarnessRowMessageText" Classes="onboardingError" Text="{Binding Message}"
+                                                   IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock Classes="onboardingNote" Text="{Binding NotFoundLine}" Margin="0,11,0,0"
+                               IsVisible="{Binding NotFoundLine, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+
+                <!-- A provider key in the terminal: kcap scrubs it from headless spawns unless told not to. -->
+                <Border Classes="onboardingCallout" IsVisible="{Binding ProviderKeyNotice, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="11">
+                        <CheckBox x:Name="ProviderKeyCheckBox" Classes="onboardingCheck" VerticalAlignment="Top" Margin="0,1,0,0"
+                                  IsChecked="{Binding UseProviderApiKey, Mode=TwoWay}" IsEnabled="{Binding Idle}"
+                                  AutomationProperties.Name="Use my provider API keys for titles and summaries" />
+                        <StackPanel Grid.Column="1" Spacing="3">
+                            <TextBlock Classes="onboardingLabel" FontSize="13" Text="Use these API keys for kcap's own calls" />
+                            <TextBlock Classes="onboardingDetail">
+                                <Run Text="{Binding ProviderKeyNotice}" /><Run Text="{Binding ProviderKeyDetail}" />
+                            </TextBlock>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <!-- Turning a harness on also puts the bundled CLI on the login shell. -->
+                <TextBlock x:Name="PathNoteText" Classes="onboardingNote" IsVisible="{Binding PathHazard}"
+                           views:OnboardingSpans.Spans="{Binding PathNote}" />
+                <StackPanel Orientation="Horizontal" Spacing="9" IsVisible="{Binding PathResolved}">
+                    <icons:AppIcon Kind="Check" Size="14" VerticalAlignment="Center" Foreground="{StaticResource KcapSuccessBrush}" />
+                    <TextBlock Classes="onboardingDetail" Foreground="{StaticResource OnboardingMutedBrush}">
+                        <Run Text="Your login shell on " /><Run Text="{Binding MachineName}" FontFamily="{StaticResource OnboardingMonoFont}" /><Run Text=" can now find " /><Run Text="kcap" FontFamily="{StaticResource OnboardingMonoFont}" /><Run Text=". Capture will record." />
+                    </TextBlock>
+                </StackPanel>
+
+                <TextBlock Classes="onboardingError" Text="{Binding Message}"
+                           IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+            </StackPanel>
+        </Border>
+
+        <TextBlock Classes="onboardingNote" IsVisible="{Binding DeclineVisible}"
+                   Text="{x:Static vm:SetupLocation.NothingSelectedNote}" />
+        <TextBlock Classes="onboardingNote" IsVisible="{Binding ConnectionsSaved}"
+                   Text="{Binding SavedNote}" />
+        <TextBlock Classes="onboardingNote" IsVisible="{Binding !DeclineVisible}">
+            <Run Text="Then you can ask " /><Run Text="“have I hit this before?”" Foreground="{StaticResource OnboardingMutedBrush}" /><Run Text=" or " /><Run Text="“what did I change in the importer last week?”" Foreground="{StaticResource OnboardingMutedBrush}" />
+        </TextBlock>
+    </StackPanel>
+</UserControl>

@@ -3,24 +3,47 @@ using Capacitor.App.Services.Onboarding;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.App.Tests.Unit;
 
 /// <summary>
-/// The decision-1 gate matrix (design doc §2 decision 1 / §4's <c>OnboardingGate</c> bullet),
-/// pinned against <see cref="TokenStore"/>'s REAL refresh/binding rules rather than a
+/// The onboarding gate matrix, pinned against <see cref="TokenStore"/>'s REAL refresh/binding rules rather than a
 /// reimplementation of them — each test below cites the TokenStore rule it mirrors.
 /// </summary>
 public class OnboardingGateTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
-    OnboardingGate Gate() => new(Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, TimeProvider.System);
+    OnboardingGate Gate() => new(Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, NoLocalInstallation.Root, TimeProvider.System);
 
     const string ProfileName = "acme";
     const string ServerUrl = "https://acme.example";
 
     string ConfigPath => AppConfig.GetConfigPath(Config.Root);
     string TokensDir  => Config.PathTo("tokens");
+
+    [Test]
+    public async Task Cli_configured_profile_opens_main_unless_setup_is_explicitly_requested() {
+        WriteConfig(SingleProfileConfig(new Profile { ServerUrl = ServerUrl }));
+        await AuthFixtures.NewTokenStore(Config.Root).SaveAsync(ProfileName,
+            MakeToken(AuthProvider.GitHubApp, expired: false, serverUrl: ServerUrl));
+
+        var (gate, _) = await App.ResolveAndEvaluateGateAsync(Config.Root,
+            AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, NoLocalInstallation.Root, TimeProvider.System, CancellationToken.None);
+
+        await Assert.That(App.ShouldShowWizard(gate, null)).IsFalse();
+        await Assert.That(App.ShouldShowWizard(gate, [])).IsFalse();
+        await Assert.That(App.AutoActionsPermanentlyClosed(gate, laneQuiesced: true)).IsFalse();
+        await Assert.That(App.ShouldShowWizard(gate, ["--setup"])).IsTrue();
+    }
+
+    [Test]
+    public async Task Unconfigured_profile_still_opens_setup_without_desktop_state() {
+        var (gate, _) = await App.ResolveAndEvaluateGateAsync(Config.Root,
+            AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, NoLocalInstallation.Root, TimeProvider.System, CancellationToken.None);
+
+        await Assert.That(App.ShouldShowWizard(gate, [])).IsTrue();
+    }
 
     // ── ValidServerUrl (the shared validator) ───────────────────────────────
 
@@ -73,8 +96,8 @@ public class OnboardingGateTests {
 
         await AssertIncomplete(result, GateReason.InvalidServerUrl);
 
-        // Decision 2: the gate and App.ValidProfileName must share one validator — before this
-        // task, App.ValidProfileName accepted any absolute URI (including file://).
+        // The gate and App.ValidProfileName must share one validator, so neither accepts a
+        // file:// URI the other refuses.
         await Assert.That(OnboardingGate.ValidServerUrl(fileUrl)).IsFalse();
         var resolved = new ResolvedProfile(fileUrl, ProfileName, profile, null);
         await Assert.That(App.ValidProfileName(resolved)).IsNull();
@@ -182,9 +205,9 @@ public class OnboardingGateTests {
         await Assert.That(Directory.Exists(TokensDir)).IsFalse();
     }
 
-    // Blocker (final review): the stamp WRITER emits AuthProvider.None ("None", capitalized)
-    // verbatim, not a lowercased literal — an ordinal-exact "none" compare would silently never
-    // satisfy the gate for a real stamp. This is the actual production shape the fix targets.
+    // The stamp WRITER emits AuthProvider.None ("None", capitalized) verbatim, not a lowercased
+    // literal: an ordinal-exact "none" compare would silently never satisfy the gate for a real
+    // stamp.
     [Test]
     public async Task None_constant_stamp_matching_current_server_is_Complete_without_any_token_file() {
         var profile = new Profile { ServerUrl = ServerUrl, AuthProvider = new AuthProviderStamp(AuthProvider.None, ServerUrl) };
@@ -242,18 +265,18 @@ public class OnboardingGateTests {
         await Assert.That(result).IsTypeOf<GateResult.Complete>();
     }
 
-    // ── EvaluateResolvedAsync: the shared-resolution seam (Codex P1) ────────
+    // ── EvaluateResolvedAsync: the shared-resolution seam ────────
 
     // App.StartAsync resolves ONCE (EvaluateAsync's own resolve, which the daemon graph is then
     // built from) and hands that SAME identity to EvaluateResolvedAsync — proving it never
-    // re-resolves is what rules out the race the P1 finding described: a concurrent active-profile
+    // re-resolves is what rules out the race: a concurrent active-profile
     // change between two independent resolves evaluating the gate against a different profile than
     // the one the daemon graph built.
     [Test]
     public async Task EvaluateResolvedAsync_never_re_resolves_ignoring_a_config_change_after_capture() {
         WriteConfig(SingleProfileConfig(
             new Profile { ServerUrl = ServerUrl, AuthProvider = new AuthProviderStamp(AuthProvider.None, ServerUrl) }));
-        var resolved = (await AppConfig.ResolveActiveProfile([], Config.Root, ProfileOverrides.None)).Resolution;
+        var resolved = (await AppConfig.ResolveActiveProfile([], Config.Root, ProfileOverrides.None, NoLocalInstallation.Endpoints)).Resolution;
 
         // Mutates the identity underneath the already-captured resolution — a fresh self-resolving
         // EvaluateAsync call at this point would see NoProfile instead.
@@ -280,6 +303,47 @@ public class OnboardingGateTests {
         await Assert.That(profiles).IsNotNull();
         await Assert.That(profiles.Name).IsEqualTo(ProfileName);
         await Assert.That(profiles.Resolution.ServerUrl).IsEqualTo(ServerUrl);
+    }
+
+    OnboardingGate GateWithSetupJournal() {
+        var root = new LocalRoot(Config.PathTo("local"));
+        root.EnsureCreated();
+        LocalStateFiles.WriteJournal(root, new(LocalSetupState.Operation, "committing", ServerStart.Deny, null,
+            DateTimeOffset.UnixEpoch, new Dictionary<string, string>()));
+
+        return new(Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, root, TimeProvider.System);
+    }
+
+    [Test]
+    public async Task Pending_local_setup_is_incomplete_even_with_a_none_stamped_local_profile() {
+        WriteConfig(SingleProfileConfig(new Profile {
+            ServerUrl    = ServerUrl,
+            AuthProvider = new AuthProviderStamp(AuthProvider.None, ServerUrl),
+        }));
+
+        var result = (await GateWithSetupJournal().EvaluateAsync(CancellationToken.None)).Result;
+
+        await AssertIncomplete(result, GateReason.LocalSetupPending);
+    }
+
+    [Test]
+    public async Task Pending_local_setup_is_incomplete_before_any_profile_exists() {
+        var result = (await GateWithSetupJournal().EvaluateAsync(CancellationToken.None)).Result;
+
+        await AssertIncomplete(result, GateReason.LocalSetupPending);
+    }
+
+    /// Settings grades each profile through the per-profile seam; a setup journal is the startup's
+    /// concern, so a cloud profile there keeps its own verdict.
+    [Test]
+    public async Task A_setup_journal_does_not_grade_a_resolved_cloud_profile() {
+        var profile = new Profile { ServerUrl = ServerUrl };
+        await AuthFixtures.NewTokenStore(Config.Root).SaveAsync(ProfileName,
+            MakeToken(AuthProvider.GitHubApp, expired: false, serverUrl: ServerUrl));
+
+        var result = await GateWithSetupJournal().EvaluateResolvedAsync(ProfileName, profile, CancellationToken.None);
+
+        await Assert.That(result).IsTypeOf<GateResult.Complete>();
     }
 
     static async Task AssertIncomplete(GateResult result, GateReason expected) {

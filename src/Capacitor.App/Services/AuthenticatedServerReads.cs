@@ -3,6 +3,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.App.Services;
 
@@ -29,18 +30,20 @@ public sealed class AuthenticatedServerReads<TChannel> : IAsyncDisposable where 
     readonly MachineAuth      _machine;
     ServiceProvider? _lane;
     readonly bool _allowAutoRedirect;
+    readonly LocalRoot? _localRoot;
     long _generation;
     bool _disposed;
 
     public AuthenticatedServerReads(ConfigRoot config, ProfileContext? profiles, ProfileOverrides env,
         MachineAuth machine, Func<HttpClient, string, TChannel> channelFactory,
-        ClientFactory? factory = null, bool allowAutoRedirect = true) {
+        ClientFactory? factory = null, bool allowAutoRedirect = true, LocalRoot? localRoot = null) {
         _config = config;
         _profiles = profiles;
         _env = env;
         _machine = machine;
         _channelFactory = channelFactory;
         _allowAutoRedirect = allowAutoRedirect;
+        _localRoot = localRoot;
         _factory = factory ?? RegisteredLaneAsync;
     }
     async Task<(HttpClient Client, AuthStatus Status)> RegisteredLaneAsync(
@@ -48,7 +51,7 @@ public sealed class AuthenticatedServerReads<TChannel> : IAsyncDisposable where 
         _lane ??= new ServiceCollection()
             .AddSingleton(config)
             .AddSingleton(profiles)
-            .AddSingleton(new CapacitorServer(url, config, profiles))
+            .AddSingleton(new CapacitorServer(url, config, profiles, _localRoot))
             .AddCapacitorHttp(_env, _machine)
             .BuildValidated();
         var clients = _lane.GetRequiredService<ICapacitorHttpClient>();

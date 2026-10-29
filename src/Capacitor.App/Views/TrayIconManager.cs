@@ -1,17 +1,15 @@
 using Avalonia;
 using Avalonia.Controls;
 using Capacitor.App.ViewModels;
-using ReactiveUI.Reactive;
 
 namespace Capacitor.App.Views;
 
-/// The thin, dumb adapter wiring TrayViewModel.MenuModel into a real TrayIcon/NativeMenu (spec
-/// §5): the icon (glyph + count) updates IMMEDIATELY on every model change; menu items rebuild
-/// ONLY inside NativeMenu.NeedsUpdate, via TrayMenuSync's dirty-flag state machine. macOS
-/// status-item menus never raise NativeMenu.Opening (confirmed live in manual acceptance) —
-/// NeedsUpdate is the pre-display hook that DOES fire, so it also fire-and-forgets the
-/// pause-state refresh, kicked before the rebuild it triggers; the refresh only starts async
-/// socket work through the §6 serialized lane and never touches menu structure itself.
+/// Wires TrayViewModel.MenuModel into a real TrayIcon/NativeMenu. Avalonia's Windows and Linux
+/// backends never raise NativeMenu.NeedsUpdate, and Windows shows nothing at all for a menu with no
+/// items, so there the menu is rebuilt on every model change and a left-click opens the main window.
+/// On macOS it rebuilds lazily inside NeedsUpdate.
+/// Those backends raise nothing when the menu opens either, so the pause state is refreshed on a
+/// timer: a failed first read or a policy changed elsewhere would otherwise stay in the menu.
 public sealed class TrayIconManager : IDisposable {
     readonly Application _app;
     readonly TrayIcon _trayIcon;
@@ -19,31 +17,43 @@ public sealed class TrayIconManager : IDisposable {
     readonly TrayMenuBuilder _builder;
     readonly TrayMenuSync _sync = new();
     readonly IDisposable _subscription;
+    readonly IDisposable? _pauseRefresh;
 
-    public TrayIconManager(Application app, TrayViewModel vm) {
+    static readonly TimeSpan PauseRefreshInterval = TimeSpan.FromSeconds(30);
+
+    public TrayIconManager(Application app, TrayViewModel vm)
+        : this(app, vm, rebuildEagerly: !Program.Host.TrayAnnouncesMenuOpen) { }
+
+    public TrayIconManager(Application app, TrayViewModel vm, bool rebuildEagerly, TimeProvider? time = null) {
         _app = app;
         _builder = new TrayMenuBuilder(vm);
 
-        _trayIcon = new TrayIcon { Menu = _menu, ToolTipText = "Kurrent Capacitor" };
+        _trayIcon = new TrayIcon { Menu = _menu, ToolTipText = "kcap" };
         TrayIcon.SetIcons(app, new TrayIcons { _trayIcon });
 
-        _menu.NeedsUpdate += (_, _) => {
-            vm.RequestPauseRefresh();
-            _sync.OnNeedsUpdate(model => _builder.Rebuild(_menu, model));
-        };
+        if (rebuildEagerly) {
+            _trayIcon.Command = vm.OpenMainWindowCommand;
+            _trayIcon.Clicked += (_, _) => vm.RequestPauseRefresh();
+            _pauseRefresh = (time ?? TimeProvider.System).CreateTimer(
+                _ => vm.RequestPauseRefresh(), null, PauseRefreshInterval, PauseRefreshInterval);
+        } else {
+            // macOS status-item menus never raise NativeMenu.Opening, so this is also the pause refresh kick.
+            _menu.NeedsUpdate += (_, _) => {
+                vm.RequestPauseRefresh();
+                _sync.OnNeedsUpdate(model => _builder.Rebuild(_menu, model));
+            };
+        }
 
-        // WhenAnyValue replays the current value synchronously on subscribe, so both the icon and
-        // the sync's dirty flag are seeded from the live model immediately — menu ITEMS still wait
-        // for the first NeedsUpdate (native menus raise it before every display, per Avalonia's own
-        // doc comment on the event), never populated eagerly here.
         _subscription = vm.WhenAnyValue(x => x.MenuModel).Subscribe(model => {
             _trayIcon.Icon = TrayIconRenderer.Get(model.State, model.RunningCount);
-            _sync.OnModelChanged(model);
+            if (rebuildEagerly) _builder.Rebuild(_menu, model);
+            else _sync.OnModelChanged(model);
         });
     }
 
     public void Dispose() {
         _subscription.Dispose();
+        _pauseRefresh?.Dispose();
         TrayIcon.SetIcons(_app, null);
         _trayIcon.Dispose();
     }

@@ -43,6 +43,31 @@ public class ConfigMutatorTests {
         await Assert.That(File.Exists(AppConfig.GetConfigPath(Config.Root) + ".tmp")).IsFalse();
     }
 
+    /// A read racing a publish sees the old or the new file, never "unreadable". Only Windows can
+    /// fail this: its sharing rules are what a read overlapping the replace-into-place collides with.
+    [Test]
+    public async Task TryLoadPure_reads_while_publishes_replace_the_file() {
+        await ConfigMutator.MutateAsync(Config.Root, c => c with { MachineId = "0" });
+        var path = AppConfig.GetConfigPath(Config.Root);
+
+        using var reading = new ManualResetEventSlim();
+        var writer = Task.Run(() => {
+            reading.Wait();
+            for (var i = 1; i <= 200; i++) ConfigMutator.Mutate(Config.Root, c => c with { MachineId = $"{i}" });
+        });
+        var unreadable = 0;
+        var overlapping = 0;
+        do {
+            if (!ConfigMutator.TryLoadPure(path, out _)) unreadable++;
+            overlapping++;
+            reading.Set();
+        } while (!writer.IsCompleted);
+        await writer;
+
+        await Assert.That(unreadable).IsEqualTo(0);
+        await Assert.That(overlapping).IsGreaterThan(1);
+    }
+
     [Test]
     public async Task Mutate_survives_a_transient_reader_holding_the_destination() {
         await ConfigMutator.MutateAsync(Config.Root, c => c with { MachineId = "before" });
@@ -256,5 +281,27 @@ public class ConfigMutatorTests {
         // allowed here (the legacy-persist behavior), but the FILE must now be v2 and valid.
         var reread = JsonDocument.Parse(await File.ReadAllTextAsync(AppConfig.GetConfigPath(Config.Root)));
         await Assert.That(reread.RootElement.TryGetProperty("version", out var v) && v.GetInt32() == 2).IsTrue();
+    }
+
+    [Test]
+    public async Task MutateStrict_refuses_a_malformed_file_and_leaves_it_untouched() {
+        var path = AppConfig.GetConfigPath(Config.Root);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, "{ not json");
+        var invoked = false;
+
+        await Assert.That(async () => await ConfigMutator.MutateStrictAsync(Config.Root, c => { invoked = true; return c with { MachineId = "m" }; }))
+            .Throws<ConfigUnreadableException>();
+
+        await Assert.That(invoked).IsFalse();
+        await Assert.That(await File.ReadAllTextAsync(path)).IsEqualTo("{ not json");
+    }
+
+    [Test]
+    public async Task MutateStrict_publishes_into_a_fresh_config_when_the_file_is_absent() {
+        var next = await ConfigMutator.MutateStrictAsync(Config.Root, c => c with { MachineId = "m" });
+
+        await Assert.That(next.MachineId).IsEqualTo("m");
+        await Assert.That((await AppConfig.LoadProfileConfig(Config.Root)).MachineId).IsEqualTo("m");
     }
 }

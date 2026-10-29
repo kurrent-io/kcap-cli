@@ -1,0 +1,187 @@
+name: Build CLI
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      rids:
+        description: Space-separated RIDs to build, from the table in the plan job.
+        required: true
+        type: string
+      sign:
+        description: Sign the macOS binaries. Needs the Apple secrets.
+        type: boolean
+        default: false
+
+env:
+  CLI_PROJECT: src/Capacitor.Cli/Capacitor.Cli.csproj
+  DAEMON_PROJECT: src/Capacitor.Cli.Daemon/Capacitor.Cli.Daemon.csproj
+  SERVICE_PROJECT: src/Capacitor.Cli.Service/Capacitor.Cli.Service.csproj
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      # Dependabot's docker ecosystem does not scan a job's `container:`, so bump alpine by hand.
+      - id: plan
+        env:
+          RIDS: ${{ inputs.rids }}
+          PLATFORMS: >-
+            [
+              {"rid": "osx-arm64",        "os": "macos-latest",     "npm-package": "kcap-darwin-arm64"},
+              {"rid": "linux-x64",        "os": "ubuntu-latest",    "npm-package": "kcap-linux-x64"},
+              {"rid": "linux-arm64",      "os": "ubuntu-24.04-arm", "npm-package": "kcap-linux-arm64"},
+              {"rid": "linux-musl-x64",   "os": "ubuntu-latest",    "npm-package": "kcap-linux-musl-x64", "container": "alpine:3.20"},
+              {"rid": "linux-musl-arm64", "os": "ubuntu-24.04-arm", "npm-package": "kcap-linux-musl-arm64"},
+              {"rid": "win-x64",          "os": "windows-latest",   "npm-package": "kcap-win-x64"}
+            ]
+        run: |
+          set -euo pipefail
+          matrix="$(jq -c --arg rids "$RIDS" '($rids | split(" ") | map(select(. != ""))) as $want | map(select(.rid as $r | $want | index($r)))' <<<"$PLATFORMS")"
+          [ "$(jq length <<<"$matrix")" -eq "$(wc -w <<<"$RIDS")" ] || { echo "::error::unknown RID in '$RIDS'"; exit 1; }
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.rid }})
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container || '' }}
+    env:
+      VERSION: ${{ inputs.version }}
+      EXE: ${{ startsWith(matrix.rid, 'win-') && '.exe' || '' }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install Alpine build dependencies
+        if: matrix.container != ''
+        shell: sh
+        run: |
+          apk add --no-cache bash curl git icu-libs krb5-libs libgcc libstdc++ zlib clang build-base zlib-dev linux-headers openssl
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux' && !matrix.container
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang zlib1g-dev ${{ contains(matrix.rid, 'musl') && 'musl-tools' || '' }}
+
+      # CompilePtyShim needs musl-gcc for a musl RID on a glibc runner; failing here is clearer than
+      # inside its Exec. The Alpine container builds natively and needs no cross-compiler.
+      - name: Verify musl toolchain
+        if: contains(matrix.rid, 'musl') && !matrix.container
+        run: musl-gcc --version
+
+      - uses: actions/checkout@v7
+
+      # No cache: RUNNER_OS keying collapses Linux legs that need different RID packages.
+      - name: Setup .NET
+        uses: ./.github/actions/setup-dotnet
+
+      - name: Publish daemon AOT binary
+        run: >
+          dotnet publish "$DAEMON_PROJECT" -c Release -r ${{ matrix.rid }}
+          -p:MinVerVersionOverride="$VERSION" -o publish/daemon/ 2>&1 | tee publish-daemon.log
+
+      - name: Import signing keychain
+        if: inputs.sign && startsWith(matrix.rid, 'osx-')
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: bash scripts/import-signing-keychain.sh
+
+      # Before the digest: signing rewrites the daemon's bytes, and the CLI embeds the digest of the
+      # bytes it will launch. The daemon is never signed again after this.
+      - name: Sign daemon and shim
+        if: inputs.sign && startsWith(matrix.rid, 'osx-')
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: >
+          bash scripts/sign-macos.sh "$APPLE_SIGNING_IDENTITY" "$KEYCHAIN"
+          src/Capacitor.App/Packaging/daemon.entitlements
+          publish/daemon/kcap-daemon publish/daemon/libpty_shim.dylib
+
+      - name: Compute daemon digest
+        id: daemon-digest
+        run: |
+          set -euo pipefail
+          source scripts/lib/hash.sh
+          echo "DIGEST=$(sha256_of "publish/daemon/kcap-daemon$EXE")" >> "$GITHUB_OUTPUT"
+
+      - name: Publish CLI AOT binary
+        run: >
+          dotnet publish "$CLI_PROJECT" -c Release -r ${{ matrix.rid }}
+          -p:MinVerVersionOverride="$VERSION"
+          -p:KcapDaemonDigest=${{ steps.daemon-digest.outputs.DIGEST }} -o publish/cli/ 2>&1 | tee publish-cli.log
+
+      - name: Publish the Windows service AOT binary
+        if: startsWith(matrix.rid, 'win-')
+        run: >
+          dotnet publish "$SERVICE_PROJECT" -c Release -r ${{ matrix.rid }}
+          -p:MinVerVersionOverride="$VERSION" -o publish/service/ 2>&1 | tee publish-service.log
+
+      # dotnet build does not surface trimming and AOT warnings; only publish does.
+      - name: Refuse AOT and trimming warnings
+        run: |
+          touch publish-service.log
+          if grep -hE 'IL[23][01][0-9]{2}' publish-daemon.log publish-cli.log publish-service.log; then
+            echo "::error::AOT/trimming warnings detected"; exit 1
+          fi
+
+      - name: Sign CLI
+        if: inputs.sign && startsWith(matrix.rid, 'osx-')
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: >
+          bash scripts/sign-macos.sh "$APPLE_SIGNING_IDENTITY" "$KEYCHAIN"
+          src/Capacitor.App/Packaging/cli.entitlements publish/cli/kcap
+
+      - name: Smoke the binaries
+        if: startsWith(matrix.rid, 'osx-')
+        run: |
+          set -euo pipefail
+          publish/cli/kcap --version --no-update-check
+          publish/daemon/kcap-daemon --version
+
+      - name: Verify the PTY shim
+        if: matrix.rid != 'win-x64'
+        run: bash scripts/verify-pty-shim.sh ${{ matrix.rid }} "$VERSION"
+
+      # The mac: incarnation-identity scheme has no emulation off real hardware, so this captures a
+      # real process's identity and a child's against the AOT build.
+      - name: Verify mac incarnation-identity runtime capture
+        if: startsWith(matrix.rid, 'osx-')
+        run: dotnet run --project test/Capacitor.Cli.Tests.Unit.NativeTestHost -r ${{ matrix.rid }} -- mac-identity-smoke
+
+      - name: Stage e_sqlite3 native release asset
+        run: bash scripts/stage-sqlite-native.sh ${{ matrix.rid }} publish/cli sqlite-native
+
+      - name: Package the CLI
+        run: bash scripts/package-cli.sh ${{ matrix.rid }} "$VERSION" ${{ matrix.npm-package }} ${{ steps.daemon-digest.outputs.DIGEST }}
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: npm-${{ matrix.npm-package }}
+          path: npm/${{ matrix.npm-package }}/
+
+      - name: Upload release archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.rid }}
+          path: kcap-${{ matrix.rid }}.*
+
+      # Named release-* so the release's github-release job publishes it with the archives.
+      - name: Upload e_sqlite3 native asset
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-sqlite-native-${{ matrix.rid }}
+          path: sqlite-native/

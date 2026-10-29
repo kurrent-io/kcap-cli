@@ -52,4 +52,28 @@ public class DriverVendorTests {
     [Arguments(null)]
     public async Task A_blank_stamp_falls_back_to_env(string? stamp)
         => await Assert.That(DriverVendor.Infer(stamp, Env(("CLAUDE_CODE_SESSION_ID", "s1")))).IsEqualTo("claude");
+
+    [Test]
+    public async Task Under_grok_the_driver_is_grok_even_with_inherited_claude_ids()
+        => await Assert.That(DriverVendor.Infer(null, Env(("GROK_SESSION_ID", "g1"), ("CLAUDE_CODE_SESSION_ID", "s1")), () => new CodingAgentAncestor("grok", 7)))
+            .IsEqualTo("grok");
+
+    [Test]
+    public async Task Under_claude_an_inherited_grok_id_does_not_name_the_driver()
+        => await Assert.That(DriverVendor.Infer(null, Env(("GROK_SESSION_ID", "g1"), ("CLAUDE_CODE_SESSION_ID", "s1")), () => new CodingAgentAncestor("claude", 7)))
+            .IsEqualTo("claude");
+
+    [Test]
+    public async Task An_unreadable_ancestry_names_no_driver()
+        => await Assert.That(DriverVendor.Infer(null, Env(("GROK_SESSION_ID", "g1"), ("CLAUDE_CODE_SESSION_ID", "s1")), () => null))
+            .IsNull();
+
+    /// <summary>Under a Grok id the walk decides: Codex nearest is Codex even with inherited Claude ids,
+    /// and another agent nearest names no driver rather than the inherited Claude one.</summary>
+    [Test]
+    [Arguments("codex", "codex")]
+    [Arguments("gemini", null)]
+    public async Task Under_a_grok_id_the_nearest_agent_decides(string nearest, string? expected)
+        => await Assert.That(DriverVendor.Infer(null, Env(("GROK_SESSION_ID", "g1"), ("CLAUDE_CODE_SESSION_ID", "s1")), () => new CodingAgentAncestor(nearest, 7)))
+            .IsEqualTo(expected);
 }

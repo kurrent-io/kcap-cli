@@ -59,6 +59,27 @@ public static class ServerSessionHttp {
         }
     };
 
+    public static SubagentEventsReader SubagentEventsReader(ICapacitorHttpClient? http, ProfileContext? profiles) => async (sessionId, agentId, from, ct) => {
+        var serverUrl = profiles?.Resolution.ServerUrl;
+        if (http is null || profiles is null || string.IsNullOrEmpty(serverUrl)) return new(null);
+        try {
+            var (client, status, _, _) = await http.ForWaitAsync(ct).ConfigureAwait(false);
+            using (client) {
+                if (status is not (AuthStatus.Ok or AuthStatus.NoAuthRequired)) return new(null, Unauthorized: true);
+                var url = $"{serverUrl.TrimEnd('/')}/{ApiRoutes.SubagentEvents(sessionId, agentId, from)}";
+                using var response = await client.GetAsync(url, ct).ConfigureAwait(false);
+                if (response.StatusCode == HttpStatusCode.NotFound) return new(null, NotFound: true);
+                if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden) return new(null, Unauthorized: true);
+                if (!response.IsSuccessStatusCode) return new(null, Failure: $"HTTP {(int)response.StatusCode}");
+                return new(await response.Content.ReadFromJsonAsync(RemoteModelsJsonContext.Default.SubagentEventsDto, ct).ConfigureAwait(false));
+            }
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            throw;
+        } catch (Exception ex) {
+            return new(null, Failure: ex.Message);
+        }
+    };
+
     static async Task<string> ReasonAsync(HttpResponseMessage response, CancellationToken ct) {
         try {
             var text = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);

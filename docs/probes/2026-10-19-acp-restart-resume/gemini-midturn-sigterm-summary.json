@@ -1,0 +1,22 @@
+{
+  "vendor": "gemini",
+  "stop": "midturn",
+  "kill": "sigterm",
+  "version": "0.60.0",
+  "argv": [
+    "gemini",
+    "--experimental-acp",
+    "--skip-trust",
+    "--allowed-mcp-server-names",
+    "__kcap_probe_unmatchable__"
+  ],
+  "started": "2026-10-19T09:26:40.874265+00:00",
+  "codeword": "PELICAN-FAA2B3",
+  "load_session_advertised": true,
+  "session_id": null,
+  "session_new_error": {
+    "code": -32000,
+    "message": "Resource has been exhausted (e.g. check quota)."
+  },
+  "ended": "2026-10-19T09:26:43.482666+00:00"
+}

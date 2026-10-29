@@ -9,7 +9,7 @@ public enum FrameType : byte {
     Stdin   = 3,
     Resize  = 4,
     Detach  = 5,
-    List    = 6,   // request the daemon's agent list (for `kcap agent ls`)
+    List    = 6,   // request the daemon's agent list (for `kcap agent ls`); Text = "title" asks for the title column
     Restart = 7,   // request restart-after-update (Text = "when-idle"|"now"|"force")
     Stop    = 8,   // stop an agent (Text = agent id; empty = every agent this daemon hosts)
     StopV2  = 10,  // stop with a force flag (see FrameCodec.StopV2); supersedes Stop
@@ -34,16 +34,32 @@ public enum FrameType : byte {
     DaemonSettingsPut = 23, // Text = DaemonSettingsPutDto JSON
     // Composer input with attachments — one-shot; acked on SendTextAck when the delivery settles.
     SendTextWithAttachments = 24, // Text = SendTextWithAttachmentsDto JSON
+    // Rename fence — long-lived: acquire holds the fence for the connection's life; commit and abort
+    // follow on the same connection. Every reply is AdmissionFenceAck.
+    AdmissionFenceAcquire = 25, // Text = AdmissionFenceAcquireDto JSON
+    AdmissionFenceCommit  = 26,
+    AdmissionFenceAbort   = 27,
+    // Daemon shutdown and interrupted-agent retry — one-shot; each is acked once.
+    Shutdown    = 28, // Text = ShutdownRequestDto JSON
+    AgentResume = 29, // Text = agent id
+    // Attach, answered with RuntimeStarted ahead of the Attached/AttachedReadOnly reply. Sent only to a
+    // daemon advertising AgentAttachClient.RuntimeCapability.
+    AttachWithRuntime = 30, // Text = agent id
+    // The session a hosted agent is bound to — one-shot. Sent only to a daemon advertising
+    // AgentSessionIpc.Capability.
+    AgentSession = 31, // Text = agent id
+    AccountsSubscribe = 32, // long-lived: push an AccountsSnapshot (immediate + on change)
     // Session rename — one-shot; acked on SessionRenameAck.
-    SessionRename = 25, // Text = SessionRenameDto JSON
+    SessionRename = 33, // Text = SessionRenameDto JSON
     // daemon → client
     Attached  = 64,
     Stdout    = 65,
     Exited    = 66,
     Error     = 67,
-    AgentList = 68, // UTF-8 table payload: one `id\tstatus\trepo\tkind\tflowRunId\tflowRole` line per agent
+    AgentList = 68, // UTF-8 table payload: one `id\tstatus\trepo\tkind\tflowRunId\tflowRole[\ttitle[\tstate]]` line per agent
     RestartAck = 69, // acknowledgement for Restart (Text = short status)
-    StopAck    = 70, // acknowledgement for Stop (Text = one `id\tstatus` line per agent; status is "stopped", "skipped", or "failed")
+    StopAck    = 70, // Text = one `id\tstatus` line per agent: "stopped", "skipped", "failed", or "missing".
+                    // StopV2 reports "missing" only when neither a live agent nor a PID record exists.
     AttachedReadOnly = 71, // Attached for a protected agent: id + reason + snapshot, no input accepted
     HelloReply = 75, // Text = HelloReplyDto JSON: protocol/daemon version, name, capabilities
     DaemonStatus = 76, // Text = DaemonStatusDto JSON: daemon block + full agent list snapshot
@@ -56,5 +72,11 @@ public enum FrameType : byte {
     PermissionAck      = 79, // Text = PermissionAckDto JSON, reply to PermissionResolve
     SendTextAck = 80, // Text = SendTextAckDto JSON, reply to SendText
     DaemonSettingsAck = 81, // Text = DaemonSettingsAckDto JSON, reply to DaemonSettingsPut
-    SessionRenameAck = 82, // Text = SessionRenameAckDto JSON, reply to SessionRename
+    AdmissionFenceAck = 82, // Text = AdmissionFenceAckDto JSON, reply to every fence frame
+    ShutdownAck    = 83, // Text = "stopping"
+    AgentResumeAck = 84, // Text = "resuming" | "not_interrupted" | "unknown"
+    RuntimeStarted = 85, // BE64 UTC ticks: the attached runtime's start, as the resume ledger's started_at
+    AgentSessionReply = 86, // Text = the agent's session id; empty when the daemon hosts no such agent or it has none yet
+    AccountsSnapshot = 87, // Text = AccountsSnapshotDto JSON, pushed on AccountsSubscribe
+    SessionRenameAck = 88, // Text = SessionRenameAckDto JSON, reply to SessionRename
 }

@@ -1,0 +1,25 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
+             x:Class="Capacitor.App.Views.AgentStatusTip"
+             x:DataType="vm:AgentStatusPresentation"
+             Background="Transparent">
+    <!-- Value, then a faint caption. A gap between rows is the separator: a middot on one
+         line disappears at this size. -->
+    <ItemsControl ItemsSource="{Binding Facts}">
+        <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+                <StackPanel Spacing="10" MaxWidth="320" />
+            </ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:AgentStatusFact">
+                <StackPanel Spacing="1">
+                    <TextBlock Text="{Binding Text}" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding Caption}" Classes="kcapTipCaption"
+                               IsVisible="{Binding HasCaption}" />
+                </StackPanel>
+            </DataTemplate>
+        </ItemsControl.ItemTemplate>
+    </ItemsControl>
+</UserControl>

@@ -7,22 +7,22 @@ public class InstallProvenanceTests {
 
     [Test]
     public async Task Inside_a_bundle_with_a_plist_is_bundled() {
-        var bundled = InstallProvenance.IsAppBundled("/Applications/Kurrent Capacitor.app/Contents/MacOS/kcap", PlistExists);
+        var bundled = InstallProvenance.IsAppBundled("/Applications/kcap.app/Contents/MacOS/kcap", PlistExists);
 
         await Assert.That(bundled).IsTrue();
     }
 
     [Test]
     public async Task Bundle_shape_without_a_plist_is_not_bundled() {
-        var bundled = InstallProvenance.IsAppBundled("/Applications/Kurrent Capacitor.app/Contents/MacOS/kcap", _ => false);
+        var bundled = InstallProvenance.IsAppBundled("/Applications/kcap.app/Contents/MacOS/kcap", _ => false);
 
         await Assert.That(bundled).IsFalse();
     }
 
     [Test]
     [Arguments("/usr/local/lib/node_modules/@kurrent/kcap-darwin-arm64/bin/kcap")]
-    [Arguments("/Applications/Kurrent Capacitor.app/Contents/Resources/kcap")]
-    [Arguments("/Applications/Kurrent Capacitor/Contents/MacOS/kcap")]
+    [Arguments("/Applications/kcap.app/Contents/Resources/kcap")]
+    [Arguments("/Applications/kcap/Contents/MacOS/kcap")]
     [Arguments("")]
     public async Task Other_shapes_are_not_bundled(string path) {
         await Assert.That(InstallProvenance.IsAppBundled(path, PlistExists)).IsFalse();

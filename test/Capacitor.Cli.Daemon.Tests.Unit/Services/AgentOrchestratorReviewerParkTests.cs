@@ -383,7 +383,7 @@ public class AgentOrchestratorReviewerParkTests {
     /// <see cref="IAcpTranscriptSource"/>, a fixed Codex thread id as its canonical session id — the two
     /// facets arm-A reads. Everything else is a harmless no-op; <see cref="TerminateAsync"/> flips
     /// <see cref="HasExited"/> so the shared stop path completes.</summary>
-    sealed class FakeAppServerRuntime(string threadId) : IHostedAgentRuntime, IAcpTranscriptSource {
+    internal sealed class FakeAppServerRuntime(string threadId) : IHostedAgentRuntime, IAcpTranscriptSource {
         readonly TaskCompletionSource _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public string Vendor              => "codex";

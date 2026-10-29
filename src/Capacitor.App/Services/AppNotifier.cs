@@ -9,8 +9,8 @@ public interface IAppNotifier {
 }
 
 /// Replay-0: a message emitted before a subscriber attaches is lost to the UI — the accepted
-/// missed-banner-while-hidden limitation (spec §11). Notify ALSO writes to Console.Error, which
-/// is the only channel that survives a hidden main window (spec §11).
+/// missed-banner-while-hidden limitation. Notify ALSO writes to Console.Error, which is the only
+/// channel that survives a hidden main window.
 public sealed class AppNotifier : IAppNotifier {
     readonly Subject<string> _messages = new();
 

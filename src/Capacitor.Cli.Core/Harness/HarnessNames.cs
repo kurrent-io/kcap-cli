@@ -19,6 +19,9 @@ public static class HarnessNames {
             HarnessId.Pi          => "pi",
             HarnessId.OpenCode    => "opencode",
             HarnessId.Antigravity => "antigravity",
+            HarnessId.MistralVibe => "mistral-vibe",
+            HarnessId.Grok        => "grok",
+            HarnessId.Muse        => "muse",
         };
 
         /// <summary>The flag that selects this one harness on our commands.</summary>
@@ -43,6 +46,9 @@ public static class HarnessNames {
             "pi"          => HarnessId.Pi,
             "opencode"    => HarnessId.OpenCode,
             "antigravity" => HarnessId.Antigravity,
+            "mistral-vibe" => HarnessId.MistralVibe,
+            "grok"        => HarnessId.Grok,
+            "muse"        => HarnessId.Muse,
             _             => null,
         };
 

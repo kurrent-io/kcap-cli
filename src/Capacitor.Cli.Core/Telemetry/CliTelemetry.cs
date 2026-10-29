@@ -20,14 +20,24 @@ public sealed class CliTelemetry {
     const string Endpoint = "https://phog.kurrent.io";
     const string Token    = "phc_DeHBgHGersY4LmDlADnPrsCPOAmMO7QFOH8f4DVEVmD";
 
+    /// <summary>The host telemetry posts to, for callers that must name every host a run contacts.</summary>
+    public static string EndpointHost => new Uri(Endpoint).Host;
+
     static readonly TimeSpan FlushBudget = TimeSpan.FromSeconds(1.5);
 
     readonly ITelemetrySink _sink;
     readonly TimeProvider   _time;
     readonly string         _command;
     readonly string?        _deviceId;
+    // Whether the id came off disk: an in-memory fallback id has no file to be replaced.
+    readonly bool           _deviceIdSaved;
     readonly string?        _orgGroup;
     readonly bool           _debug;
+    readonly bool           _desktop;
+
+    /// <summary>Set for the desktop app only, which outlives the commands run beside it: an opt-out a
+    /// command saves must stop it too, so it re-reads the saved choice before it queues or ships.</summary>
+    readonly ConfigRoot?    _config;
 
     /// <summary>
     /// Guards <see cref="_shared"/>, which is written after construction as well as during it: the
@@ -44,11 +54,14 @@ public sealed class CliTelemetry {
 
     CliTelemetry(
             ITelemetrySink sink, string command, bool enabled, string? deviceId, string? orgGroup,
-            bool debug, string signupUrl, JsonObject shared, TimeProvider time) {
+            bool debug, string signupUrl, JsonObject shared, TimeProvider time, ConfigRoot? desktopConfig = null) {
+        _desktop  = desktopConfig is not null;
+        _config   = desktopConfig;
         _sink     = sink;
         _time     = time;
         _command  = command;
         _deviceId = deviceId;
+        _deviceIdSaved = desktopConfig is not null && deviceId is not null && TelemetryDeviceId.ReadPersisted(desktopConfig) == deviceId;
         _orgGroup = orgGroup;
         _debug    = debug;
         _shared   = shared;
@@ -81,7 +94,13 @@ public sealed class CliTelemetry {
     /// </summary>
     public static CliTelemetry Start(TelemetryStartup startup, ConfigRoot config, TimeProvider time) =>
         Start(startup, config, time,
-            () => new TelemetryClient(new HttpClientHandler(), Spool(config), Token, Endpoint, time));
+            () => new TelemetryClient(new HttpClientHandler(), Spool(config), Token, Endpoint, time,
+                consent: startup.Source == TelemetryStartup.DesktopSource ? () => SavedConsent(config) : null));
+
+    /// The saved choice, or null when the file cannot be read: it may hold an opt-out, so nothing is sent on it,
+    /// but a read that fails for a moment is not an opt-out either.
+    static bool? SavedConsent(ConfigRoot config) =>
+        TelemetryState.TryRead(config) is { } state ? TelemetrySettings.Resolve(state.Enabled).Enabled : null;
 
     /// <param name="sink">
     /// Invoked only when the facade comes up live, so a run that is opted out builds no HTTP
@@ -113,7 +132,7 @@ public sealed class CliTelemetry {
                 startup.Debug,
                 startup.SignupUrl,
                 new JsonObject {
-                    ["source"]        = "cli",
+                    ["source"]        = startup.Source,
                     ["cli_version"]   = version,
                     ["build_channel"] = TelemetryEnvironment.BuildChannel(version),
                     ["os"]            = OS(),
@@ -122,13 +141,16 @@ public sealed class CliTelemetry {
                     ["is_headless"]   = Auth.HeadlessEnvironment.IsHeadless(),
                     ["has_server"]    = startup.ServerUrl is not null,
                 },
-                time);
+                time,
+                desktopConfig: startup.Source == TelemetryStartup.DesktopSource ? config : null);
 
             // Minted here rather than in Announce so the key is in the shared bag before ANY event
             // can be captured — cli_first_run included, which is once per device and unrepairable by
             // a later run. Gated to the two interactive auth commands so it never attaches to a
             // recap or an import, which have no auth run to correlate, and minted ahead of any lane
             // the command later chooses so every setup/login lane carries it.
+            // Not for the desktop app: one key per process would be reused by every sign-in it runs,
+            // and the join's loopback hop serves one return only.
             if (startup.Command is "setup" or "login")
                 telemetry.Join.Mint();
 
@@ -141,7 +163,7 @@ public sealed class CliTelemetry {
     /// <summary>Queue an event for the exit flush.</summary>
     public void Capture(string name, JsonObject properties) {
         try {
-            if (!Enabled) return;
+            if (!StillEnabled()) return;
 
             lock (_sharedGate)
                 foreach (var (key, value) in _shared)
@@ -189,11 +211,14 @@ public sealed class CliTelemetry {
     /// run dies — the population being measured is people who quit mid-setup and never run kcap
     /// again, so a deferred event is a lost event, not a delayed one. Safe here because this is a
     /// console app with no SynchronizationContext to deadlock against; do not convert to
-    /// fire-and-forget.
+    /// fire-and-forget. The desktop app is the exception: its callers sit on the UI thread, where
+    /// the wait could deadlock, and the process outlives the step, so the flush runs off-thread.
     /// </summary>
     public void CaptureNow(string name, JsonObject properties) {
         Capture(name, properties);
-        FlushAndClose().GetAwaiter().GetResult();
+
+        if (_desktop) _ = Task.Run(FlushAndClose);
+        else FlushAndClose().GetAwaiter().GetResult();
     }
 
     public void RecordCommand(string command, string[] args, int exitCode, long durationMs) {
@@ -229,10 +254,34 @@ public sealed class CliTelemetry {
 
     public async Task FlushAndClose() {
         try {
-            if (!Enabled || _deviceId is null) return;
+            if (!StillEnabled() || _deviceId is null) return;
 
             await _sink.FlushAsync(_deviceId, _orgGroup, FlushBudget);
         } catch { }
+    }
+
+    bool StillEnabled() {
+        if (!Enabled) return false;
+        if (_config is null) return true;
+
+        switch (SavedConsent(_config)) {
+            case null:
+                return false;
+            case false:
+                DiscardAndDisable();
+                return false;
+        }
+        if (!_deviceIdSaved) return true;
+        // The id this process sends under is gone or replaced only if an opt-out came between; sending on would
+        // link the two sides of it. An id that cannot be read just now sends nothing, as an unreadable choice does.
+        if (!TelemetryDeviceId.TryReadPersisted(_config, out var saved)) return false;
+        if (saved == _deviceId) return true;
+        // The opt-out in between already cleared the spool; what is there now was queued under the new id.
+        try {
+            _sink.Abandon();
+            Enabled = false;
+        } catch { }
+        return false;
     }
 
     /// <summary>
@@ -268,8 +317,9 @@ public sealed class CliTelemetry {
     /// </summary>
     public void Announce(ConfigRoot config) {
         try {
-            if (!Enabled || _command == "mcp-server") return;
-            if (TelemetryState.Read(config).NoticeShown) return;
+            // The desktop app's stderr reaches no one; it shows the notice on screen instead.
+            if (!Enabled || _command == "mcp-server" || _desktop) return;
+            if (TelemetryState.TryRead(config) is not { NoticeShown: false }) return;
 
             Console.Error.WriteLine(
                 "kcap collects pseudonymous usage data — command and flag names only, never argument values,");
@@ -279,8 +329,29 @@ public sealed class CliTelemetry {
                 "Opt out: kcap config set telemetry off (or DO_NOT_TRACK=1).");
             Console.Error.WriteLine("https://capacitor.kurrent.io/privacy");
 
-            TelemetryState.MarkNoticeShown(config);
-            Capture("cli_first_run", new JsonObject());
+            // Once per device only if the marker that says so was saved; otherwise the next run shows it again.
+            if (TelemetryState.MarkNoticeShown(config)) Capture("cli_first_run", new JsonObject());
+        } catch { }
+    }
+
+    /// <summary>Whether the desktop app still owes this device the one-time disclosure.</summary>
+    public bool NoticeDue(ConfigRoot config) {
+        try {
+            return Enabled && TelemetryState.TryRead(config) is { NoticeShown: false };
+        } catch {
+            return false;
+        }
+    }
+
+    /// <summary>The desktop app showed the disclosure: marks it shown for every kcap process on this device
+    /// and queues <c>cli_first_run</c>, as <see cref="Announce"/> does for the console.</summary>
+    public void AcknowledgeNotice(ConfigRoot config) {
+        try {
+            if (!NoticeDue(config)) return;
+
+            // Sent now: the marker is already saved, so an app killed before its next flush would
+            // otherwise lose the once-per-device event for good. An unsaved marker shows the notice again.
+            if (TelemetryState.MarkNoticeShown(config)) CaptureNow("cli_first_run", new JsonObject());
         } catch { }
     }
 
@@ -302,7 +373,7 @@ public sealed class CliTelemetry {
         return redacted.ToJsonString();
     }
 
-    static TelemetrySpool Spool(ConfigRoot config) => new(config.Path("telemetry-spool.jsonl"));
+    static TelemetrySpool Spool(ConfigRoot config) => TelemetrySpool.For(config);
 
     static string Version() =>
         typeof(CliTelemetry).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()

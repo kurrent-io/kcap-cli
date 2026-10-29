@@ -23,10 +23,8 @@ internal sealed class SessionStartMemoryOrchestrator(
     public async Task<string?> GetFragmentAsync(SessionMemoryLifecycle lifecycle,
         SessionStartMemoryContextRequest request,
         Func<CancellationToken, Task<bool>>? commitGate = null) {
-        // Both lanes disabled ⇒ no lease is spent, so a flag flipped on mid-session can still
-        // inject on a later callback (the disabled-lane disposition rule). A single disabled lane does NOT short-circuit
-        // here — the composite provider runs the enabled lane and contributes its content.
-        if (request.Disabled && request.GuidelinesDisabled) return null;
+        // Every lane off spends no lease, so a lane switched on mid-session can still inject on a later callback.
+        if (request.AllLanesDisabled) return null;
 
         var started = time.GetTimestamp();
         TimeSpan Remaining() {
@@ -38,6 +36,14 @@ internal sealed class SessionStartMemoryOrchestrator(
             var decision = SessionStartMemoryLifecyclePolicy.Decide(lifecycle);
             if (decision is SessionMemoryLifecycleDecision.IneligibleNoCommit or SessionMemoryLifecycleDecision.RetryLaterNoCommit)
                 return null;
+            // No lease: the host keeps nothing it was handed, so each start is its own delivery and a
+            // failed fetch simply leaves the next start to try again.
+            if (decision == SessionMemoryLifecycleDecision.EligibleEveryStart) {
+                var fresh = await provider.GetAsync(request with { Budget = Remaining() });
+                if (fresh.Fragment is null) return null;
+                if (commitGate is not null && !await commitGate(request.CancellationToken)) return null;
+                return fresh.Fragment;
+            }
             var key = SessionStartMemoryIdentity.Create(lifecycle.Harness, lifecycle.SessionId,
                 lifecycle.LifecycleInstanceId);
             var lease = await store.TryBeginAsync(key, Remaining(), request.CancellationToken);
@@ -45,8 +51,9 @@ internal sealed class SessionStartMemoryOrchestrator(
 
             var result = await provider.GetAsync(request with { Budget = Remaining() });
             if (result.Disposition == SessionStartMemoryDisposition.RetryableFailure) {
-                await store.RetryAsync(lease, result.RetryAfter, Remaining(), request.CancellationToken);
-                return null;
+                return await store.RetryAsync(lease, result.RetryAfter, Remaining(), request.CancellationToken)
+                    ? result.Fragment
+                    : null;
             }
             // Undeliverable-after-fetch: release the lease rather than spend it, so the next start of
             // this session retries instead of being permanently denied its one injection.

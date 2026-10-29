@@ -40,6 +40,8 @@ sealed class KiroHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
         HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
         GitProviderRouter router, WorkingDirectory workdir) {
+    readonly SessionStartAudience audience = SessionStartAudience.From(hosted);
+
     readonly AgentHookPoster _poster = new(config, profiles, http, watchers, clock.Time);
 
     string Url => profiles.Resolution.ServerUrl!;
@@ -98,8 +100,9 @@ sealed class KiroHookCommand(
             string?    scopeRoot,
             bool       disabled,
             bool       guidelinesDisabled,
+            bool       flowsDisabled,
             TimeSpan   budget) {
-        if ((disabled && guidelinesDisabled) || string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(scopeRoot)
+        if ((disabled && guidelinesDisabled && flowsDisabled) || string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(scopeRoot)
          || budget <= TimeSpan.Zero
          || !HookHttp.IsPostable(Url))
             return null;
@@ -113,10 +116,86 @@ sealed class KiroHookCommand(
                     IsTopLevel: true, ClassificationAuthoritative: true,
                     SessionLifecycleReason.RepeatedTurnCallback, CallbackMayRepeat: true),
                 new SessionStartMemoryContextRequest(Url, scopeRoot, disabled, budget, CancellationToken.None,
-                    GuidelinesDisabled: guidelinesDisabled));
+                    GuidelinesDisabled: guidelinesDisabled, FlowsDisabled: flowsDisabled));
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return null;
         }
+    }
+
+    /// <summary>Crew sets this to "1" on every <c>kiro-cli</c> it launches, so it marks a session worth
+    /// waiting on; a plain Kiro session never pays the wait, even on a machine with Crew installed.</summary>
+    const string CrewSpawnedVariable = "KIROCREW_SPAWNED";
+
+    /// <summary>Longest the hook waits for Crew to record a sub-agent's session. Crew writes it about a
+    /// second after the child's first prompt, and a one-prompt sub-agent fires agentSpawn only once.</summary>
+    static readonly TimeSpan CrewParentWait = TimeSpan.FromMilliseconds(1500);
+
+    /// <summary>Gap between Crew lookups while waiting. Timed on the hook's clock, so a test can tell
+    /// a hook that waits from one that does not.</summary>
+    internal static readonly TimeSpan CrewParentPoll = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>Longest the hook spends naming this session's Crew sub-agents.</summary>
+    static readonly TimeSpan CrewChildrenLookup = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>
+    /// The Crew sub-agents this session spawned. A one-prompt child can be recorded before its parent,
+    /// and Crew delivers each child's result to the parent as a new prompt, so naming the children
+    /// here is what links such a child. Abandoned at its deadline like the parent lookup.
+    /// </summary>
+    async Task<IReadOnlyList<string>> ResolveCrewChildrenAsync(string dashedSessionId, HookBudget budget) {
+        var kiro = harnesses.Of<KiroHarness>();
+        if (!kiro.Crew.IsPresent()) return [];
+
+        var bound = TimeSpan.FromTicks(Math.Min(CrewChildrenLookup.Ticks, budget.Remaining.Ticks / 4));
+        if (bound <= TimeSpan.Zero) return [];
+
+        try {
+            return await Task.Run(() => KiroCrewParentResolver.ChildrenOf(kiro.Crew, kiro.Paths.SessionsDir, dashedSessionId))
+                .WaitAsync(bound, budget.Time);
+        } catch (TimeoutException) {
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// The Kiro Crew session that spawned this one, or null. Waits only for a session that could still
+    /// turn out to be a sub-agent — never one Crew already maps to a chat — and never past half the
+    /// remaining budget, which the memory fetch and the POST still need. The file reads run behind that
+    /// same deadline, so a slow or oversized Crew tree is abandoned rather than awaited.
+    /// </summary>
+    async Task<string?> ResolveCrewParentAsync(string dashedSessionId, HookBudget budget) {
+        var kiro = harnesses.Of<KiroHarness>();
+        if (!kiro.Crew.IsPresent()) return null;
+
+        var wait     = TimeSpan.FromTicks(Math.Min(CrewParentWait.Ticks, budget.Remaining.Ticks / 2));
+        var deadline = budget.Time.GetUtcNow() + wait;
+
+        async Task<(string? Parent, bool IsChat)> LookUp() {
+            var remaining = deadline - budget.Time.GetUtcNow();
+            if (remaining <= TimeSpan.Zero) return (null, false);
+
+            var lookup = Task.Run(() => (
+                KiroCrewParentResolver.ParentOf(kiro.Crew, kiro.Paths.SessionsDir, dashedSessionId),
+                KiroCrewParentResolver.IsChatSession(kiro.Crew, dashedSessionId)));
+
+            try {
+                return await lookup.WaitAsync(remaining, budget.Time);
+            } catch (TimeoutException) {
+                return (null, false);
+            }
+        }
+
+        var (parent, isChat) = await LookUp();
+        if (parent is not null || isChat) return parent;
+        if (Environment.GetEnvironmentVariable(CrewSpawnedVariable) != "1") return null;
+
+        while (budget.Time.GetUtcNow() < deadline) {
+            await Task.Delay(CrewParentPoll, budget.Time);
+
+            if ((await LookUp()).Parent is { } found) return found;
+        }
+
+        return null;
     }
 
     public async Task<int> Handle(TextReader stdin, string[] args) {
@@ -221,6 +300,19 @@ sealed class KiroHookCommand(
             forwarded["model"] = model;
         }
 
+        if (await ResolveCrewParentAsync(dashedSessionId, budget) is { } parent) {
+            forwarded["parent_session_id"] = parent;
+        }
+
+        if (KiroCrewParentResolver.PreviousOf(harnesses.Of<KiroHarness>().Crew, dashedSessionId) is { } previous) {
+            forwarded["previous_session_id"] = previous;
+        }
+
+        // Newest first, so a cap on one payload keeps the children most likely still unlinked.
+        if (await ResolveCrewChildrenAsync(dashedSessionId, budget) is { Count: > 0 } children) {
+            forwarded["subagent_session_ids"] = KiroCrewParentResolver.SessionIdArray(children.Take(KiroCrewParentResolver.MaxChildrenPerStart));
+        }
+
         SessionStartInventory.Stamp(forwarded, config, harnesses, clock.Time);
         var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, forwarded.ToJsonString(), clock.Time);
 
@@ -239,8 +331,9 @@ sealed class KiroHookCommand(
             // The EFFECTIVE profile: ProfileResolver returns a null Profile whenever --server-url or
             // KCAP_URL wins, so reading the resolution's own profile here would silently ignore the
             // user's opt-out on those deployments (the defect found reviewing the Copilot adapter).
-            activeProfile?.DisableMemoryIndex is true,
+            activeProfile?.DisableMemoryIndex is true || !audience.GetsDriverGuidance,
             activeProfile?.DisableSessionGuidelines is true,
+            SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Kiro, harnesses, audience: audience),
             // Remaining already reserves Safety — do not subtract it again.
             budget.Remaining);
 
@@ -273,9 +366,9 @@ sealed class KiroHookCommand(
         // claim could commit its record with nothing emitted and silence the nudges for the
         // session. The emitters run at most once per firing: the harness nudge stamps a ledger.
         string? ResolveNudges() => HarnessNudgeEmitter.Combine(
-            WorkItemsNudgeEmitter.Resolve(HarnessId.Kiro, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
-            PlansNudgeEmitter.Resolve(HarnessId.Kiro, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
-            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time));
+            SessionNudges.Resolve(HarnessId.Kiro, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience, cwd, home),
+            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true || !audience.GetsOnboarding, config, harnesses, clock.Time),
+            FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true || !audience.GetsOnboarding, config, HarnessId.Kiro, harnesses));
         var nudgeDecided = nudgeClaim.IsCompleted;
         var workItemsNudge = nudgeDecided && await nudgeClaim ? ResolveNudges() : null;
         WriteAgentSpawnOutput(Console.Out, fragment, workItemsNudge);

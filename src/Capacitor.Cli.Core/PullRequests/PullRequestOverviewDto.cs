@@ -36,4 +36,6 @@ public sealed record PullRequestOverviewDto {
     public PullRequestReviewsSummaryDto? Reviews { get; init; }
     [JsonPropertyName("conversation")]
     public PullRequestConversationSummaryDto? Conversation { get; init; }
+    [JsonPropertyName("threads")]
+    public PullRequestThreadsSummaryDto? Threads { get; init; }
 }

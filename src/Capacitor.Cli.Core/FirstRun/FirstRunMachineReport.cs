@@ -7,14 +7,14 @@ namespace Capacitor.Cli.Core.FirstRun;
 /// What this machine tells the flow about itself, once, when the CLI creates it.
 ///
 /// <para>Separate from <see cref="HarnessInventory"/> — the daemon's report — because that one ORs the
-/// two detection signals into a single flag, which is lossy for a screen that names the signal it
+/// detection signals into a single flag, which is lossy for a screen that names the signal it
 /// saw. See <see cref="FirstRunHarnessReport"/>.</para>
 /// </summary>
 /// <param name="Machine">The display tag. Not identity; the server truncates it.</param>
 /// <param name="MachineId">This machine's id, so its reports correlate. Null means unreported — an
 /// empty string would correlate every unreported flow to the same non-machine.</param>
 /// <param name="Harnesses">Per vendor, over every harness this build knows. A vendor missing from
-/// here reads as unknown rather than absent, so all of them are reported even when both signals are
+/// here reads as unknown rather than absent, so all of them are reported even when every signal is
 /// false.</param>
 /// <param name="Declined">Vendors turned down locally, outside the flow.</param>
 /// <param name="LoginShellFindsCli">Whether the login shell resolves the CLI, or null when nothing
@@ -52,7 +52,7 @@ public sealed record FirstRunMachineReport(
 
             harnessReports[vendorId] = new FirstRunHarnessReport {
                 BinaryOnPath = agent.BinaryFound,
-                ConfigFound  = agent.InstallSignalFound,
+                ConfigFound  = agent.InstallSignalFound || agent.DesktopAppFound,
                 AlreadyWired = harness.Signals.IsWired
             };
 

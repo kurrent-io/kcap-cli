@@ -118,18 +118,25 @@ public sealed class AntigravityPaths(GeminiPaths gemini) {
     /// null when the path doesn't match the expected
     /// <c>&lt;root&gt;/brain/&lt;id&gt;/.system_generated/logs/transcript_full.jsonl</c> shape.
     /// </summary>
-    public static string? ConversationDbFromTranscript(string transcriptPath) {
-        // Require the EXACT shape …/brain/<id>/.system_generated/logs/transcript_full.jsonl —
-        // validate each segment so an unexpected path fails open (returns null) instead of
-        // being mapped to a guessed <root>/conversations/<derived>.db.
+    public static string? ConversationDbFromTranscript(string transcriptPath) =>
+        RootAndIdFromTranscript(transcriptPath) is (var root, var convId) ? Path.Combine(root, "conversations", $"{convId}.db") : null;
+
+    /// <summary>The product root's single <c>conversation_summaries.db</c>, keyed by the dashed conversation id
+    /// this returns beside it. Null when the path is not a <c>transcript_full.jsonl</c> in the expected shape.</summary>
+    public static (string DbPath, string ConversationId)? SummaryDbFromTranscript(string transcriptPath) =>
+        RootAndIdFromTranscript(transcriptPath) is (var root, var convId) ? (Path.Combine(root, "conversation_summaries.db"), convId) : null;
+
+    // Requires exactly <root>/brain/<id>/.system_generated/logs/transcript_full.jsonl, so an unexpected
+    // path yields null rather than a guessed location.
+    static (string Root, string ConversationId)? RootAndIdFromTranscript(string transcriptPath) {
         if (!string.Equals(Path.GetFileName(transcriptPath), "transcript_full.jsonl", StringComparison.Ordinal))
             return null;
 
-        var logsDir = Path.GetDirectoryName(transcriptPath);                 // …/logs
-        var sysGen  = Path.GetDirectoryName(logsDir);                        // …/.system_generated
-        var convDir = Path.GetDirectoryName(sysGen);                         // …/<id>
-        var brain   = Path.GetDirectoryName(convDir);                        // …/brain
-        var root    = Path.GetDirectoryName(brain);                          // …/<root>
+        var logsDir = Path.GetDirectoryName(transcriptPath);
+        var sysGen  = Path.GetDirectoryName(logsDir);
+        var convDir = Path.GetDirectoryName(sysGen);
+        var brain   = Path.GetDirectoryName(convDir);
+        var root    = Path.GetDirectoryName(brain);
         if (convDir is null || brain is null || root is null) return null;
 
         if (!string.Equals(Path.GetFileName(logsDir), "logs",              StringComparison.Ordinal)) return null;
@@ -137,9 +144,8 @@ public sealed class AntigravityPaths(GeminiPaths gemini) {
         if (!string.Equals(Path.GetFileName(brain),   "brain",             StringComparison.Ordinal)) return null;
 
         var convId = Path.GetFileName(convDir);
-        if (string.IsNullOrEmpty(convId)) return null;
 
-        return Path.Combine(root, "conversations", $"{convId}.db");
+        return string.IsNullOrEmpty(convId) ? null : (root, convId);
     }
 
     /// <summary>Whether Antigravity has run here. Either root counts: one vendor over two surfaces

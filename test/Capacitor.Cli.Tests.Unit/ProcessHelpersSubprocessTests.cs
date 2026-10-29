@@ -16,8 +16,8 @@ public class ProcessHelpersSubprocessTests {
             return;
         }
 
-        if (LocateSleep() is not { } sleep) {
-            Skip.Test("no sleep binary on this host");
+        if (LocateShell() is not { } shell) {
+            Skip.Test("no sh binary on this host");
 
             return;
         }
@@ -25,12 +25,11 @@ public class ProcessHelpersSubprocessTests {
         using var tmp = new TempDir();
 
         var dir    = tmp.CreateDir("claude", "versions");
-        var binary = dir.PathTo("9.9.9");
+        var binary = dir.CopyExecutable(shell, "9.9.9");
 
-        File.Copy(sleep, binary);
-        File.SetUnixFileMode(binary, UnixFileMode.UserRead | UnixFileMode.UserExecute);
-
-        using var child = System.Diagnostics.Process.Start(binary, "30")!;
+        // The trailing builtin keeps the shell from exec-ing the sleep in place, so the live process's exe stays the versioned path.
+        using var child = System.Diagnostics.Process.Start(
+            new System.Diagnostics.ProcessStartInfo(binary) { ArgumentList = { "-c", "sleep 30; :" } })!;
 
         try {
             var resolved = ProcessHelpers.ResolveCodingAgentPid(child.Id, "claude", ProcessHelpers.GetProcessInfo);
@@ -43,16 +42,17 @@ public class ProcessHelpersSubprocessTests {
     }
 
     /// <summary>
-    /// A <c>sleep</c> to copy, or null on a host that has none. Any small binary would do — the
-    /// test copies rather than symlinks so that <c>/proc/&lt;pid&gt;/exe</c> reports the versioned
-    /// path instead of resolving back to the original.
+    /// An <c>sh</c> to copy, or null on a host that has none. The test copies rather than symlinks so
+    /// that <c>/proc/&lt;pid&gt;/exe</c> reports the versioned path instead of resolving back to the
+    /// original. A shell rather than a coreutils tool: uutils coreutils name the utility after the
+    /// path they were run as, so a copy named after a version exits before the process table is read.
     /// </summary>
-    static string? LocateSleep() {
-        string[] wellKnown = ["/usr/bin/sleep", "/bin/sleep"];
+    static string? LocateShell() {
+        string[] wellKnown = ["/bin/sh", "/usr/bin/sh"];
 
         var onPath = (Environment.GetEnvironmentVariable("PATH") ?? "")
             .Split(':', StringSplitOptions.RemoveEmptyEntries)
-            .Select(dir => Path.Combine(dir, "sleep"));
+            .Select(dir => Path.Combine(dir, "sh"));
 
         return wellKnown.Concat(onPath).FirstOrDefault(File.Exists);
     }

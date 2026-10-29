@@ -5,7 +5,6 @@ using Avalonia.Data.Converters;
 using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
-using ReactiveUI.Reactive;
 
 namespace Capacitor.App.Views;
 
@@ -21,6 +20,7 @@ public partial class WorkspaceView : UserControl {
 
     public WorkspaceView() {
         InitializeComponent();
+        TerminalClipboard.Attach(this, TerminalHost);
         // The control draws its caret and takes keystrokes only while focused; a Model assignment
         // is the "terminal became live" moment — but only the Terminal tab may take focus, or a
         // reattach under the Chat tab would steal it from the composer.
@@ -33,16 +33,19 @@ public partial class WorkspaceView : UserControl {
         DataContextChanged += (_, _) => {
             _tabFocus?.Dispose();
             PullRequestHost.Content = null;
+            ArtefactsHost.Content = null;
             var model = DataContext as WorkspaceViewModel;
-            _tabFocus = model?
+            _tabFocus = model is null ? null : model
                 .WhenAnyValue(vm => vm.ActiveTab, vm => vm.Chat)
                 .Subscribe(pair => Dispatcher.UIThread.Post(() => {
-                    if (!ReferenceEquals(model, DataContext) || model?.ActiveTab != pair.Item1) return;
-                    if (pair.Item1 == WorkspaceTab.PullRequest && PullRequestHost.Content is null && model?.PullRequests is { } pullRequests)
+                    if (!ReferenceEquals(model, DataContext) || model?.ActiveTab != pair.Property1) return;
+                    if (pair.Property1 == WorkspaceTab.PullRequest && PullRequestHost.Content is null && model?.PullRequests is { } pullRequests)
                         PullRequestHost.Content = new PullRequestReader { DataContext = pullRequests };
-                    if (PullRequestHost.Content is PullRequestReader reader) reader.IsVisible = pair.Item1 == WorkspaceTab.PullRequest;
-                    if (pair.Item1 == WorkspaceTab.Chat && pair.Item2 is not null) ChatHost.FocusComposer();
-                    else if (pair.Item1 == WorkspaceTab.Terminal) TerminalHost.Focus();
+                    if (pair.Property1 == WorkspaceTab.Artefacts && ArtefactsHost.Content is null && model is not null)
+                        ArtefactsHost.Content = new ArtefactsView { DataContext = model.Artefacts };
+                    if (PullRequestHost.Content is PullRequestReader reader) reader.IsVisible = pair.Property1 == WorkspaceTab.PullRequest;
+                    if (pair.Property1 == WorkspaceTab.Chat && pair.Property2 is not null) ChatHost.FocusComposer();
+                    else if (pair.Property1 == WorkspaceTab.Terminal) TerminalHost.Focus();
                 }, DispatcherPriority.Loaded));
         };
     }
@@ -100,6 +103,21 @@ public sealed class TerminalDetachedOrFailedVisibleConverter : IValueConverter {
 
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
         value is TerminalSessionState { Phase: TerminalSessionPhase.Detached or TerminalSessionPhase.Failed };
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
+
+/// Why the daemon could not bring the agent back after a restart, and how to retry it.
+public sealed class TerminalInterruptedMessageConverter : IValueConverter {
+    public static readonly TerminalInterruptedMessageConverter Instance = new();
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        value is TerminalSessionState { Phase: TerminalSessionPhase.Interrupted } state
+            ? "This session was not resumed after the daemon restarted" +
+              (string.IsNullOrEmpty(state.Detail) ? "." : $" ({state.Detail}).") +
+              " Retry it with `kcap agent resume`, or stop it to discard it."
+            : "";
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
         throw new NotSupportedException();

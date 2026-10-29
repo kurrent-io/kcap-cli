@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Services;
@@ -33,7 +34,7 @@ public class DaemonStatusWiringTests {
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
         services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
-        services.AddSingleton(AuthFixtures.NewTokenStore(Config.Root));
+        services.AddSingleton<ICredentialSource>(new FixedCredentialSource());
         services.AddSingleton<DaemonStatusNotifier>();
         services.AddSingleton<ServerConnection>();
 
@@ -59,7 +60,8 @@ public class DaemonStatusWiringTests {
     sealed class NoopPtyProcessFactory : IPtyProcessFactory {
         public IPtyProcess Spawn(
                 string command, string[] args, string cwd,
-                Dictionary<string, string>? extraEnv = null, ushort cols = 120, ushort rows = 40
+                Dictionary<string, string>? extraEnv = null, ushort cols = 120, ushort rows = 40,
+                IReadOnlyCollection<string>? removeEnv = null
             ) => throw new NotSupportedException("DaemonStatusWiringTests never spawns a PTY");
     }
 
@@ -98,6 +100,7 @@ public class DaemonStatusWiringTests {
         services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
         services.AddSingleton(Config.Root);
         services.AddSingleton(AuthFixtures.NewTokenStore(Config.Root));
+        services.AddSingleton<ICredentialSource>(new FixedCredentialSource());
         services.AddSingleton<DaemonStatusNotifier>();
         services.AddSingleton(Home.Home);
         services.AddSingleton(TestHarnesses.Under(Home));

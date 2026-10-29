@@ -1,7 +1,10 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness.Antigravity;
 using Capacitor.Cli.Core.Harness.Codex;
+using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Mcp;
 using Capacitor.Cli.Core.Instructions;
+using Capacitor.Cli.Core.Toml;
 using Spectre.Console;
 
 namespace Capacitor.Cli.Commands;
@@ -26,9 +29,11 @@ internal static class CodingAgentsStep {
             // has always meant "leave this vendor alone", scripts pass it expecting no writes, and
             // `--no-prompt` gives them no consent moment in which to be told otherwise. Turning a
             // skip flag into something that writes MCP config would be a silent reversal.
-            bool ToolsIndependentOfCapture = false);
+            bool ToolsIndependentOfCapture = false,
+            bool SkipMistralVibe = false, bool SkipMistralVibeMcp = false, bool SkipGrok = false,
+            bool SkipMuse = false, bool SkipMuseMcp = false);
 
-    internal record DetectedAgents(bool Claude, bool Codex, bool Cursor, bool Copilot, bool Gemini = false, bool Kiro = false, bool Pi = false, bool OpenCode = false, bool Antigravity = false);
+    internal record DetectedAgents(bool Claude, bool Codex, bool Cursor, bool Copilot, bool Gemini = false, bool Kiro = false, bool Pi = false, bool OpenCode = false, bool Antigravity = false, bool Vibe = false, bool Grok = false, bool Muse = false);
 
     internal record Paths(
             string  ClaudeSettingsPath,
@@ -56,8 +61,14 @@ internal static class CodingAgentsStep {
             string  OpenCodeInstructionsPath = "",
             string  KiroMcpPath = "",
             string  KiroSkillsDir = "",
+            string  KiroCrewHookScript = "",
+            string  KiroCrewSkillsDir = "",
             string  PiMcpExtensionPath = "",
-            string  PiAgentsMdPath = ""
+            string  PiAgentsMdPath = "",
+            string  VibeHooksPath = "",
+            string  VibeConfigPath = "",
+            string  GrokHooksPath = "",
+            string  MuseSettingsPath = ""
         );
 
     internal record Installers(
@@ -87,7 +98,13 @@ internal static class CodingAgentsStep {
             Func<AgentInstructionsWriter.Change>?                    InstallOpenCodeInstructions = null,
             Func<JsonMcpConfigWriter.Change>?                        RegisterKiroMcp = null,
             Func<string /*mcpExtensionPath*/, bool>?                 InstallPiMcp = null,
-            Func<AgentInstructionsWriter.Change>?                    InstallPiInstructions = null
+            Func<AgentInstructionsWriter.Change>?                    InstallPiInstructions = null,
+            Func<KiroCrewHookInstaller.Outcome>?                     InstallKiroCrewHook = null,
+            Func<string /*hooksTomlPath*/, bool>?                    InstallVibeHooks = null,
+            Func<TomlConfigFile.Outcome>?                           RegisterVibeMcp = null,
+            Func<string /*hooksJsonPath*/, bool>?                    InstallGrokHooks = null,
+            Func<string /*settingsPath*/, bool>?                     InstallMuseHooks = null,
+            Func<JsonMcpConfigWriter.Change>?                        RegisterMuseMcp = null
         );
 
     internal record Result(
@@ -116,7 +133,14 @@ internal static class CodingAgentsStep {
             bool KiroMcpRegistered = false,
             bool KiroSkillsInstalled = false,
             bool PiMcpInstalled = false,
-            bool PiInstructionsInstalled = false
+            bool PiInstructionsInstalled = false,
+            bool KiroCrewHookInstalled = false,
+            bool KiroCrewSkillsInstalled = false,
+            bool VibeHooksInstalled = false,
+            bool VibeMcpRegistered = false,
+            bool GrokHooksInstalled = false,
+            bool MuseHooksInstalled = false,
+            bool MuseMcpRegistered = false
         ) {
         /// <summary>
         /// True when at least one agent's hooks were installed — i.e. there's a
@@ -126,7 +150,57 @@ internal static class CodingAgentsStep {
         /// as agents are added (consumers like SetupCommand's restart tip key off this).
         /// </summary>
         internal bool AnyHooksInstalled =>
-            ClaudeInstalled || CodexHooksInstalled || CursorHooksInstalled || CopilotHooksInstalled || GeminiHooksInstalled || KiroHooksInstalled || PiExtensionInstalled || OpenCodeExtensionInstalled || AntigravityHooksInstalled;
+            ClaudeInstalled || CodexHooksInstalled || CursorHooksInstalled || CopilotHooksInstalled || GeminiHooksInstalled || KiroHooksInstalled || KiroCrewHookInstalled || PiExtensionInstalled || OpenCodeExtensionInstalled || AntigravityHooksInstalled || VibeHooksInstalled || GrokHooksInstalled || MuseHooksInstalled;
+    }
+
+    /// <summary>
+    /// Every file or directory this run put kcap into, without repeats. Read off the result rather than
+    /// collected by the installers, so a path appears only for a write the step reports as done; an
+    /// installer that writes a second file needs that file added here too.
+    /// </summary>
+    internal static IReadOnlyList<string> InstalledPaths(Result r, Paths p) {
+        var paths = new List<string>();
+
+        void Add(bool done, string path) {
+            if (done && !string.IsNullOrEmpty(path) && !paths.Contains(path)) paths.Add(path);
+        }
+
+        Add(r.ClaudeInstalled, p.ClaudeSettingsPath);
+        Add(r.CodexHooksInstalled, p.CodexHooksPath);
+        Add(r.CodexNetworkAccessApplied || r.CodexMcpRegistered, p.CodexConfigTomlPath);
+        Add(r.AgentSkillsInstalled, p.AgentsSkillsDir);
+        Add(r.CursorHooksInstalled, p.CursorHooksPath);
+        Add(r.CursorMcpRegistered, p.CursorMcpPath);
+        Add(r.CopilotHooksInstalled, p.CopilotHooksPath);
+        Add(r.CopilotMcpRegistered, p.CopilotMcpPath);
+        Add(r.CopilotInstructionsInstalled, p.CopilotInstructionsPath);
+        Add(r.GeminiHooksInstalled || r.GeminiMcpRegistered, p.GeminiSettingsPath);
+        Add(r.GeminiInstructionsInstalled, p.GeminiInstructionsPath);
+        Add(r.KiroHooksInstalled, p.KiroHooksPath);
+        if (r.KiroHooksInstalled && p.KiroHooksPath.Length > 0)
+            Add(true, PluginCommand.KiroSettingsPathFor(p.KiroHooksPath));
+        Add(r.KiroMcpRegistered, p.KiroMcpPath);
+        Add(r.KiroSkillsInstalled, p.KiroSkillsDir);
+        Add(r.KiroCrewHookInstalled, p.KiroCrewHookScript);
+        Add(r.KiroCrewSkillsInstalled, p.KiroCrewSkillsDir);
+        Add(r.PiExtensionInstalled, p.PiExtensionPath);
+        Add(r.PiMcpInstalled, p.PiMcpExtensionPath);
+        Add(r.PiInstructionsInstalled, p.PiAgentsMdPath);
+        Add(r.OpenCodeExtensionInstalled, p.OpenCodeExtensionPath);
+        Add(r.OpenCodeMcpRegistered, p.OpenCodeMcpPath);
+        Add(r.OpenCodeInstructionsInstalled, p.OpenCodeInstructionsPath);
+        Add(r.AntigravityHooksInstalled, p.AntigravityHooksPath);
+        if (r.AntigravityHooksInstalled && Path.GetDirectoryName(p.AntigravityHooksPath) is { Length: > 0 } agyDir)
+            Add(true, Path.Combine(agyDir, AntigravityHooksInstaller.PluginManifestFileName));
+        Add(r.AntigravityMcpRegistered, p.AntigravityMcpPath);
+        Add(r.AntigravityInstructionsInstalled, p.AntigravityInstructionsPath);
+        Add(r.AntigravitySkillsInstalled, p.AntigravitySkillsDir);
+        Add(r.VibeHooksInstalled, p.VibeHooksPath);
+        Add(r.VibeMcpRegistered, p.VibeConfigPath);
+        Add(r.GrokHooksInstalled, p.GrokHooksPath);
+        Add(r.MuseHooksInstalled || r.MuseMcpRegistered, p.MuseSettingsPath);
+
+        return paths;
     }
 
     /// <summary>
@@ -145,8 +219,8 @@ internal static class CodingAgentsStep {
         // Ordered early-returns — BEFORE any Handle*/HandleAgentSkills/selected work — so a
         // decline (or a no-agents machine) guarantees zero artifact mutations. See
         // SetupDecisions.DecideInstallAgents for how SetupCommand derives InstallAgents.
-        if (detected is { Claude: false, Codex: false, Cursor: false, Copilot: false, Gemini: false, Kiro: false, Pi: false, OpenCode: false, Antigravity: false }) {
-            writeLine("  [yellow]⚠ No supported agent CLI detected.[/] Install Claude Code, Codex CLI, Cursor, Copilot CLI, Gemini CLI, Kiro CLI, Pi, OpenCode, or Antigravity to start capturing sessions.");
+        if (detected is { Claude: false, Codex: false, Cursor: false, Copilot: false, Gemini: false, Kiro: false, Pi: false, OpenCode: false, Antigravity: false, Vibe: false, Grok: false, Muse: false }) {
+            writeLine("  [yellow]⚠ No supported agent CLI detected.[/] Install Claude Code, Codex CLI, Cursor, Copilot CLI, Gemini CLI, Kiro CLI, Pi, OpenCode, Antigravity, Mistral Vibe, Grok, or Muse Code to start capturing sessions.");
 
             return Task.FromResult(new Result(false, false, false, false, false));
         }
@@ -180,6 +254,8 @@ internal static class CodingAgentsStep {
         // Kiro's skills live in ~/.kiro/skills (Kiro doesn't read ~/.agents/skills) and steer it toward
         // the kcap MCP tools — gate on the user having SELECTED Kiro, like the MCP registration.
         var kiroSkillsInstalled   = HandleKiroSkills(options, paths, installers, writeLine, kiroSelected);
+        var kiroCrewHookInstalled = HandleKiroCrewHook(options, paths, installers, writeLine, kiroSelected);
+        var kiroCrewSkillsInstalled = HandleKiroCrewSkills(options, paths, installers, writeLine, kiroSelected);
         var piExtensionInstalled  = HandlePiExtension(options, detected, paths, installers, writeLine, out var piSelected, out var piTools);
         // Pi has no JSON MCP config: the "MCP" is a second extension file (kcap-mcp.ts) and the
         // instructions live in the independent ~/.pi/agent/AGENTS.md — gate both on the user having
@@ -196,6 +272,11 @@ internal static class CodingAgentsStep {
         var antigravityMcpRegistered   = HandleAntigravityMcp(options, paths, installers, writeLine, antigravityTools);
         var antigravityInstructionsInstalled = HandleAntigravityInstructions(options, paths, installers, writeLine, antigravitySelected);
         var antigravitySkillsInstalled = HandleAntigravitySkills(options, paths, installers, writeLine, antigravitySelected);
+        var vibeHooksInstalled    = HandleVibeHooks(options, detected, paths, installers, writeLine, out var vibeTools);
+        var vibeMcpRegistered     = HandleVibeMcp(options, paths, installers, writeLine, vibeTools);
+        var grokHooksInstalled    = HandleGrokHooks(options, detected, paths, installers, writeLine);
+        var museHooksInstalled    = HandleMuseHooks(options, detected, paths, installers, writeLine, out var museTools);
+        var museMcpRegistered     = HandleMuseMcp(options, paths, installers, writeLine, museTools);
 
         // the shared ~/.agents/skills/ install is decoupled from Codex: run it
         // once when any non-Claude agent is detected, independent of that agent's hook
@@ -237,7 +318,14 @@ internal static class CodingAgentsStep {
                 KiroMcpRegistered: kiroMcpRegistered,
                 KiroSkillsInstalled: kiroSkillsInstalled,
                 PiMcpInstalled: piMcpInstalled,
-                PiInstructionsInstalled: piInstructionsInstalled
+                PiInstructionsInstalled: piInstructionsInstalled,
+                KiroCrewHookInstalled: kiroCrewHookInstalled,
+                KiroCrewSkillsInstalled: kiroCrewSkillsInstalled,
+                VibeHooksInstalled: vibeHooksInstalled,
+                VibeMcpRegistered: vibeMcpRegistered,
+                GrokHooksInstalled: grokHooksInstalled,
+                MuseHooksInstalled: museHooksInstalled,
+                MuseMcpRegistered: museMcpRegistered
             )
         );
     }
@@ -273,7 +361,7 @@ internal static class CodingAgentsStep {
         // same precheck as the Cursor/Copilot branches. No kcap → neither hooks nor MCP.
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Kiro integration skipped — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
+            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
 
             return false;
         }
@@ -333,6 +421,81 @@ internal static class CodingAgentsStep {
 
                 return false;
         }
+    }
+
+    /// <summary>
+    /// Installs kcap's Kiro Crew hook script when Crew is present (the installer is null otherwise).
+    /// Crew regenerates its agent profiles and keeps only scripts from <c>~/.kiro/hooks</c>, so
+    /// kcap.json's hook never reaches a Crew session. Honours <c>--skip-kiro-hooks</c>, which declines
+    /// capture.
+    /// </summary>
+    static bool HandleKiroCrewHook(
+            Options        options,
+            Paths          paths,
+            Installers     installers,
+            Action<string> writeLine,
+            bool           kiroSelected
+        ) {
+        if (installers.InstallKiroCrewHook is null || !kiroSelected || options.SkipKiro) return false;
+
+        var script = Markup.Escape(paths.KiroCrewHookScript);
+
+        switch (installers.InstallKiroCrewHook()) {
+            case KiroCrewHookInstaller.Outcome.Written:
+                writeLine($"  [green]✓[/] Kiro Crew hook installed ([dim]{script}[/])");
+                writeLine("  [dim]  Note: restart Kiro Crew so its agents pick it up.[/]");
+
+                return true;
+            case KiroCrewHookInstaller.Outcome.Unchanged:
+                writeLine("  [dim]· Kiro Crew hook already installed — no change needed[/]");
+
+                return false;
+            case KiroCrewHookInstaller.Outcome.Unowned:
+                writeLine($"  [yellow]⚠[/] {script} exists and was not written by kcap — left alone, so Kiro Crew sessions are not recorded.");
+
+                return false;
+            case KiroCrewHookInstaller.Outcome.Unsupported:
+                return false;
+            default:
+                writeLine($"  [yellow]⚠[/] Could not write the Kiro Crew hook to {script}.");
+
+                return false;
+        }
+    }
+
+    /// <summary>Installs kcap's skills into Kiro Crew's own skills root, which is all Crew reads.</summary>
+    static bool HandleKiroCrewSkills(
+            Options        options,
+            Paths          paths,
+            Installers     installers,
+            Action<string> writeLine,
+            bool           kiroSelected
+        ) {
+        if (string.IsNullOrEmpty(paths.KiroCrewSkillsDir) || !kiroSelected || options.SkipKiroSkills) return false;
+
+        var dst = paths.KiroCrewSkillsDir;
+
+        if (installers.AgentSkillsCurrent?.Invoke(dst) == true) {
+            writeLine("  [dim]· Kiro Crew skills already up to date — no change needed[/]");
+
+            return false;
+        }
+
+        if (paths.PluginDir is null) {
+            writeLine("  [yellow]⚠[/] Kiro Crew skills could not be installed (plugin directory not found).");
+
+            return false;
+        }
+
+        if (!installers.InstallAgentSkills(Path.Combine(paths.PluginDir, "skills"), dst)) {
+            writeLine($"  [yellow]⚠[/] Kiro Crew skills could not be copied to {Markup.Escape(dst)}");
+
+            return false;
+        }
+
+        writeLine($"  [green]✓[/] Kiro Crew skills installed ([dim]{Markup.Escape(dst)}[/])");
+
+        return true;
     }
 
     /// <summary>
@@ -407,7 +570,7 @@ internal static class CodingAgentsStep {
         // on Copilot finding it on PATH — same precheck as the Cursor branch.
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Copilot hooks not installed — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
+            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
 
             return false;
         }
@@ -472,7 +635,7 @@ internal static class CodingAgentsStep {
         // on Gemini finding it on PATH — same precheck as the Cursor/Copilot branch.
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Gemini hooks not installed — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
+            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
 
             return false;
         }
@@ -506,6 +669,212 @@ internal static class CodingAgentsStep {
         writeLine("  [dim]  Note: Gemini loads hook config at startup — restart any running gemini session to pick them up.[/]");
 
         return true;
+    }
+
+    static bool HandleVibeHooks(
+            Options            options,
+            DetectedAgents     detected,
+            Paths              paths,
+            Installers         installers,
+            Action<string>     writeLine,
+            out bool           toolsEligible
+        ) {
+        toolsEligible = false;
+
+        if (!detected.Vibe) {
+            writeLine("  [dim]· Mistral Vibe not detected — skipping[/]");
+
+            return false;
+        }
+
+        writeLine("  [green]✓[/] Mistral Vibe detected");
+
+        if (options.SkipMistralVibe && (options.SkipMistralVibeMcp || !options.ToolsIndependentOfCapture)) {
+            writeLine("  [dim]· Mistral Vibe hooks skipped by flag[/]");
+
+            return false;
+        }
+
+        // hooks.toml writes the bare "kcap hook --mistral-vibe" command and relies on Vibe finding it on PATH.
+        if (!installers.CapacitorOnPath()) {
+            writeLine("  [yellow]⚠[/] Vibe hooks not installed — 'kcap' is not on PATH.");
+            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
+
+            return false;
+        }
+
+        // Vibe's hooks.toml and config.toml are SEPARATE files, so the MCP servers stay eligible even
+        // when the hook write fails — unlike Gemini, where both share settings.json.
+        toolsEligible = true;
+
+        // Only reachable with ToolsIndependentOfCapture: the flag-only opt-out returned above.
+        if (options.SkipMistralVibe) {
+            writeLine("  [dim]· Mistral Vibe capture declined — registering the MCP servers only[/]");
+
+            return false;
+        }
+
+        if (installers.InstallVibeHooks is null || !installers.InstallVibeHooks(paths.VibeHooksPath)) {
+            writeLine("  [yellow]⚠[/] Could not install Vibe hooks — ensure hooks.toml is valid TOML (left untouched).");
+
+            return false;
+        }
+
+        writeLine($"  [green]✓[/] Vibe hooks installed ({Markup.Escape(paths.VibeHooksPath)})");
+        writeLine("  [dim]  Note: Vibe loads hook config at startup — restart any running vibe session to pick them up.[/]");
+
+        return true;
+    }
+
+    static bool HandleGrokHooks(
+            Options            options,
+            DetectedAgents     detected,
+            Paths              paths,
+            Installers         installers,
+            Action<string>     writeLine
+        ) {
+        if (!detected.Grok) {
+            writeLine("  [dim]· Grok not detected — skipping[/]");
+
+            return false;
+        }
+
+        writeLine("  [green]✓[/] Grok detected");
+
+        if (options.SkipGrok) {
+            writeLine("  [dim]· Grok hooks skipped by flag[/]");
+
+            return false;
+        }
+
+        // The hook file names the bare "kcap hook --grok" command, so Grok must find kcap on PATH.
+        if (!installers.CapacitorOnPath()) {
+            writeLine("  [yellow]⚠[/] Grok hooks not installed — 'kcap' is not on PATH.");
+            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
+
+            return false;
+        }
+
+        if (installers.InstallGrokHooks is null || !installers.InstallGrokHooks(paths.GrokHooksPath)) {
+            writeLine($"  [yellow]⚠[/] Could not write Grok hooks to {Markup.Escape(paths.GrokHooksPath)}.");
+
+            return false;
+        }
+
+        writeLine($"  [green]✓[/] Grok hooks installed ({Markup.Escape(paths.GrokHooksPath)})");
+        writeLine("  [dim]  Note: Grok loads hooks at startup — restart any running grok session to pick them up.[/]");
+
+        return true;
+    }
+
+    static bool HandleVibeMcp(
+            Options        options,
+            Paths          paths,
+            Installers     installers,
+            Action<string> writeLine,
+            bool           vibeToolsEligible
+        ) {
+        if (installers.RegisterVibeMcp is null || !vibeToolsEligible || options.SkipMistralVibeMcp) return false;
+
+        var configPath = Markup.Escape(paths.VibeConfigPath);
+
+        switch (installers.RegisterVibeMcp()) {
+            case TomlConfigFile.Outcome.Updated:
+                writeLine($"  [green]✓[/] Vibe MCP servers registered ([dim]{configPath}[/])");
+
+                return true;
+            case TomlConfigFile.Outcome.Unchanged:
+                writeLine("  [dim]· Vibe MCP servers already registered — no change needed[/]");
+
+                return false;
+            default:
+                writeLine($"  [yellow]⚠[/] Could not register Vibe MCP servers in {configPath} — see README to add them manually.");
+
+                return false;
+        }
+    }
+
+    static bool HandleMuseHooks(
+            Options            options,
+            DetectedAgents     detected,
+            Paths              paths,
+            Installers         installers,
+            Action<string>     writeLine,
+            out bool           toolsEligible
+        ) {
+        toolsEligible = false;
+
+        if (!detected.Muse) {
+            writeLine("  [dim]· Muse Code not detected — skipping[/]");
+
+            return false;
+        }
+
+        writeLine("  [green]✓[/] Muse Code detected");
+
+        if (options.SkipMuse && (options.SkipMuseMcp || !options.ToolsIndependentOfCapture)) {
+            writeLine("  [dim]· Muse Code hooks skipped by flag[/]");
+
+            return false;
+        }
+
+        // settings.json writes the bare "kcap hook --muse" command and relies on Muse finding it on PATH.
+        if (!installers.CapacitorOnPath()) {
+            writeLine("  [yellow]⚠[/] Muse hooks not installed — 'kcap' is not on PATH.");
+            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
+
+            return false;
+        }
+
+        // Only reachable with ToolsIndependentOfCapture: the flag-only opt-out returned above.
+        if (options.SkipMuse) {
+            toolsEligible = true;
+
+            writeLine("  [dim]· Muse Code capture declined — registering the MCP servers only[/]");
+
+            return false;
+        }
+
+        if (installers.InstallMuseHooks is null || !installers.InstallMuseHooks(paths.MuseSettingsPath)) {
+            // Hooks and MCP servers share settings.json, so a file that will not take one will not take the other.
+            writeLine("  [yellow]⚠[/] Could not install Muse hooks for every event — settings.json must be valid JSON with a hooks object of arrays.");
+
+            return false;
+        }
+
+        toolsEligible = true;
+
+        writeLine($"  [green]✓[/] Muse hooks installed ({Markup.Escape(paths.MuseSettingsPath)})");
+        writeLine("  [dim]  Note: Muse loads hook config at startup — restart any running muse session to pick them up.[/]");
+
+        return true;
+    }
+
+    static bool HandleMuseMcp(
+            Options        options,
+            Paths          paths,
+            Installers     installers,
+            Action<string> writeLine,
+            bool           museToolsEligible
+        ) {
+        if (installers.RegisterMuseMcp is null || !museToolsEligible || options.SkipMuseMcp) return false;
+
+        var configPath = Markup.Escape(paths.MuseSettingsPath);
+
+        switch (installers.RegisterMuseMcp()) {
+            case JsonMcpConfigWriter.Change.Updated:
+                writeLine($"  [green]✓[/] Muse MCP servers registered ([dim]{configPath}[/])");
+
+                return true;
+            case JsonMcpConfigWriter.Change.Unchanged:
+                writeLine("  [dim]· Muse MCP servers already registered — no change needed[/]");
+
+                return false;
+            default:
+                writeLine($"  [yellow]⚠[/] Could not register Muse MCP servers in {configPath} — see README to add them manually.");
+
+                return false;
+        }
     }
 
     static bool HandlePiExtension(
@@ -546,7 +915,7 @@ internal static class CodingAgentsStep {
         // Cursor/Copilot branches).
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Pi extension not installed — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
+            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
 
             return false;
         }
@@ -672,7 +1041,7 @@ internal static class CodingAgentsStep {
         // precheck as the Pi/Cursor/Copilot branches).
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] OpenCode plugin not installed — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
+            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
 
             return false;
         }
@@ -738,7 +1107,7 @@ internal static class CodingAgentsStep {
         // Antigravity must find kcap on PATH (same precheck as the OpenCode/Pi branches).
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Antigravity hooks not installed — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
+            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
 
             return false;
         }
@@ -906,7 +1275,10 @@ internal static class CodingAgentsStep {
             Copilot  = Wanted(detected.Copilot, options.SkipCopilot, options.SkipCopilotMcp),
             Gemini   = Wanted(detected.Gemini, options.SkipGemini, options.SkipGeminiMcp),
             Pi       = Wanted(detected.Pi, options.SkipPi, options.SkipPiMcp),
-            OpenCode = Wanted(detected.OpenCode, options.SkipOpenCode, options.SkipOpenCodeMcp)
+            OpenCode = Wanted(detected.OpenCode, options.SkipOpenCode, options.SkipOpenCodeMcp),
+            Vibe     = Wanted(detected.Vibe, options.SkipMistralVibe, options.SkipMistralVibeMcp),
+            Grok     = Wanted(detected.Grok, options.SkipGrok, options.SkipGrok),
+            Muse     = Wanted(detected.Muse, options.SkipMuse, options.SkipMuseMcp)
         };
     }
 
@@ -922,7 +1294,7 @@ internal static class CodingAgentsStep {
         // install they can't see.
         var anyNonClaudeDetected =
             detected.Codex || detected.Cursor || detected.Copilot || detected.Gemini
-         || detected.Pi    || detected.OpenCode;
+         || detected.Pi    || detected.OpenCode || detected.Vibe || detected.Grok || detected.Muse;
 
         // Nothing that reads ~/.agents/skills/ is present (Claude-only or nothing) — the
         // Claude plugin install handles Claude's skills, so there's nothing to do here.
@@ -1017,7 +1389,7 @@ internal static class CodingAgentsStep {
 
     /// <summary>
     /// Codex runs the agent's shell tool in a network-blocked sandbox, so kcap
-    /// skills (which shell out to <c>kcap …</c>) can't reach the Capacitor server. After
+    /// skills (which shell out to <c>kcap …</c>) can't reach the kcap server. After
     /// Codex hooks install, offer to enable sandbox network access for the configured
     /// server(s) via <see cref="Installers.EnableCodexNetworkAccess"/>. Gated on hooks
     /// actually installing — there's nothing to fix if the Codex integration is off.
@@ -1041,7 +1413,7 @@ internal static class CodingAgentsStep {
         writeLine("  [dim]  kcap skills (recap, errors, …) run in Codex's sandbox, which blocks network by default.[/]");
 
         var shouldApply = options.NoPrompt
-            || prompt("Allow Codex's sandbox to reach your Capacitor server(s) so kcap skills work?");
+            || prompt("Allow Codex's sandbox to reach your kcap server(s) so kcap skills work?");
 
         if (!shouldApply) {
             writeLine("  [dim]· Codex sandbox network access not changed — kcap skills may prompt for escalation (see README)[/]");
@@ -1139,7 +1511,7 @@ internal static class CodingAgentsStep {
         // instead. Mirror of PluginCommand.InstallCursor's precheck.
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Cursor hooks not installed — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
+            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
 
             return false;
         }
@@ -1431,8 +1803,8 @@ internal static class CodingAgentsStep {
         }
 
         if (paths.PluginDir is null) {
-            writeLine("  [yellow]⚠[/] Plugin directory not found. Re-install kcap via npm:");
-            writeLine("    [cyan]npm install -g @kurrent/kcap[/]");
+            writeLine("  [yellow]⚠[/] Plugin directory not found. Re-install kcap:");
+            writeLine("    [cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
 
             return false;
         }

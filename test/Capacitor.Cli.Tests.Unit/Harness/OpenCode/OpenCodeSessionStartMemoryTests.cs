@@ -20,8 +20,7 @@ public class OpenCodeSessionStartMemoryTests {
     static string Render(string? fragment) => OpenCodeHookCommand.RenderMemoryOutput(fragment);
 
     // Byte-identical to the pre-feature behaviour on every path a user gets no index: opt-out,
-    // exclusion, provider failure, budget exhaustion, and (the common case) a repeat start whose lease
-    // is already spent. Load-bearing on this harness specifically, because the plugin treats ANY
+    // exclusion, provider failure, budget exhaustion. Load-bearing on this harness specifically, because the plugin treats ANY
     // non-empty stdout as a fragment — a placeholder would have it append an empty system entry to
     // every model request for the rest of the session.
     [Test]
@@ -57,20 +56,19 @@ public class OpenCodeSessionStartMemoryTests {
         await Assert.That(lifecycle.IsTopLevel).IsTrue();
         await Assert.That(lifecycle.ClassificationAuthoritative).IsTrue();
         await Assert.That(lifecycle.Reason).IsEqualTo(SessionLifecycleReason.RepeatedTurnCallback);
-        // The plugin's start dedupe is per PROCESS: a restart or a resumed session fires it again for
-        // the same id, and only the durable lease makes that a no-op. EligibleOneShot here would
-        // re-inject once per opencode restart.
+        // The plugin holds the fragment only in its process, so a restart or a resumed session starts the
+        // same id with nothing cached and must be served the index again; the plugin dedupes within a process.
         await Assert.That(lifecycle.CallbackMayRepeat).IsTrue();
+        await Assert.That(lifecycle.HostKeepsContext).IsFalse();
 
         var decision = SessionStartMemoryLifecyclePolicy.Decide(lifecycle);
-        await Assert.That(decision).IsEqualTo(SessionMemoryLifecycleDecision.EligibleWithLease);
+        await Assert.That(decision).IsEqualTo(SessionMemoryLifecycleDecision.EligibleEveryStart);
     }
 
     /// <summary>
     /// The cross-runtime negotiation the epic specifies. Absence means contract 0, so a NEW binary
-    /// paired with an already-installed OLDER plugin fetches nothing and spends no lease — that plugin
-    /// discards this command's stdout, and the lease is what makes injection once-per-session, so
-    /// spending it for a caller that cannot deliver is the thing worth negotiating about.
+    /// paired with an already-installed OLDER plugin fetches nothing: that plugin discards this command's
+    /// stdout, and the work-items nudge on the same channel must not reach it as raw text.
     /// </summary>
     [Test]
     [Arguments(new[] { "--event", "session-start" }, 0)]                                    // older plugin
@@ -208,7 +206,7 @@ public class OpenCodeSessionStartMemoryTests {
         await Assert.That(content).Contains("MEMORY_MAX_SESSIONS");
         await Assert.That(content).Contains("memory.size >= MEMORY_MAX_SESSIONS");
         // The prompt path for a deleted session is tidied rather than left to eviction.
-        await Assert.That(content).Contains("memory.delete(sid)");
+        await Assert.That(content).Contains("memory.delete(id)");
     }
 
     /// <summary>
@@ -231,8 +229,8 @@ public class OpenCodeSessionStartMemoryTests {
     }
 
     /// <summary>
-    /// A repeated start that returns nothing must not erase a fragment already cached — the common case
-    /// once the durable lease has been spent, where the CLI legitimately prints zero bytes.
+    /// A repeated start that returns nothing (a failed or opted-out fetch, where the CLI legitimately prints
+    /// zero bytes) must not erase a fragment already cached.
     /// </summary>
     [Test]
     public async Task the_plugin_never_overwrites_a_cached_fragment_with_an_empty_one() {
@@ -281,7 +279,7 @@ public class OpenCodeSessionStartMemoryTests {
         await Assert.That(content).Contains("attempts < MEMORY_COLD_START_ATTEMPTS");
         await Assert.That(content).Contains("coldStarts.set(sid, attempts + 1)");
         // Cleared with the session, so a long-lived process does not accumulate counters.
-        await Assert.That(content).Contains("coldStarts.delete(sid)");
+        await Assert.That(content).Contains("coldStarts.delete(id)");
     }
 
     /// <summary>
@@ -294,5 +292,86 @@ public class OpenCodeSessionStartMemoryTests {
 
         await Assert.That(content).Contains("res?.stdout");
         await Assert.That(content).Contains("rememberMemory(sid, (await runKcap(args)).trim())");
+    }
+
+    /// <summary>
+    /// <c>session.updated</c> appends a <c>session_title</c> line to the watched transcript, and OpenCode's
+    /// placeholder title (<c>New session - &lt;ISO date&gt;</c>) is filtered by the same pattern the server uses.
+    /// </summary>
+    [Test]
+    public async Task Plugin_writes_a_session_title_line_on_session_updated() {
+        var content = OpenCodeExtensionInstaller.ExtensionContent;
+
+        await Assert.That(content).Contains("type === \"session.updated\"");
+        await Assert.That(content).Contains("type: \"session_title\"");
+        await Assert.That(content).Contains("/^New session - \\d{4}-/");
+    }
+
+    /// <summary>The title line carries <c>time</c> only when OpenCode supplied a numeric <c>info.time.updated</c>;
+    /// otherwise the field is omitted and the server records the rename untimed, never at a clock reading the
+    /// plugin invented.</summary>
+    [Test]
+    public async Task Plugin_emits_time_only_when_opencode_supplied_it() {
+        var content = OpenCodeExtensionInstaller.ExtensionContent;
+        var branch  = content[content.IndexOf("type === \"session.updated\"", StringComparison.Ordinal)..];
+        branch = branch[..branch.IndexOf("type === \"session.deleted\"", StringComparison.Ordinal)];
+
+        await Assert.That(branch).Contains("if (typeof info?.time?.updated === \"number\") line.time = info.time.updated");
+        await Assert.That(branch).DoesNotContain("Date.now()");
+    }
+
+    /// <summary>
+    /// A subagent session carries <c>info.parentID</c>; one not yet classified must be classified here rather than
+    /// get a title line appended to a top-level <c>&lt;dir&gt;/&lt;childId&gt;.jsonl</c> of its own.
+    /// </summary>
+    [Test]
+    public async Task Plugin_skips_title_lines_for_child_sessions() {
+        var content = OpenCodeExtensionInstaller.ExtensionContent;
+        var branch  = content[content.IndexOf("type === \"session.updated\"", StringComparison.Ordinal)..];
+        branch = branch[..branch.IndexOf("type === \"session.deleted\"", StringComparison.Ordinal)];
+
+        await Assert.That(branch).Contains("if (id && info?.parentID) { children.add(id); return }");
+        await Assert.That(branch.IndexOf("info?.parentID", StringComparison.Ordinal))
+            .IsLessThan(branch.IndexOf("appendFileSync", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// EventSessionDeleted carries <c>properties.info</c> (a Session), not
+    /// <c>properties.sessionID</c> like the other events this handler reads — without the fallback,
+    /// the generic <c>if (!sid) return</c> would drop every session.deleted before the
+    /// memory/coldStarts/lastTitle cleanup below it ever runs, leaking one entry per session.
+    /// </summary>
+    [Test]
+    public async Task Session_deleted_id_falls_back_to_the_info_shape() {
+        var content = OpenCodeExtensionInstaller.ExtensionContent;
+
+        await Assert.That(content)
+            .Contains("const id = event?.properties?.info?.id ?? event?.properties?.sessionID");
+        await Assert.That(content).Contains("memory.delete(id)");
+        await Assert.That(content).Contains("coldStarts.delete(id)");
+        await Assert.That(content).Contains("lastTitle.delete(id)");
+    }
+
+    /// <summary>The dedupe entry is recorded only after the append succeeds: a write that throws (swallowed by the
+    /// handler's catch) must leave the title eligible for the next <c>session.updated</c>.</summary>
+    [Test]
+    public async Task Plugin_records_a_title_as_written_only_after_the_append() {
+        var content = OpenCodeExtensionInstaller.ExtensionContent;
+        var branch  = content[content.IndexOf("type === \"session.updated\"", StringComparison.Ordinal)..];
+        branch = branch[..branch.IndexOf("type === \"session.deleted\"", StringComparison.Ordinal)];
+
+        await Assert.That(branch.IndexOf("rememberTitle(id, title)", StringComparison.Ordinal))
+            .IsGreaterThan(branch.IndexOf("appendFileSync", StringComparison.Ordinal));
+    }
+
+    /// <summary>The title dedupe map is bounded: most sessions end without a <c>session.deleted</c>, so a long-lived
+    /// plugin process would otherwise keep every session it ever titled.</summary>
+    [Test]
+    public async Task Plugin_bounds_the_title_dedupe_map() {
+        var content = OpenCodeExtensionInstaller.ExtensionContent;
+
+        await Assert.That(content).Contains("const TITLE_MAX_SESSIONS = 64");
+        await Assert.That(content).Contains("lastTitle.size >= TITLE_MAX_SESSIONS");
+        await Assert.That(content.Split("lastTitle.set(").Length - 1).IsEqualTo(1); // only inside rememberTitle
     }
 }

@@ -31,6 +31,9 @@ public sealed class ClaudePaths {
     public string Plans        => Path.Combine(Home, "plans");
     public string UserSettings => Path.Combine(Home, "settings.json");
 
+    /// <summary>The repository-local skills tree, relative to a session's anchor.</summary>
+    public static string RepoSkillsRelativePath { get; } = Path.Combine(".claude", "skills");
+
     /// <summary>
     /// Claude's user-global config FILE (account/OAuth, MCP servers, per-project trust flags
     /// under <c>projects[path]</c>). With CLAUDE_CONFIG_DIR set it lives INSIDE the config dir;
@@ -38,6 +41,20 @@ public sealed class ClaudePaths {
     /// 2.1.196 — do NOT collapse this into <c>Path.Combine(Home, …)</c>.
     /// </summary>
     public string UserConfigJson { get; }
+
+    /// <summary>
+    /// Whether Claude Code has run here, by files only it writes. Not <c>settings.json</c>,
+    /// <c>skills/</c>, <c>.claude.json</c> or <c>projects/</c>: kcap's plugin install, skills sync and
+    /// daemon launcher write those.
+    /// </summary>
+    public bool HasUserData() =>
+        File.Exists(Path.Combine(Home, "history.jsonl"))
+     || File.Exists(Path.Combine(Home, "stats-cache.json"))
+     || Directory.Exists(Path.Combine(Home, "file-history"))
+     || Directory.Exists(Path.Combine(Home, "shell-snapshots"))
+     || Directory.Exists(Path.Combine(Home, "session-env"))
+     || Directory.Exists(Path.Combine(Home, "todos"))
+     || Directory.Exists(Path.Combine(Home, "statsig"));
 
     /// <summary>
     /// Returns the project directory for a given repo path.

@@ -13,7 +13,7 @@ public class TempFixtureAttributeTests {
         await Assert.That(Directory.Exists(Daemons.Directory)).IsTrue();
 
         await Assert.That(Path.GetFileName(Tmp.Path)).StartsWith("kcap-test-tempfixtureattribute-");
-        await Assert.That(Path.GetFileName(Daemons.Directory)).StartsWith("kcap-test-tempfi-");
+        await Assert.That(Path.GetFileName(Daemons.Root)).StartsWith("kcap-test-tempfi-");
     }
 
     [Test]

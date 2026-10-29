@@ -1,10 +1,5 @@
-// Side-effect-free platform/native-binary resolution, shared by kcap.js (the
-// launcher) and refresh.js (postinstall / `kcap update` refresh).
-//
-// This lives in its OWN module — refresh.js must never require kcap.js: during
-// `kcap update`, runUpdate executes BEFORE kcap.js's final module.exports
-// assignment, so a refresh.js → kcap.js require would observe partial exports
-// exactly on that path. Requiring this module has no side effects.
+// Side-effect-free platform/native-binary resolution for kcap.js (the launcher).
+// Requiring this module has no side effects.
 
 const path = require("path");
 const fs = require("fs");

@@ -29,17 +29,16 @@ namespace Capacitor.Cli;
 /// process it spawns, setting both to <b>its own</b> session and project directory — so a child
 /// harness overwrites any inherited values for its own children. That makes them per-process
 /// evidence of the harness we are actually running under, which is exactly what an inherited
-/// variable cannot be. When that evidence is present it wins; when it is absent (any other harness)
-/// resolution falls back to the ambient behaviour unchanged, so the relative precedence of the
-/// existing signals is untouched.</para>
+/// variable cannot be, and when present it wins.</para>
 ///
 /// <para>Nesting keeps that evidence honest in one direction only: a Claude Code session rewrites
 /// these variables for its own children, but a DIFFERENT harness launched from inside a Claude Code
 /// session (<c>codex exec</c> from a Bash tool call, say) inherits them and leaves them in place. So
-/// a co-present signal from another harness makes ours unprovable, and resolution deliberately falls
-/// back to the ambient behaviour rather than relocating the requester into the OUTER harness's
-/// checkout — which would be the same class of bug this type exists to prevent. Falling back is
-/// never worse than the behaviour that shipped before it.</para>
+/// a co-present signal from another harness makes ours unprovable, and resolution falls back to the
+/// ambient signals rather than relocating the requester into the OUTER harness's checkout.</para>
+///
+/// <para>A daemon-hosted agent whose harness names no session of its own carries
+/// <c>KCAP_DAEMON_AGENT_ID</c> instead, and its daemon is asked which session that agent is bound to.</para>
 /// </summary>
 static class HarnessRequesterContext {
     /// <summary>Set by the running Claude Code process in every child process's environment.</summary>
@@ -51,6 +50,14 @@ static class HarnessRequesterContext {
     /// <summary>Another harness's own-session signal. Its presence alongside the Claude variables
     /// means one harness is nested inside the other and neither is provably ours.</summary>
     internal const string CodexThreadIdVar = "CODEX_THREAD_ID";
+
+    /// <summary>Set by Grok on every process it starts, its MCP servers included, to its own session.
+    /// It is passed through to anything those processes start too, so it is trusted only when Grok is
+    /// the nearest harness above this process.</summary>
+    internal const string GrokSessionIdVar = "GROK_SESSION_ID";
+
+    internal static string? GrokSessionIn(Func<string, string?> getEnv) =>
+        getEnv(GrokSessionIdVar) is { } id && !string.IsNullOrWhiteSpace(id) ? id : null;
 
     /// <param name="SessionId">
     /// The requesting session in the canonical form the server files it under (a GUID as its
@@ -64,20 +71,44 @@ static class HarnessRequesterContext {
 
     internal static Resolved Resolve() => Resolve(Environment.GetEnvironmentVariable, Directory.Exists);
 
-    /// <summary>
-    /// Env-injected overload so the precedence is unit-testable without mutating the process
-    /// environment: pass a lookup that returns the values a real harness would export.
-    /// </summary>
-    internal static Resolved Resolve(Func<string, string?> getEnv, Func<string, bool> directoryExists) {
+    internal static Resolved Resolve(Func<string, string?> getEnv, Func<string, bool> directoryExists) =>
+        Resolve(getEnv, directoryExists, ProcessHelpers.NearestCodingAgent, ProcessHelpers.GetProcessCwd, HostedAgentSessions.Daemon.For);
+
+    /// <param name="nearestAgent">The nearest coding agent above this process, asked only when a Grok
+    /// session is in the environment.</param>
+    /// <param name="processCwd">A process's working directory, which for Grok is its project.</param>
+    /// <param name="hostedAgentSession">The session the hosting daemon has bound an agent id to, null
+    /// when it has none or cannot be asked. Asked only when no harness names its own session.</param>
+    internal static Resolved Resolve(
+            Func<string, string?> getEnv, Func<string, bool> directoryExists,
+            Func<CodingAgentAncestor?> nearestAgent, Func<int, string?> processCwd,
+            Func<string, string?> hostedAgentSession) {
+        if (GrokSessionIn(getEnv) is { } grokSessionId) {
+            switch (nearestAgent()) {
+                // Whose the inherited ids are cannot be told, so none of them is claimed.
+                case null:
+                    return new(SessionId: null, ProjectDir: null);
+                case { Vendor: "grok" } grok:
+                    var cwd = processCwd(grok.Pid);
+                    return new(SessionIds.Canonical(grokSessionId), cwd is { Length: > 0 } && directoryExists(cwd) ? cwd : null);
+            }
+        }
+
         var harnessSessionId = getEnv(ClaudeSessionIdVar);
         var nestedHarness    = getEnv(CodexThreadIdVar);
 
         // No usable per-process harness evidence — either none was reported, or another harness's
-        // own-session signal is co-present so ours is unprovable (see the nesting note above). Keep
-        // the pre-existing ambient resolution exactly as it was (KCAP_SESSION_ID, then
-        // CODEX_THREAD_ID) and claim no project directory, so the caller keeps using the process cwd.
-        if (string.IsNullOrWhiteSpace(harnessSessionId) || !string.IsNullOrWhiteSpace(nestedHarness))
-            return new(ArgParsing.ResolveSessionIdFromEnv(getEnv), ProjectDir: null);
+        // own-session signal is co-present so ours is unprovable (see the nesting note above). No
+        // project directory is claimed, so the caller keeps using the process cwd.
+        if (string.IsNullOrWhiteSpace(harnessSessionId) || !string.IsNullOrWhiteSpace(nestedHarness)) {
+            // A hosted agent's session outranks a KCAP_SESSION_ID inherited from whatever shell started
+            // its daemon. A Codex thread id is that harness's own session, so it outranks the daemon.
+            var hosted = string.IsNullOrWhiteSpace(nestedHarness) && getEnv(HostedAgent.DaemonAgentIdVar) is { Length: > 0 } agentId
+                ? SessionIds.Canonical(hostedAgentSession(agentId))
+                : null;
+
+            return new(hosted ?? ArgParsing.ResolveSessionIdFromEnv(getEnv), ProjectDir: null);
+        }
 
         // A project dir is only usable if it still resolves to a directory — a value pointing at a
         // removed worktree must degrade to the process cwd rather than send the server a path

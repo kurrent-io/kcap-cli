@@ -52,9 +52,10 @@ public static class HarnessMcpProjections {
     public static readonly HarnessMcpProjection Kiro        = new("kiro",        KcapMcpServers.ForHarness("kiro"),        McpConfigShape.Standard);
     public static readonly HarnessMcpProjection OpenCode    = new("opencode",    KcapMcpServers.ForHarness("opencode"),    McpConfigShape.OpenCode);
     public static readonly HarnessMcpProjection Antigravity = new("antigravity", KcapMcpServers.ForHarness("antigravity"), McpConfigShape.Standard);
+    public static readonly HarnessMcpProjection Muse        = new("muse",        KcapMcpServers.ForHarness("muse"),        McpConfigShape.Muse);
 
     public static readonly IReadOnlyList<HarnessMcpProjection> All =
-        [Cursor, Copilot, Gemini, Kiro, OpenCode, Antigravity];
+        [Cursor, Copilot, Gemini, Kiro, OpenCode, Antigravity, Muse];
 
     /// <summary>The exact set of vendor tokens kcap stamps as <c>--driver</c> on a flows
     /// registration — the harness names above. <c>DriverVendor</c> validates an incoming stamp

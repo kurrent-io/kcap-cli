@@ -5,11 +5,11 @@ using TUnit.Assertions.Enums;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// spec §5 offer surface: the once-ever auto-offer gated on PhaseClosed + a positive
+/// The shim offer surface: the once-ever auto-offer gated on PhaseClosed + a positive
 /// probe result, and the "Install command-line tool…" tray item's independent visibility/manual
 /// retry. FakeLoginShellProbe and FakeLifecycleSurface are shared from
-/// DaemonLifecycleControllerTests.cs (same namespace); PathShimInstaller is real (sealed, no
-/// interface — Task 23), driven through the internal destination-override constructor so nothing
+/// DaemonLifecycleControllerTests.cs (same namespace); PathShimInstaller is real, driven through
+/// its destination parameter so nothing
 /// here ever touches the real /usr/local/bin/kcap.
 public class ShimOfferCoordinatorTests {
     static async Task WaitUntilAsync(Func<bool> condition, TimeSpan? timeout = null, string what = "condition") {
@@ -70,16 +70,17 @@ public class ShimOfferCoordinatorTests {
         public readonly ShimOfferCoordinator Coordinator;
 
         public Harness(
-                bool immediatePhaseClosed = false, bool noTarget = false, Func<bool>? isMacOs = null,
-                bool autoOfferSuppressed = false) {
+                bool immediatePhaseClosed = false, bool noTarget = false, bool noInstaller = false,
+                bool autoOfferSuppressed = false, Task<string?>? pendingLink = null) {
             Target      = noTarget ? null : Path.Combine(TempDir, "target-cli");
             Destination = Path.Combine(TempDir, "kcap");
-            Installer   = new PathShimInstaller(Runner, Probe);
+            Probe.KcapPathBehavior = _ => Task.FromResult<string?>(Destination);
+            Installer   = new PathShimInstaller(Runner, Probe, Destination);
 
             var phaseClosed = immediatePhaseClosed ? Task.CompletedTask : PhaseClosedSource.Task;
             Coordinator = new ShimOfferCoordinator(
-                phaseClosed, Probe, Installer, Store, Surface, Target, CancellationToken.None, Destination,
-                isMacOs ?? (() => true), autoOfferSuppressed);
+                phaseClosed, Probe, noInstaller ? null : Installer, Store, Surface, Target, CancellationToken.None,
+                autoOfferSuppressed, pendingLink);
             Coordinator.Offerable.Subscribe(OfferableValues.Add);
         }
 
@@ -104,6 +105,54 @@ public class ShimOfferCoordinatorTests {
         await WaitUntilAsync(() => probed, what: "the probe to run once the phase closes");
     }
 
+    /// The setup wizard's link can still be running when the app starts; probing first would offer
+    /// what is about to exist.
+    [Test]
+    public async Task Offer_waits_for_the_wizard_link_before_probing() {
+        var link = new TaskCompletionSource<string?>();
+        using var h = new Harness(immediatePhaseClosed: true, pendingLink: link.Task);
+        var probed = false;
+        h.Probe.KcapOnPathBehavior = _ => { probed = true; return Task.FromResult<bool?>(true); };
+        h.Coordinator.Start();
+
+        await Task.Delay(50);
+        await Assert.That(probed).IsFalse();
+
+        link.SetResult(null);
+        await WaitUntilAsync(() => probed, what: "the probe to run once the link settles");
+        await Assert.That(h.Surface.StatusMessages).IsEmpty();
+    }
+
+    /// A link the setup wizard left unfinished can meet a preflight that returns without a dialog
+    /// (Conflict here, AlreadyInstalled likewise); its reason must still reach the user.
+    [Test]
+    public async Task An_unfinished_wizard_link_says_why_even_when_no_offer_follows() {
+        const string why = "Could not finish installing the terminal command.";
+        using var h = new Harness(immediatePhaseClosed: true, pendingLink: Task.FromResult<string?>(why));
+        h.Probe.KcapOnPathBehavior = _ => Task.FromResult<bool?>(false);
+        File.WriteAllText(h.Destination, "someone else's kcap");
+        h.Coordinator.Start();
+
+        await WaitUntilAsync(() => h.OfferableValues.Contains(true), what: "the probe to find kcap missing");
+        await Task.Delay(50); // give a wrongly-firing dialog every chance to appear
+        await Assert.That(h.Surface.Prompts).IsEmpty();
+        await Assert.That(h.Surface.StatusMessages).IsEquivalentTo([why]);
+    }
+
+    /// The link can fail its own check yet leave kcap reachable; a fresh probe that finds it has
+    /// nothing to warn about.
+    [Test]
+    public async Task An_unfinished_wizard_link_says_nothing_once_kcap_is_found() {
+        using var h = new Harness(immediatePhaseClosed: true, pendingLink: Task.FromResult<string?>("Could not finish."));
+        var probed = false;
+        h.Probe.KcapOnPathBehavior = _ => { probed = true; return Task.FromResult<bool?>(true); };
+        h.Coordinator.Start();
+
+        await WaitUntilAsync(() => probed, what: "the startup probe");
+        await Task.Delay(50); // give a wrongly-posted warning every chance to appear
+        await Assert.That(h.Surface.StatusMessages).IsEmpty();
+    }
+
     [Test]
     public async Task Offer_proceeds_immediately_when_PhaseClosed_is_already_completed() {
         using var h = new Harness(immediatePhaseClosed: true);
@@ -113,11 +162,11 @@ public class ShimOfferCoordinatorTests {
         await WaitUntilAsync(() => h.OfferableValues.Contains(true), what: "the item to become visible");
     }
 
-    // ---- spec §3.3: macOS-only, no-op elsewhere ----
+    // ---- no installer for this OS: a no-op ----
 
     [Test]
-    public async Task Off_macOS_never_probes_never_offers_and_the_menu_item_stays_hidden() {
-        using var h = new Harness(immediatePhaseClosed: true, isMacOs: () => false);
+    public async Task Without_an_installer_never_probes_never_offers_and_the_menu_item_stays_hidden() {
+        using var h = new Harness(immediatePhaseClosed: true, noInstaller: true);
         var probed = false;
         h.Probe.KcapOnPathBehavior = _ => { probed = true; return Task.FromResult<bool?>(false); };
         h.Coordinator.Start();
@@ -129,8 +178,8 @@ public class ShimOfferCoordinatorTests {
     }
 
     [Test]
-    public async Task Off_macOS_manual_install_is_a_no_op_no_installer_spawn() {
-        using var h = new Harness(isMacOs: () => false);
+    public async Task Without_an_installer_manual_install_is_a_no_op_no_installer_spawn() {
+        using var h = new Harness(noInstaller: true);
 
         await h.Coordinator.RunManualInstallAsync();
 
@@ -184,11 +233,11 @@ public class ShimOfferCoordinatorTests {
         await WaitUntilAsync(() => h.Surface.Prompts.Count == 1, what: "the shim offer dialog");
         await Assert.That(h.OfferableValues).Contains(true);
         await Assert.That(h.Surface.Prompts[0].Kind).IsEqualTo(LifecyclePrompt.KindShim);
-        await Assert.That(h.Surface.Prompts[0].Disclosure).IsEqualTo(ShimOfferCoordinator.ShimDisclosure);
+        await Assert.That(h.Surface.Prompts[0].Disclosure).IsEqualTo(h.Installer.Disclosure);
         await Assert.That(h.Surface.Prompts[0].PathDegraded).IsFalse();
     }
 
-    // ---- Task 15 round-1 review: autoOfferSuppressed (carve-out mode) ----
+    // ---- autoOfferSuppressed (carve-out mode) ----
 
     [Test]
     public async Task AutoOfferSuppressed_still_becomes_offerable_but_never_shows_the_dialog() {
@@ -317,8 +366,9 @@ public class ShimOfferCoordinatorTests {
 
     // ---- accept / decline outcomes ----
 
+    // The status lane is the launcher's warning banner, which a connected daemon never clears.
     [Test]
-    public async Task Accept_then_Installed_surfaces_a_success_status() {
+    public async Task Accept_then_Installed_posts_no_status_line() {
         using var h = new Harness(immediatePhaseClosed: true);
         var probeCalls = 0;
         h.Probe.KcapOnPathBehavior = _ => Task.FromResult<bool?>(++probeCalls == 1 ? false : true);
@@ -326,13 +376,13 @@ public class ShimOfferCoordinatorTests {
         h.Runner.Enqueue(new ProcessResult(0, "", "", false));
         h.Coordinator.Start();
 
-        await WaitUntilAsync(() => h.Surface.StatusMessages.Count == 1, what: "the installed status line");
-        await Assert.That(h.Surface.StatusMessages[0]).Contains("PATH");
+        await WaitUntilAsync(() => h.OfferableValues.Count >= 3, what: "the installed outcome");
+        await Assert.That(h.Surface.StatusMessages).IsEmpty();
         await Assert.That(h.Store.State.ShimDenied).IsFalse();
     }
 
-    // Regression: a confirmed on-PATH install used to leave Offerable stuck at true forever, so
-    // the "Install command-line tool…" tray item never disappeared after a successful install.
+    // A confirmed on-PATH install must reset Offerable, or the "Install command-line tool…" tray
+    // item never disappears after a successful install.
     [Test]
     public async Task Accept_then_Installed_resets_Offerable_to_false() {
         using var h = new Harness(immediatePhaseClosed: true);
@@ -342,7 +392,7 @@ public class ShimOfferCoordinatorTests {
         h.Runner.Enqueue(new ProcessResult(0, "", "", false));
         h.Coordinator.Start();
 
-        await WaitUntilAsync(() => h.Surface.StatusMessages.Count == 1, what: "the installed status line");
+        await WaitUntilAsync(() => h.OfferableValues.Count >= 3, what: "the installed outcome");
         await Assert.That(h.OfferableValues.Last()).IsFalse();
     }
 
@@ -437,6 +487,23 @@ public class ShimOfferCoordinatorTests {
         await Assert.That(h.Surface.StatusMessages.Count).IsEqualTo(1);
         // The auto-offer never ran (no confirm dialog) — this was a direct manual click.
         await Assert.That(h.Surface.Prompts).IsEmpty();
+    }
+
+    /// The banner a connected daemon never clears would otherwise keep saying the install failed.
+    [Test]
+    public async Task A_successful_retry_withdraws_the_earlier_warning() {
+        using var h = new Harness(immediatePhaseClosed: true);
+        h.Store.State = h.Store.State with { ShimOffered = true };
+        h.Probe.KcapOnPathBehavior = _ => Task.FromResult<bool?>(false);
+        h.Runner.Enqueue(new ProcessResult(1, "", "administrator privileges denied", false));
+        await h.Coordinator.RunManualInstallAsync();
+
+        h.Probe.KcapOnPathBehavior = _ => Task.FromResult<bool?>(true);
+        h.Runner.Enqueue(new ProcessResult(0, "", "", false));
+        await h.Coordinator.RunManualInstallAsync();
+
+        await Assert.That(h.Surface.StatusMessages.Count).IsEqualTo(1);
+        await Assert.That(h.Surface.Withdrawn).IsEquivalentTo(h.Surface.StatusMessages);
     }
 
     [Test]

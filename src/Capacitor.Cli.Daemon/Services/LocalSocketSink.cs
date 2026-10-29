@@ -2,13 +2,9 @@ using System.Threading.Channels;
 
 namespace Capacitor.Cli.Daemon.Services;
 
-/// A single local-client terminal output queue. The producer (the shared PTY read loop)
-/// calls <see cref="TryEnqueue"/>, which never blocks: if the bounded queue is full, the
-/// client is too slow, so we mark it <see cref="Detached"/> and drop it rather than (a)
-/// silently losing a chunk mid-stream — which desyncs Claude's cursor-addressing redraw
-/// or (b) back-pressuring the shared loop and stalling every other client. A
-/// dropped client reattaches for a fresh <c>OutputBuffer</c> replay, recovering from a
-/// clean frame.
+/// A single local-client terminal output queue. The producer never blocks: a full queue
+/// force-detaches the client, because losing a chunk mid-stream desyncs a redraw TUI's
+/// cursor-addressing. A detached client reattaches for a fresh <c>OutputBuffer</c> replay.
 internal sealed class LocalSocketSink : ITerminalSink {
     readonly Channel<byte[]>                       _ch;
     readonly Func<byte[], CancellationToken, Task> _send;

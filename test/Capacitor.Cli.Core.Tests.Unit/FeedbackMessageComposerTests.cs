@@ -3,7 +3,7 @@ using Capacitor.Cli.Core.Commands;
 namespace Capacitor.Cli.Core.Tests.Unit;
 
 public class FeedbackMessageComposerTests {
-    const string Trailer = "Sent from Kurrent Capacitor Desktop 1.0.3 · daemon tonys-mbp 1.0.3";
+    const string Trailer = "Sent from kcap Desktop 1.0.3 · daemon tonys-mbp 1.0.3";
 
     [Test]
     public async Task Compose_trims_then_joins_with_a_blank_line() =>

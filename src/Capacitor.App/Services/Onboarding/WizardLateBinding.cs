@@ -1,3 +1,5 @@
+using Capacitor.App.Services.LocalSetup;
+using Capacitor.App.Services.Mutation;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 
@@ -53,9 +55,16 @@ public sealed class LateBoundKcapCli(Func<IKcapCli> bind, string? cliPath) : IKc
 
     public Task<ServiceSnapshot?> ServiceStatusAsync(CancellationToken ct) => bind().ServiceStatusAsync(ct);
 
+    public Task<ServiceSnapshot?> ServiceStatusAsync(string daemonName, CancellationToken ct) =>
+        bind().ServiceStatusAsync(daemonName, ct);
+
     public Task<bool> SupportsServiceRetireAsync(CancellationToken ct) => bind().SupportsServiceRetireAsync(ct);
 
     public Task<ProcessResult> ServiceStartVerifiedAsync(CancellationToken ct) => bind().ServiceStartVerifiedAsync(ct);
+
+    public Task<ProcessResult> ServiceReloadAsync(CancellationToken ct) => bind().ServiceReloadAsync(ct);
+
+    public Task<ProcessResult> ServiceInstallWindowsServiceAsync(CancellationToken ct) => bind().ServiceInstallWindowsServiceAsync(ct);
 
     public Task<ProcessResult> ServiceInstallVerifiedAsync(bool replace, CancellationToken ct, string? retireServiceId = null) =>
         bind().ServiceInstallVerifiedAsync(replace, ct, retireServiceId);
@@ -63,9 +72,29 @@ public sealed class LateBoundKcapCli(Func<IKcapCli> bind, string? cliPath) : IKc
     public Task<ProcessResult> DetachedStartAsync(string bootAttemptId, CancellationToken ct) =>
         bind().DetachedStartAsync(bootAttemptId, ct);
 
-    public Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct) =>
-        bind().PluginInstallAsync(vendorFlag, ct);
+    public Task<ImportDiscoveryReport?> ImportDiscoverAsync(IReadOnlyList<string> vendorFlags, CancellationToken ct) =>
+        bind().ImportDiscoverAsync(vendorFlags, ct);
+
+    public Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct, IReadOnlyList<string>? options = null) =>
+        bind().PluginInstallAsync(vendorFlag, ct, options);
+
+    public Task<ProcessResult> PluginRemoveAsync(string? vendorFlag, CancellationToken ct) => bind().PluginRemoveAsync(vendorFlag, ct);
+
+    public Task<ProcessResult> AccountsAsync(MutationVerb verb, AccountArgs args, CancellationToken ct) =>
+        bind().AccountsAsync(verb, args, ct);
 
     public Task<StreamingResult> ImportAsync(ImportRequest request, Action<StreamedLine> onLine, CancellationToken ct) =>
         bind().ImportAsync(request, onLine, ct);
+
+    public Task<StreamingResult> SetupLocalAsync(
+            LocalEmbeddingChoice embeddings, Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct) =>
+        bind().SetupLocalAsync(embeddings, onLine, interrupt, ct);
+
+    public Task<StreamingResult> LocalUpgradeAsync(Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct) =>
+        bind().LocalUpgradeAsync(onLine, interrupt, ct);
+
+    public Task<StreamingResult> UninstallAsync(bool purgeLocal, Action<StreamedLine> onLine, CancellationToken ct) =>
+        bind().UninstallAsync(purgeLocal, onLine, ct);
+
+    public Task<ProcessResult> LocalStartAsync(CancellationToken ct) => bind().LocalStartAsync(ct);
 }

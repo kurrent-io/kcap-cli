@@ -10,6 +10,7 @@ sealed class FixedPtyProcessFactory(IPtyProcess process) : IPtyProcessFactory {
             string                      cwd,
             Dictionary<string, string>? extraEnv = null,
             ushort                      cols     = 120,
-            ushort                      rows     = 40
+            ushort                      rows     = 40,
+            IReadOnlyCollection<string>? removeEnv = null
         ) => process;
 }

@@ -3,27 +3,11 @@ using Capacitor.Cli.Core.LocalIpc;
 namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
-/// The daemon's advertised local-control capability list, surfaced on <c>HelloReply</c>.
-/// INVARIANT: an entry may exist here ONLY if <see cref="LocalControlServer"/> actually
-/// routes the corresponding frame(s) to a real handler — this list is assembled right next
-/// to that routing switch so a capability can never be advertised without behavior behind
-/// it. Every entry's handler is live in this build: <c>"consent/1"</c> routes
-/// ConsentSubscribe/ConsentResolve/ConsentRulesGet/ConsentRulesPut to <see cref="LaunchConsentIpc"/>;
-/// <c>"consent/2"</c> routes ConsentSubscribeV2/ConsentResolveV2 to the same handler with
-/// identity-checked resolution (mandatory <c>prompt_id</c> echo), <c>rule_saved</c> acks, and
-/// <c>prompt_id</c>/<c>requester_display</c>-stamped pendings; <c>"consent/3"</c> routes
-/// ConsentRulesPutV2 to the same handler, gating the policy replacement on an
-/// ExpectedName/ExpectedServerUrl identity echo (ack is the existing ConsentAck, with the coded
-/// <c>identity_mismatch</c> error on mismatch and nothing mutated). Both v2 entries are discovery
-/// only — enforcement lives in the v2 frames themselves. <c>"status/1"</c> routes StatusSubscribe
-/// to <see cref="DaemonStatusIpc"/>; <c>"permission/1"</c> routes
-/// PermissionSubscribe/PermissionResolve to <see cref="PermissionIpc"/>; and <c>"input/1"</c>
-/// routes SendText to <see cref="AgentOrchestrator.HandleLocalSendTextAsync"/>; <c>"input/2"</c>
-/// routes SendTextWithAttachments to
-/// <see cref="AgentOrchestrator.HandleLocalSendTextWithAttachmentsAsync"/>;
-/// <c>"settings/1"</c> routes DaemonSettingsPut to <see cref="DaemonSettingsIpc"/>; and
-/// <c>"rename/1"</c> routes SessionRename to <see cref="AgentOrchestrator.HandleLocalRenameAsync"/>.
+/// The daemon's advertised local-control capability list, surfaced on <c>HelloReply</c>. A client gates
+/// on an entry, so each must be live: either <see cref="LocalControlServer"/> routes its frames to a
+/// handler, or it names fields this daemon fills on a frame it already sends (<c>experimental/1</c> on
+/// the status snapshot).
 /// </summary>
 internal static class LocalControlCapabilities {
-    public static readonly IReadOnlyList<string> Current = ["consent/1", "consent/2", "consent/3", "status/1", "permission/1", "input/1", "input/2", "settings/1", RenameWire.Capability];
+    public static readonly IReadOnlyList<string> Current = ["consent/1", "consent/2", "consent/3", "status/1", "permission/1", "input/1", "input/2", "settings/1", "fence/1", "shutdown/1", "resume/1", AgentAttachClient.RuntimeCapability, AgentSessionIpc.Capability, "accounts/1", "experimental/1", RenameWire.Capability];
 }

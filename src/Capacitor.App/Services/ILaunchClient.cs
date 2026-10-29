@@ -1,13 +1,16 @@
 using System.Text.Json.Serialization;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.App.Services;
 
-/// Model "", Effort null and PermissionMode null all mean "vendor default" — the wire's own
-/// conventions (the server rejects a null model; the daemon treats whitespace as no request).
+/// Model "", Effort null, PermissionMode null, CodexPosture null and AccountId null all mean
+/// "vendor default" — the wire's own conventions (the server rejects a null model; the daemon
+/// treats whitespace as no request).
 public sealed record LaunchRequest(
     string DaemonName, string RepoPath, string Vendor, string? Prompt,
     string Model = "", string? Effort = null, string? PermissionMode = null,
-    IReadOnlyList<string>? AttachmentIds = null);
+    IReadOnlyList<string>? AttachmentIds = null, CodexLaunchPosture? CodexPosture = null,
+    string? AccountId = null);
 
 /// Unauthorized marks a server 401 — the caller routes it to sign-in instead of rendering the
 /// raw transport message.
@@ -20,16 +23,10 @@ public interface ILaunchClient {
     Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct);
 }
 
-/// The RequestLaunchAgentV2 hub argument. A concrete record, not an anonymous type: the app
-/// serializes through source-generated contexts throughout (AppStateStore, KcapCli), and a
-/// reflection dependency here would foreclose ever AOT-publishing it. Member names must match
-/// LaunchAgentRequestV2's properties — the hub binds by name.
-// Explicit snake_case on every member: the server applies PropertyNamingPolicy =
-// SnakeCaseLower to all hub payloads (kcap-server JsonDefaults.ConfigureSignalRPayload), and
-// LaunchHubJson.Configure sets the same policy here. The explicit names are what survive that
-// policy whatever it is set to, and they put the wire contract in plain sight next to the
-// server record each member must match — this file has already shipped one launch-breaking
-// key-casing defect, so the names are pinned rather than derived.
+/// The RequestLaunchAgentV2 hub argument, serialized by SignalR through reflection. Member names
+/// must match LaunchAgentRequestV2's properties — the hub binds by name.
+// Explicit snake_case on every member: the names survive whatever naming policy the hub options
+// carry, and a key that drifts from the server record binds null there without an error.
 public sealed record LaunchAgentRequestV2Payload {
     [JsonPropertyName("daemon_name")]           public required string   DaemonName          { get; init; }
     [JsonPropertyName("prompt")]                public          string?  Prompt              { get; init; }
@@ -41,15 +38,16 @@ public sealed record LaunchAgentRequestV2Payload {
     [JsonPropertyName("visibility")]            public          string?  Visibility          { get; init; }
     [JsonPropertyName("grants")]                public          object[]? Grants             { get; init; }
     [JsonPropertyName("vendor")]                public required string   Vendor              { get; init; }
-    [JsonPropertyName("codex_posture")]         public          object?  CodexPosture        { get; init; }
+    [JsonPropertyName("codex_posture")]         public          CodexLaunchPosture? CodexPosture { get; init; }
     [JsonPropertyName("acp_permission_preset")] public          string?  AcpPermissionPreset { get; init; }
     // Omitted when null, so an unchosen mode leaves the payload an older server expects untouched.
     [JsonPropertyName("permission_mode"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? PermissionMode { get; init; }
+    // Omitted when null: a launch that names no account leaves the payload an older server
+    // expects untouched.
+    [JsonPropertyName("account_id"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? AccountId { get; init; }
 }
-
-[JsonSerializable(typeof(LaunchAgentRequestV2Payload))]
-public partial class LaunchJsonContext : JsonSerializerContext;
 
 /// The RequestLaunchAgentV2 argument, split from the transport so its shape is testable.
 public static class LaunchPayload {
@@ -60,9 +58,10 @@ public static class LaunchPayload {
         Effort     = string.IsNullOrWhiteSpace(r.Effort) ? null : r.Effort,
         RepoPath   = r.RepoPath,
         Vendor     = r.Vendor,
-        // Null, not an empty array: a launch with no files sends what it sent before attachments
-        // existed.
+        // Null, not an empty array: the server reads an empty array as "these ids, none of them".
         AttachmentIds = r.AttachmentIds is { Count: > 0 } ids ? [.. ids] : null,
         PermissionMode = string.IsNullOrWhiteSpace(r.PermissionMode) ? null : r.PermissionMode,
+        CodexPosture   = r.CodexPosture,
+        AccountId      = string.IsNullOrWhiteSpace(r.AccountId) ? null : r.AccountId,
     };
 }

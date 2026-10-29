@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json.Nodes;
+using Capacitor.Cli.Core;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -14,18 +16,19 @@ namespace Capacitor.Cli.Tests.Integration;
 /// leaks between tests, and asserts on the wire-level JSON-RPC envelopes
 /// the server emits plus the HTTP calls WireMock observed.
 /// </summary>
-public class McpFlowsServerTests : IDisposable {
+public class McpFlowsServerTests : IAsyncDisposable {
     [TempDaemonPaths] public required TempDaemonStore Daemons { get; init; }
     [TempConfigRoot]  public required TempConfigRoot  Config  { get; init; }
     [GitRepo]         public required GitRepo         Repo    { get; init; }
 
     readonly WireMockServer _server           = WireMockServer.Start();
     readonly List<Process>  _spawnedProcesses = [];
+    readonly List<(int Pid, string Identity)> _orphans = [];
 
     [Before(Test)]
     public void InitWorkspaceRepo() => Repo.AddRemote("https://github.com/test-owner/test-repo.git");
 
-    public void Dispose() {
+    public async ValueTask DisposeAsync() {
         foreach (var p in _spawnedProcesses) {
             try {
                 if (!p.HasExited) p.Kill(entireProcessTree: true);
@@ -33,6 +36,21 @@ public class McpFlowsServerTests : IDisposable {
             } catch {
                 // best-effort cleanup
             }
+        }
+
+        // Only the process that was started: a pid freed by an orphan that already exited can belong to anything now.
+        // Waited out, so no orphan outlives the test holding its pipes.
+        foreach (var (pid, identity) in _orphans) {
+            try {
+                if (ProcessStartToken.Matches(pid, identity) == true) {
+                    using var orphan = Process.GetProcessById(pid);
+                    orphan.Kill(entireProcessTree: true);
+                }
+            } catch {
+                // already gone
+            }
+
+            await PidIdentity.WaitUntilGoneAsync(pid, identity, TimeSpan.FromSeconds(10));
         }
 
         _server.Stop();
@@ -70,7 +88,9 @@ public class McpFlowsServerTests : IDisposable {
             string  provider          = "None",
             string? workingDirectory  = null,
             string? harnessSessionId  = null,
-            string? harnessProjectDir = null) {
+            string? harnessProjectDir = null,
+            string? hostedAgentId     = null,
+            bool    orphaned          = false) {
         _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody($$"""{"provider":"{{provider}}"}"""));
 
@@ -79,10 +99,50 @@ public class McpFlowsServerTests : IDisposable {
         psi.Environment["KCAP_URL"] = _server.Url!;
         psi.Environment["KCAP_SESSION_ID"] = sessionId;
 
-        ApplyHarnessSignals(psi, harnessSessionId, harnessProjectDir);
+        ApplyHarnessSignals(psi, harnessSessionId, harnessProjectDir, hostedAgentId);
+
+        if (orphaned && !OperatingSystem.IsWindows()) return StartOrphaned(psi);
 
         var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start kcap process");
         _spawnedProcesses.Add(process);
+        return process;
+    }
+
+    /// <summary>
+    /// Starts the server through a shell that exits straight away, so the server is reparented to init and its
+    /// ancestry holds none of the processes this suite runs under. A server that finds a hosting variable walks its
+    /// ancestry for coding agents, and the coding agent a developer runs the suite from must not be one of them.
+    /// The returned process is the shell; its pipes are the server's, which the shell hands down. The shell writes the
+    /// server's pid to a file of its own, since its stderr is the server's too
+    /// </summary>
+    Process StartOrphaned(ProcessStartInfo server) {
+        var shell = new ProcessStartInfo("/bin/sh") {
+            RedirectStandardInput  = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError  = true,
+            UseShellExecute        = false,
+            WorkingDirectory       = server.WorkingDirectory,
+        };
+        // A POSIX shell (dash) points an asynchronous list's stdin at /dev/null before its own redirections run, so
+        // `<&0` would hand the server /dev/null; stdin is kept on fd 3 and restored from there. The background child
+        // waits for the shell ($$ inside it) to be gone before it becomes the server, since the server reads its
+        // ancestry at startup; a pid file that cannot be written kills the child before it starts.
+        var pidFile = Config.PathTo($"orphan-{Guid.NewGuid():N}.pid");
+        const string script =
+            "exec 3<&0; (while kill -0 $$ 2>/dev/null; do sleep 0.05; done; exec \"$@\" <&3 3<&-) & "
+          + "echo $! > \"$0\" || { kill $!; exit 97; }";
+        foreach (var arg in new[] { "-c", script, pidFile, server.FileName }) shell.ArgumentList.Add(arg);
+        foreach (var arg in server.ArgumentList) shell.ArgumentList.Add(arg);
+        shell.Environment.Clear();
+        foreach (var (key, value) in server.Environment) shell.Environment[key] = value;
+
+        var process = Process.Start(shell) ?? throw new InvalidOperationException("Failed to start the shell");
+        _spawnedProcesses.Add(process);
+        process.WaitForExit();
+        if (process.ExitCode != 0) throw new InvalidOperationException($"The shell could not start the server: exit {process.ExitCode}");
+        var pid = int.Parse(File.ReadAllText(pidFile).Trim(), CultureInfo.InvariantCulture);
+        _orphans.Add((pid, PidIdentity.Capture(pid)));
+
         return process;
     }
 
@@ -97,7 +157,7 @@ public class McpFlowsServerTests : IDisposable {
     /// ambient resolution — an inherited one would silently route requester-context tests down that
     /// fallback branch whenever the suite runs from a Codex session.</para>
     /// </summary>
-    static void ApplyHarnessSignals(ProcessStartInfo psi, string? harnessSessionId, string? harnessProjectDir) {
+    static void ApplyHarnessSignals(ProcessStartInfo psi, string? harnessSessionId, string? harnessProjectDir, string? hostedAgentId = null) {
         if (harnessSessionId is null) psi.Environment.Remove("CLAUDE_CODE_SESSION_ID");
         else psi.Environment["CLAUDE_CODE_SESSION_ID"] = harnessSessionId;
 
@@ -105,6 +165,9 @@ public class McpFlowsServerTests : IDisposable {
         else psi.Environment["CLAUDE_PROJECT_DIR"] = harnessProjectDir;
 
         psi.Environment.Remove("CODEX_THREAD_ID");
+
+        if (hostedAgentId is null) psi.Environment.Remove("KCAP_AGENT_ID");
+        else psi.Environment["KCAP_AGENT_ID"] = hostedAgentId;
     }
 
     static async Task<JsonObject> SendRequest(Process proc, JsonObject request, TimeSpan? timeout = null) {
@@ -185,6 +248,7 @@ public class McpFlowsServerTests : IDisposable {
                 ["target_kind"]  = "spec",
                 ["target_ref"]   = "docs/feature.md",
                 ["target_title"] = "Feature spec",
+                ["session_title"] = "Review the thing",
                 ["context"]      = "Review."
             };
             await SendRequest(proc, ToolsCallRequest(3, "start_review_flow", args));
@@ -294,25 +358,20 @@ public class McpFlowsServerTests : IDisposable {
     }
 
     [Test]
-    public async Task Tools_list_returns_eight_flow_tools() {
+    public async Task Tools_list_returns_every_flow_tool() {
         using var proc = SpawnMcpServer();
         try {
             var response = await SendRequest(proc, ToolsListRequest(2));
 
             var tools = response["result"]?["tools"]?.AsArray();
             await Assert.That(tools).IsNotNull();
-            await Assert.That(tools!.Count).IsEqualTo(9);
-
-            var names = tools.Select(t => t?["name"]?.GetValue<string>()).ToHashSet();
-            await Assert.That(names.Contains("start_review_flow")).IsTrue();
-            await Assert.That(names.Contains("submit_review_round")).IsTrue();
-            await Assert.That(names.Contains("get_review_flow_status")).IsTrue();
-            await Assert.That(names.Contains("close_review_flow")).IsTrue();
-            await Assert.That(names.Contains("start_flow")).IsTrue();
-            await Assert.That(names.Contains("send_to_participant")).IsTrue();
-            await Assert.That(names.Contains("get_flow_status")).IsTrue();
-            await Assert.That(names.Contains("close_flow")).IsTrue();
-            await Assert.That(names.Contains("list_reviewer_vendors")).IsTrue();
+            await Assert.That(tools!.Select(t => t?["name"]?.GetValue<string>() ?? "").ToArray()).IsEquivalentTo([
+                "start_review_flow", "submit_review_round", "get_review_flow_status", "close_review_flow",
+                "start_flow", "send_to_participant", "get_flow_status", "close_flow",
+                "list_reviewer_vendors", "list_flow_definitions", "get_flow_definition",
+                "list_start_agent_options", "start_agent",
+                "schedule_wakeup", "list_wakeups", "cancel_wakeup"
+            ]);
         } finally {
             await ShutdownAsync(proc);
         }
@@ -322,9 +381,10 @@ public class McpFlowsServerTests : IDisposable {
     /// Pins the four review-tool schemas byte-stably: definition_id/participant/message must
     /// NEVER leak into these schemas — old clients (and old skills) depend on the exact
     /// property/required sets that shipped before the generic tools were added. The one deliberate
-    /// exception is `get_review_flow_status`'s additive, optional `wait` (the liveness-supervision
-    /// status-wait argument) — pinned explicitly below rather than silently allowed, so a future
-    /// accidental property change still fails loudly.
+    /// exception is `get_review_flow_status`: `wait` and `session_id` are additive and optional, and
+    /// `flow_run_id` is optional there, since a driver whose start the harness aborted never got one.
+    /// Pinned explicitly below rather than silently allowed, so a future accidental property change
+    /// still fails loudly.
     /// </summary>
     [Test]
     public async Task Review_tool_schemas_are_unchanged() {
@@ -338,8 +398,8 @@ public class McpFlowsServerTests : IDisposable {
 
             await AssertSchema(
                 byName["start_review_flow"],
-                properties: ["kind", "target_kind", "target_ref", "target_title", "context", "instructions", "mode", "vendor", "model"],
-                required:   ["kind", "target_kind", "target_ref", "target_title", "context"]
+                properties: ["kind", "target_kind", "target_ref", "target_title", "session_title", "context", "instructions", "mode", "repo_path", "patch_path", "base_commit", "vendor", "model"],
+                required:   ["kind", "target_kind", "target_ref", "target_title", "session_title", "context"]
             );
 
             await AssertSchema(
@@ -350,12 +410,13 @@ public class McpFlowsServerTests : IDisposable {
 
             await AssertSchema(
                 byName["get_review_flow_status"],
-                // Liveness-supervision status wait: additive optional `wait` — blocks until the
-                // round is terminal instead of a single snapshot GET. Backwards-compatible by
-                // construction (optional, not in `required`), so pinning it here is deliberate, not a
-                // relaxation of the byte-stable contract this test otherwise enforces.
-                properties: ["flow_run_id", "wait"],
-                required:   ["flow_run_id"]
+                // Every argument optional: `wait` blocks until the round is terminal instead of a
+                // single snapshot GET, and an omitted `flow_run_id` resolves the calling session's
+                // open flow (`session_id` names another session). Backwards-compatible by
+                // construction, so pinning it here is deliberate, not a relaxation of the byte-stable
+                // contract this test otherwise enforces.
+                properties: ["flow_run_id", "session_id", "wait"],
+                required:   []
             );
 
             await AssertSchema(
@@ -411,6 +472,7 @@ public class McpFlowsServerTests : IDisposable {
                 ["target_kind"]   = "pr",
                 ["target_ref"]    = "https://github.com/x/y/pull/1",
                 ["target_title"]  = "My PR",
+                ["session_title"] = "Review the thing",
                 ["context"]       = "please look at this"
             };
 
@@ -832,6 +894,7 @@ public class McpFlowsServerTests : IDisposable {
                 ["target_kind"]  = "spec",
                 ["target_ref"]   = "docs/feature.md",
                 ["target_title"] = "Feature spec",
+                ["session_title"] = "Review the thing",
                 ["context"]      = "Please review this spec for completeness."
             };
 
@@ -927,6 +990,7 @@ public class McpFlowsServerTests : IDisposable {
                 ["target_kind"]  = "pr",
                 ["target_ref"]   = "42",
                 ["target_title"] = "Some PR",
+                ["session_title"] = "Review the thing",
                 ["context"]      = "Review this."
             };
 
@@ -1142,7 +1206,7 @@ public class McpFlowsServerTests : IDisposable {
         try {
             var args = new JsonObject {
                 ["kind"]="spec-review", ["target_kind"]="spec", ["target_ref"]="r",
-                ["target_title"]="t", ["context"]="please review"
+                ["target_title"]="t", ["session_title"]="Review the thing", ["context"]="please review"
             };
             var response = await SendRequest(proc, ToolsCallRequest(30, "start_review_flow", args), TimeSpan.FromSeconds(30));
             var result = response["result"]?.AsObject();
@@ -1182,7 +1246,7 @@ public class McpFlowsServerTests : IDisposable {
         try {
             var args = new JsonObject {
                 ["kind"]="spec-review", ["target_kind"]="spec", ["target_ref"]="r",
-                ["target_title"]="t", ["context"]="please review"
+                ["target_title"]="t", ["session_title"]="Review the thing", ["context"]="please review"
             };
             // This must resolve quickly (run-terminal path exits on first "failed" GET),
             // well within 15 s (compared to the 8-min cap if we polled indefinitely).
@@ -1271,7 +1335,7 @@ public class McpFlowsServerTests : IDisposable {
         try {
             var args = new JsonObject {
                 ["kind"] = "spec-review", ["target_kind"] = "spec", ["target_ref"] = "r",
-                ["target_title"] = "t", ["context"] = "please review"
+                ["target_title"] = "t", ["session_title"] = "Review the thing", ["context"] = "please review"
             };
             // Must complete well before 8 min (expect ~20-30s for 6 GETs at 3s poll + budget logic).
             var response = await SendRequest(proc, ToolsCallRequest(41, "start_review_flow", args), TimeSpan.FromSeconds(60));
@@ -1318,7 +1382,7 @@ public class McpFlowsServerTests : IDisposable {
         try {
             var args = new JsonObject {
                 ["kind"] = "spec-review", ["target_kind"] = "spec", ["target_ref"] = "r",
-                ["target_title"] = "t", ["context"] = "please review"
+                ["target_title"] = "t", ["session_title"] = "Review the thing", ["context"] = "please review"
             };
             // Must complete almost immediately (no retry, no delay loop for 4xx).
             var response = await SendRequest(proc, ToolsCallRequest(42, "start_review_flow", args), TimeSpan.FromSeconds(15));
@@ -1364,7 +1428,7 @@ public class McpFlowsServerTests : IDisposable {
         try {
             var args = new JsonObject {
                 ["kind"] = "spec-review", ["target_kind"] = "spec", ["target_ref"] = "r",
-                ["target_title"] = "t", ["context"] = "please review"
+                ["target_title"] = "t", ["session_title"] = "Review the thing", ["context"] = "please review"
             };
             // NotFoundGrace = 10s, PollInterval = 3s → should fail within ~15s (grace + one more poll).
             // Allow 30s to be safe.
@@ -1429,7 +1493,7 @@ public class McpFlowsServerTests : IDisposable {
         try {
             var args = new JsonObject {
                 ["kind"]="spec-review", ["target_kind"]="spec", ["target_ref"]="r",
-                ["target_title"]="t", ["context"]="please review"
+                ["target_title"]="t", ["session_title"]="Review the thing", ["context"]="please review"
             };
             var response = await SendRequest(proc, ToolsCallRequest(20, "start_review_flow", args), TimeSpan.FromSeconds(30));
             var text = response["result"]?["content"]?[0]?["text"]?.GetValue<string>();
@@ -1453,7 +1517,7 @@ public class McpFlowsServerTests : IDisposable {
 
         using var proc = SpawnMcpServer();
         try {
-            var args = new JsonObject { ["kind"]="spec-review", ["target_kind"]="spec", ["target_ref"]="r", ["target_title"]="t", ["context"]="c" };
+            var args = new JsonObject { ["kind"]="spec-review", ["target_kind"]="spec", ["target_ref"]="r", ["target_title"]="t", ["session_title"]="Review the thing", ["context"]="c" };
             var response = await SendRequest(proc, ToolsCallRequest(21, "start_review_flow", args));
             var text = response["result"]?["content"]?[0]?["text"]?.GetValue<string>();
             await Assert.That(text!.Contains("## done")).IsTrue();
@@ -1551,6 +1615,7 @@ public class McpFlowsServerTests : IDisposable {
         ["target_kind"]  = "pr",
         ["target_ref"]   = "https://github.com/x/y/pull/1",
         ["target_title"] = "My PR",
+        ["session_title"] = "Review the thing",
         ["context"]      = "please look at this"
     };
 
@@ -1773,8 +1838,8 @@ public class McpFlowsServerTests : IDisposable {
 
             await AssertSchema(
                 startFlow,
-                properties: ["definition_id", "definition_yaml", "target_kind", "target_ref", "target_title", "context", "instructions", "mode", "vendor", "model"],
-                required:   ["target_kind", "target_ref", "target_title", "context"]
+                properties: ["definition_id", "definition_yaml", "target_kind", "target_ref", "target_title", "session_title", "context", "instructions", "mode", "repo_path", "patch_path", "base_commit", "vendor", "model"],
+                required:   ["target_kind", "target_ref", "target_title", "session_title", "context"]
             );
 
             var props    = startFlow["inputSchema"]!["properties"]!.AsObject();
@@ -1784,6 +1849,72 @@ public class McpFlowsServerTests : IDisposable {
             await Assert.That(idDesc.Contains("exactly one")).IsTrue();
             await Assert.That(yamlDesc.Contains("exactly one")).IsTrue();
             await Assert.That(yamlDesc.Contains("workspace: none")).IsTrue();
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    /// <summary>The whole path through the real process: the running harness's session, the hosting
+    /// agent's id, a worktree collapsed to its repository, and one request with nothing read back.</summary>
+    [Test]
+    public async Task Start_agent_posts_once_and_returns_without_reading_the_agent_back() {
+        // Windows does not reparent, so the server stays in this process tree; it would shed the agent id under test
+        // wherever that tree already holds the coding agents its own walk counts
+        if (OperatingSystem.IsWindows()
+         && NestedHarness.IsNested(Environment.ProcessId, NestedHarness.AgentNames, ProcessHelpers.GetProcessInfo))
+            Skip.Test("On Windows the server cannot leave this process tree, and the tree holds nested coding agents");
+
+        const string runningSession = "11111111-2222-3333-4444-555555555555";
+
+        _server.Given(Request.Create().WithPath("/api/agents/start").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json")
+                .WithBody("""
+                    {"status":"requested","agent_id":"a1b2c3d4","url":"https://cap.test/agents/a1b2c3d4","daemon":"mac-studio",
+                     "repo_path":"/r","vendor":"claude","model":"default","work_item":{"id":null,"reason":"none"}}
+                    """));
+
+        Repo.CreateFile("README.md", "test");
+        Repo.CommitAll("initial");
+        var worktree = Repo.AddWorktree(Path.Combine(".capacitor", "worktrees", "agent-1"), "capacitor/agent-1");
+
+        using var proc = SpawnMcpServerWithSession(
+            "aaaaaaaabbbbbbbbccccccccdddddddd",
+            harnessSessionId:  runningSession,
+            harnessProjectDir: Repo.Path,
+            hostedAgentId:     "0f1e2d3c",
+            orphaned:          true);
+
+        try {
+            var args = new JsonObject {
+                ["cwd"]       = worktree.Path,
+                ["prompt"]    = "Fix the retry.",
+                ["title"]     = "Fix the retry",
+                ["work_item"] = "none"
+            };
+
+            var response = await SendRequest(proc, ToolsCallRequest(3, "start_agent", args));
+
+            await Assert.That(response["result"]?["isError"]?.GetValue<bool>()).IsNotEqualTo(true);
+            var text = response["result"]?["content"]?[0]?["text"]?.GetValue<string>();
+            await Assert.That(text).IsNotNull();
+            await Assert.That(text!).Contains("status: requested");
+            await Assert.That(text).Contains("agent_id: a1b2c3d4");
+
+            var calls = _server.LogEntries.Where(e => e.RequestMessage.Path != "/auth/config").ToList();
+            await Assert.That(calls.Count).IsEqualTo(1);
+            await Assert.That(calls[0].RequestMessage.Path).IsEqualTo("/api/agents/start");
+
+            var body = JsonNode.Parse(calls[0].RequestMessage.Body ?? "")!.AsObject();
+            await Assert.That(body["session_id"]?.GetValue<string>()).IsEqualTo("11111111222233334444555555555555");
+            await Assert.That(body["caller_agent_id"]?.GetValue<string>()).IsEqualTo("0f1e2d3c");
+            await Assert.That(body["vendor"]?.GetValue<string>()).IsEqualTo("claude");
+            await Assert.That(body["cwd"]?.GetValue<string>()).Contains("agent-1");
+
+            // By directory name: git records the main repository with symlinks resolved.
+            var repoPath = body["repo_path"]?.GetValue<string>();
+            await Assert.That(repoPath).IsNotNull();
+            await Assert.That(Path.GetFileName(repoPath!)).IsEqualTo(Path.GetFileName(Repo.Path.TrimEnd(Path.DirectorySeparatorChar)));
+            await Assert.That(repoPath).DoesNotContain("agent-1");
         } finally {
             await ShutdownAsync(proc);
         }

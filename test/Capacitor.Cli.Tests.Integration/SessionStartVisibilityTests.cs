@@ -6,6 +6,7 @@ using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Integration;
@@ -52,7 +53,7 @@ public class SessionStartVisibilityTests : IDisposable {
         _server.Given(Request.Create().WithPath("/hooks/session-start").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
-        await new ClaudeHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(SessionStartPayloadWithoutTranscriptPath()));
+        await new ClaudeHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None).Handle(new StringReader(SessionStartPayloadWithoutTranscriptPath()));
 
         var requests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-start").UsingPost());
         await Assert.That(requests.Count).IsEqualTo(1);
@@ -77,7 +78,7 @@ public class SessionStartVisibilityTests : IDisposable {
         _server.Given(Request.Create().WithPath("/hooks/session-start").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
-        await new ClaudeHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(SessionStartPayloadWithoutTranscriptPath()));
+        await new ClaudeHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None).Handle(new StringReader(SessionStartPayloadWithoutTranscriptPath()));
 
         var requests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-start").UsingPost());
         await Assert.That(requests.Count).IsEqualTo(1);
@@ -102,7 +103,7 @@ public class SessionStartVisibilityTests : IDisposable {
         _server.Given(Request.Create().WithPath("/hooks/session-start").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
-        await new ClaudeHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(SessionStartPayloadWithoutTranscriptPath()));
+        await new ClaudeHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None).Handle(new StringReader(SessionStartPayloadWithoutTranscriptPath()));
 
         var requests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-start").UsingPost());
         await Assert.That(requests.Count).IsEqualTo(1);
@@ -125,7 +126,7 @@ public class SessionStartVisibilityTests : IDisposable {
         _server.Given(Request.Create().WithPath("/hooks/session-start").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
-        await new ClaudeHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(SessionStartPayloadWithoutTranscriptPath()));
+        await new ClaudeHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None).Handle(new StringReader(SessionStartPayloadWithoutTranscriptPath()));
 
         var requests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-start").UsingPost());
         await Assert.That(requests.Count).IsEqualTo(1);
@@ -134,7 +135,7 @@ public class SessionStartVisibilityTests : IDisposable {
         var inv  = body["harness_inventory"];
         await Assert.That(inv).IsNotNull();
         await Assert.That(string.IsNullOrEmpty(inv!["machine_id"]?.GetValue<string>())).IsFalse();
-        await Assert.That(inv["vendors"]!.AsObject().Count).IsEqualTo(9);
+        await Assert.That(inv["vendors"]!.AsObject().Count).IsEqualTo(HarnessRegistry.Identities.Count);
         await Assert.That(inv["vendors"]!["claude"]!["wired"]).IsNotNull(); // per-vendor {detected,wired} shape
     }
 
@@ -165,7 +166,7 @@ public class SessionStartVisibilityTests : IDisposable {
             }
             """;
 
-        await new ClaudeHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(payload));
+        await new ClaudeHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None).Handle(new StringReader(payload));
 
         var requests = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-start").UsingPost());
         await Assert.That(requests.Count).IsEqualTo(0);

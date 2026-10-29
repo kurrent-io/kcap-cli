@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Tests.Unit.SessionStartMemory;
 
 namespace Capacitor.Cli.Tests.Unit.Harness.Pi;
@@ -28,14 +29,13 @@ namespace Capacitor.Cli.Tests.Unit.Harness.Pi;
 /// each probe must resolve to an identity kcap has never seen, so it spends its own once-per-session
 /// lease rather than the cert's.</para>
 ///
-/// <para><b>No <c>VerifiedAgainstVersion</c> baseline yet.</b> Unlike the OpenCode cert, this file has
-/// never been run against a live <c>pi</c> + installed extension — the substitution work that produced
-/// it was done by reading <c>PiExtensionInstaller.ExtensionContent</c> and <c>PiHookCommand</c>, not by
+/// <para><b>No <c>VerifiedFloor</c> baseline yet.</b> Unlike the OpenCode cert, this file has never
+/// been run against a live <c>pi</c> + installed extension — the substitution work that produced it was
+/// done by reading <c>PiExtensionInstaller.ExtensionContent</c> and <c>PiHookCommand</c>, not by
 /// observing a real turn. Recording an unverified version string here would be worse than recording
-/// none: a future failure would be misread as "the vendor moved from a known-good baseline" when no
-/// baseline was ever established. The first live run must fill in <see cref="VerifiedAgainstVersion"/>
-/// with the observed <c>pi --version</c> output (see <c>RecordCertEnvironmentAsync</c>'s console line)
-/// before this comment can make the same claim OpenCode's does.</para>
+/// none: a future failure below an unearned floor would be misread as a vendor regression when no floor
+/// was ever established. The first live run must fill in <see cref="VerifiedFloor"/> with the observed
+/// <c>pi --version</c> output (see <c>RecordCertEnvironmentAsync</c>'s console line).</para>
 ///
 /// <para><b>The <c>-p</c> stdout-shape assumption is GUARDED, not just disclosed.</b> The positive case
 /// asserts on <c>stdout.Trim()</c> directly on the assumption that print mode writes ONLY the
@@ -65,12 +65,12 @@ public class PiMemoryIndexLiveCertTests {
     const string VendorLabel    = "pi";
 
     /// <summary>
-    /// The <c>pi --version</c> output this cert was last verified against, or "pending" if it never
-    /// has been. See the class doc's "No VerifiedAgainstVersion baseline yet" section — fill this in
-    /// on the first live pass, from the <c>[pi-memory-live] pi --version</c> line
+    /// The lowest <c>pi</c> build this cert has passed on, or "pending" before its first live run. A
+    /// minimum, never an exact version: a pass on a newer build changes nothing. Fill this in on the
+    /// first live pass, from the <c>[pi-memory-live] pi --version</c> line
     /// <c>RecordCertEnvironmentAsync</c> writes to stdout.
     /// </summary>
-    internal const string VerifiedAgainstVersion = "pending";
+    internal const string VerifiedFloor = "pending";
 
     /// <summary>
     /// Optional model override, passed as <c>--model &lt;value&gt;</c>. Deliberately not hard-coded for
@@ -122,6 +122,25 @@ public class PiMemoryIndexLiveCertTests {
 
         return MemoryIndexLiveCertHarness.RunProcessAsync(
             MemoryIndexLiveCertHarness.ResolveOnPath("pi"), [.. args, prompt], cwd);
+    }
+
+    /// <summary><c>RecordCertEnvironmentAsync</c> logs <c>pi --version</c> but does not return it, so
+    /// this is a second, independent probe purely to feed <see cref="RequireAtOrAboveFloorAsync"/> —
+    /// a no-op today while <see cref="VerifiedFloor"/> is "pending".</summary>
+    static async Task<string> ObservedPiVersionAsync() {
+        var (_, stdout, _) = await MemoryIndexLiveCertHarness.RunProcessAsync("pi", ["--version"], workingDirectory: null);
+        return stdout.Trim();
+    }
+
+    /// <summary>A cert certifies behaviour at or above its floor. Below it, the run fails with the
+    /// remedy instead of skipping, because a skipped cert reads as a pass.</summary>
+    static async Task RequireAtOrAboveFloorAsync(string installed, string floor) {
+        if (floor == "pending") return;   // first run: nothing to compare against yet
+
+        var decision = ReviewerVersionAffirmations.Decide(installed, floor);
+
+        await Assert.That(decision).IsEqualTo(ReviewerVersionAffirmation.MeetsMinimum)
+            .Because($"pi {installed} is below this cert's floor {floor}; upgrade pi. Any newer build is in scope.");
     }
 
     /// <summary>
@@ -184,6 +203,7 @@ public class PiMemoryIndexLiveCertTests {
             // memory-cert failures were misdiagnosed as code defects when the real cause was a stale
             // installed binary.
             await MemoryIndexLiveCertHarness.RecordCertEnvironmentAsync(VendorLabel, "pi", ["--version"]);
+            await RequireAtOrAboveFloorAsync(await ObservedPiVersionAsync(), VerifiedFloor);
 
             // Establish that there IS something for the model to reproduce before spending a turn.
             await Assert.That(await WaitForNonceInIndexAsync(nonce, worktree.Path))
@@ -245,6 +265,7 @@ public class PiMemoryIndexLiveCertTests {
         Gate();
 
         await MemoryIndexLiveCertHarness.RecordCertEnvironmentAsync(VendorLabel, "pi", ["--version"]);
+        await RequireAtOrAboveFloorAsync(await ObservedPiVersionAsync(), VerifiedFloor);
 
         // Snapshot before anything is created — this throws on an unreadable config, and doing it after
         // the save would strand a real memory outside the archive-protecting try below.

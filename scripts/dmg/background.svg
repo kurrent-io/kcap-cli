@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" viewBox="0 0 640 480">
+  <defs>
+    <radialGradient id="glow" cx="320" cy="220" r="260" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#631B3A" stop-opacity="0.55" />
+      <stop offset="1" stop-color="#180F19" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+  <rect width="640" height="480" fill="#180F19" />
+  <rect width="640" height="480" fill="url(#glow)" />
+
+  <image href="kcap-wordmark-lavender.svg" x="269.3" y="30" width="101.4" height="47.67" />
+
+  <text x="320" y="112" text-anchor="middle" fill="#DED9FF"
+        font-family="SF Pro Display, Helvetica Neue, Helvetica, sans-serif"
+        font-size="20" font-weight="600" letter-spacing="-0.2">Install kcap</text>
+  <text x="320" y="138" text-anchor="middle" fill="#C3B5C7"
+        font-family="SF Pro Text, Helvetica Neue, Helvetica, sans-serif"
+        font-size="13.5">Drag the app onto the Applications folder.</text>
+
+  <!-- Icons sit centred at (170, 220) and (470, 220); settings.py places them there. -->
+  <!-- Finder draws icon labels black over a background picture, in dark mode too, and a DMG
+       cannot recolour them; the light plates keep them readable on the dark canvas. -->
+  <rect x="138" y="283" width="64" height="24" rx="12" fill="#DED9FF" />
+  <rect x="414" y="283" width="112" height="24" rx="12" fill="#DED9FF" />
+
+  <path d="M262,220 L370,220" fill="none" stroke="#FF4A80" stroke-width="2.5"
+        stroke-linecap="round" stroke-dasharray="1 9" />
+  <path d="M366,210 L378,220 L366,230" fill="none" stroke="#FF4A80" stroke-width="2.5"
+        stroke-linecap="round" stroke-linejoin="round" />
+
+  <text x="320" y="360" text-anchor="middle" fill="#AD9AB2"
+        font-family="SF Pro Text, Helvetica Neue, Helvetica, sans-serif"
+        font-size="12">Then open it from Applications or Spotlight.</text>
+</svg>

@@ -10,7 +10,14 @@ namespace Capacitor.Cli.Core.LocalIpc;
 public sealed record DaemonStatusDto(DaemonInfoDto Daemon, List<AgentStatusDto> Agents,
     // Launches whose runtime is still starting, before an agent exists to list under Agents. Null
     // from an older daemon, which a client reads as unknown, never as "nothing starting".
-    List<PendingLaunchDto>? Pending = null);
+    List<PendingLaunchDto>? Pending = null,
+    // Whether any agent is running or starting, admitted launches included, observed at once: the two lists, read one
+    // after the other, cannot promise that. A yes, not a count, since one launch can be admitted and published at
+    // once. Null from an older daemon, which a client reads as unknown.
+    bool? Busy = null,
+    // Each experimental feature as the daemon resolved it. Null from an older daemon, which a client reads as
+    // unknown, never as "all off".
+    List<ExperimentalFeatureStatusDto>? Experimental = null);
 
 /// <summary>
 /// <see cref="Connection"/> ∈ connected|connecting|reconnecting|disconnected (lowercase).
@@ -28,6 +35,16 @@ public sealed record DaemonInfoDto(
     // the same set advertised to the server on DaemonConnect. Trailing/additive: null from a
     // daemon that predates it, which a client must read as UNKNOWN, never as "hosts nothing".
     string[]? SupportedVendors = null,
+    // Same null / missing-key / empty-array meaning as DaemonConnect.VendorModels.
+    Dictionary<string, VendorModelOption[]>? VendorModels = null,
+    // Why the daemon's own sign-in keeps the hub from connecting, while it is not connected:
+    // "signed_out" (nothing usable stored) or "rejected" (the server refused it). Null when the
+    // credential is not the problem, and from a daemon that predates the field.
+    string? Credential = null,
+    // The profile the daemon resolved its server and sign-in from. Null from an older daemon.
+    string? Profile = null,
+    // Same shape as VendorModels, keyed by registry id.
+    Dictionary<string, VendorModelOption[]>? VendorModelsByAccount = null,
     // The signed-in account's stable subject, echoed back in a rename so the daemon can refuse
     // when the client was looking at another account. Null = older daemon or signed out.
     string? UserSubject = null);
@@ -86,6 +103,32 @@ public sealed record AgentStatusDto(
     // file, TranscriptFormats.Envelopes for the daemon-written envelope journal. Always emitted by a
     // current daemon, so null means an older daemon and nothing else.
     string? TranscriptFormat = null,
+    // How many subagents the daemon believes are running: null until the agent's first subagent
+    // report (an older daemon, a vendor whose hooks report none, or a session that has spawned
+    // none yet), then a number — the clock's count while Running, zero in any other status.
+    int? LiveSubagents = null,
+    // A vendor usage limit matched for this live agent. Null from an older daemon, and whenever
+    // nothing is matched. A blocked notice that carries options is a question the user answers;
+    // it is not AwaitingInput, which means the turn ended and a prompt will be read.
+    UsageLimitNoticeDto? UsageLimit = null,
+    // A select dialog on the agent's terminal, while it is on screen. Null from an older daemon
+    // and whenever none shows.
+    TerminalDialogDto? TerminalDialog = null,
+    // Why the daemon could not resume an agent a restart stopped, on a row whose Status is
+    // "Interrupted". Such a row and a "Resuming" one have no process, only a resume ledger entry.
+    string? Interruption = null,
+    // UTC instant the daemon last saw the agent stop waiting, while Running and not waiting. Lets a
+    // freshly built view show the turn's real elapsed time. Null from an older daemon.
+    DateTime? WorkingSince = null,
+    // The account the agent runs under. Null from an older daemon.
+    string? AccountDirectory = null,
+    string? AccountId = null,
+    string? AccountLabel = null,
+    // The daemon has positive evidence that a turn is running: an ACP turn gate, or a PTY vendor's
+    // relayed prompt submit or tool call since its last turn end. AwaitingInput == false is not
+    // that evidence; an idle PTY prompt reports it too. False and null (an older daemon) both mean
+    // unproven, so a client must not send a keystroke that is safe only mid-turn.
+    bool? TurnAttested = null,
     // The session is hidden from everyone but its owner. Null = older daemon, unknown.
     bool? IsPrivate = null);
 
@@ -102,6 +145,57 @@ public static class TranscriptFormats {
     public const string Envelopes = "envelopes";
 }
 
+/// Wire tokens for <see cref="UsageLimitNoticeDto.Kind"/>.
+public static class UsageLimitKinds {
+    /// The vendor is waiting on a choice before the turn can continue. Chat send is refused.
+    public const string Blocked  = "blocked";
+    /// The vendor is retrying on its own. The composer stays usable.
+    public const string Retrying = "retrying";
+    /// The turn already stopped. The composer stays usable.
+    public const string Failed   = "failed";
+}
+
+/// One numbered choice on a blocking usage-limit menu. <see cref="Index"/> is the digit the
+/// vendor's own menu shows, which is what an answer sends.
+public sealed record UsageLimitOptionDto(int Index, string Label);
+
+/// Vendor-neutral usage-limit notice. Options are empty when the vendor is not asking a question.
+/// Equality is by value: a status pulse rebuilds this object, and a surface must not treat an
+/// unchanged menu as a new one.
+public sealed class UsageLimitNoticeDto : IEquatable<UsageLimitNoticeDto> {
+    public UsageLimitNoticeDto(string kind, string summary, string prompt, List<UsageLimitOptionDto>? options) {
+        Kind    = kind;
+        Summary = summary;
+        Prompt  = prompt;
+        Options = options ?? [];
+    }
+
+    public string Kind { get; }
+    public string Summary { get; }
+    public string Prompt { get; }
+    public List<UsageLimitOptionDto> Options { get; }
+
+    public static bool IsQuestion(UsageLimitNoticeDto? notice) =>
+        notice is { Kind: UsageLimitKinds.Blocked, Options.Count: > 0 };
+
+    public bool Equals(UsageLimitNoticeDto? other) {
+        if (other is null || Kind != other.Kind || Summary != other.Summary || Prompt != other.Prompt
+            || Options.Count != other.Options.Count) return false;
+        for (var i = 0; i < Options.Count; i++)
+            if (Options[i] != other.Options[i]) return false;
+        return true;
+    }
+
+    public override bool Equals(object? obj) => Equals(obj as UsageLimitNoticeDto);
+
+    public override int GetHashCode() {
+        var hash = HashCode.Combine(Kind, Summary, Prompt);
+        foreach (var option in Options) hash = HashCode.Combine(hash, option);
+        return hash;
+    }
+}
+
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
 [JsonSerializable(typeof(DaemonStatusDto))]
+[JsonSerializable(typeof(ExperimentalFeatureStatusDto))]
 public partial class StatusIpcJsonContext : JsonSerializerContext;

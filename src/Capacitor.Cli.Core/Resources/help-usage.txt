@@ -1,13 +1,22 @@
-kcap — CLI companion for Kurrent Capacitor
+kcap — record and explore coding-agent sessions
 
 Usage: kcap <command> [options]
 
 Getting Started:
   setup                            Configure server, login, and install plugin
-  status                           Show server, auth, and daemon status
+  status                           Show server, auth, hook activity, and daemon status
   login                            Authenticate via OAuth (browser)
   logout                           Remove stored credentials
   whoami                           Show current user; verify the server accepts your token
+
+Local server (kcap setup --local):
+  local status                     Explain the local installation's state and what to do about it
+  local start | stop | restart     Start, stop or restart the local server
+  local logs [-n N]                Print the end of the local server's log
+  local open                       Open the local web UI in a browser
+
+Vendor accounts:
+  accounts                         Manage the Claude and Codex config directories kcap records
 
 Profiles:
   profile add <name> --server-url <url>  Add a server profile
@@ -32,20 +41,28 @@ Configuration:
   remap --list                     List configured cwd remaps
   remap --remove <from>            Remove a cwd remap entry
 
+Experimental features:
+  experimental                     List experimental features and whether each is on
+  experimental enable <feature>    Turn a feature on for the active profile
+  experimental disable <feature>   Turn a feature off for the active profile
+
 Harness setup nudges:
-  harness list                     Show which coding agents are installed and whether kcap is set up for each
+  harness list [--json]            Show which coding agents are installed and whether kcap is set up for each
   harness dismiss <vendor…>|--all  Stop nudging to set kcap up for an installed-but-unconfigured harness
   harness reset <vendor…>|--all    Offer a previously-dismissed harness again
 
 Agents:
-  agent start <vendor> [-d] [--worktree] [--private] [-- <args>]  Start a daemon-hosted agent
-  agent ls                         List this daemon's agents (id, status, kind, repo)
+  agent start <vendor> [-d] [--worktree] [--private] [--title T] [-- <args>]  Start a daemon-hosted agent
+  agent ls                         List this daemon's agents (id, status, state, kind, repo, title)
   agent attach <id>                Attach your terminal to a running agent (id prefix ok)
+  agent resume <id>                Retry an agent a daemon restart left interrupted
   agent stop <id> | --all [-y] [--force]  Stop one agent, or all of them
 
 Daemon:
   daemon start [-d] [--name N]     Start the daemon (foreground, or -d for background; refuses on duplicate name)
-  daemon stop [--name N] [--yes]   Stop a daemon (prompts on multi unless --yes)
+  daemon stop [--name N] [--yes] [--keep-agents]
+                                   Stop a daemon and end its agents (--keep-agents
+                                   keeps them to resume; prompts on multi unless --yes)
   daemon status [--name N]         Show daemon status (lists all when --name omitted)
   daemon doctor [--clean]          Diagnose lock-file state, optionally clean stale entries
   repos                            List known repos (sorted by last used)
@@ -60,18 +77,28 @@ Session:
   errors [--chain] [id]            List tool call errors for a session
   recap [--chain] [--full] [id]    Session summary (--full for raw transcript)
   recap --repo                     Recent session summaries for current repo
-  sessions [--active|--ended|--all] [--repo R] [--mine]  Sessions on the current repo, running first
+  sessions [--repo R|all] [--mine] [--since W] [--until W]  Sessions you can see, optionally in a period
   validate-plan [id]               Validate plan completion for a session
   eval [--model N] [--chain] [id]  Run LLM-as-judge evaluation over a session
   generate-whats-done [--codex] <id>  Generate what's-done summary (--codex uses `codex exec`)
   import [vendor-filters] [options]   Import local sessions (Claude, Codex, Cursor, Copilot, Gemini, Kiro, Pi, OpenCode, Antigravity)
-  set-title <title>                Set session title
+  muse-assistant ingest|scope|sweep  Record Muse Assistant chats (run by Muse's own cron on its VM)
+  set-title [--auto] <title>       Rename the current session
   disable                          Stop recording and delete session data
   hide                             Hide session (owner-only visibility)
   review <pr>                      Launch Claude with PR review context
 
 Curation:
   curate apply [--dry-run] [--yes]   Write promoted guidelines into CLAUDE.md / AGENTS.md
+
+Memories:
+  memories import [opts]           Copy Claude Code's local memory notes into server memories
+
+Pages:
+  page publish <file.html> [opts]  Publish a self-contained HTML page, print its link
+  page list [--mine]               Pages you can see
+  page share <id> --visibility V   Change who may open a page
+  page delete <id>                 Remove a page
 
 MCP servers (stdio):
   mcp review [--owner --repo --pr]   PR review context for agents
@@ -82,20 +109,23 @@ MCP servers (stdio):
   mcp workitems                      Declare/list a session's work-item attachments
   mcp plans                          Declare a session's plan document and task list
   mcp analytics                      Governed SQL over org coding-agent analytics (schema + query)
+  mcp pages                          Publish an HTML page from an agent and get back a link
+  mcp knowledge                      Read facts and skills and fine-tune skills from agents
 
 Plugin:
-  plugin install [--project] [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity|--skills]   Register hooks/skills (Claude default; flag picks the vendor)
-  plugin remove  [--project] [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity|--skills]   Remove hooks/skills (Claude default; flag picks the vendor)
+  plugin install [--project] [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity|--mistral-vibe|--muse|--grok|--skills]   Register hooks/skills (Claude default; flag picks the vendor)
+  plugin remove  [--project] [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity|--mistral-vibe|--grok|--muse|--skills]   Remove hooks/skills (Claude default; flag picks the vendor)
 
 Maintenance:
   update                           Check for and install updates
+  refresh                          Refresh the agent integrations kcap installed (runs after an update)
   feedback (--bug|--feedback) [-m <text>]  Report a bug or send feedback to Kurrent support
   cleanup                          Kill all orphaned watcher processes
   uninstall [--project] [--yes]    Remove kcap config + all agent integrations
   --version                        Show version
   --help                           Show this help
 
-Hooks (internal — invoked by Claude Code / Codex / Cursor / Copilot / Gemini / Kiro / Pi / OpenCode / Antigravity):
+Hooks (internal — invoked by Claude Code / Codex / Cursor / Copilot / Gemini / Kiro / Pi / OpenCode / Antigravity / Mistral Vibe / Muse Code):
   hook --claude                    Dispatch a Claude Code hook event (reads payload from stdin)
   hook --codex                     Dispatch a Codex CLI hook event
   hook --cursor                    Dispatch a Cursor IDE hook event
@@ -105,6 +135,11 @@ Hooks (internal — invoked by Claude Code / Codex / Cursor / Copilot / Gemini /
   hook --pi --event <name> --file <f>  Dispatch a Pi lifecycle event (arg-driven; no stdin)
   hook --opencode --event <name> --session <id> --file <f>  Dispatch an SST OpenCode lifecycle event (arg-driven; no stdin)
   hook --antigravity <event>       Dispatch a Google Antigravity control-hook event (event as positional arg; payload on stdin)
+  hook --mistral-vibe              Dispatch a Mistral Vibe hook event (reads payload from stdin)
+  hook --muse                      Dispatch a Muse Code hook event (reads payload from stdin)
+
+Status line (internal — installed into each Claude account by kcap accounts wiring):
+  statusline --account <id>        Record the account's usage from the payload on stdin, then run the original status line
 
 Environment:
   KCAP_URL              Server URL (overrides config file)

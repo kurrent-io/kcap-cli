@@ -1,30 +1,20 @@
+using System.Collections.Frozen;
 using System.Diagnostics;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Setup;
 
 namespace Capacitor.Cli.Daemon.Harness.Codex;
 
 /// <summary>
-/// The single <c>codex</c> runtime factory. It routes a launch to one of two transports and is the
-/// ONLY codex entry in the vendor→factory dictionary:
-/// <list type="bullet">
-/// <item>a review-flow (unattended) launch, when this daemon resolved app-server as active
-/// (<see cref="DaemonConfig.CodexAppServerActive"/> — operator selection + version floor, decided
-/// once by <see cref="CodexTransportDecision"/>), goes to
-/// <see cref="CodexAppServerHostedAgentRuntime"/>;</item>
-/// <item>everything else — every interactive launch, and every launch when the transport is PTY —
-/// delegates to the wrapped <see cref="PtyHostedAgentRuntimeFactory"/>, byte-identically to today.</item>
-/// </list>
-///
-/// <para>Capability advertisement (borrowed-review containment, unattended support, model resolver)
-/// is delegated to the PTY factory unchanged: the transport swaps the LAUNCH mechanism, not the
-/// containment story — a reviewer's read boundary stays <c>native-tool-clamp</c> either way. The
-/// launcher-policy version the server certifies against is chosen in <c>DaemonRunner</c> from the
-/// same <see cref="DaemonConfig.CodexAppServerActive"/> field this factory routes on, so the
-/// advertised policy and the transport used are one fact.</para>
+/// The single <c>codex</c> runtime factory, choosing app-server or the wrapped PTY factory per launch
+/// (<see cref="Route"/>). Capability advertisement is delegated to the PTY factory: the transport
+/// changes how a launch is hosted, not its containment.
 /// </summary>
 internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactory {
     readonly TimeProvider _time;
@@ -42,10 +32,16 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     /// <param name="connection">The server connection whose <c>RequestAcpInteractionAsync</c> forwards an
     /// interactive launch's approvals to the user (§2.3). Null in tests that never exercise interactive
     /// approvals; reviewers (approvalPolicy:never) never build an approval bridge regardless.</param>
+    /// <param name="refreshCapabilities">Asks the daemon to re-probe and re-advertise, when a launch finds the
+    /// installed Codex no longer matches what was advertised. Null leaves the advertisement to the next refresh.</param>
+    /// <param name="installedVersion">Test seam only: production probes the Codex at the PTY factory's CLI path.</param>
     public CodexHostedAgentRuntimeFactory(
             CodexLauncher launcher, IHostedAgentRuntimeFactory ptyDelegate, DaemonConfig config,
             ILoggerFactory loggerFactory, TimeProvider time, CodexAppServerSpawnFactory? spawnFactory = null,
-            ServerConnection? connection = null) {
+            ServerConnection? connection = null, PolicyJudgeGateway? policyJudge = null,
+            Action<string>? refreshCapabilities = null, Func<string?>? installedVersion = null,
+            AccountReadingSink? readings = null) {
+        _readings      = readings;
         _time          = time;
         _launcher      = launcher;
         _pty           = ptyDelegate;
@@ -53,9 +49,28 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
         _loggerFactory = loggerFactory;
         _logger        = loggerFactory.CreateLogger<CodexHostedAgentRuntimeFactory>();
         _spawnFactory  = spawnFactory
-            ?? ((cli, args, seed, cwd, env, cfg, lf) => DefaultSpawnFactory(cli, args, seed, cwd, env, cfg, lf, time));
+            ?? ((cli, args, seed, cwd, env, removeEnv, cfg, lf) => DefaultSpawnFactory(cli, args, seed, cwd, env, removeEnv, cfg, lf, time));
         _connection    = connection;
+        _policyJudge   = policyJudge;
+        _refreshCapabilities = refreshCapabilities;
+        _installedVersion    = installedVersion ?? (() => DaemonRunner.ProbeCliVersionForLaunch(_pty.CliPath));
     }
+
+    readonly Action<string>? _refreshCapabilities;
+    readonly Func<string?>   _installedVersion;
+
+    readonly PolicyJudgeGateway? _policyJudge;
+    readonly AccountReadingSink? _readings;
+
+    /// <summary>A governed interactive launch evaluates each approval before it reaches a card; a reviewer
+    /// (approvals never raised) and an ungoverned launch take none.</summary>
+    CodexHostedPolicySeam? PolicySeamFor(RuntimeStartContext ctx, string approval) =>
+        ctx.PolicySnapshot is { IsEmpty: false } snapshot && _connection is { } connection
+     && !string.Equals(approval, "never", StringComparison.Ordinal)
+            ? new CodexHostedPolicySeam(snapshot, _policyJudge, evt => _ = connection.AppendAgentRunEventAsync(ctx.AgentId, evt),
+                new PermissionRefusalLedger(), ctx.PersistenceProbe ?? (() => null), ctx.AgentId, _time,
+                _loggerFactory.CreateLogger<CodexHostedPolicySeam>(), ctx.Worktree.Path)
+            : null;
 
     public string Vendor => "codex";
 
@@ -63,6 +78,7 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     public string           CliPath                                    => _pty.CliPath;
     public bool             IsAvailable()                              => _pty.IsAvailable();
     public bool             SupportsUnattended                          => _pty.SupportsUnattended;
+    public bool             SupportsPrReview                            => _pty.SupportsPrReview;
     public UnattendedSupport DescribeUnattendedSupport()               => _pty.DescribeUnattendedSupport();
     public bool             SupportsBorrowedReviewFlow                  => _pty.SupportsBorrowedReviewFlow;
     public bool             BorrowedReviewRequiresIndependentSnapshot   => _pty.BorrowedReviewRequiresIndependentSnapshot;
@@ -71,37 +87,87 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     public IReviewerModelResolver? ReviewerModelResolver               => _pty.ReviewerModelResolver;
     public bool             SupportsModelSelection                      => _pty.SupportsModelSelection;
 
+    public Task<IReadOnlyList<VendorModelOption>?> ProbeModelsAsync(CancellationToken ct) => ProbeModelsAsync(null, ct);
+
+    /// <summary>A null directory probes under the daemon's own environment; an account's probe gets that
+    /// account's <c>CODEX_HOME</c>, removed for the built-in directory, as its launches do.</summary>
+    public Task<IReadOnlyList<VendorModelOption>?> ProbeModelsAsync(string? configDirectory, CancellationToken ct) =>
+        CodexModelCatalogProbe.RunAsync(
+            () => {
+                var stateDir = _config.Store.StateDirectory(_config.Name);
+                var env      = new Dictionary<string, string>();
+                var (dir, remove) = configDirectory is null
+                    ? (CodexModelCatalogProbe.DirectoryFor(stateDir), FrozenSet<string>.Empty)
+                    : (CodexModelCatalogProbe.DirectoryFor(stateDir, DirectoryKey.Of(configDirectory)),
+                       VendorHomeEnv.Apply(env, Vendor, configDirectory, _config.Home));
+                Directory.CreateDirectory(dir);
+                return _spawnFactory(_pty.CliPath, [], null, dir, env, remove, _config, _loggerFactory);
+            },
+            string.IsNullOrEmpty(_config.Version) ? "0.0.0" : _config.Version, _time, _logger, ct);
+
+    /// <summary>Codex rewrites its cached catalog when it refetches it, and its auth file when the
+    /// account changes; either can change the models this account may launch.</summary>
+    public IReadOnlyList<string> CatalogFingerprintPaths => [_launcher.Paths.ModelsCache, _launcher.Paths.AuthJson];
+
+    public IReadOnlyList<string> CatalogFingerprintPathsFor(string? configDirectory) {
+        if (configDirectory is null) return CatalogFingerprintPaths;
+
+        var paths = AccountLayouts.Codex(_config.Home, configDirectory);
+        return [paths.ModelsCache, paths.AuthJson];
+    }
+
     // A default-kind launch is the only Codex shape that accepts a follow-up while running, so it is
     // the only one whose fetch happens alongside a live, write-contained process: the store keeps
     // that write outside every cwd it could steer. Protected kinds fetch before the process exists.
     public AttachmentPlacement AttachmentPlacementFor(LaunchKind kind) =>
         kind == LaunchKind.Default ? AttachmentPlacement.DaemonStore : AttachmentPlacement.Worktree;
 
-    /// <summary>App-server hosts unattended reviewers (review-flow) wherever the daemon resolved it
-    /// active. INTERACTIVE launches join only where the operator opted that daemon in, so one daemon can
-    /// run interactive on app-server while the rest of a fleet stays on PTY.
-    ///
-    /// <para>Interactive is stated positively — neither a review flow nor a PR review — rather than as
-    /// "not a review flow": the launch classes here are review-flow, PR review and interactive, so the
-    /// negative form would sweep PR review along with it and widen the opt-in past what it names. The
-    /// interactive branch reads <see cref="CodexTransportDecision.InteractiveTransport"/>, the same
-    /// function the daemon advertises to the server — which refuses a registration whose transport
-    /// differs from the advertisement.</para></summary>
-    internal bool UsesAppServer(RuntimeStartContext ctx) =>
-        _config.CodexAppServerActive
-     && (ctx.IsReviewFlow
-         || (!ctx.IsReview && CodexTransportDecision.InteractiveTransport(_config) == CodexTransportDecision.AppServer));
+    /// <summary>
+    /// A pinned transport wins: the ledger's for a resume, else the one the server will validate the
+    /// registration against. Unpinned, a PR review stays on PTY and anything else follows the resolution
+    /// the server last acknowledged, since that is the advertisement it dispatched against. Every
+    /// app-server launch is checked against the Codex installed now, since the advertised version is
+    /// only as fresh as the last capability refresh. Below the floor the launch is refused, never moved
+    /// to PTY, which the server would refuse at registration, and the daemon is asked to re-advertise.
+    /// </summary>
+    internal CodexRoute Route(RuntimeStartContext ctx) {
+        var pinned = Recognised(ctx.RequestedTransport) ?? Recognised(ctx.ExpectedRuntimeTransport);
+        var appServer = pinned switch {
+            CodexTransportDecision.Pty       => false,
+            CodexTransportDecision.AppServer => true,
+            _ => !(ctx.IsReview && !ctx.IsReviewFlow) && _config.AcknowledgedCodexResolution.Active,
+        };
+        if (!appServer) return new(AppServer: false, Refusal: null);
+
+        var version = _installedVersion();
+        if (CodexTransportDecision.MeetsFloor(version)) return new(AppServer: true, Refusal: null);
+
+        _refreshCapabilities?.Invoke("the installed Codex is below the app-server floor");
+        return new(AppServer: false, Refusal:
+            $"codex: this launch must run on app-server, which needs Codex {CodexTransportDecision.VersionFloor} or later; " +
+            $"the installed Codex is {version ?? "of an unreadable version"}.");
+    }
+
+    static string? Recognised(string? transport) =>
+        transport is CodexTransportDecision.AppServer or CodexTransportDecision.Pty ? transport : null;
+
+    public bool SupportsRestartResume(string? runtimeTransport) => true;
+
+    /// <summary>Only a session recorded on the terminal transport resumes there; any other may reach the app-server.</summary>
+    public bool ResumesIdleWithoutPrompt(string? runtimeTransport) =>
+        runtimeTransport == CodexTransportDecision.Pty && _pty.ResumesIdleWithoutPrompt(runtimeTransport);
 
     public Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
-        // §2.7 B4: resume is app-server-only (thread/resume). A resume request routed to the PTY path can't
-        // be honored and would silently start a FRESH session — forking the transcript, breaking the
-        // never-silently-fork invariant — so fail the launch instead. (Server-side, resume must also be
-        // capability-gated to app-server-capable daemons before B6 activates parking.)
-        if (ctx.ResumeSessionId is not null && !UsesAppServer(ctx))
-            throw new InvalidOperationException(
-                "codex: a resume (ResumeSessionId set) requires the app-server route; refusing to start a fresh PTY session.");
+        var route = Route(ctx);
+        if (route.Refusal is { } refusal)
+            return Task.FromException<HostedRuntimeStart>(new InvalidOperationException(refusal));
 
-        return UsesAppServer(ctx) ? StartAppServerAsync(ctx, ct) : _pty.StartAsync(ctx, ct);
+        // A parked reviewer's transcript is envelope-sourced; a PTY resume would fork it.
+        if (ctx.ResumeSessionId is not null && ctx.IsReviewFlow && !route.AppServer)
+            return Task.FromException<HostedRuntimeStart>(
+                new InvalidOperationException("codex: a reviewer resume requires the app-server route; refusing to start a PTY session."));
+
+        return route.AppServer ? StartAppServerAsync(ctx, ct) : _pty.StartAsync(ctx, ct);
     }
 
     async Task<HostedRuntimeStart> StartAppServerAsync(RuntimeStartContext ctx, CancellationToken ct) {
@@ -109,7 +175,10 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
 
         // Fail-closed hooks preflight + TrustWorktree config, exactly as the PTY path — a missing
         // critical hook throws CodexHooksNotInstalledException for the orchestrator's cleanup path.
-        _launcher.Prepare(launcherCtx);
+        var owned  = launcherCtx.Work == Core.LocalIpc.WorkLocation.OwnedWorktree;
+        var before = owned ? WorktreeManager.StampDaemonPaths(launcherCtx.Worktree.Path) : null;
+        try { _launcher.Prepare(launcherCtx); }
+        finally { if (owned) WorktreeManager.RecordDaemonBaseline(launcherCtx.Worktree.Path, before); }
 
         var (sandbox, approval) = CodexPosturePolicy.Resolve(ctx.Work, ctx.IsReviewFlow, ctx.CodexPosture);
         var appServerArgs = _launcher.BuildAppServerLaunchArgs(launcherCtx);
@@ -117,9 +186,12 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
         // The app-server path is envelope-sourced: the daemon emits the transcript and defers the first
         // turn behind a source claim, guard-1 stands the rollout watcher down (the marker), and guard-2
         // backstops server-side. ONE decision drives all four (marker, emission, deferral, forwarder) so
-        // they can never desync. Rollback is codex.transport=pty — this method is not reached then.
+        // they can never desync.
         const bool envelopeSourced = true;
-        var env = BuildEnv(ctx, envelopeSourced);
+        var env       = BuildEnv(ctx, envelopeSourced);
+        var removeEnv = ctx.Account is { } account
+            ? VendorHomeEnv.Apply(env, Vendor, account, _config.Home)
+            : FrozenSet<string>.Empty;
 
         var launch = new CodexAppServerLaunch(
             Cwd:           ctx.Worktree.Path,
@@ -136,7 +208,7 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
             ResumeSessionId: ctx.ResumeSessionId);
 
         CodexAppServerSpawn spawn = (seed, spawnCt) =>
-            _spawnFactory(_launcher.CliPath, appServerArgs, seed, ctx.Worktree.Path, env, _config, _loggerFactory);
+            _spawnFactory(_launcher.CliPath, appServerArgs, seed, ctx.Worktree.Path, env, removeEnv, _config, _loggerFactory);
 
         ctx.Journal?.Open(ctx.Worktree.Path, ctx.Model);
 
@@ -148,7 +220,10 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
             agentId: ctx.AgentId,
             requestInteraction: _connection is { } c ? c.RequestAcpInteractionAsync : null,
             approvalTimeout: TimeSpan.FromSeconds(Math.Max(1, _config.CodexAppServerApprovalTimeoutSeconds)),
-            journal: ctx.Journal);
+            journal: ctx.Journal,
+            policy: PolicySeamFor(ctx, approval),
+            account: ctx.Account,
+            postReading: _readings is { } readings ? readings.Post : null);
 
         // StartAsync may spawn a child before it throws (a failed hooks/list, thread/start, or initial
         // turn on the fail-closed paths). The orchestrator never receives a runtime it did not get a
@@ -178,35 +253,39 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
         Review:         ctx.Review,
         // App-server review flows carry no PR-review MCP launch (ctx.IsReview is false); the
         // flow-result + allowlist servers are spliced by BuildAppServerLaunchArgs from IsReviewFlow.
-        ReviewLaunch:   null) {
+        ReviewLaunch:   null,
+        Account:        ctx.Account) {
         McpAllowlist = ctx.McpAllowlist,
         Work         = ctx.Work,
         CodexPosture = ctx.CodexPosture,
     };
-
-    internal const string HostedAppServerMarkerEnv = "KCAP_HOSTED_APPSERVER";
 
     internal static Dictionary<string, string> BuildEnv(RuntimeStartContext ctx, bool emitEnvelopeTranscript) {
         var env = new Dictionary<string, string> {
             [HostedAgent.RenderedVar] = HostedAgent.Rendered,
             [HostedAgent.AgentIdVar]  = ctx.AgentId,
         };
+        HostedLaunchMarkers.ApplyOverlay(env, ctx);
         if (!string.IsNullOrEmpty(ctx.DaemonId))        env["KCAP_DAEMON_ID"]         = ctx.DaemonId;
         if (!string.IsNullOrEmpty(ctx.DaemonEpoch))     env["KCAP_DAEMON_EPOCH"]      = ctx.DaemonEpoch;
         if (!string.IsNullOrEmpty(ctx.ServerUrl))       env[ProfileOverrides.UrlVar]  = ctx.ServerUrl;
         if (!string.IsNullOrEmpty(ctx.DaemonBridgeUrl)) env[HostedAgent.BridgeUrlVar] = ctx.DaemonBridgeUrl;
-        // guard-1: only an envelope-sourced session carries this marker; the codex hook + watcher read it
-        // and stand down so the rollout is not double-ingested alongside the envelopes.
-        if (emitEnvelopeTranscript) env[HostedAppServerMarkerEnv] = "1";
+        // Only an envelope-sourced session carries this marker, so its rollout is not ingested a second
+        // time beside the envelopes.
+        if (emitEnvelopeTranscript) env[HostedAgent.HostedAppServerVar] = "1";
         return env;
     }
 
-    // Materialize the child's environment. The marker must reflect THIS launch's emit decision only —
-    // never a value inherited from the daemon's own environment, or a non-emitting child would suppress
-    // its hook watcher and lose transcript ingestion. Clear any inherited marker, then apply the overlay
-    // (which carries the marker only when emitting).
-    internal static void ApplyChildEnv(IDictionary<string, string?> childEnv, IReadOnlyDictionary<string, string> overlay) {
-        childEnv.Remove(HostedAppServerMarkerEnv);
+    // Materialize the child's environment over the daemon's own, where nothing inherited may speak for
+    // this launch: an inherited envelope marker would make a non-emitting child's hook watcher stand
+    // down and lose ingestion, and an inherited session or lookup agent names another session.
+    internal static void ApplyChildEnv(
+            IDictionary<string, string?> childEnv, IReadOnlyDictionary<string, string> overlay, IReadOnlyCollection<string> remove) {
+        childEnv.Remove(HostedAgent.HostedAppServerVar);
+        childEnv.Remove(HostedAgent.FlowRoleVar);
+        childEnv.Remove(HostedAgent.DaemonAgentIdVar);
+        InheritedHarnessSessions.Remove(childEnv);
+        foreach (var key in remove) childEnv.Remove(key);
         foreach (var (k, v) in overlay) childEnv[k] = v;
     }
 
@@ -214,8 +293,8 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     /// shared <see cref="AcpChildProcess"/> (stderr drain + terminate) and the JSON-RPC transport.</summary>
     static Task<(CodexAppServerConnection, IAcpProcess)> DefaultSpawnFactory(
             string cliPath, IReadOnlyList<string> appServerArgs, string? hookStateSeed, string cwd,
-            IReadOnlyDictionary<string, string> env, DaemonConfig config, ILoggerFactory loggerFactory,
-            TimeProvider time) {
+            IReadOnlyDictionary<string, string> env, IReadOnlyCollection<string> removeEnv, DaemonConfig config,
+            ILoggerFactory loggerFactory, TimeProvider time) {
         var argv = new List<string> { "app-server" };
         argv.AddRange(appServerArgs);
         if (!string.IsNullOrEmpty(hookStateSeed)) {
@@ -230,7 +309,8 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
             UseShellExecute        = false,
             WorkingDirectory       = cwd,
         };
-        ApplyChildEnv(psi.Environment, env);
+        ApplyChildEnv(psi.Environment, env, removeEnv);
+        WindowsLaunchCommand.Apply(psi, BinaryProbe.FromEnvironment());
 
         var process = Process.Start(psi)
             ?? throw new InvalidOperationException($"Failed to start '{cliPath} {string.Join(' ', argv)}'.");
@@ -248,4 +328,5 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
 /// production spawns a real process; a test substitutes an in-process fake peer.</summary>
 internal delegate Task<(CodexAppServerConnection Connection, IAcpProcess Process)> CodexAppServerSpawnFactory(
     string cliPath, IReadOnlyList<string> appServerArgs, string? hookStateSeed, string cwd,
-    IReadOnlyDictionary<string, string> env, DaemonConfig config, ILoggerFactory loggerFactory);
+    IReadOnlyDictionary<string, string> env, IReadOnlyCollection<string> removeEnv, DaemonConfig config,
+    ILoggerFactory loggerFactory);

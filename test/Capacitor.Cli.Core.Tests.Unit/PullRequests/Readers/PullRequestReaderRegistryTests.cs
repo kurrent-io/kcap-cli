@@ -85,6 +85,21 @@ public class PullRequestReaderRegistryTests {
         await Assert.That(list.Data.Items[0].HeadRef).IsEqualTo("feature");
     }
 
+    /// A subject picked from a lowercase listing must match the merged row, whatever casing the repository carries.
+    [Test]
+    [Arguments(PullRequestReadKind.Ready)]
+    [Arguments(PullRequestReadKind.Unavailable)]
+    public async Task Discovered_links_are_lowercased_to_match_listed_subjects(PullRequestReadKind serverList) {
+        var links = new StubLinks { Links = [Link("github.com", 5)], ListKind = serverList };
+        var gh = new StubProvider("gh", ready: true, hosts: ["github.com"]) {
+            Discovered = [Link("github.com", 5) with { Owner = "Example", RepoName = "Repo" }] };
+        var registry = new PullRequestReaderRegistry(links, [gh], TimeProvider.System);
+        await registry.DiscoverAsync(false, default);
+        registry.DescribeSession("session", new("github", "github.com", "Example", "Repo", "hash"), "feature");
+        var list = await registry.ListAsync("session", default);
+        await Assert.That(list.Data!.Items.Select(PullRequestWire.Subject).ToArray()).IsEquivalentTo(new[] { Subject(number: 5) });
+    }
+
     [Test]
     public async Task Local_discovery_serves_the_list_when_the_server_links_are_unavailable() {
         var links = new StubLinks { ListKind = PullRequestReadKind.Unavailable };
@@ -282,6 +297,7 @@ public class PullRequestReaderRegistryTests {
         await registry.DiscoverAsync(false, default);
         await Assert.That(registry.NoteFor("github", "github.com")!.Text).IsEqualTo("Install GitHub CLI to read pull requests here.");
         await Assert.That(registry.NoteFor("github", "github.com")!.InstallUrl).IsEqualTo("https://cli.github.com");
+        await Assert.That(registry.NoteFor("github", "github.com")!.InstallLabel).IsEqualTo("Install GitHub CLI");
         gh.Status = PullRequestReaderStatusKind.SignedOut;
         await registry.DiscoverAsync(true, default);
         await Assert.That(registry.NoteFor("github", "github.com")!.Text).IsEqualTo("GitHub CLI is not signed in. Run gh auth login to read pull requests here.");
@@ -300,6 +316,19 @@ public class PullRequestReaderRegistryTests {
         var note = registry.NoteFor("github", "github.com")!;
         await Assert.That(note.Text).IsEqualTo("Update GitHub CLI to read pull requests here.");
         await Assert.That(note.InstallUrl).IsEqualTo("https://cli.github.com");
+        await Assert.That(note.InstallLabel).IsEqualTo("Update GitHub CLI");
+    }
+
+    [Test]
+    public async Task A_routed_read_names_the_tool_that_served_it() {
+        var gh = new StubProvider("gh", ready: true, hosts: ["github.com"]);
+        var glab = new StubProvider("glab", ready: true, hosts: ["gitlab.com"], kind: "gitlab");
+        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh, glab], TimeProvider.System);
+        await registry.DiscoverAsync(false, default);
+        var local = await registry.OverviewAsync("session", new() { Provider = "github", Host = "github.com", RepoHash = "hash", Owner = "example", RepoName = "repo", Number = 1 }, default);
+        var other = await registry.OverviewAsync("session", new() { Provider = "gitlab", Host = "gitlab.com", RepoHash = "hash", Owner = "example", RepoName = "repo", Number = 2 }, default);
+        await Assert.That(local.Reader).IsEqualTo("GitHub CLI");
+        await Assert.That(other.Reader).IsEqualTo("GitLab CLI");
     }
 
     internal sealed class StubLinks : IPullRequestSource {

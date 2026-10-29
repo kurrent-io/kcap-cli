@@ -9,7 +9,9 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.Plans;
 using Capacitor.Cli.Core.Telemetry;
+using Capacitor.Cli.Plans;
 
 namespace Capacitor.Cli.Commands;
 
@@ -51,17 +53,15 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
 
         var urlOk = HttpClientExtensions.IsAcceptableUrl(baseUrl);
 
-        // Created on demand so a session that never calls a tool pays no network cost; nullable so
-        // a transient creation failure leaves it null and the next call retries. The stdio loop
-        // handles one request at a time, so no locking.
-        HttpClient? client = null;
+        // Created on first use, so a session that never calls a tool stays local-only.
+        using var sessionClient = new OnDemand<HttpClient>(() => http.ForSessionAsync());
 
         async Task<string> DispatchToolCallAsync(JsonNode callId, JsonObject callRequest) {
             if (!urlOk)
                 return BuildToolResult(callId, HttpClientExtensions.SchemeMissingHint, isError: true);
 
             try {
-                client ??= await http.ForSessionAsync();
+                var client = await sessionClient.GetAsync();
                 return await HandleToolCallAsync(callId, callRequest, client, baseUrl, cwd, repoRoot);
             } catch (Exception ex) {
                 // The detail goes to stderr, not the client, which could leak local paths.
@@ -90,50 +90,20 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
         await using var writer = new StreamWriter(stdout, new UTF8Encoding(false));
         writer.AutoFlush = true;
 
-        try {
-            while (await reader.ReadLineAsync() is { } line) {
-                if (string.IsNullOrWhiteSpace(line)) continue;
-
-                JsonObject? request;
-
-                try {
-                    request = JsonNode.Parse(line)?.AsObject();
-                } catch {
-                    continue;
-                }
-
-                if (request is null) continue;
-
-                var id     = request["id"];
-                var method = DecodeMethod(request);
-
-                // Notifications have no id — don't send a response
-                if (id is null) continue;
-
-                var response = method switch {
-                    null         => BuildErrorResponse(id, -32600, "Invalid request: method must be a string"),
-                    "initialize" => BuildInitializeResponse(id, request),
-                    "tools/list" => BuildToolsListResponse(id, tools),
-                    "tools/call" => await TimedDispatchToolCallAsync(id, request),
-                    _            => McpProtocol.TryHandleStandardMethod(method, id)
-                                    ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
-                };
-
-                await writer.WriteLineAsync(response);
-            }
-        } finally {
-            if (client is not null) {
-                try { client.Dispose(); } catch {
-                    /* swallow — best-effort cleanup */
-                }
-            }
-        }
+        // In arrival order: a task call addresses the plan that the call before it declared.
+        await McpStdioLoop.RunAsync(reader, writer, tools, TimedDispatchToolCallAsync, (id, method, request) => method switch {
+            null         => BuildErrorResponse(id, -32600, "Invalid request: method must be a string"),
+            "initialize" => BuildInitializeResponse(id, request),
+            "tools/list" => BuildToolsListResponse(id, tools),
+            _            => McpProtocol.TryHandleStandardMethod(method, id)
+                            ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
+        }, "plans", McpStdioLoop.InArrivalOrder);
 
         return 0;
     }
 
     internal const string ServerInstructions =
-        "Use these tools to keep Capacitor's record of the plan this session executes. When you write or are " +
+        "Use these tools to keep kcap's record of the plan this session executes. When you write or are " +
         "handed a plan, spec or design document, declare it with declare_plan_document. When a plan has " +
         "discrete steps, declare them with set_plan_tasks and record every status change with " +
         "update_plan_task; after context compaction, get_plan returns the list with its ids. Keep whatever " +
@@ -167,11 +137,11 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
 
         try {
             return toolName switch {
-                "declare_plan_document" => await DeclareAsync(id, client, baseUrl, arguments, cwd, repoRoot),
-                "set_plan_tasks"        => await SetTasksAsync(id, client, baseUrl, arguments),
-                "update_plan_task"      => await UpdateTaskAsync(id, client, baseUrl, arguments),
-                "get_plan"              => await GetPlanAsync(id, client, baseUrl, arguments),
-                _                       => throw new ArgumentException($"Unknown tool: {toolName}")
+                PlanToolNames.DeclareDocument => await DeclareAsync(id, client, baseUrl, arguments, cwd, repoRoot),
+                PlanToolNames.SetTasks        => await SetTasksAsync(id, client, baseUrl, arguments),
+                PlanToolNames.UpdateTask      => await UpdateTaskAsync(id, client, baseUrl, arguments),
+                PlanToolNames.GetPlan         => await GetPlanAsync(id, client, baseUrl, arguments),
+                _                             => throw new ArgumentException($"Unknown tool: {toolName}")
             };
         } catch (ArgumentException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
@@ -180,10 +150,24 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
         }
     }
 
+    /// <summary>Longer than a Claude plan-edit hook can hold the document, which is its 3 s timeout.</summary>
+    internal TimeSpan DeclareLockWait { get; init; } = TimeSpan.FromSeconds(5);
+
     async Task<string> DeclareAsync(JsonNode id, HttpClient client, string baseUrl, JsonObject? args, string cwd, string? repoRoot) {
+        var ledger   = new DeclaredDocumentLedger(config, time);
+        var resolved = BuildDeclaration(args, cwd, repoRoot);
+
+        // Under the lock an edit refresh cannot interleave, so the text read and the arguments
+        // recorded are the last the server gets. Without it this declaration could land after a
+        // newer refresh, so the agent is asked to retry instead.
+        using var gate = await ledger.LockAsync(resolved.SessionId, resolved.Document.Path, DeclareLockWait);
+        if (gate is null)
+            return BuildToolResult(id, $"Error: {resolved.WirePath} is being refreshed after an edit; call declare_plan_document again.", isError: true);
+
         var declaration = BuildDeclaration(args, cwd, repoRoot);
 
-        using var response = await client.PostAsync($"{baseUrl}/api/plans/documents", ToJsonContent(declaration.Body));
+        using var response = await client.PostAsync(DocumentsUrl(baseUrl), ToJsonContent(declaration.Body));
+        if (response.IsSuccessStatusCode) ledger.Record(declaration.SessionId, declaration.Document, baseUrl);
 
         return await RelayAsync(id, response, baseUrl, body => AnnotateDeclaration(body, declaration));
     }
@@ -298,6 +282,8 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
     internal static string? ReadPlanId(string body) =>
         TryParseObject(body)?["plan_id"] is JsonValue v && v.TryGetValue<string>(out var id) && !string.IsNullOrWhiteSpace(id) ? id : null;
 
+    internal static string DocumentsUrl(string baseUrl) => $"{baseUrl}/api/plans/documents";
+
     static StringContent ToJsonContent(JsonObject body) => new(body.ToJsonString(), Encoding.UTF8, "application/json");
 
     // Content is declared verbatim, so a snapshot must hash to what the server stores: a file that
@@ -308,20 +294,28 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
         var sessionId = McpSessionId.Resolve(args);
         var kind      = McpToolArguments.RequireString(args, "kind");
         var rawPath   = McpToolArguments.RequireString(args, "path");
-        var boundary  = repoRoot ?? cwd;
-        var fullPath  = ContainedPath(rawPath, cwd, boundary);
+        var named     = McpToolArguments.OptionalString(args, "workspace_root");
+        var baseDir   = named is null ? cwd : Path.GetFullPath(named, cwd);
+        var checkout  = named is null ? DocumentCheckout(Path.GetFullPath(rawPath, baseDir), repoRoot, cwd) : NamedCheckout(named, baseDir);
+        var fullPath  = ContainedPath(rawPath, baseDir, checkout);
 
         if (!File.Exists(fullPath))
-            throw new ArgumentException($"'{rawPath}' does not exist (resolved against {cwd}).");
+            throw new ArgumentException($"'{rawPath}' does not exist (resolved against {baseDir}).");
+
+        // A file in the session's own checkout, under any spelling of it, goes root-relative, keyed as
+        // discovery keys it; one in another checkout goes absolute, which lets the server key it there.
+        var ownCheckout = PathComparison.Equal(CanonicalPath.Resolve(checkout), CanonicalPath.Resolve(repoRoot ?? cwd));
+        var keyRoot     = ownCheckout ? repoRoot : checkout;
+        string Wire(string path) => ownCheckout ? WirePath(path, repoRoot is null ? null : checkout) : path;
 
         var (hash, snapshot, length) = ReadDocument(fullPath);
-        var wirePath = WirePath(fullPath, repoRoot);
+        var wirePath = Wire(fullPath);
 
         var body = new JsonObject {
             ["session_id"]     = sessionId,
             ["kind"]           = kind,
             ["path"]           = wirePath,
-            ["workspace_root"] = repoRoot,
+            ["workspace_root"] = keyRoot,
             ["content_hash"]   = hash
         };
 
@@ -337,13 +331,42 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
             }
         }
 
-        if (McpToolArguments.OptionalString(args, "argues_from") is { } arguesFrom)
-            body["argues_from"] = WirePath(Path.GetFullPath(arguesFrom, cwd), repoRoot);
+        var arguesFrom = McpToolArguments.OptionalString(args, "argues_from") is { } rawArguesFrom ? Path.GetFullPath(rawArguesFrom, baseDir) : null;
+        if (arguesFrom is not null)
+            body["argues_from"] = Wire(arguesFrom);
 
-        if (McpToolArguments.OptionalString(args, "work_item_id") is { } workItemId)
+        var workItemId = McpToolArguments.OptionalString(args, "work_item_id");
+        if (workItemId is not null)
             body["work_item_id"] = workItemId;
 
-        return new(body, wirePath, repoRoot, length, omitted);
+        if (OptionalPlanId(args) is { } planId)
+            body["plan_id"] = planId;
+
+        var document = new DeclaredDocument(fullPath, kind, arguesFrom, workItemId, cwd, repoRoot, named is null ? null : checkout);
+        return new(body, sessionId, document, wirePath, keyRoot, length, omitted);
+    }
+
+    /// <summary>The checkout a declared file is bounded by: the session's own, unless the file sits in
+    /// a different working tree of the same repository — a linked worktree, which may be nested inside
+    /// the session's checkout or beside it. A file anywhere else stays bounded by the session's checkout,
+    /// which refuses it.</summary>
+    static string DocumentCheckout(string fullPath, string? repoRoot, string cwd) {
+        var own = repoRoot ?? cwd;
+        if (repoRoot is null || Path.GetDirectoryName(fullPath) is not { } dir || GitRepository.FindRoot(dir) is not { } holder) return own;
+        if (PathComparison.Equal(holder, repoRoot)) return own;
+
+        var common = GitRepository.ResolveCommonDir(holder);
+        return common is not null && PathComparison.Equal(common, GitRepository.ResolveCommonDir(repoRoot) ?? "") ? holder : own;
+    }
+
+    /// <summary>A checkout the agent named: the git working tree holding that directory, of whatever
+    /// repository, since the agent may work in several.</summary>
+    static string NamedCheckout(string named, string directory) {
+        if (!Directory.Exists(directory))
+            throw new ArgumentException($"workspace_root '{named}' is not a directory.");
+
+        return GitRepository.FindRoot(directory)
+            ?? throw new ArgumentException($"workspace_root '{named}' is not inside a git working tree.");
     }
 
     /// <summary>Bound on link hops while resolving a declared path; a chain deeper than this is a
@@ -357,7 +380,9 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
         var fullPath = Path.GetFullPath(rawPath, cwd);
 
         if (!IsInside(fullPath, boundary))
-            throw new ArgumentException($"'{rawPath}' is outside the project root ({boundary}); only files under it can be declared.");
+            throw new ArgumentException(
+                $"'{rawPath}' is outside the project root ({boundary}); only files under it or in another worktree of its repository "
+              + "can be declared. For a file in another checkout you work in, pass that checkout as workspace_root.");
 
         // Both sides are resolved the way the kernel opens them, so a link above the root (macOS's
         // /var → /private/var) cancels out and only a link that leaves the tree remains.
@@ -548,19 +573,25 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
     }
 
     internal static McpTool[] BuildToolsList() => [
-        new("declare_plan_document",
+        new(PlanToolNames.DeclareDocument,
             "Declare the plan, spec or design document this session works from. Call it when you write such a "
-          + "document or are handed one. The file is read locally: its SHA-256 and, up to 256 KB, its content are "
-          + "recorded, and the path is keyed against the git repository root. Returns plan_id, document_key and "
-          + "whether the plan was created; declaring the same document again attaches this session to the same plan.",
+          + "document or are handed one. The file is read locally; its SHA-256 and, up to 256 KB, its content go "
+          + "to the kcap server this session is recorded to — the one `kcap login` signed in to, which "
+          + "already holds the session's transcript — keyed by path against the git repository root. Nothing is "
+          + "published anywhere else. Returns plan_id, document_key and whether the plan was created; declaring "
+          + "the same document again attaches this session to the same plan and replaces the stored copy with the "
+          + "file's current text, so declare it again whenever you change it. A document declared after set_plan_tasks, "
+          + "or from another checkout of a document the session's plan already holds, joins the session's current plan.",
             new("object", new() {
-                ["kind"]         = new("string", "One of 'plan', 'spec' or 'design'."),
-                ["path"]         = new("string", "Path to the document, absolute or relative to the project directory."),
-                ["argues_from"]  = new("string", "Path of the document this one argues from — the spec a plan implements, or the design a spec refines — so both land on one plan."),
-                ["work_item_id"] = new("string", "Work item the plan belongs to, when known."),
-                ["session_id"]   = new("string", "Session to attach. Defaults to the session this server runs in when omitted.")
-            }, ["kind", "path"])),
-        new("set_plan_tasks",
+                ["kind"]           = new("string", "One of 'plan', 'spec' or 'design'."),
+                ["path"]           = new("string", "Path to the document, absolute or relative to the project directory (or to workspace_root when given)."),
+                ["argues_from"]    = new("string", "Path of the document this one argues from — the spec a plan implements, or the design a spec refines — so both land on one plan."),
+                ["work_item_id"]   = new("string", "Work item the plan belongs to, when known."),
+                ["plan_id"]        = new("string", "Plan to attach the document to — the plan you are continuing, when you declare its document from a different checkout. Omit to let the document find or start its plan."),
+                ["workspace_root"] = new("string", "The checkout the document is in, when it is not the project directory — a worktree or clone you work in. Defaults to the project directory, or to the worktree an absolute path lies in."),
+                ["session_id"]     = new("string", "Session to attach. Defaults to the session this server runs in when omitted.")
+            }, ["kind", "path"]), McpToolAnnotations.Upsert),
+        new(PlanToolNames.SetTasks,
             "Declare the plan's task list as a full ordered snapshot, replacing the declared list. Call it when a "
           + "plan has discrete steps, and again — with the whole list — when the steps change. An entry carrying a "
           + "task_id the plan already knows keeps it; the rest are minted. Without plan_id the session's current "
@@ -570,8 +601,8 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
                     new("object", "A task: {title, task_id?, status?: pending|in_progress|completed|skipped, note?}.")),
                 ["plan_id"]    = new("string", "Plan to write to. Defaults to the session's current plan."),
                 ["session_id"] = new("string", "Session making the declaration. Defaults to the session this server runs in when omitted.")
-            }, ["tasks"])),
-        new("update_plan_task",
+            }, ["tasks"]), McpToolAnnotations.Replace),
+        new(PlanToolNames.UpdateTask,
             "Record one task's status transition — call it every time a task starts, finishes or is skipped. Name "
           + "the task by task_id (from set_plan_tasks or get_plan) or by its 1-based ordinal. Without plan_id the "
           + "session's current plan is used. The result names the plan it acted on.",
@@ -582,14 +613,14 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
                 ["note"]       = new("string", "Optional note on the transition — why a task was skipped, what blocked it."),
                 ["plan_id"]    = new("string", "Plan the task belongs to. Defaults to the session's current plan."),
                 ["session_id"] = new("string", "Session recording the change. Defaults to the session this server runs in when omitted.")
-            }, ["status"])),
-        new("get_plan",
+            }, ["status"]), McpToolAnnotations.Upsert),
+        new(PlanToolNames.GetPlan,
             "Read a plan back: its documents, tasks with status and source, and progress. Call it to recover the "
           + "task list after context compaction instead of re-reading a ledger file. Without plan_id the session's "
           + "current plan is returned; a session with no plan gets an empty result, not an error.",
             new("object", new() {
                 ["plan_id"]    = new("string", "Plan to read. Defaults to the session's current plan."),
                 ["session_id"] = new("string", "Session whose current plan to read. Defaults to the session this server runs in when omitted.")
-            }, []))
+            }, []), McpToolAnnotations.Read)
     ];
 }

@@ -2,8 +2,10 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Threading;
 using Capacitor.App.Services;
+using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core.Commands;
+using TUnit.Core.Enums;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -19,7 +21,27 @@ public class AppMenuBarTests {
     static string Layout(NativeMenu menu) =>
         string.Join("|", menu.Items.Select(i => i is NativeMenuItem item ? item.Header : "-"));
 
+    static readonly string AppMenuLayout =
+        "About kcap|Check for Updates…|-|Settings…|Set up kcap…" + (OperatingSystem.IsMacOS() ? "|-|Uninstall kcap…" : "");
+
     static void Click(NativeMenuItem item) => ((INativeMenuItemExporterEventsImplBridge)item).RaiseClicked();
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Launch_approvals_action_updates_existing_window_menus() => AvaloniaSession.RunOnUiAsync(async () => {
+        var opened = 0;
+        var bar = NewBar();
+        var window = new Window();
+        var menu = Submenu(bar.Build(window), "Window");
+        var item = Item(menu, "Launch approvals…");
+        await Assert.That(item.IsEnabled).IsFalse();
+        bar.SetLaunchApprovalsAction(() => opened++);
+        await Assert.That(item.IsEnabled).IsTrue();
+        Click(item);
+        await Assert.That(opened).IsEqualTo(1);
+        bar.SetLaunchApprovalsAction(null);
+        await Assert.That(item.IsEnabled).IsFalse();
+    });
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -35,7 +57,7 @@ public class AppMenuBarTests {
         var layout = await AvaloniaSession.DispatchAsync(() =>
             Layout(Submenu(NewBar(showMainWindow: () => { }).Build(new Window()), "Window")));
 
-        await Assert.That(layout).IsEqualTo("Minimize|Zoom|Toggle Full Screen|-|Kurrent Capacitor|-|Bring All to Front");
+        await Assert.That(layout).IsEqualTo("Minimize|Zoom|Toggle Full Screen|-|kcap|Launch approvals…|-|Bring All to Front");
     }
 
     [Test]
@@ -43,7 +65,7 @@ public class AppMenuBarTests {
     public async Task Window_menu_leaves_out_the_main_window_before_one_exists() {
         var layout = await AvaloniaSession.DispatchAsync(() => Layout(Submenu(NewBar().Build(new Window()), "Window")));
 
-        await Assert.That(layout).IsEqualTo("Minimize|Zoom|Toggle Full Screen|-|Bring All to Front");
+        await Assert.That(layout).IsEqualTo("Minimize|Zoom|Toggle Full Screen|-|Launch approvals…|-|Bring All to Front");
     }
 
     [Test]
@@ -51,12 +73,37 @@ public class AppMenuBarTests {
     public async Task Window_menu_carries_the_standard_macOS_shortcuts() {
         var (minimize, fullScreen, main) = await AvaloniaSession.DispatchAsync(() => {
             var menu = Submenu(NewBar(showMainWindow: () => { }).Build(new Window()), "Window");
-            return (Item(menu, "Minimize").Gesture, Item(menu, "Toggle Full Screen").Gesture, Item(menu, "Kurrent Capacitor").Gesture);
+            return (Item(menu, "Minimize").Gesture, Item(menu, "Toggle Full Screen").Gesture, Item(menu, "kcap").Gesture);
         });
 
         await Assert.That(minimize).IsEqualTo(new KeyGesture(Key.M, KeyModifiers.Meta));
         await Assert.That(fullScreen).IsEqualTo(new KeyGesture(Key.F, KeyModifiers.Control | KeyModifiers.Meta));
-        await Assert.That(main).IsEqualTo(new KeyGesture(Key.D0, KeyModifiers.Meta));
+        await Assert.That(main).IsNull();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Window_menu_on_the_main_window_offers_Refresh_beside_the_other_shortcuts() {
+        var (layout, gesture, enabled) = await AvaloniaSession.DispatchAsync(() => {
+            var vm = new MainWindowViewModel(
+                new FakeDaemonClientService(), CancellationToken.None, TestActivity.New(), TimeProvider.System);
+            var menu = Submenu(NewBar(showMainWindow: () => { }).Build(new MainWindow { DataContext = vm }), "Window");
+            var refresh = Item(menu, "Refresh");
+            return (Layout(menu), refresh.Gesture, refresh.IsEnabled);
+        });
+
+        await Assert.That(layout).IsEqualTo("Minimize|Zoom|Toggle Full Screen|Refresh|-|kcap|Launch approvals…|-|Bring All to Front");
+        await Assert.That(gesture).IsEqualTo(RefreshShortcut.Primary);
+        await Assert.That(enabled).IsFalse();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Window_menu_on_any_other_window_has_no_Refresh() {
+        var layout = await AvaloniaSession.DispatchAsync(() =>
+            Layout(Submenu(NewBar().Build(new SettingsWindow()), "Window")));
+
+        await Assert.That(layout).IsEqualTo("Minimize|Zoom|Toggle Full Screen|-|Launch approvals…|-|Bring All to Front");
     }
 
     [Test]
@@ -120,7 +167,7 @@ public class AppMenuBarTests {
     public async Task The_main_window_item_shows_the_main_window() {
         var shown = 0;
         await AvaloniaSession.DispatchAsync(() =>
-            Click(Item(Submenu(NewBar(showMainWindow: () => shown++).Build(new Window()), "Window"), "Kurrent Capacitor")));
+            Click(Item(Submenu(NewBar(showMainWindow: () => shown++).Build(new Window()), "Window"), "kcap")));
 
         await Assert.That(shown).IsEqualTo(1);
     }
@@ -172,12 +219,12 @@ public class AppMenuBarTests {
         var opener = new RecordingOpener();
         var layout = await AvaloniaSession.DispatchAsync(() => {
             var help = Submenu(NewBar(opener).Build(new Window()), "Help");
-            Click(Item(help, "Kurrent Capacitor Documentation"));
+            Click(Item(help, "kcap Documentation"));
             Click(Item(help, "Changelog"));
             return Layout(help);
         });
 
-        await Assert.That(layout).IsEqualTo("Kurrent Capacitor Documentation|Changelog|-|Report a Bug…|Send Feedback…");
+        await Assert.That(layout).IsEqualTo("kcap Documentation|Changelog|-|Report a Bug…|Send Feedback…");
         await Assert.That(string.Join("|", opener.Opened))
             .IsEqualTo("https://www.kurrent.io/docs/capacitor/|https://github.com/kurrent-io/kcap-cli/releases");
     }
@@ -197,11 +244,11 @@ public class AppMenuBarTests {
         var opened = 0;
         var layout = await AvaloniaSession.DispatchAsync(() => {
             var menu = new AppMenu(() => opened++).Menu;
-            Click(Item(menu, "About Kurrent Capacitor"));
+            Click(Item(menu, "About kcap"));
             return Layout(menu);
         });
 
-        await Assert.That(layout).IsEqualTo("About Kurrent Capacitor|-|Settings…");
+        await Assert.That(layout).IsEqualTo(AppMenuLayout);
         await Assert.That(opened).IsEqualTo(1);
     }
 
@@ -211,7 +258,43 @@ public class AppMenuBarTests {
     public async Task The_app_brings_its_own_app_menu() {
         var layout = await AvaloniaSession.DispatchAsync(() => Layout(NativeMenu.GetMenu(Avalonia.Application.Current!)!));
 
-        await Assert.That(layout).IsEqualTo("About Kurrent Capacitor|-|Settings…");
+        await Assert.That(layout).IsEqualTo(AppMenuLayout);
+    }
+
+    [Test, RunOn(OS.MacOs)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Uninstall_item_is_disabled_until_an_action_is_set() {
+        var uninstalls = 0;
+        var (before, after) = await AvaloniaSession.DispatchAsync(() => {
+            var appMenu = new AppMenu(() => { });
+            var uninstall = Item(appMenu.Menu, "Uninstall kcap…");
+            var before = uninstall.IsEnabled;
+            appMenu.SetUninstallAction(() => uninstalls++);
+            Click(uninstall);
+            return (before, uninstall.IsEnabled);
+        });
+
+        await Assert.That(before).IsFalse();
+        await Assert.That(after).IsTrue();
+        await Assert.That(uninstalls).IsEqualTo(1);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Check_for_updates_is_disabled_until_an_action_is_set() {
+        var checks = 0;
+        var (before, after) = await AvaloniaSession.DispatchAsync(() => {
+            var appMenu = new AppMenu(() => { });
+            var item = Item(appMenu.Menu, "Check for Updates…");
+            var before = item.IsEnabled;
+            appMenu.SetCheckForUpdatesAction(() => { checks++; return Task.CompletedTask; });
+            Click(item);
+            return (before, item.IsEnabled);
+        });
+
+        await Assert.That(before).IsFalse();
+        await Assert.That(after).IsTrue();
+        await Assert.That(checks).IsEqualTo(1);
     }
 
     [Test]
@@ -265,14 +348,6 @@ public class AppMenuBarTests {
         });
 
         await Assert.That(same).IsTrue();
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Help_menu_offers_the_report_items_after_a_separator() {
-        var layout = await AvaloniaSession.DispatchAsync(() => Layout(Submenu(NewBar().Build(new Window()), "Help")));
-
-        await Assert.That(layout).IsEqualTo("Kurrent Capacitor Documentation|Changelog|-|Report a Bug…|Send Feedback…");
     }
 
     [Test]

@@ -1,12 +1,13 @@
 using System.Text.Json;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.Cli.Core.Tests.Unit.LocalIpc;
 
 /// <summary>
-/// Phase B (D2): the additive daemon self-report DTOs round-trip through the source-gen
-/// <see cref="CapacitorJsonContext"/>, and the new trailing fields on existing wire types stay
-/// backward-compatible (an old server's JSON without them still deserializes).
+/// The additive daemon self-report DTOs round-trip through the source-gen
+/// <see cref="CapacitorJsonContext"/>, and trailing fields on existing wire types stay
+/// backward-compatible (JSON without them still deserializes).
 /// </summary>
 public class DaemonStatusDtoTests {
     [Test]
@@ -80,5 +81,119 @@ public class DaemonStatusDtoTests {
         var back = JsonSerializer.Deserialize(json, StatusIpcJsonContext.Default.DaemonStatusDto)!;
 
         await Assert.That(back.Daemon.SupportedVendors).IsNull();
+    }
+
+    [Test]
+    public async Task DaemonConnect_serializes_vendor_models_as_snake_case_and_round_trips() {
+        var connect = new DaemonConnect("d", "mac", [], 1, [],
+            VendorModels: new Dictionary<string, VendorModelOption[]>(StringComparer.Ordinal) {
+                ["pi"] = [new("anthropic/claude-opus-5", "Claude Opus 5 · anthropic")],
+                ["kiro"] = [],
+            });
+
+        var json = JsonSerializer.Serialize(connect, CapacitorJsonContext.Default.DaemonConnect);
+        var back = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.DaemonConnect);
+
+        await Assert.That(json).Contains("\"vendor_models\"");
+        await Assert.That(back.VendorModels!["pi"][0].Value).IsEqualTo("anthropic/claude-opus-5");
+        await Assert.That(back.VendorModels["kiro"]).IsEmpty();
+    }
+
+    [Test]
+    public async Task DaemonConnect_without_vendor_models_deserializes_to_null() {
+        var json = JsonSerializer.Serialize(new DaemonConnect("d", "mac", [], 1, []), CapacitorJsonContext.Default.DaemonConnect);
+        var back = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.DaemonConnect);
+        await Assert.That(back.VendorModels).IsNull();
+    }
+
+    [Test]
+    public async Task DaemonInfoDto_vendor_models_round_trips_through_status_context() {
+        var dto = new DaemonStatusDto(
+            new DaemonInfoDto("d", "1", "http://s", "connected", 1, 0,
+                VendorModels: new Dictionary<string, VendorModelOption[]>(StringComparer.Ordinal) { ["pi"] = [] }),
+            []);
+
+        var json = JsonSerializer.Serialize(dto, StatusIpcJsonContext.Default.DaemonStatusDto);
+        var back = JsonSerializer.Deserialize(json, StatusIpcJsonContext.Default.DaemonStatusDto)!;
+
+        await Assert.That(json).Contains("\"vendor_models\"");
+        await Assert.That(back.Daemon.VendorModels!["pi"]).IsEmpty();
+    }
+
+    [Test]
+    public async Task DaemonInfoDto_from_an_older_daemon_has_null_vendor_models() {
+        var json = """{"daemon":{"name":"d","version":"1","server_url":"http://s","connection":"connected","max_agents":1,"active_agents":0},"agents":[]}""";
+        var back = JsonSerializer.Deserialize(json, StatusIpcJsonContext.Default.DaemonStatusDto)!;
+        await Assert.That(back.Daemon.VendorModels).IsNull();
+    }
+
+    static AccountsSnapshotDto Snapshot() => new(
+        "host-1", 3,
+        [new AccountViewDto("a1b2", "claude", "/Users/x/.claude-work", "/users/x/.claude-work", "Work", "recording")],
+        [new DefaultDirectoryDto("claude", "/Users/x/.claude", "/users/x/.claude")]);
+
+    [Test]
+    public async Task DaemonConnect_carries_account_launch_support_the_snapshot_and_per_account_models() {
+        var connect = new DaemonConnect("d", "mac", [], 1, [],
+            SupportsAccountLaunches: true,
+            Accounts: Snapshot(),
+            VendorModelsByAccount: new Dictionary<string, VendorModelOption[]>(StringComparer.Ordinal) {
+                ["a1b2"] = [new("opus", "Opus")],
+            });
+
+        var json = JsonSerializer.Serialize(connect, CapacitorJsonContext.Default.DaemonConnect);
+        var back = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.DaemonConnect);
+
+        await Assert.That(json).Contains("\"supports_account_launches\":true");
+        await Assert.That(json).Contains("\"vendor_models_by_account\":{\"a1b2\":[");
+        await Assert.That(back.SupportsAccountLaunches).IsTrue();
+        await Assert.That(back.Accounts!.HostId).IsEqualTo("host-1");
+        await Assert.That(back.Accounts.Accounts[0].Id).IsEqualTo("a1b2");
+        await Assert.That(back.Accounts.Defaults[0].Vendor).IsEqualTo("claude");
+        await Assert.That(back.VendorModelsByAccount!["a1b2"][0].Value).IsEqualTo("opus");
+    }
+
+    [Test]
+    public async Task DaemonConnect_from_an_older_daemon_reads_the_account_members_as_absent() {
+        var json = JsonSerializer.Serialize(new DaemonConnect("d", "mac", [], 1, []), CapacitorJsonContext.Default.DaemonConnect);
+        var stripped = System.Text.RegularExpressions.Regex.Replace(
+            json, ",\"(supports_account_launches|accounts|vendor_models_by_account)\":(true|false|null)", "");
+
+        var back = JsonSerializer.Deserialize(stripped, CapacitorJsonContext.Default.DaemonConnect);
+
+        await Assert.That(stripped).DoesNotContain("supports_account_launches");
+        await Assert.That(back.SupportsAccountLaunches).IsFalse();
+        await Assert.That(back.Accounts).IsNull();
+        await Assert.That(back.VendorModelsByAccount).IsNull();
+    }
+
+    [Test]
+    public async Task DaemonInfoDto_vendor_models_by_account_round_trips_through_status_context() {
+        var dto = new DaemonStatusDto(
+            new DaemonInfoDto("d", "1", "http://s", "connected", 1, 0,
+                VendorModelsByAccount: new Dictionary<string, VendorModelOption[]>(StringComparer.Ordinal) { ["a1b2"] = [] }),
+            []);
+
+        var json = JsonSerializer.Serialize(dto, StatusIpcJsonContext.Default.DaemonStatusDto);
+        var back = JsonSerializer.Deserialize(json, StatusIpcJsonContext.Default.DaemonStatusDto)!;
+
+        await Assert.That(json).Contains("\"vendor_models_by_account\":{\"a1b2\":[]}");
+        await Assert.That(back.Daemon.VendorModelsByAccount!["a1b2"]).IsEmpty();
+    }
+
+    [Test]
+    public async Task Registration_and_live_agent_entries_carry_the_account_members() {
+        var registered = new AgentRegistered("a1", null, null, null, null,
+            AccountDirectory: "/Users/x/.claude-work", AccountId: "a1b2", AccountLabel: "Work");
+        var live = new LiveAgentInfo("a1", "Default", DateTimeOffset.UnixEpoch,
+            AccountDirectory: "/Users/x/.claude-work", AccountId: "a1b2", AccountLabel: "Work");
+
+        var registeredBack = JsonSerializer.Deserialize(
+            JsonSerializer.Serialize(registered, CapacitorJsonContext.Default.AgentRegistered), CapacitorJsonContext.Default.AgentRegistered);
+        var liveBack = JsonSerializer.Deserialize(
+            JsonSerializer.Serialize(live, CapacitorJsonContext.Default.LiveAgentInfo), CapacitorJsonContext.Default.LiveAgentInfo);
+
+        await Assert.That(registeredBack).IsEqualTo(registered);
+        await Assert.That(liveBack).IsEqualTo(live);
     }
 }

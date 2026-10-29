@@ -2,29 +2,44 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
 public class McpSessionsServerTests {
     const string CwdHash = "da9c523c68aee2f1";
 
+    static readonly FakeTimeProvider Clock = new(new DateTimeOffset(2026, 9, 28, 15, 0, 0, TimeSpan.Zero));
+
+    [Test]
+    public async Task BuildSessionWorkItemsUrl_canonicalises_a_dashed_guid() {
+        var url = McpSessionsServer.BuildSessionWorkItemsUrl("http://srv", "0B9A7E3C-1D2F-4A5B-8C6D-7E8F9A0B1C2D");
+
+        await Assert.That(url).IsEqualTo("http://srv/api/work-items/session/0b9a7e3c1d2f4a5b8c6d7e8f9a0b1c2d");
+    }
+
+    [Test]
+    public async Task BuildSessionWorkItemsUrl_skips_an_id_that_has_no_canonical_form() {
+        await Assert.That(McpSessionsServer.BuildSessionWorkItemsUrl("http://srv", "..")).IsNull();
+    }
+
     [Test]
     public async Task BuildRepoSessionsUrl_no_repo_uses_cwd_hash_and_defaults_state_to_active() {
-        var url = McpSessionsServer.BuildRepoSessionsUrl("http://srv", args: null, cwdRepoHash: CwdHash);
+        var url = McpSessionsServer.BuildRepoSessionsUrl("http://srv", args: null, cwdRepoHash: CwdHash, time: Clock);
 
         await Assert.That(url).IsEqualTo($"http://srv/api/repositories/{CwdHash}/sessions?state=active");
     }
 
     [Test]
     public async Task BuildRepoSessionsUrl_blank_repo_is_treated_as_absent() {
-        var url = McpSessionsServer.BuildRepoSessionsUrl("http://srv", new JsonObject { ["repo"] = "  " }, CwdHash);
+        var url = McpSessionsServer.BuildRepoSessionsUrl("http://srv", new JsonObject { ["repo"] = "  " }, CwdHash, Clock);
 
         await Assert.That(url).Contains($"/api/repositories/{CwdHash}/sessions");
     }
 
     [Test]
     public async Task BuildRepoSessionsUrl_no_repo_and_no_cwd_hash_fails_closed_without_offering_all() {
-        var ex = await Assert.That(() => McpSessionsServer.BuildRepoSessionsUrl("http://srv", args: null, cwdRepoHash: null))
+        var ex = await Assert.That(() => McpSessionsServer.BuildRepoSessionsUrl("http://srv", args: null, cwdRepoHash: null, time: Clock))
             .Throws<ArgumentException>();
 
         await Assert.That(ex!.Message).Contains("<owner>/<name>");
@@ -33,37 +48,36 @@ public class McpSessionsServerTests {
 
     [Test]
     public async Task BuildRepoSessionsUrl_owner_name_is_hashed_locally_and_hash_passes_through() {
-        var byName = McpSessionsServer.BuildRepoSessionsUrl("http://srv", new JsonObject { ["repo"] = "kurrent-io/kcap-server" }, null);
-        var byHash = McpSessionsServer.BuildRepoSessionsUrl("http://srv", new JsonObject { ["repo"] = CwdHash }, null);
+        var byName = McpSessionsServer.BuildRepoSessionsUrl("http://srv", new JsonObject { ["repo"] = "kurrent-io/kcap-server" }, null, Clock);
+        var byHash = McpSessionsServer.BuildRepoSessionsUrl("http://srv", new JsonObject { ["repo"] = CwdHash }, null, Clock);
 
         await Assert.That(byName).Contains($"/api/repositories/{RepoHashHelper.ComputeRepoHash("kurrent-io", "kcap-server")}/sessions");
         await Assert.That(byHash).Contains($"/api/repositories/{CwdHash}/sessions");
     }
 
     [Test]
-    [Arguments("all")]
     [Arguments("owner")]
     [Arguments("a//b")]
     [Arguments("DA9C523C68AEE2F1")]
     [Arguments("da9c523c")]
     public async Task BuildRepoSessionsUrl_rejects_malformed_repo(string repo) {
-        await Assert.That(() => McpSessionsServer.BuildRepoSessionsUrl("http://srv", new JsonObject { ["repo"] = repo }, CwdHash))
+        await Assert.That(() => McpSessionsServer.BuildRepoSessionsUrl("http://srv", new JsonObject { ["repo"] = repo }, CwdHash, Clock))
             .Throws<ArgumentException>();
     }
 
     [Test]
     public async Task BuildRepoSessionsUrl_nested_group_owner_resolves_repo_hash() {
         var url = McpSessionsServer.BuildRepoSessionsUrl(
-            "http://srv", new JsonObject { ["repo"] = "group/subgroup/project" }, null);
+            "http://srv", new JsonObject { ["repo"] = "group/subgroup/project" }, null, Clock);
 
         await Assert.That(url).Contains($"/api/repositories/{RepoHashHelper.ComputeRepoHash("group/subgroup", "project")}/sessions");
     }
 
     [Test]
     public async Task BuildRepoSessionsUrl_rejects_non_string_repo_and_bad_state() {
-        await Assert.That(() => McpSessionsServer.BuildRepoSessionsUrl("http://srv", new JsonObject { ["repo"] = 42 }, CwdHash))
+        await Assert.That(() => McpSessionsServer.BuildRepoSessionsUrl("http://srv", new JsonObject { ["repo"] = 42 }, CwdHash, Clock))
             .Throws<ArgumentException>();
-        await Assert.That(() => McpSessionsServer.BuildRepoSessionsUrl("http://srv", new JsonObject { ["state"] = "running" }, CwdHash))
+        await Assert.That(() => McpSessionsServer.BuildRepoSessionsUrl("http://srv", new JsonObject { ["state"] = "running" }, CwdHash, Clock))
             .Throws<ArgumentException>();
     }
 
@@ -78,13 +92,130 @@ public class McpSessionsServerTests {
                 ["limit"]         = 5,
                 ["offset"]        = 10
             },
-            CwdHash);
+            CwdHash, Clock);
 
         await Assert.That(url).Contains("state=ended");
         await Assert.That(url).Contains("owner=user_01ABC%20DEF");
         await Assert.That(url).Contains("touching_path=src%2FFoo%20Bar.cs");
         await Assert.That(url).Contains("limit=5");
         await Assert.That(url).Contains("offset=10");
+    }
+
+    [Test]
+    public async Task BuildRepoSessionsUrl_repo_all_is_the_listing_route_and_needs_no_cwd_repo() {
+        var url = McpSessionsServer.BuildRepoSessionsUrl("http://srv", new JsonObject { ["repo"] = "all" }, cwdRepoHash: null, Clock);
+
+        await Assert.That(url).IsEqualTo("http://srv/api/sessions/listing?state=active");
+    }
+
+    [Test]
+    public async Task BuildRepoSessionsUrl_a_period_lists_every_state_and_sends_utc_instants() {
+        var url = McpSessionsServer.BuildRepoSessionsUrl(
+            "http://srv", new JsonObject { ["since"] = "2026-09-27", ["until"] = "2026-09-28" }, CwdHash, Clock);
+
+        await Assert.That(url).IsEqualTo(
+            $"http://srv/api/repositories/{CwdHash}/sessions?state=all&since=2026-09-27T00%3A00%3A00Z&until=2026-09-28T00%3A00%3A00Z");
+    }
+
+    [Test]
+    public async Task BuildRepoSessionsUrl_an_explicit_state_survives_a_period() {
+        var url = McpSessionsServer.BuildRepoSessionsUrl(
+            "http://srv", new JsonObject { ["state"] = "ended", ["since"] = "14d" }, CwdHash, Clock);
+
+        await Assert.That(url).Contains("state=ended");
+        await Assert.That(url).Contains("since=2026-09-14T15%3A00%3A00Z");
+    }
+
+    [Test]
+    public async Task BuildRepoSessionsUrl_a_blank_period_is_no_period() {
+        var url = McpSessionsServer.BuildRepoSessionsUrl(
+            "http://srv", new JsonObject { ["since"] = "  ", ["until"] = "" }, CwdHash, Clock);
+
+        await Assert.That(url).IsEqualTo($"http://srv/api/repositories/{CwdHash}/sessions?state=active");
+    }
+
+    [Test]
+    public async Task BuildRepoSessionsUrl_a_cursor_travels_with_the_limit_and_nothing_else() {
+        var url = McpSessionsServer.BuildRepoSessionsUrl(
+            "http://srv", new JsonObject { ["repo"] = "all", ["cursor"] = "eyJ2IjoxfQ", ["limit"] = 50 }, null, Clock);
+
+        await Assert.That(url).IsEqualTo("http://srv/api/sessions/listing?cursor=eyJ2IjoxfQ&limit=50");
+    }
+
+    /// <summary>The server ignores every filter sent beside a cursor, so passing one through would
+    /// return a page the agent believes it narrowed.</summary>
+    [Test]
+    public async Task BuildRepoSessionsUrl_a_cursor_beside_a_filter_names_the_filter() {
+        var ex = await Assert.That(() => McpSessionsServer.BuildRepoSessionsUrl(
+                "http://srv", new JsonObject { ["cursor"] = "eyJ2IjoxfQ", ["owner"] = "me", ["since"] = "14d" }, CwdHash, Clock))
+            .Throws<ArgumentException>();
+
+        await Assert.That(ex!.Message).Contains("owner");
+        await Assert.That(ex.Message).Contains("since");
+        await Assert.That(ex.Message).DoesNotContain("touching_path");
+    }
+
+    [Test]
+    public async Task BuildRepoSessionsUrl_a_blank_argument_beside_a_cursor_is_not_a_filter() {
+        var url = McpSessionsServer.BuildRepoSessionsUrl(
+            "http://srv",
+            new JsonObject { ["repo"] = "all", ["cursor"] = "eyJ2IjoxfQ", ["owner"] = "", ["since"] = " ", ["state"] = "", ["offset"] = 0 },
+            null, Clock);
+
+        await Assert.That(url).IsEqualTo("http://srv/api/sessions/listing?cursor=eyJ2IjoxfQ");
+    }
+
+    [Test]
+    public async Task BuildRepoSessionsUrl_a_non_string_filter_beside_a_cursor_is_refused_by_name() {
+        var ex = await Assert.That(() => McpSessionsServer.BuildRepoSessionsUrl(
+                "http://srv", new JsonObject { ["cursor"] = "eyJ2IjoxfQ", ["owner"] = 42, ["offset"] = 7 }, CwdHash, Clock))
+            .Throws<ArgumentException>();
+
+        await Assert.That(ex!.Message).Contains("owner");
+        await Assert.That(ex.Message).Contains("offset");
+    }
+
+    [Test]
+    public async Task BuildRepoSessionsUrl_since_later_than_until_is_refused() {
+        var ex = await Assert.That(() => McpSessionsServer.BuildRepoSessionsUrl(
+                "http://srv", new JsonObject { ["since"] = "2026-09-28", ["until"] = "2026-09-27" }, CwdHash, Clock))
+            .Throws<ArgumentException>();
+
+        await Assert.That(ex!.Message).Contains("later than");
+    }
+
+    [Test]
+    public async Task BuildRepoSessionsUrl_a_time_that_cannot_be_read_names_the_argument_and_the_forms() {
+        var unreadable = await Assert.That(() => McpSessionsServer.BuildRepoSessionsUrl(
+                "http://srv", new JsonObject { ["since"] = "yesterday" }, CwdHash, Clock))
+            .Throws<ArgumentException>();
+        var wrongType = await Assert.That(() => McpSessionsServer.BuildRepoSessionsUrl(
+                "http://srv", new JsonObject { ["until"] = 14 }, CwdHash, Clock))
+            .Throws<ArgumentException>();
+
+        await Assert.That(unreadable!.Message).Contains("`since`");
+        await Assert.That(unreadable.Message).Contains("14d");
+        await Assert.That(wrongType!.Message).Contains("`until`");
+    }
+
+    [Test]
+    public async Task IsWindowed_reads_a_period_or_a_cursor_and_nothing_else() {
+        await Assert.That(McpSessionsServer.IsWindowed(new JsonObject { ["since"] = "14d" })).IsTrue();
+        await Assert.That(McpSessionsServer.IsWindowed(new JsonObject { ["until"] = "2026-09-28" })).IsTrue();
+        await Assert.That(McpSessionsServer.IsWindowed(new JsonObject { ["cursor"] = "eyJ2IjoxfQ" })).IsTrue();
+        await Assert.That(McpSessionsServer.IsWindowed(new JsonObject { ["since"] = " " })).IsFalse();
+        await Assert.That(McpSessionsServer.IsWindowed(new JsonObject { ["state"] = "all" })).IsFalse();
+        await Assert.That(McpSessionsServer.IsWindowed(null)).IsFalse();
+    }
+
+    [Test]
+    [Arguments("""{"items":[],"total":0,"since":"2026-09-14T00:00:00+00:00","until":null}""", true)]
+    [Arguments("""{"items":[],"total":0,"since":null,"until":"2026-09-28T00:00:00+00:00"}""", true)]
+    [Arguments("""{"items":[],"total":0,"since":null,"until":null}""", false)]
+    [Arguments("""{"items":[],"total":0,"limit":20,"offset":0}""", false)]
+    [Arguments("not json", true)]
+    public async Task EchoesWindow_is_false_only_for_a_listing_that_names_no_window(string body, bool expected) {
+        await Assert.That(McpSessionsServer.EchoesWindow(body)).IsEqualTo(expected);
     }
 
     [Test]
@@ -497,6 +628,68 @@ public class McpSessionsServerTests {
     }
 
     [Test]
+    public async Task MergeWidenedBody_lexical_match_in_widened_scope_clears_no_lexical_match() {
+        var merged = McpSessionsServer.MergeWidenedBody(
+            firstBody: """{"no_lexical_match":true,"hits":[{"session_id":"s1","lanes":["semantic"]}]}""",
+            widenedBody: """{"no_lexical_match":false,"hits":[{"session_id":"s2","lanes":["transcript"]}]}""",
+            limit: 10);
+
+        var root = JsonNode.Parse(merged)!.AsObject();
+
+        await Assert.That(root["no_lexical_match"]!.GetValue<bool>()).IsFalse();
+        await Assert.That(root["widened_to_all_repos"]!.GetValue<bool>()).IsTrue();
+    }
+
+    /// <summary>A match in either scope is a match; "no match" needs both scopes to say so, and a scope whose
+    /// transcript lane timed out (<c>null</c>) leaves the answer unknown. A scope whose body carries no flag at all
+    /// says nothing, so the other scope's answer stands; a field neither body carries stays absent.</summary>
+    [Test]
+    [Arguments("true", "true", "true")]
+    [Arguments("false", "true", "false")]
+    [Arguments("true", "false", "false")]
+    [Arguments("null", "false", "false")]
+    [Arguments("null", "true", "null")]
+    [Arguments("true", "null", "null")]
+    [Arguments("null", "null", "null")]
+    [Arguments(null, "true", "true")]
+    [Arguments("true", null, "true")]
+    [Arguments(null, "false", "false")]
+    [Arguments(null, "null", "null")]
+    [Arguments(null, null, null)]
+    public async Task MergeWidenedBody_combines_no_lexical_match_across_scopes(string? first, string? widened, string? expected) =>
+        await AssertMergedField("no_lexical_match", first, widened, expected);
+
+    /// <summary>The lane flags describe one request each, so the merged response names every lane either request
+    /// bounded or timed out; <c>null</c> (no lexical search ran) survives only when neither request ran one.</summary>
+    [Test]
+    [Arguments("bounded_lanes", "[]", """["transcript"]""", """["transcript"]""")]
+    [Arguments("bounded_lanes", """["transcript"]""", """["transcript"]""", """["transcript"]""")]
+    [Arguments("bounded_lanes", """["title"]""", """["transcript"]""", """["title","transcript"]""")]
+    [Arguments("bounded_lanes", "[]", "null", "[]")]
+    [Arguments("bounded_lanes", "null", "null", "null")]
+    [Arguments("timed_out_lanes", "[]", """["transcript"]""", """["transcript"]""")]
+    [Arguments("timed_out_lanes", "null", """["transcript"]""", """["transcript"]""")]
+    [Arguments("timed_out_lanes", null, null, null)]
+    public async Task MergeWidenedBody_unions_the_lane_flags_across_scopes(string field, string? first, string? widened, string? expected) =>
+        await AssertMergedField(field, first, widened, expected);
+
+    static async Task AssertMergedField(string field, string? first, string? widened, string? expected) {
+        string WithField(string? value, string sid) =>
+            value is null
+                ? Body(sid)
+                : $$"""{"{{field}}":{{value}},"hits":[{"session_id":"{{sid}}"}]}""";
+
+        var merged = JsonNode.Parse(McpSessionsServer.MergeWidenedBody(WithField(first, "s1"), WithField(widened, "s2"), limit: 10))!.AsObject();
+
+        if (expected is null) {
+            await Assert.That(merged.ContainsKey(field)).IsFalse();
+        } else {
+            await Assert.That(merged.ContainsKey(field)).IsTrue();
+            await Assert.That(merged[field]?.ToJsonString() ?? "null").IsEqualTo(expected);
+        }
+    }
+
+    [Test]
     public async Task MergeWidenedBody_malformed_widened_body_returns_first_unchanged() {
         var first  = Body("s1");
         var merged = McpSessionsServer.MergeWidenedBody(first, "not json", limit: 10);
@@ -517,5 +710,192 @@ public class McpSessionsServerTests {
         } catch (System.Reflection.TargetInvocationException tie) when (tie.InnerException is not null) {
             throw tie.InnerException;
         }
+    }
+
+    [Test]
+    public async Task BuildRepoPlansUrl_no_args_uses_cwd_hash_and_defaults_state_to_open() {
+        var url = McpSessionsServer.BuildRepoPlansUrl("http://srv", args: null, cwdRepoHash: CwdHash);
+
+        await Assert.That(url).IsEqualTo($"http://srv/api/repositories/{CwdHash}/plans?state=open");
+    }
+
+    [Test]
+    public async Task BuildRepoPlansUrl_carries_state_owner_and_limit() {
+        var args = new JsonObject { ["state"] = "all", ["owner"] = "github:1 2", ["limit"] = 5 };
+
+        var url = McpSessionsServer.BuildRepoPlansUrl("http://srv", args, CwdHash);
+
+        await Assert.That(url).IsEqualTo($"http://srv/api/repositories/{CwdHash}/plans?state=all&owner=github%3A1%202&limit=5");
+    }
+
+    [Test]
+    public async Task BuildRepoPlansUrl_rejects_an_unknown_state() {
+        var ex = await Assert.That(() => McpSessionsServer.BuildRepoPlansUrl("http://srv", new JsonObject { ["state"] = "done" }, CwdHash))
+            .Throws<ArgumentException>();
+
+        await Assert.That(ex!.Message).Contains("open or all");
+    }
+
+    [Test]
+    public async Task BuildRepoPlansUrl_no_repo_and_no_cwd_hash_fails_closed_without_offering_all() {
+        var ex = await Assert.That(() => McpSessionsServer.BuildRepoPlansUrl("http://srv", args: null, cwdRepoHash: null))
+            .Throws<ArgumentException>();
+
+        await Assert.That(ex!.Message).Contains("<owner>/<name>");
+        await Assert.That(ex.Message).DoesNotContain("\"all\"");
+    }
+
+    [Test]
+    public async Task BuildDeclaredPlansUrl_by_plan_id_reads_one_plan() {
+        var url = McpSessionsServer.BuildDeclaredPlansUrl("http://srv", new JsonObject { ["plan_id"] = "p 1" }, out var single);
+
+        await Assert.That(url).IsEqualTo("http://srv/api/plans/p%201");
+        await Assert.That(single).IsTrue();
+    }
+
+    [Test]
+    public async Task BuildDeclaredPlansUrl_by_session_id_reads_the_sessions_plans() {
+        var url = McpSessionsServer.BuildDeclaredPlansUrl("http://srv", new JsonObject { ["session_id"] = "s1" }, out var single);
+
+        await Assert.That(url).IsEqualTo("http://srv/api/sessions/s1/plans");
+        await Assert.That(single).IsFalse();
+    }
+
+    [Test]
+    public async Task BuildDeclaredPlansUrl_needs_exactly_one_of_plan_id_and_session_id() {
+        var neither = await Assert.That(() => McpSessionsServer.BuildDeclaredPlansUrl("http://srv", new JsonObject(), out _))
+            .Throws<ArgumentException>();
+        var both = await Assert.That(() => McpSessionsServer.BuildDeclaredPlansUrl("http://srv", new JsonObject { ["plan_id"] = "p1", ["session_id"] = "s1" }, out _))
+            .Throws<ArgumentException>();
+
+        await Assert.That(neither!.Message).Contains("exactly one");
+        await Assert.That(both!.Message).Contains("exactly one");
+    }
+
+    /// <summary>"current" names a session's pointer and needs a session the route would not get;
+    /// a dot segment would walk the URL path.</summary>
+    [Test]
+    [Arguments("current")]
+    [Arguments(".")]
+    [Arguments("..")]
+    public async Task BuildDeclaredPlansUrl_rejects_a_plan_id_that_is_not_an_id(string planId) {
+        var ex = await Assert.That(() => McpSessionsServer.BuildDeclaredPlansUrl("http://srv", new JsonObject { ["plan_id"] = planId }, out _))
+            .Throws<ArgumentException>();
+
+        await Assert.That(ex!.Message).Contains("session_id");
+    }
+
+    /// <summary>A dot segment in session_id would walk the URL path the same way it does for plan_id.</summary>
+    [Test]
+    [Arguments(".")]
+    [Arguments("..")]
+    public async Task BuildDeclaredPlansUrl_rejects_a_dot_segment_session_id(string sessionId) {
+        var ex = await Assert.That(() => McpSessionsServer.BuildDeclaredPlansUrl("http://srv", new JsonObject { ["session_id"] = sessionId }, out _))
+            .Throws<ArgumentException>();
+
+        await Assert.That(ex!.Message).Contains("not \".\" or \"..\"");
+    }
+
+    [Test]
+    public async Task Tools_list_exposes_the_two_plan_tools_with_no_required_arguments() {
+        var byName = McpSessionsServer.BuildToolsList().ToDictionary(t => t.Name);
+
+        await Assert.That(byName["list_repo_plans"].InputSchema.Required.Length).IsEqualTo(0);
+        await Assert.That(byName["get_declared_plans"].InputSchema.Required.Length).IsEqualTo(0);
+        await Assert.That(byName["get_declared_plans"].Description).Contains("is_complete");
+        await Assert.That(byName["list_repo_plans"].Description).Contains("finished");
+    }
+
+    const string Recap = """[{"type":"whats_done","content":"did X"}]""";
+
+    static JsonArray? DeclaredPlans(string? plansBody) =>
+        JsonNode.Parse(McpSessionsServer.ProjectRecapToSummary(Recap, plansBody))!["declared_plans"]?.AsArray();
+
+    [Test]
+    public async Task ProjectRecapToSummary_carries_a_pointer_for_each_declared_plan() {
+        const string plans = """
+            [
+              {"plan_id":"p-1","progress":{"completed":2,"total":7,"total_known":true,"finished":false},"is_complete":true,"is_current":true,"tasks":[{"title":"ignored"}]},
+              {"plan_id":"p-2","progress":{"completed":3,"total":3,"total_known":true,"finished":true},"is_complete":true,"is_current":false}
+            ]
+            """;
+
+        var pointers = DeclaredPlans(plans)!;
+
+        await Assert.That(pointers.Count).IsEqualTo(2);
+        await Assert.That(pointers[0]!.ToJsonString())
+            .IsEqualTo("""{"plan_id":"p-1","completed":2,"total":7,"total_known":true,"finished":false,"is_complete":true,"is_current":true}""");
+        await Assert.That(pointers[1]!["finished"]!.GetValue<bool>()).IsTrue();
+    }
+
+    [Test]
+    [Arguments(null)]
+    [Arguments("[]")]
+    [Arguments("not json")]
+    [Arguments("""{"error":"nope"}""")]
+    public async Task ProjectRecapToSummary_omits_declared_plans_when_there_is_nothing_to_show(string? plansBody) {
+        var projected = JsonNode.Parse(McpSessionsServer.ProjectRecapToSummary(Recap, plansBody))!.AsObject();
+
+        await Assert.That(projected.ContainsKey("declared_plans")).IsFalse();
+        await Assert.That(projected["summary_text"]!.GetValue<string>()).IsEqualTo("did X");
+    }
+
+    /// <summary>A server that predates the field omits it. Both zero-task shapes read 0 of 0 and
+    /// differ only in total_known, so completed == total alone would call a plan with no task list
+    /// finished.</summary>
+    [Test]
+    [Arguments("""{"completed":0,"total":0,"total_known":false}""", true,  false)]
+    [Arguments("""{"completed":0,"total":0,"total_known":true}""",  true,  true)]
+    [Arguments("""{"completed":3,"total":3,"total_known":true}""",  false, false)]
+    [Arguments("""{"completed":3,"total":3,"total_known":true}""",  true,  true)]
+    [Arguments("""{"completed":2,"total":3,"total_known":true}""",  true,  false)]
+    public async Task ProjectDeclaredPlans_derives_finished_when_the_server_did_not_send_it(string progress, bool isComplete, bool expected) {
+        var plans = $$"""[{"plan_id":"p-1","progress":{{progress}},"is_complete":{{(isComplete ? "true" : "false")}},"is_current":false}]""";
+
+        await Assert.That(DeclaredPlans(plans)![0]!["finished"]!.GetValue<bool>()).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task ProjectDeclaredPlans_trusts_a_finished_the_server_sent() {
+        const string plans = """[{"plan_id":"p-1","progress":{"completed":3,"total":3,"total_known":true,"finished":false},"is_complete":true,"is_current":false}]""";
+
+        await Assert.That(DeclaredPlans(plans)![0]!["finished"]!.GetValue<bool>()).IsFalse();
+    }
+
+    [Test]
+    public async Task ProjectDeclaredPlans_skips_an_entry_with_no_plan_id() {
+        const string plans = """[{"progress":{"completed":0,"total":1,"total_known":true}},{"plan_id":"p-2","progress":{"completed":0,"total":1,"total_known":true},"is_complete":true,"is_current":false}]""";
+
+        var pointers = DeclaredPlans(plans)!;
+
+        await Assert.That(pointers.Count).IsEqualTo(1);
+        await Assert.That(pointers[0]!["plan_id"]!.GetValue<string>()).IsEqualTo("p-2");
+    }
+
+    [Test]
+    public async Task Summary_lists_the_sessions_work_items() {
+        var json = McpSessionsServer.ProjectRecapToSummary("[]", null,
+            """[{"work_item_id":"w1","label":"#1 — One","source":"declared","confidence":1.0,"is_primary":true}]""");
+
+        var items = JsonNode.Parse(json)!["work_items"]!.AsArray();
+        await Assert.That(items.Count).IsEqualTo(1);
+        await Assert.That(items[0]!["work_item_id"]!.GetValue<string>()).IsEqualTo("w1");
+        await Assert.That(items[0]!["label"]!.GetValue<string>()).IsEqualTo("#1 — One");
+        await Assert.That(items[0]!["is_primary"]!.GetValue<bool>()).IsTrue();
+        await Assert.That(items[0]!.AsObject().ContainsKey("confidence")).IsFalse();
+    }
+
+    [Test]
+    public async Task Summary_omits_work_items_when_there_are_none_or_they_are_unavailable() {
+        await Assert.That(JsonNode.Parse(McpSessionsServer.ProjectRecapToSummary("[]", null, "[]"))!.AsObject().ContainsKey("work_items")).IsFalse();
+        await Assert.That(JsonNode.Parse(McpSessionsServer.ProjectRecapToSummary("[]", null, null))!.AsObject().ContainsKey("work_items")).IsFalse();
+        await Assert.That(JsonNode.Parse(McpSessionsServer.ProjectRecapToSummary("[]", null, """{"code":"work_items_not_in_plan"}"""))!.AsObject().ContainsKey("work_items")).IsFalse();
+    }
+
+    [Test]
+    public async Task Summary_description_points_to_the_takeover() {
+        var tool = McpSessionsServer.BuildToolsList().Single(t => t.Name == "get_session_summary");
+        await Assert.That(tool.Description).Contains("continue_session");
+        await Assert.That(tool.Description).Contains("kcap recap");
     }
 }

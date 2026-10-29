@@ -10,32 +10,23 @@ permissions:
   checks: read
   id-token: write
 
-env:
-  CLI_PROJECT: src/Capacitor.Cli/Capacitor.Cli.csproj
-  DAEMON_PROJECT: src/Capacitor.Cli.Daemon/Capacitor.Cli.Daemon.csproj
-
 jobs:
   ci:
     name: Wait for CI
     runs-on: ubuntu-latest
     steps:
-      # Matrix jobs carry their (matrix) suffix in the check name; the pattern must match the suffixed names.
+      # CI passed exists only once every other CI job has finished, so discovery waits that long.
       - name: Wait for CI workflow to succeed
         uses: lewagon/wait-on-check-action@v1.9.1
         with:
           ref: ${{ github.sha }}
-          check-regexp: '^(Build and test \(.*\)|AOT publish check \(.*\)|App bundle \(osx-arm64\))$'
+          check-name: CI passed
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           wait-interval: 15
-          checks-discovery-timeout: 300
+          checks-discovery-timeout: 7200
 
-  # Guards against a moved/re-cut release tag: npm never lets a version
-  # republish, so this workflow only re-runs for an already-published version
-  # if the tag was deleted+recreated (or force-moved) onto a different commit
-  # — the failure mode that lets a published npm artifact silently diverge
-  # from its git tag. Runs standalone (no `needs`) so it fails in seconds,
-  # before CI polling and the six-runner build matrix spend time/money on a
-  # release that's refused anyway.
+  # npm never lets a version republish, so a run for an already-published version means the tag
+  # was moved or re-cut. Standalone so it fails in seconds, before CI polling and the builds.
   verify-release-immutable:
     name: Refuse a moved or re-cut release tag
     runs-on: ubuntu-latest
@@ -47,489 +38,51 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Extract version from tag
-        id: version
-        shell: bash
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
       - name: Refuse to re-publish or re-point an already-released version
-        shell: bash
+        env:
+          PKG: '@kurrent/kcap'
+          THIS_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          PKG="@kurrent/kcap"
-          VERSION="${{ steps.version.outputs.VERSION }}"
-          THIS_SHA="${{ github.sha }}"
-
-          echo "Checking npm registry for an existing $PKG@$VERSION ..."
-
-          # Queries one `npm view` field for "$PKG@$VERSION", retrying on
-          # transient failures. Prints "FOUND:<value>" (value may be empty
-          # for a field that predates this guard) or "NOTFOUND" (npm's
-          # definitive E404) and returns 0 for either. On a genuine failure
-          # (network/registry/auth) after retries, it returns 1 — the caller
-          # MUST treat that as ambiguous and refuse to release, NEVER as
-          # "not found", so an ignored/misread npm error can't masquerade as
-          # "brand-new version, proceed".
-          npm_view_field() {
-            local field="$1" attempts=3 delay=3 i out err rc errfile
-            for ((i = 1; i <= attempts; i++)); do
-              errfile="$(mktemp)"
-              if out=$(npm view "$PKG@$VERSION" "$field" --registry https://registry.npmjs.org 2>"$errfile"); then
-                rc=0
-              else
-                rc=$?
-              fi
-              err="$(cat "$errfile")"
-              rm -f "$errfile"
-
-              if [ "$rc" -eq 0 ]; then
-                echo "FOUND:${out}"
-                return 0
-              fi
-
-              # npm's own "this doesn't exist" signal, across the exit-code
-              # conventions different npm versions use for it (some report
-              # E404 in stderr text even for a plain field-not-found).
-              if printf '%s' "$err" | grep -qiE '(^|[^0-9])E404([^0-9]|$)|404 Not Found'; then
-                echo "NOTFOUND"
-                return 0
-              fi
-
-              echo "npm view '$field' attempt $i/$attempts failed (exit $rc): ${err:-<no output>}" >&2
-              if [ "$i" -lt "$attempts" ]; then
-                sleep "$delay"
-              fi
-            done
-
-            echo "::error::npm view '$field' for $PKG@$VERSION failed after $attempts attempts: ${err:-<no output>}"
-            return 1
-          }
-
-          query_status="ok"
-          published_sha=""
-
-          # kcapReleaseCommit is the explicit stamp the sibling publish step
-          # writes into package.json — source of truth for which commit an
-          # npm version was built from (matches MinVer's build-metadata
-          # suffix baked into the binary; both derive from the same tag's
-          # checked-out HEAD).
-          if result=$(npm_view_field kcapReleaseCommit); then
-            if [ "$result" != "NOTFOUND" ]; then
-              published_sha="${result#FOUND:}"
-
-              # Fallback for pre-guard versions: npm auto-records `gitHead`
-              # on every publish from a git checkout, so it already carries
-              # the same info for older releases.
-              if [ -z "$published_sha" ]; then
-                if result=$(npm_view_field gitHead); then
-                  if [ "$result" != "NOTFOUND" ]; then
-                    published_sha="${result#FOUND:}"
-                  fi
-                else
-                  query_status="error"
-                fi
-              fi
-            fi
-          else
-            query_status="error"
-          fi
-
-          # Pure pass/fail decision lives in a standalone, unit-tested script
-          # (scripts/verify-release-not-recut.sh + .test.sh) — this step only
-          # does the registry lookup, retries, and CI-specific error
-          # formatting.
+          VERSION="${GITHUB_REF_NAME#v}"
+          status=ok
+          published="$(bash scripts/npm-release-commit.sh "$PKG" "$VERSION")" || status=error
           set +e
-          verdict=$(bash scripts/verify-release-not-recut.sh "$THIS_SHA" "$published_sha" "$query_status")
+          verdict="$(bash scripts/verify-release-not-recut.sh "$THIS_SHA" "$published" "$status")"
           rc=$?
           set -e
-
-          if [ "$rc" -eq 0 ]; then
-            echo "No existing $PKG@$VERSION on npm — first-time publish for this version, proceeding."
-            exit 0
-          fi
-
-          if [ "$verdict" = "error" ]; then
-            echo "::error::Could not verify release immutability against npm for $PKG@$VERSION: the registry lookup did not complete successfully after retries. Refusing to publish rather than risk silently letting a moved/re-cut tag through."
-            exit 1
-          fi
-
-          echo "::error::$PKG@$VERSION is already published on npm (built from commit $published_sha)."
-          if [ "$verdict" = "republish" ]; then
-            echo "::error::This workflow run is for the SAME commit. npm forbids republishing an existing version even unchanged — if this is a retry of a partially-failed release, cut a NEW version instead of re-running this tag."
-          else
-            echo "::error::This workflow run is building from a DIFFERENT commit ($THIS_SHA)."
-            echo "::error::That means tag ${GITHUB_REF_NAME} has been moved or re-cut after ${PKG}@${VERSION}'s npm artifact was already published from commit $published_sha — the exact failure mode that let a published binary silently diverge from what its tag claimed. Refusing to publish."
-            echo "::error::Cut a NEW version for this commit instead of re-pointing an already-released tag."
-          fi
+          if [ "$rc" -eq 0 ]; then echo "No existing $PKG@$VERSION on npm; first publish of this version."; exit 0; fi
+          case "$verdict" in
+            error)     echo "::error::Could not verify $PKG@$VERSION against npm. Refusing to publish rather than let a moved or re-cut tag through." ;;
+            republish) echo "::error::$PKG@$VERSION is already published from this commit, and npm forbids republishing a version. Cut a new version instead of re-running this tag." ;;
+            *)         echo "::error::$PKG@$VERSION is already published from commit $published, but tag $GITHUB_REF_NAME points at $THIS_SHA. Cut a new version instead of re-pointing a released tag." ;;
+          esac
           exit 1
 
-  build:
-    needs: [ci, verify-release-immutable]
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - rid: osx-arm64
-            os: macos-latest
-            npm-package: kcap-darwin-arm64
-            cli-binary: kcap
-            daemon-binary: kcap-daemon
-          - rid: linux-x64
-            os: ubuntu-latest
-            npm-package: kcap-linux-x64
-            cli-binary: kcap
-            daemon-binary: kcap-daemon
-          - rid: linux-arm64
-            os: ubuntu-24.04-arm
-            npm-package: kcap-linux-arm64
-            cli-binary: kcap
-            daemon-binary: kcap-daemon
-          - rid: linux-musl-x64
-            os: ubuntu-latest
-            # Dependabot's docker ecosystem does not scan job `container:` — bump by hand.
-            container: alpine:3.20
-            npm-package: kcap-linux-musl-x64
-            cli-binary: kcap
-            daemon-binary: kcap-daemon
-          - rid: linux-musl-arm64
-            os: ubuntu-24.04-arm
-            npm-package: kcap-linux-musl-arm64
-            cli-binary: kcap
-            daemon-binary: kcap-daemon
-          - rid: win-x64
-            os: windows-latest
-            npm-package: kcap-win-x64
-            cli-binary: kcap.exe
-            daemon-binary: kcap-daemon.exe
-
-    runs-on: ${{ matrix.os }}
-    container: ${{ matrix.container || '' }}
-
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
     steps:
-      - name: Install Alpine build dependencies
-        if: matrix.container != ''
-        shell: sh
-        run: |
-          apk add --no-cache bash curl git icu-libs krb5-libs libgcc libstdc++ zlib clang build-base zlib-dev linux-headers openssl
-
-      - name: Install Linux build dependencies
-        if: runner.os == 'Linux' && !matrix.container
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang zlib1g-dev ${{ contains(matrix.rid, 'musl') && 'musl-tools' || '' }}
-
-      # musl-tools (installed above) provides the musl-gcc cross-compiler CompilePtyShim needs
-      # for the two musl RIDs on a native (non-container) runner. Fail loudly here if the
-      # install silently didn't provide it, rather than inside the opaque CompilePtyShim Exec.
-      # Skipped under matrix.container: the Alpine path below installs its own native
-      # build-base toolchain (cc/gcc against musl libc directly), no musl-gcc cross-compiler
-      # needed there.
-      - name: Verify musl toolchain (musl RIDs only)
-        if: contains(matrix.rid, 'musl') && !matrix.container
-        run: musl-gcc --version
-
-      - uses: actions/checkout@v7
-
-      # No cache: RUNNER_OS keying collapses four Linux legs that need different RID packages.
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v6
-
-      - name: Extract version from tag
-        id: version
-        shell: bash
+      - id: version
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Publish daemon AOT binary
-        run: >
-          dotnet publish ${{ env.DAEMON_PROJECT }}
-          -c Release
-          -r ${{ matrix.rid }}
-          -p:MinVerVersionOverride=${{ steps.version.outputs.VERSION }}
-          -o publish/daemon/
-
-      - name: Import signing keychain (macOS)
-        if: startsWith(matrix.rid, 'osx-')
-        shell: bash
-        env:
-          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-        run: bash scripts/import-signing-keychain.sh
-
-      # Before the digest: signing rewrites the daemon's bytes, and the CLI embeds the digest of
-      # the bytes it will actually launch. The daemon is never signed again after this.
-      - name: Sign daemon and shim (macOS)
-        if: startsWith(matrix.rid, 'osx-')
-        shell: bash
-        run: >
-          bash scripts/sign-macos.sh "${{ secrets.APPLE_SIGNING_IDENTITY }}" "$KEYCHAIN"
-          src/Capacitor.App/Packaging/daemon.entitlements
-          publish/daemon/${{ matrix.daemon-binary }} publish/daemon/libpty_shim.dylib
-
-      - name: Compute daemon digest
-        id: daemon-digest
-        shell: bash
-        run: |
-          BIN=publish/daemon/${{ matrix.daemon-binary }}
-          DIGEST=$(openssl dgst -sha256 -r "$BIN" | cut -d' ' -f1)
-          if [ -z "$DIGEST" ]; then
-            echo "::error::empty daemon digest for $BIN"; exit 1
-          fi
-          echo "DIGEST=$DIGEST" >> "$GITHUB_OUTPUT"
-
-      - name: Publish CLI AOT binary
-        run: >
-          dotnet publish ${{ env.CLI_PROJECT }}
-          -c Release
-          -r ${{ matrix.rid }}
-          -p:MinVerVersionOverride=${{ steps.version.outputs.VERSION }}
-          -p:KcapDaemonDigest=${{ steps.daemon-digest.outputs.DIGEST }}
-          -o publish/cli/
-
-      - name: Sign CLI (macOS)
-        if: startsWith(matrix.rid, 'osx-')
-        shell: bash
-        run: >
-          bash scripts/sign-macos.sh "${{ secrets.APPLE_SIGNING_IDENTITY }}" "$KEYCHAIN"
-          src/Capacitor.App/Packaging/cli.entitlements publish/cli/${{ matrix.cli-binary }}
-
-      - name: Smoke signed binaries (macOS)
-        if: startsWith(matrix.rid, 'osx-')
-        shell: bash
-        run: |
-          set -euo pipefail
-          publish/cli/kcap --version --no-update-check
-          publish/daemon/kcap-daemon --version
-
-      # The daemon's UnixPtyInterop hard-imports libpty_shim on every non-win-x64 RID (macOS
-      # ARM64's variadic-ioctl workaround, and every Linux RID's containment shim as of L1-build).
-      # If CompilePtyShim ever silently fails to produce the shim for a given RID, the npm
-      # package would ship a daemon that crashes on first PTY use. Fail loudly here instead of
-      # distributing a broken artifact.
-      - name: Verify libpty_shim built
-        if: matrix.rid != 'win-x64'
-        shell: bash
-        run: |
-          ext="so"
-          if [[ "${{ matrix.rid }}" == osx-* ]]; then ext="dylib"; fi
-          if [ ! -f "publish/daemon/libpty_shim.$ext" ]; then
-            echo "::error::libpty_shim.$ext missing from publish/daemon/ on ${{ matrix.rid }}"
-            ls -la publish/daemon/
-            exit 1
-          fi
-
-      # Per-RID acceptance beyond "the file exists": the shim's recorded machine type must match
-      # the RID it was built for (catches a wrong-arch artifact that would otherwise only fail at
-      # runtime on the target device), and it must actually be loadable and callable, not just a
-      # correctly-named file (reuses the Task 4 NativeTestHost's spawn-dummy mode, which loads
-      # the shim and calls the real production pty_spawn path end to end).
-      - name: Verify shim machine type and load-and-call smoke
-        if: matrix.rid != 'win-x64'
-        shell: bash
-        run: |
-          set -euo pipefail
-          ext="so"; if [[ "${{ matrix.rid }}" == osx-* ]]; then ext="dylib"; fi
-          shim="publish/daemon/libpty_shim.$ext"
-
-          case "${{ matrix.rid }}" in
-            *-arm64) want_arch="arm64|aarch64" ;;
-            *-x64)   want_arch="x86-64|x86_64" ;;
-          esac
-
-          if [[ "$ext" == "dylib" ]]; then
-            actual=$(lipo -info "$shim" | grep -oE 'arm64|x86_64' | head -1)
-          else
-            actual=$(readelf -h "$shim" | grep -i "Machine:" | grep -oE 'X86-64|AArch64' | tr '[:upper:]' '[:lower:]')
-          fi
-
-          if ! echo "$actual" | grep -qEi "$want_arch"; then
-            echo "::error::libpty_shim machine type ($actual) does not match RID ${{ matrix.rid }} (expected $want_arch)"
-            exit 1
-          fi
-
-          # Load-and-call smoke: spawn-dummy loads the shim (built for THIS RID, right next to
-          # the daemon build output) via the SAME UnixPtyProcessFactory/pty_spawn path the
-          # daemon itself uses in production, and prints a PID= line once the child exists.
-          # Building/running via `dotnet run` (rather than the AOT-published daemon binary)
-          # keeps this step independent of the publish/npm-packaging steps below, at the cost of
-          # a JIT run instead of the AOT one; acceptable here since this is a load/call smoke,
-          # not a perf or AOT-compatibility check (AOT publish itself is already exercised by
-          # "Publish daemon AOT binary" above).
-          #
-          # A musl RID's build output (musl-linked apphost and shim) cannot execute on a glibc
-          # runner at all, so the load-and-call smoke only runs where the host libc matches the
-          # RID: linux-musl-x64 runs it inside its Alpine container; linux-musl-arm64 (glibc
-          # arm64 runner, no container) gets the machine-type check above only.
-          if [[ "${{ matrix.rid }}" == *musl* && ! -f /etc/alpine-release ]]; then
-            echo "Skipping load-and-call smoke: musl build output cannot execute on a glibc host"
-            exit 0
-          fi
-
-          # Build synchronously first: a cold `dotnet run` (restore + build) takes far longer
-          # than any fixed grace period, so the backgrounded run below must only have to start
-          # the already-built host.
-          dotnet build test/Capacitor.Cli.Tests.Unit.NativeTestHost -r ${{ matrix.rid }} -p:MinVerVersionOverride=${{ steps.version.outputs.VERSION }}
-          dotnet run --no-build --project test/Capacitor.Cli.Tests.Unit.NativeTestHost -r ${{ matrix.rid }} -- spawn-dummy > smoke-output.txt 2>&1 &
-          HOST_PID=$!
-
-          # spawn-dummy blocks forever by design (it's the PDEATHSIG test host), so poll for
-          # the PID= line rather than sleeping a fixed interval, then tear the host down with a
-          # SIGKILL fallback — this step must never hang on a host that ignores SIGTERM.
-          ok=0
-          for _ in $(seq 1 60); do
-            if grep -q '^PID=' smoke-output.txt 2>/dev/null; then ok=1; break; fi
-            if ! kill -0 "$HOST_PID" 2>/dev/null; then break; fi
-            sleep 1
-          done
-          pkill -TERM -P "$HOST_PID" 2>/dev/null || true
-          kill "$HOST_PID" 2>/dev/null || true
-          sleep 1
-          kill -9 "$HOST_PID" 2>/dev/null || true
-          wait "$HOST_PID" 2>/dev/null || true
-          cat smoke-output.txt
-          if [[ "$ok" -ne 1 ]]; then
-            echo "::error::load-and-call smoke did not see a PID= line from spawn-dummy on ${{ matrix.rid }}"
-            exit 1
-          fi
-
-      # macOS-only: the mac: incarnation-identity scheme (design spec §4.3, M1-A) has no useful
-      # emulation off real hardware, so its one CI acceptance gate is a runtime-capture smoke
-      # here in the per-RID packaging checks — capture this process's own identity and a spawned
-      # child's, and assert both are present and distinct (proves the kernel primitive actually
-      # works and varies per process, not a mock). ci.yml has no macOS runner at all, so this
-      # cannot live there — see the Global Constraints note in the design spec.
-      - name: Verify mac incarnation-identity runtime capture (osx-arm64 only)
-        if: startsWith(matrix.rid, 'osx-')
-        shell: bash
-        run: |
-          set -euo pipefail
-          dotnet run --project test/Capacitor.Cli.Tests.Unit.NativeTestHost -r ${{ matrix.rid }} -- mac-identity-smoke
-
-      # `kcap import --opencode` reads opencode.db via Microsoft.Data.Sqlite +
-      # SQLitePCLRaw.bundle_e_sqlite3. NativeAOT does NOT statically link the engine and we
-      # deliberately do NOT bundle it (it's only needed for OpenCode import) — instead the
-      # CLI downloads it on demand from this release's assets (SqliteNativeResolver).
-      # Source the per-RID native straight from the publish output: it's exactly the bytes
-      # the binary was built against (== the pinned SHA-256 in SqliteNativeResolver) and is
-      # always present, unlike a NuGet cache path that may be absent/polluted on a clean
-      # runner. Name it to match the resolver's pin table: <basename>-<rid>.<ext>
-      # (e.g. libe_sqlite3-osx-arm64.dylib, e_sqlite3-win-x64.dll).
-      - name: Stage e_sqlite3 native release asset
-        shell: bash
-        run: |
-          set -euo pipefail
-          rid="${{ matrix.rid }}"
-
-          # Require exactly one match. nullglob so zero matches is an empty array (not the
-          # literal pattern), and avoids set -e aborting mid-assignment before we can report.
-          shopt -s nullglob
-          matches=(publish/cli/*e_sqlite3*)
-          shopt -u nullglob
-          if [ "${#matches[@]}" -ne 1 ]; then
-            echo "::error::expected exactly one e_sqlite3 native in publish/cli for $rid, found ${#matches[@]}"
-            ls -la publish/cli/ || true
-            exit 1
-          fi
-          src="${matches[0]}"
-
-          # Verify the bytes match the SHA-256 the resolver pins for this RID (single source
-          # of truth: src/Capacitor.Cli/Commands/SqliteNativeResolver.cs). A mismatch (e.g.
-          # publish post-processed the native) would ship an asset that every cold-cache
-          # OpenCode import fails to verify — fail the release here instead.
-          # `|| true`: a zero-match grep returns non-zero, which under `set -euo pipefail`
-          # would abort the substitution before the actionable empty-check below can run.
-          pin=$(grep -E "\[\"$rid\"\]" src/Capacitor.Cli/Commands/SqliteNativeResolver.cs \
-                | grep -oE '[0-9a-f]{64}' | head -1 || true)
-          if [ -z "$pin" ]; then
-            echo "::error::no SqliteNativeResolver pin found for $rid"
-            exit 1
-          fi
-          if command -v sha256sum >/dev/null 2>&1; then
-            actual=$(sha256sum "$src" | cut -d' ' -f1)
-          else
-            actual=$(shasum -a 256 "$src" | cut -d' ' -f1)
-          fi
-          if [ "$actual" != "$pin" ]; then
-            echo "::error::e_sqlite3 native for $rid ($actual) does not match resolver pin ($pin)"
-            exit 1
-          fi
-
-          mkdir -p sqlite-native
-          base=$(basename "$src"); name="${base%.*}"; ext="${base##*.}"
-          cp "$src" "sqlite-native/${name}-${rid}.${ext}"
-          ls -la sqlite-native/
-
-      - name: Copy binaries to npm package
-        shell: bash
-        run: |
-          mkdir -p npm/${{ matrix.npm-package }}/bin
-          cp publish/cli/${{ matrix.cli-binary }} npm/${{ matrix.npm-package }}/bin/
-          cp publish/daemon/${{ matrix.daemon-binary }} npm/${{ matrix.npm-package }}/bin/
-          for ext in so dylib; do
-            if [ -f "publish/daemon/libpty_shim.$ext" ]; then
-              cp "publish/daemon/libpty_shim.$ext" npm/${{ matrix.npm-package }}/bin/
-            fi
-          done
-
-      # Guards against the CLI shipping with an embedded digest that doesn't match the daemon
-      # binary actually packaged next to it (e.g. a re-run that repackaged a stale/different
-      # daemon build) — the archive below copies the same bytes, so one assertion here covers
-      # both.
-      - name: Assert packaged daemon matches embedded digest
-        shell: bash
-        run: |
-          PACKED=npm/${{ matrix.npm-package }}/bin/${{ matrix.daemon-binary }}
-          ACTUAL=$(openssl dgst -sha256 -r "$PACKED" | cut -d' ' -f1)
-          if [ "$ACTUAL" != "${{ steps.daemon-digest.outputs.DIGEST }}" ]; then
-            echo "::error::packaged daemon digest mismatch"; exit 1
-          fi
-
-      - name: Create release archive
-        shell: bash
-        run: |
-          mkdir -p archive
-          cp publish/cli/${{ matrix.cli-binary }} archive/
-          cp publish/daemon/${{ matrix.daemon-binary }} archive/
-          for ext in so dylib; do
-            if [ -f "publish/daemon/libpty_shim.$ext" ]; then
-              cp "publish/daemon/libpty_shim.$ext" archive/
-            fi
-          done
-          if [[ "${{ matrix.rid }}" == osx-* ]]; then
-            source scripts/lib/hash.sh
-            echo "${{ steps.daemon-digest.outputs.DIGEST }}" > archive/daemon.sha256
-            sha256_of publish/cli/${{ matrix.cli-binary }} > archive/kcap.sha256
-          fi
-          cd archive
-          if [ "${{ matrix.rid }}" = "win-x64" ]; then
-            7z a ../kcap-${{ matrix.rid }}.zip *
-          else
-            tar czf ../kcap-${{ matrix.rid }}.tar.gz *
-          fi
-
-      - name: Upload binary artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: npm-${{ matrix.npm-package }}
-          path: npm/${{ matrix.npm-package }}/
-
-      - name: Upload release archive
-        uses: actions/upload-artifact@v7
-        with:
-          name: release-${{ matrix.rid }}
-          path: kcap-${{ matrix.rid }}.*
-
-      # Per-RID SQLite native, downloaded on demand by SqliteNativeResolver. Named
-      # release-* so the github-release job's `pattern: release-*` publishes it.
-      - name: Upload e_sqlite3 native asset
-        uses: actions/upload-artifact@v7
-        with:
-          name: release-sqlite-native-${{ matrix.rid }}
-          path: sqlite-native/
+  build:
+    name: CLI
+    needs: [ci, verify-release-immutable, version]
+    uses: ./.github/workflows/cli-build.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      rids: osx-arm64 linux-x64 linux-arm64 linux-musl-x64 linux-musl-arm64 win-x64
+      sign: true
+    secrets: inherit
 
   publish-npm:
-    needs: build
+    needs: [build, version]
     runs-on: ubuntu-latest
-
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
 
@@ -539,18 +92,14 @@ jobs:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
-      # npm trusted publishing (OIDC) requires npm >= 11.5.1. Pin a known-good
-      # npm 11 release; npm 12.0.0 has a broken bundled sigstore dependency.
+      # npm trusted publishing (OIDC) requires npm >= 11.5.1. Pinned to a known-good npm 11: npm
+      # 12.0.0 has a broken bundled sigstore dependency.
       - name: Upgrade npm for trusted publishing
         run: npm install -g npm@11.18.0
 
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
       - name: Derive npm dist-tag
         id: disttag
-        run: echo "TAG=$(bash scripts/npm-dist-tag.sh '${{ steps.version.outputs.VERSION }}')" >> "$GITHUB_OUTPUT"
+        run: echo "TAG=$(bash scripts/npm-dist-tag.sh "$VERSION")" >> "$GITHUB_OUTPUT"
 
       - name: Download all npm artifacts
         uses: actions/download-artifact@v8
@@ -560,14 +109,14 @@ jobs:
 
       - name: Update package versions and publish platform packages
         run: |
-          VERSION=${{ steps.version.outputs.VERSION }}
-
+          set -euo pipefail
           for dir in npm-artifacts/npm-kcap-*/; do
             pkg_name=$(basename "$dir" | sed 's/^npm-//')
 
             # A re-run after a later step failed finds this commit's packages already on npm, and npm
             # refuses to publish a version twice: skip those, refuse one published from another commit.
-            published=$(npm view "@kurrent/$pkg_name@$VERSION" kcapReleaseCommit --registry https://registry.npmjs.org 2>/dev/null || true)
+            published="$(bash scripts/npm-release-commit.sh "@kurrent/$pkg_name" "$VERSION")" \
+              || { echo "::error::could not tell whether @kurrent/$pkg_name@$VERSION is published"; exit 1; }
             case "$(bash scripts/verify-release-not-recut.sh "${{ github.sha }}" "$published" || true)" in
               ok) ;;
               republish) echo "@kurrent/$pkg_name@$VERSION is already published from this commit; skipping"; continue ;;
@@ -577,16 +126,9 @@ jobs:
             cp "npm/$pkg_name/package.json" "$dir/package.json"
             cp LICENSE.md "$dir/LICENSE.md"
 
-            # actions/upload-artifact + download-artifact round-trips through ZIP,
-            # which drops the executable bit. The platform packages have no `bin`
-            # field in package.json (the wrapper resolves the binary path
-            # manually), so npm won't restore +x at install time either. Set it
-            # explicitly here so the published tarball ships executable files.
-            #
-            # Each platform package contains a CLI binary (kcap / kcap.exe)
-            # AND a daemon binary (kcap-daemon / kcap-daemon.exe).
-            # Pick by file existence instead of pkg_name pattern so adding new
-            # RIDs doesn't silently regress this step.
+            # The artifact round-trip through ZIP drops the execute bit, and the platform packages
+            # have no `bin` field for npm to restore it from. Chosen by file, not package name, so a
+            # new RID needs no change here.
             found_cli=false
             for bin in kcap kcap.exe kcap-daemon kcap-daemon.exe; do
               if [ -f "$dir/bin/$bin" ]; then
@@ -601,44 +143,35 @@ jobs:
 
             cd "$dir"
             npm version "$VERSION" --no-git-tag-version --allow-same-version
-
-            # Stamp the exact commit this tag points to into the published
-            # package metadata, so the artifact self-describes the commit it
-            # was built from — checked by "Refuse a moved or re-cut release
-            # tag" above on every future release of this package. Same
-            # source of truth (github.sha) as the +<sha> build metadata
-            # MinVer bakes into the binary's AssemblyInformationalVersion.
+            # The commit this package was built from, which the tag guard above checks on every
+            # later release of this version.
             npm pkg set kcapReleaseCommit="${{ github.sha }}" kcapReleaseTag="${{ github.ref_name }}"
-
             npm publish --access public --tag "${{ steps.disttag.outputs.TAG }}"
             cd -
           done
 
       - name: Update plugin version
         run: |
-          VERSION=${{ steps.version.outputs.VERSION }}
           node -e "
             const pkg = require('./kcap/.claude-plugin/plugin.json');
             pkg.version = '$VERSION';
             require('fs').writeFileSync('./kcap/.claude-plugin/plugin.json', JSON.stringify(pkg, null, 2) + '\n');
           "
 
-      - name: Copy plugin into wrapper package
-        run: cp -r kcap/ npm/kcap/kcap/
-
-      - name: Copy license into wrapper package
-        run: cp LICENSE.md npm/kcap/LICENSE.md
+      - name: Copy plugin and license into wrapper package
+        run: |
+          cp -r kcap/ npm/kcap/kcap/
+          cp LICENSE.md npm/kcap/LICENSE.md
 
       # A wrapper installable before its platform packages installs without them, silently: npm
       # skips an optional dependency it cannot resolve.
       - name: Wait for the platform packages to become installable
         run: |
           read -ra pkgs <<< "$(node -p "Object.keys(require('./npm/kcap/package.json').optionalDependencies).join(' ')")"
-          bash scripts/wait-npm-available.sh "${{ steps.version.outputs.VERSION }}" "${pkgs[@]}"
+          bash scripts/wait-npm-available.sh "$VERSION" "${pkgs[@]}"
 
       - name: Publish wrapper package
         run: |
-          VERSION=${{ steps.version.outputs.VERSION }}
           cd npm/kcap
           npm version "$VERSION" --no-git-tag-version --allow-same-version
           node -e "
@@ -652,10 +185,23 @@ jobs:
           npm publish --access public --tag "${{ steps.disttag.outputs.TAG }}"
 
   github-release:
-    needs: build
+    needs: [build, version]
     runs-on: ubuntu-latest
-
+    env: &cli-bucket
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      R2: --endpoint-url ${{ secrets.R2_ENDPOINT }}
+      DEST: s3://${{ secrets.R2_BUCKET }}/cli
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
+      - uses: actions/checkout@v7
+
+      # The same rule picks the npm dist-tag, so GitHub and npm agree on what a prerelease is.
+      - name: Derive release channel
+        id: disttag
+        run: echo "TAG=$(bash scripts/npm-dist-tag.sh "$VERSION")" >> "$GITHUB_OUTPUT"
+
       - name: Download all release archives
         uses: actions/download-artifact@v8
         with:
@@ -663,46 +209,247 @@ jobs:
           path: release-artifacts/
           merge-multiple: true
 
+      - name: Build the install manifest
+        run: >
+          bash scripts/build-cli-manifest.sh "$VERSION" "${{ github.sha }}"
+          release-artifacts "${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}"
+          > kcap-manifest.json
+
+      # A published manifest vouches for the archives already on this release. Rebuilt archives
+      # never match it (signing and archive timestamps), and uploading them would fail every
+      # install from that manifest's channels.
+      - name: Refuse to replace archives a published manifest covers
+        run: |
+          set -euo pipefail
+          KEY="$VERSION/manifest.json"
+          set +e; bash scripts/r2-fetch.sh "$KEY" published.json; rc=$?; set -e
+          case "$rc" in
+            0)  cmp -s published.json kcap-manifest.json || {
+                  echo "::error::cli/$KEY already vouches for other archives of this version. Re-run the failed jobs of the run that published it, or cut a new version."
+                  exit 1; } ;;
+            44) ;;
+            *)  exit 1 ;;
+          esac
+
+      - name: Upload the install manifest
+        uses: actions/upload-artifact@v7
+        with:
+          name: cli-manifest
+          path: kcap-manifest.json
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           files: release-artifacts/*
           generate_release_notes: true
+          prerelease: ${{ steps.disttag.outputs.TAG == 'beta' }}
 
-  app-macos:
-    name: Build and sign the desktop app
-    needs: build
-    runs-on: macos-latest
-    timeout-minutes: 90
-    env:
-      DOTNET_ROLL_FORWARD: Major
+  # The script installer's manifests, served by kcap-web from the bucket's cli/ prefix. The
+  # archives stay on the GitHub Release: the checksum and the bytes it covers come from two hosts.
+  cli-publish:
+    name: Publish the CLI install manifest
+    needs: [github-release, version]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Channel promotion is read-compare-write. Without queue: max a second waiting release would
+    # cancel the first one's promotion.
+    concurrency:
+      group: cli-publish
+      cancel-in-progress: false
+      queue: max
+    env: *cli-bucket
     steps:
       - uses: actions/checkout@v7
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v6
+      - name: Download the install manifest
+        uses: actions/download-artifact@v8
+        with:
+          name: cli-manifest
+
+      # A version's manifest is written once. A re-run finds identical bytes and carries on; a
+      # re-cut tag finds different ones and stops before any channel moves.
+      - name: Upload the version manifest
+        run: |
+          set -euo pipefail
+          KEY="$VERSION/manifest.json"
+          set +e; bash scripts/r2-fetch.sh "$KEY" published.json; rc=$?; set -e
+          case "$rc" in
+            0)  cmp -s published.json kcap-manifest.json || {
+                  echo "::error::cli/$KEY is already published with different contents"; exit 1; } ;;
+            44) aws s3 cp $R2 kcap-manifest.json "$DEST/$KEY" \
+                  --content-type application/json --cache-control "public, max-age=31536000, immutable" ;;
+            *)  exit 1 ;;
+          esac
+
+      - name: Promote channels
+        run: |
+          set -euo pipefail
+          current() { # <channel>: the channel's version, empty when it does not exist yet
+            local rc; set +e; bash scripts/r2-fetch.sh "channels/$1.json" "current-$1.json"; rc=$?; set -e
+            case "$rc" in
+              0)  jq -er .version "current-$1.json" ;;
+              44) echo "" ;;
+              *)  return 1 ;;
+            esac
+          }
+          latest="$(current latest)"; beta="$(current beta)"
+          # Assigned first: a failure inside a for loop's word list does not fail the step.
+          channels="$(bash scripts/promote-cli-channels.sh "$VERSION" "$latest" "$beta")"
+          for channel in $channels; do
+            aws s3 cp $R2 kcap-manifest.json "$DEST/channels/$channel.json" \
+              --content-type application/json --cache-control "no-cache"
+            echo "cli/channels/$channel.json -> $VERSION"
+          done
+
+      - name: Attach the manifest to the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" kcap-manifest.json --clobber
+
+  app-macos:
+    name: Desktop (macOS)
+    needs: [build, version]
+    uses: ./.github/workflows/desktop.yml
+    with:
+      rid: osx-arm64
+      version: ${{ needs.version.outputs.version }}
+      release: true
+    secrets: inherit
+
+  app-publish:
+    name: Publish the macOS desktop app
+    needs: [app-macos, publish-npm, github-release, version]
+    uses: ./.github/workflows/publish-desktop.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      channel: osx-arm64
+      artifact: app-osx-arm64
+      npm-platform: darwin-arm64
+      installers: .dmg
+    secrets: inherit
+
+  app-windows:
+    name: Desktop (Windows)
+    needs: [build, version]
+    uses: ./.github/workflows/desktop.yml
+    with:
+      rid: win-x64
+      version: ${{ needs.version.outputs.version }}
+      release: true
+    secrets: inherit
+
+  app-publish-windows:
+    name: Publish the Windows desktop app
+    needs: [app-windows, publish-npm, github-release, version]
+    uses: ./.github/workflows/publish-desktop.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      channel: win-x64
+      artifact: app-win-x64
+      npm-platform: win-x64
+      installers: -Setup.exe
+    secrets: inherit
+
+  app-linux:
+    name: Desktop (Linux)
+    needs: [build, version]
+    uses: ./.github/workflows/desktop.yml
+    with:
+      rid: linux-x64
+      version: ${{ needs.version.outputs.version }}
+      release: true
+    secrets: inherit
+
+  app-publish-linux:
+    name: Publish the Linux desktop app
+    needs: [app-linux, publish-npm, github-release, version]
+    uses: ./.github/workflows/publish-desktop.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      channel: linux-x64
+      artifact: app-linux-x64
+      npm-platform: linux-x64
+      installers: .AppImage .deb
+    secrets: inherit
+
+  # The local-edition bundle is built unsigned by kcap-server's local-bundle workflow on the same tag
+  # and attached to that tag's kcap-server release. A tarball cannot be stapled: the signed tree is
+  # notarized as a zip, so each Mach-O's ticket is found online, and the manifest signature plus its
+  # SHA-256 are what the CLI checks before it extracts anything.
+  # No job that holds a signing credential runs code from that release: signing only reads the
+  # binaries, the smoke test runs where no secret is, and the manifest is signed on a fresh runner.
+  local-manifest-key:
+    name: Check the local bundle manifest key
+    needs: [ci, verify-release-immutable]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check the manifest signing key
+        env:
+          LOCAL_BUNDLE_MANIFEST_KEY: ${{ secrets.LOCAL_BUNDLE_MANIFEST_KEY }}
+        run: bash scripts/local-manifest-key.sh check src/Capacitor.Cli.Core/Resources/local-bundle-manifest-key.pem
+
+  local-bundle:
+    name: Sign and notarize the local bundle (osx-arm64)
+    needs: local-manifest-key
+    runs-on: macos-latest
+    timeout-minutes: 120
+    env:
+      RID: osx-arm64
+    steps:
+      - uses: actions/checkout@v7
 
       - name: Extract version from tag
         id: version
         shell: bash
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Install tools
-        run: dotnet tool install -g vpk --version 1.2.0
-
-      - name: Download the signed CLI and daemon
-        uses: actions/download-artifact@v8
-        with:
-          name: release-osx-arm64
-          path: trio/
-
-      - name: Unpack the trio
+      # The cheap first line of the immutability rule; local-publish repeats it inside its
+      # concurrency group against the actual bytes.
+      - name: Refuse an already-published version
         shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2: --endpoint-url ${{ secrets.R2_ENDPOINT }}
+          DEST: s3://${{ secrets.R2_BUCKET }}/local/osx-arm64
         run: |
           set -euo pipefail
-          mkdir -p trio/bin && tar xzf trio/kcap-osx-arm64.tar.gz -C trio/bin
-          chmod +x trio/bin/kcap trio/bin/kcap-daemon
-          test -f trio/bin/daemon.sha256 && test -f trio/bin/kcap.sha256
+          KEY="kcap-local-${{ steps.version.outputs.VERSION }}-$RID.json"
+          set +e; bash scripts/r2-fetch.sh "$KEY" published.json; rc=$?; set -e
+          case "$rc" in
+            0)  echo "::error::local/$RID/$KEY is already published. A published bundle is never rebuilt: cut a new version."; exit 1 ;;
+            44) echo "local/$RID/$KEY is not published yet" ;;
+            *)  exit 1 ;;
+          esac
+
+      # kcap-server is private. An installation token lasts an hour, which bounds the wait below.
+      - name: Get a token that reads kcap-server
+        id: server-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.KURRENT_CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KURRENT_CI_APP_PRIVATE_KEY }}
+          owner: kurrent-io
+          repositories: kcap-server
+          permission-contents: read
+
+      - name: Download the unsigned bundle
+        id: download
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.server-token.outputs.token }}
+          SERVER_WAIT_TIMEOUT: 3300
+          SERVER_WAIT_INTERVAL: 30
+        run: |
+          set -euo pipefail
+          NAME="kcap-local-${{ steps.version.outputs.VERSION }}-$RID"
+          archive="$(bash scripts/wait-server-bundle.sh "$GITHUB_REF_NAME" "$NAME.tar.gz" "$RUNNER_TEMP/unsigned")"
+          echo "NAME=$NAME" >> "$GITHUB_OUTPUT"
+          echo "ARCHIVE=$archive" >> "$GITHUB_OUTPUT"
 
       - name: Import signing keychain and notary profile
         shell: bash
@@ -714,193 +461,141 @@ jobs:
           APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
         run: bash scripts/import-signing-keychain.sh
 
-      # The cheap first line of the immutability rule; app-publish repeats it inside its
-      # concurrency group against the actual bytes.
-      - name: Refuse an already-published version
+      - name: Sign every Mach-O and re-archive
         shell: bash
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
         run: |
           set -euo pipefail
-          KEY="desktop/osx-arm64/KurrentCapacitor-${{ steps.version.outputs.VERSION }}-osx-arm64-full.nupkg"
-          set +e
-          ERR="$(aws s3api head-object --endpoint-url "${{ secrets.R2_ENDPOINT }}" --bucket "${{ secrets.R2_BUCKET }}" --key "$KEY" 2>&1 >/dev/null)"
-          rc=$?
-          set -e
-          if [ "$rc" -eq 0 ]; then
-            echo "::error::$KEY is already published. A published desktop version is never rebuilt — cut a new version."
-            exit 1
+          mkdir -p tree out
+          tar -xzf "${{ steps.download.outputs.ARCHIVE }}" -C tree
+          bash scripts/sign-local-bundle.sh "${{ secrets.APPLE_SIGNING_IDENTITY }}" "$KEYCHAIN" tree
+          bash scripts/verify-local-bundle.sh tree
+          # Same root-level layout as the server's archive; no AppleDouble or xattr entries.
+          COPYFILE_DISABLE=1 tar --no-xattrs -czf "out/${{ steps.download.outputs.NAME }}.tar.gz" -C tree .
+
+      - name: Notarize the signed tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          ditto -c -k --keepParent tree "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" --keychain-profile kcap-notary --keychain "$KEYCHAIN" \
+            --wait --timeout 45m --output-format json > notary.json || true
+          cat notary.json
+          id="$(jq -r '.id // empty' notary.json)"
+          if [ "$(jq -r '.status // empty' notary.json)" != "Accepted" ]; then
+            [ -n "$id" ] && xcrun notarytool log "$id" --keychain-profile kcap-notary --keychain "$KEYCHAIN" || true
+            echo "::error::notarization was not accepted"; exit 1
           fi
-          if echo "$ERR" | grep -qiE '404|Not Found'; then
-            echo "$KEY is not published yet"
-          else
-            echo "::error::could not determine whether $KEY is published (aws exit $rc): $ERR"
-            exit 1
-          fi
 
-      - name: Publish app
-        run: >
-          dotnet publish src/Capacitor.App/Capacitor.App.csproj -c Release -r osx-arm64 --self-contained
-          -p:MinVerVersionOverride=${{ steps.version.outputs.VERSION }} -o publish/app/
-
-      - name: Sign the app's binaries
+      # Checks the archive about to be published, not the tree it came from.
+      - name: Verify the archive is signed and notarized
         shell: bash
         run: |
           set -euo pipefail
-          machos=()
-          while IFS= read -r f; do
-            if file "$f" | grep -q 'Mach-O'; then machos+=("$f"); fi
-          done < <(find publish/app -type f)
-          bash scripts/sign-macos.sh "${{ secrets.APPLE_SIGNING_IDENTITY }}" "$KEYCHAIN" src/Capacitor.App/Packaging/app.entitlements "${machos[@]}"
+          mkdir -p check
+          tar -xzf "out/${{ steps.download.outputs.NAME }}.tar.gz" -C check
+          bash scripts/verify-local-bundle.sh check
+          # Only Apple's ticket lookup is retried: it can lag the accepted submission.
+          for attempt in 1 2 3 4 5; do
+            bash scripts/verify-local-bundle.sh check --notarized && exit 0
+            echo "notarization not visible yet (attempt $attempt)"; sleep 30
+          done
+          exit 1
 
-      # The trio arrives already signed; it is copied, never touched by codesign again.
-      - name: Assemble pack directory
-        shell: bash
-        run: |
-          set -euo pipefail
-          cp trio/bin/kcap trio/bin/kcap-daemon trio/bin/libpty_shim.dylib publish/app/
-          chmod +x publish/app/kcap publish/app/kcap-daemon "publish/app/Kurrent Capacitor"
-          bash scripts/render-info-plist.sh "${{ steps.version.outputs.VERSION }}" publish/Info.plist
-
-      - name: Fetch the delta baseline
-        shell: bash
-        run: |
-          mkdir -p releases
-          vpk download s3 --channel osx-arm64 --outputDir releases --endpoint "${{ secrets.R2_ENDPOINT }}" --bucket "${{ secrets.R2_BUCKET }}" --prefix desktop/osx-arm64 --keyId "${{ secrets.R2_ACCESS_KEY_ID }}" --secret "${{ secrets.R2_SECRET_ACCESS_KEY }}" \
-            || echo "no previous release to diff against"
-          bash scripts/desktop-baseline.sh releases "${{ steps.version.outputs.VERSION }}"
-
-      - name: Pack, sign the bundle, notarize
-        shell: bash
-        run: >
-          vpk pack --packId KurrentCapacitor --packVersion "${{ steps.version.outputs.VERSION }}"
-          --packTitle "Kurrent Capacitor" --packAuthors Kurrent --mainExe "Kurrent Capacitor"
-          --packDir publish/app --plist publish/Info.plist --icon src/Capacitor.App/Assets/kcap-icon.icns
-          --channel osx-arm64 --noInst --outputDir releases
-          --signAppIdentity "${{ secrets.APPLE_SIGNING_IDENTITY }}" --signEntitlements src/Capacitor.App/Packaging/app.entitlements
-          --signDisableDeep --notaryProfile kcap-notary --keychain "$KEYCHAIN"
-
-      - name: Assert and smoke the packed bundle
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p extracted
-          ditto -x -k releases/KurrentCapacitor-osx-arm64-Portable.zip extracted
-          APP="extracted/Kurrent Capacitor.app"
-          bash scripts/assert-app-cli-version.sh "$APP/Contents/MacOS/kcap" "${{ steps.version.outputs.VERSION }}"
-          bash scripts/assert-bundle-digest.sh "$APP" trio/bin/daemon.sha256
-          "$APP/Contents/MacOS/kcap" --version --no-update-check
-          "$APP/Contents/MacOS/kcap-daemon" --version
-          # JIT under hardened runtime: the signed app must still be alive after 15 s.
-          SCRATCH="$(mktemp -d)"
-          KCAP_CONFIG_DIR="$SCRATCH" KCAP_APP_UPDATE_URL="http://127.0.0.1:9/" "$APP/Contents/MacOS/Kurrent Capacitor" &
-          APP_PID=$!
-          sleep 15
-          kill -0 "$APP_PID" || { echo "::error::the signed app exited within 15 s"; exit 1; }
-          kill "$APP_PID" 2>/dev/null || true; wait "$APP_PID" 2>/dev/null || true
-
-      - name: Build, sign, notarize and staple the DMG
-        shell: bash
-        run: |
-          set -euo pipefail
-          DMG="releases/Kurrent-Capacitor-${{ steps.version.outputs.VERSION }}-osx-arm64.dmg"
-          bash scripts/build-dmg.sh "extracted/Kurrent Capacitor.app" "$DMG"
-          codesign --force --timestamp --sign "${{ secrets.APPLE_SIGNING_IDENTITY }}" --keychain "$KEYCHAIN" "$DMG"
-          xcrun notarytool submit "$DMG" --keychain-profile kcap-notary --keychain "$KEYCHAIN" --wait --timeout 45m
-          xcrun stapler staple "$DMG"
-          spctl --assess -t open --context context:primary-signature -v "$DMG"
-          cp trio/bin/daemon.sha256 trio/bin/kcap.sha256 releases/
-
-      - name: Upload the signed release set
+      - name: Upload the signed archive
         uses: actions/upload-artifact@v7
         with:
-          name: app-osx-arm64-signed
-          path: releases/
+          name: local-bundle-osx-arm64
+          path: out/
+          if-no-files-found: error
 
-  app-publish:
-    name: Publish the desktop app
-    needs: [app-macos, publish-npm, github-release]
+  # The hardened runtime is enforced when the binary runs, not when it is signed, so the smoke test
+  # runs the signed archive. Its runner holds only a read token for kcap-server.
+  local-smoke:
+    name: Smoke-start the signed local bundle (osx-arm64)
+    needs: local-bundle
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Get a token that reads kcap-server
+        id: server-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.KURRENT_CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KURRENT_CI_APP_PRIVATE_KEY }}
+          owner: kurrent-io
+          repositories: kcap-server
+          permission-contents: read
+
+      # The smoke test reads the model pin and its fetch script relative to its own location.
+      - name: Fetch the server's smoke test for this tag
+        env:
+          GH_TOKEN: ${{ steps.server-token.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/server/scripts" "$RUNNER_TEMP/server/eng"
+          for f in scripts/smoke-local-bundle.sh scripts/fetch-embedding-model.sh \
+                   eng/builtin-embedding-model.env eng/builtin-embedding-reference.json; do
+            gh api -H 'Accept: application/vnd.github.raw' \
+              "repos/kurrent-io/kcap-server/contents/$f?ref=$GITHUB_REF_NAME" > "$RUNNER_TEMP/server/$f"
+          done
+
+      - name: Download the signed archive
+        uses: actions/download-artifact@v8
+        with:
+          name: local-bundle-osx-arm64
+          path: local/
+
+      - name: Smoke-start the signed archive
+        shell: bash
+        run: bash "$RUNNER_TEMP/server/scripts/smoke-local-bundle.sh" local/kcap-local-*-osx-arm64.tar.gz
+
+  local-publish:
+    name: Publish the local bundle (osx-arm64)
+    needs: [local-bundle, local-smoke]
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    # Every publication into the bucket runs alone: the feed manifest is read-merge-write.
+    timeout-minutes: 20
     concurrency:
-      group: desktop-publish
+      group: local-publish
       cancel-in-progress: false
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: auto
       R2: --endpoint-url ${{ secrets.R2_ENDPOINT }}
-      DEST: s3://${{ secrets.R2_BUCKET }}/desktop/osx-arm64
-      DOTNET_ROLL_FORWARD: Major
+      DEST: s3://${{ secrets.R2_BUCKET }}/local/osx-arm64
+      MANIFEST_KEY: src/Capacitor.Cli.Core/Resources/local-bundle-manifest-key.pem
     steps:
       - uses: actions/checkout@v7
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v6
-
-      - name: Install vpk
-        run: dotnet tool install -g vpk --version 1.2.0
 
       - name: Extract version from tag
         id: version
         shell: bash
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Download the signed release set
+      - name: Download the signed archive
         uses: actions/download-artifact@v8
         with:
-          name: app-osx-arm64-signed
-          path: releases/
+          name: local-bundle-osx-arm64
+          path: local/
 
-      # The app ships only the trio npm shipped: a run that lost the npm race stops here.
-      - name: Verify the npm trio
-        run: bash scripts/verify-npm-trio.sh "${{ steps.version.outputs.VERSION }}" releases/kcap.sha256 releases/daemon.sha256
-
-      - name: Verify immutable objects
-        shell: bash
-        run: |
-          set -euo pipefail
-          cat > fetch.sh <<'EOF'
-          #!/usr/bin/env bash
-          ERR="$(aws s3 cp $R2 "$DEST/$1" "$2" 2>&1 >/dev/null)"
-          rc=$?
-          if [ "$rc" -eq 0 ]; then
-            exit 0
-          elif echo "$ERR" | grep -qiE '404|Not Found'; then
-            exit 44
-          else
-            echo "$ERR" >&2
-            exit 1
-          fi
-          EOF
-          chmod +x fetch.sh
-          bash scripts/verify-desktop-immutables.sh releases "${{ steps.version.outputs.VERSION }}" ./fetch.sh
-
-      - name: Upload the feed and packages
-        run: >
-          vpk upload s3 --channel osx-arm64 --outputDir releases --endpoint "${{ secrets.R2_ENDPOINT }}"
-          --bucket "${{ secrets.R2_BUCKET }}" --prefix desktop/osx-arm64
-          --keyId "${{ secrets.R2_ACCESS_KEY_ID }}" --secret "${{ secrets.R2_SECRET_ACCESS_KEY }}"
-
-      - name: Upload the DMG and promote aliases
-        shell: bash
-        run: |
-          set -euo pipefail
-          V="${{ steps.version.outputs.VERSION }}"
-          DMG="releases/Kurrent-Capacitor-$V-osx-arm64.dmg"
-          aws s3 cp $R2 "$DMG" "$DEST/Kurrent-Capacitor-$V-osx-arm64.dmg" --cache-control "public, max-age=31536000, immutable"
-          aws s3 cp $R2 "$DEST/releases.osx-arm64.json" merged.json
-          for alias in $(bash scripts/promote-desktop-aliases.sh merged.json "$V"); do
-            case "$alias" in
-              beta)   aws s3 cp $R2 "$DMG" "$DEST/Kurrent-Capacitor-osx-arm64-beta.dmg" --cache-control "public, max-age=300" ;;
-              stable) aws s3 cp $R2 "$DMG" "$DEST/Kurrent-Capacitor-osx-arm64.dmg" --cache-control "public, max-age=300" ;;
-            esac
-          done
-
-      - name: Attach the DMG to the GitHub Release
+      - name: Build and sign the manifest
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.ref_name }}" "releases/Kurrent-Capacitor-${{ steps.version.outputs.VERSION }}-osx-arm64.dmg" --clobber
+          LOCAL_BUNDLE_MANIFEST_KEY: ${{ secrets.LOCAL_BUNDLE_MANIFEST_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          NAME="kcap-local-${{ steps.version.outputs.VERSION }}-osx-arm64"
+          bash scripts/build-local-manifest.sh "${{ steps.version.outputs.VERSION }}" osx-arm64 "local/$NAME.tar.gz" "$MANIFEST_KEY" > "local/$NAME.json"
+          bash scripts/local-manifest-key.sh sign "$MANIFEST_KEY" "local/$NAME.json" "local/$NAME.json.sig"
+          cat "local/$NAME.json"
+
+      # Every model object is stored and verified before the manifest that names it is published.
+      # Under local/ rather than local/<rid>/: the model set is shared by every rid.
+      - name: Upload the built-in model set
+        env:
+          DEST: s3://${{ secrets.R2_BUCKET }}/local
+        run: bash scripts/publish-local-model.sh "local/kcap-local-${{ steps.version.outputs.VERSION }}-osx-arm64.tar.gz"
+
+      - name: Upload the archive, signature and manifest
+        run: bash scripts/publish-local-bundle.sh local "${{ steps.version.outputs.VERSION }}" osx-arm64 "$MANIFEST_KEY"

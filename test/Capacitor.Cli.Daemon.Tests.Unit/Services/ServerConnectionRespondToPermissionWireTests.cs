@@ -47,7 +47,7 @@ public class ServerConnectionRespondToPermissionWireTests {
     }
 
     sealed class TestServerConnection(DaemonConfig config)
-        : ServerConnection(config, UnusedTokenStore.Create(), NullLoggerFactory.Instance,
+        : ServerConnection(config, new FixedCredentialSource(), NullLoggerFactory.Instance,
                            NullLogger<ServerConnection>.Instance, TimeProvider.System);
 
     [Test]

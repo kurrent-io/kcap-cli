@@ -233,6 +233,18 @@ public class LocalControlOpsTests {
     }
 
     [Test]
+    public async Task Stop_missing_agent_is_a_rejection() {
+        if (OperatingSystem.IsWindows()) return;
+
+        await WithOpsAsync([StopAckThen("a1\tmissing")], async ops => {
+            var result = await ops.StopAgentAsync("a1", false, CancellationToken.None);
+            await Assert.That(result.Ok).IsFalse();
+            await Assert.That(result.Status).IsEqualTo("error");
+            await Assert.That(result.Error).IsEqualTo("no such agent a1");
+        });
+    }
+
+    [Test]
     public async Task Stop_missing_line() {
         if (OperatingSystem.IsWindows()) return;
 
@@ -366,6 +378,35 @@ public class LocalControlOpsTests {
                 async () => await ops.PutConsentPolicyAsync(new ConsentPolicyDto("allow", 45, []), CancellationToken.None));
             await Assert.That(ex!.Reason).IsEqualTo("daemon_rejected");
             await Assert.That(ex.Message).IsEqualTo("not authorized");
+        });
+    }
+
+    // ---- RequestRestartAsync ----
+
+    [Test]
+    public async Task A_restart_request_sends_its_mode_and_returns_the_ack() {
+        if (OperatingSystem.IsWindows()) return;
+
+        string? mode = null;
+        ConnScript restart = async (_, s, ct) => {
+            var f = await FrameCodec.ReadAsync(s, ct);
+            if (f?.Type != FrameType.Restart) return;
+            mode = f.Text;
+            await FrameCodec.WriteAsync(s, LocalFrame.RestartAck("queued"), ct);
+        };
+        await WithOpsAsync([restart], async ops =>
+            await Assert.That(await ops.RequestRestartAsync("when-idle", CancellationToken.None)).IsEqualTo("queued"));
+        await Assert.That(mode).IsEqualTo("when-idle");
+    }
+
+    [Test]
+    public async Task A_refused_restart_is_daemon_rejected() {
+        if (OperatingSystem.IsWindows()) return;
+
+        await WithOpsAsync([ErrorThen("foreground daemon — exit and restart it manually")], async ops => {
+            var ex = await Assert.ThrowsAsync<LocalControlOpsException>(
+                async () => await ops.RequestRestartAsync("when-idle", CancellationToken.None));
+            await Assert.That(ex!.Reason).IsEqualTo("daemon_rejected");
         });
     }
 

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO.Pipelines;
 using System.Text;
 using System.Text.Json;
@@ -38,9 +39,19 @@ sealed class FakeCodexAppServer : IAsyncDisposable {
     public string      ApprovalMethod = "item/commandExecution/requestApproval";
     public int         Fail32001TimesOnTurnStart;
     public (long input, long output, long total)? EmitUsageOnTurn;
+    public string?     RerouteToModelOnTurn;
+
     // When set, turn/start responds inProgress and does NOT auto-emit turn/completed — the turn stays
     // active so a follow-up input is steered onto it. Complete it with CompleteHeldTurnAsync.
     public bool        HoldTurnOpen;
+    // Records each turn's input as a completed userMessage item, as the real server does.
+    public bool        EchoUserMessages;
+    // Holds those items until ReleaseUserMessagesAsync, so they can arrive after later inputs were sent.
+    public bool        HoldUserMessages;
+    /// <summary>`model/list` pages, served in order; each page's nextCursor names the following one.</summary>
+    public List<JsonArray> ModelPages = [];
+    /// <summary>The `model/list` page answered with a result that is not a model list.</summary>
+    public int?            MalformedModelPage;
 
     // ── Observed ───────────────────────────────────────────────────────────────────────────────
     public readonly List<string>       ReceivedMethods    = [];
@@ -111,6 +122,21 @@ sealed class FakeCodexAppServer : IAsyncDisposable {
                 await RespondAsync(id, new JsonObject { ["userAgent"] = "codex-fake" }, ct);
                 break;
 
+            case "model/list": {
+                var index = @params.ValueKind == JsonValueKind.Object && Str(@params, "cursor") is { } c ? int.Parse(c, CultureInfo.InvariantCulture) : 0;
+                if (index == MalformedModelPage) {
+                    await RespondAsync(id, new JsonObject { ["unexpected"] = true }, ct);
+                    break;
+                }
+
+                var page  = index < ModelPages.Count ? ModelPages[index] : [];
+                await RespondAsync(id, new JsonObject {
+                    ["data"]       = page.DeepClone(),
+                    ["nextCursor"] = index + 1 < ModelPages.Count ? (index + 1).ToString(CultureInfo.InvariantCulture) : null,
+                }, ct);
+                break;
+            }
+
             case "hooks/list":
                 await RespondAsync(id, new JsonObject { ["data"] = HooksData.DeepClone() }, ct);
                 break;
@@ -155,9 +181,12 @@ sealed class FakeCodexAppServer : IAsyncDisposable {
 
                 var turnId = "turn-" + _turnStartCount;
                 _lastTurnId = turnId;
+                // A held echo is stored before the ack, so a release the test sends after it cannot miss it.
+                if (EchoUserMessages && HoldUserMessages) await EchoUserMessageAsync(turnId, @params, ct);
                 await RespondAsync(id, new JsonObject {
                     ["turn"] = new JsonObject { ["id"] = turnId, ["status"] = "inProgress", ["items"] = new JsonArray() },
                 }, ct);
+                if (EchoUserMessages && !HoldUserMessages) await EchoUserMessageAsync(turnId, @params, ct);
 
                 // Optionally inject an out-of-policy approval request mid-turn.
                 if (InjectApprovalDuringTurn) {
@@ -181,6 +210,12 @@ sealed class FakeCodexAppServer : IAsyncDisposable {
                         },
                     }, ct);
 
+                if (RerouteToModelOnTurn is { } reroute)
+                    await NotifyAsync("model/rerouted", new JsonObject {
+                        ["threadId"] = ThreadId, ["turnId"] = turnId,
+                        ["fromModel"] = Model, ["toModel"] = reroute, ["reason"] = "highRiskCyberActivity",
+                    }, ct);
+
                 await NotifyAsync("turn/completed", new JsonObject {
                     ["threadId"] = ThreadId,
                     ["turn"]     = new JsonObject { ["id"] = turnId, ["status"] = TurnStatus, ["items"] = new JsonArray() },
@@ -192,7 +227,9 @@ sealed class FakeCodexAppServer : IAsyncDisposable {
                 LastSteerExpectedTurnId = @params.Str("expectedTurnId");
                 if (@params.Arr("input") is { } steerInput && steerInput.GetArrayLength() > 0)
                     LastSteerText = steerInput[0].Str("text");
+                if (EchoUserMessages && HoldUserMessages) await EchoUserMessageAsync(LastSteerExpectedTurnId ?? _lastTurnId, @params, ct);
                 await RespondAsync(id, new JsonObject { ["accepted"] = true }, ct);
+                if (EchoUserMessages && !HoldUserMessages) await EchoUserMessageAsync(LastSteerExpectedTurnId ?? _lastTurnId, @params, ct);
                 break;
 
             case "turn/interrupt":
@@ -216,6 +253,31 @@ sealed class FakeCodexAppServer : IAsyncDisposable {
             ["threadId"] = ThreadId,
             ["turn"]     = new JsonObject { ["id"] = _lastTurnId, ["status"] = status, ["items"] = new JsonArray() },
         }, _cts.Token);
+
+    /// <summary>Pushes a notification no request asked for, as the app-server does for account state.</summary>
+    public Task SendNotificationAsync(string method, JsonNode @params) => NotifyAsync(method, @params, _cts.Token);
+
+    int _userItems;
+    readonly List<JsonObject> _heldUserMessages = [];
+
+    Task EchoUserMessageAsync(string? turnId, JsonElement @params, CancellationToken ct) {
+        var item = new JsonObject {
+            ["threadId"] = ThreadId, ["turnId"] = turnId,
+            ["item"] = new JsonObject {
+                ["type"] = "userMessage", ["id"] = "user-" + Interlocked.Increment(ref _userItems),
+                ["content"] = JsonNode.Parse(@params.Arr("input")?.GetRawText() ?? "[]"),
+            },
+        };
+        if (!HoldUserMessages) return NotifyAsync("item/completed", item, ct);
+        lock (_heldUserMessages) _heldUserMessages.Add(item);
+        return Task.CompletedTask;
+    }
+
+    public async Task ReleaseUserMessagesAsync() {
+        List<JsonObject> held;
+        lock (_heldUserMessages) { held = [.. _heldUserMessages]; _heldUserMessages.Clear(); }
+        foreach (var item in held) await NotifyAsync("item/completed", item, _cts.Token);
+    }
 
     async Task<JsonElement> ServerRequestAsync(string method, JsonNode @params, CancellationToken ct) {
         var id  = Interlocked.Increment(ref _nextServerId);

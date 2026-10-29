@@ -276,6 +276,49 @@ public class AgentOrchestratorFinalizerVerdictTests {
         await Assert.That(server.AgentUnregisteredCalls).Contains("post-window-1");
     }
 
+    /// <summary>A reap after the launch window reaches the server only through the unregister, so that
+    /// call carries the verdict's code; free text after the code stays on the daemon.</summary>
+    [Test]
+    [Arguments("pi_reviewer_turn_timeout", "pi_reviewer_turn_timeout")]
+    [Arguments("unattended_frame_unadmittable: /private/path", "unattended_frame_unadmittable")]
+    public async Task Post_window_reap_unregisters_with_the_verdicts_code(string reason, string expected) {
+        var server = new CaptureServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
+            server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        var (runtime, process, fake) = BuildVerdictRuntime("post-window-code");
+        await using var _ = fake;
+
+        runtime.FirstTurnSettledForTest.TrySetResult();
+        await Assert.That(runtime.TryStartReap(reason, () => Task.CompletedTask)).IsTrue();
+        process.SignalExited(0);
+
+        var agent = AgentOrchestratorHarness.SeedAcpAgent(orch, "post-window-code", runtime);
+
+        await orch.FinalizeAgentRunForTest(agent).WaitAsync(TimeSpan.FromSeconds(30));
+
+        await Assert.That(server.AgentUnregisteredStopReasons["post-window-code"]).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task An_agent_nothing_reaped_unregisters_without_a_code() {
+        var server = new CaptureServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
+            server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        var (runtime, process, fake) = BuildVerdictRuntime("no-verdict");
+        await using var _ = fake;
+
+        process.SignalExited(0);
+
+        var agent = AgentOrchestratorHarness.SeedAcpAgent(orch, "no-verdict", runtime);
+
+        await orch.FinalizeAgentRunForTest(agent).WaitAsync(TimeSpan.FromSeconds(30));
+
+        await Assert.That(server.AgentUnregisteredCalls).Contains("no-verdict");
+        await Assert.That(server.AgentUnregisteredStopReasons["no-verdict"]).IsNull();
+    }
+
     [Test]
     public async Task Empty_reason_fallback_carries_exception_type() {
         // Direct unit coverage of the mapping helper itself (the general-purpose fallback cover).
@@ -365,6 +408,41 @@ public class AgentOrchestratorFinalizerVerdictTests {
 
         await Assert.That(server.StatusChangedCalls).Contains(("stop-normal-1", "Completed"));
         await Assert.That(agent.Status).IsEqualTo("Completed");
+    }
+
+    /// <summary>A stop reports Completed only once the agent is gone. One whose process outlives the
+    /// terminate is reported Failed, here and on the server, so a live agent never reads as stopped.</summary>
+    [Test]
+    public async Task Stop_of_an_agent_that_never_exits_reports_failed_not_completed() {
+        var server = new CaptureServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
+            server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        var agent = orch.SeedAgentForTest("stop-stuck-1", status: "Running", pty: new RecordingPtyProcess());
+
+        await orch.HandleStopAgentForTest("stop-stuck-1");
+
+        await Assert.That(server.StatusChangedCalls.Where(c => c.AgentId == "stop-stuck-1").Select(c => c.Status))
+            .IsEquivalentTo(["Failed"]);
+        await Assert.That(agent.Status).IsEqualTo("Failed");
+        await Assert.That(server.RunEvents.Single(e => e.AgentId == "stop-stuck-1").Event)
+            .IsEqualTo(new AgentRunStopped("failed", null));
+    }
+
+    /// <summary>Overlapping stops of one agent report its ending once, after the last of them settles.</summary>
+    [Test]
+    public async Task Overlapping_stops_report_once() {
+        var server = new CaptureServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
+            server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        var agent = orch.SeedAgentForTest("stop-twice-1", status: "Running", pty: new RecordingPtyProcess());
+
+        await Task.WhenAll(orch.HandleStopAgentForTest("stop-twice-1"), orch.HandleStopAgentForTest("stop-twice-1"));
+
+        await Assert.That(server.StatusChangedCalls.Count(c => c.AgentId == "stop-twice-1")).IsEqualTo(1);
+        await Assert.That(server.RunEvents.Count(e => e.AgentId == "stop-twice-1")).IsEqualTo(1);
+        await Assert.That(agent.StopSettled.Task.IsCompleted).IsTrue();
     }
 
     /// <summary>Part A final-review fix wave, item 2: the publish→report race. A same-tick

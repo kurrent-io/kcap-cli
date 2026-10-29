@@ -6,33 +6,62 @@
         <!-- ConsentFlipClaims' directory-fsync barrier uses LibraryImport, which requires this. -->
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <!-- This is an unbundled `dotnet run` executable, so macOS shows the binary name (not an
-             app-bundle display name) on dock hover — give it a human-friendly one. RootNamespace
-             stays Capacitor.App: only the output/assembly identity changes here. -->
-        <AssemblyName>Kurrent Capacitor</AssemblyName>
+             app-bundle display name) on dock hover — use a recognisable name distinct from the bundled CLI. -->
+        <AssemblyName>kcap-desktop</AssemblyName>
+        <Title>kcap</Title>
+        <Product>kcap</Product>
         <RootNamespace>Capacitor.App</RootNamespace>
+        <!-- The exe's own icon: Explorer, the taskbar pin and the Start-menu shortcut read it. -->
+        <ApplicationIcon>Assets\kcap-icon.ico</ApplicationIcon>
     </PropertyGroup>
+    <ItemGroup>
+        <!-- Only a gen2 sweeps the large-object heap, and a mostly idle UI rarely reaches one, so
+             transcript and terminal replays pile up there as free space until this compacts it. -->
+        <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="5" />
+    </ItemGroup>
     <ItemGroup>
         <ProjectReference Include="..\Capacitor.Cli.Core\Capacitor.Cli.Core.csproj" />
         <ProjectReference Include="..\Capacitor.Remote.Models\Capacitor.Remote.Models.csproj" />
         <PackageReference Include="Avalonia" />
         <PackageReference Include="Avalonia.Desktop" />
+        <PackageReference Include="Avalonia.Fonts.Inter" />
+        <PackageReference Include="Avalonia.Labs.Notifications" />
         <PackageReference Include="Avalonia.Themes.Fluent" />
         <PackageReference Include="ReactiveUI.Avalonia.Reactive" />
         <PackageReference Include="DynamicData" />
         <PackageReference Include="Markdig" />
+        <PackageReference Include="Lucide.Avalonia" />
         <PackageReference Include="MarkView.Avalonia" />
         <PackageReference Include="MarkView.Avalonia.SyntaxHighlighting" />
         <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
         <PackageReference Include="Eventuous.SignalR.Client" />
+        <PackageReference Include="Svg.Controls.Skia.Avalonia" />
         <PackageReference Include="SvcSystems.UI.Terminal" />
         <PackageReference Include="Velopack" />
         <PackageReference Include="XTerm.NET" />
     </ItemGroup>
     <ItemGroup>
         <!-- .axaml files are auto-included as AvaloniaXaml by Avalonia's build props; plain
-             assets (the product-mark bitmap, spec §4) need an explicit AvaloniaResource entry
+             assets (the product-mark bitmap) need an explicit AvaloniaResource entry
              to ship inside the assembly's avares:// resource set. -->
         <AvaloniaResource Include="Assets\kcap-icon.png" />
+        <AvaloniaResource Include="Assets\kcap-tray-icon.png" />
+        <AvaloniaResource Include="Assets\kcap-logo-on-dark.png" />
+        <AvaloniaResource Include="Assets\ouro.svg" />
+        <!-- Embed icon licenses so they also travel with the single-file macOS bundle. -->
+        <AvaloniaResource Include="Assets\Lucide*-LICENSE.txt" />
+        <AvaloniaResource Include="Assets\LobeHub-Icons-LICENSE.txt" />
+    </ItemGroup>
+    <!-- Loaded by PatchedAvaloniaNative in place of the package's library on macOS, and a file of
+         its own so codesign can sign it. Native/AvaloniaNative/build.sh rebuilds it on an Avalonia bump.
+         The version stamp is for the tests only: published, it lands in Contents/MacOS, where
+         codesign refuses a file that is not code. -->
+    <ItemGroup Condition="$([MSBuild]::IsOSPlatform('OSX')) Or '$(RuntimeIdentifier)' == 'osx-arm64' Or '$(RuntimeIdentifier)' == 'osx-x64'">
+        <None Include="Native\AvaloniaNative\libAvaloniaNative.patched.dylib" Link="libAvaloniaNative.patched.dylib" CopyToOutputDirectory="PreserveNewest" />
+        <None Include="Native\AvaloniaNative\libAvaloniaNative.patched.version" Link="libAvaloniaNative.patched.version" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Never" />
+    </ItemGroup>
+    <ItemGroup>
+        <AdditionalFiles Include="BannedSymbols.App.txt" Visible="false" />
     </ItemGroup>
     <ItemGroup>
         <InternalsVisibleTo Include="Capacitor.App.Tests.Unit" />

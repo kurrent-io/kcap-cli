@@ -63,6 +63,9 @@ public class ToolSummaryTests {
     [Arguments("exec_command", """{"cmd":"sed -n '1,40p' a.cs"}""", ToolCategory.Read)]
     [Arguments("exec_command", """{"cmd":"rg foo src"}""", ToolCategory.Search)]
     [Arguments("exec_command", """{"cmd":"ls src"}""", ToolCategory.Search)]
+    [Arguments("exec_command", """{"cmd":"find . -name '*.cs'"}""", ToolCategory.Search)]
+    [Arguments("exec_command", """{"cmd":"find . -delete"}""", ToolCategory.Command)]
+    [Arguments("exec_command", """{"cmd":"find . -exec rm {} +"}""", ToolCategory.Command)]
     [Arguments("exec_command", """{"cmd":"cat a && make"}""", ToolCategory.Command)]
     [Arguments("exec_command", """{"cmd":"rg foo src\nrm -rf tmp"}""", ToolCategory.Command)]
     [Arguments("exec_command", """{"cmd":"cat skills/review/SKILL.md"}""", ToolCategory.Skill)]
@@ -76,5 +79,56 @@ public class ToolSummaryTests {
     [Arguments("spawn_agent", """{"task":"t"}""", ToolCategory.Agent)]
     public async Task Categorize_refines_reads_and_shell_commands_from_the_input(string name, string? input, ToolCategory expected) {
         await Assert.That(ToolSummary.Categorize(name, input)).IsEqualTo(expected);
+    }
+
+    [Test]
+    [Arguments("mcp__plugin_kcap_kcap-workitems__declare_work_item", ToolCategory.Work)]
+    [Arguments("declare_work_item", ToolCategory.Work)]
+    [Arguments("mcp__kcap-artefacts__publish_artefact", ToolCategory.Artefact)]
+    [Arguments("save_memory", ToolCategory.Memory)]
+    [Arguments("search_sessions", ToolCategory.Session)]
+    [Arguments("start_agent", ToolCategory.Flow)]
+    [Arguments("mcp__plugin_kcap_kcap-plans__update_plan_task", ToolCategory.Plan)]
+    public async Task Kcap_tools_categorize_through_the_catalogue(string name, ToolCategory expected) {
+        await Assert.That(ToolSummary.Categorize(name, """{"x":1}""")).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task Kcap_categories_describe_and_chip_in_product_words() {
+        await Assert.That(ToolSummary.Describe([ToolCategory.Artefact])).IsEqualTo("Worked on a page");
+        await Assert.That(ToolSummary.Describe([ToolCategory.Work, ToolCategory.Memory, ToolCategory.Session, ToolCategory.Flow, ToolCategory.Flow]))
+            .IsEqualTo("Tracked work, used team memory, recalled sessions, ran flows");
+        await Assert.That(ToolSummary.ChipLabel(ToolCategory.Artefact)).IsEqualTo("Page");
+        await Assert.That(ToolSummary.ChipLabel(ToolCategory.Work)).IsEqualTo("Work");
+        await Assert.That(ToolSummary.ChipLabel(ToolCategory.Memory)).IsEqualTo("Memory");
+        await Assert.That(ToolSummary.ChipLabel(ToolCategory.Session)).IsEqualTo("Recall");
+        await Assert.That(ToolSummary.ChipLabel(ToolCategory.Flow)).IsEqualTo("Flow");
+    }
+
+    [Test]
+    [Arguments("Write", ToolCategory.Edit, """{"file_path":"docs/plan.md"}""", "Wrote file")]
+    [Arguments("write_file", ToolCategory.Edit, """{"path":"docs/plan.md"}""", "Wrote file")]
+    [Arguments("Edit", ToolCategory.Edit, """{"file_path":"src/a.cs"}""", "Edited file")]
+    [Arguments("Read", ToolCategory.Read, """{"file_path":"src/a.cs"}""", "Read file")]
+    [Arguments("LS", ToolCategory.Search, """{"path":"src"}""", "Listed files")]
+    [Arguments("Grep", ToolCategory.Search, """{"pattern":"foo"}""", "Searched files")]
+    [Arguments("Bash", ToolCategory.Command, """{"command":"git status"}""", "Ran command")]
+    [Arguments("BashOutput", ToolCategory.Command, """{"bash_id":"b1"}""", "Read shell output")]
+    [Arguments("KillShell", ToolCategory.Command, """{"shell_id":"b1"}""", "Stopped shell")]
+    [Arguments("write_stdin", ToolCategory.Command, """{"session_id":1}""", "Sent input")]
+    [Arguments("Bash", ToolCategory.Command, """{"command":"git status","description":"Check repo status"}""", null)]
+    [Arguments("Task", ToolCategory.Agent, """{"prompt":"Reply pong","description":"Reply pong"}""", null)]
+    [Arguments("Task", ToolCategory.Agent, """{"prompt":"Inspect src/"}""", "Ran agent")]
+    [Arguments("TaskOutput", ToolCategory.Agent, """{"task_id":"a1"}""", "Read agent output")]
+    [Arguments("TaskStop", ToolCategory.Agent, """{"task_id":"a1"}""", "Stopped agent")]
+    [Arguments("interrupt_agent", ToolCategory.Agent, """{"id":"a1"}""", "Stopped agent")]
+    [Arguments("close_agent", ToolCategory.Agent, """{"id":"a1"}""", "Stopped agent")]
+    [Arguments("wait_agent", ToolCategory.Agent, """{"id":"a1"}""", "Waited on agent")]
+    [Arguments("send_input", ToolCategory.Agent, """{"id":"a1"}""", "Sent input")]
+    [Arguments("resume_agent", ToolCategory.Agent, """{"id":"a1"}""", "Resumed agent")]
+    [Arguments("list_agents", ToolCategory.Agent, """{}""", "Listed agents")]
+    [Arguments("AskUserQuestion", ToolCategory.Question, """{"questions":[{"question":"Pick one"}]}""", null)]
+    public async Task Row_label_names_built_in_tools_without_their_own_prose_description(string name, ToolCategory category, string? input, string? expected) {
+        await Assert.That(ToolSummary.RowLabel(name, category, input)).IsEqualTo(expected);
     }
 }

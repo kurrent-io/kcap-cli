@@ -175,7 +175,8 @@ internal static partial class AcpEventTranslator {
             string? cwd          = null,
             string? model        = null,
             string? rawSessionId = null,
-            string? sessionMode  = null) =>
+            string? sessionMode  = null,
+            HostedSessionRepository? repository = null) =>
         new(
             Seq: seq,
             Kind: AcpEventKind.SessionStarted,
@@ -183,7 +184,11 @@ internal static partial class AcpEventTranslator {
             Model: model,
             RawSessionId: rawSessionId,
             SessionMode: sessionMode,
-            TimestampIso: timestampIso);
+            TimestampIso: timestampIso,
+            RepoOwner: repository?.Owner,
+            RepoName: repository?.Name,
+            RepoRemoteUrl: repository?.RemoteUrl,
+            RepoBranch: repository?.Branch);
 
     /// <summary>
     /// Builds the daemon-synthesized <c>UserMessage</c> envelope — one per

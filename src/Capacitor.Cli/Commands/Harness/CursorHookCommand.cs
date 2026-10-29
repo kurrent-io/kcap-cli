@@ -26,6 +26,8 @@ public sealed class CursorHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
         HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
         GitProviderRouter router, WorkingDirectory workdir) {
+    readonly SessionStartAudience audience = SessionStartAudience.From(hosted);
+
     readonly CursorMarkers  _markers  = new(config, clock.Time);
 
     string Url => profiles.Resolution.ServerUrl!;
@@ -42,39 +44,25 @@ public sealed class CursorHookCommand(
 
     /// <summary>2s of work is what kcap promises Cursor per hook so it never blocks the agent loop
     /// — its own promise, not a Cursor timeout, which is why it is written as the
-    /// work plus the reserve <see cref="HookBudget.Remaining"/> takes back off it. One ceiling for
-    /// every Cursor event: the budget is armed before the payload is parsed.</summary>
+    /// work plus the reserve <see cref="HookBudget.Remaining"/> takes back off it.</summary>
     internal static readonly TimeSpan Ceiling = TimeSpan.FromSeconds(2) + HookBudget.Safety;
+
+    /// <summary>cursor-agent holds the first model request until sessionStart answers (an 8s hook was
+    /// measured to land), and the guidelines fetch runs on whatever recording leaves, so 2s leaves it
+    /// nothing. Every other event keeps <see cref="Ceiling"/>.</summary>
+    internal static readonly TimeSpan SessionStartCeiling = TimeSpan.FromSeconds(6) + HookBudget.Safety;
 
     static readonly TimeSpan HookPostTimeout = TimeSpan.FromSeconds(1);
 
     /// <summary>
     /// Production entry point. Delegates straight to <see cref="HandleInternal"/> with
-    /// production factories — see that method's doc for how the single hard-cap deadline
-    /// (review finding 1) covers client/auth setup through dispatch.
+    /// production factories. The single hard-cap deadline covers client/auth setup through dispatch.
     /// </summary>
     public Task<int> Handle(TextReader stdin) => HandleInternal(stdin);
 
     /// <summary>
-    /// Test seam for a bare hard-cap race over an arbitrary <see cref="Task{TResult}"/>. Kept
-    /// as a generic, independently-tested utility (mirrors <c>ClaudeHookCommand.WithHardCap</c>,
-    /// itself unused in that class's production path) — NOT used by <see cref="Handle"/>/
-    /// <see cref="HandleInternal"/>, which own their own single deadline race end-to-end (see
-    /// review finding 1: wrapping <em>another</em>, independent cap around an
-    /// already-self-capping inner phase created two competing timers aimed at the same
-    /// deadline, and the outer one — started earlier, before client/auth setup — could win
-    /// without knowing whether a {} was owed, while the abandoned inner still held the sole
-    /// stdout handle and could write late).
-    /// </summary>
-    internal static async Task<int> WithHardCap(Task<int> inner, TimeSpan budget, TimeProvider time) {
-        var winner = await Task.WhenAny(inner, Task.Delay(budget, time));
-        if (winner != inner) return 0;
-        return await inner;
-    }
-
-    /// <summary>
     /// The single hard-cap deadline for the ENTIRE dispatch — client/auth setup through the
-    /// bounded async stdin read, recording-critical work, and memory (review finding 1).
+    /// bounded async stdin read, recording-critical work, and memory.
     /// There is exactly one race here: client/auth creation is bounded by its own
     /// <see cref="Task.WhenAny(Task, Task)"/> against what this hook's budget has left (some
     /// <c>TokenStore</c> paths don't honour a <see cref="CancellationToken"/> and would
@@ -119,7 +107,10 @@ public sealed class CursorHookCommand(
             return 0;
         }
 
-        var budget = clock.Budget(Ceiling);
+        // Read before auth, so a sessionStart's longer ceiling covers its token refresh as well.
+        if (await ReadPayloadAsync(stdin) is not { } body) return 0;
+
+        var budget = clock.Budget(CeilingFor(body));
 
         using var cts = budget.CancelAtCeiling();
         HttpClient? client = null;
@@ -156,13 +147,21 @@ public sealed class CursorHookCommand(
             // No entry guard on the budget: the ceiling is measured from process entry, so a slow
             // resolve or spool drain can spend it before dispatch, and returning here would drop
             // the event outright. HandleCore's own per-step gates spool it instead of posting.
-            return await HandleCore(client, stdin, spool);
+            return await DispatchAsync(client, body, spool);
         } catch {
             // Fail-open contract: never crash Cursor. Covers auth timeout,
             // unreachable server, malformed config, etc.
             return 0;
         } finally {
             client?.Dispose();
+        }
+    }
+
+    static bool IsSessionStart(string body) {
+        try {
+            return JsonNode.Parse(body) is JsonObject node && TryGetString(node, "hook_event_name") == "sessionStart";
+        } catch (System.Text.Json.JsonException) {
+            return false;
         }
     }
 
@@ -180,15 +179,44 @@ public sealed class CursorHookCommand(
             HttpClient client,
             TextReader stdin,
             HookSpool  spool
-        ) {
-        // Its own budget rather than the caller's: this is an entry point in its own right, and a
-        // budget is nothing but a ceiling read off the shared clock, so both name the same deadline.
-        var budget = clock.Budget(Ceiling);
+        ) =>
+        await ReadPayloadAsync(stdin) is { } body ? await DispatchAsync(client, body, spool) : 0;
+
+    /// <summary>The payload, read before anything else because its kind picks the ceiling. Raced against the
+    /// ordinary ceiling rather than cancelled, since a reader need not honour a token; a read already done wins
+    /// the tie. Null when it did not arrive in time, and then nothing is written.</summary>
+    async Task<string?> ReadPayloadAsync(TextReader stdin) {
+        // A reader that blocks inside its async overload, as Console.In does, blocks here before the race
+        // starts, so the entry point hands over a stream-backed reader instead.
+        var read   = stdin.ReadToEndAsync(CancellationToken.None);
+        var winner = await Task.WhenAny(read, clock.Budget(Ceiling).CeilingReached());
+
+        if (winner == read) {
+            try {
+                return await read;
+            } catch {
+                // Fail-open: an unreadable payload must never crash Cursor's agent loop.
+                return null;
+            }
+        }
+
+        _ = read.ContinueWith(static t => _ = t.Exception, CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+
+        return null;
+    }
+
+    static TimeSpan CeilingFor(string body) => IsSessionStart(body) ? SessionStartCeiling : Ceiling;
+
+    async Task<int> DispatchAsync(HttpClient client, string body, HookSpool spool) {
+        // Its own budget rather than the caller's: a budget is nothing but a ceiling read off the
+        // shared clock, so both name the same deadline.
+        var budget = clock.Budget(CeilingFor(body));
 
         using var cts = budget.CancelAtCeiling();
         var kindSignal = new ResolvedEventKindSignal();
 
-        var inner    = HandleCoreInner(client, stdin, spool, cts.Token, kindSignal, budget);
+        var inner    = HandleCoreInner(client, new StringReader(body), spool, cts.Token, kindSignal, budget);
         var deadline = budget.CeilingReached();
         var winner   = await Task.WhenAny(inner, deadline);
 
@@ -200,8 +228,8 @@ public sealed class CursorHookCommand(
         // wall-clock moment regardless — but that internal timer racing this method's own
         // `using`-disposal at the very next statement is exactly that, a race, not a
         // guarantee. Calling Cancel() deterministically (rather than trusting the timer to
-        // have already fired) is what makes the inner's cancellation-aware stdin read /
-        // HTTP calls (both bound to cts.Token) actually observe cancellation promptly. This
+        // have already fired) is what makes the inner's cancellation-aware HTTP calls
+        // (bound to cts.Token) actually observe cancellation promptly. This
         // also cancels the linked memory CTS in RunMemoryOrchestrationAsync — a cancelled
         // fetch there leaves the lease uncommitted, which is already the intended, tested
         // behavior (see CancelledFetch_leaves_lease_uncommitted).
@@ -546,11 +574,11 @@ public sealed class CursorHookCommand(
             // orchestration), so re-read it; sessionStart fires once per session and the read is
             // fail-open under the surrounding catch.
             var nudgeProfile   = profiles.Effective;
-            var workItemsNudge = WorkItemsNudgeEmitter.Resolve(HarnessId.Cursor, sessionId, nudgeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()));
-            var plansNudge     = PlansNudgeEmitter.Resolve(HarnessId.Cursor, sessionId, nudgeProfile?.DisablePlansNudge is true, harnesses);
-            var harnessNudge   = HarnessNudgeEmitter.ResolveFragmentForHook(nudgeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time);
+            var sessionNudges  = SessionNudges.Resolve(HarnessId.Cursor, sessionId, nudgeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience, workspaceRoot, home);
+            var harnessNudge   = HarnessNudgeEmitter.ResolveFragmentForHook(nudgeProfile?.DisableHarnessNudge is true || !audience.GetsOnboarding, config, harnesses, clock.Time);
+            var firstRunNotice = FirstRunNoticeEmitter.Resolve(nudgeProfile?.DisableFirstRunNotice is true || !audience.GetsOnboarding, config, HarnessId.Cursor, harnesses);
             return SessionStartMemoryOutputAdapters.Render(HarnessId.Cursor, fragment,
-                HarnessNudgeEmitter.Combine(workItemsNudge, plansNudge, harnessNudge));
+                HarnessNudgeEmitter.Combine(sessionNudges, harnessNudge, firstRunNotice));
         } catch {
             // Fail-open per design: any exception (budget cancellation,
             // transcript-file IO race, JSON quirk we missed) must never crash Cursor's agent
@@ -597,9 +625,10 @@ public sealed class CursorHookCommand(
         // Effective profile (ResolvedProfile.Profile is null under --server-url/KCAP_URL). ct-bound to
         // the dispatcher deadline so the config read cancels rather than lingering when abandoned.
         var activeProfile      = profiles.Effective;
-        var disabled           = activeProfile?.DisableMemoryIndex is true;
+        var disabled           = activeProfile?.DisableMemoryIndex is true || !audience.GetsDriverGuidance;
         var guidelinesDisabled = activeProfile?.DisableSessionGuidelines is true;
-        if (disabled && guidelinesDisabled) return null;
+        var flowsDisabled      = SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Cursor, harnesses, audience: audience);
+        if (disabled && guidelinesDisabled && flowsDisabled) return null;
 
         try {
             // The injected clock, the same one the lease store below runs on: a hook run has exactly
@@ -632,7 +661,7 @@ public sealed class CursorHookCommand(
                     IsTopLevel: true, ClassificationAuthoritative: true, SessionLifecycleReason.New,
                     CallbackMayRepeat: false),
                 new SessionStartMemoryContextRequest(Url, workspaceRoot, disabled, memBudget, memCts.Token,
-                    GuidelinesDisabled: guidelinesDisabled));
+                    GuidelinesDisabled: guidelinesDisabled, FlowsDisabled: flowsDisabled));
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return null;
         }

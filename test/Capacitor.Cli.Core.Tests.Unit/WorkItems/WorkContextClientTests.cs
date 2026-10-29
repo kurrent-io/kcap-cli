@@ -44,6 +44,19 @@ public class WorkContextClientTests {
     }
 
     [Test]
+    public async Task Viewer_identity_route_parses_the_avatar_and_ids() {
+        using var server = Serve("/api/users/me/identity", 200, """{"user_id":"user_a","avatar_url":"https://example.test/a.png","ids":["user_a","github:5"]}""");
+        using var http = new HttpClient();
+
+        var outcome = await new WorkContextClient(http, server.Urls[0]).GetViewerIdentityAsync(CancellationToken.None);
+
+        await Assert.That(outcome.Body!.AvatarUrl).IsEqualTo("https://example.test/a.png");
+        await Assert.That(outcome.Body.Owns("github:5")).IsTrue();
+        await Assert.That(outcome.Body.Owns("github:6")).IsFalse();
+        await Assert.That(outcome.Body.Owns("5")).IsTrue();
+    }
+
+    [Test]
     public async Task Topology_and_summary_routes_hit_their_paths() {
         using var server = WireMockServer.Start();
         server.Given(Request.Create().WithPath("/api/work-items/w1/topology").UsingGet())

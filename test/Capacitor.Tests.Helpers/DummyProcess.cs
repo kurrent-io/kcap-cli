@@ -32,7 +32,55 @@ public sealed class DummyProcess : IDisposable {
             foreach (var (k, v) in env)
                 psi.Environment[k] = v;
 
-        return new DummyProcess(Process.Start(psi) ?? throw new InvalidOperationException("failed to start dummy process"));
+        var proc = Process.Start(psi) ?? throw new InvalidOperationException("failed to start dummy process");
+
+        var dummy = new DummyProcess(proc);
+
+        if (OperatingSystem.IsLinux()) {
+            try {
+                WaitUntilExeced(proc, env);
+            } catch {
+                dummy.Dispose();
+                throw;
+            }
+        }
+
+        return dummy;
+    }
+
+    /// <summary>
+    /// <c>Process.Start</c> returns while the child is still inside <c>execve</c>: <c>vfork</c>
+    /// releases the parent before the kernel publishes the new image, and until then
+    /// <c>/proc/{pid}/environ</c> reads empty, so an env-marker read sees no marker at all. A
+    /// <c>cmdline</c> naming sleep proves the new image is in place; <c>environ</c> is published
+    /// after it, so the requested markers are checked second.
+    /// </summary>
+    static void WaitUntilExeced(Process proc, IDictionary<string, string>? env) {
+        var deadline = Stopwatch.StartNew();
+
+        while (deadline.Elapsed < TimeSpan.FromSeconds(10)) {
+            if (proc.HasExited) return;
+
+            try {
+                var argv0 = File.ReadAllText($"/proc/{proc.Id}/cmdline").Split('\0')[0];
+
+                if (Path.GetFileName(argv0) == "sleep" && HasMarkers(proc.Id, env)) return;
+            } catch (IOException) {
+                // Still mid-exec, or gone: the HasExited check above ends the wait for a dead child.
+            }
+
+            Thread.Sleep(1);
+        }
+
+        throw new InvalidOperationException($"dummy process {proc.Id} did not finish exec within 10s");
+    }
+
+    static bool HasMarkers(int pid, IDictionary<string, string>? env) {
+        if (env is null || env.Count == 0) return true;
+
+        var entries = File.ReadAllText($"/proc/{pid}/environ").Split('\0');
+
+        return env.All(kv => entries.Contains($"{kv.Key}={kv.Value}", StringComparer.Ordinal));
     }
 
     public void Kill() {

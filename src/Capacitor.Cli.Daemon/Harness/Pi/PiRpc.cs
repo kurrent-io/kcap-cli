@@ -118,14 +118,10 @@ internal static class PiRpc {
     /// dropping the result, so this never throws on an unexpected shape.</description></item>
     /// <item><description><c>extension_error</c> maps to ONE <c>system_note</c>, its text capped at
     /// <see cref="ExtensionNoteTextCap"/> characters.</description></item>
-    /// <item><description><c>extension_ui_request</c> — a dialog or fire-and-forget UI call from a
-    /// user's OWN Pi extension (<c>KCAP_PI_PURE</c> only stands down kcap's own extension) — maps to
-    /// ONE <c>system_note</c> naming the request's <c>method</c>, capped at
-    /// <see cref="ExtensionNoteTextCap"/> characters. A dialog method (<c>select</c>/<c>confirm</c>/
-    /// <c>input</c>/<c>editor</c>) blocks the child on stdin for an <c>extension_ui_response</c> this
-    /// daemon never sends, so without this the turn stalls silently; the note is emitted for every
-    /// method, not just the blocking ones, since a hosted viewer has no way to tell them apart
-    /// either.</description></item>
+    /// <item><description><c>extension_ui_request</c> with method <c>notify</c> maps to ONE
+    /// <c>system_note</c> carrying its message, capped at <see cref="ExtensionNoteTextCap"/>. A dialog
+    /// method is the runtime's to answer, and the remaining display-only methods have no transcript
+    /// meaning, so both yield <c>[]</c>.</description></item>
     /// <item><description>Every other known event (<c>agent_start</c>/<c>agent_end</c>/
     /// <c>agent_settled</c>/<c>turn_start</c>/<c>turn_end</c>/<c>message_start</c>/
     /// <c>message_update</c>/<c>bash_execution_update</c>) and any unrecognized type yield
@@ -281,24 +277,10 @@ internal static class PiRpc {
         return [new AcpEventEnvelope(Kind: AcpEventKind.SystemNote, Text: Cap(error))];
     }
 
-    /// <summary>See the <see cref="ToEnvelopes"/> class doc's <c>extension_ui_request</c> item: a
-    /// dialog method blocks the child waiting for an <c>extension_ui_response</c> this daemon never
-    /// sends, so a hosted turn that hits one stalls with no other signal anywhere in the
-    /// transcript.
-    ///
-    /// <para><b>Recovery.</b> A dialog method (<c>select</c>/<c>confirm</c>/<c>input</c>/
-    /// <c>editor</c>) leaves the child BLOCKED on stdin waiting for an <c>extension_ui_response</c>
-    /// this daemon never sends; this note is the only signal anywhere that it happened. The runtime
-    /// does not synthesize a response or auto-abort in PR-1 — the only way out is termination
-    /// (graceful stop → abort → terminate).</para></summary>
-    static IReadOnlyList<AcpEventEnvelope> TranslateExtensionUiRequest(JsonElement root) {
-        var method = root.Str("method") ?? "unknown";
-
-        return [new AcpEventEnvelope(
-            Kind: AcpEventKind.SystemNote,
-            Text: Cap($"Pi extension requested interactive input ({method}); hosted sessions cannot "
-                    + "answer, the turn may stall."))];
-    }
+    static IReadOnlyList<AcpEventEnvelope> TranslateExtensionUiRequest(JsonElement root) =>
+        root.Str("method") == "notify" && root.Str("message") is { Length: > 0 } message
+            ? [new AcpEventEnvelope(Kind: AcpEventKind.SystemNote, Text: Cap(message))]
+            : [];
 
     static string Cap(string text) => text.Length > ExtensionNoteTextCap ? text[..ExtensionNoteTextCap] : text;
 
@@ -321,6 +303,27 @@ internal static class PiRpc {
         new System.Text.Json.Nodes.JsonObject {
             ["id"]   = id,
             ["type"] = "abort",
+        }.ToJsonString();
+
+    public static string ExtensionUiValue(string id, string value) =>
+        new System.Text.Json.Nodes.JsonObject {
+            ["type"]  = "extension_ui_response",
+            ["id"]    = id,
+            ["value"] = value,
+        }.ToJsonString();
+
+    public static string ExtensionUiConfirmed(string id, bool confirmed) =>
+        new System.Text.Json.Nodes.JsonObject {
+            ["type"]      = "extension_ui_response",
+            ["id"]        = id,
+            ["confirmed"] = confirmed,
+        }.ToJsonString();
+
+    public static string ExtensionUiCancelled(string id) =>
+        new System.Text.Json.Nodes.JsonObject {
+            ["type"]      = "extension_ui_response",
+            ["id"]        = id,
+            ["cancelled"] = true,
         }.ToJsonString();
 
     public static string GetStateCommand(string id) =>

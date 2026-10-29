@@ -102,6 +102,14 @@ public static class CodexConfigToml {
         UpdateMcpRegistration(configPath, remove: false,
                               Mcp.KcapBinaryCommand.Resolve(resolveBinaryPath));
 
+    /// <summary>Whether kcap previously registered MCP servers here, independently of recording hooks.</summary>
+    public static bool HasMcpInstallRecord(string configPath) {
+        var ledgerPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(configPath))!, "mcp-ownership-v1.json");
+        if (!File.Exists(ledgerPath)) return false;
+        CanonicalConfigPath(configPath);
+        return ReadOwnershipLedger(ledgerPath)?["entries"] is JsonObject entries && entries.Count > 0;
+    }
+
     /// <summary>
     /// Removes the kcap-owned MCP server entries (<see cref="KcapMcpServers.ForCodex"/>)
     /// from <c>~/.codex/config.toml</c> . Only those names
@@ -169,6 +177,17 @@ public static class CodexConfigToml {
                         ledgerChanged = true;
                     }
 
+                    foreach (var name in KcapMcpServers.Retired) {
+                        if (claims[name] is not JsonObject claim) continue;
+                        if (servers.TryGetValue(name, out var value) && value is TomlTable table &&
+                            string.Equals(StringField(claim, "fingerprint"), Fingerprint(table), StringComparison.Ordinal)) {
+                            servers.Remove(name);
+                            tomlChanged = true;
+                        }
+                        claims.Remove(name);
+                        ledgerChanged = true;
+                    }
+
                     // Safe crash ordering: config first, ownership claim second. A crash leaks an
                     // unowned entry, which uninstall deliberately preserves.
                     if (tomlChanged) {
@@ -179,28 +198,29 @@ public static class CodexConfigToml {
                     return tomlChanged || ledgerChanged ? Change.Updated : Change.Unchanged;
                 }
 
+                var names = KcapMcpServers.ForCodex.Select(d => d.Name).Concat(KcapMcpServers.Retired).ToArray();
                 if (servers is null) {
-                    foreach (var descriptor in KcapMcpServers.ForCodex)
-                        ledgerChanged |= claims.Remove(descriptor.Name);
+                    foreach (var name in names)
+                        ledgerChanged |= claims.Remove(name);
                     if (ledgerChanged) WriteJsonAtomic(ledgerPath, ledger);
                     return ledgerChanged ? Change.Updated : Change.Unchanged;
                 }
                 var removable = new List<string>();
                 var preserved = false;
-                foreach (var descriptor in KcapMcpServers.ForCodex) {
-                    if (claims[descriptor.Name] is not JsonObject claim) {
-                        preserved |= servers.ContainsKey(descriptor.Name);
+                foreach (var name in names) {
+                    if (claims[name] is not JsonObject claim) {
+                        preserved |= servers.ContainsKey(name);
                         continue;
                     }
-                    if (!servers.TryGetValue(descriptor.Name, out var value) || value is not TomlTable table ||
+                    if (!servers.TryGetValue(name, out var value) || value is not TomlTable table ||
                         !string.Equals(StringField(claim, "fingerprint"), Fingerprint(table), StringComparison.Ordinal)) {
-                        claims.Remove(descriptor.Name); // missing/changed: clear claim and preserve config
+                        claims.Remove(name); // missing/changed: clear claim and preserve config
                         ledgerChanged = true;
-                        preserved |= servers.ContainsKey(descriptor.Name);
+                        preserved |= servers.ContainsKey(name);
                         continue;
                     }
-                    removable.Add(descriptor.Name);
-                    claims.Remove(descriptor.Name);
+                    removable.Add(name);
+                    claims.Remove(name);
                     ledgerChanged = true;
                 }
 
@@ -226,7 +246,8 @@ public static class CodexConfigToml {
             ["command"] = command,
             ["args"] = ToTomlArray(descriptor.Args)
         };
-        if (descriptor.ReadOnly) table["default_tools_approval_mode"] = "approve";
+        if (descriptor.AutoApprove) table["default_tools_approval_mode"] = "approve";
+        if (descriptor.ToolTimeout is { } timeout) table["tool_timeout_sec"] = (long)timeout.TotalSeconds;
         return table;
     }
 

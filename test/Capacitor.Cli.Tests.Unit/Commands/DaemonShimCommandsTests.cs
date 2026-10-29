@@ -24,13 +24,15 @@ public class DaemonShimCommandsTests {
     static async Task<(int Exit, ShimEnsureJson? Json, string? Out)> Run(
             string[] args, bool? onPath = null, string? target = "/usr/local/lib/kcap",
             Func<string, CancellationToken, Task<ShimResult>>? install = null,
-            Func<string, ShimPreflight>? preflight = null, bool isMacOs = false) {
+            Func<string, ShimPreflight>? preflight = null, bool installable = false) {
         using var capture = ConsoleOutput.StartFullCapture();
         var exit = await DaemonShimCommands.Ensure(args, TimeProvider.System, resolveTarget: () => target,
-            probe: new FakeProbe(onPath), install: install, preflight: preflight, isMacOs: isMacOs);
-        var text = capture.GetCapturedOutput() + capture.GetCapturedError();
+            probe: new FakeProbe(onPath), install: install,
+            preflight: preflight ?? (_ => ShimPreflight.Installable), installable: installable);
+        var output = capture.GetCapturedOutput();
+        var text = output + capture.GetCapturedError();
         ShimEnsureJson? json = null;
-        if (text.Contains("{\"capability\"")) json = JsonSerializer.Deserialize<ShimEnsureJson>(text, ShimJsonContext.Default.ShimEnsureJson);
+        if (output.Contains("{\"capability\"")) json = JsonSerializer.Deserialize<ShimEnsureJson>(output, ShimJsonContext.Default.ShimEnsureJson);
         return (exit, json, text);
     }
 
@@ -57,6 +59,41 @@ public class DaemonShimCommandsTests {
         await Assert.That(target).IsEqualTo(native);
     }
 
+    /// npm on Windows nests the platform package, and kcap.js cannot run from PATH; the prefix's
+    /// kcap.cmd is what runs the launcher.
+    [Test]
+    public async Task ResolveLinkTarget_on_Windows_uses_the_npm_prefix_shim_for_a_nested_install() {
+        var prefix   = Path.GetFullPath("/Users/someone/AppData/Roaming/npm");
+        var modules  = Path.Combine(prefix, "node_modules");
+        var native   = Path.Combine(modules, "@kurrent", "kcap", "node_modules", "@kurrent", "kcap-win-x64", "bin", "kcap.exe");
+        var launcher = Path.Combine(modules, "@kurrent", "kcap", "bin", "kcap.js");
+        var shim     = Path.Combine(prefix, "kcap.cmd");
+
+        var target = DaemonShimCommands.ResolveLinkTarget(() => native, p => p == launcher || p == shim, windows: true);
+
+        await Assert.That(target).IsEqualTo(shim);
+    }
+
+    [Test]
+    public async Task ResolveLinkTarget_on_Windows_uses_the_npm_prefix_shim_for_a_flat_install() {
+        var prefix   = Path.GetFullPath("/Users/someone/AppData/Roaming/npm");
+        var modules  = Path.Combine(prefix, "node_modules");
+        var native   = Path.Combine(modules, "@kurrent", "kcap-win-x64", "bin", "kcap.exe");
+        var launcher = Path.Combine(modules, "@kurrent", "kcap", "bin", "kcap.js");
+        var shim     = Path.Combine(prefix, "kcap.cmd");
+
+        var target = DaemonShimCommands.ResolveLinkTarget(() => native, p => p == launcher || p == shim, windows: true);
+
+        await Assert.That(target).IsEqualTo(shim);
+    }
+
+    [Test]
+    public async Task ResolveLinkTarget_on_Windows_uses_the_running_binary_outside_npm() {
+        var native = Path.GetFullPath("/Users/someone/AppData/Local/kcap/current/kcap.exe");
+        var target = DaemonShimCommands.ResolveLinkTarget(() => native, _ => false, windows: true);
+        await Assert.That(target).IsEqualTo(native);
+    }
+
     [Test]
     public async Task ResolveLinkTarget_null_process_path_is_null() {
         var target = DaemonShimCommands.ResolveLinkTarget(() => null, _ => true);
@@ -67,43 +104,43 @@ public class DaemonShimCommandsTests {
 
     [Test]
     public async Task Classify_already_on_path_is_terminal_when_probe_finds_kcap() {
-        var d = ShimEnsureClassifier.Classify(onPath: true, isMacOs: true);
+        var d = ShimEnsureClassifier.Classify(onPath: true, installable: true);
         await Assert.That(d.Action).IsEqualTo(ShimEnsureAction.AlreadyOnPath);
         await Assert.That(d.Reason).IsNull();
     }
 
     [Test]
-    public async Task Classify_installable_only_on_macos_with_positive_absence() {
-        var d = ShimEnsureClassifier.Classify(onPath: false, isMacOs: true);
+    public async Task Classify_installable_only_with_an_installer_and_positive_absence() {
+        var d = ShimEnsureClassifier.Classify(onPath: false, installable: true);
         await Assert.That(d.Action).IsEqualTo(ShimEnsureAction.Install);
     }
 
     [Test]
-    public async Task Classify_unknown_probe_fails_closed_even_on_macos() {
-        var d = ShimEnsureClassifier.Classify(onPath: null, isMacOs: true);
+    public async Task Classify_unknown_probe_fails_closed_even_with_an_installer() {
+        var d = ShimEnsureClassifier.Classify(onPath: null, installable: true);
         await Assert.That(d.Action).IsEqualTo(ShimEnsureAction.Refuse);
         await Assert.That(d.Reason).IsEqualTo("probe_unknown");
     }
 
     [Test]
-    public async Task Classify_off_macos_refuses_even_on_positive_absence() {
-        var d = ShimEnsureClassifier.Classify(onPath: false, isMacOs: false);
+    public async Task Classify_without_an_installer_refuses_even_on_positive_absence() {
+        var d = ShimEnsureClassifier.Classify(onPath: false, installable: false);
         await Assert.That(d.Action).IsEqualTo(ShimEnsureAction.Refuse);
         await Assert.That(d.Reason).IsEqualTo("unsupported_platform");
     }
 
-    // Platform beats probe: on non-macOS the refusal is unsupported_platform even when the probe
+    // Platform beats probe: without an installer the refusal is unsupported_platform even when the probe
     // is unknown — the flow expects a stable platform row, not a probe-dependent one.
     [Test]
-    public async Task Classify_off_macos_with_unknown_probe_is_unsupported_platform_not_probe_unknown() {
-        var d = ShimEnsureClassifier.Classify(onPath: null, isMacOs: false);
+    public async Task Classify_without_an_installer_and_an_unknown_probe_is_unsupported_platform() {
+        var d = ShimEnsureClassifier.Classify(onPath: null, installable: false);
         await Assert.That(d.Action).IsEqualTo(ShimEnsureAction.Refuse);
         await Assert.That(d.Reason).IsEqualTo("unsupported_platform");
     }
 
     [Test]
-    public async Task Classify_already_on_path_is_terminal_off_macos_too() {
-        var d = ShimEnsureClassifier.Classify(onPath: true, isMacOs: false);
+    public async Task Classify_already_on_path_is_terminal_without_an_installer_too() {
+        var d = ShimEnsureClassifier.Classify(onPath: true, installable: false);
         await Assert.That(d.Action).IsEqualTo(ShimEnsureAction.AlreadyOnPath);
     }
 
@@ -122,7 +159,7 @@ public class DaemonShimCommandsTests {
 
     [Test]
     public async Task Ensure_probe_unknown_fails_closed_with_coded_reason() {
-        var (exit, json, _) = await Run(["--json"], onPath: null, isMacOs: true);
+        var (exit, json, _) = await Run(["--json"], onPath: null, installable: true);
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(json).IsNotNull();
@@ -131,8 +168,8 @@ public class DaemonShimCommandsTests {
     }
 
     [Test]
-    public async Task Ensure_off_macos_refuses_with_unsupported_platform() {
-        var (exit, json, _) = await Run(["--json"], onPath: false, isMacOs: false);
+    public async Task Ensure_without_an_installer_refuses_with_unsupported_platform() {
+        var (exit, json, _) = await Run(["--json"], onPath: false, installable: false);
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(json).IsNotNull();
@@ -153,7 +190,7 @@ public class DaemonShimCommandsTests {
 
     [Test]
     public async Task Ensure_installed_exits_zero_with_installed_outcome() {
-        var (exit, json, _) = await Run(["--json"], onPath: false, isMacOs: true,
+        var (exit, json, _) = await Run(["--json"], onPath: false, installable: true,
             install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Installed, null, null)));
 
         await Assert.That(exit).IsEqualTo(0);
@@ -165,7 +202,7 @@ public class DaemonShimCommandsTests {
 
     [Test]
     public async Task Ensure_installed_but_not_on_path_exits_nonzero_with_detail() {
-        var (exit, json, _) = await Run(["--json"], onPath: false, isMacOs: true,
+        var (exit, json, _) = await Run(["--json"], onPath: false, installable: true,
             install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.InstalledButNotOnPath, "Add the line", null)));
 
         await Assert.That(exit).IsEqualTo(1);
@@ -177,7 +214,7 @@ public class DaemonShimCommandsTests {
 
     [Test]
     public async Task Ensure_cancelled_reports_cancelled() {
-        var (exit, json, _) = await Run(["--json"], onPath: false, isMacOs: true,
+        var (exit, json, _) = await Run(["--json"], onPath: false, installable: true,
             install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Cancelled, null, null)));
 
         await Assert.That(exit).IsEqualTo(1);
@@ -187,7 +224,7 @@ public class DaemonShimCommandsTests {
 
     [Test]
     public async Task Ensure_failed_carries_detail_and_sudo_fallback() {
-        var (exit, json, _) = await Run(["--json"], onPath: false, isMacOs: true,
+        var (exit, json, _) = await Run(["--json"], onPath: false, installable: true,
             install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Failed, "osascript failed", "sudo ln -s ...")));
 
         await Assert.That(exit).IsEqualTo(1);
@@ -199,7 +236,7 @@ public class DaemonShimCommandsTests {
 
     [Test]
     public async Task Ensure_failed_without_sudo_fallback_still_exits_nonzero() {
-        var (exit, json, _) = await Run(["--json"], onPath: false, isMacOs: true,
+        var (exit, json, _) = await Run(["--json"], onPath: false, installable: true,
             install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Failed, "could not re-verify", null)));
 
         await Assert.That(exit).IsEqualTo(1);
@@ -212,23 +249,20 @@ public class DaemonShimCommandsTests {
     }
 
     [Test]
-    public async Task Ensure_conflict_preflight_is_a_coded_refusal_with_what_was_found() {
-        var (exit, json, _) = await Run(["--json"], onPath: false, isMacOs: true,
+    public async Task Ensure_a_conflict_at_usr_local_bin_does_not_stop_a_path_folder_install() {
+        var (exit, json, _) = await Run(["--json"], onPath: false, installable: true,
+            install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Installed, null, null)),
             preflight: _ => ShimPreflight.Conflict);
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(0);
         await Assert.That(json).IsNotNull();
-        await Assert.That(json!.Outcome).IsEqualTo("refused");
-        await Assert.That(json.Reason).IsEqualTo("conflict");
-        await Assert.That(json.Detail).Contains("left untouched");
+        await Assert.That(json!.Outcome).IsEqualTo("installed");
     }
 
-    // The outer preflight and the installer's checks are not atomic — an entry can appear between
-    // them, or the non-forcing ln -s can lose the race. A failed install whose fresh preflight now
-    // sees a foreign entry is the coded conflict row the flow was promised, not a generic failure.
+    // A failed install with a foreign entry at the destination is the coded conflict row, not a generic failure.
     [Test]
     public async Task Ensure_failed_install_with_conflict_now_is_still_the_coded_conflict_row() {
-        var (exit, json, _) = await Run(["--json"], onPath: false, isMacOs: true,
+        var (exit, json, _) = await Run(["--json"], onPath: false, installable: true,
             install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Failed, "ln: /usr/local/bin/kcap: File exists", null)),
             preflight: _ => ShimPreflight.Conflict);
 
@@ -242,7 +276,7 @@ public class DaemonShimCommandsTests {
     // A failed install with NO foreign entry at the destination stays a plain failure.
     [Test]
     public async Task Ensure_failed_install_with_installable_preflight_stays_failed() {
-        var (exit, json, _) = await Run(["--json"], onPath: false, isMacOs: true,
+        var (exit, json, _) = await Run(["--json"], onPath: false, installable: true,
             install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Failed, "osascript failed", null)),
             preflight: _ => ShimPreflight.Installable);
 
@@ -254,7 +288,7 @@ public class DaemonShimCommandsTests {
 
     [Test]
     public async Task Ensure_unknown_flag_is_rejected_before_any_probe_or_prompt() {
-        var (exit, _, text) = await Run(["--bogus"], onPath: false, isMacOs: true,
+        var (exit, _, text) = await Run(["--bogus"], onPath: false, installable: true,
             install: (_, _) => throw new InvalidOperationException("the install seam must not run"));
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(text).Contains("Usage: kcap daemon shim");
@@ -271,14 +305,14 @@ public class DaemonShimCommandsTests {
 
     [Test]
     public async Task Ensure_human_refusal_prints_the_coded_reason_line() {
-        var (exit, _, text) = await Run([], onPath: null, isMacOs: true);
+        var (exit, _, text) = await Run([], onPath: null, installable: true);
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(text).Contains("Could not determine whether kcap is on your terminal PATH");
     }
 
     [Test]
     public async Task Ensure_human_installed_does_not_claim_a_fresh_link() {
-        var (exit, _, text) = await Run([], onPath: false, isMacOs: true,
+        var (exit, _, text) = await Run([], onPath: false, installable: true,
             install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Installed, null, null)));
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(text).Contains("kcap is now on your terminal PATH");
@@ -287,15 +321,37 @@ public class DaemonShimCommandsTests {
 
     [Test]
     public async Task Ensure_human_installed_not_on_path_prints_the_actionable_detail() {
-        var (exit, _, text) = await Run([], onPath: false, isMacOs: true,
+        var (exit, _, text) = await Run([], onPath: false, installable: true,
             install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.InstalledButNotOnPath, "Add: export PATH=\"/usr/local/bin:$PATH\"", null)));
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(text).Contains("export PATH");
     }
 
+    /// A standard user's install edits their shell profile, so what it will do is said first.
+    [Test]
+    public async Task Ensure_human_install_prints_the_disclosure_before_installing() {
+        var (_, _, text) = await Run([], onPath: false, installable: true,
+            install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Installed, null, null)));
+
+        await Assert.That(text!.IndexOf("works from any", StringComparison.Ordinal)).IsBetween(0, text.IndexOf("now on your terminal PATH", StringComparison.Ordinal));
+    }
+
+
+    [Test]
+    public async Task Ensure_json_install_keeps_the_disclosure_off_stdout() {
+        using var capture = ConsoleOutput.StartFullCapture();
+        await DaemonShimCommands.Ensure(["--json"], TimeProvider.System, resolveTarget: () => "/usr/local/lib/kcap",
+            probe: new FakeProbe(false), install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Installed, null, null)),
+            preflight: _ => ShimPreflight.Installable, installable: true);
+
+        await Assert.That(capture.GetCapturedError()).Contains("works from any");
+        await Assert.That(JsonSerializer.Deserialize(capture.GetCapturedOutput(), ShimJsonContext.Default.ShimEnsureJson)!.Outcome)
+            .IsEqualTo("installed");
+    }
+
     [Test]
     public async Task Ensure_human_cancelled_prints_the_cancel_line() {
-        var (exit, _, text) = await Run([], onPath: false, isMacOs: true,
+        var (exit, _, text) = await Run([], onPath: false, installable: true,
             install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Cancelled, null, null)));
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(text).Contains("canceled");
@@ -303,7 +359,7 @@ public class DaemonShimCommandsTests {
 
     [Test]
     public async Task Ensure_human_failed_prints_detail_and_sudo_fallback() {
-        var (exit, _, text) = await Run([], onPath: false, isMacOs: true,
+        var (exit, _, text) = await Run([], onPath: false, installable: true,
             install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Failed, "osascript failed", "sudo ln -s ...")));
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(text).Contains("osascript failed");
@@ -328,17 +384,17 @@ public class DaemonShimCommandsTests {
 
         var result = await DaemonShimCommands.EvaluateAsync(
             TimeProvider.System,
-            resolveTarget: () => "/usr/local/lib/kcap", probe: new FakeProbe(true), isMacOs: true);
+            resolveTarget: () => "/usr/local/lib/kcap", probe: new FakeProbe(true), installable: true);
 
         await Assert.That(result.Outcome).IsEqualTo(FirstRunMachineActionOutcomes.AlreadyOnPath);
         await Assert.That(capture.GetCapturedOutput() + capture.GetCapturedError()).IsEmpty();
     }
 
     [Test]
-    public async Task EvaluateAsync_refuses_off_macOS_with_the_platform_row() {
+    public async Task EvaluateAsync_refuses_without_an_installer_with_the_platform_row() {
         var result = await DaemonShimCommands.EvaluateAsync(
             TimeProvider.System,
-            resolveTarget: () => "/usr/local/lib/kcap", probe: new FakeProbe(false), isMacOs: false);
+            resolveTarget: () => "/usr/local/lib/kcap", probe: new FakeProbe(false), installable: false);
 
         await Assert.That(result.Outcome).IsEqualTo(FirstRunMachineActionOutcomes.Refused);
         await Assert.That(result.Reason).IsEqualTo(FirstRunMachineActionReasons.UnsupportedPlatform);
@@ -349,7 +405,7 @@ public class DaemonShimCommandsTests {
     public async Task EvaluateAsync_refuses_an_unknown_probe_rather_than_installing() {
         var result = await DaemonShimCommands.EvaluateAsync(
             TimeProvider.System,
-            resolveTarget: () => "/usr/local/lib/kcap", probe: new FakeProbe(null), isMacOs: true,
+            resolveTarget: () => "/usr/local/lib/kcap", probe: new FakeProbe(null), installable: true,
             install: (_, _) => throw new InvalidOperationException("must not install on an unknown probe"));
 
         await Assert.That(result.Outcome).IsEqualTo(FirstRunMachineActionOutcomes.Refused);

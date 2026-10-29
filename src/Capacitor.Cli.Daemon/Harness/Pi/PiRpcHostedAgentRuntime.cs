@@ -65,7 +65,7 @@ namespace Capacitor.Cli.Daemon.Harness.Pi;
 /// <para><b>Never emits <c>session_ended</c></b> — the server's <c>EndAgentSession</c> owns that
 /// transition, exactly as for every other <see cref="IAcpTranscriptSource"/> runtime.</para>
 /// </summary>
-internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscriptSource {
+internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscriptSource, ITerminationVerdictSource {
     /// <summary>The correlation id of the constructor's handshake <c>get_state</c> — fixed rather
     /// than sequenced so a test (and a log reader) can name it.</summary>
     internal const string InitStateCommandId = "init-state";
@@ -80,6 +80,7 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
     const int SentPromptMemory = 16;
 
     static readonly TimeSpan DefaultStopGrace = TimeSpan.FromSeconds(3);
+    static readonly TimeSpan PumpDrainFloor   = TimeSpan.FromSeconds(1);
 
     /// <summary>Backs an omitted <c>readyDeadline</c> — see rule (a) on why the deadline is never
     /// allowed to be absent. Generous rather than tight: it bounds a PATHOLOGY (a child that
@@ -143,9 +144,39 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
     readonly Lock         _echoGate    = new();
     readonly List<string> _sentPrompts = [];
 
+    /// <summary>Reviewer-only round tally, decoupled from the bounded <see cref="_sentPrompts"/> dedup
+    /// cache above. A reviewer's accepted prompt must decrement the ceiling's owed count when Pi echoes
+    /// it; the 16-entry cap on <see cref="_sentPrompts"/> would drop an echo whose send was evicted,
+    /// stranding the ceiling armed and reaping a settled reviewer as a false timeout. Not capped — a
+    /// reviewer sends few prompts, each consumed on its echo. Guarded by <see cref="_echoGate"/>.</summary>
+    readonly List<string> _reviewerRoundEchoes = [];
+
     readonly Lock                         _turnGate    = new();
     readonly List<TaskCompletionSource>   _idleWaiters = [];
+
+    // Prompts written but not yet started: between the write and Pi's agent_start the turn is already
+    // committed, so it counts as busy. A settle drains Pi's whole queue and clears it.
+    int                                   _promptsAwaitingStart;
     bool                                  _busy;
+
+    /// <summary>Null for every launch but an unattended Pi review — see <see cref="PiReviewerGuards"/>.</summary>
+    readonly PiReviewerGuards? _guards;
+
+    /// <summary>Asks a viewer a Pi dialog. Null cancels every dialog at once, so Pi falls back to its
+    /// own default rather than blocking on stdin.</summary>
+    readonly Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>>? _requestInteraction;
+
+    /// <summary>Completed by <see cref="ServerBindSettled"/> with whether the server bound the session. A
+    /// launch prompt's dialog can arrive before it, and must wait rather than be refused.</summary>
+    readonly TaskCompletionSource<bool> _bindSettled = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    readonly ReapVerdictGate _gate;
+
+    /// <summary>Null unless <see cref="_guards"/> is set — the review-flow-only deadline on a round.</summary>
+    readonly PiRoundCeiling? _ceiling;
+
+    /// <summary>0 until the first <c>agent_settled</c> — the reap gate's launch-window marker.</summary>
+    int _firstRoundSettled;
 
     readonly Task _pumpTask;
     readonly Task _handshakeTask;
@@ -158,6 +189,13 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
     /// because the pump thread writes it and <see cref="AcpSessionId"/> is read cross-thread (the
     /// orchestrator reads it the instant a launch returns).</summary>
     volatile string? _sessionId;
+
+    /// <summary>Path of the session file <c>get_state</c> reported; null until the handshake answers
+    /// or when Pi omits it.</summary>
+    internal volatile string? SessionFile;
+
+    /// <summary>Pi's <c>--session</c> takes the session file, not its id.</summary>
+    public string? VendorResumeToken => SessionFile;
 
     /// <summary>See <see cref="_sessionId"/> — same cross-thread reasoning. Null means the
     /// handshake's <c>get_state</c> did not carry a model (see <see cref="ExtractModelId"/>) — NEVER
@@ -182,7 +220,9 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
             TimeSpan?     readyDeadline = null,
             TimeSpan?     stopGrace     = null,
             Action?       onDisposed    = null,
-            TranscriptJournal? journal  = null) {
+            TranscriptJournal? journal  = null,
+            PiReviewerGuards? reviewerGuards = null,
+            Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>>? requestInteraction = null) {
         _process        = process;
         _logger         = logger;
         _agentId        = agentId;
@@ -193,6 +233,8 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
         _stopGrace      = stopGrace ?? DefaultStopGrace;
         _onDisposed     = onDisposed;
         _journal        = journal;
+        _guards         = reviewerGuards;
+        _requestInteraction = requestInteraction;
         _ownerToken     = _ownerCts.Token;
 
         // DropOldest with SingleWriter=false: the pump is the only writer that matters for
@@ -201,6 +243,11 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
         _transcript = Channel.CreateBounded<AcpEventEnvelope>(
             new BoundedChannelOptions(DefaultTranscriptCapacity)
                 { SingleReader = true, SingleWriter = false, FullMode = BoundedChannelFullMode.DropOldest });
+
+        _gate    = new ReapVerdictGate(() => Volatile.Read(ref _firstRoundSettled) == 0, logger);
+        _ceiling = reviewerGuards is null
+            ? null
+            : new PiRoundCeiling(reviewerGuards.RoundLimit, time, () => StartReap("pi_reviewer_turn_timeout"));
 
         // The pump starts FIRST: the handshake's response can only be observed by a running pump,
         // and Pi may answer before WriteLineAsync's continuation even resumes.
@@ -226,10 +273,56 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
 
     public ChannelReader<AcpEventEnvelope> Envelopes => _transcript.Reader;
 
+    public void ServerBindSettled(bool bound) => _bindSettled.TrySetResult(bound);
+
     /// <summary>Rule (a). A factory MUST await this after constructing the runtime and BEFORE
     /// returning control to the orchestrator. Faults — never hangs — on every path that cannot
     /// produce a session identity.</summary>
     internal Task WaitForSessionReadyAsync(CancellationToken ct) => _sessionReady.Task.WaitAsync(ct);
+
+    // ---- Reviewer guards (review-flow only — see PiReviewerGuards) ----
+
+    public TerminationVerdict? ReadVerdict() => _gate.ReadVerdict();
+
+    public bool TryInitiateNonFailureStatusSend(Func<Task> send, out Task sendTask) =>
+        _gate.TryInitiateNonFailureStatusSend(send, out sendTask);
+
+    internal Action? BeforeReadVerdictLockForTest {
+        get => _gate.BeforeReadVerdictLockForTest;
+        set => _gate.BeforeReadVerdictLockForTest = value;
+    }
+
+    internal Action? BeforeGatedSendHookForTest {
+        get => _gate.BeforeGatedSendHookForTest;
+        set => _gate.BeforeGatedSendHookForTest = value;
+    }
+
+    /// <summary>Ends a reviewer for a coded reason. False when another reap already won the slot.</summary>
+    bool StartReap(string reason) => _gate.TryStartReap(reason, () => RunReapAsync(reason));
+
+    /// <summary>The one reap routine every guard below funnels through. Fixed order: claim + publish
+    /// (inside <see cref="StartReap"/>, before this even starts), then a bounded best-effort abort,
+    /// then an unconditional terminate.</summary>
+    async Task RunReapAsync(string reason) {
+        // Yield first: the gate runs this under its lock and publishes the verdict when it returns.
+        await Task.Yield();
+
+        _logger.LogWarning("Pi: ending the unattended reviewer ({Reason}) (agentId={AgentId}).", reason, _agentId);
+
+        // Bounded, and abandoned on timeout: stdin writes are serialised, so an abort queued behind a
+        // prompt write the child has stopped draining would otherwise never return — and termination
+        // below is the only thing that ends that wedge.
+        try {
+            var abort = _process.WriteLineAsync(PiRpc.AbortCommand(NextCommandId()), _ownerToken);
+            _ = abort.ContinueWith(static t => _ = t.Exception, CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            await abort.WaitAsync(_guards!.AbortGrace, _time).ConfigureAwait(false);
+        } catch (Exception ex) {
+            _logger.LogDebug(ex, "Pi: the reap's abort did not complete (agentId={AgentId}).", _agentId);
+        }
+
+        await TerminateAsync(_stopGrace).ConfigureAwait(false);
+    }
 
     // ---- Read pump ----
 
@@ -272,6 +365,10 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
             return;
         }
 
+        // Ignores ids it never saw — the handshake's get_state, for one, since PromptWriting is
+        // only ever called for a `prompt` command.
+        _ceiling?.Response(id, frame.Success != false);
+
         if (_pending.TryRemove(id, out var waiter)) waiter.TrySetResult(frame);
         else _logger.LogDebug("Pi: response {Id} matched no in-flight command (agentId={AgentId}).", id, _agentId);
     }
@@ -287,13 +384,24 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
     /// from the translator and silently stop matching.</para>
     /// </summary>
     void HandleEvent(PiRpcFrame frame) {
+        _ceiling?.Activity();
+
         switch (frame.Type) {
             case "agent_start":
+                _ceiling?.AgentStarted();
+                lock (_turnGate) if (_promptsAwaitingStart > 0) _promptsAwaitingStart--;
                 SetBusy(true);
                 return;
 
             case "agent_settled":
+                Interlocked.Exchange(ref _firstRoundSettled, 1);
+                _ceiling?.AgentSettled();
                 SetBusy(false);
+                return;
+
+            case "extension_ui_request" when PiDialogBridge.IsDialog(frame.Root.Str("method")):
+                if (_guards is not null) StartReap("pi_reviewer_unexpected_dialog");
+                else _ = AnswerDialogAsync(frame);
                 return;
         }
 
@@ -303,12 +411,61 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
         var envelopes = PiRpc.ToEnvelopes(frame, _resolvedModel ?? _requestedModel);
         if (envelopes.Count == 0) return;
 
+        // A reviewer's round accounting rides its own uncapped tally, NOT the bounded transcript-dedup
+        // cache consulted by IsOurOwnEcho: an echo whose send was evicted from that cache still starts a
+        // round, so the ceiling must still see its UserEcho or it reaps a settled reviewer.
+        if (_guards is not null
+            && frame.Type == "message_end"
+            && envelopes is [{ Kind: AcpEventKind.UserMessage, Text: { } echoText }]
+            && TryConsumeReviewerRoundEcho(echoText))
+            _ceiling?.UserEcho();
+
         if (IsOurOwnEcho(frame, envelopes)) {
             _logger.LogDebug("Pi: dropped the echo of a prompt this daemon sent (agentId={AgentId}).", _agentId);
             return;
         }
 
         foreach (var env in envelopes) EmitAgentEnvelope(env);
+    }
+
+    /// <summary>Runs off the pump, which must keep reading while a viewer decides. Every path writes a
+    /// response — Pi blocks the turn on stdin until one arrives — except teardown, where nobody is left
+    /// to read it. Pi's own <c>timeout</c> bounds the question here too, so a card does not outlive the
+    /// dialog Pi already dismissed.</summary>
+    async Task AnswerDialogAsync(PiRpcFrame frame) {
+        if (frame.Id is not { Length: > 0 } requestId) return;
+
+        var response = PiRpc.ExtensionUiCancelled(requestId);
+
+        if (_requestInteraction is not null) {
+            using var timeoutCts = frame.Root.Num("timeout") is > 0 and var timeout
+                ? new CancellationTokenSource(TimeSpan.FromMilliseconds(Math.Min(timeout, int.MaxValue)), _time)
+                : new CancellationTokenSource();
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(_ownerToken, timeoutCts.Token);
+
+            try {
+                if (!await _bindSettled.Task.WaitAsync(cts.Token).ConfigureAwait(false))
+                    _logger.LogInformation("Pi: cancelling dialog {RequestId}: the session is not bound on the server (agentId={AgentId}).", requestId, _agentId);
+                else if (PiDialogBridge.ToInteraction(_agentId, AcpSessionId, frame.Root) is { } interaction) {
+                    var decision = await _requestInteraction(interaction, cts.Token).ConfigureAwait(false);
+                    response = PiDialogBridge.ToResponse(requestId, decision, frame.Root);
+                }
+            } catch (OperationCanceledException) when (cts.IsCancellationRequested) {
+                if (_ownerToken.IsCancellationRequested) return;
+            } catch (Exception ex) {
+                _logger.LogWarning(ex, "Pi: dialog {RequestId} could not be asked; cancelling it (agentId={AgentId}).", requestId, _agentId);
+            }
+        } else {
+            _logger.LogInformation("Pi: cancelling dialog {RequestId}: nobody can be asked (agentId={AgentId}).", requestId, _agentId);
+        }
+
+        try {
+            await _process.WriteLineAsync(response, _ownerToken).ConfigureAwait(false);
+        } catch (Exception ex) when (ex is not OperationCanceledException || !_ownerToken.IsCancellationRequested) {
+            _logger.LogWarning(ex, "Pi: the answer to dialog {RequestId} could not be written (agentId={AgentId}).", requestId, _agentId);
+        } catch (OperationCanceledException) {
+            // Teardown — the child is going away with its dialog.
+        }
     }
 
     /// <summary>Rule (c): true when this frame is Pi echoing back a prompt we sent, in which case
@@ -401,7 +558,8 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
             return;
         }
 
-        _sessionId = sessionId;
+        _sessionId  = sessionId;
+        SessionFile = data.Value.Str("sessionFile");
 
         // NOT `?? _requestedModel`: ResolvedModel is the orchestrator's CONFIRMED-applied-model
         // signal (see the ResolvedModel property doc), so when get_state omits a model, null is the
@@ -459,20 +617,36 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
 
     // ---- Input ----
 
-    public async Task SendUserInputAsync(string text) {
+    public Task SendUserInputAsync(string text) => SendAsync(text, dispatchId: null);
+
+    public Task SendDispatchedInputAsync(string text, Guid dispatchId, bool waitForWrite) => SendAsync(text, dispatchId);
+
+    // Pi's echo of a prompt it was sent is dropped, so the envelope emitted here is the one that carries the dispatch.
+    async Task SendAsync(string text, Guid? dispatchId) {
+        if (_guards is not null && text.AsSpan().TrimStart().StartsWith("/")) {
+            StartReap("pi_reviewer_prompt_is_command");
+            throw new InvalidOperationException(
+                "pi_reviewer_prompt_is_command: a reviewer prompt may not begin with '/', which Pi runs as a command.");
+        }
+
         // Ordering is load-bearing on both halves. The echo memory is written BEFORE the command
         // goes on the wire, because Pi's echo can be read back by the pump before this method's
         // own continuation resumes. The envelope is emitted first so the viewer sees their message
         // immediately, rather than only when Pi gets round to echoing it.
         RememberSentPrompt(text);
-        EmitLocalEnvelope(new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: text));
+        EmitLocalEnvelope(new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: text, DispatchId: dispatchId));
 
         var id     = NextCommandId();
         var waiter = RegisterPending(id);
 
+        _ceiling?.PromptWriting(id);
+        lock (_turnGate) _promptsAwaitingStart++;
+
         try {
             await _process.WriteLineAsync(PiRpc.PromptCommand(id, text), _ownerToken).ConfigureAwait(false);
         } catch {
+            _ceiling?.PromptWriteFailed(id);
+            PromptWillNotStart();
             _pending.TryRemove(id, out _);
 
             // Undo the echo memory: this message never reached Pi, so its echo can never arrive —
@@ -480,6 +654,7 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
             // message with identical text (a retry of exactly what just failed is the likeliest
             // thing to happen next), which is the dedupe misfiring on real content.
             TryConsumeSentPrompt(text);
+            if (_guards is not null) TryConsumeReviewerRoundEcho(text);
 
             // Best-effort: dropped when the channel is already completed (the common case if the
             // write failed BECAUSE the session is ending), which is fine — the session ending is
@@ -507,6 +682,8 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
         try {
             var frame = await response.ConfigureAwait(false);
             if (frame.Success != false) return;
+
+            PromptWillNotStart();
 
             var reason = frame.Root.Str("error") ?? "pi rejected the message";
             EmitLocalEnvelope(new AcpEventEnvelope(
@@ -554,6 +731,7 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
 
         lock (_echoGate) {
             _sentPrompts.Add(text);
+            if (_guards is not null) _reviewerRoundEchoes.Add(text);
 
             // Oldest-first eviction: an entry that has waited this long was never echoed.
             while (_sentPrompts.Count > SentPromptMemory) {
@@ -585,6 +763,22 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
         }
     }
 
+    /// <summary>Reviewer-only, FIFO: consumes one accepted-prompt entry matching an echo, driving the
+    /// ceiling's per-round UserEcho independently of the capped transcript-dedup cache. Exactly one
+    /// entry per echo keeps the ceiling's owed count correct however many rounds queue.</summary>
+    bool TryConsumeReviewerRoundEcho(string text) {
+        lock (_echoGate) {
+            for (var i = 0; i < _reviewerRoundEchoes.Count; i++) {
+                if (!string.Equals(_reviewerRoundEchoes[i], text, StringComparison.Ordinal)) continue;
+
+                _reviewerRoundEchoes.RemoveAt(i);
+                return true;
+            }
+
+            return false;
+        }
+    }
+
     // ---- Turn idleness ----
 
     /// <summary>Completes immediately when Pi is not streaming, else on the next
@@ -592,16 +786,15 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
     /// <see cref="EnterTerminal"/>'s <c>SetBusy(false)</c>) — a waiter parked on a settle that can
     /// never arrive is a hang, not a stop.
     ///
-    /// <para>A caller that may need to stop waiting on a wedged turn (e.g. a child blocked on an
-    /// <c>extension_ui_request</c> that never settles — see <see cref="PiRpc"/>'s
-    /// <c>TranslateExtensionUiRequest</c>) MUST pass a cancellable token: with
+    /// <para>A caller that may need to stop waiting on a wedged turn (e.g. one held open by a dialog
+    /// nobody answers) MUST pass a cancellable token: with
     /// <see cref="CancellationToken.None"/> the waiter only completes on the next
     /// <c>agent_settled</c> or on <see cref="EnterTerminal"/>.</para></summary>
     public Task WaitForTurnIdleAsync(CancellationToken ct) {
         TaskCompletionSource waiter;
 
         lock (_turnGate) {
-            if (!_busy) return Task.CompletedTask;
+            if (!_busy && _promptsAwaitingStart == 0) return Task.CompletedTask;
 
             waiter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _idleWaiters.Add(waiter);
@@ -638,6 +831,7 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
 
         lock (_turnGate) {
             _busy = busy;
+            if (!busy) _promptsAwaitingStart = 0;
 
             if (!busy && _idleWaiters.Count > 0) {
                 release = [.. _idleWaiters];
@@ -648,6 +842,24 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
         // Both effects OUTSIDE the lock: the clock takes its own lock, and a waiter's continuation
         // can run inline. Neither belongs under a lock this runtime's own pump re-enters.
         ActivityClock?.SetTurnInFlight(busy);
+
+        if (release is null) return;
+
+        foreach (var waiter in release) waiter.TrySetResult();
+    }
+
+    /// <summary>A written prompt Pi refused, or one that never reached it, will produce no turn.</summary>
+    void PromptWillNotStart() {
+        TaskCompletionSource[]? release = null;
+
+        lock (_turnGate) {
+            if (_promptsAwaitingStart > 0) _promptsAwaitingStart--;
+
+            if (!_busy && _promptsAwaitingStart == 0 && _idleWaiters.Count > 0) {
+                release = [.. _idleWaiters];
+                _idleWaiters.Clear();
+            }
+        }
 
         if (release is null) return;
 
@@ -697,6 +909,14 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
     bool EnterTerminal() {
         if (Interlocked.Exchange(ref _terminal, 1) != 0) return false;
 
+        // Seal the reap gate FIRST, before disarming the ceiling: an ordinary teardown (EOF, cancel,
+        // dispose) must win the race against a stale round-timer, a buffered dialog, or a command-shaped
+        // input, so that once terminal none of them can publish a reviewer verdict over a normal death.
+        // A reap that already won is untouched — DisposeAsync awaits it via Seal's return.
+        _gate.Seal();
+
+        _ceiling?.Terminal();
+
         _terminalTcs.TrySetResult();
 
         // A snapshot of the keys, deliberately — see RegisterPending, which covers the entries
@@ -728,9 +948,28 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
             _logger.LogDebug(ex, "Pi: failed to send the graceful-stop abort (agentId={AgentId}).", _agentId);
         }
 
-        await _process.WaitForExitAsync(_stopGrace).ConfigureAwait(false);
+        var started = _time.GetTimestamp();
 
-        if (_process.HasExited) return;
+        TimeSpan Remaining() {
+            var left = _stopGrace - _time.GetElapsedTime(started);
+            return left > TimeSpan.Zero ? left : TimeSpan.Zero;
+        }
+
+        // Pi ends its session on stdin EOF and exits 0; the kill below is only for a child that does not.
+        await _process.CloseInputAsync(_stopGrace).ConfigureAwait(false);
+        await _process.WaitForExitAsync(Remaining()).ConfigureAwait(false);
+
+        if (_process.HasExited) {
+            // The frames Pi wrote before exiting are still in the pipe, and the terminate that follows
+            // a stop cancels the pump that reads them.
+            try {
+                await _pumpTask.WaitAsync(Remaining() + PumpDrainFloor, _time).ConfigureAwait(false);
+            } catch (TimeoutException) {
+                _logger.LogDebug("Pi: the read pump did not drain after a graceful exit (agentId={AgentId}).", _agentId);
+            }
+
+            return;
+        }
 
         await TerminateAsync(_stopGrace).ConfigureAwait(false);
     }
@@ -757,6 +996,27 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
         EnterTerminal();
 
         await _ownerCts.CancelAsync().ConfigureAwait(false);
+
+        // A claimed reap's verdict is published synchronously at claim time, but a caller that
+        // disposes and then reads the verdict must see the reap's TERMINATE having run too. Seal
+        // returns the reap that won the slot before EnterTerminal (above) closed it — so no claim
+        // racing this dispose can be missed.
+        if (_gate.Seal() is { } reap) {
+            // Observe the reap's eventual fault unconditionally, BEFORE the bounded wait — RunReapAsync
+            // can outlast the wait, and an abandoned faulted task would otherwise surface as an
+            // UnobservedTaskException. The wait is sized to the reap's OWN bounded ladder (its abort
+            // grace plus the terminate stop grace) so a normal slow teardown is not cut short, while a
+            // truly stuck one still cannot hang dispose.
+            _ = reap.ContinueWith(static t => _ = t.Exception, CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+
+            var reapBudget = (_guards?.AbortGrace ?? PiReviewerGuards.DefaultAbortGrace) + _stopGrace + TimeSpan.FromSeconds(1);
+            try {
+                await reap.WaitAsync(reapBudget, _time).ConfigureAwait(false);
+            } catch (Exception ex) {
+                _logger.LogDebug(ex, "Pi: the reap did not finish within its bounded ladder at dispose (agentId={AgentId}).", _agentId);
+            }
+        }
 
         // Both bounded and both swallowed — a stuck pump or an unanswered handshake must never hang
         // a dispose. The handshake is joined too so its own `finally` cannot run against a disposed

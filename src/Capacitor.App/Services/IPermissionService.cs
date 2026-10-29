@@ -31,6 +31,9 @@ public interface IPermissionService : IDisposable {
     /// The distinct agent ids in the cache; replays the current set on subscribe. A server-lane
     /// item whose session has no agent row yet carries no id and is left out.
     IObservable<IReadOnlySet<string>> AgentsWithPending { get; }
+    /// Agent ids with an unanswered question (AskUserQuestion or an ACP elicitation). A permission
+    /// prompt is not one of these. Replays the current set on subscribe.
+    IObservable<IReadOnlySet<string>> AgentsAwaitingAnswer { get; }
     /// One consistent pair per emission, from a single cache snapshot; replays on subscribe.
     IObservable<PendingSummary> Summary { get; }
     Task<PermissionResolveOutcome> ResolveAsync(PendingPermissionRequest target, PermissionAnswer answer, CancellationToken ct);
@@ -44,6 +47,7 @@ public interface IPermissionService : IDisposable {
     Task<PermissionResolveOutcome> PickOptionAsync(PendingPermissionRequest target, string optionId, CancellationToken ct);
     /// Retires a request whose tool already has a result in the transcript: it was answered where
     /// the daemon cannot see (the vendor's own terminal prompt), so the app is the party that knows.
-    /// Concluded here on any ack, a rejected decision from an older daemon included.
+    /// A local request is concluded here on any ack, a rejected decision from an older daemon included.
+    /// A server-lane request has no withdraw frame, so it is dropped locally.
     Task<PermissionResolveOutcome> WithdrawAsync(PendingPermissionRequest target, CancellationToken ct);
 }

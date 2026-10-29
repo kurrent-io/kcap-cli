@@ -1,0 +1,196 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels.Onboarding"
+                          xmlns:icons="clr-namespace:Capacitor.App.Views"
+             x:Class="Capacitor.App.Views.Onboarding.HistoryPaneView"
+             x:DataType="vm:HistoryStepViewModel">
+    <StackPanel Spacing="14">
+        <TextBlock Classes="onboardingNote" IsVisible="{Binding ImportStarted}"
+                   Text="This import has already started. It continues in the background after setup. Your original files stay on this machine." />
+        <Border Classes="onboardingCard">
+            <StackPanel Spacing="12">
+                <StackPanel Spacing="14" IsVisible="{Binding Looking}">
+                    <StackPanel Orientation="Horizontal" Spacing="14">
+                        <Border Width="40" Height="40" CornerRadius="20" Background="{StaticResource OnboardingAccentWashBrush}">
+                            <Panel Classes="onboardingSpinner">
+                                <icons:AppIcon Kind="LoaderCircle" Size="20" Classes.kcapSpinning="{Binding Looking}"
+                                               Foreground="{StaticResource OnboardingAccentBrush}" />
+                            </Panel>
+                        </Border>
+                        <StackPanel VerticalAlignment="Center" Spacing="2">
+                            <TextBlock Classes="onboardingLabel" FontSize="15" Text="Looking for history" />
+                            <TextBlock Classes="onboardingBody" FontSize="13">
+                                <Run Text="on " /><Run Text="{Binding MachineName}" FontFamily="{StaticResource OnboardingMonoFont}" /><Run Text=" — usually a few seconds" />
+                            </TextBlock>
+                        </StackPanel>
+                    </StackPanel>
+                    <StackPanel Spacing="6">
+                        <Border Height="44" CornerRadius="4" BorderThickness="1" BorderBrush="{StaticResource OnboardingPanelBorderBrush}"
+                                Background="{StaticResource OnboardingSkeletonBrush}" Classes="pulsing" />
+                        <Border Height="44" CornerRadius="4" BorderThickness="1" BorderBrush="{StaticResource OnboardingPanelBorderBrush}"
+                                Background="{StaticResource OnboardingSkeletonBrush}" Classes="pulsing" />
+                        <Border Height="44" CornerRadius="4" BorderThickness="1" BorderBrush="{StaticResource OnboardingPanelBorderBrush}"
+                                Background="{StaticResource OnboardingSkeletonBrush}" Classes="pulsing" />
+                    </StackPanel>
+                </StackPanel>
+
+                <TextBlock x:Name="HistoryEmptyText" Classes="onboardingBody" Text="{Binding EmptyMessage}"
+                           IsVisible="{Binding EmptyMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+                <StackPanel Spacing="4" IsVisible="{Binding HasRepos}">
+                    <TextBlock x:Name="FoundLineText" Classes="onboardingLabel" FontSize="15" TextWrapping="Wrap" Text="{Binding FoundLine}" />
+                    <TextBlock x:Name="ImportLineText" Classes="onboardingBody" FontSize="13" TextWrapping="Wrap" Text="{Binding ImportLine}" />
+                    <TextBlock x:Name="SharingLineText" Classes="onboardingNote" TextWrapping="Wrap" Text="{Binding SharingLine}"
+                               IsVisible="{Binding SharingLine, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    <TextBlock x:Name="UnmatchedNoteText" Classes="onboardingNote" TextWrapping="Wrap" Text="{Binding UnmatchedNote}"
+                               IsVisible="{Binding UnmatchedNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    <Button x:Name="CustomizeButton" Classes="onboardingLink" HorizontalAlignment="Left" Margin="0,4,0,0"
+                            Command="{Binding ToggleCustomizeCommand}" AutomationProperties.Name="{Binding CustomizeLabel}">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <TextBlock Text="{Binding CustomizeLabel}" VerticalAlignment="Center" />
+                            <icons:AppIcon Kind="ChevronDown" Size="14" IsVisible="{Binding !Customizing}" />
+                            <icons:AppIcon Kind="ChevronUp" Size="14" IsVisible="{Binding Customizing}" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+
+                <StackPanel IsVisible="{Binding DetailsVisible}">
+                    <Border Classes="onboardingRowRule" Padding="0,0,0,9">
+                        <StackPanel Orientation="Horizontal" Spacing="14">
+                            <TextBlock Classes="onboardingMicro" Text="FROM" VerticalAlignment="Center" />
+                            <ItemsControl ItemsSource="{Binding FromLabels}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel Orientation="Horizontal" ItemSpacing="14" LineSpacing="4" />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="x:String">
+                                        <StackPanel Orientation="Horizontal" Spacing="4">
+                                            <icons:AppIcon Kind="Check" Size="12" Foreground="{StaticResource KcapSuccessBrush}" />
+                                            <TextBlock Classes="onboardingSignal" Text="{Binding}"
+                                                       Foreground="{StaticResource OnboardingTextBrush}" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Classes="onboardingRowRule" Padding="0,9,0,8">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                            <TextBlock Classes="onboardingMicro" VerticalAlignment="Bottom">
+                                <Run Text="FOUND ON " /><Run Text="{Binding MachineName}" Foreground="{StaticResource OnboardingTextBrush}" />
+                            </TextBlock>
+                            <TextBlock Grid.Column="1" Classes="onboardingMicro" Text="ONLY ME" IsVisible="{Binding CloudLevels}" />
+                        </Grid>
+                    </Border>
+
+                    <ItemsControl x:Name="OwnerGroups" ItemsSource="{Binding Groups}" IsEnabled="{Binding !ImportStarted}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:HistoryOwnerGroup">
+                                <Border Classes="onboardingRowRule">
+                                    <StackPanel>
+                                        <!-- A mixed owner shows its box half-filled; a click on it clears every repository. -->
+                                        <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10" Margin="2,9">
+                                            <CheckBox x:Name="OwnerImportCheck" Classes="onboardingCheck" IsChecked="{Binding Included, Mode=TwoWay}"
+                                                      AutomationProperties.Name="{Binding Owner, StringFormat='Import every repository from {0}'}" />
+                                            <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+                                                <TextBlock x:Name="OwnerText" Classes="onboardingLabel" FontSize="13" Text="{Binding Owner}" />
+                                                <TextBlock Classes="onboardingSignal" Text="{Binding SignalLine}" />
+                                            </StackPanel>
+                                            <CheckBox Grid.Column="2" x:Name="OwnerOnlyMeCheck" Classes="onboardingCheck"
+                                                      IsChecked="{Binding OnlyMe, Mode=TwoWay}" IsEnabled="{Binding OnlyMeEnabled}"
+                                                      IsVisible="{Binding !Local}"
+                                                      AutomationProperties.Name="{Binding Owner, StringFormat='Keep every repository from {0} to only me'}" />
+                                        </Grid>
+                                        <ItemsControl ItemsSource="{Binding Repos}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:HistoryRepoRow">
+                                                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10" Margin="16,9,2,9">
+                                                        <CheckBox x:Name="RepoImportCheck" Classes="onboardingCheck" IsChecked="{Binding Included, Mode=TwoWay}"
+                                                                  AutomationProperties.Name="{Binding Slug, StringFormat='Import {0}'}" />
+                                                        <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+                                                            <TextBlock x:Name="RepoText" Classes="onboardingLabel" FontSize="13" Text="{Binding Name}"
+                                                                       TextWrapping="Wrap" />
+                                                            <TextBlock Classes="onboardingSignal" Text="{Binding SignalLine}" />
+                                                        </StackPanel>
+                                                        <CheckBox Grid.Column="2" x:Name="RepoOnlyMeCheck" Classes="onboardingCheck"
+                                                                  IsChecked="{Binding OnlyMe, Mode=TwoWay}" IsEnabled="{Binding Included}"
+                                                                  IsVisible="{Binding !Local}"
+                                                                  AutomationProperties.Name="{Binding Slug, StringFormat='Keep {0} to only me'}" />
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                </StackPanel>
+
+                <TextBlock Classes="onboardingNote" IsVisible="{Binding DetailsVisible}"
+                           Text="{Binding LevelsNote}" />
+
+                <StackPanel Spacing="8" IsVisible="{Binding DetailsVisible}" Margin="0,4,0,0">
+                    <TextBlock Classes="onboardingMicro" Text="HOW MUCH HISTORY" />
+                    <ItemsControl x:Name="WindowOptions" ItemsSource="{Binding Windows}" IsEnabled="{Binding !ImportStarted}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <UniformGrid Rows="1" ColumnSpacing="6" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:HistoryWindowOption">
+                                <RadioButton Classes="onboardingSegment" GroupName="HistoryWindow" IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                             AutomationProperties.Name="{Binding Label}">
+                                    <StackPanel Spacing="2">
+                                        <TextBlock Classes="onboardingLabel" FontSize="12.5" Text="{Binding Label}" />
+                                        <TextBlock Classes="onboardingSignal" Text="{Binding CountLabel}"
+                                                   IsVisible="{Binding CountLabel, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                    </StackPanel>
+                                </RadioButton>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+
+                <!-- Titling runs the user's own agent, on their quota: theirs to turn off. -->
+                <Border Classes="onboardingCallout" IsVisible="{Binding TitlingOffered}" Margin="0,4,0,0">
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="11">
+                        <CheckBox x:Name="TitleLocallyCheckBox" Classes="onboardingCheck" VerticalAlignment="Top" Margin="0,1,0,0"
+                                  IsChecked="{Binding TitleLocally, Mode=TwoWay}" IsEnabled="{Binding !ImportStarted}"
+                                  AutomationProperties.Name="Name sessions using my agent and quota" />
+                        <StackPanel Grid.Column="1" Spacing="3">
+                            <TextBlock Classes="onboardingLabel" FontSize="13" Text="Name sessions as they import" />
+                            <TextBlock Classes="onboardingDetail" Foreground="{StaticResource OnboardingMutedBrush}"
+                                       Text="Uses your own agent and quota" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <!-- Import is all this page decides; which repositories record from now on is a setting. -->
+                <TextBlock Classes="onboardingNote" IsVisible="{Binding DetailsVisible}">
+                    <Run Text="To record only some repositories from now on, set " /><Run Text="allowed_repos" FontFamily="{StaticResource OnboardingMonoFont}"
+                        Foreground="{StaticResource OnboardingMutedBrush}" /><Run Text=" or " /><Run Text="excluded_repos" FontFamily="{StaticResource OnboardingMonoFont}"
+                        Foreground="{StaticResource OnboardingMutedBrush}" /><Run Text=" in your configuration." />
+                </TextBlock>
+                <Button x:Name="RepoSettingsDocsButton" Classes="onboardingLink" HorizontalAlignment="Left"
+                        AutomationProperties.Name="Repository settings in the docs"
+                        Click="OnDocsClick" IsVisible="{Binding DetailsVisible}" Margin="0,-6,0,0">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="Repository settings in the docs" VerticalAlignment="Center" />
+                        <icons:AppIcon Kind="ArrowRight" Size="14" />
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+        </Border>
+
+        <TextBlock Classes="onboardingNote" IsVisible="{Binding LocalDeclineVisible}" Text="{Binding DeclineNote}" />
+        <TextBlock Classes="onboardingNote" IsVisible="{Binding CloudDeclineVisible}">
+            <Run Text="Not now means kcap starts its history from today. Nothing is deleted either way, and you can widen the window later with " /><Run Text="kcap import" FontFamily="{StaticResource OnboardingMonoFont}" Foreground="{StaticResource OnboardingMutedBrush}" /><Run Text="." />
+        </TextBlock>
+    </StackPanel>
+</UserControl>

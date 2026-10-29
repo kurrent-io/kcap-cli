@@ -1,5 +1,4 @@
 using Avalonia.Input;
-using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
@@ -72,21 +71,6 @@ public class AttachmentIntakeTests {
         await Assert.That(AttachmentIntake.ContentTypeFor("x.pdf")).IsEqualTo("application/pdf");
         await Assert.That(AttachmentIntake.ContentTypeFor("x.cs")).IsEqualTo("text/plain");
         await Assert.That(AttachmentIntake.ContentTypeFor("x.unknownext")).IsEqualTo("application/octet-stream");
-    }
-
-    /// The headless test session has no real image codec, so this only pins the clock-based name
-    /// and the content type FromBitmap hands to the FromPngBytes seam — not the encoded bytes,
-    /// which the oversize-refusal test below covers via that seam directly.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task From_bitmap_names_the_file_by_the_clock_and_tags_it_as_png() {
-        await AvaloniaSession.RunOnUiAsync(async () => {
-            var time = new FakeTimeProvider(new DateTimeOffset(2026, 9, 14, 10, 30, 5, TimeSpan.Zero));
-            using var small = new WriteableBitmap(new Avalonia.PixelSize(4, 4), new Avalonia.Vector(96, 96));
-            var ok = AttachmentIntake.FromBitmap(small, time);
-            await Assert.That(ok.Accepted.Single().FileName).IsEqualTo("pasted-image-20260914-103005.png");
-            await Assert.That(ok.Accepted.Single().ContentType).IsEqualTo("image/png");
-        });
     }
 
     [Test]

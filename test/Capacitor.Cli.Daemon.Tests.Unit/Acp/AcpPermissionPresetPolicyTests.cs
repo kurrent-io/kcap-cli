@@ -28,9 +28,17 @@ public class AcpPermissionPresetPolicyTests {
     [Arguments("kiro")]
     [Arguments("opencode")]
     [Arguments("gemini")]
-    public async Task Both_presets_accepted_on_interactive_launches_for_acp_vendors(string vendor) {
-        await Assert.That(AcpPermissionPresetPolicy.RejectionReason(Cmd(vendor, preset: AcpPermissionPresets.Explore))).IsNull();
-        await Assert.That(AcpPermissionPresetPolicy.RejectionReason(Cmd(vendor, preset: AcpPermissionPresets.Edit))).IsNull();
+    [Arguments("grok")]
+    public async Task Every_preset_is_accepted_on_interactive_launches_for_acp_vendors(string vendor) {
+        foreach (var preset in AcpPermissionPresets.Advertised)
+            await Assert.That(AcpPermissionPresetPolicy.RejectionReason(Cmd(vendor, preset: preset))).IsNull();
+    }
+
+    [Test]
+    public async Task Every_resolvable_preset_is_advertised() {
+        await Assert.That(AcpPermissionPresets.Advertised).IsEquivalentTo(new[] { "explore", "edit", "auto" });
+        foreach (var preset in AcpPermissionPresets.Advertised)
+            await Assert.That(AcpPermissionPresets.TryResolve(preset, out _)).IsTrue();
     }
 
     [Test]
@@ -81,7 +89,14 @@ public class AcpPermissionPresetPolicyTests {
         await Assert.That(AcpPermissionPresets.TryResolve(null, out _)).IsFalse();
         await Assert.That(AcpPermissionPresets.TryResolve("nope", out _)).IsFalse();
 
-        // Monotone: edit is a superset of explore.
+        // Monotone: edit is a superset of explore, and auto covers what neither does.
         await Assert.That(explore.AutoApprovedKinds.All(edit.AutoApprovedKinds.Contains)).IsTrue();
+        await Assert.That(edit.Covers("execute")).IsFalse();
+        await Assert.That(edit.Covers(null)).IsFalse();
+
+        await Assert.That(AcpPermissionPresets.TryResolve("auto", out var auto)).IsTrue();
+        await Assert.That(auto!.Covers("execute")).IsTrue();
+        await Assert.That(auto.Covers("wat")).IsTrue();
+        await Assert.That(auto.Covers(null)).IsTrue();
     }
 }

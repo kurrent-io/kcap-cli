@@ -2,6 +2,7 @@ using System.Collections.Frozen;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Capacitor.App.Services;
+using Capacitor.App.ViewModels;
 using DynamicData;
 
 namespace Capacitor.App.Tests.Unit;
@@ -21,6 +22,14 @@ sealed class FakeAgentDirectory : IAgentDirectory, IDisposable {
     IObservableCache<AgentRow, string> IAgentDirectory.Rows => Rows;
     IObservable<bool> IAgentDirectory.RemoteStale => RemoteStale;
     IObservable<bool> IAgentDirectory.LocalDaemonOnAppServer => LocalOnAppServer;
+    /// Lane evidence for IsHostedNow; a test about a cached row clears one of them.
+    public bool LocalConnected = true;
+    public bool RegistryCurrent = true;
+    public bool IsHostedNow(AgentRow row) => !SessionStatusDots.IsTerminal(row.Status) && row.Origin switch {
+        AgentOrigin.Local => LocalConnected && LocalOnAppServer.Value,
+        AgentOrigin.Remote => RegistryCurrent,
+        _ => false,
+    };
 
     public bool IsProvenLocalTwin(string agentId) => ProvenTwins.Contains(agentId);
 

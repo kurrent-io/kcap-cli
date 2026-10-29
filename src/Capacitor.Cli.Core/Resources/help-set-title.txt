@@ -1,9 +1,24 @@
-kcap set-title — Set session title
+kcap set-title — Rename the current session
 
-Usage: kcap set-title <title>
+Usage: kcap set-title [--auto] <title>
 
 Arguments:
   title                   Session title (max 120 characters)
+
+Options:
+  --auto                  Name the session instead of renaming it: the title replaces a
+                          placeholder or generated title, never one chosen at start or a rename.
+                          Must come first; a title that loses is reported but exits 0
+
+A plain title is a rename; the later of it and a rename made in the dashboard wins.
+
+Exit codes:
+  0                       The session shows the title, or an --auto title lost to another
+                          (the title the session keeps is printed)
+                          An unusable server URL is reported, but also exits 0
+  1                       The title could not be sent or was refused, or the session is not yours
+  3                       A rename the server did not apply: it kept another title (printed),
+                          or is too old to confirm it, so it only lands on a session with no title
 
 Environment:
   Session ID is auto-resolved from KCAP_SESSION_ID (Claude)

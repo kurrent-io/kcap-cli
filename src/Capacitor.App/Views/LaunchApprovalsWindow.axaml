@@ -1,0 +1,89 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
+        xmlns:views="clr-namespace:Capacitor.App.Views"
+        x:Class="Capacitor.App.Views.LaunchApprovalsWindow"
+        x:DataType="vm:ActivityViewModel"
+        Title="kcap — Launch approvals"
+        Icon="avares://kcap-desktop/Assets/kcap-icon.png"
+        Width="560" Height="520" MinWidth="420" MinHeight="320"
+        Background="{StaticResource KcapCanvasBrush}">
+    <Grid Margin="28,24" RowDefinitions="Auto,Auto,*" RowSpacing="10">
+        <TextBlock Text="Launch approvals" Classes="kcapTitle" />
+        <TextBlock Grid.Row="1" Text="Recent launch decisions on this machine."
+                   Classes="kcapSubtitle" TextWrapping="Wrap" Margin="0,0,0,8" />
+        <Border Grid.Row="2" Background="{StaticResource KcapSurfaceBrush}"
+                BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
+                CornerRadius="12" Padding="16,8">
+                <Grid>
+                    <TextBlock Text="Loading…" Foreground="{StaticResource KcapMutedBrush}"
+                               FontSize="13.5" HorizontalAlignment="Center" VerticalAlignment="Center"
+                               Margin="0,28"
+                               IsVisible="{Binding IsLoading}" />
+
+                    <StackPanel IsVisible="{Binding ShowsEmpty}"
+                                Spacing="6" Margin="0,28"
+                                HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <TextBlock x:Name="ActivityEmptyText" Text="No launch approvals yet"
+                                   Foreground="{StaticResource KcapMutedBrush}"
+                                   FontSize="13.5" HorizontalAlignment="Center" />
+                        <TextBlock Text="Approval decisions for launches on this machine appear here."
+                                   Foreground="{StaticResource KcapFaintBrush}"
+                                   FontSize="12" TextWrapping="Wrap" MaxWidth="300"
+                                   TextAlignment="Center" HorizontalAlignment="Center" />
+                    </StackPanel>
+
+                    <DockPanel IsVisible="{Binding ShowsRows}">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled">
+                            <ItemsControl x:Name="ActivityItems" ItemsSource="{Binding Rows}"
+                                          HorizontalAlignment="Stretch">
+                                <ItemsControl.Styles>
+                                    <Style Selector="ItemsControl > ContentPresenter">
+                                        <Setter Property="HorizontalAlignment" Value="Stretch" />
+                                    </Style>
+                                    <Style Selector="Border.activityRow">
+                                        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+                                        <Setter Property="BorderThickness" Value="0,0,0,1" />
+                                        <Setter Property="Padding" Value="4,10" />
+                                    </Style>
+                                    <Style Selector="ContentPresenter:nth-last-child(1) > Border.activityRow">
+                                        <Setter Property="BorderThickness" Value="0" />
+                                    </Style>
+                                </ItemsControl.Styles>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:ActivityRow">
+                                        <Border Classes="activityRow">
+                                            <StackPanel Spacing="2">
+                                                <Grid ColumnSpacing="0">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="*" MinWidth="0" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Grid.Column="0" Text="{Binding Outcome}" FontSize="12.5" FontWeight="SemiBold"
+                                                               Foreground="{Binding IsAllowed, Converter={x:Static views:OutcomeBrushConverter.Instance}}" />
+                                                    <TextBlock Grid.Column="1" Text=" · " FontSize="12.5"
+                                                               Foreground="{StaticResource KcapTextBrush}" />
+                                                    <TextBlock Grid.Column="2" Text="{Binding PrimaryDetail}" FontSize="12.5"
+                                                               Foreground="{StaticResource KcapTextBrush}"
+                                                               TextTrimming="CharacterEllipsis" />
+                                                </Grid>
+                                                <TextBlock Text="{Binding SecondaryLine}" FontSize="12"
+                                                           Foreground="{StaticResource KcapMutedBrush}"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           ToolTip.Tip="{Binding SecondaryTip}" />
+                                                <TextBlock Text="{Binding Time}" FontSize="11"
+                                                           Foreground="{StaticResource KcapFaintBrush}"
+                                                           ToolTip.Tip="{Binding TimeTip}" />
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </DockPanel>
+                </Grid>
+        </Border>
+    </Grid>
+</Window>

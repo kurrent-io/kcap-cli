@@ -57,6 +57,165 @@ public class WorkOSDiscoveryTests {
         await Assert.That(cfg.Profiles["eventuous"].ServerUrl).IsEqualTo("https://eventuous.kcap.ai");
     }
 
+    /// <summary>Signing in to a tenant a hand-named profile already points at saves the token and the
+    /// stamp under that profile and keeps it active, rather than minting a slug-named twin.</summary>
+    [Test]
+    public async Task PublishAsync_saves_under_the_hand_named_profile_on_the_same_server() {
+        await ConfigMutator.MutateAsync(Config.Root, _ => new ProfileConfig {
+            ActiveProfile = "kurrent",
+            Profiles      = new() { ["kurrent"] = new() { ServerUrl = "https://kurrent.kcap.ai" } }
+        });
+        var tenant = new DiscoveredTenant {
+            Provider = "WorkOS", OrganizationId = "org_k", Slug = "kurrent-io", DisplayName = "Kurrent", Origin = "https://kurrent.kcap.ai"
+        };
+        var switched = new WorkOSAuthResponse { User = new() { Id = "user_x" }, OrganizationId = "org_k", AccessToken = "acc2", RefreshToken = "rt2" };
+
+        var result = await WorkOSDiscovery.PublishAsync(
+            Config.Root, AuthFixtures.NewTokenStore(Config.Root),
+            new WorkOSDiscoveryFlow.Ready([tenant], tenant, switched, "client_d", "Ada"), new RecordingAuthProgress(),
+            beforeCommit: null, TimeProvider.System, CancellationToken.None);
+
+        await Assert.That(result).IsTypeOf<AuthResult.Committed>();
+        await Assert.That(((AuthResult.Committed)result).CredentialSaved).IsTrue();
+        await Assert.That((await AuthFixtures.NewTokenStore(Config.Root).LoadAsync("kurrent"))!.AccessToken).IsEqualTo("acc2");
+
+        var cfg = await AppConfig.LoadProfileConfig(Config.Root);
+        await Assert.That(cfg.Profiles.Keys).IsEquivalentTo(["kurrent"]);
+        await Assert.That(cfg.ActiveProfile).IsEqualTo("kurrent");
+        await Assert.That(cfg.Profiles["kurrent"].AuthProvider).IsNotNull();
+    }
+
+    /// <summary>A hand-named profile for the tenant's server written after the names were chosen, but
+    /// before the commit took the config lock, is found under the lock: the commit is prepared again
+    /// under that name instead of writing a slug-named twin.</summary>
+    [Test]
+    public async Task PublishAsync_renames_when_a_profile_for_the_server_lands_before_the_commit() {
+        var tenant = new DiscoveredTenant {
+            Provider = "WorkOS", OrganizationId = "org_k", Slug = "kurrent-io", DisplayName = "Kurrent", Origin = "https://kurrent.kcap.ai"
+        };
+        var switched = new WorkOSAuthResponse { User = new() { Id = "user_x" }, OrganizationId = "org_k", AccessToken = "acc2", RefreshToken = "rt2" };
+        var offered  = new List<string>();
+
+        var result = await WorkOSDiscovery.PublishAsync(
+            Config.Root, AuthFixtures.NewTokenStore(Config.Root),
+            new WorkOSDiscoveryFlow.Ready([tenant], tenant, switched, "client_d", "Ada"), new RecordingAuthProgress(),
+            beforeCommit: async (identities, ct) => {
+                offered.Add(identities.Single().Profile);
+                if (offered.Count == 1)
+                    await ConfigMutator.MutateAsync(Config.Root, c => c with {
+                        Profiles = new(c.Profiles) { ["kurrent"] = new() { ServerUrl = "https://kurrent.kcap.ai" } }
+                    }, ct);
+            },
+            TimeProvider.System, CancellationToken.None);
+
+        await Assert.That(result).IsTypeOf<AuthResult.Committed>();
+        await Assert.That(offered).IsEquivalentTo(["kurrent-io", "kurrent"]);
+        await Assert.That((await AuthFixtures.NewTokenStore(Config.Root).LoadAsync("kurrent"))!.AccessToken).IsEqualTo("acc2");
+
+        var cfg = await AppConfig.LoadProfileConfig(Config.Root);
+        await Assert.That(cfg.Profiles.ContainsKey("kurrent-io")).IsFalse();
+        await Assert.That(cfg.ActiveProfile).IsEqualTo("kurrent");
+    }
+
+    /// <summary>A removed tenant whose organization survives is still listed by the proxy; picking it
+    /// would configure a host that only 404s, so the account is treated as having no workspace.</summary>
+    [Test]
+    public async Task DiscoverAsync_leaves_out_a_workspace_that_no_longer_answers_and_offers_to_create() {
+        var proxy = Substitute.For<IAuthProxyClient>();
+        DiscoveredTenant[] tenants = [
+            new() { Provider = "WorkOS", OrganizationId = "org_gone", Slug = "gone", DisplayName = "Gone", Origin = "https://gone.kcap.ai" }
+        ];
+        proxy.DiscoverWorkOSTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
+             .Returns(Task.FromResult(new Cli.Core.Auth.DiscoveryResult(tenants, DiscoveryError.None)));
+
+        var provisioner = Substitute.For<ITenantProvisioner>();
+        provisioner.OfferCreateAsync(Arg.Any<WorkOSTokenSource>(), Arg.Any<CancellationToken>())
+                   .Returns(Task.FromResult(ProvisionOffer.Created(
+                       new ProvisionedTenant("org_new", "acme", "Acme", "https://acme.kcap.ai"))));
+
+        string? switchedTo = null;
+        var     progress   = new RecordingAuthProgress();
+
+        var flow = await WorkOSDiscovery.DiscoverAsync(
+            "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },
+            proxy, Substitute.For<ITenantPicker>(), NoTelemetry.Funnel,
+            orglessLogin: ()       => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { AccessToken = "acc", RefreshToken = "rt" }),
+            orgSwitch:    (_, org) => {
+                switchedTo = org;
+                return Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { OrganizationId = org, AccessToken = "acc2", RefreshToken = "rt2" });
+            },
+            provisioner: provisioner, time: TimeProvider.System, progress: progress,
+            probe: (_, _, _) => Task.FromResult(WorkspaceAnswer.Gone));
+
+        await Assert.That(flow).IsTypeOf<WorkOSDiscoveryFlow.Ready>();
+        await Assert.That(switchedTo).IsEqualTo("org_new");
+        await Assert.That(string.Join("\n", progress.Notices)).Contains("https://gone.kcap.ai");
+    }
+
+    /// <summary>Only a definite "not a workspace" drops a tenant: an outage must not send the user to
+    /// create a second one.</summary>
+    [Test]
+    [Arguments(WorkspaceAnswer.Live)]
+    [Arguments(WorkspaceAnswer.NoAnswer)]
+    public async Task DiscoverAsync_keeps_a_workspace_that_did_not_answer_gone(WorkspaceAnswer answer) {
+        var proxy = Substitute.For<IAuthProxyClient>();
+        DiscoveredTenant[] tenants = [
+            new() { Provider = "WorkOS", OrganizationId = "org_a", Slug = "acme", DisplayName = "Acme", Origin = "https://acme.kcap.ai" }
+        ];
+        proxy.DiscoverWorkOSTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
+             .Returns(Task.FromResult(new Cli.Core.Auth.DiscoveryResult(tenants, DiscoveryError.None)));
+
+        var provisioner = Substitute.For<ITenantProvisioner>();
+
+        var flow = await WorkOSDiscovery.DiscoverAsync(
+            "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },
+            proxy, Substitute.For<ITenantPicker>(), NoTelemetry.Funnel,
+            orglessLogin: ()       => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { AccessToken = "acc", RefreshToken = "rt" }),
+            orgSwitch:    (_, org) => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { OrganizationId = org, AccessToken = "acc2", RefreshToken = "rt2" }),
+            provisioner: provisioner, time: TimeProvider.System,
+            probe: (_, _, _) => Task.FromResult(answer));
+
+        await Assert.That(flow).IsTypeOf<WorkOSDiscoveryFlow.Ready>();
+        await Assert.That(((WorkOSDiscoveryFlow.Ready)flow).Picked.Slug).IsEqualTo("acme");
+        await provisioner.DidNotReceiveWithAnyArgs().OfferCreateAsync(default!, default);
+    }
+
+    /// <summary>A workspace still being created is left out without anything taking its place: alone it
+    /// ends discovery as in progress rather than at the create offer, and beside another the user is
+    /// asked rather than signed in to the other.</summary>
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task DiscoverAsync_takes_nothing_in_place_of_a_pending_workspace(bool withAnother) {
+        var proxy = Substitute.For<IAuthProxyClient>();
+        DiscoveredTenant pending = new() { Provider = "WorkOS", OrganizationId = "org_n", Slug = "fresh", DisplayName = "Fresh", Origin = "https://fresh.kcap.ai" };
+        DiscoveredTenant older   = new() { Provider = "WorkOS", OrganizationId = "org_o", Slug = "older", DisplayName = "Older", Origin = "https://older.kcap.ai" };
+        DiscoveredTenant[] tenants = withAnother ? [pending, older] : [pending];
+        proxy.DiscoverWorkOSTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
+             .Returns(Task.FromResult(new Cli.Core.Auth.DiscoveryResult(tenants, DiscoveryError.None)));
+
+        var picker      = Substitute.For<ITenantPicker>();
+        var provisioner = Substitute.For<ITenantProvisioner>();
+
+        var flow = await WorkOSDiscovery.DiscoverAsync(
+            "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },
+            proxy, picker, NoTelemetry.Funnel,
+            orglessLogin: ()       => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { AccessToken = "acc", RefreshToken = "rt" }),
+            orgSwitch:    (_, org) => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { OrganizationId = org, AccessToken = "acc2", RefreshToken = "rt2" }),
+            provisioner: provisioner, time: TimeProvider.System,
+            probe: (t, _, _) => Task.FromResult(t.Slug == "fresh" ? WorkspaceAnswer.Pending : WorkspaceAnswer.Live));
+
+        await provisioner.DidNotReceiveWithAnyArgs().OfferCreateAsync(default!, default);
+        if (withAnother) {
+            await picker.Received(1).PickAsync(
+                Arg.Is<DiscoveredTenant[]>(offered => offered.Length == 1 && offered[0].Slug == "older"),
+                Arg.Any<TenantPickContext>(), Arg.Any<CancellationToken>());
+        } else {
+            await Assert.That(flow).IsTypeOf<WorkOSDiscoveryFlow.Failed>();
+            await Assert.That(((WorkOSDiscoveryFlow.Failed)flow).Reason).IsEqualTo(AuthFailureReason.ProvisioningInProgress);
+        }
+    }
+
     [Test]
     public async Task DiscoverAsync_errors_when_workos_not_configured() {
         var flow = await WorkOSDiscovery.DiscoverAsync(
@@ -371,5 +530,36 @@ public class WorkOSDiscoveryTests {
         await Assert.That(seen!.ViaLoopback).IsEqualTo(expectLoopback);
         await Assert.That(seen.Bearer).IsEqualTo("orgless-token");
         await Assert.That(seen.CanPickInBrowser).IsEqualTo(expectLoopback);
+    }
+
+    /// <summary>
+    /// A browser sign-up's new workspace is left out until it is live, so the one workspace discovery
+    /// still finds may be another the account already belongs to: a confirmed pick shows it rather
+    /// than signing in to it unasked.
+    /// </summary>
+    [Test]
+    [Arguments(true, 1)]
+    [Arguments(false, 0)]
+    public async Task DiscoverAsync_asks_the_picker_about_a_single_workspace_only_when_told_to_confirm(bool confirm, int picks) {
+        var proxy = Substitute.For<IAuthProxyClient>();
+        DiscoveredTenant[] tenants = [
+            new() { Provider = "WorkOS", OrganizationId = "org_a", Slug = "acme", Origin = "https://acme.kcap.ai" }
+        ];
+        proxy.DiscoverWorkOSTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
+             .Returns(Task.FromResult(new Cli.Core.Auth.DiscoveryResult(tenants, DiscoveryError.None)));
+
+        var picker = Substitute.For<ITenantPicker>();
+        picker.PickAsync(Arg.Any<DiscoveredTenant[]>(), Arg.Any<TenantPickContext>(), Arg.Any<CancellationToken>())
+              .Returns(Task.FromResult<DiscoveredTenant?>(tenants[0]));
+
+        var flow = await WorkOSDiscovery.DiscoverAsync(
+            "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" }, proxy, picker, NoTelemetry.Funnel,
+            orglessLogin: ()       => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { AccessToken = "acc", RefreshToken = "rt" }),
+            orgSwitch:    (_, org) => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { OrganizationId = org, AccessToken = "acc2", RefreshToken = "rt2" }),
+            time: TimeProvider.System,
+            confirmPick: confirm);
+
+        await Assert.That(flow).IsTypeOf<WorkOSDiscoveryFlow.Ready>();
+        await Assert.That(picker.ReceivedCalls().Count()).IsEqualTo(picks);
     }
 }

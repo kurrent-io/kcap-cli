@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Microsoft.Extensions.Logging;
 
@@ -29,7 +30,8 @@ internal partial class RepoMatcher(DaemonConfig config, ILogger<RepoMatcher> log
 
     readonly ConcurrentDictionary<string, CacheEntry> _cache = new();
 
-    public async Task<string[]> FindAsync(string owner, string repo, string[] serverCandidates, CancellationToken ct) {
+    public async Task<string[]> FindAsync(
+            string owner, string repo, string[] serverCandidates, CancellationToken ct, bool resolveWorktrees = false) {
         var target = $"{owner}/{repo}";
 
         var candidates = await MergeCandidatesAsync(serverCandidates);
@@ -45,9 +47,13 @@ internal partial class RepoMatcher(DaemonConfig config, ILogger<RepoMatcher> log
             ct.ThrowIfCancellationRequested();
 
             try {
-                var root = WalkUpToGitRoot(candidate);
+                var found = WalkUpToGitRoot(candidate);
+                var root  = found is not null && resolveWorktrees ? GitRepository.ResolveMainRepoRoot(found) : found;
 
-                if (root is null || !seenRoots.Add(root)) {
+                // Keyed canonically only when resolving: `gitdir:` targets are realpaths, so a main
+                // root can arrive as /private/var/… beside its own candidate's /var/…. Otherwise each
+                // spelling stays, because flow discovery exact-matches the requester's root.
+                if (root is null || !seenRoots.Add(resolveWorktrees ? CanonicalPath.Resolve(root) : root)) {
                     continue;
                 }
 

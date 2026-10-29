@@ -47,6 +47,8 @@ sealed class CopilotHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
         HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
         GitProviderRouter router, WorkingDirectory workdir) {
+    readonly SessionStartAudience audience = SessionStartAudience.From(hosted);
+
     readonly AgentHookPoster _poster = new(config, profiles, http, watchers, clock.Time);
 
     string Url => profiles.Resolution.ServerUrl!;
@@ -105,9 +107,10 @@ sealed class CopilotHookCommand(
             string?    source,
             bool       disabled,
             bool       guidelinesDisabled,
+            bool       flowsDisabled,
             TimeSpan   budget,
             Func<CancellationToken, Task<bool>>? commitGate) {
-        if ((disabled && guidelinesDisabled) || string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(scopeRoot)
+        if ((disabled && guidelinesDisabled && flowsDisabled) || string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(scopeRoot)
          || budget <= TimeSpan.Zero
          || !HookHttp.IsPostable(Url))
             return null;
@@ -121,7 +124,7 @@ sealed class CopilotHookCommand(
                     IsTopLevel: true, ClassificationAuthoritative: true,
                     SessionStartMemoryHookSupport.ReasonFor(source), CallbackMayRepeat: false),
                 new SessionStartMemoryContextRequest(Url, scopeRoot, disabled, budget, CancellationToken.None,
-                    GuidelinesDisabled: guidelinesDisabled),
+                    GuidelinesDisabled: guidelinesDisabled, FlowsDisabled: flowsDisabled),
                 commitGate);
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return null;
@@ -287,8 +290,9 @@ sealed class CopilotHookCommand(
             // whenever --server-url or KCAP_URL wins, and the effective one falls back to the on-disk
             // active profile. Reading the resolution silently ignored `disable_memory_index: true`
             // for every KCAP_URL user.
-            activeProfile?.DisableMemoryIndex is true,
+            activeProfile?.DisableMemoryIndex is true || !audience.GetsDriverGuidance,
             activeProfile?.DisableSessionGuidelines is true,
+            SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Copilot, harnesses, audience: audience),
             // Remaining already reserves Safety — subtracting it again here halved the window.
             budget.Remaining,
             // Deliverability gate: the lease is committed only once the lifecycle POST has proved the
@@ -322,9 +326,9 @@ sealed class CopilotHookCommand(
         // Copilot parses this hook's stdout as its (optional) single JSON result document. Silent when
         // there is neither a fragment nor a nudge, which keeps all pre-existing paths byte-identical.
         var workItemsNudge = HarnessNudgeEmitter.Combine(
-            WorkItemsNudgeEmitter.Resolve(HarnessId.Copilot, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
-            PlansNudgeEmitter.Resolve(HarnessId.Copilot, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
-            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time));
+            SessionNudges.Resolve(HarnessId.Copilot, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience, cwd, home),
+            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true || !audience.GetsOnboarding, config, harnesses, clock.Time),
+            FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true || !audience.GetsOnboarding, config, HarnessId.Copilot, harnesses));
         WriteSessionStartOutput(Console.Out, fragment, workItemsNudge);
 
         if (!AgentHookPoster.ShouldSpawnAfter(outcome, Url)) return 0;

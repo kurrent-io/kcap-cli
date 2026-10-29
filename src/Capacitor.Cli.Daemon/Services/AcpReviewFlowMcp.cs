@@ -61,7 +61,7 @@ internal static class AcpReviewFlowMcp {
                 throw new InvalidOperationException(
                     "Borrowed-snapshot review cannot inject kcap-review-context (missing capability URL).");
             servers.Add(new(
-                WireName(ctx, "kcap-review-context"), ctx.CapacitorPath, ["mcp", "review"],
+                WireName(ctx, KcapMcpRegistry.ReviewContextServerId), ctx.CapacitorPath, ["mcp", "review"],
                 [new("KCAP_REVIEW_CONTEXT_MODE", "1"),
                  new("KCAP_REVIEW_CONTEXT_URL", ctx.ReviewContextCapabilityUrl)]));
         }

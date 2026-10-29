@@ -62,4 +62,43 @@ public class HostedAgentTests {
         await Assert.That(hosted.AgentId).IsEqualTo("agent-1");
         await Assert.That(hosted.Bridge).IsEqualTo(new DaemonBridge.Loopback("http://127.0.0.1:9/b"));
     }
+
+    /// <summary>Written with the literals: the daemon and the server's ack both send these.</summary>
+    [Test]
+    [Arguments("flow_participant", HostedSessionKind.FlowParticipant)]
+    [Arguments("hosted_agent", HostedSessionKind.HostedAgent)]
+    [Arguments("reviewer", HostedSessionKind.None)]
+    [Arguments("", HostedSessionKind.None)]
+    [Arguments(null, HostedSessionKind.None)]
+    public async Task The_session_kind_is_read_from_its_marker(string? raw, HostedSessionKind kind) {
+        using var _ = EnvScope.Exclusive("KCAP_SESSION_KIND", raw);
+
+        await Assert.That(HostedAgent.FromEnvironment().Kind).IsEqualTo(kind);
+    }
+
+    [Test]
+    public async Task A_participant_launch_is_marked_with_its_kind_and_role() {
+        var markers = HostedAgent.LaunchMarkers(isFlowParticipant: true, flowRole: "reviewer");
+
+        await Assert.That(markers.ToDictionary()).IsEquivalentTo(new Dictionary<string, string> {
+            ["KCAP_SESSION_KIND"] = "flow_participant",
+            ["KCAP_FLOW_ROLE"]    = "reviewer"
+        });
+    }
+
+    [Test]
+    [Arguments(false, "reviewer")]
+    [Arguments(false, null)]
+    public async Task Any_other_launch_is_a_hosted_agent_with_no_role(bool participant, string? role) {
+        var markers = HostedAgent.LaunchMarkers(participant, role);
+
+        await Assert.That(markers.ToDictionary()).IsEquivalentTo(new Dictionary<string, string> { ["KCAP_SESSION_KIND"] = "hosted_agent" });
+    }
+
+    [Test]
+    public async Task A_participant_whose_launch_named_no_role_gets_none() {
+        var markers = HostedAgent.LaunchMarkers(isFlowParticipant: true, flowRole: null);
+
+        await Assert.That(markers.ToDictionary()).IsEquivalentTo(new Dictionary<string, string> { ["KCAP_SESSION_KIND"] = "flow_participant" });
+    }
 }

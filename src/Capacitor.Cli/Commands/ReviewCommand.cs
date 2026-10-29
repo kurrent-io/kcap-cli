@@ -26,7 +26,7 @@ class ReviewCommand(ProfileContext profiles, IReviewApi review) {
         try {
             if (await review.GetPullRequestContextAsync(owner, repo, prNumber) is ReviewContextResult.NotFound) {
                 await Console.Error.WriteLineAsync($"No review context found for {owner}/{repo}#{prNumber}.");
-                await Console.Error.WriteLineAsync("Make sure the PR has sessions tracked in Capacitor.");
+                await Console.Error.WriteLineAsync("Make sure the PR has sessions tracked in kcap.");
 
                 return 1;
             }

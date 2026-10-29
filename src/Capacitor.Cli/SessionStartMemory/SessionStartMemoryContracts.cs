@@ -4,9 +4,12 @@ using Capacitor.Cli.Core.Harness;
 namespace Capacitor.Cli.SessionStartMemory;
 
 internal enum SessionLifecycleReason { New, Resume, Reopen, Fork, Compact, RepeatedTurnCallback, Unknown }
-internal enum SessionMemoryLifecycleDecision { EligibleWithLease, EligibleOneShot, IneligibleNoCommit, RetryLaterNoCommit }
+internal enum SessionMemoryLifecycleDecision { EligibleWithLease, EligibleOneShot, EligibleEveryStart, IneligibleNoCommit, RetryLaterNoCommit }
 internal enum SessionStartMemoryDisposition { Ready, CompleteWithoutContext, RetryableFailure }
 
+/// <param name="HostKeepsContext">False when the host holds an injected fragment only for the life of
+/// the process that received it and persists none of it, so every start of the session needs its own
+/// copy and a once-per-session lease would leave each later start without one.</param>
 internal sealed record SessionMemoryLifecycle(
     HarnessId Harness,
     string SessionId,
@@ -14,7 +17,8 @@ internal sealed record SessionMemoryLifecycle(
     bool IsTopLevel,
     bool ClassificationAuthoritative,
     SessionLifecycleReason Reason,
-    bool CallbackMayRepeat);
+    bool CallbackMayRepeat,
+    bool HostKeepsContext = true);
 
 internal sealed record SessionStartMemoryEntry(
     [property: JsonPropertyName("memory_id")] string? MemoryId,
@@ -25,7 +29,9 @@ internal sealed record SessionStartMemoryEntry(
     // The memory's home scope (org|project|repo) + the resolved project slug for a project-scoped row.
     // Defaulted so an older server (no scope fields) parses as org, which renders unannotated.
     [property: JsonPropertyName("scope_kind")] string? ScopeKind = null,
-    [property: JsonPropertyName("project_slug")] string? ProjectSlug = null);
+    [property: JsonPropertyName("project_slug")] string? ProjectSlug = null,
+    // A log's count of open entries; null on a document and from a server that predates logs.
+    [property: JsonPropertyName("open_entries")] int? OpenEntries = null);
 
 /// <summary>A project the cwd repo is confirmed to belong to: the slug an agent passes on the
 /// place axis of a save, and the human name it is known by.</summary>
@@ -40,18 +46,21 @@ internal sealed record SessionStartMemoryIndexResponse(
     [property: JsonPropertyName("entries")] SessionStartMemoryEntry[]? Entries,
     [property: JsonPropertyName("projects")] SessionStartMemoryProject[]? Projects);
 
+/// <summary>Each lane has its own opt-out. The guidelines and flows flags default to off so a memory-only
+/// construction stays memory-only.</summary>
 internal sealed record SessionStartMemoryContextRequest(
     string BaseUrl,
     string? Cwd,
     bool Disabled,
     TimeSpan Budget,
     CancellationToken CancellationToken,
-    // the guidelines lane's opt-out (disable_session_guidelines), independent of the
-    // memory lane's Disabled (disable_memory_index). Additive with a default so the Claude
-    // memory-only construction — which never runs the guidelines lane — compiles untouched and
-    // stays guidelines-off. The eight non-Claude adapters set it explicitly from activeProfile.
-    bool GuidelinesDisabled = true);
+    bool GuidelinesDisabled = true,
+    bool FlowsDisabled = true) {
+    public bool AllLanesDisabled => Disabled && GuidelinesDisabled && FlowsDisabled;
+}
 
+/// <param name="Fragment">Delivered even on a <see cref="SessionStartMemoryDisposition.RetryableFailure"/>, which
+/// leaves the lease open, so only content safe to deliver again may ride on one.</param>
 internal sealed record SessionStartMemoryContextResult(
     SessionStartMemoryDisposition Disposition,
     string? Fragment = null,

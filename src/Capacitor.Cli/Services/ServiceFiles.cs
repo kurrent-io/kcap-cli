@@ -1,4 +1,6 @@
 using System.Text;
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalEdition;
 using Microsoft.Win32.SafeHandles;
 
 namespace Capacitor.Cli.Services;
@@ -28,15 +30,20 @@ static class ServiceFiles {
     /// <param name="tightenDirectory">Test seam. Production passes null and gets the real chmod; a test
     /// supplies a no-op one to prove the refusal, which is otherwise only reachable through a directory
     /// the current user does not own.</param>
+    /// <param name="durable">Flushes the content and the directory entry, so a power loss leaves the old unit or
+    /// the new one. Every directory level below the home is synced.</param>
+    /// <param name="home">Bounds the durable directory creation; without it the walk reaches the filesystem root.</param>
     public static void WriteOwnerOnly(
             string path, string content, Encoding? encoding = null, Action<string>? verifyFinal = null,
-            Action<string>? tightenDirectory = null) {
+            Action<string>? tightenDirectory = null, bool durable = false, UserHome? home = null) {
         var directory = Path.GetDirectoryName(path);
 
         if (!string.IsNullOrEmpty(directory)) {
-            CreateDirectory(directory);
+            if (durable) DurableDirectory.Ensure(directory, DurableDirectory.AnchorFor(directory, home), OwnerOnlyDir);
+            else CreateDirectory(directory);
             RequireNoSharedWrite(directory, tightenDirectory);
             RequireNoWorldWritableAncestor(directory);
+            RequireNoForeignOwnedAncestor(directory);
         }
 
         // Full GUID: the staging name must not be guessable by a local process racing to pre-create it,
@@ -44,8 +51,11 @@ static class ServiceFiles {
         var staging = path + ".tmp-" + Guid.NewGuid().ToString("N");
 
         try {
-            WriteStaging(staging, content, encoding);
+            WriteStaging(staging, content, encoding, durable);
+            FaultPoints.Hit($"rename:{path}");
             File.Move(staging, path, overwrite: true);
+            FaultPoints.Hit($"renamed:{path}");
+            if (durable && !string.IsNullOrEmpty(directory)) DurableDirectory.Sync(directory);
         } catch (Exception) {
             TryDelete(staging);
 
@@ -61,7 +71,7 @@ static class ServiceFiles {
         }
     }
 
-    static void WriteStaging(string staging, string content, Encoding? encoding) {
+    static void WriteStaging(string staging, string content, Encoding? encoding, bool durable) {
         var options = new FileStreamOptions {
             Mode   = FileMode.CreateNew,       // never follow or truncate an existing entry
             Access = FileAccess.Write
@@ -78,6 +88,12 @@ static class ServiceFiles {
         using var writer = encoding is null ? new StreamWriter(stream) : new StreamWriter(stream, encoding);
 
         writer.Write(content);
+
+        if (!durable) return;
+
+        writer.Flush();
+        FaultPoints.Hit($"flush:{staging}");
+        stream.Flush(flushToDisk: true);
     }
 
     /// <summary>Creates the unit directory, and every ancestor it has to create, owner-only — so the umask
@@ -169,15 +185,46 @@ static class ServiceFiles {
     /// world-writable directory on the way to someone's home is produced by no umask and is never
     /// deliberate. The group-write case is reported by <c>kcap daemon doctor</c>, which can advise where
     /// this cannot safely block.</para></summary>
-    static void RequireNoWorldWritableAncestor(string directory) {
-        // The unit directory itself is included and costs nothing: RequireNoSharedWrite has already
-        // stripped its world-write bit or thrown, so it cannot be the offender found here.
-        if (DirectoryExposure.GrantingWrite(directory, UnixFileMode.OtherWrite) is not [var offender, ..]) return;
+    static void RequireNoWorldWritableAncestor(string directory, bool exceptItself = false) {
+        // The unit directory itself is included and costs nothing after RequireNoSharedWrite, which has
+        // stripped its world-write bit or thrown. Before that runs, it is excluded by its lexical and its
+        // physical path alike, while its target's parents are still walked.
+        string[] itself = exceptItself ? [Path.GetFullPath(directory), DirectoryExposure.Physical(directory)] : [];
+        if (DirectoryExposure.GrantingWrite(directory, UnixFileMode.OtherWrite).FirstOrDefault(d => !itself.Contains(d))
+            is not { } offender) return;
 
         throw new InvalidOperationException(
             $"Refusing to write a service unit below a world-writable directory: {offender}. Any local "
           + "account can rename the unit directory out from under it and choose what the daemon runs. "
           + $"Remove that write bit with `chmod o-w {offender}` and re-run the install.");
+    }
+
+    /// <summary>The ancestor checks <see cref="WriteOwnerOnly"/> makes, run on their own so an install can
+    /// refuse before it touches the unit it would replace. The unit directory's own mode is left out:
+    /// the writer repairs that one rather than refusing it.</summary>
+    public static void RequireSafeAncestors(string unitPath) {
+        if (Path.GetDirectoryName(unitPath) is not { Length: > 0 } directory) return;
+        RequireNoWorldWritableAncestor(directory, exceptItself: true);
+        RequireNoForeignOwnedAncestor(directory);
+    }
+
+    /// <summary>Refuses when a directory on the path to the unit is owned by another account, which can
+    /// rename the unit directory away whatever the modes say. Root-owned directories pass: every path
+    /// starts under them. One directory whose owner cannot be read is left to the mode check, but a system
+    /// where no owner can be read at all is refused rather than passed unchecked.</summary>
+    static void RequireNoForeignOwnedAncestor(string directory) {
+        if (OperatingSystem.IsWindows()) return;
+        if (!FileOwner.Available)
+            throw new InvalidOperationException(
+                "Refusing to write a service unit without checking who owns the directories above it: no working "
+              + "`stat` command was found in /usr/bin, /bin or /run/current-system/sw/bin. Install coreutils and re-run the install.");
+
+        if (DirectoryExposure.ForeignOwned(directory) is not [var (offender, owner), ..]) return;
+
+        throw new InvalidOperationException(
+            $"Refusing to write a service unit below a directory owned by another account: {offender} "
+          + $"(uid {owner}). Its owner can rename the unit directory out from under it and choose what the "
+          + "daemon runs. Install from a home directory whose path you or root own.");
     }
 
     static void RequireOwnerOnlyPath(string path) {

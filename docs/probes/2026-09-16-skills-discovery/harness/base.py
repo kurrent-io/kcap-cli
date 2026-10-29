@@ -1,0 +1,154 @@
+from __future__ import annotations
+
+import shutil
+import subprocess
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from types import MappingProxyType
+
+from lib.isolation import Sandbox
+
+
+@dataclass
+class HookInfo:
+    mechanism: str
+    config_path: str
+    # Where this mechanism actually writes the skill, when that is not the arm's own path.
+    target: Path | None = None
+
+
+@dataclass
+class AskResult:
+    reply_text: str
+    raw: str
+    argv: list[str]
+    started_at: float
+    first_request_at: float
+    stderr_path: str | None
+    exit_code: int | None
+    notes: str = ""
+
+
+class Session:
+    """A live vendor session that takes more than one prompt."""
+
+    def ask(self, prompt: str) -> AskResult:
+        raise NotImplementedError
+
+    def reload(self) -> str | None:
+        """Ask the vendor to rebuild its skill catalogue: the command used, or None if it has none."""
+        return None
+
+    def close(self) -> None:
+        return None
+
+
+class ClassifiedSession(Session):
+    """A driver session whose replies carry the adapter's own tool classification instead of the
+    driver's flat count, which cannot tell a listed skill's own file from a search for it."""
+
+    def __init__(self, inner: Session, classify: Callable[[AskResult], str]) -> None:
+        self.inner = inner
+        self.classify = classify
+
+    def ask(self, prompt: str) -> AskResult:
+        res = self.inner.ask(prompt)
+        generic = " ".join(n for n in res.notes.split() if not n.startswith("tools_used="))
+        res.notes = (generic + " " + self.classify(res)).strip()
+        return res
+
+    def reload(self) -> str | None:
+        return self.inner.reload()
+
+    def close(self) -> None:
+        self.inner.close()
+
+
+class Adapter:
+    entry: str = ""
+    harness: str = ""
+    binary: str = ""
+    lever: str = ""
+    # Class-level defaults are shared by every adapter, so they are immutable: a subclass that
+    # appended to a list default would extend it for all of them.
+    credential_files: tuple[str, ...] = ()
+    passthrough_env: tuple[str, ...] = ()
+    extra_env: Mapping[str, str] = MappingProxyType({})
+    native_root: str = ""
+    documented_roots: frozenset[str] = frozenset()
+    flat_skill_layout: bool = False
+    modes: tuple[str, ...] = ("print", "daemon")
+    turn_timeout: float = 180.0
+    can_resume: bool = False
+    # Interactive launch: (regex on the stripped screen, keys to send) pairs for the vendor's
+    # dialogs, the slash command that rebuilds its catalogue, the keys that end it.
+    tui_dialogs: tuple[tuple[str, str], ...] = ()
+    tui_reload: str | None = None
+    # An interactive turn carries the UI's own latency on top of the model's, so it gets longer
+    # than a headless one before the screen is called unreadable.
+    tui_timeout: float = 300.0
+    tui_exit: tuple[str, ...] = ("\x03", "\x03", "\x04")
+    tui_ready: float = 4.0
+
+    def binary_path(self) -> str | None:
+        return shutil.which(self.binary)
+
+    def version(self, env: dict | None = None) -> str:
+        path = self.binary_path()
+        if path is None:
+            return "not-installed"
+        kwargs = {"env": env} if env is not None else {}
+        out = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=60, **kwargs)
+        return (out.stdout or out.stderr).strip().splitlines()[0] if (out.stdout or out.stderr).strip() else "unknown"
+
+    def real_root(self) -> Path | None:
+        return None
+
+    def prepare(self, sb: Sandbox) -> None:
+        return None
+
+    def check_auth(self, sb: Sandbox) -> bool | None:
+        return None
+
+    def install_startup_hook(self, sb: Sandbox, script: Path) -> HookInfo | None:
+        return None
+
+    def install_registration(self, sb: Sandbox, skill_file: Path, body: str) -> HookInfo | None:
+        return None
+
+    def ask(self, sb: Sandbox, mode: str, prompt: str) -> AskResult:
+        raise NotImplementedError
+
+    def open_session(self, sb: Sandbox, mode: str) -> Session | None:
+        if mode != "tui":
+            return None
+        argv = self.tui_argv(sb)
+        if argv is None:
+            return None
+        from lib.pty_driver import PtySession
+        session = PtySession(argv, sb.cwd, sb.env, sb.root / f"{self.harness}-tui.log", dialogs=self.tui_dialogs,
+                             reload_command=self.tui_reload, exit_keys=self.tui_exit, ready_idle=self.tui_ready,
+                             timeout=self.tui_timeout)
+        session.start()
+        return session
+
+    def tui_argv(self, sb: Sandbox) -> list[str] | None:
+        return None
+
+    def session_id(self, res: AskResult) -> str | None:
+        return None
+
+    def resume(self, sb: Sandbox, session_id: str, prompt: str) -> AskResult | None:
+        return None
+
+    def list_catalogue(self, sb: Sandbox) -> str | None:
+        return None
+
+    def skill_dir(self, sb: Sandbox, root: str, name: str) -> Path:
+        return sb.repo / root if self.flat_skill_layout else sb.repo / root / name
+
+    def skill_file(self, sb: Sandbox, root: str, name: str) -> Path:
+        if self.flat_skill_layout:
+            return sb.repo / root / f"{name}.md"
+        return sb.repo / root / name / "SKILL.md"

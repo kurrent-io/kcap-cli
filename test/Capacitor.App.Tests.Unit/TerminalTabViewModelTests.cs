@@ -6,6 +6,7 @@ using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core.LocalIpc;
 using DynamicData;
 using Microsoft.Extensions.Time.Testing;
+using TUnit.Assertions.Enums;
 using static Capacitor.App.Tests.Unit.AvaloniaSession;
 using static Capacitor.App.Tests.Unit.WorkspaceFixtures;
 
@@ -111,7 +112,7 @@ public class TerminalTabViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Resolve_timeout_is_not_found_and_a_late_dto_is_ignored_until_retry() {
+    public async Task Resolve_timeout_is_not_found_and_a_late_dto_recovers_without_retry() {
         await RunOnUiAsync(async () => {
             var daemon = new FakeDaemonClientService();
             var factory = new FakeTerminalAttachClientFactory();
@@ -121,14 +122,35 @@ public class TerminalTabViewModelTests {
             time.Advance(TimeSpan.FromSeconds(10));
             await Assert.That(vm.State.Phase).IsEqualTo(TerminalSessionPhase.NotFound);
 
-            // A late DTO reaches nothing -- the timeout disposed the Agents subscription.
+            // Timeout keeps the Agents subscription: a late DTO (daemon linked the session after
+            // the 10s budget) claims timeout-won → dto-won and attaches without Retry.
             daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true));
+            await (vm.PendingResolveWorkForTesting ?? Task.CompletedTask);
+
+            await Assert.That(vm.State.Phase).IsEqualTo(TerminalSessionPhase.Connecting);
+            await Assert.That(factory.Created.Count).IsEqualTo(1);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Retry_after_timeout_with_no_agent_stays_not_found_and_can_still_recover() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var factory = new FakeTerminalAttachClientFactory();
+            var time = new FakeTimeProvider();
+            var vm = Build(daemon, factory, time, agentId: "a1");
+
+            time.Advance(TimeSpan.FromSeconds(10));
+            await Assert.That(vm.State.Phase).IsEqualTo(TerminalSessionPhase.NotFound);
+
+            // Lookup miss restores timeout-won so a later Agents push (or another Retry) can try.
+            await vm.RetryResolveCommand.Execute();
             await Assert.That(vm.State.Phase).IsEqualTo(TerminalSessionPhase.NotFound);
             await Assert.That(factory.Created.Count).IsEqualTo(0);
 
-            // RetryResolveCommand resolves against the now-present DTO.
-            await vm.RetryResolveCommand.Execute();
-
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true));
+            await (vm.PendingResolveWorkForTesting ?? Task.CompletedTask);
             await Assert.That(vm.State.Phase).IsEqualTo(TerminalSessionPhase.Connecting);
             await Assert.That(factory.Created.Count).IsEqualTo(1);
         });
@@ -175,28 +197,146 @@ public class TerminalTabViewModelTests {
         });
     }
 
-    /// I1 (final review, reworked): a post-attach resend fired from inside OnAttachedAsync is
-    /// structurally defeated -- Core's own post-attach repaint nudge (AgentAttachClient.
-    /// RunCoreAsync, right after a read-write Attached) writes at whatever size RunAsync started
-    /// with and follows immediately after any same-callback resend on the wire; the daemon applies
-    /// resizes in stream order with last-write-wins, so the resend never survives. The fix instead
-    /// starts the run itself at the surface's real size (TryStartAttemptAsync reads CurrentSize
-    /// right after the UI swap dispatch, before calling RunAsync) -- committed before any Attach
-    /// reply, so it holds regardless of whether the attach turns out read-write or read-only.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Attach_starts_the_run_at_the_surfaces_real_current_size() {
+    public async Task Visible_attach_resizes_to_the_surfaces_current_size_only_when_writable() {
         await RunOnUiAsync(async () => {
             var (_, _, _, _, client) = await BuildConnectingAsync(
                 surfaceFactory: () => new FakeTerminalSurface { CurrentSize = (137, 41) });
-
-            await Assert.That((client.Cols, client.Rows)).IsEqualTo((137, 41));
+            await client.TriggerAttached([]);
+            await Assert.That(client.Resizes).IsEquivalentTo(new[] { (137, 41) });
 
             var (_, _, _, _, client2) = await BuildConnectingAsync(
                 agentId: "a2", surfaceFactory: () => new FakeTerminalSurface { CurrentSize = (137, 41) });
-            await client2.TriggerAttached([], reason: "review");   // read-only: same RunAsync argument either way
+            await client2.TriggerAttached([], reason: "review");
+            await Assert.That(client2.Resizes).IsEmpty();
+        });
+    }
 
-            await Assert.That((client2.Cols, client2.Rows)).IsEqualTo((137, 41));
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Chat_only_attach_defers_resize_until_the_terminal_is_shown_and_keeps_input_available() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var factory = new FakeTerminalAttachClientFactory();
+            var time = new FakeTimeProvider();
+            var surface = new FakeTerminalSurface { CurrentSize = (137, 41) };
+            var vm = Build(daemon, factory, time, surfaceFactory: () => surface);
+            vm.SurfaceShown = false;
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { AwaitingInput = true });
+            Dispatcher.UIThread.RunJobs();
+            await (vm.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            var client = factory.Created.Single();
+            await client.TriggerAttached([]);
+            surface.RaiseResize(100, 30);
+
+            await Assert.That(client.Resizes).IsEmpty();
+            await Assert.That(vm.CanAcceptText).IsTrue();
+
+            vm.SurfaceShown = true;
+            await Assert.That(client.Resizes).IsEquivalentTo(new[] { (137, 41) });
+            surface.RaiseResize(120, 40);
+            await Assert.That(client.Resizes).IsEquivalentTo(new[] { (137, 41), (120, 40) });
+
+            vm.SurfaceShown = false;
+            surface.CurrentSize = (110, 35);
+            surface.RaiseResize(110, 35);
+            await Assert.That(client.Resizes.Count).IsEqualTo(2);
+            vm.SurfaceShown = true;
+            await Assert.That(client.Resizes.Last()).IsEqualTo((110, 35));
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Replayed_terminal_queries_send_no_input_but_live_queries_still_get_answers(bool shown) {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var factory = new FakeTerminalAttachClientFactory();
+            var time = new FakeTimeProvider();
+            var surface = new XtermTerminalSurface(80, 24);
+            var vm = Build(daemon, factory, time, surfaceFactory: () => surface);
+            vm.SurfaceShown = shown;
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { AwaitingInput = true });
+            Dispatcher.UIThread.RunJobs();
+            await (vm.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            var client = factory.Created.Single();
+            await client.TriggerAttached(System.Text.Encoding.ASCII.GetBytes("hello\u001b[6n"));
+            await client.TriggerOutput("!"u8.ToArray());
+            time.Advance(TerminalTabViewModel.HiddenFeedInterval);
+            await Assert.That(client.SentInput).IsEmpty();
+
+            await client.TriggerOutput(System.Text.Encoding.ASCII.GetBytes("\u001b[6n"));
+            time.Advance(TerminalTabViewModel.HiddenFeedInterval);
+            await Assert.That(client.SentInput.Single()).IsEquivalentTo(System.Text.Encoding.ASCII.GetBytes("\u001b[1;7R"));
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(false, false, "claude")]
+    [Arguments(null, false, "codex")]
+    [Arguments(false, true, "codex")]
+    [Arguments(null, true, "claude")]
+    public async Task An_active_or_unknown_turn_answers_pending_queries_on_attach_and_reconnect(
+            bool? awaitingInput, bool shown, string vendor) {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var factory = new FakeTerminalAttachClientFactory();
+            var time = new FakeTimeProvider();
+            var vm = Build(daemon, factory, time, surfaceFactory: () => new XtermTerminalSurface(80, 24));
+            vm.SurfaceShown = shown;
+            daemon.Agents.AddOrUpdate(Agent("a1", vendor, hasTerminal: true) with { AwaitingInput = awaitingInput });
+            Dispatcher.UIThread.RunJobs();
+            await (vm.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            var first = factory.Created.Single();
+            await first.TriggerAttached("\u001b[6n"u8.ToArray());
+            time.Advance(TerminalTabViewModel.HiddenFeedInterval);
+            await Assert.That(first.SentInput.Single()).IsEquivalentTo("\u001b[1;1R"u8.ToArray());
+
+            first.Result.SetResult(new AttachOutcome.ConnectionLost());
+            await vm.CurrentRunForTesting!;
+            await vm.ReattachCommand.Execute();
+            var second = factory.Created.Last();
+            await second.TriggerAttached("active\u001b[6n"u8.ToArray());
+            await second.TriggerOutput("\u001b["u8.ToArray());
+            await second.TriggerOutput("6n"u8.ToArray());
+            time.Advance(TerminalTabViewModel.HiddenFeedInterval);
+            await Assert.That(second.SentInput.Count).IsEqualTo(2);
+            foreach (var reply in second.SentInput)
+                await Assert.That(reply).IsEquivalentTo("\u001b[1;7R"u8.ToArray());
+            await Assert.That(vm.CanAcceptText).IsTrue();
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_hidden_idle_terminal_resumes_sizing_when_a_turn_starts() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var factory = new FakeTerminalAttachClientFactory();
+            var time = new FakeTimeProvider();
+            var surface = new FakeTerminalSurface { CurrentSize = (125, 33) };
+            var vm = Build(daemon, factory, time, surfaceFactory: () => surface);
+            vm.SurfaceShown = false;
+            var idle = Agent("a1", "claude", hasTerminal: true) with { AwaitingInput = true };
+            daemon.Agents.AddOrUpdate(idle);
+            Dispatcher.UIThread.RunJobs();
+            await (vm.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            var client = factory.Created.Single();
+            await client.TriggerAttached([]);
+            await Assert.That(client.Resizes).IsEmpty();
+
+            daemon.Agents.AddOrUpdate(idle with { AwaitingInput = false });
+            await Assert.That(client.Resizes).IsEquivalentTo(new[] { (125, 33) });
+            surface.RaiseResize(110, 30);
+            await Assert.That(client.Resizes.Last()).IsEqualTo((110, 30));
+            await vm.TeardownAsync();
         });
     }
 
@@ -291,6 +431,48 @@ public class TerminalTabViewModelTests {
         });
     }
 
+    /// The control re-lays out every row it draws on each feed, so while nobody is looking the
+    /// chunks are held and fed once a second as one piece.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Output_while_the_surface_is_hidden_is_held_and_fed_once_a_second() {
+        await RunOnUiAsync(async () => {
+            var (_, _, time, vm, client) = await BuildConnectingAsync();
+            var surface = (FakeTerminalSurface)vm.Surface!;
+            vm.SurfaceShown = false;
+
+            await client.TriggerOutput("AB"u8.ToArray());
+            await client.TriggerOutput("CD"u8.ToArray());
+            await Assert.That(surface.Fed).IsEmpty();
+
+            time.Advance(TerminalTabViewModel.HiddenFeedInterval);
+            await Assert.That(surface.Fed).IsEquivalentTo(new[] { "ABCD" }, CollectionOrdering.Matching);
+
+            await client.TriggerOutput("EF"u8.ToArray());
+            await Assert.That(surface.Fed).IsEquivalentTo(new[] { "ABCD" }, CollectionOrdering.Matching);
+            time.Advance(TerminalTabViewModel.HiddenFeedInterval);
+            await Assert.That(surface.Fed).IsEquivalentTo(new[] { "ABCD", "EF" }, CollectionOrdering.Matching);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Showing_the_surface_feeds_the_held_output_before_anything_newer() {
+        await RunOnUiAsync(async () => {
+            var (_, _, _, vm, client) = await BuildConnectingAsync();
+            var surface = (FakeTerminalSurface)vm.Surface!;
+            vm.SurfaceShown = false;
+            await client.TriggerOutput("AB"u8.ToArray());
+            await Assert.That(surface.Fed).IsEmpty();
+
+            vm.SurfaceShown = true;
+            await Assert.That(surface.Fed).IsEquivalentTo(new[] { "AB" }, CollectionOrdering.Matching);
+
+            await client.TriggerOutput("CD"u8.ToArray());
+            await Assert.That(surface.Fed).IsEquivalentTo(new[] { "AB", "CD" }, CollectionOrdering.Matching);
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Exited_is_not_overwritten_by_session_ended() {
@@ -317,7 +499,7 @@ public class TerminalTabViewModelTests {
             await vm.ReattachCommand.Execute(); // retires attempt 1: cancels + await-disposes client1
 
             // TrySetException, not SetException: DisposeAsync's own Result.TrySetResult(Detached)
-            // (I4's fake-fidelity fix) may already have claimed Result as part of that retire --
+            // may already have claimed Result as part of that retire --
             // this call's outcome doesn't matter either way, only that attempt 1 settles silently.
             client1.Result.TrySetException(new OperationCanceledException());
             await run1; // attempt 1's own run settles silently
@@ -471,8 +653,7 @@ public class TerminalTabViewModelTests {
             time.Advance(TimeSpan.FromSeconds(1));
             await WaitUntilAsync(() => client.DisposeCalls == 1, what: "DisposeAsync called at the 1s detach bound");
 
-            // A safety margin, not strictly required any more: DisposeAsync's own
-            // Result.TrySetResult(Detached) (I4) settles the run step through ordinary Task
+            // A safety margin: DisposeAsync's own Result.TrySetResult(Detached) settles the run step through ordinary Task
             // scheduling once DisposeCalls confirms it ran, but this covers a slow CI box too.
             time.Advance(TimeSpan.FromSeconds(2));
             await teardown;
@@ -510,7 +691,7 @@ public class TerminalTabViewModelTests {
         });
     }
 
-    // ---- review fixes: C1/I1-I6 ----
+    // ---- teardown and reattach races ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -523,9 +704,8 @@ public class TerminalTabViewModelTests {
             var before = factory.Created.Count;
             await vm.ReattachCommand.Execute();
 
-            // Disposal wins permanently: a post-teardown Reattach must build nothing -- the
-            // straggler client C1 reproduced (nothing would ever dispose it; TeardownAsync is
-            // idempotent) never gets created at all.
+            // Disposal wins permanently: a post-teardown Reattach must build nothing, since
+            // nothing would ever dispose that straggler client (TeardownAsync is idempotent).
             await Assert.That(factory.Created.Count).IsEqualTo(before);
         });
     }
@@ -537,9 +717,9 @@ public class TerminalTabViewModelTests {
             var (_, factory, _, vm, client1) = await BuildConnectingAsync();
 
             // Gate client1's DisposeAsync open so Reattach's retire step is still suspended
-            // (straddling the swap) when TeardownAsync lands -- the class of race C1 reproduced:
-            // a resumed cts.Token read/Register throwing ObjectDisposedException, and a second
-            // live client nothing could ever dispose.
+            // (straddling the swap) when TeardownAsync lands. The hazard: a resumed cts.Token
+            // read/Register throwing ObjectDisposedException, and a second live client nothing
+            // could ever dispose.
             client1.DisposeGate = new TaskCompletionSource();
 
             var reattach = Task.Run(() => vm.ReattachCommand.Execute().ToTask());

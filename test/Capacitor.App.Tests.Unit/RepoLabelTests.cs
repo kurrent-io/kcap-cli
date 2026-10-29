@@ -2,15 +2,26 @@ using Capacitor.App.ViewModels;
 
 namespace Capacitor.App.Tests.Unit;
 
+/// <summary>A repository is named by its last segment, whether the path is this host's or a Windows daemon's,
+/// and a drive or share root has no name.</summary>
 public class RepoLabelTests {
-    /// The wire says which path is a worktree; the leaf never guesses from a path's shape, so a
-    /// worktree path yields the worktree's own name and only null yields the dash.
     [Test]
-    public async Task The_leaf_is_the_last_segment_and_never_a_guess_from_the_path_shape() {
-        await Assert.That(RepoLabel.Leaf("/repo/myproj")).IsEqualTo("myproj");
-        await Assert.That(RepoLabel.Leaf("/repo/myproj/")).IsEqualTo("myproj");
-        await Assert.That(RepoLabel.Leaf("/repo/myproj/.claude/worktrees/feature")).IsEqualTo("feature");
-        await Assert.That(RepoLabel.Leaf("/repo/myproj/.capacitor/worktrees/agent-6da2")).IsEqualTo("agent-6da2");
-        await Assert.That(RepoLabel.Leaf(null)).IsEqualTo("—");
+    [Arguments("/work/kcap", "kcap")]
+    [Arguments("/work/kcap/", "kcap")]
+    [Arguments(@"Z:\x\Engine", "Engine")]
+    [Arguments(@"Z:\x\Engine\", "Engine")]
+    [Arguments("C:/x/repo", "repo")]
+    [Arguments(@"C:\", "")]
+    [Arguments("C:", "")]
+    [Arguments(@"\\server\share", "")]
+    [Arguments(@"\\server\share\repo", "repo")]
+    public async Task A_path_is_named_by_its_last_segment(string path, string leaf) =>
+        await Assert.That(RepoLabel.Leaf(path)).IsEqualTo(leaf);
+
+    [Test]
+    public async Task A_backslash_in_a_unix_name_stays_part_of_it() {
+        Skip.Unless(!OperatingSystem.IsWindows(), "a backslash separates segments on Windows");
+
+        await Assert.That(RepoLabel.Leaf(@"/work/foo\bar")).IsEqualTo(@"foo\bar");
     }
 }

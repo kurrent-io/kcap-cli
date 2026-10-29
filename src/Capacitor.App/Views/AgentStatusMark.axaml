@@ -1,0 +1,62 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
+             xmlns:views="clr-namespace:Capacitor.App.Views"
+             x:Class="Capacitor.App.Views.AgentStatusMark"
+             x:DataType="vm:AgentStatusPresentation"
+             ClipToBounds="False"
+             IsVisible="{Binding HasLabel, FallbackValue=False}"
+             AutomationProperties.Name="{Binding AccessibleName}">
+    <ToolTip.Tip>
+        <views:AgentStatusTip DataContext="{Binding}" />
+    </ToolTip.Tip>
+    <UserControl.Styles>
+        <Style Selector="TextBlock.statusWord">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="LineHeight" Value="16" />
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="TextBlock.statusWord.inflight">
+            <Setter Property="Foreground" Value="{StaticResource KcapPurpleBrush}" />
+        </Style>
+        <Style Selector="TextBlock.statusWord.warning">
+            <Setter Property="Foreground" Value="{StaticResource KcapWarningBrush}" />
+        </Style>
+        <Style Selector="TextBlock.statusWord.danger">
+            <Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" />
+        </Style>
+        <Style Selector="Panel.glyph">
+            <Setter Property="Width" Value="12" />
+            <Setter Property="Height" Value="12" />
+        </Style>
+    </UserControl.Styles>
+    <!-- A DockPanel, not a horizontal StackPanel, so the word is width-bounded and trims when a
+         raw daemon status outgrows its column; the tooltip carries the full text. -->
+    <DockPanel VerticalAlignment="Center">
+        <!-- Lucide's full canvas keeps the ring stroke inside the status slot. -->
+        <Panel x:Name="Glyph" Classes="glyph" DockPanel.Dock="Left" Margin="0,0,5,0"
+               VerticalAlignment="Center" ClipToBounds="False"
+               Classes.pulsing="{Binding Pulses}" views:PulseClock.IsActive="{Binding Pulses}">
+            <views:AppIcon Kind="Circle" Size="12" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" IsVisible="{Binding ShowsRing}"
+                           Foreground="{StaticResource KcapPurpleBrush}" />
+            <Ellipse Width="5" Height="5" Fill="{StaticResource KcapPurpleBrush}"
+                     HorizontalAlignment="Center" VerticalAlignment="Center" UseLayoutRounding="False" IsVisible="{Binding ShowsRing}" />
+            <views:AppIcon Kind="Clock" Size="12" IsVisible="{Binding ShowsClock}" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                           Foreground="{StaticResource KcapWarningBrush}" />
+            <views:AppIcon Kind="CircleQuestionMark" Size="12" Foreground="{StaticResource KcapWarningBrush}" HorizontalAlignment="Center"
+                           VerticalAlignment="Center" IsVisible="{Binding ShowsAsk}" />
+            <views:AppIcon Kind="CircleAlert" Size="12" Foreground="{StaticResource KcapWarningBrush}" HorizontalAlignment="Center"
+                           VerticalAlignment="Center" IsVisible="{Binding ShowsBang}" />
+            <views:AppIcon Kind="CirclePause" Size="12" Foreground="{StaticResource KcapWarningBrush}" HorizontalAlignment="Center"
+                           VerticalAlignment="Center" IsVisible="{Binding ShowsPause}" />
+            <views:AppIcon Kind="X" Size="12" IsVisible="{Binding ShowsCross}" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                           Foreground="{StaticResource KcapDangerBrush}" />
+            <views:AppIcon Kind="Minus" Size="12" Foreground="{StaticResource KcapMutedBrush}" IsVisible="{Binding ShowsDash}" />
+        </Panel>
+        <TextBlock x:Name="StatusWord" Classes="statusWord" Text="{Binding Label}"
+                   Classes.inflight="{Binding IsInFlight}" Classes.warning="{Binding IsWarning}"
+                   Classes.danger="{Binding IsDanger}" TextTrimming="CharacterEllipsis" />
+    </DockPanel>
+</UserControl>

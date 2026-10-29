@@ -3,6 +3,9 @@ using Capacitor.Cli.Core.LocalIpc;
 namespace Capacitor.Cli.Core.Tests.Unit.LocalIpc;
 
 public class FrameCodecTests {
+    // A frame without a title or an account ends with the title byte and the empty account's 4-byte length prefix.
+    const int TitleByteAndEmptyAccount = 5;
+
     static async Task<LocalFrame> RoundTrip(LocalFrame f) {
         using var ms = new MemoryStream();
         await FrameCodec.WriteAsync(ms, f, default);
@@ -20,6 +23,22 @@ public class FrameCodecTests {
     }
 
     [Test]
+    public async Task RuntimeStarted_round_trips_the_stamp_to_the_tick() {
+        var at = new DateTimeOffset(2026, 10, 20, 9, 30, 15, TimeSpan.Zero).AddTicks(1234567);
+        var r = await RoundTrip(LocalFrame.RuntimeStarted(at));
+        await Assert.That(r.Type).IsEqualTo(FrameType.RuntimeStarted);
+        await Assert.That(r.StartedAt).IsEqualTo(at);
+        await Assert.That(r.StartedAt.UtcTicks).IsEqualTo(at.UtcTicks);
+    }
+
+    [Test]
+    public async Task AttachWithRuntime_round_trips_the_agent_id() {
+        var r = await RoundTrip(new LocalFrame(FrameType.AttachWithRuntime) { Text = "agent-1" });
+        await Assert.That(r.Type).IsEqualTo(FrameType.AttachWithRuntime);
+        await Assert.That(r.Text).IsEqualTo("agent-1");
+    }
+
+    [Test]
     public async Task Resize_round_trips_dimensions() {
         var r = await RoundTrip(LocalFrame.Resize(203, 51));
         await Assert.That(r.Cols).IsEqualTo((ushort)203);
@@ -32,7 +51,7 @@ public class FrameCodecTests {
             var built = FrameCodec.Spawn("codex", WorkLocation.OwnedWorktree, priv, "/repo", ["--model", "opus", "fix it"], 100, 30);
             var r = await RoundTrip(built);
             await Assert.That(r.Type).IsEqualTo(FrameType.Spawn);
-            var (vendor, work, isPrivate, cwd, args, cols, rows) = FrameCodec.Spawn(r);
+            var (vendor, work, isPrivate, cwd, args, cols, rows, title, _) = FrameCodec.Spawn(r);
             await Assert.That(vendor).IsEqualTo("codex");
             await Assert.That(work).IsEqualTo(WorkLocation.OwnedWorktree);
             await Assert.That(isPrivate).IsEqualTo(priv);
@@ -40,7 +59,56 @@ public class FrameCodecTests {
             await Assert.That(args).IsEquivalentTo(new[] { "--model", "opus", "fix it" });
             await Assert.That(cols).IsEqualTo((ushort)100);
             await Assert.That(rows).IsEqualTo((ushort)30);
+            await Assert.That(title).IsNull();
         }
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Spawn_round_trips_the_start_title_and_whether_it_was_derived(bool derived) {
+        var built = FrameCodec.Spawn(
+            "claude", WorkLocation.BorrowedCwd, false, "/repo", ["fix it"], 80, 24, new AgentStartTitle("Fix it ✓", derived));
+
+        var (_, _, isPrivate, _, args, _, _, title, _) = FrameCodec.Spawn(await RoundTrip(built));
+
+        await Assert.That(isPrivate).IsFalse();
+        await Assert.That(args).IsEquivalentTo(new[] { "fix it" });
+        await Assert.That(title).IsEqualTo(new AgentStartTitle("Fix it ✓", derived));
+    }
+
+    [Test]
+    public async Task Spawn_title_rides_after_every_field_an_older_daemon_reads() {
+        // An older daemon parses through the private byte and ignores the rest, so the title must
+        // leave every earlier byte exactly as a frame without one lays it out.
+        var plain  = FrameCodec.Spawn("claude", WorkLocation.BorrowedCwd, false, "/repo", ["fix it"], 80, 24).Bytes;
+        var titled = FrameCodec.Spawn("claude", WorkLocation.BorrowedCwd, false, "/repo", ["fix it"], 80, 24,
+            new AgentStartTitle("Fix it", Derived: false)).Bytes;
+
+        var olderLayout = plain[..^TitleByteAndEmptyAccount];
+        await Assert.That(titled.Length).IsGreaterThan(plain.Length);
+        await Assert.That(titled[..olderLayout.Length]).IsEquivalentTo(olderLayout);
+    }
+
+    [Test]
+    public async Task Spawn_frame_ending_at_the_private_byte_carries_no_title() {
+        var plain = FrameCodec.Spawn("claude", WorkLocation.BorrowedCwd, false, "/repo", [], 80, 24).Bytes;
+        var frame = new LocalFrame(FrameType.Spawn) { Bytes = plain[..^TitleByteAndEmptyAccount] };
+
+        var (_, _, isPrivate, _, _, _, _, title, _) = FrameCodec.Spawn(frame);
+
+        await Assert.That(isPrivate).IsFalse();
+        await Assert.That(title).IsNull();
+    }
+
+    [Test]
+    public async Task Spawn_with_an_unknown_title_kind_carries_no_title() {
+        var plain = FrameCodec.Spawn("claude", WorkLocation.BorrowedCwd, false, "/repo", [], 80, 24).Bytes;
+        plain[^TitleByteAndEmptyAccount] = 0x7f;
+
+        var (_, _, _, _, _, _, _, title, _) = FrameCodec.Spawn(new LocalFrame(FrameType.Spawn) { Bytes = plain });
+
+        await Assert.That(title).IsNull();
     }
 
     [Test]
@@ -54,9 +122,10 @@ public class FrameCodecTests {
         ms.Write([0, 0, 0, 0]);                          // argCount=0  (no trailing private byte)
         var frame = new LocalFrame(FrameType.Spawn) { Bytes = ms.ToArray() };
 
-        var (vendor, _, isPrivate, _, _, _, _) = FrameCodec.Spawn(frame);
+        var (vendor, _, isPrivate, _, _, _, _, title, _) = FrameCodec.Spawn(frame);
         await Assert.That(vendor).IsEqualTo("claude");
         await Assert.That(isPrivate).IsTrue();
+        await Assert.That(title).IsNull();
     }
 
     [Test]

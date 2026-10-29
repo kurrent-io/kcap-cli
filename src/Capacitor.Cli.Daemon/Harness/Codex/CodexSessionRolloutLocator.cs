@@ -93,7 +93,10 @@ internal static class CodexSessionRolloutLocator {
                 // (never a real Codex rollout); a mislink there is display-only either way.
                 var creation = TryParseCreationFromFileName(file) ?? File.GetCreationTimeUtc(file);
 
-                if (!IsNewEnough(creation, spawnedAtUtc)) continue;
+                if (!IsNewEnough(creation, spawnedAtUtc)) {
+                    ruledOut?.Add(file);
+                    continue;
+                }
 
                 switch (MatchRollout(ReadFirstLines(file), cwd, DefaultPathComparison)) {
                     case CwdMatch.Yes:

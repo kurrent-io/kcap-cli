@@ -13,6 +13,7 @@ public class CommandEventsTests {
     [Arguments("copilot-finalize")]
     [Arguments("cursor-verify-appendonly")]
     [Arguments("refresh-token")]
+    [Arguments("muse-assistant")]
     public async Task Machine_driven_verbs_are_not_reportable(string command) {
         await Assert.That(CommandEvents.IsReportable(command)).IsFalse();
     }
@@ -43,6 +44,11 @@ public class CommandEventsTests {
         await Assert.That(CommandEvents.Subcommand("plugin", ["plugin", "install"])).IsEqualTo("install");
         await Assert.That(CommandEvents.Subcommand("config", ["config", "set", "server_url", "https://acme.kcap.ai"])).IsEqualTo("set");
         await Assert.That(CommandEvents.Subcommand("curate", ["curate", "apply"])).IsEqualTo("apply");
+    }
+
+    [Test]
+    public async Task Muse_assistant_is_a_known_verb() {
+        await Assert.That(CommandEvents.ReportableCommand("muse-assistant")).IsEqualTo("muse-assistant");
     }
 
     [Test]
@@ -180,6 +186,7 @@ public class CommandEventsTests {
     [Arguments("hook")] // known-but-denylisted verbs are still KNOWN verbs — the two lists are independent
     [Arguments("uninstall")]
     [Arguments("sessions")]
+    [Arguments("local")]
     public async Task Known_verbs_report_themselves(string command) {
         await Assert.That(CommandEvents.ReportableCommand(command)).IsEqualTo(command);
     }

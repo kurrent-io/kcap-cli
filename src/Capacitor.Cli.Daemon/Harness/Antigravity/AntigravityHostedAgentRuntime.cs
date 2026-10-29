@@ -137,7 +137,7 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// <see cref="SendUserInputAndWaitForWriteAsync"/> callers — resolved once this turn's process has
     /// actually spawned (agy has no separate "write" step; the prompt IS the spawn argument), faulted
     /// if the turn is dropped instead (terminal, full queue, or a spawn failure).</summary>
-    sealed record PendingTurn(string Text, TaskCompletionSource? Written);
+    sealed record PendingTurn(string Text, TaskCompletionSource? Written, Guid? DispatchId = null);
 
     readonly object _stateLock = new();
     int _phase = (int)RuntimePhase.Starting;
@@ -344,8 +344,10 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             int?                                                           transcriptCapacity = null,
             int?                                                           pendingTurnsCapacity = null,
             Action?                                                        onDisposed = null,
-            TranscriptJournal?                                             journal = null
+            TranscriptJournal?                                             journal = null,
+            string?                                                        resumeConversationId = null
         ) {
+        _conversationId       = resumeConversationId;
         _spawnTurn            = spawnTurn;
         _logger               = logger;
         _agentId              = agentId;
@@ -428,6 +430,9 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
 
     public Task SendUserInputAndWaitForWriteAsync(string text) => EnqueueTurn(text, acknowledgeWrite: true);
 
+    public Task SendDispatchedInputAsync(string text, Guid dispatchId, bool waitForWrite) =>
+        EnqueueTurn(text, acknowledgeWrite: waitForWrite, dispatchId);
+
     /// <summary>Acquire-then-IMMEDIATELY-release: queues behind an in-flight turn and returns once it's
     /// done, but never itself holds <see cref="_turnGate"/> — see the class doc's rule (d), which is the
     /// exact property <see cref="TerminateAsync"/> also depends on.
@@ -479,12 +484,12 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// agent's session ending is itself the user-visible signal — a thrown error for input that raced
     /// a normal end-of-session would be noise, not news.</para>
     /// </summary>
-    Task EnqueueTurn(string text, bool acknowledgeWrite) {
+    Task EnqueueTurn(string text, bool acknowledgeWrite, Guid? dispatchId = null) {
         var written = acknowledgeWrite
             ? new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
             : null;
 
-        if (_pendingTurns.Writer.TryWrite(new PendingTurn(text, written)))
+        if (_pendingTurns.Writer.TryWrite(new PendingTurn(text, written, dispatchId)))
             return written?.Task ?? Task.CompletedTask;
 
         if (Phase == RuntimePhase.Terminal) {
@@ -578,7 +583,7 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                     // through session/update, so there is no natural agent-sourced envelope for the
                     // prompt itself, and only the single worker (holding the gate) can order it ahead
                     // of this turn's own output without racing the child's first line.
-                    Write(AcpEventTranslator.BuildUserMessage(seq: 0, NowIso(), turn.Text), agentActivity: false);
+                    Write(AcpEventTranslator.BuildUserMessage(seq: 0, NowIso(), turn.Text) with { DispatchId = turn.DispatchId }, agentActivity: false);
 
                     // The turn is in flight from here — set BEFORE the spawn, because a turn whose
                     // process is still being created is legitimately not idle. The finally is what
@@ -901,23 +906,19 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// so it must never trigger termination itself.</summary>
     bool HandleInit(AntigravityEvent evt) {
         if (evt.ConversationId is { Length: > 0 } cid) {
-            if (_conversationId is null) {
-                _conversationId = cid;
-
-                // Rule (e): the ONE place this ever completes successfully — unblocks any factory
-                // awaiting WaitForConversationIdAsync before it reads AcpSessionId.
-                _conversationIdResolved.TrySetResult();
-
-                // The handshake's second and last stamp — this is the moment the runtime has a
-                // conversation, the exec-per-turn analogue of an ACP `session/new` returning. Guarded
-                // by the same "id was null" branch, so it can fire at most once per runtime.
-                ActivityClock?.SetLaunchStage("session_created");
-            } else if (!string.Equals(_conversationId, cid, StringComparison.Ordinal)) {
+            if (_conversationId is not null && !string.Equals(_conversationId, cid, StringComparison.Ordinal)) {
                 _logger.LogError(
                     "Antigravity: conversation id changed from {Old} to {New} mid-session (agentId={AgentId}); entering Terminal.",
                     _conversationId, cid, _agentId);
                 return false;
             }
+
+            _conversationId = cid;
+
+            // Completes once even when the id was seeded at construction, so a factory awaiting
+            // WaitForConversationIdAsync is released by the first confirming init.
+            if (_conversationIdResolved.TrySetResult())
+                ActivityClock?.SetLaunchStage("session_created");
         }
 
         if (evt.Cwd is { Length: > 0 } cwd) _cwd = cwd;
@@ -999,14 +1000,19 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             _terminalExitCode = exitCode;
         }
 
-        _terminalTcs.TrySetResult();
-
         // Terminal is absorbing and no turn can run past it, so the reaper must never see a held turn
         // from here on. The turn worker's own finally clears this too — but it does so only once the
         // in-flight turn actually unwinds, which is AFTER TerminateAsync returns to its caller (and
-        // never at all, if a turn's process ignores cancellation). Clearing here is what makes "the
-        // runtime is stopped" and "the reviewer holds no turn" the same instant.
-        ActivityClock?.SetTurnInFlight(false);
+        // never at all, if a turn's process ignores cancellation). Cleared BEFORE _terminalTcs
+        // completes, so no exit waiter can resume into a stopped runtime that still holds a turn.
+        // Its callbacks are contained: a throwing one must not leave Terminal entered but unsignalled.
+        try {
+            ActivityClock?.SetTurnInFlight(false);
+        } catch (Exception ex) {
+            _logger.LogWarning(ex, "Antigravity: activity-clock callback threw while entering Terminal (agentId={AgentId}).", _agentId);
+        }
+
+        _terminalTcs.TrySetResult();
 
         // Rule (e): unblock a factory parked in WaitForConversationIdAsync when a conversation id is
         // never going to arrive (e.g. turn 1's spawn itself failed) — never hang that caller forever.

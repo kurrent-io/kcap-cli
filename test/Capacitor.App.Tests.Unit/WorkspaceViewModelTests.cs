@@ -22,13 +22,185 @@ namespace Capacitor.App.Tests.Unit;
 /// so ObserveOn(RxSchedulers.MainThreadScheduler) applies synchronously) and carries
 /// [NotInParallel("AvaloniaSession")] -- see that class's identical header comment.
 public class WorkspaceViewModelTests {
+    [TempDir] public required TempDir Tmp { get; init; }
+
     static WorkspaceViewModel Build(
             FakeDaemonClientService daemon, AgentActionService actions, FakeTerminalAttachClientFactory factory,
             FakeTimeProvider time, string agentId = "a1", IPermissionService? permissions = null,
-            SessionAccessService? access = null) =>
-        new(agentId, daemon, actions, factory.Factory, () => new FakeTerminalSurface(), time, new RecordingOpener(),
+            SessionAccessService? access = null, IPlanArtifactSource? planArtifacts = null, IUrlOpener? opener = null, IPlanSource? plans = null,
+            BackgroundCommandActivity? commands = null) =>
+        new(agentId, daemon, actions, factory.Factory, () => new FakeTerminalSurface(), time, opener ?? new RecordingOpener(),
             permissions ?? new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(),
-            new NoAttachmentUploader(), access: access);
+            new NoAttachmentUploader(), access: access, plans: plans, planArtifacts: planArtifacts, commands: commands);
+
+    const string Session = "0123456789abcdef0123456789abcdef";
+
+    /// The tab exists only while the session has a document, like Pull request with its changes.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_artefacts_tab_appears_with_the_first_document_and_falls_back_to_chat_when_none_remain() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var source = new FakePlanArtifactSource();
+            source.Enqueue(Ready(Doc("docs/x-design.md")));
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider(), planArtifacts: source);
+            await Assert.That(vm.ShowsArtefactsTab).IsFalse();
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/x", sessionId: Session));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(vm.ShowsArtefactsTab).IsTrue();
+            await Assert.That(vm.ShowsSurfaceSwitch).IsTrue();
+
+            await vm.ShowArtefactsCommand.Execute();
+            await Assert.That(vm.IsArtefactsActive).IsTrue();
+            await Assert.That(vm.Artefacts.IsShown).IsTrue();
+
+            source.Enqueue(Ready());
+            vm.Artefacts.Refresh();
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(vm.ShowsArtefactsTab).IsFalse();
+            await Assert.That(vm.ActiveTab).IsEqualTo(WorkspaceTab.Chat);
+            await Assert.That(vm.Artefacts.IsShown).IsFalse();
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_empty_session_does_not_flash_the_artefacts_tab_while_loading() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var source = new FakePlanArtifactSource();
+            var gate = source.Gate();
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider(), planArtifacts: source);
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/x", sessionId: Session));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+
+            await Assert.That(vm.Artefacts.IsLoading).IsTrue();
+            await Assert.That(vm.ShowsArtefactsTab).IsFalse();
+
+            gate.SetResult(Ready());
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(vm.ShowsArtefactsTab).IsFalse();
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_artefacts_tab_stays_while_a_visible_session_reloads() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var source = new FakePlanArtifactSource();
+            source.Enqueue(Ready(Doc("docs/x-design.md")));
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider(), planArtifacts: source);
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/x", sessionId: Session));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+            await vm.ShowArtefactsCommand.Execute();
+
+            var gate = source.Gate();
+            const string next = "fedcba9876543210fedcba9876543210";
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/x", sessionId: next));
+            await Assert.That(vm.Artefacts.IsLoading).IsTrue();
+            await Assert.That(vm.ShowsArtefactsTab).IsTrue();
+            await Assert.That(vm.IsArtefactsActive).IsTrue();
+
+            gate.SetResult(Ready());
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(vm.ShowsArtefactsTab).IsFalse();
+            await Assert.That(vm.ActiveTab).IsEqualTo(WorkspaceTab.Chat);
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Settling_ready_documents_keeps_an_active_artefacts_tab() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var source = new FakePlanArtifactSource();
+            source.Enqueue(Ready(Doc("docs/a.md")));
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider(), planArtifacts: source);
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/x", sessionId: Session));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+            await vm.ShowArtefactsCommand.Execute();
+
+            var gate = source.Gate();
+            const string next = "fedcba9876543210fedcba9876543210";
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/x", sessionId: next));
+            await Assert.That(vm.IsArtefactsActive).IsTrue();
+
+            gate.SetResult(Ready(Doc("docs/b.md")));
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(vm.ShowsArtefactsTab).IsTrue();
+            await Assert.That(vm.IsArtefactsActive).IsTrue();
+            await Assert.That(vm.Artefacts.Documents.Single().Path).IsEqualTo("docs/b.md");
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// A card's Open: a document goes to the tab, a page to the browser.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_card_opens_a_document_in_the_tab_and_a_page_in_the_browser() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var source = new FakePlanArtifactSource();
+            source.Enqueue(Ready(Doc("docs/x-design.md")));
+            var opener = new RecordingOpener();
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), opener), new FakeTerminalAttachClientFactory(), new FakeTimeProvider(), planArtifacts: source, opener: opener);
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/x", sessionId: Session));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+
+            vm.OpenCard(new ToolCard(ToolCardKind.Document, "Declared design doc", "x-design.md", "docs/x-design.md", null, "/repo/x/docs/x-design.md"));
+            await Assert.That(vm.ActiveTab).IsEqualTo(WorkspaceTab.Artefacts);
+            await Assert.That(vm.Artefacts.Selected!.Path).IsEqualTo("docs/x-design.md");
+
+            vm.OpenCard(new ToolCard(ToolCardKind.Page, "Published page", "Brief", "v1 · Org", "https://x/artefacts/1", null));
+            await Assert.That(opener.Opened).IsEquivalentTo(new[] { "https://x/artefacts/1" });
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_document_card_matching_no_row_still_opens_the_tab_when_it_has_documents() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var source = new FakePlanArtifactSource();
+            source.Enqueue(Ready(Doc("docs/x-design.md")));
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider(), planArtifacts: source);
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/x", sessionId: Session));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+
+            vm.OpenCard(new ToolCard(ToolCardKind.Document, "Declared plan", "other.md", "docs/other.md", null, "/repo/x/docs/other.md"));
+            await Assert.That(vm.ActiveTab).IsEqualTo(WorkspaceTab.Artefacts);
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_document_card_leaves_the_tab_alone_when_it_has_no_documents() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var source = new FakePlanArtifactSource();
+            source.Enqueue(Ready());
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider(), planArtifacts: source);
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/x", sessionId: Session));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+
+            vm.OpenCard(new ToolCard(ToolCardKind.Document, "Declared plan", "other.md", "docs/other.md", null, "/repo/x/docs/other.md"));
+            await Assert.That(vm.ActiveTab).IsEqualTo(WorkspaceTab.Chat);
+            await vm.TeardownAsync();
+        });
+    }
 
     static FakeServerLane ConnectedLane() {
         var lane = new FakeServerLane();
@@ -41,6 +213,40 @@ public class WorkspaceViewModelTests {
             Func<string, Task<bool>>? confirmForceStop = null) =>
         new(ops, notifier, opener, new ReplaySubject<DaemonStatusDto>(1), CancellationToken.None,
             confirmForceStop ?? NeverConfirm.Confirm);
+
+    /// A starting launch can be cancelled from its workspace: Stop shows before the daemon reports the
+    /// agent, and reads the pending row's kind, so only a protected launch asks to force.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments("agent", false)]
+    [Arguments("review", true)]
+    public async Task Stop_reaches_a_launch_that_is_still_starting(string kind, bool forced) {
+        await RunOnUiAsync(async () => {
+            var ops       = new ScriptedLocalControlOps();
+            var confirmer = new RecordingConfirmer();
+            if (forced) confirmer.Queue(true);
+            var actions   = NewActions(ops, new RecordingNotifier(), new RecordingOpener(), confirmForceStop: confirmer.Confirm);
+            using var directory = new FakeAgentDirectory();
+            directory.Rows.AddOrUpdate(AgentRow.FromPending(
+                new PendingLaunchDto("a1", "claude", "/repo/myproj", "Fix the flaky test", DateTime.UtcNow, "spawned", kind),
+                new RepoIdentity("path:/repo/myproj", "myproj")));
+            var vm = new WorkspaceViewModel("a1", new FakeDaemonClientService(), actions, new FakeTerminalAttachClientFactory().Factory,
+                () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(), new FakePermissionService(),
+                new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader(), directory: directory);
+
+            await Assert.That(vm.HasAgent).IsFalse();
+            await Assert.That(vm.ShowsStop).IsTrue();
+            await Assert.That(await vm.StopCommand.CanExecute.FirstAsync()).IsTrue();
+
+            ops.QueueStop(new StopAgentResult(true, "stopped", null));
+            await vm.StopCommand.Execute();
+
+            await WaitUntilAsync(() => ops.StopCalls >= 1, what: "stop issued for the starting launch");
+            await Assert.That(confirmer.Prompted.Count).IsEqualTo(forced ? 1 : 0);
+            await Assert.That(ops.StopPayloads).IsEquivalentTo([("a1", forced)], CollectionOrdering.Matching);
+            await vm.TeardownAsync();
+        });
+    }
 
     /// Between the launch being accepted and the daemon publishing the agent, the header reads the
     /// directory's pending row, so the workspace never opens as a blank shell.
@@ -233,6 +439,71 @@ public class WorkspaceViewModelTests {
             await vm.ShowChatCommand.Execute();
             await Assert.That(vm.ShowsTerminalBanners).IsFalse();
 
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// A resume brings an agent back under its id after its row ended or vanished, and an interrupted
+    /// agent can still be stopped, so neither leaves the workspace latched as ended.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_resume_row_clears_an_ended_session() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider());
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Failed" });
+            await Assert.That(vm.SessionEnded).IsTrue();
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Interrupted" });
+            await Assert.That(vm.SessionEnded).IsFalse();
+
+            daemon.Agents.RemoveKey("a1");
+            await Assert.That(vm.SessionEnded).IsTrue();
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Resuming" });
+            await Assert.That(vm.SessionEnded).IsFalse();
+
+            // A reconnect can skip the intermediate rows and land straight on a live one.
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Failed" });
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true));
+            await Assert.That(vm.SessionEnded).IsFalse();
+
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// A resume row from an entry that never recorded the runtime's metadata cannot choose the reader or
+    /// the input channel, and the chat is built only once, so it waits for a row that can.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Chat_waits_past_a_resume_row_that_carries_no_runtime_metadata() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider());
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "cursor", hasTerminal: null) with { Status = "Resuming" });
+            await Assert.That(vm.Chat).IsNull();
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "cursor", hasTerminal: false) with { TranscriptFormat = TranscriptFormats.Envelopes });
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await Assert.That(vm.Chat).IsNotNull();
+            await Assert.That(vm.Chat!.Phase).IsEqualTo(ChatTabPhase.Waiting);
+
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// An interrupted row can stay for the ledger's whole retention, so it is not held back.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Chat_is_built_for_an_interrupted_row_without_runtime_metadata() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider());
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "cursor", hasTerminal: null) with { Status = "Interrupted" });
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+
+            await Assert.That(vm.Chat).IsNotNull();
             await vm.TeardownAsync();
         });
     }
@@ -458,6 +729,120 @@ public class WorkspaceViewModelTests {
             source.Default = WorkContextRead.Of(WorkContextReadKind.Ready);
             daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/myproj", sessionId: "ffffffffffffffffffffffffffffffff"));
             await Assert.That(source.Requested.Count).IsEqualTo(1);
+        });
+    }
+
+    const string AgentCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_A","name":"Agent","input":{"description":"Map desktop chat UI surfaces","prompt":"go","subagent_type":"Explore"}}]}}""";
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_chat_and_the_pane_share_one_subagent_tracker() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider());
+            var path = Tmp.CreateFile("t.jsonl", [AgentCallLine]);
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path });
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await (vm.Chat!.PendingReadForTesting ?? Task.CompletedTask);
+
+            await Assert.That(vm.Chat.HasRunningRuns).IsTrue();
+            await Assert.That(vm.WorkContext.HasRuns).IsTrue();
+            await Assert.That(vm.WorkContext.RunsHeader).IsEqualTo("1 running");
+            await Assert.That(vm.WorkContext.Runs.Single().Name).IsEqualTo("Explore");
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// A running foreground subagent is named by its meta file, and its own transcript, every line of it a
+    /// sidechain record, opens in place of the chat.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_running_local_subagent_opens_its_own_transcript_in_place_of_the_chat() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var time = new FakeTimeProvider();
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), time);
+            var path = Tmp.CreateFile("t.jsonl", [AgentCallLine]);
+            Tmp.CreateFile(["t", "subagents", "agent-s1.meta.json"], """{"toolUseId":"toolu_A","requestShape":"foreground"}""");
+            Tmp.CreateFile(["t", "subagents", "agent-s1.jsonl"],
+                """{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"Found the chat surfaces"}]}}""" + "\n");
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path });
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await (vm.Chat!.PendingReadForTesting ?? Task.CompletedTask);
+            var row = vm.WorkContext.Runs.Single();
+            await Assert.That(row.AgentId).IsEqualTo("s1");
+
+            vm.WorkContext.OpenRunCommand.Execute(row).Subscribe();
+            var pane = vm.Subagent!;
+            time.Advance(ChatTabViewModel.PollInterval);
+            await (pane.Chat.PendingReadForTesting ?? Task.CompletedTask);
+
+            await Assert.That(vm.ShowsSubagent).IsTrue();
+            await Assert.That(vm.ShowsChat).IsFalse();
+            await Assert.That(pane.Chat.Items.OfType<AssistantTextItem>().Single().Text).IsEqualTo("Found the chat surfaces");
+            await Assert.That(vm.Chat.Items.OfType<AssistantTextItem>()).IsEmpty();
+            await vm.TeardownAsync();
+        });
+    }
+
+    const string ShellCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_S","name":"Bash","input":{"command":"make check"}}]}}""";
+    const string ShellLaunchLine = """{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_S","type":"tool_result","content":"Command running in background with ID: b1.","is_error":false}]},"toolUseResult":{"stdout":"","stderr":"","interrupted":false,"isImage":false,"noOutputExpected":false,"backgroundTaskId":"b1"}}""";
+
+    /// The rail reads a session's running commands from here; the subagent beside it is left
+    /// out, since the daemon already counts that one. A closed workspace hands its feed and runs on, so the
+    /// count carries on without the transcript being read again. The header reads them too, so a finished
+    /// turn with a command still running is Working there as well.
+    [Test]
+    [Arguments("command")]
+    [Arguments("session")]
+    [Arguments("removed")]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Running_background_commands_remain_working_after_navigation_and_settle_when_finished(string finish) {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            using var directory = new FakeAgentDirectory();
+            var time = new FakeTimeProvider();
+            var lane = new FakeServerLane();
+            using var access = new SessionAccessService(lane, time);
+            BackgroundCommandMonitor? monitor = null;
+            using var commands = new BackgroundCommandActivity((key, report, ended, handoff) =>
+                monitor = new BackgroundCommandMonitor(key, report, ended, daemon, directory, access,
+                    (_, _) => Task.FromResult(new SessionDetailFetch(null)), lane, time, handoff));
+            IReadOnlyDictionary<string, int> latest = new Dictionary<string, int>();
+            using var subscription = commands.Running.Subscribe(running => latest = running);
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), time, commands: commands);
+            var path = Tmp.CreateFile("t.jsonl", [AgentCallLine, ShellCallLine, ShellLaunchLine]);
+            var dto = Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path, AwaitingInput = true };
+            using var selected = new BehaviorSubject<string?>("a1");
+            using var railRow = new RailSessionViewModel(AgentRow.FromLocal(dto, new RepoIdentity("repo", "repo")),
+                selected, Observable.Return<IReadOnlySet<string>>(new HashSet<string>()), Observable.Return(false),
+                _ => { }, _ => { }, time, agentsRunningCommands: commands.Running);
+            daemon.Agents.AddOrUpdate(dto);
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await (vm.Chat!.PendingReadForTesting ?? Task.CompletedTask);
+
+            await Assert.That(latest.GetValueOrDefault("local:a1")).IsEqualTo(1);
+            await Assert.That(vm.Chat.AgentStatus.Kind).IsEqualTo(AgentStatusKind.Working);
+            await Assert.That(vm.Chat.AgentStatus.Tip).Contains("1 command running");
+            selected.OnNext("another-agent");
+            // Blanked in place, same length: a monitor that carries on from the chat's feed reads none of it,
+            // and one that read the transcript again from the start would find no command running.
+            File.WriteAllText(path, new string(' ', (int)new FileInfo(path).Length - 1) + "\n");
+            await vm.TeardownAsync();
+            await (monitor!.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(latest.GetValueOrDefault("local:a1")).IsEqualTo(1);
+            await Assert.That(railRow.Status.Kind).IsEqualTo(AgentStatusKind.Working);
+            await Assert.That(railRow.Status.Pulses).IsTrue();
+
+            if (finish == "session") daemon.Agents.AddOrUpdate(daemon.Agents.Lookup("a1").Value with { Status = "Completed" });
+            else if (finish == "removed") daemon.Agents.RemoveKey("a1");
+            else File.AppendAllText(path, """{"type":"user","origin":{"kind":"task-notification"},"message":{"role":"user","content":"<task-notification>\n<task-id>b1</task-id>\n<tool-use-id>toolu_S</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>"}}""" + "\n");
+            time.Advance(ChatTabViewModel.PollInterval);
+            await WaitUntilAsync(() => !latest.ContainsKey("local:a1"), what: "background command completion");
+            await Assert.That(latest.ContainsKey("local:a1")).IsFalse();
+            await Assert.That(railRow.Status.Kind).IsEqualTo(AgentStatusKind.Idle);
         });
     }
 

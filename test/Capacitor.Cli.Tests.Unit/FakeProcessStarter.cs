@@ -28,4 +28,31 @@ sealed class FakeProcessStarter : IProcessStarter {
 
         return _behaviour(psi);
     }
+
+    /// <summary>Counts alongside <see cref="Start"/>: a test asserting a guard ran cares that
+    /// nothing was spawned, not which spawn shape the caller reached for.</summary>
+    public int? StartDetached(ProcessStartInfo psi) => Start(psi)?.Id;
+
+    /// <summary>
+    /// Counts alongside <see cref="Start"/> too, and hands back the stub child's own stdin so a
+    /// test can assert on what the caller wrote to it.
+    /// </summary>
+    public DetachedChild? StartDetachedWithStdin(ProcessStartInfo psi) {
+        if (Start(psi) is not { } child) {
+            return null;
+        }
+
+        try {
+            return DetachedChild.ForProcess(child, child.StandardInput.BaseStream);
+        } catch {
+            // The real starter terminates a child it cannot hand back, because the caller never
+            // receives one to clean up with; a double that leaked one would let a test pass
+            // against production code that strands it.
+            try { child.Kill(entireProcessTree: true); } catch { }
+
+            child.Dispose();
+
+            throw;
+        }
+    }
 }

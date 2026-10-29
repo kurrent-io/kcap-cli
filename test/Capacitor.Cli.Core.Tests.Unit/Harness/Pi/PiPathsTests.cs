@@ -63,5 +63,12 @@ public class PiPathsTests {
             .IsEqualTo(Path.Combine("/fake/home", ".pi", "agent"));
     }
 
+    [Test]
+    public async Task Auth_and_models_files_live_in_the_agent_dir() {
+        var agentDir = Path.Combine("/fake/home", ".pi", "agent");
+        await Assert.That(Under("/fake/home").AuthJson).IsEqualTo(Path.Combine(agentDir, "auth.json"));
+        await Assert.That(Under("/fake/home").ModelsJson).IsEqualTo(Path.Combine(agentDir, "models.json"));
+    }
+
     [TempDir] public required TempDir Tmp { get; init; }
 }

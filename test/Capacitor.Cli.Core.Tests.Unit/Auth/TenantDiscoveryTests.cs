@@ -54,7 +54,7 @@ public class TenantDiscoveryTests {
         var outcome = await discovery.RunAsync("https://proxy", "gh");
 
         await Assert.That(outcome.Picked).IsNull();
-        await Assert.That(outcome.ErrorMessage!).Contains("No Capacitor tenants");
+        await Assert.That(outcome.ErrorMessage!).Contains("No kcap tenants");
         // The genuine "authenticated but has no tenant" case — this is what should count toward
         // the funnel's cli_setup_tenant_none denominator (see SetupCommand).
         await Assert.That(outcome.NoTenantsFound).IsTrue();
@@ -240,5 +240,167 @@ public class TenantDiscoveryTests {
 
         await Assert.That(merged.ActiveProfile).IsEqualTo("eventuous");
         await Assert.That(merged.Profiles["eventuous"].ServerUrl).IsEqualTo("https://eventuous.kcap.ai");
+    }
+
+    /// <summary>
+    /// A tenant whose server an existing profile already names takes that profile's name, the
+    /// active one first among twins; a tenant on a server no profile names keeps its slug. The
+    /// merge then leaves one profile per server.
+    /// </summary>
+    [Test]
+    public async Task NameProfiles_reuses_the_profile_already_on_the_tenants_server() {
+        var existing = new ProfileConfig {
+            ActiveProfile = "kurrent",
+            Profiles = new Dictionary<string, Profile> {
+                ["default"]   = new(),
+                ["kurrent"]   = new() { ServerUrl = "https://kurrent.kcap.ai", DefaultVisibility = "private" },
+                ["eventuous"] = new() { ServerUrl = "https://eventuous.kcap.ai/" },
+                ["evt-twin"]  = new() { ServerUrl = "https://eventuous.kcap.ai" },
+            }
+        };
+        DiscoveredTenant[] discovered = [
+            new() { Provider = "WorkOS", OrganizationId = "org_k", Slug = "kurrent-io", Origin = "https://kurrent.kcap.ai" },
+            new() { Provider = "WorkOS", OrganizationId = "org_e", Slug = "Eventuous",  Origin = "https://eventuous.kcap.ai" },
+            new() { Provider = "WorkOS", OrganizationId = "org_c", Slug = "contoso",    Origin = "https://contoso.kcap.ai" },
+        ];
+
+        var (tenants, picked) = TenantDiscovery.NameProfiles(existing, discovered, discovered[0]);
+
+        await Assert.That(tenants.Select(t => t.ProfileName)).IsEquivalentTo(["kurrent", "eventuous", "contoso"]);
+        await Assert.That(picked.ProfileName).IsEqualTo("kurrent");
+
+        var merged = TenantDiscovery.MergeProfiles(existing, tenants, picked);
+
+        await Assert.That(merged.Profiles.Keys).IsEquivalentTo(["default", "kurrent", "eventuous", "evt-twin", "contoso"]);
+        await Assert.That(merged.ActiveProfile).IsEqualTo("kurrent");
+        await Assert.That(merged.Profiles["kurrent"].DefaultVisibility).IsEqualTo("private");
+    }
+
+    /// <summary>
+    /// Two tenants never share a profile: a slug that names the profile another tenant reuses for
+    /// its own server takes a numbered suffix rather than repointing that profile, and a profile with
+    /// no server matches none.
+    /// </summary>
+    [Test]
+    public async Task NameProfiles_never_gives_two_tenants_one_name() {
+        var existing = new ProfileConfig {
+            ActiveProfile = "default",
+            Profiles = new Dictionary<string, Profile> {
+                ["default"] = new(),
+                ["acme"]    = new() { ServerUrl = "https://a.example" },
+                ["acme-2"]  = new() { ServerUrl = "" },
+            }
+        };
+        DiscoveredTenant[] discovered = [
+            new() { OrgId = 1, OrgLogin = "acme",    Origin = "https://b.example" },
+            new() { OrgId = 2, OrgLogin = "acme-io", Origin = "https://a.example" },
+        ];
+
+        var (tenants, picked) = TenantDiscovery.NameProfiles(existing, discovered, discovered[0]);
+
+        await Assert.That(tenants[0].ProfileName).IsEqualTo("acme-3");
+        await Assert.That(tenants[1].ProfileName).IsEqualTo("acme");
+        await Assert.That(picked.ProfileName).IsEqualTo("acme-3");
+        await Assert.That(TenantDiscovery.NamesHold(existing, discovered, discovered[0], tenants, picked)).IsTrue();
+    }
+
+    /// <summary>Workspaces sharing a server reuse only a profile named for one of them, whatever order
+    /// they arrive in; the server's other profiles belong to neither, so each unnamed workspace gets its
+    /// own new profile rather than one picked by discovery order.</summary>
+    [Test]
+    public async Task NameProfiles_reuses_only_named_profiles_on_a_shared_server() {
+        var existing = new ProfileConfig {
+            ActiveProfile = "work",
+            Profiles = new Dictionary<string, Profile> {
+                ["default"] = new(),
+                ["work"]    = new() { ServerUrl = "https://a.example" },
+                ["other"]   = new() { ServerUrl = "https://a.example" },
+            }
+        };
+        DiscoveredTenant[] discovered = [
+            new() { Provider = "WorkOS", OrganizationId = "org_1", Slug = "one", Origin = "https://a.example" },
+            new() { Provider = "WorkOS", OrganizationId = "org_2", Slug = "two", Origin = "https://a.example" },
+        ];
+
+        var (tenants, _) = TenantDiscovery.NameProfiles(existing, discovered, discovered[0]);
+
+        await Assert.That(string.Join(",", tenants.Select(t => t.ProfileName))).IsEqualTo("one,two");
+
+        var (reversed, _) = TenantDiscovery.NameProfiles(existing, [discovered[1], discovered[0]], discovered[0]);
+
+        await Assert.That(string.Join(",", reversed.Select(t => t.ProfileName))).IsEqualTo("two,one");
+
+        DiscoveredTenant[] named = [
+            new() { Provider = "WorkOS", OrganizationId = "org_2", Slug = "other", Origin = "https://a.example" },
+            new() { Provider = "WorkOS", OrganizationId = "org_1", Slug = "work",  Origin = "https://a.example" },
+        ];
+
+        var (exact, _) = TenantDiscovery.NameProfiles(existing, named, named[0]);
+
+        await Assert.That(string.Join(",", exact.Select(t => t.ProfileName))).IsEqualTo("other,work");
+
+        DiscoveredTenant[] renamed = [
+            new() { Provider = "WorkOS", OrganizationId = "org_2", Slug = "new",   Origin = "https://a.example" },
+            new() { Provider = "WorkOS", OrganizationId = "org_2", Slug = "other", Origin = "https://a.example" },
+        ];
+
+        var (regrouped, _) = TenantDiscovery.NameProfiles(existing, renamed, renamed[0]);
+
+        await Assert.That(string.Join(",", regrouped.Select(t => t.ProfileName))).IsEqualTo("other,other");
+    }
+
+    /// <summary>Of two workspaces with one slug on one server, the same one keeps the slug's profile
+    /// whichever order discovery lists them in, and the other never lands on it.</summary>
+    [Test]
+    public async Task NameProfiles_gives_the_slug_profile_to_the_same_workspace_in_any_order() {
+        DiscoveredTenant a = new() { Provider = "WorkOS", OrganizationId = "org_a", Slug = "acme", Origin = "https://a.example" };
+        DiscoveredTenant b = new() { Provider = "WorkOS", OrganizationId = "org_b", Slug = "acme", Origin = "https://a.example" };
+
+        var (fresh, _) = TenantDiscovery.NameProfiles(ProfileConfig.Fresh(), [b, a], b);
+        var saved      = TenantDiscovery.MergeProfiles(ProfileConfig.Fresh(), fresh, fresh[0]);
+
+        foreach (DiscoveredTenant[] discovered in new[] { new[] { a, b }, new[] { b, a } }) {
+            var (tenants, _) = TenantDiscovery.NameProfiles(saved, discovered, discovered[0]);
+            var byOrg = tenants.ToDictionary(t => t.OrganizationId!, t => t.ProfileName);
+
+            await Assert.That(byOrg["org_a"]).IsEqualTo("acme");
+            await Assert.That(byOrg["org_b"]).IsNotEqualTo("acme");
+        }
+    }
+
+    /// <summary>A tenant the discovery service lists twice is still one profile: rows match on the
+    /// provider's own id even when their slugs differ, while two organizations, or one organization
+    /// on two servers, stay apart.</summary>
+    [Test]
+    public async Task NameProfiles_gives_a_repeated_tenant_one_name() {
+        DiscoveredTenant[] discovered = [
+            new() { Provider = "WorkOS", OrganizationId = "org_a", Slug = "acme",     Origin = "https://a.example" },
+            new() { Provider = "WorkOS", OrganizationId = "org_a", Slug = "acme-old", Origin = "https://a.example/" },
+            new() { Provider = "WorkOS", OrganizationId = "org_b", Slug = "acme",     Origin = "https://b.example" },
+            new() { Provider = "WorkOS", OrganizationId = "org_a", Slug = "acme",     Origin = "https://staging.example" },
+        ];
+
+        var (tenants, picked) = TenantDiscovery.NameProfiles(ProfileConfig.Fresh(), discovered, discovered[1]);
+
+        await Assert.That(tenants[0].ProfileName).IsEqualTo("acme");
+        await Assert.That(tenants[1].ProfileName).IsEqualTo("acme");
+        await Assert.That(tenants[2].ProfileName).IsEqualTo("acme-3");
+        await Assert.That(tenants[3].ProfileName).IsEqualTo("acme-2");
+        await Assert.That(picked.ProfileName).IsEqualTo("acme");
+        await Assert.That(TenantDiscovery.MergeProfiles(ProfileConfig.Fresh(), tenants, picked).Profiles.Keys)
+            .IsEquivalentTo(["default", "acme", "acme-2", "acme-3"]);
+    }
+
+    // A rejected token is the provider's rejection. Telling a WorkOS user that GitHub turned them
+    // away sends them to the wrong sign-in.
+    [Test]
+    public async Task Describe_names_the_provider_that_rejected_the_token() {
+        await Assert.That(TenantDiscovery.Describe(DiscoveryError.TokenRejected, AuthProvider.WorkOS))
+            .Contains("WorkOS");
+        await Assert.That(TenantDiscovery.Describe(DiscoveryError.TokenRejected, AuthProvider.GitHubApp))
+            .Contains("GitHub");
+        // The service being unreachable is neither provider's doing, so it names neither.
+        await Assert.That(TenantDiscovery.Describe(DiscoveryError.ProxyUnreachable, AuthProvider.WorkOS))
+            .DoesNotContain("GitHub");
     }
 }

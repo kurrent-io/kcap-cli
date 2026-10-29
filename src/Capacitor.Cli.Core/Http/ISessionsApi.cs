@@ -10,7 +10,8 @@ public interface ISessionsApi {
 
     Task HideSessionAsync(string sessionId, CancellationToken ct = default);
 
-    Task SetSessionTitleAsync(string sessionId, string title, CancellationToken ct = default);
+    /// <param name="rename">A rename ranks with one made in the UI; otherwise the title only replaces generated ones.</param>
+    Task<SetTitleResult> SetSessionTitleAsync(string sessionId, string title, bool rename, CancellationToken ct = default);
 
     Task<ErrorsResult> GetErrorsAsync(string sessionId, bool chain, CancellationToken ct = default);
 

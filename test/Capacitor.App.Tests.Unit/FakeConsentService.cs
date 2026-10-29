@@ -27,7 +27,7 @@ static class ConsentEntries {
 
 /// Scripted IConsentService: a real SourceCache plus a per-call TaskCompletionSource queue for
 /// ResolveAsync, so a test arms the NEXT resolve's outcome (or holds it open) before clicking.
-/// Two behaviors deliberately mirror the real service (spec §5), because the ViewModel's advance
+/// Two behaviors deliberately mirror the real service, because the ViewModel's advance
 /// rules are only honest against them: a conclusive outcome evicts its target from the cache
 /// (identity-guarded) BEFORE the awaiting caller resumes, and a transport failure keeps it.
 /// EntryAdded fires on the FIRST SURFACING of a PromptId — a same-key successor fires, a replay
@@ -59,10 +59,10 @@ sealed class FakeConsentService : IConsentService {
         if (isNew) _entryAdded.OnNext(ReactiveUnit.Default);
     }
 
-    /// The §5 prune: an entry disappearing under the ViewModel with no ack involved.
+    /// The prune: an entry disappearing under the ViewModel with no ack involved.
     public void Prune(PendingConsent entry) => Cache.Remove(entry.RequestId);
 
-    /// The §5 Subscribed boundary: the cache is emptied, the daemon's replay re-adds through
+    /// The Subscribed boundary: the cache is emptied, the daemon's replay re-adds through
     /// <see cref="Add"/>. Surfaced identities survive it, exactly as in the real service.
     public void Clear() => Cache.Clear();
 

@@ -61,6 +61,37 @@ public class OpenCodeImportSourceImportTests : IDisposable {
         await Assert.That(logs).Contains("/hooks/transcript");
         await Assert.That(logs).Contains("/hooks/set-title");
         await Assert.That(logs).Contains("/hooks/session-end/opencode");
+
+        // /hooks/harness-title is unstubbed (bare 404 → RouteMissing), so the title falls back to
+        // /hooks/set-title (asserted above) — but the harness-title attempt still carries the kind
+        // OpenCode always forwards: its own store's title is the user-visible rename.
+        var titleAttempt = _server.FindLogEntries(Request.Create().WithPath("/hooks/harness-title").UsingPost());
+        await Assert.That(titleAttempt.Count).IsEqualTo(1);
+        var titleBody = System.Text.Json.Nodes.JsonNode.Parse(titleAttempt[0].RequestMessage.Body!)!;
+        await Assert.That(titleBody["kind"]!.GetValue<string>()).IsEqualTo("rename");
+    }
+
+    [Test]
+    public async Task ImportSession_never_posts_the_seed_placeholder_title() {
+        _fix.AddSession("ses_root", null, "/work/a", "New session - 2026-06-10T20:23:49Z", 1782241513759);
+        _fix.AddMessageWithText("ses_root", "msg_1", "hello", 1782241513760);
+
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+               .RespondWith(Response.Create().WithStatusCode(404));
+        StubOk("/hooks/session-start/opencode", "/hooks/transcript", "/hooks/set-title", "/hooks/session-end/opencode");
+
+        using var client = new HttpClient();
+        var source     = new OpenCodeImportSource(_fix.DbPath, _fix.LedgerPath, TimeProvider.System);
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(discovered,
+            new ClassifyContext(client, _server.Url!, 0, Home), CancellationToken.None);
+
+        await source.ImportSessionAsync(classified[0],
+            new ImportContext(client, _server.Url!, ForcePrivate: false), CancellationToken.None);
+
+        var logs = _server.LogEntries.Select(e => e.RequestMessage.Path).ToList();
+        await Assert.That(logs.Contains("/hooks/harness-title")).IsFalse();
+        await Assert.That(logs.Contains("/hooks/set-title")).IsFalse();
     }
 
     [Test]

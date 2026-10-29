@@ -90,11 +90,28 @@ public record Profile {
     [JsonPropertyName("disable_workitems_nudge")]
     public bool? DisableWorkItemsNudge { get; init; }
 
+    /// <summary>when true, kcap neither asks the server for page one of the next-work feed at
+    /// SessionStart nor injects it. Independent of the other SessionStart opt-outs.</summary>
+    [JsonPropertyName("disable_nextwork_nudge")]
+    public bool? DisableNextWorkNudge { get; init; }
+
+    /// <summary>when true, kcap skips the one-shot notice the next session after setup carries (that
+    /// setup completed, and the guided tour where it can run). Independent of the other SessionStart
+    /// opt-outs. The marker stays armed while this is set, so clearing it still delivers the notice.</summary>
+    [JsonPropertyName("disable_first_run_notice")]
+    public bool? DisableFirstRunNotice { get; init; }
+
     /// <summary>when true, kcap skips injecting the SessionStart plans nudge (the guidance to declare
     /// the plan document and task list through the kcap-plans MCP tools). Independent of the other
     /// SessionStart opt-outs.</summary>
     [JsonPropertyName("disable_plans_nudge")]
     public bool? DisablePlansNudge { get; init; }
+
+    /// <summary>when true, kcap skips the SessionStart nudge to switch a repository opened from a
+    /// sandbox to relative worktree links. Independent of the other SessionStart opt-outs; a single
+    /// repository opts out with <c>git config kcap.relativeWorktrees declined</c>.</summary>
+    [JsonPropertyName("disable_relative_worktrees_nudge")]
+    public bool? DisableRelativeWorktreesNudge { get; init; }
 
     /// <summary>
     /// when true, kcap does not advertise the coordination-notices capability at SessionStart, so the

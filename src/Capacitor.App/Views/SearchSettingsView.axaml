@@ -1,0 +1,48 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
+             xmlns:views="clr-namespace:Capacitor.App.Views"
+             xmlns:services="clr-namespace:Capacitor.App.Services.LocalSetup"
+             x:Class="Capacitor.App.Views.SearchSettingsView"
+             x:DataType="vm:LocalSearchViewModel">
+    <!-- Also hosted by the rail's Help flyout, outside the Settings window that carries these styles. -->
+    <UserControl.Styles>
+        <StyleInclude Source="avares://kcap-desktop/Views/SettingsStyles.axaml" />
+    </UserControl.Styles>
+    <StackPanel Spacing="28">
+        <StackPanel Classes="settingsHeader">
+            <TextBlock Classes="kcapTitle" Text="Search" />
+            <TextBlock x:Name="SearchCurrentText" Classes="kcapSubtitle" TextWrapping="Wrap"
+                       Text="{Binding CurrentText}" />
+        </StackPanel>
+
+        <Border Classes="settingsCard settingsCardBody">
+            <StackPanel Spacing="14">
+                <Panel IsEnabled="{Binding !Running}">
+                    <views:SearchChoiceView x:Name="SearchChoice" DataContext="{Binding Choice}" />
+                </Panel>
+                <TextBlock Classes="kcapHint" Text="Setting up search…" TextWrapping="Wrap" IsVisible="{Binding Running}" />
+                <StackPanel Spacing="6" DataContext="{Binding Embeddings}" x:DataType="services:LocalEmbeddingProgress">
+                    <StackPanel Spacing="4" IsVisible="{Binding Pulling}">
+                        <TextBlock x:Name="SearchPullText" Classes="kcapHint" Text="{Binding PullText}" TextWrapping="Wrap" />
+                        <ProgressBar x:Name="SearchPullBar" Height="3" Minimum="0" Maximum="1"
+                                     Value="{Binding PullFraction, FallbackValue=0, TargetNullValue=0}"
+                                     IsIndeterminate="{Binding PullFraction, Converter={x:Static ObjectConverters.IsNull}}"
+                                     Foreground="{StaticResource KcapMutedBrush}" />
+                    </StackPanel>
+                    <TextBlock x:Name="SearchSummaryText" Classes="kcapHint" Text="{Binding Summary}" TextWrapping="Wrap"
+                               IsVisible="{Binding Summary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    <TextBlock Classes="kcapHint" Text="{Binding ReembedNote}" TextWrapping="Wrap"
+                               IsVisible="{Binding ReembedNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+                <SelectableTextBlock x:Name="SearchFailureText" Text="{Binding FailureText}" FontSize="12.5"
+                                     TextWrapping="Wrap" Foreground="{StaticResource KcapDangerBrush}"
+                                     IsVisible="{Binding FailureText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+            </StackPanel>
+        </Border>
+
+        <!-- Outside the card, as setup's footer action is: inside, it groups with the options' own buttons. -->
+        <Button x:Name="SearchApplyButton" Classes="kcapPrimary" HorizontalAlignment="Left" Margin="0,-12,0,0"
+                Content="Save" Command="{Binding ApplyCommand}" IsEnabled="{Binding CanApply}" />
+    </StackPanel>
+</UserControl>

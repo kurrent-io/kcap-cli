@@ -9,6 +9,9 @@ namespace Capacitor.Cli.Core.Telemetry;
 /// a permanently offline machine can never grow the file without limit.
 /// </summary>
 public sealed class TelemetrySpool(string path, int maxEvents = 2000) {
+    /// The spool every kcap process sharing this config directory reads and writes.
+    public static TelemetrySpool For(ConfigRoot config) => new(config.Path("telemetry-spool.jsonl"));
+
     public void Append(IReadOnlyList<TelemetryEvent> events) {
         if (events.Count == 0) return;
 

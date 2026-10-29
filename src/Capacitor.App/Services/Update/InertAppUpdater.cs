@@ -6,9 +6,10 @@ public sealed class InertAppUpdater : IAppUpdater {
 
     public bool IsAvailable => false;
     public string? InstalledVersion => null;
+    public bool AllowsPrerelease => false;
     public UpdateCandidate? PendingRestart => null;
     public Task<UpdateCandidate?> CheckAsync(CancellationToken ct) => Task.FromResult<UpdateCandidate?>(null);
-    public Task DownloadAsync(UpdateCandidate candidate, IProgress<int>? progress, CancellationToken ct) => Task.CompletedTask;
+    public Task DownloadAsync(UpdateCandidate candidate, CancellationToken ct) => Task.CompletedTask;
     public void ApplyOnExit(UpdateCandidate candidate) { }
     public void ApplyNow(UpdateCandidate candidate) { }
 }

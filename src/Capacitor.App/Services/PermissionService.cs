@@ -40,7 +40,7 @@ public sealed class PermissionService : IPermissionService {
     readonly PermissionResponder _respond;
     readonly IDisposable _statusSub;
     readonly IDisposable? _agentsSub;
-    IReadOnlyDictionary<string, string> _sessionAgents = new Dictionary<string, string>();
+    IReadOnlyDictionary<string, string> _sessionAgents = FrozenDictionary<string, string>.Empty;
     CancellationTokenSource? _loopCts;
     long _liveSequence;
     long _laneEpoch;
@@ -64,6 +64,10 @@ public sealed class PermissionService : IPermissionService {
         _cache.Connect()
             .QueryWhenChanged(q => Agents(q.Items))
             .StartWith(Agents(_cache.Items));
+    public IObservable<IReadOnlySet<string>> AgentsAwaitingAnswer =>
+        _cache.Connect()
+            .QueryWhenChanged(q => Agents(q.Items.Where(static p => p.IsQuestion)))
+            .StartWith(Agents(_cache.Items.Where(static p => p.IsQuestion)));
     public IObservable<PendingSummary> Summary =>
         _cache.Connect()
             .QueryWhenChanged(q => PendingSummary.From(q.Items))
@@ -75,7 +79,14 @@ public sealed class PermissionService : IPermissionService {
     }
 
     public Task<PermissionResolveOutcome> ResolveAsync(PendingPermissionRequest target, PermissionAnswer answer, CancellationToken ct) {
-        var apply = answer == PermissionAnswer.AllowAlways ? ClaudePermissions.AlwaysAllow(target.ToolName) : (JsonElement?)null;
+        JsonElement? apply = null;
+        if (answer == PermissionAnswer.AllowAlways) {
+            if (target.Vendor == "claude") apply = ClaudePermissions.AlwaysAllow(target.ToolName);
+            else {
+                using var marker = JsonDocument.Parse("true");
+                apply = marker.RootElement.Clone();
+            }
+        }
         if (target.Lane == PermissionLane.Local) {
             var decision = answer == PermissionAnswer.Deny ? PermissionResolveDecisions.Deny : PermissionResolveDecisions.Allow;
             return SendResolveAsync(target, new PermissionResolveDto(target.RequestId, decision, apply, null), ct);
@@ -123,10 +134,16 @@ public sealed class PermissionService : IPermissionService {
         kind is not null && (kind.Contains("reject", StringComparison.OrdinalIgnoreCase) || kind.Contains("deny", StringComparison.OrdinalIgnoreCase) || kind.Contains("cancel", StringComparison.OrdinalIgnoreCase))
             ? PermissionBehaviors.Deny : PermissionBehaviors.Allow;
 
-    public Task<PermissionResolveOutcome> WithdrawAsync(PendingPermissionRequest target, CancellationToken ct) =>
-        target.Lane == PermissionLane.Local
-            ? SendResolveAsync(target, new PermissionResolveDto(target.RequestId, PermissionResolveDecisions.Withdraw, null, null), ct)
-            : Task.FromResult(new PermissionResolveOutcome(PermissionResolveKind.TransportFailure, "withdraw_unsupported"));
+    public Task<PermissionResolveOutcome> WithdrawAsync(PendingPermissionRequest target, CancellationToken ct) {
+        if (target.Lane == PermissionLane.Local)
+            return SendResolveAsync(target, new PermissionResolveDto(target.RequestId, PermissionResolveDecisions.Withdraw, null, null), ct);
+        // The server lane has no withdraw frame. The transcript already showed the tool finished,
+        // so the card is dropped here and a later replay of the same id stays dropped.
+        lock (_lock) {
+            if (!_disposed) ConcludeServerKey(target.RequestId);
+        }
+        return Task.FromResult(new PermissionResolveOutcome(PermissionResolveKind.Applied, null));
+    }
 
     async Task<PermissionResolveOutcome> SendResolveAsync(PendingPermissionRequest target, PermissionResolveDto dto, CancellationToken ct) {
         PermissionAckDto ack;
@@ -285,14 +302,19 @@ public sealed class PermissionService : IPermissionService {
     void DropLocalLane() {
         lock (_lock) {
             if (_disposed) return;
-            foreach (var item in _cache.Items.Where(i => i.Lane == PermissionLane.Local).ToList()) _cache.Remove(item.Key);
-            foreach (var (key, twin) in _shadowed.ToList()) {
-                _shadowed.Remove(key);
-                if (_tombstones.Contains(key)) continue;
-                // The map moved on while the twin was out of the cache, where nothing restamps it.
-                twin.AgentId = _sessionAgents.GetValueOrDefault(twin.SessionId, "");
-                _cache.AddOrUpdate(twin);
-            }
+            // Replacing a local handle with its server twin must not announce a settled request.
+            _cache.Edit(cache => {
+                foreach (var item in cache.Items.Where(i => i.Lane == PermissionLane.Local).ToList()) {
+                    item.SubscriptionLost = true;
+                    cache.Remove(item.Key);
+                }
+                foreach (var (key, twin) in _shadowed.ToList()) {
+                    _shadowed.Remove(key);
+                    if (_tombstones.Contains(key)) continue;
+                    twin.AgentId = _sessionAgents.GetValueOrDefault(twin.SessionId, "");
+                    cache.AddOrUpdate(twin);
+                }
+            });
         }
     }
 

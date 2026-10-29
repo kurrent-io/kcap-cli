@@ -6,7 +6,7 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 public class KcapMcpRegistryReviewFlowTests {
     [Test]
     public async Task Resolve_accepts_read_only_servers_case_insensitively() {
-        var ok = KcapMcpRegistry.TryResolveReviewFlowAllowlist(["Kcap-Review"], out var servers, out var rejected);
+        var ok = KcapMcpRegistry.TryResolveReviewFlowAllowlist(["kcap-Review"], out var servers, out var rejected);
 
         await Assert.That(ok).IsTrue();
         await Assert.That(rejected).IsNull();
@@ -58,6 +58,29 @@ public class KcapMcpRegistryReviewFlowTests {
 
         await Assert.That(ok).IsFalse();
         await Assert.That(rejected).IsEqualTo("kcap-plans");
+    }
+
+    /// <summary>Stored flow definitions may still name the server <c>kcap-artefacts</c>.</summary>
+    [Test]
+    public async Task The_old_artefacts_id_resolves_to_the_pages_server() {
+        await Assert.That(KcapMcpRegistry.Resolve("kcap-artefacts")!.Id).IsEqualTo("kcap-pages");
+        await Assert.That(KcapMcpRegistry.AllIds.Count(id => id == "kcap-pages")).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Resolve_rejects_write_server_kcap_pages() {
+        var ok = KcapMcpRegistry.TryResolveReviewFlowAllowlist(["kcap-pages"], out _, out var rejected);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(rejected).IsEqualTo("kcap-pages");
+    }
+
+    [Test]
+    public async Task Resolve_rejects_write_server_kcap_knowledge() {
+        var ok = KcapMcpRegistry.TryResolveReviewFlowAllowlist(["kcap-knowledge"], out _, out var rejected);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(rejected).IsEqualTo("kcap-knowledge");
     }
 
     [Test]

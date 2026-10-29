@@ -1,0 +1,131 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels.Onboarding"
+             xmlns:vmr="clr-namespace:Capacitor.App.ViewModels"
+             xmlns:services="clr-namespace:Capacitor.App.Services.LocalSetup"
+             xmlns:views="clr-namespace:Capacitor.App.Views.Onboarding"
+             xmlns:icons="clr-namespace:Capacitor.App.Views"
+             x:Class="Capacitor.App.Views.Onboarding.InstallPaneView"
+             x:DataType="vm:InstallStepViewModel">
+    <StackPanel Spacing="14">
+        <Border Classes="onboardingWarning" IsVisible="{Binding RefusalVisible}">
+            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
+                <icons:AppIcon Kind="TriangleAlert" Size="14" VerticalAlignment="Top" Margin="0,2,0,0"
+                               Foreground="{StaticResource KcapWarningBrush}" />
+                <TextBlock Grid.Column="1" x:Name="RefusalText" Classes="onboardingBody" TextWrapping="Wrap"
+                           Text="{Binding RefusalMessage}" />
+            </Grid>
+        </Border>
+
+        <Border Classes="onboardingCard" IsVisible="{Binding Repairing}">
+            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+                <Panel Classes="onboardingSpinner" Width="14" Height="14" VerticalAlignment="Center">
+                    <icons:AppIcon Kind="LoaderCircle" Size="14" Foreground="{StaticResource OnboardingAccentBrush}"
+                                   Classes.kcapSpinning="{Binding Repairing}" />
+                </Panel>
+                <TextBlock Grid.Column="1" x:Name="RepairingText" Classes="onboardingBody" VerticalAlignment="Center"
+                           Text="{x:Static vm:InstallStepViewModel.RepairingText}" />
+            </Grid>
+        </Border>
+
+        <Border Classes="onboardingWarning" IsVisible="{Binding ClientProblemVisible}">
+            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
+                <icons:AppIcon Kind="TriangleAlert" Size="14" VerticalAlignment="Top" Margin="0,2,0,0"
+                               Foreground="{StaticResource KcapWarningBrush}" />
+                <StackPanel Grid.Column="1" Spacing="8">
+                    <TextBlock x:Name="ClientProblemText" Classes="onboardingBody" TextWrapping="Wrap"
+                               Text="{Binding ClientProblem}" />
+                    <Button x:Name="RepairAgainButton" Classes="onboardingPrimary" Content="Try again" HorizontalAlignment="Left"
+                            Command="{Binding RepairAgainCommand}" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Border Classes="onboardingCard" IsVisible="{Binding ChoiceVisible}">
+            <icons:SearchChoiceView DataContext="{Binding Search}" />
+        </Border>
+
+        <Border Classes="onboardingCard" IsVisible="{Binding ProgressVisible}">
+            <StackPanel Spacing="12">
+                <TextBlock Classes="onboardingNote" Text="Finishing an earlier setup" IsVisible="{Binding Progress.Recovering}" />
+                <TextBlock Classes="onboardingNote" Text="Undoing the partial install" IsVisible="{Binding Progress.RollingBack}" />
+                <TextBlock Classes="onboardingNote" Text="Already installed" IsVisible="{Binding Progress.Reused}" />
+
+                <ItemsControl x:Name="InstallRows" ItemsSource="{Binding Rows}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Spacing="10" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:InstallStepRow">
+                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+                                <Panel Width="14" Height="14" VerticalAlignment="Center">
+                                    <icons:AppIcon Kind="Circle" Size="14" Foreground="{StaticResource OnboardingMutedBrush}"
+                                                   IsVisible="{Binding Row.State, Converter={x:Static views:RowStateIsConverter.Instance}, ConverterParameter=Pending}" />
+                                    <Panel Classes="onboardingSpinner"
+                                           IsVisible="{Binding Row.State, Converter={x:Static views:RowStateIsConverter.Instance}, ConverterParameter=Running}">
+                                        <icons:AppIcon Kind="LoaderCircle" Size="14" Foreground="{StaticResource OnboardingAccentBrush}"
+                                                       Classes.kcapSpinning="{Binding Row.State, Converter={x:Static views:RowStateIsConverter.Instance}, ConverterParameter=Running}" />
+                                    </Panel>
+                                    <icons:AppIcon Kind="Check" Size="14" Foreground="{StaticResource KcapSuccessBrush}"
+                                                   IsVisible="{Binding Row.State, Converter={x:Static views:RowStateIsConverter.Instance}, ConverterParameter=Done}" />
+                                    <icons:AppIcon Kind="CircleMinus" Size="14" Foreground="{StaticResource OnboardingMutedBrush}"
+                                                   IsVisible="{Binding Row.State, Converter={x:Static views:RowStateIsConverter.Instance}, ConverterParameter=Skipped}" />
+                                </Panel>
+                                <TextBlock Grid.Column="1" Classes="onboardingBody" VerticalAlignment="Center" Text="{Binding Label}" />
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <ProgressBar Height="2" MinHeight="2" Minimum="0" Maximum="100"
+                             Value="{Binding DownloadPercent}" IsIndeterminate="{Binding DownloadIndeterminate}"
+                             Background="{StaticResource OnboardingDividerBrush}" Foreground="{StaticResource OnboardingAccentBrush}"
+                             IsVisible="{Binding DownloadBarVisible}" />
+
+                <StackPanel Spacing="6" DataContext="{Binding Progress.Embeddings}" x:DataType="services:LocalEmbeddingProgress">
+                    <StackPanel Spacing="4" IsVisible="{Binding Pulling}">
+                        <TextBlock x:Name="EmbeddingPullText" Classes="onboardingDetail" Text="{Binding PullText}" />
+                        <ProgressBar Height="2" MinHeight="2" Minimum="0" Maximum="1"
+                                     Value="{Binding PullFraction, FallbackValue=0, TargetNullValue=0}"
+                                     IsIndeterminate="{Binding PullFraction, Converter={x:Static ObjectConverters.IsNull}}"
+                                     Background="{StaticResource OnboardingDividerBrush}" Foreground="{StaticResource OnboardingAccentBrush}" />
+                    </StackPanel>
+                    <TextBlock x:Name="EmbeddingSummaryText" Classes="onboardingDetail" TextWrapping="Wrap" Text="{Binding Summary}"
+                               IsVisible="{Binding Summary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    <TextBlock x:Name="EmbeddingReembedText" Classes="onboardingDetail" TextWrapping="Wrap" Text="{Binding ReembedNote}"
+                               IsVisible="{Binding ReembedNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    <TextBlock Classes="onboardingDetail" TextWrapping="Wrap" IsVisible="{Binding Skipped}"
+                               Text="{x:Static vmr:SearchChoiceViewModel.KeywordDetail}" />
+                </StackPanel>
+
+                <Button x:Name="CancelInstallButton" Classes="onboardingLink" Content="Cancel" HorizontalAlignment="Left"
+                        AutomationProperties.Name="Cancel the install"
+                        Command="{Binding CancelCommand}" IsVisible="{Binding CancelVisible}" />
+            </StackPanel>
+        </Border>
+
+        <Border Classes="onboardingWarning" IsVisible="{Binding FailureVisible}">
+            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
+                <icons:AppIcon Kind="TriangleAlert" Size="14" VerticalAlignment="Top" Margin="0,2,0,0"
+                               Foreground="{StaticResource KcapDangerBrush}" />
+                <StackPanel Grid.Column="1" Spacing="8">
+                    <TextBlock Classes="onboardingLabel" FontSize="12.5" Text="{x:Static vm:InstallStepViewModel.LockedText}"
+                               IsVisible="{Binding LockedVisible}" />
+                    <TextBlock x:Name="FailureText" Classes="onboardingDetail" Foreground="{StaticResource OnboardingMutedBrush}"
+                               TextWrapping="Wrap" Text="{Binding FailureMessage}" />
+                    <StackPanel Spacing="2" IsVisible="{Binding FailureDetailVisible}">
+                        <TextBlock Text="Details from the installer" FontSize="11"
+                                   Foreground="{StaticResource OnboardingDimBrush}" />
+                        <SelectableTextBlock x:Name="FailureDetailText" Text="{Binding FailureDetail}"
+                                             TextWrapping="Wrap" FontSize="11" LineHeight="16"
+                                             Foreground="{StaticResource OnboardingDimBrush}" />
+                    </StackPanel>
+                    <Button x:Name="TryAgainButton" Classes="onboardingPrimary" Content="Try again" HorizontalAlignment="Left"
+                            Command="{Binding TryAgainCommand}" IsVisible="{Binding TryAgainVisible}" />
+                </StackPanel>
+            </Grid>
+        </Border>
+    </StackPanel>
+</UserControl>

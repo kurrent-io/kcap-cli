@@ -5,6 +5,9 @@ using Capacitor.Cli.Tests.Unit.SessionStartMemory;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.PrDetection;
+using WireMock.RequestBuilders;
+using WireMock.ResponseBuilders;
+using WireMock.Server;
 
 namespace Capacitor.Cli.Tests.Unit.Harness.Antigravity;
 
@@ -118,20 +121,36 @@ public class AntigravitySessionStartMemoryTests {
     public async Task Fetch_is_skipped_when_disabled_or_unscoped_or_out_of_budget() {
         // Each guard alone must suppress the fetch. A non-postable base url is checked BEFORE
         // any client is built: an unusable URL should spend no budget, no lease, and start no task.
-        // Both lanes off ⇒ suppressed; a single lane off would still fetch.
+        // All three lanes off ⇒ suppressed; a single lane on would still fetch.
         await Assert.That(await Hook().StartMemoryIndexTask("e80c33bfc10f4d2fb626b0043f488fc0", "/repo",
-            disabled: true, guidelinesDisabled: true, TimeSpan.FromSeconds(5))).IsNull();
+            disabled: true, guidelinesDisabled: true, flowsDisabled: true, TimeSpan.FromSeconds(5))).IsNull();
 
         // The scope / budget / url guards suppress even with guidelines ENABLED.
         await Assert.That(await Hook().StartMemoryIndexTask("e80c33bfc10f4d2fb626b0043f488fc0", scopeRoot: null,
-            disabled: false, guidelinesDisabled: false, TimeSpan.FromSeconds(5))).IsNull();
+            disabled: false, guidelinesDisabled: false, flowsDisabled: false, TimeSpan.FromSeconds(5))).IsNull();
 
         await Assert.That(await Hook().StartMemoryIndexTask("e80c33bfc10f4d2fb626b0043f488fc0", "/repo",
-            disabled: false, guidelinesDisabled: false, TimeSpan.Zero)).IsNull();
+            disabled: false, guidelinesDisabled: false, flowsDisabled: false, TimeSpan.Zero)).IsNull();
 
         await Assert.That(await Hook("").StartMemoryIndexTask(
             "e80c33bfc10f4d2fb626b0043f488fc0", "/repo",
-            disabled: false, guidelinesDisabled: false, TimeSpan.FromSeconds(5))).IsNull();
+            disabled: false, guidelinesDisabled: false, flowsDisabled: false, TimeSpan.FromSeconds(5))).IsNull();
+    }
+
+    [Test]
+    public async Task With_memory_and_guidelines_off_the_flows_lane_alone_still_fetches() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/flows/definitions").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json")
+                .WithBody("""{"definitions":[{"id":"code-review","offer":"proactive","when_to_use":"After a change is complete."}]}"""));
+
+        // Budget is generous to accommodate the real round trip through scope resolution and the WireMock fetch under full parallelism.
+        var fragment = await Hook(server.Url!).StartMemoryIndexTask("e80c33bfc10f4d2fb626b0043f488fc0", "/repo",
+            disabled: true, guidelinesDisabled: true, flowsDisabled: false, TimeSpan.FromSeconds(30));
+
+        await Assert.That(server.FindLogEntries(Request.Create().WithPath("/api/flows/definitions").UsingGet()).Count).IsEqualTo(1);
+        await Assert.That(fragment).IsNotNull();
+        await Assert.That(fragment!).Contains("Flows you may offer");
     }
 
     /// <summary>The memory subsystem is optional, so a store that cannot even be constructed must
@@ -143,7 +162,7 @@ public class AntigravitySessionStartMemoryTests {
         MemoryStoreProbe.Poison(Config.Root);
 
         var task = Hook().StartMemoryIndexTask("e80c33bfc10f4d2fb626b0043f488fc0", "/repo",
-            disabled: false, guidelinesDisabled: true, TimeSpan.FromSeconds(5));
+            disabled: false, guidelinesDisabled: true, flowsDisabled: true, TimeSpan.FromSeconds(5));
 
         await Assert.That(await task).IsNull();
     }

@@ -1,11 +1,12 @@
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace Capacitor.Cli.Daemon.Pty.Unix;
 
 public sealed class UnixPtyProcess : IPtyProcess {
-    readonly int                     _masterFd;
+    readonly PtyMasterHandle         _master;
     readonly CancellationTokenSource _cts = new();
-    bool                             _disposed;
+    int                              _disposed;
 
     public int     Pid           { get; }
     public bool    HasExited     { get; private set; }
@@ -15,13 +16,15 @@ public sealed class UnixPtyProcess : IPtyProcess {
     static readonly TimeSpan ExitPollGap    = TimeSpan.FromMilliseconds(100);
     static readonly TimeSpan ExitConfirmGap = TimeSpan.FromMilliseconds(50);
 
-    readonly TimeProvider _time;
+    readonly TimeProvider        _time;
+    readonly UnixPtyReaderThread _reader;
 
-    UnixPtyProcess(int masterFd, int childPid, string startIdentity, TimeProvider time) {
+    UnixPtyProcess(PtyMasterHandle master, int masterFd, int childPid, string startIdentity, TimeProvider time) {
         _time         = time;
-        _masterFd     = masterFd;
+        _master       = master;
         Pid           = childPid;
         StartIdentity = startIdentity;
+        _reader       = new(masterFd, childPid, _cts.Token);
     }
 
     /// <summary>Executable resolution is PRE-FORK, in the parent (spec §4.2(a), pinned): resolves
@@ -78,7 +81,8 @@ public sealed class UnixPtyProcess : IPtyProcess {
         return UnixPtyInterop.access(path, UnixPtyInterop.X_OK) == 0;
     }
 
-    static IReadOnlyDictionary<string, string> BuildChildEnv(Dictionary<string, string>? extraEnv, ushort cols, ushort rows) {
+    internal static IReadOnlyDictionary<string, string> BuildChildEnv(
+            Dictionary<string, string>? extraEnv, IReadOnlyCollection<string>? removeEnv, ushort cols, ushort rows) {
         var env = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
             if (entry is { Key: string key, Value: string value }) env[key] = value;
@@ -88,16 +92,19 @@ public sealed class UnixPtyProcess : IPtyProcess {
         env["COLUMNS"] = cols.ToString();
         env["LINES"]   = rows.ToString();
 
-        // Clear any hosted-agent identity/routing (and Claude session vars / daemon supervision
-        // state) the daemon may have inherited BEFORE re-applying extraEnv — matches the OLD
-        // managed child branch's ordering (unsetenv, then extraEnv setenv) exactly.
+        // Clear what the daemon inherited (hosted-agent identity, another harness's session, Claude's
+        // session vars, supervision state) before extraEnv, which re-adds what this launch sets.
         foreach (var key in PtyEnvScrub.ClaudeSessionVars) env.Remove(key);
+        foreach (var key in PtyEnvScrub.InheritedSessionVars) env.Remove(key);
         foreach (var key in PtyEnvScrub.HostedAgentVars) env.Remove(key);
         foreach (var key in PtyEnvScrub.DaemonSupervisionVars) env.Remove(key);
         // Defense in depth: CaptureBootCarriers already clears these from the daemon's
         // own ambient env at boot, so this loop should normally be a no-op — but a spawned agent
         // must never see the daemon's boot-local consent-seed/expectation/attempt vars either way.
         foreach (var key in DaemonRunner.BootCarriers.All) env.Remove(key);
+
+        if (removeEnv is not null)
+            foreach (var key in removeEnv) env.Remove(key);
 
         if (extraEnv is not null)
             foreach (var (key, value) in extraEnv) env[key] = value;
@@ -134,9 +141,10 @@ public sealed class UnixPtyProcess : IPtyProcess {
             TimeProvider                time,
             Dictionary<string, string>? extraEnv = null,
             ushort                      cols     = 120,
-            ushort                      rows     = 40
+            ushort                      rows     = 40,
+            IReadOnlyCollection<string>? removeEnv = null
         ) {
-        var childEnv = BuildChildEnv(extraEnv, cols, rows);
+        var childEnv = BuildChildEnv(extraEnv, removeEnv, cols, rows);
         var envpArr  = ToEnvpArray(childEnv);
 
         var resolvedPath = ResolveExecutableAbsolutePath(command, cwd, childEnv);
@@ -163,70 +171,109 @@ public sealed class UnixPtyProcess : IPtyProcess {
                     $"pty_spawn failed: step {result.FailedStep}, errno {result.ErrNo}");
             }
 
-            return new UnixPtyProcess(result.MasterFd, result.Pid, result.StartIdentityString, time);
+            return Adopt(
+                result.MasterFd, result.Pid,
+                master => new UnixPtyProcess(master, result.MasterFd, result.Pid, result.StartIdentityString, time)
+            );
         } finally {
             UnixPtyInterop.pty_plan_free(ref plan); // the plan is spent whether spawn succeeded or failed
         }
+    }
+
+    /// <summary>Wraps the master fd in its handle for <paramref name="create"/>, and abandons the
+    /// child if that throws. <see cref="Abandon"/> closes the fd, so the handle is disowned first:
+    /// its finalizer would close the same number again, by then possibly another file's.</summary>
+    internal static T Adopt<T>(int masterFd, int pid, Func<PtyMasterHandle, T> create) {
+        var master = new PtyMasterHandle(masterFd);
+
+        try {
+            return create(master);
+        } catch {
+            master.SetHandleAsInvalid();
+            Abandon(masterFd, pid);
+
+            throw;
+        }
+    }
+
+    /// <summary>Takes down a spawned child that no <see cref="UnixPtyProcess"/> came to own: with
+    /// nobody holding its pid, nothing could ever stop or reap it. The child is still unreaped here,
+    /// which pins its pid and pgid, so the group signal cannot land on a recycled id.</summary>
+    internal static void Abandon(int masterFd, int pid) {
+        if (pid > 0) { // kill(0) signals the caller's own group and kill(-1) broadcasts
+            if (UnixPtyInterop.kill(-pid, UnixPtyInterop.SIGKILL) != 0) UnixPtyInterop.kill(pid, UnixPtyInterop.SIGKILL);
+
+            // SIGKILL cannot be refused, so this only waits out the kernel's teardown — bounded,
+            // because a launch must not hang on a child stuck in an uninterruptible sleep.
+            for (var i = 0; i < 100 && UnixPtyInterop.waitpid(pid, out _, UnixPtyInterop.WNOHANG) == 0; i++) Thread.Sleep(10);
+        }
+
+        UnixPtyInterop.close(masterFd);
     }
 
     public async IAsyncEnumerable<byte[]> ReadOutputAsync(
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default
         ) {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _cts.Token);
-        var       buf    = new byte[4096];
 
         while (!linked.Token.IsCancellationRequested && !HasExited) {
-            var bytesRead = await Task.Run(
-                () => {
-                    var pfd = new UnixPtyInterop.PollFd { fd = _masterFd, events = UnixPtyInterop.POLLIN };
+            byte[]? chunk;
 
-                    while (!linked.Token.IsCancellationRequested) {
-                        var pollResult = UnixPtyInterop.poll(ref pfd, 1, 200);
+            try {
+                chunk = await _reader.ReadAsync(linked.Token);
+            } catch (OperationCanceledException) {
+                chunk = null;
+            }
 
-                        switch (pollResult) {
-                            case > 0 when (pfd.revents & UnixPtyInterop.POLLIN) != 0: {
-                                var n = UnixPtyInterop.read(_masterFd, buf, buf.Length);
-
-                                return (int)n;
-                            }
-                            case > 0 when (pfd.revents & (UnixPtyInterop.POLLHUP | UnixPtyInterop.POLLERR)) != 0:
-                                // Slave side closed or errored without buffered data — EOF
-                                return 0;
-                            case < 0:
-                                return -1;
-                        }
-                    }
-
-                    return 0;
-                },
-                CancellationToken.None
-            );
-
-            if (bytesRead <= 0) {
+            if (chunk is null) {
                 CheckExited();
 
                 yield break;
             }
 
-            var data = new byte[bytesRead];
-            Array.Copy(buf, data, bytesRead);
-
-            yield return data;
+            yield return chunk;
         }
     }
 
-    public Task WriteAsync(string input) {
-        var bytes = Encoding.UTF8.GetBytes(input);
+    internal int MasterFdForTest => (int)_master.DangerousGetHandle();
 
-        return Task.Run(() => UnixPtyInterop.write(_masterFd, bytes, bytes.Length));
+    /// <summary>Runs with the master fd held, just before the write itself.</summary>
+    internal Action? BeforeMasterWriteForTest { get; set; }
+
+    public Task WriteAsync(string input) => WriteAsync(Encoding.UTF8.GetBytes(input));
+
+    /// <summary>A no-op once disposal has begun: input for a closing PTY has nowhere to go. That
+    /// includes a write that started first and fails because disposal took the child down under it.</summary>
+    public Task WriteAsync(byte[] data) {
+        if (Volatile.Read(ref _disposed) != 0) return Task.CompletedTask;
+
+        return Task.Run(() => {
+                try {
+                    _master.TryUse(fd => {
+                            BeforeMasterWriteForTest?.Invoke();
+                            WriteFully(data, chunk => UnixPtyInterop.write(fd, chunk.Span, chunk.Length));
+                        }
+                    );
+                } catch (IOException) when (Volatile.Read(ref _disposed) != 0) { }
+            }
+        );
     }
 
-    public Task WriteAsync(byte[] data) {
-        return Task.Run(() => UnixPtyInterop.write(_masterFd, data, data.Length));
+    /// <summary>A master write may take only part of the buffer, a signal may interrupt it before any
+    /// byte goes out, and a negative count otherwise is a failure; the first two would drop the tail
+    /// of a paste without a trace.</summary>
+    internal static void WriteFully(ReadOnlyMemory<byte> data, Func<ReadOnlyMemory<byte>, nint> write) {
+        while (data.Length > 0) {
+            var written = write(data);
+            if (written < 0 && Marshal.GetLastPInvokeError() == UnixPtyInterop.EINTR) continue;
+            if (written <= 0) throw new IOException($"The PTY master write returned {written}.");
+
+            data = data[(int) written..];
+        }
     }
 
     public void Resize(ushort cols, ushort rows) {
-        UnixPtyInterop.SetWinSize(_masterFd, rows, cols);
+        _master.TryUse(fd => UnixPtyInterop.SetWinSize(fd, rows, cols));
     }
 
     public void SendInterrupt() {
@@ -251,11 +298,23 @@ public sealed class UnixPtyProcess : IPtyProcess {
             }
         }
 
-        if (!HasExited) {
-            SignalGroup(UnixPtyInterop.SIGKILL);
+        if (HasExited) return;
+
+        SignalGroup(UnixPtyInterop.SIGKILL);
+
+        // The kill lands asynchronously, and once this runtime is disposed nothing else will reap the
+        // child: a single immediate check leaves a zombie behind whenever the host is busy.
+        var reapDeadline = _time.GetUtcNow().UtcDateTime + KillReapBound;
+
+        CheckExited();
+
+        while (!HasExited && _time.GetUtcNow().UtcDateTime < reapDeadline) {
+            await Task.Delay(ExitPollGap, _time);
             CheckExited();
         }
     }
+
+    static readonly TimeSpan KillReapBound = TimeSpan.FromSeconds(5);
 
     /// <summary>Serializes the reap (<see cref="CheckExited"/>'s waitpid) against group signalling
     /// (<see cref="SignalGroup"/>). The leader's unreaped zombie is what pins its pid AND pgid
@@ -320,11 +379,9 @@ public sealed class UnixPtyProcess : IPtyProcess {
     }
 
     public async ValueTask DisposeAsync() {
-        if (_disposed) {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) {
             return;
         }
-
-        _disposed = true;
 
         await _cts.CancelAsync();
 
@@ -332,7 +389,8 @@ public sealed class UnixPtyProcess : IPtyProcess {
             await TerminateAsync();
         }
 
-        UnixPtyInterop.close(_masterFd);
+        await _reader.Stopped;
+        _master.Dispose();
         _cts.Dispose();
     }
 }
@@ -344,7 +402,8 @@ public class UnixPtyProcessFactory(UnixSpawnerThread spawner, TimeProvider time)
             string                      cwd,
             Dictionary<string, string>? extraEnv = null,
             ushort                      cols     = 120,
-            ushort                      rows     = 40
+            ushort                      rows     = 40,
+            IReadOnlyCollection<string>? removeEnv = null
         )
-        => UnixPtyProcess.Spawn(spawner, command, args, cwd, time, extraEnv, cols, rows);
+        => UnixPtyProcess.Spawn(spawner, command, args, cwd, time, extraEnv, cols, rows, removeEnv);
 }

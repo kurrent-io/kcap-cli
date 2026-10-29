@@ -45,11 +45,17 @@ internal static partial class TerminalRawMode {
     /// Unix its stream layer re-cooks the terminal, which would defeat raw mode (double echo,
     /// line buffering, LF-instead-of-CR on Enter). Returns bytes read, 0 on EOF.
     /// </summary>
-    public static int ReadStdin(byte[] buf) => (int)read(StdinFd, buf, buf.Length);
+    public static int ReadStdin(byte[] buf) =>
+        OperatingSystem.IsWindows() ? WindowsConsoleRawMode.ReadStdin(buf) : (int)read(StdinFd, buf, buf.Length);
 
     /// <summary>Writes <paramref name="length"/> bytes of <paramref name="data"/> to stdout
     /// (fd 1), looping over partial writes. Bypasses <see cref="Console"/> for the same reason.</summary>
     public static void WriteStdout(byte[] data, int length) {
+        if (OperatingSystem.IsWindows()) {
+            WindowsConsoleRawMode.WriteStdout(data, length);
+            return;
+        }
+
         var off = 0;
         while (off < length) {
             var slice = off == 0 ? data : data[off..length];
@@ -66,7 +72,7 @@ internal static partial class TerminalRawMode {
     /// can always wrap their session in a <c>using</c>.
     /// </summary>
     public static IDisposable Enable() {
-        if (OperatingSystem.IsWindows()) return new Noop();
+        if (OperatingSystem.IsWindows()) return WindowsConsoleRawMode.Enable();
 
         var original = new byte[TermiosBlobSize];
         if (tcgetattr(StdinFd, original) != 0) return new Noop(); // not a tty

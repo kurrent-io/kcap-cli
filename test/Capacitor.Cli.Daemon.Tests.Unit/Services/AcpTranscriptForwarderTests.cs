@@ -1,7 +1,9 @@
+using System.Text.Json;
 using System.Threading.Channels;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
+using TUnit.Assertions.Enums;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
@@ -29,8 +31,9 @@ public class AcpTranscriptForwarderTests {
     static AcpEventEnvelope NewTextEnvelope(string text) =>
         new() { Kind = AcpEventKind.AssistantText, Text = text }; // Seq=0 placeholder, per task 2's contract
 
-    static AcpEventEnvelope NewEphemeralEnvelope(string text) =>
-        new() { Kind = AcpEventKind.AssistantText, Text = text, Ephemeral = true, ItemId = "item-1" };
+    // A distinct item per call unless named: ephemerals of one item supersede each other in a drain.
+    static AcpEventEnvelope NewEphemeralEnvelope(string text, string? itemId = null) =>
+        new() { Kind = AcpEventKind.AssistantText, Text = text, Ephemeral = true, ItemId = itemId ?? Guid.NewGuid().ToString("N") };
 
     /// <summary>Acks the way the server actually does: it sequences CANONICAL envelopes only
     /// (<c>envelopes.Where(e =&gt; !e.Ephemeral)</c>), so AcceptedSeq can never reflect an ephemeral.
@@ -53,9 +56,10 @@ public class AcpTranscriptForwarderTests {
 
     static AcpTranscriptForwarder NewForwarder(
             Func<AcpEventEnvelope[], CancellationToken, Task<AcpBatchAck>> send,
-            ChannelReader<AcpEventEnvelope>                                envelopes
+            ChannelReader<AcpEventEnvelope>                                envelopes,
+            int?                                                           maxBatchBytes = null
         ) => new(send, InitialEnvelope, envelopes, NullLogger.Instance, TimeProvider.System,
-                 FastRetryDelay, FastRetryDelay);
+                 FastRetryDelay, FastRetryDelay, maxBatchBytes: maxBatchBytes);
 
     // ── Seq assignment ───────────────────────────────────────────────────────────────────────────
 
@@ -119,6 +123,49 @@ public class AcpTranscriptForwarderTests {
         await Assert.That(sent.Any(e => e.Kind == AcpEventKind.SessionStarted)).IsFalse();
         await Assert.That(forwarder.IsTerminal).IsFalse();
         await Assert.That(forwarder.UnackedCount).IsEqualTo(0);
+    }
+
+    static AcpTranscriptForwarder ResumedForwarder(
+            Func<AcpEventEnvelope[], CancellationToken, Task<AcpBatchAck>> send, ChannelReader<AcpEventEnvelope> envelopes) =>
+        new(send, initialEnvelope: null, envelopes, NullLogger.Instance, TimeProvider.System,
+            FastRetryDelay, FastRetryDelay, resumeFromSeq: 41);
+
+    /// <summary>A resumed session's held first turn waits on this: an all-ephemeral batch leaves the
+    /// cursor where it was, so it must not count as the server accepting anything.</summary>
+    [Test]
+    public async Task FirstEventAccepted_waits_for_a_canonical_envelope_past_the_resumed_cursor() {
+        var channel = NewChannel();
+        var forwarder = ResumedForwarder(
+            (batch, _) => {
+                var canonical = batch.Where(static e => !e.Ephemeral).ToArray();
+                var accepted  = canonical.Length == 0 ? 41 : canonical[^1].Seq;
+                return Task.FromResult(new AcpBatchAck(accepted, accepted));
+            },
+            channel.Reader);
+        using var cts = new CancellationTokenSource();
+        var run = forwarder.RunAsync(cts.Token);
+
+        channel.Writer.TryWrite(NewEphemeralEnvelope("streaming"));
+        await Task.Delay(100);
+        await Assert.That(forwarder.FirstEventAccepted.IsCompleted).IsFalse();
+
+        channel.Writer.TryWrite(NewTextEnvelope("a"));
+        await Assert.That(await forwarder.FirstEventAccepted.WaitAsync(HangGuard)).IsTrue();
+
+        channel.Writer.Complete();
+        await run.WaitAsync(HangGuard);
+    }
+
+    [Test]
+    public async Task FirstEventAccepted_is_false_when_a_terminal_binding_drops_the_first_event() {
+        var channel = NewChannel();
+        channel.Writer.TryWrite(NewTextEnvelope("a"));
+        var forwarder = ResumedForwarder((_, _) => Task.FromResult(new AcpBatchAck(41, 41)), channel.Reader);
+
+        await forwarder.RunAsync(CancellationToken.None).WaitAsync(HangGuard);
+
+        await Assert.That(forwarder.IsTerminal).IsTrue();
+        await Assert.That(await forwarder.FirstEventAccepted.WaitAsync(HangGuard)).IsFalse();
     }
 
     [Test]
@@ -591,5 +638,94 @@ public class AcpTranscriptForwarderTests {
         var resend = observed[^1];
         await Assert.That(resend.All(static e => !e.Ephemeral)).IsTrue();
         await Assert.That(resend.Select(static e => e.Seq)).IsEquivalentTo(new long[] { 1, 2 });
+    }
+
+    // ── Batch budget ─────────────────────────────────────────────────────────────────────────────
+
+    const int SmallBudget = 2_000;
+
+    static string Payload(int chars) => new('x', chars);
+
+    /// <summary>Pins that no invocation carries more than the byte budget (beyond a single envelope
+    /// that alone exceeds it), while every canonical envelope still lands once, in seq order.</summary>
+    [Test]
+    public async Task Drained_envelopes_are_sent_in_batches_within_the_byte_budget() {
+        var channel = NewChannel();
+        for (var i = 0; i < 10; i++) channel.Writer.TryWrite(NewTextEnvelope(Payload(600)));
+        channel.Writer.TryWrite(NewTextEnvelope(Payload(SmallBudget * 3))); // alone over budget
+        channel.Writer.Complete();
+
+        var observed  = new List<AcpEventEnvelope[]>();
+        var forwarder = NewForwarder(ServerAccurateSend(observed), channel.Reader, SmallBudget);
+
+        await forwarder.RunAsync(CancellationToken.None).WaitAsync(HangGuard);
+
+        await Assert.That(observed.Count).IsGreaterThan(3);
+        await Assert.That(observed.All(static b =>
+            b.Length == 1 || b.Sum(static e => AcpTranscriptForwarder.EstimateBytes(e)) <= SmallBudget)).IsTrue();
+        await Assert.That(observed.SelectMany(static b => b).Select(static e => e.Seq))
+            .IsEquivalentTo(Enumerable.Range(0, 12).Select(static i => (long) i), CollectionOrdering.Matching);
+        await Assert.That(forwarder.IsTerminal).IsFalse();
+        await Assert.That(forwarder.UnackedCount).IsEqualTo(0);
+    }
+
+    /// <summary>Pins that the budget's size estimate never undercounts what the hub serializer writes,
+    /// including text the default encoder escapes to six bytes a character. Every string member is long
+    /// enough that one the estimate missed would overrun the fixed allowance.</summary>
+    [Test]
+    [Arguments("plain ascii output")]
+    [Arguments("naïve café — “quoted” 漢字 🚀")]
+    [Arguments("<tag attr='x'> & \"q\" \\ back + `tick`")]
+    [Arguments("tab\tnew\nline\u0001ctl")]
+    public async Task The_size_estimate_bounds_the_serialized_envelope(string text) {
+        var s = string.Concat(Enumerable.Repeat(text, 50));
+        var envelope = new AcpEventEnvelope {
+            Seq = 7, Kind = AcpEventKind.ToolResult, Text = s, ToolCallId = s, ToolName = s, ToolInputJson = s, ToolKind = s,
+            ToolResult = s, Model = s, Cwd = s, RawSessionId = s, SessionMode = s, EndReason = s, TimestampIso = s, ItemId = s,
+            RepoOwner = s, RepoName = s, RepoRemoteUrl = s, RepoBranch = s, AgentId = s, AgentType = s, TurnId = s,
+        };
+
+        var serialized = JsonSerializer.SerializeToUtf8Bytes(envelope, CapacitorJsonContext.Default.AcpEventEnvelope);
+
+        await Assert.That(AcpTranscriptForwarder.EstimateBytes(envelope)).IsGreaterThanOrEqualTo(serialized.Length);
+    }
+
+    /// <summary>Pins which ephemerals a drain sends: only the newest of each item and kind, none of an
+    /// item whose canonical envelope follows, and every ephemeral with no item id.</summary>
+    [Test]
+    public async Task A_drain_sends_only_ephemerals_not_superseded_later_in_it() {
+        var toolOutput = new AcpEventEnvelope { Kind = AcpEventKind.ToolResult, ToolResult = "o", Ephemeral = true, ItemId = "cmd" };
+        var patch      = new AcpEventEnvelope { Kind = AcpEventKind.ToolCall, ToolInputJson = "{}", Ephemeral = true, ItemId = "cmd" };
+        var noItem     = new AcpEventEnvelope { Kind = AcpEventKind.AssistantText, Text = "n", Ephemeral = true };
+
+        List<AcpEventEnvelope> drained = [
+            NewEphemeralEnvelope("a", "msg"),
+            NewEphemeralEnvelope("ab", "msg"),
+            toolOutput,
+            patch,
+            noItem,
+            NewEphemeralEnvelope("t", "thought"),
+            new AcpEventEnvelope { Kind = AcpEventKind.AssistantThinking, Text = "t!", ItemId = "thought", Seq = 1 },
+        ];
+
+        var kept = AcpTranscriptForwarder.DropSupersededEphemerals(drained);
+
+        await Assert.That(kept).IsEquivalentTo(new[] { drained[1], toolOutput, patch, noItem, drained[6] }, CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task An_ephemeral_over_the_budget_is_not_sent() {
+        var channel = NewChannel();
+        channel.Writer.TryWrite(NewEphemeralEnvelope(Payload(SmallBudget * 2)));
+        channel.Writer.TryWrite(NewTextEnvelope("after"));
+        channel.Writer.Complete();
+
+        var observed  = new List<AcpEventEnvelope[]>();
+        var forwarder = NewForwarder(ServerAccurateSend(observed), channel.Reader, SmallBudget);
+
+        await forwarder.RunAsync(CancellationToken.None).WaitAsync(HangGuard);
+
+        await Assert.That(observed.SelectMany(static b => b).Any(static e => e.Ephemeral)).IsFalse();
+        await Assert.That(observed.SelectMany(static b => b).Select(static e => e.Seq)).IsEquivalentTo(new long[] { 0, 1 });
     }
 }

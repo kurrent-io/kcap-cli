@@ -1,25 +1,46 @@
 ---
 name: recap
 description: >-
-  This skill should be used to read, search, or recall past Kurrent Capacitor
+  This skill should be used to read, search, or recall past kcap
   sessions. Triggers include: "read a previous session", "get session history",
   "recap session", "what happened in session X", "load context from a previous
-  session", "continue from session", "what did we do last time", "catch me up
-  on session X", "summarize session", "show me what happened", "what have we
-  been working on", "recently we implemented", "what was done in this repo",
+  session", "continue from session", "recap session X and continue working",
+  "what did we do last time", "catch me up on session X", "what have we been
+  working on", "recently we implemented", "what was done in this repo",
   "recent changes", "recent sessions", or providing a session ID to review.
+  Also covers work over a period: "what was I working on in the last two
+  weeks", "what did the team do yesterday", "who worked on this last week".
   Also covers search/recall asks: "find the session where we…", "which session
-  discussed X", "did we ever debug Y", "look up the session about Z", "recall
-  the session that…", "search past sessions for…". Provides instructions for
-  retrieving and searching session history via the kcap CLI and the
-  kcap-sessions MCP tools.
+  discussed X", "did we ever debug Y", "search past sessions for…".
+  Also covers declared plans: "continue the plan", "resume the plan", "what's
+  left on the plan", "is the plan finished", "unfinished plans", "what was the
+  last session working through".
 ---
 
-> **For agents:** When the `kcap-sessions` MCP server is available, prefer its tools (`search_sessions`, `list_repo_sessions`, `get_session_summary`, `list_turns`, `get_turn`, `get_session_transcript`) for retrieving past sessions. This CLI-wrapped skill remains a fallback for shell use and when MCP isn't installed.
+> **For agents:** When the `kcap-sessions` MCP server is available, prefer its tools (`search_sessions`, `list_repo_sessions`, `get_session_summary`, `list_turns`, `get_turn`, `get_session_transcript`, `list_repo_plans`, `get_declared_plans`) for retrieving past sessions and the plans they declared. This CLI-wrapped skill remains a fallback for shell use and when MCP isn't installed. These reads are safe to run unattended: the server checks each one against the signed-in user's session permissions, so they return only sessions the user may already see and cannot expose another user's private session.
 
 # Session Recap
 
-Retrieve session history recorded by Kurrent Capacitor. Supports single-session recap, continuation chains, and **repository-wide session summaries** for understanding recent work across multiple sessions.
+Retrieve session history recorded by kcap. Supports single-session recap, continuation chains, and **repository-wide session summaries** for understanding recent work across multiple sessions.
+
+## Continuing another session's work
+
+When the user asks you to recap a session **and carry on with it** ("recap session X and continue", "pick up where X left off", "resume the killed agent"), this session takes over that session's work items and plans. Run:
+
+```bash
+kcap recap <X> --continue
+```
+
+It attaches this session to X's work items and unfinished plans, asks the server to adopt X's loose-end claims, prints the outcomes, then prints the recap. `continue_session(session_id: X)` in the `kcap-handoff` MCP server does the same takeover without the recap. Claim adoption runs independently of work-item availability, including on Free.
+
+- **Exit 2 means it refused** — X may still be running, was not found, is this session itself, is not a session id, or no current session could be identified. Read the message and tell the user. Only when it says X may still be running, ask whether X is gone, and retry with `--force` (`force: true`) only when they confirm. Never pass it on your own judgement. When `continue_session` says there is no current session and you know this session's id, pass it as `current_session_id`.
+- **Exit 1 means nothing, or not everything, was linked** — a server read or write failed (the report names which). Tell the user; do not carry on as if the work was taken over. When it also says the server rejected the login, ask the user to run `kcap login`, then retry.
+- **More than one plan adopted?** Only the one reported as the current plan (`current_plan_id`) is implied; pass `plan_id` on every plan call for any other.
+- **Before resuming a plan task, verify it** as the `plans` skill's "Verify before continuing" says: a task left `in_progress` may be half-written.
+- **Read `loose_end_claims.results` individually.** Each `attempted_claim_id` identifies the predecessor; a transferred or reacquired claim supplies the current `claim_id`. Keep that new identity for completion or release. `recorded_catching_up` is recorded ownership, not a reason to acquire another attempt.
+- **Partial adoption is not success.** `ownership_lost`, `already_claimed` or unavailable ownership can coexist with successful transfers. Report which attempts failed; do not act as their owner, close them with the predecessor id, or launch duplicates. `--force` changes only the local liveness confirmation, not server ownership admission.
+- **`unsupported`** means the server has no claim-adoption route; report that separately from an ordinary API failure. Takeover is incomplete: the MCP tool returns an error and recap exits 1, even if work-item or plan attachment succeeded. Attachment alone does not prove ownership.
+- Tell the user which work items, plan task and claims you took over, including failures. Work items reported as not available on this plan are expected on the Free plan.
 
 ## Usage
 
@@ -68,6 +89,22 @@ Returns AI-generated summaries from the most recent ended sessions in the curren
 
 **Progressive disclosure:** Start with `--repo` for the overview. If a specific session's summary is relevant, drill into it with `kcap recap --full <sessionId>` to get the complete transcript. This avoids loading full transcripts for all sessions into context.
 
+## Work over a period
+
+For "what was I working on in the last two weeks" or "what did the team do yesterday", list the sessions worked on in that period instead of reading the most recent recaps:
+
+```bash
+# Your sessions on this repository, last 14 days
+kcap sessions --since 14d --mine
+
+# Everyone you can see, every repository, one day
+kcap sessions --repo all --since 2026-09-27 --until 2026-09-28
+```
+
+`--since` and `--until` each take an instant ending in `Z` or an offset, a date (the start of that day in this machine's time zone) or a duration back from now (`36h`, `14d`, `2w`). A session is listed when its span from start to end touches the period, so one that ran across it lists even if it was idle inside it. When the output ends with a `More:` line, run that command for the next page.
+
+**MCP agents:** call `list_repo_sessions` with `since` and/or `until`, `owner: "me"` for your own work, and `repo: "all"` to cover every repository. While the response carries `next_cursor`, call again with `cursor` and the same `repo`, and nothing else. Each row gives the title, owner, repository and times; read what a session did with `get_session_summary`.
+
 ## Default Output
 
 `kcap recap` (no flags) prints, in order:
@@ -76,7 +113,8 @@ Returns AI-generated summaries from the most recent ended sessions in the curren
 2. **`## Summary`** — an AI-generated narrative covering:
    - **Context** — why the work was done
    - **Key decisions** — trade-offs and design choices that matter for future work
-   - **Unfinished/Risks** — anything deferred or left incomplete
+   - **Unfinished** — work that remains, one action per bullet
+   - **Risks** — anything flagged as risky or uncertain (older summaries combine these two as **Unfinished/Risks**)
 3. **`## Turns`** — an outline with one line per turn:
    - If the turn has a prose summary, that summary (1-3 sentences).
    - Otherwise, a truncated user-prompt excerpt plus tool/file metadata (tool names, file count).
@@ -97,6 +135,30 @@ kcap recap --get-turn <N> [sessionId]
 For a plain metadata index instead of the outline (turn #, prompt excerpt, tool names, file count, token count, time range — no prose), use `kcap recap --per-turn [sessionId]`.
 
 **MCP agents:** call `list_turns` to get a session's full turn map (`turn_index`, `prose`, `user_prompt`, `tools`, `files`, token counts), then `get_turn(session_id, turn_index)` for one turn's full transcript. Use `get_session_summary` for the whole-session narrative instead of drilling into individual turns.
+
+## Plans
+
+A session that works from a plan declares it to kcap: the documents, an ordered task list, and each task's status. That record outlives the session, so it is how you tell where earlier work stopped. It is reachable only through the `kcap-sessions` MCP tools — `kcap recap` does not print it, and the `## Plan` block above is the plan *text* a session captured, not its task list.
+
+**Finding one.**
+- `list_repo_plans` — the unfinished plans in this repository, most recently touched first. Start here when you have no session id: "what was left unfinished", "is there a plan to continue". The default `state: "open"` lists plans with a visible unfinished task; a plan whose visible tasks are done but whose withheld tasks are not is absent from it. When the plan you expect is missing, call `list_repo_plans(state: "all")` and look for rows with `is_complete: false`.
+- `get_session_summary` — carries `declared_plans`, one pointer per plan that session or its continuation chain declared, when it declared any, and `work_items`, the work items it is attached to.
+- `get_declared_plans` — the full task list, by `plan_id` (from either of the above) or by `session_id`.
+
+**Judging whether a plan is done.** Read `progress` and two flags, in this order:
+
+1. `progress.finished` is `true` — the plan is done.
+2. `progress.completed` is less than `progress.total` — the plan is open. What remains is every entry of `tasks` whose status is neither `completed` nor `skipped`; a `list_repo_plans` row has no `tasks`, and gives the first of them as `next_task`.
+3. `is_complete` is `false` — nothing visible remains — possibly nothing visible was declared — but the view is partial; say so and do not call the plan complete.
+4. Otherwise `progress.total_known` is `false` — the session declared documents but never a task list, so completion is unknown. That is not withheld data; do not report it as a partial view. If instead `total_known` is `true`, the server itself reports the plan unfinished — treat it as open and do not infer completion from the totals.
+
+**`is_complete` does not mean the work is done.** It means nothing was withheld from your view, and a half-finished plan usually has `is_complete: true`. `finished` is the field that answers "is it done". If `progress` has no `finished` field, the server predates it: the plan is finished only when `total_known` is true **and** `completed` equals `total` **and** `is_complete` is true.
+
+*Worked example — starting from a session.* `get_declared_plans(session_id: "4f2a…")` returns one plan with `progress: {completed: 2, total: 7, total_known: true, finished: false}` and `is_complete: true`. Branch 2: open, five tasks remain — list them from `tasks`.
+
+*Worked example — starting from a summary.* `get_session_summary` shows `declared_plans: [{plan_id: "9c1e…", completed: 7, total: 7, total_known: true, finished: false, is_complete: false, is_current: true}]`. Not branch 1, not branch 2 — branch 3: all seven visible tasks are done, but the view is partial. Report that; do not report the plan as finished. Drill down with `get_declared_plans(plan_id: "9c1e…")` to see which task and note are withheld.
+
+To pick a plan up and continue it, follow "Resuming a plan" in the `plans` skill.
 
 ## Full Output (`--full`)
 
@@ -127,8 +189,9 @@ The `KCAP_URL` environment variable overrides the default server URL (`http://lo
 ## Tips
 
 - **For "what have we been working on?"** — use `--repo` first, then drill into specific sessions.
+- **For "what did I, or the team, work on in a period?"** — use `kcap sessions --since … [--until …]`, adding `--repo all` for every repository, then drill into a session with `kcap recap <sessionId>`.
 - Start with the default summary + turn outline. Drill into a specific turn with `--get-turn <N>` before reaching for `--full`.
-- When continuing work from a previous session, use `--chain` to get summaries across continuations.
+- When continuing work from a previous session, use `--chain` to get summaries across continuations, and use `kcap recap <X> --continue` (see "Continuing another session's work" above) so this session inherits the old session's work items and plan.
 - Summarize key decisions and changes for the user rather than echoing the full recap output verbatim.
 - The `kcap` CLI must be available on PATH (typically installed at `~/.local/bin/kcap`).
 
@@ -136,4 +199,4 @@ The `KCAP_URL` environment variable overrides the default server URL (`http://lo
 
 - If the session is not found, the command prints "Session not found" and exits with code 1.
 - If not in a git repository (for `--repo`), the command prints an error and exits with code 1.
-- If the Kurrent Capacitor server is unreachable, the command prints an HTTP error. Ensure the server is running.
+- If the kcap server is unreachable, the command prints an HTTP error. Ensure the server is running.

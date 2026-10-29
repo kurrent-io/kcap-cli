@@ -97,6 +97,48 @@ public class CodexLauncherTests {
         await Assert.That(args).DoesNotContain("gpt-5.6-luna");
     }
 
+    [Test]
+    public async Task Resume_launch_uses_the_resume_subcommand_with_overrides_and_prompt() {
+        var ctx = NewCtx(prompt: "carry on", effort: "high") with { ResumeSessionId = "019a-thread" };
+
+        var args = NewLauncher().BuildArgs(ctx).Args;
+
+        await Assert.That(args).IsEquivalentTo(new[] {
+            "resume", "019a-thread",
+            "--cd", "/tmp/wt",
+            "--sandbox", "workspace-write",
+            "--ask-for-approval", "on-request",
+            "--dangerously-bypass-hook-trust",
+            "-m", "gpt-5.3-codex",
+            "-c", "model_reasoning_effort=\"high\"",
+            "--no-alt-screen",
+            "--", "carry on",
+        }, CollectionOrdering.Matching);
+    }
+
+    /// <summary>A resume of an agent that was waiting sends no turn: an empty prompt adds no argument.</summary>
+    [Test]
+    public async Task A_resume_with_an_empty_prompt_passes_no_prompt_argument() {
+        var args = NewLauncher().BuildArgs(NewCtx(prompt: "") with { ResumeSessionId = "019a-thread" }).Args;
+
+        await Assert.That(args).DoesNotContain("--");
+        await Assert.That(args).DoesNotContain("");
+    }
+
+    /// The resume ledger can hold the dashless id rollout discovery records; Codex resumes only a dashed UUID.
+    [Test]
+    public async Task Resume_restores_the_dashes_of_a_dashless_session_id() {
+        const string thread = "019e0322-05fc-7570-be65-75719c3ea861";
+        var args = NewLauncher().BuildArgs(NewCtx() with { ResumeSessionId = thread.Replace("-", "") }).Args;
+
+        await Assert.That(args[Array.IndexOf(args, "resume") + 1]).IsEqualTo(thread);
+    }
+
+    [Test]
+    public async Task Resume_is_supported() {
+        await Assert.That(NewLauncher().SupportsResume).IsTrue();
+    }
+
     void WriteCodexConfig(string toml) => Home.CreateFile([".codex", "config.toml"], toml);
 
     [Test]
@@ -251,10 +293,13 @@ public class CodexLauncherTests {
         var enabled = args.Where(a => a.StartsWith("mcp_servers.", StringComparison.Ordinal)
                                    && !a.Contains(".enabled=false")).ToArray();
         await Assert.That(enabled.All(a => a.StartsWith("mcp_servers.kcap-flow-result.", StringComparison.Ordinal))).IsTrue();
-        await Assert.That(enabled.Length).IsEqualTo(4);
+        await Assert.That(enabled.Length).IsEqualTo(5);
 
         // Force-enabled regardless of anything the user's own config may say.
         await Assert.That(args).Contains("mcp_servers.kcap-flow-result.enabled=true");
+
+        // Codex must outlast the channel's own retry deadline rather than abandon a submit mid-restart.
+        await Assert.That(args).Contains("mcp_servers.kcap-flow-result.tool_timeout_sec=300");
 
         var command = enabled.Single(a => a.Contains(".command="));
         await Assert.That(command).Contains("/opt/kcap");
@@ -529,7 +574,10 @@ public class CodexLauncherTests {
             NewLauncher().Prepare(ctx);
             await Task.CompletedTask;
         });
-        await Assert.That(ex!.Message).Contains("kcap plugin install --codex");
+        var checkedDir = Path.Combine(Home.Path, ".codex");
+        await Assert.That(ex!.Message).Contains(checkedDir);
+        await Assert.That(ex.Message).Contains($"kcap accounts add codex {ShellArgument.Quote(checkedDir)}");
+        await Assert.That(ex.Message).Contains("kcap plugin install --codex --project");
     }
 
     [Test, NotInParallel]
@@ -783,6 +831,7 @@ public class CodexLauncherTests {
             "-c", "mcp_servers.kcap-flow-result.command=\"/opt/kcap\"",
             "-c", "mcp_servers.kcap-flow-result.args=[\"mcp\",\"flow-result\"]",
             "-c", "mcp_servers.kcap-flow-result.env={KCAP_URL=\"https://t.example\",KCAP_FLOW_AGENT_ID=\"agent-xyz\"}",
+            "-c", "mcp_servers.kcap-flow-result.tool_timeout_sec=300",
             "-m", "gpt-5.3-codex",
             "--no-alt-screen"
         ];

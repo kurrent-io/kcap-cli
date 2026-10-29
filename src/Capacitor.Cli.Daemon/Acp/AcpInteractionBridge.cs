@@ -2,6 +2,7 @@ using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
 using Capacitor.Cli.Core.Policy;
+using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
 
 namespace Capacitor.Cli.Daemon.Acp;
@@ -41,9 +42,9 @@ internal sealed partial class AcpInteractionBridge(
         Action<string>?                                                               unexpectedUnattendedInteraction = null,
         IReadOnlySet<string>?                                                         admittedToolIds = null,
         // Launch-time permission preset for the INTERACTIVE path only (non-null only when
-        // unattendedPolicy is Disabled): the bridge auto-approves a permission request whose ACP tool
-        // kind the preset covers, with a single unambiguous allow_once — everything else keeps
-        // prompting. Null for a review-flow launch and every launch without a preset.
+        // unattendedPolicy is Disabled): the bridge auto-approves a permission request the preset
+        // covers, with a single unambiguous allow_once — everything else keeps prompting. Null for a
+        // review-flow launch and every launch without a preset.
         AcpLaunchPermissionPreset?                                                    preset = null,
         // Fire-and-forget audit sink invoked once per preset auto-approval (through a non-throwing
         // boundary). Null in tests / when no server connection is wired.
@@ -57,9 +58,26 @@ internal sealed partial class AcpInteractionBridge(
         // The launch's working directory, which a relative tool-call path is resolved against. Without
         // it such a frame normalizes to Other and no path rule can match it, while the preset arm —
         // which reads the raw frame kind — would still auto-approve.
-        string?                                                                       policyCwd = null
+        string?                                                                       policyCwd = null,
+        // The server's policy judge, consulted for a call no rule decided when the launch's policy
+        // enables it. Null leaves an undecided call exactly as it is without one.
+        PolicyJudgeGateway?                                                           policyJudge = null,
+        TimeSpan?                                                                     judgeBudget = null,
+        // The vendor's own match for an admitted frame; Kiro's title match when unset.
+        Func<JsonElement, IReadOnlySet<string>, bool>?                                admissionMatcher = null,
+        // The vendor's own question method, answered through question cards; unhandled when null.
+        AcpQuestionProtocol?                                                          questionProtocol = null
     ) {
     static readonly IReadOnlySet<string> EmptyAdmitted = new HashSet<string>(StringComparer.Ordinal);
+
+    /// <summary>The agent is already blocked on the permission request, as it would be on a human,
+    /// so the judge gets the server's full ceiling.</summary>
+    internal static readonly TimeSpan JudgeBudget = TimeSpan.FromSeconds(5);
+
+    readonly PermissionRefusalLedger _refusals = new();
+
+    /// <summary>The runtime opened this session with <c>session/new</c>, so every refusal in it passes through here.</summary>
+    internal void MarkBridgedSinceStart(string sessionId) => _refusals.MarkBridgedSinceStart(sessionId);
 
     /// <summary>
     /// A permission frame this bridge cannot even parse. Always answers <c>cancelled</c>; under
@@ -141,14 +159,149 @@ internal sealed partial class AcpInteractionBridge(
                 return ElicitationCancelResult();
             }
 
+            if (questionProtocol is { } declined && request.Method == declined.Method)
+                return declined.Reply(null);
+
             return request.Method == "session/request_permission" ? CancelledResult() : null;
         }
 
         return request.Method switch {
             "session/request_permission" => await HandlePermissionAsync(request, ct).ConfigureAwait(false),
             "elicitation/create"         => await HandleElicitationAsync(request, ct).ConfigureAwait(false),
+            var method when questionProtocol is { } protocol && method == protocol.Method
+                                         => await HandleVendorQuestionAsync(protocol, request, ct).ConfigureAwait(false),
             _                            => null
         };
+    }
+
+    /// <summary>Asks each of a vendor's questions in turn, as a question card, and replies once with every
+    /// answer. A declined card, or one that cannot be read, declines the whole request.</summary>
+    async Task<JsonElement?> HandleVendorQuestionAsync(AcpQuestionProtocol protocol, AcpRequest request, CancellationToken ct) {
+        if (unattendedPolicy == AcpUnattendedInteractionPolicy.AutoApprove) {
+            LogUnattendedElicitationDeclined(agentId);
+
+            return protocol.Reply(null);
+        }
+
+        if (request.Params is not { } p || protocol.Read(p) is not { Questions.Count: > 0 } asked) {
+            logger.LogWarning("ACP: {Method} for agent {AgentId} could not be read as questions; declining", request.Method, agentId);
+            AcpMetrics.RecordElicitationUnrenderable("vendor_malformed_request");
+
+            return protocol.Reply(null);
+        }
+
+        // The vendor keys each answer by its question's text: a repeated question is asked once, and two
+        // different questions sharing a text cannot both be answered.
+        var questions = new List<AcpVendorQuestion>(asked.Questions.Count);
+
+        foreach (var question in asked.Questions) {
+            if (questions.Find(q => q.Text == question.Text) is not { } seen) {
+                questions.Add(question);
+                continue;
+            }
+
+            if (seen.MultiSelect != question.MultiSelect || !seen.Options.SequenceEqual(question.Options)) {
+                logger.LogWarning("ACP: {Method} for agent {AgentId} asked two different questions with the same text; declining",
+                    request.Method, agentId);
+                AcpMetrics.RecordElicitationUnrenderable("vendor_conflicting_questions");
+
+                return protocol.Reply(null);
+            }
+        }
+
+        var prompts = questions
+            .Select((q, i) => questions.Count > 1 ? $"({i + 1} of {questions.Count}) {q.Text}" : q.Text)
+            .ToArray();
+
+        if (questions.Where((q, i) => !FitsAQuestionCard(q, prompts[i])).FirstOrDefault() is { } oversized) {
+            logger.LogWarning(
+                "ACP: {Method} for agent {AgentId} asked a question too large for a question card ({Options} options); declining",
+                request.Method, agentId, oversized.Options.Count);
+            AcpMetrics.RecordElicitationUnrenderable("vendor_question_too_large");
+
+            return protocol.Reply(null);
+        }
+
+        var answered = new List<AcpVendorQuestionAnswer>(questions.Count);
+
+        for (var i = 0; i < questions.Count; i++) {
+            var question = questions[i];
+            var options  = question.Options
+                .Select((o, n) => new AcpInteractionOption(n.ToString(System.Globalization.CultureInfo.InvariantCulture), o.Label, o.Description))
+                .ToArray();
+            var multi = question.MultiSelect && options.Length > 0;
+
+            var card = new AcpInteractionRequest(
+                AgentId: agentId,
+                AcpSessionId: asked.SessionId,
+                Kind: "elicitation",
+                ToolName: null,
+                ToolInput: null,
+                ToolCallId: null,
+                Prompt: prompts[i],
+                Options: options,
+                IsMultiSelect: multi,
+                MinSelections: multi ? 1 : null,
+                MaxSelections: multi ? options.Length : null
+            );
+
+            LogInteractionIssued(agentId, "elicitation");
+            AcpMetrics.RecordBlockingRequest("elicitation");
+
+            AcpInteractionDecision decision;
+
+            try {
+                decision = await requestInteraction(card, ct).ConfigureAwait(false);
+            } catch (Exception ex) {
+                logger.LogDebug(ex, "ACP: {Method} could not be routed for agent {AgentId}; declining", request.Method, agentId);
+                LogInteractionResolved(agentId, "elicitation", "cancel");
+
+                return protocol.Reply(null);
+            }
+
+            var chosen = ChosenAnswers(decision, options, multi);
+            LogInteractionResolved(agentId, "elicitation", chosen is null ? "cancel" : "accept");
+
+            if (chosen is null) return protocol.Reply(null);
+
+            answered.Add(new AcpVendorQuestionAnswer(question, chosen));
+        }
+
+        return protocol.Reply(answered);
+    }
+
+    /// <summary>The same bounds an elicitation's question card is held to, which the server enforces.</summary>
+    static bool FitsAQuestionCard(AcpVendorQuestion question, string prompt) =>
+        prompt.Length <= MaxElicitationMessageCodeUnits
+     && question.Options.Count <= ElicitationSchemaClassifier.MaxOptions
+     && question.Options.All(o => o.Label.Length <= MaxQuestionOptionCodeUnits
+                               && (o.Description?.Length ?? 0) <= MaxQuestionOptionCodeUnits);
+
+    /// <summary>The server cuts a card option's label and description to this, and a vendor question's label
+    /// is its answer, so a longer one could look like another while answering differently.</summary>
+    const int MaxQuestionOptionCodeUnits = 256;
+
+    /// <summary>The labels a decision picked from the offered options, or the answer typed instead of
+    /// picking one; null when it declined or names an option that was not offered.</summary>
+    static string[]? ChosenAnswers(AcpInteractionDecision decision, AcpInteractionOption[] options, bool multi) {
+        if (!AffirmativeOutcomes.Contains(decision.Outcome)) return null;
+
+        var ids = multi
+            ? decision.SelectedOptionIds ?? (decision.SelectedOptionId is { } scalar ? [scalar] : null)
+            : decision.SelectedOptionId is { } one ? [one] : null;
+
+        if (options.Length == 0 || ids is not { Length: > 0 })
+            return string.IsNullOrWhiteSpace(decision.FreeText) ? null : [decision.FreeText];
+
+        var labels = new List<string>(ids.Length);
+
+        foreach (var id in ids.Distinct(StringComparer.Ordinal)) {
+            if (options.FirstOrDefault(o => o.OptionId == id) is not { OptionId: not null } match) return null;
+
+            labels.Add(match.Label);
+        }
+
+        return [.. labels];
     }
 
     async Task<JsonElement?> HandlePermissionAsync(AcpRequest request, CancellationToken ct) {
@@ -195,7 +348,7 @@ internal sealed partial class AcpInteractionBridge(
         // correctly-configured reviewer never raises a frame is measurably false on Kiro, which
         // intermittently prompts for a tool that is in its own trust list.
         if (unattendedPolicy == AcpUnattendedInteractionPolicy.AllowlistedAutoApprove) {
-            if (!UnattendedToolAdmission.IsAdmitted(parsed.ToolCall, admittedToolIds ?? EmptyAdmitted))
+            if (!(admissionMatcher ?? UnattendedToolAdmission.IsAdmitted)(parsed.ToolCall, admittedToolIds ?? EmptyAdmitted))
                 return ReapForbiddenPermissionFrame(parsed.ToolCall);
 
             var admittedChoice = TrySelectLeastPrivilegeAllow(options);
@@ -235,58 +388,78 @@ internal sealed partial class AcpInteractionBridge(
         // falls through unchanged. A throwing evaluation leaves the request on the lane rather than
         // deciding it.
         var policyForcedAsk = false;
+        CanonicalAction? policyAction = null;
 
         if (unattendedPolicy == AcpUnattendedInteractionPolicy.Disabled
          && policySnapshot is { IsEmpty: false } snapshot) {
-            CanonicalAction?  action     = null;
             PolicyEvaluation? evaluation = null;
 
             try {
-                action     = AcpActionNormalizer.Normalize(parsed.ToolCall, policyVendor ?? "unknown", policyCwd);
-                evaluation = PolicyEngine.Evaluate(snapshot, action, EvaluationMode.Full);
+                policyAction = AcpActionNormalizer.Normalize(parsed.ToolCall, policyVendor ?? "unknown", policyCwd);
+                evaluation   = PolicyEngine.Evaluate(snapshot, policyAction, EvaluationMode.Full);
             } catch (Exception ex) {
                 LogPolicyEvaluationFailed(ex, agentId);
+                // A policy that could not be read might have denied this call, so no preset may approve it.
+                policyForcedAsk = true;
             }
 
-            if (action is { } act && evaluation is { } eval) {
+            if (policyAction is { } act && evaluation is { } eval) {
                 var correlationId = TryGetToolCallId(parsed.ToolCall);
+                var judged = eval.Outcome == PolicyOutcome.None && snapshot.JudgeEnabled && policyJudge is { } judge
+                    ? await ConsultJudgeAsync(judge, snapshot, act, parsed.SessionId, ct).ConfigureAwait(false)
+                    : null;
 
-                switch (eval.Outcome) {
+                switch (judged?.Outcome ?? eval.Outcome) {
                     case PolicyOutcome.Deny:
-                        TryNotifyPolicyDecision(snapshot, act, eval, parsed.SessionId, correlationId, "deny", "deny");
+                        TryNotifyPolicyDecision(snapshot, act, eval, parsed.SessionId, correlationId, "deny", "deny", judged);
 
                         return DenyResult(options);
                     case PolicyOutcome.Allow when TrySelectSingleAllowOnce(options) is { } policyChoice:
-                        TryNotifyPolicyDecision(snapshot, act, eval, parsed.SessionId, correlationId, "allow", "allow");
+                        TryNotifyPolicyDecision(snapshot, act, eval, parsed.SessionId, correlationId, "allow", "allow", judged);
 
                         return SelectedResult(policyChoice);
                     case PolicyOutcome.Allow:
                         // Nothing offered unambiguously means allow-once. Degrade to the layers below
                         // rather than answering with an option id the agent never offered.
-                        TryNotifyPolicyDecision(snapshot, act, eval, parsed.SessionId, correlationId, "allow", "pass_through");
+                        TryNotifyPolicyDecision(snapshot, act, eval, parsed.SessionId, correlationId, "allow", "pass_through", judged);
                         break;
                     case PolicyOutcome.Ask:
-                        TryNotifyPolicyDecision(snapshot, act, eval, parsed.SessionId, correlationId, "ask", "parked");
+                        TryNotifyPolicyDecision(snapshot, act, eval, parsed.SessionId, correlationId, "ask", "parked", judged);
                         policyForcedAsk = true;
+                        break;
+                    // A judge that did not decide leaves the layers below exactly as they would be
+                    // without it, and is recorded with why.
+                    case PolicyOutcome.None when judged is not null:
+                        TryNotifyPolicyDecision(snapshot, act, eval, parsed.SessionId, correlationId, "pass_through", "pass_through", judged);
                         break;
                 }
             }
+
+            // A call of a governed kind that lacks the field its rules read normalizes to Other, where
+            // those rules cannot see it; it may be one they deny, so no preset approves it.
+            if (policyAction is { Kind: ActionKind.Other }
+             && TryGetToolKind(parsed.ToolCall) is AcpToolKind.Execute or AcpToolKind.Fetch or AcpToolKind.Read
+                    or AcpToolKind.Search or AcpToolKind.Edit or AcpToolKind.Move or AcpToolKind.Delete)
+                policyForcedAsk = true;
         }
 
         // Launch-time permission preset (INTERACTIVE path only). Sits strictly between "frame
         // understood" and "forward to human": it can only ever replace a prompt with an allow — never
-        // a cancel, never a standing grant. Auto-approve iff the request's ACP tool kind is one the
-        // preset covers AND there is a single unambiguous allow_once option. Every other case — a
-        // kind the preset does not cover, a kind-less frame, zero/multiple allow_once, or a sole
-        // allow_always — falls through to the interactive forward below.
+        // a cancel, never a standing grant. Auto-approve iff the preset covers the request AND there
+        // is a single unambiguous allow_once. A vendor's allow_always is never taken, not even a
+        // session-scoped one: once granted the vendor stops asking, so later calls would bypass both
+        // the launch's policy and this audit.
         if (unattendedPolicy == AcpUnattendedInteractionPolicy.Disabled
          && !policyForcedAsk
          && preset is not null
-         && TryGetToolKind(parsed.ToolCall) is { } toolKind
-         && preset.AutoApprovedKinds.Contains(toolKind)) {
+         && preset.Covers(TryGetToolKind(parsed.ToolCall))) {
             var autoChoice = TrySelectSingleAllowOnce(options);
 
             if (autoChoice is not null) {
+                // The server drops an audit whose kind is outside the ACP vocabulary, and `auto`
+                // approves frames with an unrecognised kind or none at all.
+                var toolKind = AcpToolKind.Normalize(TryGetToolKind(parsed.ToolCall)) ?? AcpToolKind.Other;
+
                 LogPresetAutoApproved(agentId, toolKind, preset.Token, TryGetToolTitle(parsed.ToolCall) ?? "(untitled)");
                 TryNotifyAutoApproval(new AcpAutoApprovalNotice(
                     AgentId:      agentId,
@@ -298,8 +471,6 @@ internal sealed partial class AcpInteractionBridge(
 
                 return SelectedResult(autoChoice);
             }
-            // No unambiguous allow_once — fall through to the interactive forward (prompt), never
-            // cancel, never a standing grant.
         }
 
         var interactionRequest = new AcpInteractionRequest(
@@ -358,6 +529,10 @@ internal sealed partial class AcpInteractionBridge(
 
         var mapped  = MapPermissionDecision(decision, options);
         var matched = decision.SelectedOptionId is { } sid && options.Any(o => o.OptionId == sid);
+
+        if (policySnapshot is { JudgeEnabled: true } && IsHumanRefusal(decision, options))
+            _refusals.Record(parsed.SessionId, TryGetToolCallId(parsed.ToolCall), approvalId: null,
+                TryGetToolKind(parsed.ToolCall) ?? TryGetToolTitle(parsed.ToolCall), policyAction, promptId: null);
         LogPermissionDecisionReceived(agentId, decision.Outcome, decision.SelectedOptionId ?? "(none)", matched);
         LogInteractionResolved(agentId, "permission", OutcomeLabel(mapped));
 
@@ -783,17 +958,48 @@ internal sealed partial class AcpInteractionBridge(
     /// evaluated request, so there is nothing ambiguous about which call it answers.</summary>
     void TryNotifyPolicyDecision(
             PolicySnapshot snapshot, CanonicalAction action, PolicyEvaluation evaluation,
-            string sessionId, string? correlationId, string requested, string effective) {
+            string sessionId, string? correlationId, string requested, string effective, PolicyJudgeResult? judged = null) {
         try {
-            notifyPolicyDecision?.Invoke(new PolicyDecisionEventV1(
-                sessionId, agentId, policyVendor ?? "unknown", PolicySeams.AcpRequestPermission, snapshot.Id,
-                PolicyEngine.Version, "full", requested, effective, PolicyWire.ToWire(action),
-                PolicyWire.ToWire(evaluation.MatchedRules), snapshot.Degraded, null, correlationId, false,
-                time.GetUtcNow().ToString("O")));
+            notifyPolicyDecision?.Invoke(PolicyWire.Decision(
+                sessionId: sessionId, agentId: agentId, vendor: policyVendor ?? "unknown", seam: PolicySeams.AcpRequestPermission,
+                snapshot: snapshot, mode: EvaluationMode.Full, requestedOutcome: requested, effectiveOutcome: effective,
+                action: PolicyWire.ToWire(action), matchedRules: PolicyWire.ToWire(evaluation.MatchedRules), time: time,
+                failureClass: judged?.FailureClass, correlationId: correlationId, judge: judged?.Consultation));
         } catch (Exception ex) {
             logger.LogDebug(ex, "ACP: policy decision audit notify threw for agent {AgentId}; ignoring", agentId);
         }
     }
+
+    /// <summary>
+    /// Consults the judge for a call no rule decided. Windowless: an ACP agent has no transcript the
+    /// server can verify a turn against, so the request declares only the refusals this bridge
+    /// relayed. The snapshot travels inline as well as staged: the launch only enqueues the staged
+    /// copy, and the server reads the inline one only when it holds no other.
+    /// </summary>
+    async Task<PolicyJudgeResult> ConsultJudgeAsync(
+            PolicyJudgeGateway judge, PolicySnapshot snapshot, CanonicalAction action, string sessionId,
+            CancellationToken ct) {
+        try {
+            var wire     = PolicyWire.ToWire(action);
+            var refusals = _refusals.Declare(sessionId);
+
+            return await judge.ConsultAsync(budgetMs => new PolicyJudgeRequestV1(
+                    sessionId, agentId, policyVendor ?? "unknown", PolicySeams.AcpRequestPermission, snapshot.Id,
+                    PolicyEngine.Version, wire, Turns: null, refusals, PolicyWire.ToUpload(sessionId, snapshot), budgetMs),
+                judgeBudget ?? JudgeBudget, ct).ConfigureAwait(false);
+        } catch (Exception ex) {
+            logger.LogDebug(ex, "ACP: policy judge consultation threw for agent {AgentId}; passing through", agentId);
+            return PolicyJudgeResult.PassThrough(PolicyJudgeResult.Error);
+        }
+    }
+
+    /// <summary>A human said no to this call: the negative outcome, or an affirmative one that picked
+    /// a reject option. A cancel is the turn going away, not a refusal.</summary>
+    static bool IsHumanRefusal(AcpInteractionDecision decision, IReadOnlyList<PermissionOptionDto> options) =>
+        NegativeOutcomes.Contains(decision.Outcome)
+     || (AffirmativeOutcomes.Contains(decision.Outcome)
+      && decision.SelectedOptionId is { } id
+      && options.FirstOrDefault(o => o.OptionId == id)?.Kind is { } kind && RejectKinds.Contains(kind));
 
     static JsonElement SelectedResult(PermissionOptionDto chosen) =>
         JsonSerializer.SerializeToElement(

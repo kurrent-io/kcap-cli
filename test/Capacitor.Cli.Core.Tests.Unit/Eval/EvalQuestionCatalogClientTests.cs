@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core.Eval;
+using Capacitor.Cli.Core.Eval.Contracts;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -22,7 +23,7 @@ public class EvalQuestionCatalogClientTests : IDisposable {
 
         public void OnQuestionStarted(int index, int total, string category, string questionId) { }
 
-        public void OnQuestionCompleted(int index, int total, EvalQuestionVerdict verdict, long inputTokens, long outputTokens) { }
+        public void OnQuestionCompleted(int index, int total, EvalQuestionAssessment assessment, EvalUsage usage, string route, TimeSpan elapsed, int runnerInvocations) { }
 
         public void OnQuestionFailed(int index, int total, string category, string questionId, string reason) { }
 
@@ -30,11 +31,11 @@ public class EvalQuestionCatalogClientTests : IDisposable {
 
         public void OnRetrospectiveStarted() { }
 
-        public void OnRetrospectiveCompleted(EvalRetrospectiveV2 retrospective) { }
+        public void OnRetrospectiveCompleted(EvalRetrospectiveV2 retrospective, EvalUsage usage, TimeSpan elapsed) { }
 
         public void OnRetrospectiveFailed(string reason) { }
 
-        public void OnFinished(SessionEvalCompletedPayloadV3 aggregate) { }
+        public void OnFinished(SessionEvalCompletedPayloadV4 aggregate) { }
 
         public void OnFailed(string reason) => FailureMessages.Add(reason);
     }

@@ -9,11 +9,13 @@ namespace Capacitor.Cli.Core;
 /// </summary>
 public sealed class VendorVersionResolver(BinaryProbe binaries) {
     public string? Resolve(string binaryPath) {
+        Process? proc = null;
+        CancellationTokenSource? stop = null;
         try {
             var resolved = binaries.Resolve(binaryPath);
             if (resolved is null) return null;
 
-            using var proc = Process.Start(new ProcessStartInfo(resolved, ["--version"]) {
+            proc = Process.Start(new ProcessStartInfo(resolved, ["--version"]) {
                 RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
                 CreateNoWindow = true
             });
@@ -21,20 +23,27 @@ public sealed class VendorVersionResolver(BinaryProbe binaries) {
 
             // Both streams are drained CONCURRENTLY with the wait: a vendor that never closes stdout
             // would block a read-then-wait shape before the timeout could apply, and a redirected but
-            // undrained stderr wedges the child once its buffer fills. A bounded wait is only bounded
-            // if nothing ahead of it can block indefinitely.
-            var stdout = proc.StandardOutput.ReadToEndAsync();
-            var stderr = proc.StandardError.ReadToEndAsync();
+            // undrained stderr wedges the child once its buffer fills. Each drain is its own thread —
+            // a pool-scheduled read stays queued while the wait expires, and the version already in
+            // the pipe is then reported as unknown.
+            stop = new CancellationTokenSource();
+            var stdout = ProcessPipeDrain.Start(proc.StandardOutput, cap: 64 * 1024, stop.Token);
+            var stderr = ProcessPipeDrain.Start(proc.StandardError, cap: 64 * 1024, stop.Token);
 
             if (!proc.WaitForExit(TimeSpan.FromSeconds(10))) {
                 try { proc.Kill(entireProcessTree: true); } catch { /* already gone */ }
-
+                stop.Cancel();
+                WaitPipes(stdout, stderr, TimeSpan.FromSeconds(1));
                 return null;   // a timeout is an UNKNOWN version, which the capability denies
             }
 
             // The child has exited, so both reads are complete or completing; bounded again so a detached
             // grandchild holding a pipe cannot keep us here.
-            if (!Task.WhenAll(stdout, stderr).Wait(TimeSpan.FromSeconds(5))) return null;
+            if (!WaitPipes(stdout, stderr, TimeSpan.FromSeconds(5))) {
+                stop.Cancel();
+                WaitPipes(stdout, stderr, TimeSpan.FromSeconds(1));
+                return null;
+            }
 
             // A version TOKEN from either stream, rather than requiring the whole trimmed output to be
             // one: vendors already emit banner lines on other paths, and a build that added an "update
@@ -46,7 +55,17 @@ public sealed class VendorVersionResolver(BinaryProbe binaries) {
             // Any failure to interrogate the binary is "unknown version", which the capability denies. A
             // throw here would surface as a launch error rather than a coded capability refusal.
             return null;
+        } finally {
+            // Dispose can throw once the pipes are torn down. That must not replace a version already
+            // parsed above: the catch would report the build as unknown.
+            try { proc?.Dispose(); } catch { /* already gone */ }
+            stop?.Dispose();
         }
+    }
+
+    static bool WaitPipes(Task stdout, Task stderr, TimeSpan budget) {
+        try { return Task.WaitAll([stdout, stderr], budget); }
+        catch { return false; }
     }
 
     /// <summary>

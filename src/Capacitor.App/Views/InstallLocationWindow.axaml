@@ -1,0 +1,75 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:Capacitor.App.Views"
+        x:Class="Capacitor.App.Views.InstallLocationWindow"
+        Title="kcap"
+        Icon="avares://kcap-desktop/Assets/kcap-icon.png"
+        Width="480" SizeToContent="Height"
+        CanResize="False" WindowStartupLocation="CenterScreen"
+        Background="{StaticResource KcapCanvasBrush}"
+        ExtendClientAreaToDecorationsHint="True">
+    <Panel>
+        <Border Height="32" VerticalAlignment="Top" Background="Transparent"
+                PointerPressed="OnChromePointerPressed" />
+
+        <StackPanel Margin="36,52,36,28" Spacing="0">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" Spacing="14">
+                <Panel Width="64" Height="64">
+                    <Image Source="avares://kcap-desktop/Assets/kcap-icon.png"
+                           RenderOptions.BitmapInterpolationMode="HighQuality" />
+                    <Border CornerRadius="12" BorderThickness="1" BorderBrush="{StaticResource KcapBorderBrush}" />
+                    <Border x:Name="InstallBadge" Width="30" Height="30" CornerRadius="15" Margin="0,0,-8,-8"
+                            HorizontalAlignment="Right" VerticalAlignment="Bottom" BorderThickness="3"
+                            BorderBrush="{StaticResource KcapCanvasBrush}" Background="{StaticResource KcapSurfaceBrush}">
+                        <views:AppIcon Kind="Folder" Size="16" Foreground="{StaticResource KcapMutedBrush}" />
+                    </Border>
+                    <Border x:Name="UpdateBadge" IsVisible="False" Width="30" Height="30" CornerRadius="15" Margin="0,0,-8,-8"
+                            HorizontalAlignment="Right" VerticalAlignment="Bottom" BorderThickness="3"
+                            BorderBrush="{StaticResource KcapCanvasBrush}" Background="{StaticResource KcapSurfaceBrush}">
+                        <views:AppIcon Kind="RefreshCw" Size="16" Foreground="{StaticResource KcapMutedBrush}" />
+                    </Border>
+                    <Border x:Name="ReadyBadge" IsVisible="False" Width="30" Height="30" CornerRadius="15" Margin="0,0,-8,-8"
+                            HorizontalAlignment="Right" VerticalAlignment="Bottom" BorderThickness="3"
+                            BorderBrush="{StaticResource KcapCanvasBrush}" Background="{StaticResource KcapSuccessDimBrush}">
+                        <views:AppIcon Kind="Check" Size="16" Foreground="{StaticResource KcapSuccessBrush}" />
+                    </Border>
+                    <Border x:Name="ConflictBadge" IsVisible="False" Width="30" Height="30" CornerRadius="15" Margin="0,0,-8,-8"
+                            HorizontalAlignment="Right" VerticalAlignment="Bottom" BorderThickness="3"
+                            BorderBrush="{StaticResource KcapCanvasBrush}" Background="{StaticResource KcapWarningDimBrush}">
+                        <views:AppIcon Kind="TriangleAlert" Size="16" Foreground="{StaticResource KcapWarningBrush}" />
+                    </Border>
+                </Panel>
+            </StackPanel>
+
+            <TextBlock x:Name="Heading" Margin="0,24,0,0" Text="Install kcap"
+                       HorizontalAlignment="Left" TextAlignment="Left"
+                       FontSize="19" FontWeight="SemiBold" LineHeight="26" LetterSpacing="-0.2"
+                       Foreground="{StaticResource KcapTextBrush}" />
+            <TextBlock x:Name="Explanation" Margin="0,10,0,0" Width="400"
+                       HorizontalAlignment="Left" TextAlignment="Left" TextWrapping="Wrap"
+                       FontSize="13.5" LineHeight="21"
+                       Foreground="{StaticResource KcapMutedBrush}" />
+
+            <StackPanel x:Name="DestinationPanel" IsVisible="False" Margin="0,18,0,0" Spacing="8">
+                <TextBlock x:Name="DestinationLabel" Text="Install location" Foreground="{StaticResource KcapTextBrush}" />
+                <ComboBox x:Name="DestinationPicker" Classes="kcapField" HorizontalAlignment="Stretch"
+                          FontSize="12"
+                          PlaceholderText="Select a destination…" />
+            </StackPanel>
+
+            <Border x:Name="ErrorPanel" IsVisible="False" Margin="0,18,0,0" Padding="12,9"
+                    CornerRadius="8" BorderThickness="1"
+                    Background="{StaticResource KcapDangerDimBrush}"
+                    BorderBrush="{StaticResource KcapDangerBrush}">
+                <SelectableTextBlock x:Name="ErrorText" TextWrapping="Wrap"
+                                     FontSize="12.5" LineHeight="19"
+                                     Foreground="{StaticResource KcapDangerBrush}" />
+            </Border>
+
+            <StackPanel Margin="0,26,0,0" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                <Button x:Name="QuitButton" Content="Quit" Classes="kcapChip" IsCancel="True" />
+                <Button x:Name="MoveButton" Content="Install and open" Classes="kcapPrimary" IsDefault="True" />
+            </StackPanel>
+        </StackPanel>
+    </Panel>
+</Window>

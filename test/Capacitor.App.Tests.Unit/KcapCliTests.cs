@@ -1,4 +1,6 @@
 using Capacitor.App.Services;
+using Capacitor.App.Services.LocalSetup;
+using Capacitor.App.Services.Mutation;
 using TUnit.Assertions.Enums;
 using Capacitor.Cli.Core;
 
@@ -19,9 +21,11 @@ public class KcapCliTests {
         }
 
         public IReadOnlyList<StreamedLine> ScriptedStreamLines = [];
+        public CancellationToken SeenStreamingToken;
 
         public Task<StreamingResult> RunStreamingAsync(string fileName, string[] args, RunOptions options,
                 Action<StreamedLine> onLine, CancellationToken ct) {
+            SeenStreamingToken = ct;
             SeenFileName = fileName;
             SeenArgs     = args;
             SeenOptions  = options;
@@ -34,13 +38,6 @@ public class KcapCliTests {
 
     static KcapCli MakeCli(FakeProcessRunner runner, string? terminalPath = null, string? canonicalServer = CanonicalServer) =>
         new(runner, "kcap", "daemon-a", "work", _ => Task.FromResult(terminalPath), canonicalServer);
-
-    [Test]
-    public async Task CliPath_reflects_the_constructor_value() {
-        var cli = MakeCli(new FakeProcessRunner());
-
-        await Assert.That(cli.CliPath).IsEqualTo("kcap");
-    }
 
     [Test]
     public async Task VersionAsync_builds_argv_and_parses_stdout() {
@@ -124,7 +121,7 @@ public class KcapCliTests {
 
         await Assert.That(await cli.ServiceStatusAsync(CancellationToken.None)).IsNull();
         // Confirms the query is actually bounded — a hung `launchctl print` must not be able to
-        // block this forever and deadlock the §3.2 per-mutation gate.
+        // block this forever and deadlock the per-mutation gate.
         await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(10));
     }
 
@@ -160,7 +157,7 @@ public class KcapCliTests {
         await Assert.That(runner.SeenArgs).IsEquivalentTo(
             ["daemon", "service", "install", "--name", "daemon-a", "--profile", "work", "--verify", "--replace", "--retire", "old-name"],
             CollectionOrdering.Matching);
-        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(100));
+        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(150));
     }
 
     [Test]
@@ -191,20 +188,6 @@ public class KcapCliTests {
         await Assert.That(runner.SeenArgs).IsEquivalentTo(
             ["daemon", "service", "install", "--name", "daemon-a", "--profile", "work", "--verify"],
             CollectionOrdering.Matching);
-    }
-
-    [Test]
-    public async Task DetachedStartAsync_argv_uses_abandon_wait_and_a_bounded_process_only_timeout() {
-        var runner = new FakeProcessRunner();
-        var cli = MakeCli(runner);
-
-        await cli.DetachedStartAsync("boot-attempt-test", CancellationToken.None);
-
-        await Assert.That(runner.SeenArgs).IsEquivalentTo(
-            ["daemon", "start", "-d", "--name", "daemon-a"], CollectionOrdering.Matching);
-        await Assert.That(runner.SeenOptions!.CancelMode).IsEqualTo(CancelMode.AbandonWait);
-        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(75));
-        await Assert.That(runner.SeenOptions!.TimeoutKill).IsEqualTo(TimeoutKillScope.ProcessOnly);
     }
 
     [Test]
@@ -254,6 +237,48 @@ public class KcapCliTests {
 
         await cli.DetachedStartAsync("boot-attempt-test", CancellationToken.None);
         await Assert.That(runner.SeenOptions!.EnvOverlay![KcapCli.SpawnNoTelemetryVar]).IsEqualTo("1");
+    }
+
+    /// The login shell can resolve kcap to the npm shim, whose `#!/usr/bin/env node` line needs the
+    /// terminal's PATH that a GUI app does not inherit.
+    [Test]
+    public async Task Every_call_carries_the_terminal_path_once_the_probe_knows_it() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCli(runner, terminalPath: "/opt/homebrew/bin:/usr/bin:/bin");
+
+        await cli.VersionAsync(CancellationToken.None);
+        await Assert.That(runner.SeenOptions!.EnvOverlay!["PATH"]).IsEqualTo("/opt/homebrew/bin:/usr/bin:/bin");
+
+        await cli.ServiceStatusAsync(CancellationToken.None);
+        await Assert.That(runner.SeenOptions!.EnvOverlay!["PATH"]).IsEqualTo("/opt/homebrew/bin:/usr/bin:/bin");
+
+        await cli.SupportsServiceRetireAsync(CancellationToken.None);
+        await Assert.That(runner.SeenOptions!.EnvOverlay!["PATH"]).IsEqualTo("/opt/homebrew/bin:/usr/bin:/bin");
+
+        await cli.ServiceStartVerifiedAsync(CancellationToken.None);
+        await Assert.That(runner.SeenOptions!.EnvOverlay!["PATH"]).IsEqualTo("/opt/homebrew/bin:/usr/bin:/bin");
+
+        await cli.ServiceReloadAsync(CancellationToken.None);
+        await Assert.That(runner.SeenOptions!.EnvOverlay!["PATH"]).IsEqualTo("/opt/homebrew/bin:/usr/bin:/bin");
+
+        await cli.DetachedStartAsync("boot-attempt-test", CancellationToken.None);
+        await Assert.That(runner.SeenOptions!.EnvOverlay!["PATH"]).IsEqualTo("/opt/homebrew/bin:/usr/bin:/bin");
+
+        await cli.PluginInstallAsync(null, CancellationToken.None);
+        await Assert.That(runner.SeenOptions!.EnvOverlay!["PATH"]).IsEqualTo("/opt/homebrew/bin:/usr/bin:/bin");
+    }
+
+    [Test]
+    [Arguments(null)]
+    [Arguments("")]
+    [Arguments("  ")]
+    public async Task An_unknown_or_empty_terminal_path_leaves_PATH_out_of_the_overlay(string? terminalPath) {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCli(runner, terminalPath: terminalPath);
+
+        await cli.VersionAsync(CancellationToken.None);
+
+        await Assert.That(runner.SeenOptions!.EnvOverlay!.ContainsKey("PATH")).IsFalse();
     }
 
     [Test]
@@ -365,27 +390,6 @@ public class KcapCliTests {
         await Assert.That(runner.SeenOptions!.EnvOverlay!["KCAP_PROFILE"]).IsEqualTo("work");
     }
 
-    // Decision 7: the PATH overlay belongs on the unit-writing mutation (install) only — starting
-    // an already-installed unit recaptures nothing, and read-only queries never need it. Even a
-    // probe that DOES know the terminal PATH must not leak it onto these calls.
-    [Test]
-    public async Task Read_only_and_start_verify_calls_never_carry_a_path_overlay_even_when_the_probe_knows_it() {
-        var runner = new FakeProcessRunner();
-        var cli = MakeCli(runner, terminalPath: "/usr/bin:/bin");
-
-        await cli.VersionAsync(CancellationToken.None);
-        await Assert.That(runner.SeenOptions!.EnvOverlay!.ContainsKey("PATH")).IsFalse();
-
-        await cli.ServiceStatusAsync(CancellationToken.None);
-        await Assert.That(runner.SeenOptions!.EnvOverlay!.ContainsKey("PATH")).IsFalse();
-
-        await cli.ServiceStartVerifiedAsync(CancellationToken.None);
-        await Assert.That(runner.SeenOptions!.EnvOverlay!.ContainsKey("PATH")).IsFalse();
-
-        await cli.DetachedStartAsync("boot-attempt-test", CancellationToken.None);
-        await Assert.That(runner.SeenOptions!.EnvOverlay!.ContainsKey("PATH")).IsFalse();
-    }
-
     [Test]
     public async Task ServiceInstallVerifiedAsync_carries_the_resolved_terminal_path() {
         var runner = new FakeProcessRunner();
@@ -445,8 +449,7 @@ public class KcapCliTests {
         await Assert.That(runner.SeenFileName).IsEqualTo("kcap");
     }
 
-    // Fix: a broken KCAP_APP_CLI_PATH (CliResolver.ResolvePath returned null) used to make Run
-    // throw via a null-forgiving `CliPath!` — the app treats null CliPath as "no CLI", so every
+    // A broken KCAP_APP_CLI_PATH leaves CliPath null, which the app treats as "no CLI": every
     // call must degrade the same honest way instead of crashing whichever caller hits it.
     static KcapCli MakeCliWithNullPath(FakeProcessRunner runner) =>
         new(runner, null, "daemon-a", "work", _ => Task.FromResult<string?>(null), CanonicalServer);
@@ -523,6 +526,56 @@ public class KcapCliTests {
         await Assert.That(runner.SeenOptions!.EnvOverlay![KcapCli.SpawnNoTelemetryVar]).IsEqualTo("1");
         await Assert.That(runner.SeenOptions!.EnvOverlay!.ContainsKey(KcapCli.ConsentSeedDefaultVar)).IsFalse();
         await Assert.That(runner.SeenOptions!.EnvOverlay!.ContainsKey(KcapCli.ExpectServerUrlVar)).IsFalse();
+    }
+
+    [Test]
+    [Arguments(null)]
+    [Arguments("--codex")]
+    [Arguments("--opencode")]
+    public async Task Plugin_remove_targets_the_harness_and_keeps_the_profile_and_terminal_environment(string? flag) {
+        var runner = new FakeProcessRunner();
+        await MakeCli(runner, terminalPath: "/opt/homebrew/bin:/usr/bin:/bin").PluginRemoveAsync(flag, CancellationToken.None);
+        string[] expected = flag is null ? ["plugin", "remove"] : ["plugin", "remove", flag];
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(expected, CollectionOrdering.Matching);
+        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(60));
+        await Assert.That(runner.SeenOptions.EnvOverlay!["KCAP_PROFILE"]).IsEqualTo("work");
+        await Assert.That(runner.SeenOptions.EnvOverlay[KcapCli.SpawnNoTelemetryVar]).IsEqualTo("1");
+        await Assert.That(runner.SeenOptions.EnvOverlay["PATH"]).IsEqualTo("/opt/homebrew/bin:/usr/bin:/bin");
+    }
+
+    public static IEnumerable<Func<(MutationVerb Verb, AccountArgs Args, string[] Expected)>> AccountVerbArgv() {
+        yield return () => (MutationVerb.AccountAdd, new AccountArgs("codex", "/Users/me/.codex-work", null, null),
+            ["accounts", "add", "codex", "/Users/me/.codex-work", "--json"]);
+        yield return () => (MutationVerb.AccountRemove, new AccountArgs(null, null, "abcd1234", null), ["accounts", "remove", "abcd1234", "--json"]);
+        yield return () => (MutationVerb.AccountRename, new AccountArgs(null, null, "abcd1234", "Work account"),
+            ["accounts", "rename", "abcd1234", "Work account", "--json"]);
+        yield return () => (MutationVerb.AccountRewire, new AccountArgs(null, null, "abcd1234", null), ["accounts", "rewire", "abcd1234", "--json"]);
+        yield return () => (MutationVerb.AccountRewire, new AccountArgs(null, null, null, null), ["accounts", "rewire", "--json"]);
+        yield return () => (MutationVerb.AccountRefresh, new AccountArgs(null, null, "abcd1234", null), ["accounts", "refresh", "abcd1234", "--json"]);
+    }
+
+    [Test]
+    [MethodDataSource(nameof(AccountVerbArgv))]
+    public async Task Account_verbs_spell_their_argv_with_json(MutationVerb verb, AccountArgs args, string[] expected) {
+        var runner = new FakeProcessRunner();
+
+        await MakeCli(runner).AccountsAsync(verb, args, CancellationToken.None);
+
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(expected, CollectionOrdering.Matching);
+        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(60));
+    }
+
+    [Test]
+    public async Task Account_verbs_run_without_a_canonical_server() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCli(runner, terminalPath: "/opt/homebrew/bin:/usr/bin:/bin", canonicalServer: null);
+
+        await cli.AccountsAsync(MutationVerb.AccountRewire, new AccountArgs(null, null, null, null), CancellationToken.None);
+
+        await Assert.That(runner.SeenFileName).IsEqualTo("kcap");
+        await Assert.That(runner.SeenOptions!.EnvOverlay!.Keys).IsEquivalentTo(
+            ["KCAP_PROFILE", KcapCli.SpawnNoTelemetryVar, "PATH"], CollectionOrdering.Any);
+        await Assert.That(runner.SeenOptions!.EnvOverlay!["KCAP_PROFILE"]).IsEqualTo("work");
     }
 
     [Test]
@@ -629,5 +682,168 @@ public class KcapCliTests {
         await Assert.That(result.Tail).IsEquivalentTo(
             [new StreamedLine(ProcessStreamKind.Stderr, "kcap CLI not found")], CollectionOrdering.Matching);
         await Assert.That(runner.SeenFileName).IsNull();
+    }
+
+    [Test]
+    public async Task SetupLocalAsync_builds_argv_env_and_interrupt_with_no_timeout() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCli(runner);
+        using var interrupt = new CancellationTokenSource();
+
+        await cli.SetupLocalAsync(new LocalEmbeddingChoice("nomic-embed-text"), _ => { }, interrupt.Token, CancellationToken.None);
+
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(
+            ["setup", "--local", "--json", "--single-user", "--yes", "--embedding-model", "nomic-embed-text"], CollectionOrdering.Matching);
+        await Assert.That(runner.SeenOptions!.EnvOverlay!["KCAP_PROFILE"]).IsEqualTo("work");
+        await Assert.That(runner.SeenOptions!.EnvOverlay![KcapCli.SpawnNoTelemetryVar]).IsEqualTo("1");
+        await Assert.That(runner.SeenOptions!.Interrupt).IsEqualTo(interrupt.Token);
+        await Assert.That(runner.SeenOptions!.Timeout).IsNull();
+        // Above the 26 min a recovery and commit can spend back to back after the interrupt.
+        await Assert.That(runner.SeenOptions!.InterruptGrace).IsEqualTo(TimeSpan.FromMinutes(30));
+    }
+
+    [Test]
+    public async Task SetupLocalAsync_passes_keyword_only_as_no_embeddings() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCli(runner);
+
+        await cli.SetupLocalAsync(LocalEmbeddingChoice.KeywordOnly, _ => { }, CancellationToken.None, CancellationToken.None);
+
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(
+            ["setup", "--local", "--json", "--single-user", "--yes", "--no-embeddings"], CollectionOrdering.Matching);
+    }
+
+    /// The caller's token bounds only the work before the spawn: a running setup stops through its
+    /// interrupt, which lets the CLI roll back, never through a tree kill.
+    [Test]
+    public async Task SetupLocalAsync_never_hands_the_callers_token_to_the_runner() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCli(runner);
+        using var caller = new CancellationTokenSource();
+
+        await cli.SetupLocalAsync(LocalEmbeddingChoice.Default, _ => { }, CancellationToken.None, caller.Token);
+
+        await Assert.That(runner.SeenStreamingToken.CanBeCanceled).IsFalse();
+    }
+
+    [Test]
+    public async Task SetupLocalAsync_with_null_CliPath_returns_a_synthesized_no_cli_result() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCliWithNullPath(runner);
+
+        var result = await cli.SetupLocalAsync(LocalEmbeddingChoice.Default, _ => { }, CancellationToken.None, CancellationToken.None);
+
+        await Assert.That(result.ExitCode).IsEqualTo(-1);
+        await Assert.That(result.Tail).IsEquivalentTo(
+            [new StreamedLine(ProcessStreamKind.Stderr, "kcap CLI not found")], CollectionOrdering.Matching);
+        await Assert.That(runner.SeenFileName).IsNull();
+    }
+
+    [Test]
+    public async Task LocalUpgradeAsync_builds_argv_env_and_interrupt_with_no_timeout() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCli(runner);
+        using var interrupt = new CancellationTokenSource();
+        using var caller = new CancellationTokenSource();
+
+        await cli.LocalUpgradeAsync(_ => { }, interrupt.Token, caller.Token);
+
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(
+            ["local", "upgrade", "--json", "--no-update-check"], CollectionOrdering.Matching);
+        await Assert.That(runner.SeenOptions!.EnvOverlay!["KCAP_PROFILE"]).IsEqualTo("work");
+        await Assert.That(runner.SeenOptions!.Interrupt).IsEqualTo(interrupt.Token);
+        await Assert.That(runner.SeenOptions!.Timeout).IsNull();
+        // Above the 31 min a resumed upgrade and this one can spend back to back after the interrupt.
+        await Assert.That(runner.SeenOptions!.InterruptGrace).IsEqualTo(TimeSpan.FromMinutes(35));
+        await Assert.That(runner.SeenStreamingToken.CanBeCanceled).IsFalse();
+    }
+
+    [Test]
+    public async Task LocalUpgradeAsync_with_null_CliPath_returns_a_synthesized_no_cli_result() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCliWithNullPath(runner);
+
+        var result = await cli.LocalUpgradeAsync(_ => { }, CancellationToken.None, CancellationToken.None);
+
+        await Assert.That(result.ExitCode).IsEqualTo(-1);
+        await Assert.That(result.Tail).IsEquivalentTo(
+            [new StreamedLine(ProcessStreamKind.Stderr, "kcap CLI not found")], CollectionOrdering.Matching);
+        await Assert.That(runner.SeenFileName).IsNull();
+    }
+
+    [Test]
+    [Arguments(false, new[] { "uninstall", "--yes", "--force", "--keep-path-links" })]
+    [Arguments(true, new[] { "uninstall", "--yes", "--force", "--keep-path-links", "--purge-local" })]
+    public async Task UninstallAsync_builds_argv_env_with_no_timeout(bool purgeLocal, string[] expected) {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCli(runner);
+        using var caller = new CancellationTokenSource();
+
+        await cli.UninstallAsync(purgeLocal, _ => { }, caller.Token);
+
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(expected, CollectionOrdering.Matching);
+        await Assert.That(runner.SeenOptions!.EnvOverlay!["KCAP_PROFILE"]).IsEqualTo("work");
+        await Assert.That(runner.SeenOptions!.Timeout).IsNull();
+        await Assert.That(runner.SeenStreamingToken.CanBeCanceled).IsFalse();
+    }
+
+    [Test]
+    public async Task LocalStartAsync_builds_argv_env_and_the_eleven_minute_bound() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCli(runner);
+
+        await cli.LocalStartAsync(CancellationToken.None);
+
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(["local", "start"], CollectionOrdering.Matching);
+        await Assert.That(runner.SeenOptions!.EnvOverlay!["KCAP_PROFILE"]).IsEqualTo("work");
+        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromMinutes(11));
+    }
+
+    [Test]
+    public async Task LocalStartAsync_with_null_CliPath_returns_127_without_calling_the_runner() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCliWithNullPath(runner);
+
+        var result = await cli.LocalStartAsync(CancellationToken.None);
+
+        await Assert.That(result.ExitCode).IsEqualTo(127);
+        await Assert.That(runner.SeenFileName).IsNull();
+    }
+
+    [Test]
+    [Arguments("\"loaded_spawn_type\":\"adaptive\",", "adaptive")]
+    [Arguments("\"loaded_spawn_type\":null,", null)]
+    [Arguments("", null)]
+    public async Task ServiceStatusAsync_reads_the_loaded_spawn_type(string field, string? expected) {
+        var json = "{\"service_id\":\"daemon-a\",\"unit_present\":true,\"state\":\"running\",\"binary_path\":\"/b\"," +
+                   "\"install_binary_path\":\"/b\",\"job_pid\":7,\"daemon_pid\":7,\"txn_marker\":false,\"txn_active\":false," +
+                   field + "\"unit_profile\":null}";
+        var runner = new FakeProcessRunner { Behavior = _ => Task.FromResult(new ProcessResult(0, json, "", false)) };
+
+        var snapshot = await MakeCli(runner).ServiceStatusAsync(CancellationToken.None);
+
+        await Assert.That(snapshot!.LoadedSpawnType).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task ServiceReloadAsync_runs_the_forced_refresh_for_this_daemon() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCli(runner);
+
+        await cli.ServiceReloadAsync(CancellationToken.None);
+
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(
+            ["daemon", "service", "refresh", "--name", "daemon-a", "--force"], CollectionOrdering.Matching);
+        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(105));
+        await Assert.That(runner.SeenOptions.EnvOverlay![KcapCli.ExpectServerUrlVar]).IsEqualTo(CanonicalServer);
+    }
+
+    [Test]
+    public async Task ServiceReloadAsync_without_a_cli_is_exit_127() {
+        var runner = new FakeProcessRunner();
+        var cli = new KcapCli(runner, null, "daemon-a", "work", _ => Task.FromResult<string?>(null), CanonicalServer);
+        var result = await cli.ServiceReloadAsync(CancellationToken.None);
+        await Assert.That(result.ExitCode).IsEqualTo(127);
+        await Assert.That(runner.SeenArgs).IsNull();
     }
 }

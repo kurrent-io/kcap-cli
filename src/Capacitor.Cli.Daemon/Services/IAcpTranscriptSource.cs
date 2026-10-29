@@ -40,4 +40,17 @@ internal interface IAcpTranscriptSource {
     /// downstream of this reader may reorder it.
     /// </summary>
     ChannelReader<AcpEventEnvelope> Envelopes { get; }
+
+    /// <summary>A session reopened for a restart resume: the server already holds its history, and no
+    /// turn of it, the first included, reaches the vendor before <see cref="ReleaseFirstTurn"/>.</summary>
+    bool Reopened => false;
+
+    /// <summary>Lets a reopened session's turns through, in the order they were queued, once the server has
+    /// accepted an event of it.</summary>
+    void ReleaseFirstTurn() { }
+
+    /// <summary>The server has bound this session (<paramref name="bound"/>), or never will: a silent agent,
+    /// whose data must not reach the server, or a failed bind. The server refuses an interaction for a session
+    /// it has not bound, so nothing may be asked before this, and nothing at all when it is false.</summary>
+    void ServerBindSettled(bool bound) { }
 }

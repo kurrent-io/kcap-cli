@@ -35,16 +35,11 @@ public class PluginCommandCursorTests {
         await Assert.That(File.ReadAllText(hooksPath)).IsEqualTo("{}");
     }
 
-    // `plugin install/remove --cursor` also (un)registers the kcap MCP
-    // servers in ~/.cursor/mcp.json. These use an explicit PluginEnvironment
-    // (not PluginEnvironment.FromProcess()) so env.Harnesses.Of<CursorHarness>().Paths.UserMcpJson resolves under
-    // a temp home instead of the real machine's ~/.cursor — mirrors
-    // PluginCommandCodexInstallIntegrationTests.TestEnv. The `--if-installed`
-    // refresh branch is used (pre-marker hooks.json seeded) rather than a bare
-    // `install --cursor`, so the AgentDetection "kcap on PATH" precheck (which
-    // only runs on the non-refresh path) never comes into play.
+    /// <summary>The upgrade-time refresh points every kcap server at the current binary, including
+    /// entries an older install left on a binary that is gone and that kcap holds no ownership record
+    /// for, and leaves the user's own servers alone. Seeding hooks.json is what makes the refresh run.</summary>
     [Test]
-    public async Task install_cursor_registers_mcp_servers_preserving_user_entries() {
+    public async Task install_cursor_refresh_points_every_kcap_server_at_the_current_binary() {
         using var fakeHome = new TempHome();
         var cursorDir = System.IO.Path.Combine(fakeHome.Path, ".cursor");
         Directory.CreateDirectory(cursorDir);
@@ -54,27 +49,26 @@ public class PluginCommandCursorTests {
             {"version":1,"hooks":{"sessionStart":[{"command":"kcap hook --cursor"}]}}
             """);
 
-        var mcpPath = System.IO.Path.Combine(cursorDir, "mcp.json");
-        await File.WriteAllTextAsync(mcpPath, """
-            {"mcpServers":{"my-tool":{"command":"my-tool","args":["serve"]}}}
-            """);
+        // A kcap binary that still exists is never taken over, so the stale one must be absent
+        // whatever the machine has installed.
+        var goneBinary = fakeHome.PathTo("uninstalled", "bin", "kcap");
+        var mcpPath    = System.IO.Path.Combine(cursorDir, "mcp.json");
+        await File.WriteAllTextAsync(mcpPath, new JsonObject {
+            ["mcpServers"] = new JsonObject {
+                ["my-tool"]        = new JsonObject { ["command"] = "my-tool",  ["args"] = new JsonArray("serve") },
+                ["kcap-review"]    = new JsonObject { ["command"] = "kcap",     ["args"] = new JsonArray("mcp", "review") },
+                ["kcap-workitems"] = new JsonObject { ["command"] = goneBinary, ["args"] = new JsonArray("mcp", "workitems") },
+            },
+        }.ToJsonString());
 
         var exit = await new PluginCommand(TestEnv(fakeHome.Path), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
             ["plugin", "install", "--cursor", "--if-installed"]);
         await Assert.That(exit).IsEqualTo(0);
 
-        var root    = JsonNode.Parse(await File.ReadAllTextAsync(mcpPath))!.AsObject();
-        var servers = root["mcpServers"]!.AsObject();
-        // Registered command is the resolved native binary (injected seam), not the wrapper-resolved "kcap".
-        await Assert.That(servers["kcap-review"]!["command"]!.GetValue<string>()).IsEqualTo(TestBinaryPath);
-        await Assert.That(servers.Select(kv => kv.Key)).Contains("kcap-sessions");
-        await Assert.That(servers.Select(kv => kv.Key)).Contains("kcap-flows");
-        await Assert.That(servers.Select(kv => kv.Key)).Contains("kcap-memory");
-        // kcap-workitems is now registered for Cursor (and every harness).
-        await Assert.That(servers.Select(kv => kv.Key)).Contains("kcap-workitems");
-        // kcap-analytics rides the same CWD-resolved writer path as kcap-sessions.
-        await Assert.That(servers.Select(kv => kv.Key)).Contains("kcap-analytics");
-        await Assert.That(servers["my-tool"]).IsNotNull(); // user server preserved
+        var servers = JsonNode.Parse(await File.ReadAllTextAsync(mcpPath))!["mcpServers"]!.AsObject();
+        foreach (var server in KcapMcpServers.All)
+            await Assert.That(servers[server.Name]?["command"]?.GetValue<string>()).IsEqualTo(TestBinaryPath);
+        await Assert.That(servers["my-tool"]!["command"]!.GetValue<string>()).IsEqualTo("my-tool");
     }
 
     [Test]

@@ -6,6 +6,40 @@ using Capacitor.Cli.Core.Config;
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
 public class ConfigCommandTests {
+    // ── daemon.max_agents ────────────────────────────────────────────────────
+
+    /// <summary>A negative capacity is refused when set: the daemon would refuse it at startup.</summary>
+    [Test]
+    [Arguments("-1")]
+    [Arguments("five")]
+    public async Task ApplySet_DaemonMaxAgents_RejectsAnythingButACount(string value) =>
+        await Assert.That(() => ConfigCommand.ApplySet(new Profile(), "daemon.max_agents", value)).Throws<ArgumentException>();
+
+    [Test]
+    public async Task ApplySet_DaemonMaxAgents_ZeroIsUnlimited() =>
+        await Assert.That(ConfigCommand.ApplySet(new Profile(), "daemon.max_agents", "0").Daemon!.MaxAgents).IsEqualTo(0);
+
+    // ── daemon.auto_resume ───────────────────────────────────────────────────
+
+    [Test]
+    public async Task ApplySet_accepts_daemon_auto_resume_booleans_only() {
+        await Assert.That(ConfigCommand.ApplySet(new Profile(), "daemon.auto_resume", "false").Daemon!.AutoResume).IsFalse();
+        await Assert.That(ConfigCommand.ApplySet(new Profile(), "daemon.auto_resume", "true").Daemon!.AutoResume).IsTrue();
+        await Assert.That(() => ConfigCommand.ApplySet(new Profile(), "daemon.auto_resume", "off")).Throws<ArgumentException>();
+        await Assert.That(() => ConfigCommand.ApplySet(new Profile(), "daemon.auto_resume", "")).Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task ApplyUnset_daemon_auto_resume_clears_it_and_keeps_the_other_daemon_settings() {
+        var set = ConfigCommand.ApplySet(new Profile { Daemon = new DaemonSettings { Name = "bot", MaxAgents = 3 } }, "daemon.auto_resume", "false");
+
+        var cleared = ConfigCommand.ApplyUnset(set, "daemon.auto_resume");
+
+        await Assert.That(cleared.Daemon!.AutoResume).IsNull();
+        await Assert.That(cleared.Daemon.Name).IsEqualTo("bot");
+        await Assert.That(cleared.Daemon.MaxAgents).IsEqualTo(3);
+    }
+
     // ── daemon.claude_path ───────────────────────────────────────────────────
 
     [Test]
@@ -168,6 +202,39 @@ public class ConfigCommandTests {
     }
 
     [Test]
+    public async Task ApplySet_DisableNextWorkNudge_True_UpdatesProfile() {
+        var updated = ConfigCommand.ApplySet(new Profile(), "disable_nextwork_nudge", "true");
+
+        await Assert.That(updated.DisableNextWorkNudge).IsTrue();
+    }
+
+    [Test]
+    public async Task ApplySet_DisableNextWorkNudge_False_UpdatesProfile() {
+        var updated = ConfigCommand.ApplySet(new Profile { DisableNextWorkNudge = true }, "disable_nextwork_nudge", "false");
+
+        await Assert.That(updated.DisableNextWorkNudge).IsFalse();
+    }
+
+    [Test]
+    public async Task DisableNextWorkNudge_JsonRoundTrip_UsesTheSnakeCaseKey() {
+        var profileConfig = new ProfileConfig {
+            Profiles = new Dictionary<string, Profile> { ["default"] = ConfigCommand.ApplySet(new Profile(), "disable_nextwork_nudge", "true") }
+        };
+
+        var json    = JsonSerializer.Serialize(profileConfig, ProfileConfigJsonContextIndented.Default.ProfileConfig);
+        var decoded = JsonSerializer.Deserialize(json, ProfileConfigJsonContext.Default.ProfileConfig);
+
+        await Assert.That(json).Contains("\"disable_nextwork_nudge\": true");
+        await Assert.That(decoded?.Profiles["default"].DisableNextWorkNudge).IsTrue();
+    }
+
+    [Test]
+    public async Task ApplySet_DisableNextWorkNudge_InvalidValue_Throws() {
+        await Assert.That(() => ConfigCommand.ApplySet(new Profile(), "disable_nextwork_nudge", "nope"))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
     public async Task ApplySet_UnknownKey_Throws() {
         var profile = new Profile();
 
@@ -229,13 +296,13 @@ public class ConfigCommandTests {
         Directory.CreateDirectory(tmp.Path);
         await File.WriteAllTextAsync(AppConfig.GetConfigPath(root), """{"active_profile":"","profiles":{}}""");
 
-        await new ConfigCommand(root, new FixedCapacitorHttpClient(), NoTelemetry.Facade).HandleAsync(["config", "set", "skills.auto_sync", "true"]);
+        await new ConfigCommand(root, new FixedCapacitorHttpClient(), NoTelemetry.Facade, DaemonStore.FromEnvironment(), TimeProvider.System).HandleAsync(["config", "set", "skills.auto_sync", "true"]);
 
         var cfg = await AppConfig.LoadProfileConfig(root);
         await Assert.That(cfg.Profiles.ContainsKey("")).IsFalse();
         await Assert.That(cfg.Profiles["default"].Skills!.AutoSync!.Value).IsTrue();
 
-        await new ConfigCommand(root, new FixedCapacitorHttpClient(), NoTelemetry.Facade).HandleAsync(["config", "unset", "skills.auto_sync"]);
+        await new ConfigCommand(root, new FixedCapacitorHttpClient(), NoTelemetry.Facade, DaemonStore.FromEnvironment(), TimeProvider.System).HandleAsync(["config", "unset", "skills.auto_sync"]);
         var after = await AppConfig.LoadProfileConfig(root);
         await Assert.That(after.Profiles["default"].Skills!.AutoSync).IsNull();
     }

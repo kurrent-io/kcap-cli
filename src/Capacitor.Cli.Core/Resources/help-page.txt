@@ -1,0 +1,56 @@
+kcap page — publish a self-contained HTML page and get a link back, or read one
+
+Usage: kcap page <subcommand>
+
+Subcommands:
+  publish <file.html> [options]    Publish a page, print its URL
+  list [--mine]                    Pages you can see
+  get <id|url> [--version N]       Print a page's text; --html prints its HTML
+  share <id> --visibility V [--to] Change who may open a page
+  delete <id>                      Remove a page
+
+Options for publish:
+  --title <T>                      Name shown in listings and the browser tab.
+                                   Defaults to the file's own name.
+  --description <D>                One line saying what the page is for.
+  --visibility none|org|scoped     Who may open it. `none` (the default) is you
+                                   alone; `org` is anyone in the organization;
+                                   `scoped` is exactly the --to grants below.
+  --to <type>:<id>                 One audience member, repeatable. Type is
+                                   user, team or project. Only read under
+                                   `scoped`.
+  --session <id>                   A session this page came out of,
+                                   repeatable. Defaults to KCAP_SESSION_ID when
+                                   set, so an agent's publish is attributed to
+                                   its own session without ceremony.
+  --update <pageId>                Publish a new version of an existing
+                                   page. The URL does not change, so a link
+                                   you already shared stays good. Content only —
+                                   change the audience with `share`; a title
+                                   cannot be changed after publishing.
+
+Options for share:
+  --visibility none|org|scoped     Required.
+  --to <type>:<id>                 Repeatable. This REPLACES the whole
+                                   audience: a grant you leave out is one you
+                                   are taking away.
+
+THE PAGE
+
+  A page is served under a sandbox that cannot reach the network, so
+  inline every style, script and image as a data URI — an external URL renders
+  as nothing. The page must be self-contained HTML.
+
+LIMITS
+
+  A refusal names the limit it hit and the value of that limit, so you never
+  have to find the ceiling by bisection.
+
+EXAMPLES
+
+  kcap page publish plan.html --title "Migration plan" --visibility org
+  kcap page publish report.html --visibility scoped --to team:platform
+  kcap page publish plan.html --update art_01J9...
+  kcap page list --mine
+  kcap page get https://kcap.example.com/pages/art_01J9... --html > page.html
+  kcap page share art_01J9... --visibility none

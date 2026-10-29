@@ -89,6 +89,20 @@ public class StandaloneSnapshotTests {
 
     }
 
+    /// <summary>An empty folder is a greenfield start: the snapshot still gets a HEAD via an
+    /// empty initial commit, so the agent can add the first files.</summary>
+    [Test]
+    public async Task Empty_folder_gets_an_empty_initial_commit() {
+        using var root = new TempDir("standalone");
+        var source     = root.CreateDir("proj");
+
+        var worktree = await NewManager().CreateAsync(source, "empty");
+
+        await Assert.That(worktree.IsStandalone).IsTrue();
+        await Assert.That(CommitCount(worktree.Path)).IsEqualTo("1");
+        await Assert.That(CommittedPaths(worktree.Path)).IsEmpty();
+    }
+
     // ---- 2/3: outside links are not materialised ----------------------------------------------------
 
     /// <summary>A link to an outside FILE must not bring the file's bytes in.

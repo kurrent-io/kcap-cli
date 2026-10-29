@@ -2,16 +2,25 @@ kcap uninstall — Remove kcap configuration from this machine
 
 Usage: kcap uninstall [options]
 
-Stops any running daemons and watcher processes, strips kcap entries from
+Removes the local server first, if one is installed (see Notes), then
+stops any running daemons and watcher processes, strips kcap entries from
 user-level Claude Code, Codex CLI, Cursor, and Gemini (~/.gemini/settings.json)
 hook files, deletes kcap's Copilot hooks file (~/.copilot/hooks/kcap.json), the
 kcap Kiro agent (~/.kiro/agents/kcap.json, restoring the default agent it
 replaced), the Pi live-ingest extension (~/.pi/agent/extensions/kcap.ts), and the
 OpenCode plugin (~/.config/opencode/plugins/kcap.ts), removes agent skills (and
-any legacy ~/.codex/skills/kcap-* folders), and
-deletes the kcap config directory.
+any legacy ~/.codex/skills/kcap-* folders), removes the kcap git hook from
+~/.gitconfig, and removes kcap configuration.
 
 Non-kcap entries in shared files (settings.json, hooks.json) are preserved.
+
+Also removes Mistral Vibe hooks/MCP, kcap caches, legacy Cursor pending
+recordings and retired vendor-specific skills.
+
+When a local server was ever set up, its lifecycle lock and retired-URL registry
+stay (they contain no recordings), and cleanup holds that lock until configuration
+removal has finished. A local server that appears or changes after you confirm
+stops the uninstall, even with --keep-config; re-run to review it.
 
 Options:
   --project           Also remove kcap entries from project-scope files
@@ -23,9 +32,28 @@ Options:
   --keep-config       Don't delete the kcap config directory; only remove
                       the agent-side integrations. Useful when reinstalling
                       while preserving profiles, tokens, and ignore lists.
+                      A local server is removed but its data is kept.
+  --purge-local       With --yes, consent to deleting the local server's data:
+                      every session it recorded. Without it (or --keep-config),
+                      --yes refuses when a local server is installed. An
+                      interrupted purge needs it even with --keep-config, since
+                      recovery finishes deleting the data.
+  --force             Uninstall even while a daemon is running or starting
+                      agents; they are ended. Without it, uninstall refuses
+                      and changes nothing.
   --yes, -y           Skip the confirmation prompt.
 
 Notes:
+  A local server (kcap setup --local) is purged as `kcap local uninstall --purge`
+  does: its service, binaries, data and logs are deleted, with every session
+  it recorded. The prompt names it; with --yes, pass --purge-local. A failure
+  there keeps the kcap config directory so a re-run can finish.
+
+  Uninstall also removes the `kcap` command links on your PATH that point at
+  this install (macOS and Linux). A link it cannot delete is reported with a
+  `sudo rm <path>` command to run yourself, and the uninstall counts as
+  incomplete.
+
   Per-agent selective cleanup is not exposed here — uninstall always touches
   all known agents. Use `kcap plugin remove [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--skills]`
   for finer-grained removal.
@@ -37,5 +65,7 @@ Notes:
 Examples:
   kcap uninstall                    # User-level removal, interactive prompt
   kcap uninstall --yes              # Non-interactive
+  kcap uninstall --yes --purge-local  # Non-interactive, deleting a local server's sessions
   kcap uninstall --project --yes    # Also strip project-scope hooks in cwd's repo
+  kcap uninstall --yes --force      # Also end a daemon that is running agents
   kcap uninstall --keep-config      # Remove integrations, keep ~/.config/kcap

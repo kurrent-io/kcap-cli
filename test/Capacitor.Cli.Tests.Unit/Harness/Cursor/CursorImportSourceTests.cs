@@ -6,6 +6,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Harness.Cursor;
+using TUnit.Assertions.Enums;
 using TUnit.Core.Enums;
 using Capacitor.Cli.PrDetection;
 
@@ -469,6 +470,100 @@ public class CursorImportSourceTests {
         await Assert.That(endNode["session_id"]!.GetValue<string>()).IsEqualTo("11111111111111111111111111111111");
         await Assert.That(endNode["hook_event_name"]!.GetValue<string>()).IsEqualTo("sessionEnd");
         await Assert.That(endNode["reason"]!.GetValue<string>()).IsEqualTo("historical-import");
+    }
+
+    async Task<List<(string Path, string Body)>> ImportWithChatTitle(string? chatTitle, string? composerName = null) {
+        using var fx    = new ProjectsDirFixture();
+        var       jsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{\"a\":1}\n");
+
+        var titlePaths = new CursorPaths(Home);
+        if (chatTitle is not null) {
+            var chatDir = Directory.CreateDirectory(Path.Combine(titlePaths.ChatsDir, "ws-hash", "11111111-1111-1111-1111-111111111111"));
+            File.WriteAllText(Path.Combine(chatDir.FullName, "meta.json"), new JsonObject { ["title"] = chatTitle }.ToJsonString());
+        }
+        if (composerName is not null) {
+            var stateDb = titlePaths.GlobalStateDb!;
+            Directory.CreateDirectory(Path.GetDirectoryName(stateDb)!);
+            CursorComposerTitleTests.BuildStateDb(stateDb, "11111111-1111-1111-1111-111111111111", composerName);
+        }
+
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System, titlePaths: titlePaths);
+
+        var posted = new List<(string Path, string Body)>();
+        using var handler = new StubHandler(
+            postCapture: (req, body) => {
+                posted.Add((req.RequestUri!.AbsolutePath, body));
+
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            }
+        );
+        using var client = new HttpClient(handler);
+
+        var classification = new ImportCommand.SessionClassification {
+            SessionId  = "11111111111111111111111111111111",
+            FilePath   = "",
+            EncodedCwd = "",
+            Meta       = new SessionMetadata(),
+            Status     = ImportCommand.ClassificationStatus.New,
+            Vendor     = HarnessId.Cursor,
+            SourceMeta = new Dictionary<string, object?> { ["TranscriptPath"] = jsonl },
+        };
+
+        var outcome = await src.ImportSessionAsync(classification, new ImportContext(client, "http://localhost", ForcePrivate: false), CancellationToken.None);
+        await Assert.That(outcome.Outcome).IsEqualTo(ImportOutcome.Loaded);
+
+        return posted;
+    }
+
+    /// <summary>The chat's own name, read by the dashed transcript id, is posted under the dashless session id as an
+    /// untimed rename before session-end.</summary>
+    [Test]
+    public async Task import_session_posts_the_chat_title_before_session_end() {
+        var posted = await ImportWithChatTitle("Refactor the auth flow");
+
+        await Assert.That(posted.Select(p => p.Path)).IsEquivalentTo(
+            ["/hooks/session-start/cursor", "/hooks/transcript", "/hooks/harness-title", "/hooks/session-end/cursor"],
+            CollectionOrdering.Matching);
+
+        var title = JsonNode.Parse(posted[2].Body)!.AsObject();
+        await Assert.That(title["session_id"]!.GetValue<string>()).IsEqualTo("11111111111111111111111111111111");
+        await Assert.That(title["title"]!.GetValue<string>()).IsEqualTo("Refactor the auth flow");
+        await Assert.That(title["kind"]!.GetValue<string>()).IsEqualTo("rename");
+        await Assert.That(title.ContainsKey("changed_at")).IsFalse();
+    }
+
+    /// <summary>With no chat title, the IDE's composer record in state.vscdb names the chat, keyed by the dashed
+    /// transcript id.</summary>
+    // Windows puts state.vscdb under the real Roaming AppData, which no test home redirects.
+    [Test, ExcludeOn(OS.Windows)]
+    public async Task import_session_posts_the_ide_composer_name_when_the_chat_has_none() {
+        var posted = await ImportWithChatTitle(null, composerName: "Repository project overview");
+
+        var titles = posted.Where(p => p.Path == "/hooks/harness-title").ToList();
+        await Assert.That(titles.Count).IsEqualTo(1);
+
+        var title = JsonNode.Parse(titles[0].Body)!.AsObject();
+        await Assert.That(title["session_id"]!.GetValue<string>()).IsEqualTo("11111111111111111111111111111111");
+        await Assert.That(title["title"]!.GetValue<string>()).IsEqualTo("Repository project overview");
+        await Assert.That(title["kind"]!.GetValue<string>()).IsEqualTo("rename");
+        await Assert.That(title.ContainsKey("changed_at")).IsFalse();
+    }
+
+    // Windows puts state.vscdb under the real Roaming AppData, which no test home redirects.
+    [Test, ExcludeOn(OS.Windows)]
+    public async Task import_session_posts_no_title_for_the_default_composer_name() {
+        var posted = await ImportWithChatTitle(null, composerName: "New Agent");
+
+        await Assert.That(posted.Any(p => p.Path == "/hooks/harness-title")).IsFalse();
+    }
+
+    [Test]
+    [Arguments("New Agent")]
+    [Arguments(null)]
+    public async Task import_session_posts_no_title_for_an_unnamed_chat(string? chatTitle) {
+        var posted = await ImportWithChatTitle(chatTitle);
+
+        await Assert.That(posted.Any(p => p.Path == "/hooks/harness-title")).IsFalse();
     }
 
     [Test, ExcludeOn(OS.Linux)]
@@ -1584,6 +1679,65 @@ public class CursorImportSourceTests {
         } finally { try { File.Delete(Markers.QuarantinePath(sessionId)); } catch { } }
     }
 
+    /// <summary>
+    /// A 409 means the server halted the source frontier at a gap: posting the later batch or the
+    /// children would move its watermark past the blocked lines, so delivery stops there and the
+    /// session is still closed.
+    /// </summary>
+    [Test]
+    public async Task import_session_stops_delivery_and_closes_when_the_server_blocks_a_batch() {
+        using var fx = new ProjectsDirFixture();
+        var parentIdWithDashes = Guid.NewGuid().ToString();
+        var parentId           = CursorImportSource.NormalizeCursorSessionId(parentIdWithDashes);
+        var childIdWithDashes  = Guid.NewGuid().ToString();
+        var lines       = string.Concat(Enumerable.Range(0, 150).Select(i => $$"""{"n":{{i}}}""" + "\n"));
+        var parentJsonl = fx.AddSession("Users-me-proj", parentIdWithDashes, lines);
+        var childJsonl  = fx.AddSession("Users-me-proj", childIdWithDashes, "{\"b\":1}\n");
+        var src         = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
+
+        var posted          = new List<string>();
+        var transcriptPosts = 0;
+        var progress        = new CollectingProgress();
+        using var handler = new StubHandler(postCapture: (req, _) => {
+            var path = req.RequestUri!.AbsolutePath;
+            posted.Add(path);
+            if (path != "/hooks/transcript") return new HttpResponseMessage(HttpStatusCode.OK);
+
+            transcriptPosts++;
+
+            return new HttpResponseMessage(HttpStatusCode.Conflict) {
+                Content = new StringContent("""{"processed":40,"next_line_number":40,"blocked":"RetryBlocked"}""")
+            };
+        });
+        using var client = new HttpClient(handler);
+
+        var outcome = await src.ImportSessionAsync(
+            new ImportCommand.SessionClassification {
+                SessionId  = parentId,
+                FilePath   = "",
+                EncodedCwd = "",
+                Meta       = new SessionMetadata(),
+                Status     = ImportCommand.ClassificationStatus.New,
+                Vendor     = HarnessId.Cursor,
+                SourceMeta = new Dictionary<string, object?> {
+                    ["TranscriptPath"]   = parentJsonl,
+                    ["SubagentChildren"] = new List<CursorImportSource.CursorSubagentChild> {
+                        new(CursorImportSource.NormalizeCursorSessionId(childIdWithDashes), childJsonl, "task"),
+                    },
+                },
+            },
+            new ImportContext(client, "http://localhost", ForcePrivate: false, Progress: progress),
+            CancellationToken.None
+        );
+
+        await Assert.That(outcome).IsEqualTo(ImportOutcome.Failed);
+        await Assert.That(transcriptPosts).IsEqualTo(1);
+        await Assert.That(progress.Events.OfType<BatchFlushed>().Sum(e => e.LinesAdded)).IsEqualTo(40);
+        await Assert.That(progress.Events.OfType<BatchDropped>().Single().FirstLineNumber).IsEqualTo(40);
+        await Assert.That(posted).DoesNotContain("/hooks/subagent-start");
+        await Assert.That(posted).Contains("/hooks/session-end/cursor");
+    }
+
     // the round-3 fix above only proved the SECOND of TWO
     // batches gets aborted; it never exercised a transcript that is a SINGLE (final and only)
     // batch, which is exactly the gap SendTranscriptBatches' round-3 wiring left open (no "next"
@@ -2077,9 +2231,7 @@ public class CursorImportSourceTests {
             File.WriteAllText(Path.Combine(dir, "workspace.json"), $$"""{"folder":"{{folderUri}}"}""");
         }
 
-        public void Dispose() {
-            try { Directory.Delete(Root, recursive: true); } catch { }
-        }
+        public void Dispose() => _root.Dispose();
     }
 
     sealed class StubHandler(
@@ -2095,5 +2247,10 @@ public class CursorImportSourceTests {
 
             return postCapture?.Invoke(request, body) ?? new HttpResponseMessage(HttpStatusCode.OK);
         }
+    }
+
+    sealed class CollectingProgress : IProgress<ImportProgress> {
+        public List<ImportProgress> Events { get; } = [];
+        public void Report(ImportProgress value) => Events.Add(value);
     }
 }

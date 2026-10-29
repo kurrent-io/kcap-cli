@@ -19,15 +19,21 @@ public sealed record ProvisionRequest {
     [JsonPropertyName("joinId")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? JoinId { get; init; }
+
+    // WhenWritingNull for the same reason as JoinId: a run with no code sends the body it always did.
+    [JsonPropertyName("code")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Code { get; init; }
 }
 
-// POST /api/signup/provision response (202/200/400/409 bodies unioned; fields optional)
+// POST /api/signup/provision response (202/200/400/403/409 bodies unioned; fields optional)
 public sealed record ProvisionResponse {
     [JsonPropertyName("slug")]        public string? Slug        { get; init; }
     [JsonPropertyName("state")]       public string? State       { get; init; }
     [JsonPropertyName("url")]         public string? Url         { get; init; }
     [JsonPropertyName("workosOrgId")] public string? WorkosOrgId { get; init; }
     [JsonPropertyName("reason")]      public string? Reason      { get; init; }
+    [JsonPropertyName("requestUrl")]  public string? RequestUrl  { get; init; }
 }
 
 // GET /api/signup/availability response

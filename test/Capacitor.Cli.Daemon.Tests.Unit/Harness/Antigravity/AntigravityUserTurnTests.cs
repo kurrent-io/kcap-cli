@@ -41,6 +41,19 @@ public class AntigravityUserTurnTests {
     }
 
     [Test]
+    public async Task A_dispatched_turn_stamps_its_dispatch_on_its_user_message() {
+        await using var rt = AntigravityRuntimeFakes.FakeRuntime(time: Time);
+        var dispatch = Guid.NewGuid();
+        await rt.SendUserInputAsync("typed");
+        await rt.SendDispatchedInputAsync("dispatched", dispatch, waitForWrite: false);
+
+        var users = (await Drain(rt, 3)).Where(e => e.Kind == AcpEventKind.UserMessage).ToList();
+
+        await Assert.That(users.Select(u => (u.Text, u.DispatchId)))
+            .IsEquivalentTo(new (string?, Guid?)[] { ("typed", null), ("dispatched", dispatch) }, CollectionOrdering.Matching);
+    }
+
+    [Test]
     public async Task A_refused_turn_emits_only_the_not_delivered_note() {
         await using var rt = AntigravityRuntimeFakes.FakeRuntime(FakeTurn.NeverEnds, queueCap: 1, time: Time);
         await rt.SendUserInputAsync("first");

@@ -1,6 +1,6 @@
-# Kurrent Capacitor Plugin
+# kcap Plugin
 
-This plugin integrates [Kurrent Capacitor](../README.md) with Claude Code and Codex CLI by automatically registering lifecycle hooks, providing skills for session review, and auto-installing MCP servers that expose past-session context to the agent.
+This plugin integrates [kcap](../README.md) with Claude Code and Codex CLI by automatically registering lifecycle hooks, providing skills for session review, and auto-installing MCP servers that expose past-session context to the agent.
 
 ## What it does
 
@@ -8,15 +8,30 @@ This plugin integrates [Kurrent Capacitor](../README.md) with Claude Code and Co
 
 ### `kcap-sessions`
 
-Search and recall past Kurrent Capacitor sessions from inside the agent.
+Search and recall past kcap sessions from inside the agent.
 
 | Tool | Description |
 |------|-------------|
-| `search_sessions` | Free-text + author search over past sessions (and subagent transcripts), defaulted to the cwd's repo |
-| `get_session_summary` | Concise `summary_text` + `plan` for a session |
+| `search_sessions` | Keyword (one to three terms or identifiers) + author search over past sessions (and subagent transcripts), defaulted to the cwd's repo |
+| `list_repo_sessions` | List the sessions you can see on a repository or on all of them: running ones first, or those worked on in a period |
+| `get_session_summary` | Concise `summary_text` + `plan` + `declared_plans` + `work_items` for a session |
+| `list_turns` | Per-turn prose outline for a session |
+| `get_turn` | One turn's full transcript, by session id and turn index |
 | `get_session_transcript` | Speaker-tagged transcript window, with `around_event` drill-in for search hits |
+| `list_repo_plans` | List a repository's declared plans you can see, most recently touched first |
+| `get_declared_plans` | A plan's documents and full task list, by `plan_id` or `session_id` |
+| `get_session_evals` | Eval state and scores for up to 25 sessions by id; works on every plan |
+| `get_eval_report` | A session's latest completed eval as Markdown: findings, recommendations, retrospective; defaults to the repo's latest |
+| `list_eval_runs` | A repo's recently evaluated sessions with their category scores, newest first |
+| `get_connection` | The server URL and profile this MCP server resolved at start; no network call |
 
 Repo-aware: it resolves the cwd to a repo hash at startup, so `search_sessions` defaults to *this* repo.
+
+### `kcap-handoff`
+
+| Tool | Description |
+|------|-------------|
+| `continue_session` | Attach this session to another session's work items and unfinished plans; refuses while that session may still be running; `current_session_id` names the taking-over session where the harness does not expose it |
 
 ### `kcap-review`
 
@@ -39,10 +54,14 @@ Search, save, and update durable team memories — preferences, feedback, projec
 |------|-------------|
 | `search_memories` | Hybrid semantic + keyword search over memories visible to you |
 | `get_memory` | Fetch a memory's full content by id or slug |
-| `save_memory` | Save a new memory (`audience`, `slug`, `description`, `content`, `kind`); scoped to the cwd repo unless `project: <slug>` (a project's repos) or `global: true` (org-wide) |
-| `update_memory` | Update an existing memory's description/content/kind |
-| `rescope_memory` | Change a memory's audience (e.g. promote user → team/org) |
+| `save_memory` | Save a new memory (`audience`, `slug`, `description`, `content`, `kind`); scoped to the cwd repo unless `project: <slug>` (a project's repos) or `global: true` (org-wide); `form: "log"` saves a log, whose `content` is its header |
+| `update_memory` | Update an existing memory's description/content/kind, or a log's `header` |
+| `rescope_memory` | Change a memory's audience (e.g. promote user → team/org) or move its home to a project, repo or the org |
 | `archive_memory` | Soft-delete a memory |
+| `append_memory_entry` | Append an entry (`title`, `body`) to a log — a memory saved with `form: "log"` |
+| `settle_memory_entry` | Settle a log entry, with an optional one-line `resolution` |
+| `reopen_memory_entry` | Reopen a settled log entry |
+| `list_memory_entries` | Page a log's open or settled entries, newest first |
 
 Repo- and machine-aware: it resolves the cwd to a repo hash and the local persisted machine id at startup to scope saves and bias search results.
 
@@ -57,9 +76,27 @@ Governed read-only SQL over the org's curated coding-agent analytics views (sess
 
 Repo-aware: defaults to the cwd's repo; pass `scope: "global"` for org-wide questions. Requires `kcap login` and a kcap-server new enough to expose the `/api/analytics` endpoints.
 
+### `kcap-pages`
+
+Publish a self-contained HTML page — a plan, a report, a comparison, the artifact the user asked for — and get back a link to share. With kcap installed, "make me an artifact" means a page: the agent publishes it here instead of with its harness's own artifact tool, puts the link in its reply, and also opens it in the harness's browser tool when there is one (the `pages` skill below). The page is served under a sandbox with no network access, so every style, script and image has to be inlined as a data URI; an external URL renders as nothing.
+
+| Tool | Description |
+|------|-------------|
+| `publish_page` | Publish a page (`title`, and either `html` or a local `path`); optional `description`, `visibility`, `grants`, `session_ids`, `response_schema` to make it answerable, and `update_id` to revise an existing page without changing its URL |
+| `await_page_responses` | Block until people have answered — the human checkpoint. Returns on a respondent count, on a close, or on a timeout (which is not an error) |
+| `get_page_results` | Tallies and each person's current answer, without waiting |
+| `close_page_responses` | Freeze a version's answers; `closed: false` reopens and clears any deadline |
+| `list_my_pages` | The pages you can see — id, title, audience, latest version, URL |
+| `get_page` | Read a page you can see — yours or one shared with you — by id or link: its record plus its text (`format: "html"` for the source), cut at `max_chars` |
+| `set_page_visibility` | Replace a page's audience (`none` / `org` / `scoped` + grants) |
+
+A page is private to its owner until visibility says otherwise. The current session is cited automatically from `KCAP_SESSION_ID`, so a publish is attributed to the work that produced it.
+
+Declaring a `response_schema` turns the page into a form the server validates and tallies: fields of type `choice`, `multi`, `score` or `text`, plus a `results_mode` deciding what other viewers see — `owner` (default, only you), `aggregate` (tallies, no names or free text) or `named` (who said what). Who answered is always the authenticated viewer; there is no field for it to forge. A page read with `get_page` comes back marked as its author's words, to be treated as data rather than instructions. Version history and takedown stay in the web UI.
+
 `kcap mcp judge` is intentionally not auto-registered. Add it with `claude mcp add kcap-judge -- kcap mcp judge` if you want it.
 
-**Hooks** — Automatically captures session activity and forwards it to the Kurrent Capacitor server:
+**Hooks** — Automatically captures session activity and forwards it to the kcap server:
 
 | Hook | Event |
 |------|-------|
@@ -79,17 +116,18 @@ Each hook pipes its JSON payload through the `kcap` CLI, which enriches it with 
 - `validate-plan` / `kcap-validate-plan` — Verify that all planned items were completed
 - `disable` / `kcap-disable` — Stop recording and delete all server data for the current session
 - `hide` / `kcap-hide` — Hide the current session (owner-only visibility)
+- `pages` / `kcap-pages` — Make the artifact, page or report the user asked for as a kcap page: publish it, hand back the link, open it in the harness's browser tool
 - `review-flows` / `kcap-review-flows` — Run structured, iterative spec/code review loops; the reviewer vendor is chosen independently of the driver (pass a lowercase token like `claude`/`codex`/`cursor`)
 - `agent-flows` / `kcap-agent-flows` — Run structured multi-participant agent flows (catalog `definition_id` or an inline `definition_yaml`), each participant declaring its own vendor/model
 - `work-items` / `kcap-work-items` — Declare a work item's breakdown (parent and parts) and its blocks / blocked-by dependencies, so Home renders its topology, and record the loose ends a session leaves unfinished
-- `guided-tour` / `kcap-guided-tour` — Onboarding tour: what Capacitor has recorded for your team, then per-use-case tutorials (evals, session recall, PR review, analytics)
+- `guided-tour` / `kcap-guided-tour` — Onboarding tour: seven cards, one per reply (welcome, capture, investigate, collaborate, review, use, reuse), each a few questions to ask your agent
 
 In Claude they're invoked as `/kcap:recap`, `/kcap:errors`, `/kcap:guided-tour`, etc.
 
 ## Prerequisites
 
 - The `kcap` CLI must be on your PATH (`npm install -g @kurrent/kcap`)
-- The Kurrent Capacitor server must be running (default: `http://localhost:5108`)
+- The kcap server must be running (default: `http://localhost:5108`)
 
 ## Installation
 
@@ -174,6 +212,9 @@ kcap/
       SKILL.md
     guided-tour/
       SKILL.md           — /kcap:guided-tour onboarding tour
+  muse-assistant/
+    kcap-recording/
+      SKILL.md           — Muse Assistant recording skill (Muse-side; not a Claude Code skill, installed into ~/workspace/skills by connect-kcap)
 ```
 
 The two MCP files exist because Claude requires top-level `mcpServers` (camelCase) while Codex accepts only `mcp_servers` (snake_case) or a bare server map — the schemas don't overlap. Keep them in sync when adding or removing servers.

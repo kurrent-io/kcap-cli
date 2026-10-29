@@ -33,7 +33,7 @@ public class WorkOSOrgCorrectionTests {
         var       workos = new WorkOSClient(new PlainHttpClientFactory(stub), TimeProvider.System);
 
         var corrected = await OAuthLoginFlow.CorrectWorkOSOrgAsync(
-            workos, "client_d", SignedInTo("org_picked"), "org_wanted", CancellationToken.None);
+            workos, WorkOSClient.ApiBase, "client_d", SignedInTo("org_picked"), "org_wanted", CancellationToken.None);
 
         await Assert.That(corrected!.AccessToken).IsEqualTo("right");
         await Assert.That(corrected.OrganizationId).IsEqualTo("org_wanted");
@@ -48,7 +48,7 @@ public class WorkOSOrgCorrectionTests {
         var       workos = new WorkOSClient(new PlainHttpClientFactory(stub), TimeProvider.System);
 
         var corrected = await OAuthLoginFlow.CorrectWorkOSOrgAsync(
-            workos, "client_d", SignedInTo("org_picked"), "org_wanted", CancellationToken.None);
+            workos, WorkOSClient.ApiBase, "client_d", SignedInTo("org_picked"), "org_wanted", CancellationToken.None);
 
         await Assert.That(OAuthLoginFlow.WorkOSDisplayName(corrected!.User)).IsEqualTo("Ada Lovelace");
     }
@@ -62,7 +62,7 @@ public class WorkOSOrgCorrectionTests {
         var       workos = new WorkOSClient(new PlainHttpClientFactory(stub), TimeProvider.System);
 
         var corrected = await OAuthLoginFlow.CorrectWorkOSOrgAsync(
-            workos, "client_d", SignedInTo("org_picked"), "org_wanted", CancellationToken.None);
+            workos, WorkOSClient.ApiBase, "client_d", SignedInTo("org_picked"), "org_wanted", CancellationToken.None);
 
         await Assert.That(corrected).IsNull();
     }
@@ -75,7 +75,7 @@ public class WorkOSOrgCorrectionTests {
         var       workos = new WorkOSClient(new PlainHttpClientFactory(stub), TimeProvider.System);
 
         var corrected = await OAuthLoginFlow.CorrectWorkOSOrgAsync(
-            workos, "client_d", SignedInTo("org_picked"), "org_wanted", CancellationToken.None);
+            workos, WorkOSClient.ApiBase, "client_d", SignedInTo("org_picked"), "org_wanted", CancellationToken.None);
 
         await Assert.That(corrected).IsNull();
     }
@@ -93,7 +93,7 @@ public class WorkOSOrgCorrectionTests {
         var       workos = new WorkOSClient(new PlainHttpClientFactory(stub), TimeProvider.System);
 
         await OAuthLoginFlow.CorrectWorkOSOrgAsync(
-            workos, "client_d", SignedInTo("org_picked"), "org_wanted", CancellationToken.None);
+            workos, WorkOSClient.ApiBase, "client_d", SignedInTo("org_picked"), "org_wanted", CancellationToken.None);
 
         var body = server.FindLogEntries(
             Request.Create().WithPath("/user_management/authenticate").UsingPost())[0].RequestMessage.Body!;
@@ -107,7 +107,7 @@ public class WorkOSOrgCorrectionTests {
     public async Task Refuses_when_there_is_no_refresh_token_to_switch_with() {
         // No stub: the switch is refused before a request is built.
         var corrected = await OAuthLoginFlow.CorrectWorkOSOrgAsync(
-            new WorkOSClient(new PlainHttpClientFactory(), TimeProvider.System), "client_d",
+            new WorkOSClient(new PlainHttpClientFactory(), TimeProvider.System), WorkOSClient.ApiBase, "client_d",
             SignedInTo("org_picked") with { RefreshToken = null }, "org_wanted", CancellationToken.None);
 
         await Assert.That(corrected).IsNull();

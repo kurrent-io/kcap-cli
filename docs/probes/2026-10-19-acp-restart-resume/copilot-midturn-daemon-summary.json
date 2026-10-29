@@ -1,0 +1,53 @@
+{
+  "vendor": "copilot",
+  "stop": "midturn",
+  "kill": "daemon",
+  "version": "GitHub Copilot CLI 1.0.98.",
+  "argv": [
+    "copilot",
+    "--acp",
+    "--stdio"
+  ],
+  "started": "2026-10-19T11:52:00.905236+00:00",
+  "codeword": "PELICAN-8BC686",
+  "load_session_advertised": true,
+  "session_id": "89ab8d12-bcfb-45ce-bc42-d527b9837c0a",
+  "turn_a_stop": "end_turn",
+  "turn_c_stop": "end_turn",
+  "stopped_mid_turn": true,
+  "stop1": {
+    "cancel_sent": true,
+    "ended_by": "eof",
+    "exit_code": 0,
+    "elapsed_s": 0.97,
+    "group_outlived_leader": false
+  },
+  "load_session_advertised_after": true,
+  "load": {
+    "ok": true,
+    "error": null,
+    "replayed_updates": 9,
+    "replayed_kinds": [
+      "agent_message_chunk",
+      "available_commands_update",
+      "tool_call",
+      "tool_call_update",
+      "user_message_chunk"
+    ],
+    "conversation_updates_after_response": 0,
+    "trailer_kinds": [
+      "available_commands_update"
+    ]
+  },
+  "recall_stop": "end_turn",
+  "recall_answer": "PELICAN-8BC686",
+  "codeword_recalled": true,
+  "stop2": {
+    "cancel_sent": false,
+    "ended_by": "eof",
+    "exit_code": 0,
+    "elapsed_s": 0.43,
+    "group_outlived_leader": false
+  },
+  "ended": "2026-10-19T11:52:22.609100+00:00"
+}

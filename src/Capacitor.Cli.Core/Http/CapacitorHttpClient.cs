@@ -12,7 +12,7 @@ internal sealed class CapacitorHttpClient(
     public async Task<HttpClient> ForCommandAsync(CancellationToken ct = default) {
         // The only verb that throws, and it is not in a send path: a command with a user present owes
         // them the hint and an exit code, which the other verbs' callers have no way to render.
-        if (!server.Usable) throw new UnusableServerUrlException(HttpClientExtensions.SchemeMissingHint);
+        if (!server.Usable) throw new UnusableServerUrlException(server.UnusableHint);
 
         // Resolved here only for the hint: the handler applies the bearer itself, since a client the
         // factory builds has no credential at build time.
@@ -39,7 +39,7 @@ internal sealed class CapacitorHttpClient(
         if (!server.Usable)
             return new AuthAttempt(
                 factory.CreateClient(lane),
-                AuthStatus.UnusableServerUrl, HttpClientExtensions.SchemeMissingHint);
+                AuthStatus.UnusableServerUrl, server.UnusableHint);
 
         var state = await credentials.ResolveAsync(ct);
 

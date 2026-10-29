@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
              xmlns:views="clr-namespace:Capacitor.App.Views"
+             xmlns:svc="clr-namespace:Capacitor.App.Services"
              xmlns:cmd="clr-namespace:Capacitor.Cli.Core.Commands;assembly=Capacitor.Cli.Core"
              x:Class="Capacitor.App.Views.SessionRailView"
              x:DataType="vm:MainWindowViewModel">
@@ -17,34 +18,122 @@
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="CornerRadius" Value="7" />
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="Cursor" Value="Hand" />
         </Style>
-        <Style Selector="Button.holdsSelected">
+        <Style Selector="Border.railSession">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="CornerRadius" Value="7" />
+        </Style>
+        <Style Selector="Border.railSession.selected">
+            <Setter Property="Background" Value="{StaticResource KcapSelectionBrush}" />
+        </Style>
+        <Style Selector="Button.railPr">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="Padding" Value="4,0" />
+            <Setter Property="MinHeight" Value="20" />
+            <Setter Property="Cursor" Value="Hand" />
+        </Style>
+        <Style Selector="Button.railPr /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+        </Style>
+        <Style Selector="Button.railPr:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.railPr:pressed /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
         </Style>
-        <!-- Hover paints the raised surface, so the open row needs its own background plus an
-             accent edge and a heavier title to read as selected beside a hovered sibling. -->
+        <!-- Hover paints the raised surface, so the open row needs its own background and a
+             heavier title to read as selected beside a hovered sibling. No left accent: a
+             leading border insets that row's content past its siblings. -->
         <Style Selector="Button.selected">
             <Setter Property="Background" Value="{StaticResource KcapSelectionBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
-            <Setter Property="BorderThickness" Value="3,0,0,0" />
         </Style>
         <Style Selector="Button.selected TextBlock.rowTitle">
             <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <!-- The rail is 330 wide: two segments share one line only at this size. -->
+        <Style Selector="Button.railSegmentItem">
+            <Setter Property="Padding" Value="9,3" />
+            <Setter Property="FontSize" Value="12" />
+        </Style>
+        <Style Selector="Border.railScopeSegment:disabled">
+            <Setter Property="Opacity" Value="0.55" />
+        </Style>
+        <Style Selector="Button.railPicker">
+            <Setter Property="Padding" Value="6,4" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="CornerRadius" Value="7" />
+        </Style>
+        <Style Selector="Button.railPickerRow">
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="Padding" Value="10,6" />
+            <Setter Property="FontSize" Value="13" />
+        </Style>
+        <Style Selector="TextBlock.footerValue">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        </Style>
+        <Style Selector="TextBlock.footerMeta">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
+        </Style>
+        <Style Selector="TextBlock.footerMeta.restartPending">
+            <Setter Property="Foreground" Value="{StaticResource KcapWarningBrush}" />
+        </Style>
+        <!-- U+00B7 sits at mid x-height by design, so the glyph centres itself against the
+             fragments it separates. It is enlarged by a render transform rather than a FontSize,
+             which would give it a taller line box than the row and drop its baseline below the
+             fragments'; the transform is laid out at 11 and scaled about the box centre, so the
+             glyph grows in place. -->
+        <Style Selector="TextBlock.footerDot">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
+            <Setter Property="Text" Value="·" />
+            <Setter Property="RenderTransform" Value="scale(1.5)" />
+        </Style>
+        <Style Selector="TextBlock.footerMeta.failed">
+            <Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" />
+        </Style>
+        <Style Selector="WrapPanel#RailLocalStackRow > TextBlock">
+            <Setter Property="Margin" Value="0,0,5,0" />
+        </Style>
+        <!-- A WrapPanel stacks line boxes flush. The bottom margin is the gap before a
+             wrapped version. -->
+        <Style Selector="WrapPanel#RailDaemonRow > TextBlock, WrapPanel#RailDaemonRow > StackPanel">
+            <Setter Property="Margin" Value="0,0,5,4" />
+        </Style>
+        <!-- Top keeps the chip on the status line when the local-stack row wraps and the
+             daemon row is still absent. withDaemon overrides this once that row exists. -->
+        <Style Selector="Button#RailHelpButton">
+            <Setter Property="VerticalAlignment" Value="Top" />
+        </Style>
+        <Style Selector="Button#RailHelpButton.withDaemon">
+            <Setter Property="VerticalAlignment" Value="Bottom" />
+        </Style>
+        <!-- Status, machine, and age share an 11px line; the logo and glyph sit in that line. -->
+        <Style Selector="Border.railChip">
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="TextBlock.railChipLabel">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="LineHeight" Value="16" />
+        </Style>
+        <Style Selector="TextBlock.railMeta">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="LineHeight" Value="16" />
+            <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
         <Style Selector="Button.railRow:pointerover /template/ ContentPresenter#PART_ContentPresenter,
                          Button.railRow:pressed /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
         </Style>
-        <Style Selector="Button.holdsSelected:pointerover /template/ ContentPresenter#PART_ContentPresenter,
-                         Button.holdsSelected:pressed /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
-            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-        </Style>
         <Style Selector="Button.selected:pointerover /template/ ContentPresenter#PART_ContentPresenter,
                          Button.selected:pressed /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{StaticResource KcapSelectionBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
         </Style>
     </UserControl.Styles>
@@ -62,213 +151,463 @@
                 <Button x:Name="RailNewSessionButton" Classes="kcapChip" HorizontalAlignment="Stretch" Margin="10,0,10,10"
                         Command="{Binding CloseWorkspaceCommand}"
                         Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
-                        BorderThickness="1" CornerRadius="7" Padding="11,7">
+                        BorderThickness="1" CornerRadius="7" Padding="11,7" AutomationProperties.Name="New session">
                     <DockPanel>
-                        <TextBlock DockPanel.Dock="Right" Text="⌘N" FontSize="11"
+                        <TextBlock x:Name="RailNewSessionShortcut" DockPanel.Dock="Right" Text="{x:Static views:ShortcutLabels.NewSession}" FontSize="11"
                                    Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center" />
                         <StackPanel Orientation="Horizontal" Spacing="8">
-                            <TextBlock Text="+" FontSize="15" FontWeight="SemiBold"
-                                       Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                            <views:AppIcon Kind="Plus" Size="14" Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
                             <TextBlock Text="New session" FontSize="13" FontWeight="SemiBold"
                                        Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
                         </StackPanel>
                     </DockPanel>
                 </Button>
-            </StackPanel>
 
-            <!-- The one daemon indicator: dot + word + tenant, with the full identity (daemon,
-                 version, server, agent count) one hover away rather than a block of chrome. -->
-            <Border DockPanel.Dock="Bottom" BorderThickness="0,1,0,0" BorderBrush="{StaticResource KcapBorderBrush}">
-                <ToolTip.Tip>
-                    <StackPanel Spacing="3" MaxWidth="260">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <TextBlock Text="{Binding DaemonName}" FontWeight="Bold" />
-                            <TextBlock Text="{Binding VersionDisplay}" />
-                        </StackPanel>
-                        <TextBlock Text="{Binding ServerUrl}" />
-                        <TextBlock Text="{Binding AgentCountText}" />
-                        <TextBlock Text="{Binding ServerLaneTip}" TextWrapping="Wrap"
-                                   Foreground="{StaticResource KcapWarningBrush}"
-                                   IsVisible="{Binding ServerLaneTip, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                        <TextBlock Text="{Binding RestartPendingText}" TextWrapping="Wrap"
-                                   IsVisible="{Binding RestartPendingText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                    </StackPanel>
-                </ToolTip.Tip>
-                <DockPanel Margin="16,10,16,14" Background="Transparent">
-                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="8">
-                        <!-- Its own ToolTip.Tip outranks the footer Border's daemon tooltip while the
-                             pointer is over the button. -->
-                        <Button x:Name="RailHelpButton" Classes="kcapChip" Width="22" Height="22" Padding="0" CornerRadius="6"
-                                ToolTip.Tip="Help and support" AutomationProperties.Name="Help and support" VerticalAlignment="Center">
-                            <PathIcon Width="14" Height="14" Foreground="{StaticResource KcapMutedBrush}"
-                                      Data="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 1.8a7.2 7.2 0 1 1 0 14.4 7.2 7.2 0 0 1 0-14.4zm0 3.2a3 3 0 0 0-3 3h1.8a1.2 1.2 0 1 1 1.7 1.1c-.9.4-1.4 1.1-1.4 2.2h1.8c0-.5.2-.8.7-1a3 3 0 0 0-1.6-5.3zM11 15.5v1.8h1.8v-1.8z" />
+                <!-- Scope and state are one tap each; grouping and sort open pickers. -->
+                <StackPanel x:Name="RailControls" DataContext="{Binding Rail}" x:DataType="vm:SessionRailViewModel"
+                            Margin="10,0,10,8" Spacing="6" IsVisible="{Binding Converter={x:Static ObjectConverters.IsNotNull}}">
+                    <Grid ColumnDefinitions="Auto,*,Auto">
+                        <Border x:Name="RailScopeSegment" Classes="kcapSegment railScopeSegment" HorizontalAlignment="Left"
+                                IsEnabled="{Binding CanChangeScope}" ToolTip.Tip="{Binding ScopeTip}" ToolTip.ShowOnDisabled="True">
+                            <StackPanel Orientation="Horizontal" Spacing="2">
+                                <Button x:Name="RailScopeMineButton" Content="Mine" Classes="kcapSegmentItem railSegmentItem"
+                                        Classes.active="{Binding IsMine}" Command="{Binding SetScopeCommand}"
+                                        CommandParameter="{x:Static svc:RailScope.Mine}" AutomationProperties.Name="Mine" />
+                                <Button x:Name="RailScopeTeamButton" Content="Team" Classes="kcapSegmentItem railSegmentItem"
+                                        Classes.active="{Binding IsTeam}" Command="{Binding SetScopeCommand}"
+                                        CommandParameter="{x:Static svc:RailScope.Team}" AutomationProperties.Name="Team" />
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Column="2" Classes="kcapSegment" HorizontalAlignment="Right">
+                            <StackPanel Orientation="Horizontal" Spacing="2">
+                                <Button x:Name="RailStateAllButton" Content="All" Classes="kcapSegmentItem railSegmentItem"
+                                        Classes.active="{Binding IsAll}" Command="{Binding SetStateCommand}"
+                                        CommandParameter="{x:Static vm:RailState.All}" AutomationProperties.Name="All sessions" />
+                                <Button x:Name="RailStateLiveButton" Content="Live" Classes="kcapSegmentItem railSegmentItem"
+                                        Classes.active="{Binding IsLive}" Command="{Binding SetStateCommand}"
+                                        CommandParameter="{x:Static vm:RailState.Live}" AutomationProperties.Name="Live sessions" />
+                                <Button x:Name="RailStateEndedButton" Content="Ended" Classes="kcapSegmentItem railSegmentItem"
+                                        Classes.active="{Binding IsEnded}" Command="{Binding SetStateCommand}"
+                                        CommandParameter="{x:Static vm:RailState.Ended}" AutomationProperties.Name="Ended sessions" />
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                    <!-- Flexible pickers reserve the direction button and the rail's edge inset. -->
+                    <Grid ColumnDefinitions="*,*,Auto" ColumnSpacing="4">
+                        <Button x:Name="RailGroupButton" Classes="kcapChip railPicker" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" ToolTip.Tip="Group sessions by"
+                                AutomationProperties.Name="Group sessions by">
+                            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="4">
+                                <TextBlock Text="Group" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
+                                <TextBlock x:Name="RailGroupLabel" Grid.Column="1" Text="{Binding GroupingLabel}"
+                                           TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                                <views:AppIcon Grid.Column="2" Kind="ChevronDown" Size="12" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
+                            </Grid>
                             <Button.Flyout>
-                                <MenuFlyout Placement="TopEdgeAlignedRight" FlyoutPresenterClasses="kcapPanel">
-                                    <MenuItem Header="Documentation" Command="{Binding OpenDocsCommand}" />
-                                    <MenuItem Header="Report a bug…" Command="{Binding OpenFeedbackCommand}" CommandParameter="{x:Static cmd:FeedbackCategory.Bug}" />
-                                    <MenuItem Header="Send feedback…" Command="{Binding OpenFeedbackCommand}" CommandParameter="{x:Static cmd:FeedbackCategory.Feedback}" />
-                                </MenuFlyout>
+                                <Flyout Placement="BottomEdgeAlignedLeft" VerticalOffset="4" FlyoutPresenterClasses="kcapPanel">
+                                    <StackPanel Spacing="2" Margin="6" MinWidth="160">
+                                        <Button Classes="kcapGhost railPickerRow" Content="No grouping" Click="OnGroupPickerItemClick"
+                                                Command="{Binding SetGroupingCommand}" CommandParameter="{x:Static vm:RailGrouping.None}" />
+                                        <Button Classes="kcapGhost railPickerRow" Content="Repository" Click="OnGroupPickerItemClick"
+                                                Command="{Binding SetGroupingCommand}" CommandParameter="{x:Static vm:RailGrouping.Repository}" />
+                                        <Button Classes="kcapGhost railPickerRow" Content="Date" Click="OnGroupPickerItemClick"
+                                                Command="{Binding SetGroupingCommand}" CommandParameter="{x:Static vm:RailGrouping.Date}" />
+                                        <Button Classes="kcapGhost railPickerRow" Content="Status" Click="OnGroupPickerItemClick"
+                                                Command="{Binding SetGroupingCommand}" CommandParameter="{x:Static vm:RailGrouping.Status}" />
+                                    </StackPanel>
+                                </Flyout>
                             </Button.Flyout>
                         </Button>
-                        <TextBlock Text="{Binding Rail.HostedText, FallbackValue=''}" FontSize="11.5"
-                                   Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center" />
+                        <Button x:Name="RailSortButton" Grid.Column="1" Classes="kcapChip railPicker" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" ToolTip.Tip="Sort sessions by"
+                                AutomationProperties.Name="Sort sessions by">
+                            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="4">
+                                <TextBlock Text="Sort" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
+                                <TextBlock x:Name="RailSortLabel" Grid.Column="1" Text="{Binding SortLabel}"
+                                           TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                                <views:AppIcon Grid.Column="2" Kind="ChevronDown" Size="12" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
+                            </Grid>
+                            <Button.Flyout>
+                                <Flyout Placement="BottomEdgeAlignedLeft" VerticalOffset="4" FlyoutPresenterClasses="kcapPanel">
+                                    <StackPanel Spacing="2" Margin="6" MinWidth="160">
+                                        <Button Classes="kcapGhost railPickerRow" Content="Last updated" Click="OnSortPickerItemClick"
+                                                Command="{Binding SetSortCommand}" CommandParameter="{x:Static vm:RailSort.LastUpdated}" />
+                                        <Button Classes="kcapGhost railPickerRow" Content="Created" Click="OnSortPickerItemClick"
+                                                Command="{Binding SetSortCommand}" CommandParameter="{x:Static vm:RailSort.Created}" />
+                                        <Button Classes="kcapGhost railPickerRow" Content="Title" Click="OnSortPickerItemClick"
+                                                Command="{Binding SetSortCommand}" CommandParameter="{x:Static vm:RailSort.Title}" />
+                                    </StackPanel>
+                                </Flyout>
+                            </Button.Flyout>
+                        </Button>
+                        <Button x:Name="RailDirectionButton" Grid.Column="2" Classes="kcapGhost kcapIcon" Command="{Binding ToggleDirectionCommand}"
+                                ToolTip.Tip="{Binding DirectionLabel}" AutomationProperties.Name="{Binding DirectionLabel}">
+                            <Panel>
+                                <views:AppIcon Kind="ArrowDown" Size="14" Foreground="{StaticResource KcapMutedBrush}" IsVisible="{Binding Descending}" />
+                                <views:AppIcon Kind="ArrowUp" Size="14" Foreground="{StaticResource KcapMutedBrush}" IsVisible="{Binding !Descending}" />
+                            </Panel>
+                        </Button>
+                    </Grid>
+                </StackPanel>
+
+                <TextBlock Text="Loading sessions…" FontSize="12" Foreground="{StaticResource KcapFaintBrush}"
+                           Margin="16,0,16,8" IsVisible="{Binding LoadingSessions}" />
+            </StackPanel>
+
+            <!-- Two rows split by what each fact belongs to: the org and how we stand with it,
+                 then the daemon on this machine and what it is running. The server URL rides the
+                 org's hover — at rail width it wraps to two lines and outweighs its neighbours. -->
+            <Border DockPanel.Dock="Bottom" BorderThickness="0,1,0,0" BorderBrush="{StaticResource KcapBorderBrush}">
+                <StackPanel x:Name="RailFooterPanel" Margin="16,10,16,10" Spacing="2">
+                    <!-- A daemon launchd holds in the background band throttles every hosted agent; the
+                         block offers the reload and keeps its last outcome readable until a success clears it. -->
+                    <Border x:Name="RailPriorityBlock" Classes="backgroundPriority" Margin="0,0,0,8" Padding="10,8"
+                            CornerRadius="6" Background="{StaticResource KcapWarningDimBrush}"
+                            IsVisible="{Binding ShowsReloadBlock}">
+                        <StackPanel Spacing="6">
+                            <TextBlock x:Name="RailPriorityText" Text="{Binding BackgroundPriorityText}" TextWrapping="Wrap"
+                                       FontSize="12" LineHeight="17" Foreground="{StaticResource KcapWarningBrush}"
+                                       IsVisible="{Binding BackgroundPriority}" />
+                            <Button x:Name="RailReloadButton" Classes="kcapGhost" Content="Reload" Padding="10,4" FontSize="12.5"
+                                    HorizontalAlignment="Left"
+                                    Command="{Binding ReloadDaemonCommand}" />
+                            <TextBlock x:Name="RailReloadFailureText" Text="{Binding ReloadFailureText}" TextWrapping="Wrap"
+                                       FontSize="12" LineHeight="17" Foreground="{StaticResource KcapWarningBrush}"
+                                       IsVisible="{Binding ReloadFailureText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        </StackPanel>
+                    </Border>
+                    <!-- The chip docks beside the status column. Until a daemon name or version
+                         exists the second row is absent, and the chip shares the status line. -->
+                    <Grid ColumnDefinitions="*,Auto" ClipToBounds="True">
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Spacing="2">
+                    <StackPanel x:Name="RailConnectionStatus" Orientation="Horizontal" Spacing="7">
+                        <!-- Extra info (lighter) then the fragment's name (kcapTipCaption). A
+                             diagnostic takes the extra slot; without one the caption stands
+                             alone at default colour, same as daemon / agents / help. -->
+                        <ToolTip.Tip>
+                            <StackPanel Spacing="2">
+                                <TextBlock Text="{Binding ServerLaneTip}" TextWrapping="Wrap"
+                                           IsVisible="{Binding ConnectionHasDetail}" />
+                                <TextBlock Text="{x:Static vm:MainWindowViewModel.AttachStatusTip}"
+                                           Classes="kcapTipCaption"
+                                           IsVisible="{Binding ConnectionHasDetail}" />
+                                <TextBlock Text="{x:Static vm:MainWindowViewModel.AttachStatusTip}"
+                                           IsVisible="{Binding !ConnectionHasDetail}" />
+                            </StackPanel>
+                        </ToolTip.Tip>
+                        <!-- The word IS the indicator: it takes StatusBrush itself, so the status
+                             colour needs no disc with a line box of its own to align against.
+                             Both fragments draw their size from footerValue and override only the
+                             brush, so the row cannot end up with two sizes and two baselines. -->
+                        <TextBlock Text="{Binding ConnectionDisplay}" Classes="footerValue"
+                                   Foreground="{Binding StatusBrush}" TextTrimming="CharacterEllipsis" />
+                        <TextBlock x:Name="RailTenantText" Text="{Binding TenantName}" Classes="footerValue"
+                                   Foreground="{StaticResource KcapFaintBrush}" TextTrimming="CharacterEllipsis"
+                                   IsVisible="{Binding TenantName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                            <ToolTip.Tip>
+                                <StackPanel Spacing="2">
+                                    <TextBlock Text="{Binding ServerUrl}" />
+                                    <TextBlock Text="{x:Static vm:MainWindowViewModel.ServerUrlTip}"
+                                               Classes="kcapTipCaption" />
+                                </StackPanel>
+                            </ToolTip.Tip>
+                        </TextBlock>
                     </StackPanel>
-                    <StackPanel Orientation="Horizontal" Spacing="7">
-                        <Ellipse Width="7" Height="7" Fill="{Binding StatusDotBrush}" VerticalAlignment="Center" />
-                        <TextBlock Text="{Binding ConnectionDisplay}" FontSize="11.5"
-                                   Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
-                        <TextBlock Text="·" FontSize="11.5" Foreground="{StaticResource KcapFaintBrush}"
-                                   IsVisible="{Binding TenantName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                        <TextBlock x:Name="RailTenantText" Text="{Binding TenantName}" FontSize="11.5"
-                                   Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center"
-                                   IsVisible="{Binding TenantName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                        <TextBlock Text="·" FontSize="11.5" Foreground="{StaticResource KcapFaintBrush}"
-                                   IsVisible="{Binding RestartPending}" />
-                        <TextBlock Text="update pending" FontSize="11.5"
-                                   Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center"
-                                   IsVisible="{Binding RestartPending}" />
+                    <Panel IsVisible="{Binding LocalStack, Converter={x:Static ObjectConverters.IsNotNull}}">
+                        <WrapPanel x:Name="RailLocalStackRow" DataContext="{Binding LocalStack}" x:DataType="vm:LocalStackViewModel">
+                            <TextBlock Text="kcap local" Classes="footerMeta"
+                                       ToolTip.Tip="{x:Static vm:LocalStackViewModel.NameTip}" />
+                            <TextBlock Classes="footerDot"
+                                       IsVisible="{Binding Version, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            <TextBlock x:Name="RailLocalStackVersionText" Text="{Binding Version}" Classes="footerMeta"
+                                       ToolTip.Tip="{x:Static vm:LocalStackViewModel.VersionTip}"
+                                       IsVisible="{Binding Version, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            <TextBlock Classes="footerDot"
+                                       IsVisible="{Binding StateText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            <TextBlock x:Name="RailLocalStackStateText" Text="{Binding StateText}" Classes="footerMeta"
+                                       Classes.failed="{Binding Attention}"
+                                       IsVisible="{Binding StateText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        </WrapPanel>
+                    </Panel>
+                    <!-- Bottom, not Center: the fragments and the button share the row's
+                         bottom edge, so the text line and the button agree on one line. One
+                         font size across the row, so the baselines coincide outright.
+                         The dot and the count are one wrap child, so a break takes the
+                         separator with the count. The version has none. -->
+                    <WrapPanel x:Name="RailDaemonRow" VerticalAlignment="Bottom"
+                               IsVisible="{Binding ShowsDaemonLine}">
+                        <TextBlock x:Name="RailDaemonNameText" Text="{Binding DaemonName}" Classes="footerMeta"
+                                   TextTrimming="CharacterEllipsis"
+                                   ToolTip.Tip="{x:Static vm:MainWindowViewModel.DaemonNameTip}"
+                                   IsVisible="{Binding DaemonName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Bottom"
+                                    IsVisible="{Binding AgentCountText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                            <TextBlock Classes="footerDot" />
+                            <TextBlock x:Name="RailAgentCountText" Text="{Binding AgentCountText}" Classes="footerMeta"
+                                       ToolTip.Tip="{x:Static vm:MainWindowViewModel.AgentCountTip}" />
+                        </StackPanel>
+                        <TextBlock x:Name="RailVersionText" Text="{Binding VersionDisplay, StringFormat='kcap {0}'}" Classes="footerMeta"
+                                   Classes.restartPending="{Binding RestartPending}"
+                                   IsVisible="{Binding RestartPending}">
+                            <ToolTip.Tip>
+                                <StackPanel Spacing="2">
+                                    <TextBlock Text="{Binding RestartPendingText}" TextWrapping="Wrap"
+                                               IsVisible="{Binding RestartPending}" />
+                                    <TextBlock Text="{x:Static vm:MainWindowViewModel.VersionIdentityTip}"
+                                               Classes="kcapTipCaption"
+                                               IsVisible="{Binding RestartPending}" />
+                                    <TextBlock Text="{x:Static vm:MainWindowViewModel.VersionIdentityTip}"
+                                               IsVisible="{Binding !RestartPending}" />
+                                </StackPanel>
+                            </ToolTip.Tip>
+                        </TextBlock>
+                    </WrapPanel>
                     </StackPanel>
-                </DockPanel>
+                    <Button x:Name="RailHelpButton" Grid.Column="1" Classes="kcapChip"
+                            Classes.withDaemon="{Binding ShowsDaemonLine}"
+                            Width="22" Height="22" Padding="0" CornerRadius="6" Margin="10,0,0,0"
+                            ToolTip.Tip="Help and support" AutomationProperties.Name="Help and support">
+                        <views:AppIcon Kind="CircleQuestionMark" Size="14" Foreground="{StaticResource KcapMutedBrush}" />
+                        <Button.Flyout>
+                                <!-- Same kcapPanel + ghost rows as the launcher pickers; MenuFlyout
+                                     keeps Fluent MenuItem chrome (grey hover bar on this surface). -->
+                                <Flyout Placement="TopEdgeAlignedRight" VerticalOffset="6"
+                                        FlyoutPresenterClasses="kcapPanel">
+                                    <StackPanel Spacing="2" Margin="6" MinWidth="188">
+                                        <Button x:Name="RailOpenDashboardButton" Classes="kcapGhost"
+                                                Command="{Binding Web.OpenCommand}" Click="OnHelpFlyoutItemClick"
+                                                IsVisible="{Binding Web.IsVisible, FallbackValue=False}"
+                                                ToolTip.Tip="{Binding Web.Tooltip}" AutomationProperties.Name="{Binding Web.Label}"
+                                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="10,8" FontSize="13.5">
+                                            <StackPanel Orientation="Horizontal" Spacing="7">
+                                                <TextBlock Text="{Binding Web.Label}" VerticalAlignment="Center" />
+                                                <views:AppIcon Kind="ExternalLink" Size="14" />
+                                            </StackPanel>
+                                        </Button>
+                                        <Border Height="1" Margin="8,4" Background="{StaticResource KcapBorderBrush}"
+                                                IsVisible="{Binding Web.IsVisible, FallbackValue=False}" />
+                                        <Button x:Name="RailHelpDocsButton" Classes="kcapGhost" Content="Documentation"
+                                                Command="{Binding OpenDocsCommand}" Click="OnHelpFlyoutItemClick"
+                                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                Padding="10,8" FontSize="13.5" />
+                                        <Button x:Name="RailHelpBugButton" Classes="kcapGhost" Content="Report a bug…"
+                                                Command="{Binding OpenFeedbackCommand}" CommandParameter="{x:Static cmd:FeedbackCategory.Bug}"
+                                                Click="OnHelpFlyoutItemClick"
+                                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                Padding="10,8" FontSize="13.5" />
+                                        <Button x:Name="RailHelpFeedbackButton" Classes="kcapGhost" Content="Send feedback…"
+                                                Command="{Binding OpenFeedbackCommand}" CommandParameter="{x:Static cmd:FeedbackCategory.Feedback}"
+                                                Click="OnHelpFlyoutItemClick"
+                                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                Padding="10,8" FontSize="13.5" />
+                                        <Border Height="1" Margin="8,4" Background="{StaticResource KcapBorderBrush}">
+                                            <Border.IsVisible>
+                                                <MultiBinding Converter="{x:Static BoolConverters.Or}">
+                                                    <Binding Path="CanOpenSetup" />
+                                                    <Binding Path="SignInVisible" />
+                                                </MultiBinding>
+                                            </Border.IsVisible>
+                                        </Border>
+                                        <Button x:Name="RailHelpSetupButton" Classes="kcapGhost" Content="Set up kcap…"
+                                                Command="{Binding SetupCommand}" Click="OnHelpFlyoutItemClick"
+                                                IsVisible="{Binding CanOpenSetup}" HorizontalAlignment="Stretch"
+                                                HorizontalContentAlignment="Left" Padding="10,8" FontSize="13.5" />
+                                        <Button x:Name="RailHelpSignInButton" Classes="kcapGhost" Content="Sign in"
+                                                Command="{Binding SignInCommand}" Click="OnHelpFlyoutItemClick"
+                                                IsVisible="{Binding SignInVisible}"
+                                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                Padding="10,8" FontSize="13.5"
+                                                AutomationProperties.Name="Sign in" />
+                                        <Button x:Name="LocalSearchSettingsMenuButton" Classes="kcapGhost" Content="Search settings…"
+                                                IsVisible="{Binding LocalStack.Search.ShowsInlineSettings, FallbackValue=False}"
+                                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="10,8" FontSize="13.5">
+                                            <Button.Flyout>
+                                                <Flyout Placement="RightEdgeAlignedBottom" HorizontalOffset="6" FlyoutPresenterClasses="kcapPanel">
+                                                    <ScrollViewer MaxHeight="560" Width="440" Margin="16" VerticalScrollBarVisibility="Auto"
+                                                                  HorizontalScrollBarVisibility="Disabled">
+                                                        <views:SearchSettingsView DataContext="{Binding LocalStack.Search}" />
+                                                    </ScrollViewer>
+                                                </Flyout>
+                                            </Button.Flyout>
+                                        </Button>
+                                        <StackPanel x:Name="RailAppMenuItems" Spacing="2" IsVisible="{Binding AppMenuInWindow}">
+                                            <Border Height="1" Margin="8,4" Background="{StaticResource KcapBorderBrush}" />
+                                            <Button x:Name="RailHelpAboutButton" Classes="kcapGhost" Content="About kcap"
+                                                    Click="OnAboutClick" IsVisible="{Binding ShowsAbout}"
+                                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                    Padding="10,8" FontSize="13.5" />
+                                            <Button x:Name="RailHelpCheckForUpdatesButton" Classes="kcapGhost" Content="Check for Updates…"
+                                                    Command="{Binding CheckForUpdatesCommand}" Click="OnHelpFlyoutItemClick"
+                                                    IsVisible="{Binding ShowsCheckForUpdates}"
+                                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                    Padding="10,8" FontSize="13.5" />
+                                            <Button x:Name="RailLaunchApprovalsButton" Classes="kcapGhost" Content="Launch approvals…"
+                                                    Command="{Binding OpenLaunchApprovalsCommand}" Click="OnHelpFlyoutItemClick"
+                                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                    Padding="10,8" FontSize="13.5" />
+                                            <Button x:Name="RailHelpSettingsButton" Classes="kcapGhost" Content="Settings…"
+                                                    Command="{Binding OpenSettingsCommand}" Click="OnHelpFlyoutItemClick"
+                                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                    Padding="10,8" FontSize="13.5" />
+                                            <Button x:Name="RailHelpUninstallButton" Classes="kcapGhost" Content="Uninstall kcap…"
+                                                    Command="{Binding UninstallCommand}" Click="OnHelpFlyoutItemClick"
+                                                    IsVisible="{Binding ShowsUninstall}"
+                                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                    Padding="10,8" FontSize="13.5" />
+                                            <Button x:Name="RailHelpChangelogButton" Classes="kcapGhost" Content="Changelog"
+                                                    Command="{Binding OpenChangelogCommand}" Click="OnHelpFlyoutItemClick"
+                                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                    Padding="10,8" FontSize="13.5" />
+                                            <TextBlock x:Name="RailAppVersionText" Text="{Binding AppVersionLabel}"
+                                                       Foreground="{StaticResource KcapFaintBrush}" FontSize="12" Margin="10,6,10,4" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Flyout>
+                            </Button.Flyout>
+                        </Button>
+                    </Grid>
+                </StackPanel>
             </Border>
 
             <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="10,0,10,4">
-                <Panel>
+                <StackPanel>
                     <TextBlock Text="No sessions" Foreground="{StaticResource KcapFaintBrush}" Margin="8,16"
-                               IsVisible="{Binding Rail.IsEmpty, FallbackValue=False}" />
-                    <ItemsControl x:Name="RailRepos" ItemsSource="{Binding Rail.Repos, FallbackValue={x:Null}}">
+                               IsVisible="{Binding ShowsNoSessions}" />
+                    <ItemsControl x:Name="RailGroups" ItemsSource="{Binding Rail.Groups, FallbackValue={x:Null}}">
                         <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="vm:RailRepoViewModel">
-                                <StackPanel Margin="0,10,0,0">
-                                    <DockPanel Margin="8,0,8,5" ToolTip.Tip="{Binding RootDisplay}">
-                                        <TextBlock DockPanel.Dock="Right" Text="{Binding CountText}" FontSize="10.5"
-                                                   Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center" />
-                                        <TextBlock Text="{Binding Label, Converter={x:Static views:UppercaseConverter.Instance}}"
-                                                   FontSize="10.5" FontWeight="Bold" LetterSpacing="1.2"
-                                                   Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center" />
-                                    </DockPanel>
-                                    <TextBlock Text="Work with no checkout yet. It keeps a title and a session; parts and blockers arrive once it lands in a repo."
-                                               FontSize="10.5" LineHeight="15" Foreground="{StaticResource KcapFaintBrush}"
-                                               TextWrapping="Wrap" Margin="8,0,8,4"
-                                               IsVisible="{Binding IsNoRepository}" />
-                                    <ItemsControl ItemsSource="{Binding Worktrees}">
-                                        <ItemsControl.ItemTemplate>
-                                            <DataTemplate x:DataType="vm:RailWorktreeViewModel">
-                                                <StackPanel>
-                                                    <Button Command="{Binding ToggleCommand}" IsVisible="{Binding ShowHeader}"
-                                                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
-                                                            Padding="8,5" Margin="0,2,0,0"
-                                                            ToolTip.Tip="{Binding Tooltip}"
-                                                            Classes="railRow" Classes.holdsSelected="{Binding HoldsSelected}">
-                                                        <DockPanel>
-                                                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6">
-                                                                <TextBlock Text="{Binding CountText}" FontSize="10.5"
-                                                                           Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center" />
-                                                                <Border Background="{StaticResource KcapWarningDimBrush}" CornerRadius="999"
-                                                                        Padding="6,0" IsVisible="{Binding NeedsYou}" VerticalAlignment="Center">
-                                                                    <TextBlock Text="{Binding StatusBadge}" FontSize="9" FontWeight="Bold"
-                                                                               Foreground="{StaticResource KcapWarningBrush}" />
-                                                                </Border>
-                                                            </StackPanel>
-                                                            <StackPanel Orientation="Horizontal" Spacing="7">
-                                                                <!-- Stroked chevron, not a text glyph — the 9px ▸ rendered as a dot. -->
-                                                                <Panel Width="12" Height="12" VerticalAlignment="Center">
-                                                                    <Path Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.8"
-                                                                          StrokeLineCap="Round" StrokeJoin="Round"
-                                                                          Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding IsExpanded}" />
-                                                                    <Path Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.8"
-                                                                          StrokeLineCap="Round" StrokeJoin="Round"
-                                                                          Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !IsExpanded}" />
-                                                                </Panel>
-                                                                <!-- Branch glyph: two commits and a fork, stroked to read at 12px. Its
-                                                                     colour is the worktree's pull request state; plain when it has none. -->
-                                                                <Path Stroke="{Binding PullRequestTone, Converter={x:Static views:PullRequestToneBrushConverter.Instance}}"
-                                                                      StrokeThickness="1.5" Classes.pulsing="{Binding ChecksRunning}"
-                                                                      Width="12" Height="12" Stretch="Uniform" VerticalAlignment="Center"
-                                                                      Data="M3.3,3 A1.3,1.3 0 1 0 3.3,5.6 A1.3,1.3 0 1 0 3.3,3 M3.3,9 A1.3,1.3 0 1 0 3.3,11.6 A1.3,1.3 0 1 0 3.3,9 M9,4 A1.3,1.3 0 1 0 9,6.6 A1.3,1.3 0 1 0 9,4 M3.3,5.6 L3.3,9 M9,6.6 C9,8.6 3.3,7.6 3.3,9" />
-                                                                <TextBlock Text="{Binding Label}" FontSize="12.5"
-                                                                           Foreground="{StaticResource KcapMutedBrush}" TextTrimming="CharacterEllipsis" />
-                                                            </StackPanel>
-                                                        </DockPanel>
-                                                    </Button>
-                                                    <!-- The indent's guide-line: sessions hang off their worktree visually,
-                                                         not just by margin. -->
-                                                    <Border BorderThickness="1,0,0,0" BorderBrush="{StaticResource KcapBorderBrush}"
-                                                            Margin="14,0,0,0" Padding="6,0,0,0"
-                                                            IsVisible="{Binding SessionsVisible}">
-                                                        <ItemsControl ItemsSource="{Binding Sessions}">
-                                                            <ItemsControl.ItemTemplate>
-                                                                <DataTemplate x:DataType="vm:RailSessionViewModel">
-                                                                    <Button Command="{Binding OpenCommand}" HorizontalAlignment="Stretch"
-                                                                            HorizontalContentAlignment="Stretch"
-                                                                            Padding="8,6" Margin="0,2,0,0"
-                                                                            ToolTip.Tip="{Binding Tooltip}"
-                                                                            Opacity="{Binding IsStale, Converter={x:Static views:StaleOpacityConverter.Instance}}"
-                                                                            Classes="railRow" Classes.selected="{Binding IsSelected}">
-                                                                        <DockPanel>
-                                                                            <Border DockPanel.Dock="Right" Background="{StaticResource KcapWarningDimBrush}"
-                                                                                    CornerRadius="999" Padding="7,1" IsVisible="{Binding NeedsYou}"
-                                                                                    VerticalAlignment="Top">
-                                                                                <TextBlock Text="{Binding StatusBadge}" FontSize="9" FontWeight="Bold"
-                                                                                           Foreground="{StaticResource KcapWarningBrush}" />
+                            <DataTemplate x:DataType="vm:RailGroupViewModel">
+                                <StackPanel Margin="8,10,8,0">
+                                    <Button Classes="sectionHeader expandable railRepoHeader" Command="{Binding ToggleCommand}" IsVisible="{Binding ShowsHeader}"
+                                            ToolTip.Tip="{Binding Tooltip}" AutomationProperties.Name="{Binding ToggleAccessibleName}">
+                                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                                            <TextBlock Text="{Binding Label, Converter={x:Static views:UppercaseConverter.Instance}}"
+                                                       Classes="eyebrow" TextTrimming="CharacterEllipsis" />
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                                <Border IsVisible="{Binding ShowsHeaderBadge}" VerticalAlignment="Center" MaxWidth="76">
+                                                    <views:AgentStatusMark Classes="railRepoStatus" DataContext="{Binding HeaderStatus}" ToolTip.Tip="{x:Null}" />
+                                                </Border>
+                                                <TextBlock Text="{Binding CountText}" Classes="sectionMeta" />
+                                                <Panel Width="12" Height="12">
+                                                    <views:AppIcon Kind="ChevronDown" Size="12" Classes="chevron"
+                                                                   IsVisible="{Binding IsExpanded}" />
+                                                    <views:AppIcon Kind="ChevronRight" Size="12" Classes="chevron"
+                                                                   IsVisible="{Binding !IsExpanded}" />
+                                                </Panel>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Button>
+                                    <Border Classes="sectionBody" IsVisible="{Binding IsExpanded}" Padding="8,2,0,2">
+                                        <ItemsControl ItemsSource="{Binding Sessions}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:RailSessionViewModel">
+                                                    <Border Classes="railSession" Classes.selected="{Binding IsSelected}" Margin="0,2,0,0"
+                                                            Opacity="{Binding IsStale, Converter={x:Static views:StaleOpacityConverter.Instance}}">
+                                                        <Grid>
+                                                            <Button Command="{Binding OpenCommand}" HorizontalAlignment="Stretch"
+                                                                    HorizontalContentAlignment="Stretch" Padding="8,6"
+                                                                    AutomationProperties.Name="{Binding SessionAccessibleName}"
+                                                                    Classes="railRow" Classes.selected="{Binding IsSelected}">
+                                                                <ToolTip.Tip>
+                                                                    <StackPanel Spacing="10" MaxWidth="320">
+                                                                        <views:AgentStatusTip DataContext="{Binding Status}" />
+                                                                        <StackPanel Spacing="1" IsVisible="{Binding IsRemote}">
+                                                                            <TextBlock Text="{Binding MachineBadge}" TextWrapping="Wrap" />
+                                                                            <TextBlock Text="Machine · remote daemon" Classes="kcapTipCaption" />
+                                                                        </StackPanel>
+                                                                        <StackPanel Spacing="1" IsVisible="{Binding CheckoutPath, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                                                            <TextBlock Text="{Binding CheckoutPath}" TextWrapping="Wrap" />
+                                                                            <TextBlock Text="Checkout" Classes="kcapTipCaption" />
+                                                                        </StackPanel>
+                                                                    </StackPanel>
+                                                                </ToolTip.Tip>
+                                                                <StackPanel Spacing="3">
+                                                                    <TextBlock Text="{Binding Primary}" FontSize="14.5" LineHeight="20"
+                                                                               Classes="rowTitle" IsVisible="{Binding HasTitle}"
+                                                                               Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
+                                                                    <!-- Reserve the measured PR link width so machine and age never paint beneath its hit target. -->
+                                                                    <Grid ColumnDefinitions="*,Auto">
+                                                                        <WrapPanel VerticalAlignment="Center">
+                                                                            <!-- Another user's row shows their picture, or their initials until it loads or when it never does. -->
+                                                                            <Border Width="16" Height="16" CornerRadius="8" Margin="0,0,6,0" VerticalAlignment="Center" ClipToBounds="True"
+                                                                                    Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
+                                                                                    IsVisible="{Binding ShowsOwner}" ToolTip.Tip="{Binding OwnerTooltip}" AutomationProperties.Name="{Binding OwnerTooltip}">
+                                                                                <Panel>
+                                                                                    <TextBlock Text="{Binding OwnerInitials}" FontSize="8" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                                                               Foreground="{StaticResource KcapMutedBrush}" />
+                                                                                    <views:RemoteAvatar Url="{Binding OwnerAvatarUrl}" AutomationProperties.AccessibilityView="Raw" />
+                                                                                </Panel>
                                                                             </Border>
-                                                                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
-                                                                                <Ellipse Grid.Column="0" Width="7" Height="7" Fill="{Binding StatusDot}"
-                                                                                         Classes.pulsing="{Binding IsStarting}"
-                                                                                         VerticalAlignment="Top" Margin="0,4,0,0" />
-                                                                                <StackPanel Grid.Column="1" Spacing="3">
-                                                                                    <!-- Title stands alone on its line; a plain TextBlock in this vertical
-                                                                                         StackPanel is width-bounded, so CharacterEllipsis engages. When the
-                                                                                         row has no title the chips line below is the row's identity. -->
-                                                                                    <TextBlock Text="{Binding Primary}" FontSize="13" LineHeight="18"
-                                                                                               Classes="rowTitle" IsVisible="{Binding HasTitle}"
-                                                                                               Foreground="{StaticResource KcapTextBrush}"
-                                                                                               TextTrimming="CharacterEllipsis" />
-                                                                                    <!-- WrapPanel, not a fixed row: chips + meta wrap to a second line rather
-                                                                                         than overflow the 310px rail when a vendor token, model id, or daemon
-                                                                                         name is unusually long. Each label is also individually width-capped and
-                                                                                         trims, so no single chip can push a line past the rail either. -->
-                                                                                    <WrapPanel>
-                                                                                        <Border IsVisible="{Binding HasVendor}" CornerRadius="999" MaxWidth="120"
-                                                                                                Padding="6,1" Margin="0,0,6,3" VerticalAlignment="Center"
-                                                                                                Background="{Binding Vendor, Converter={x:Static views:VendorChipBackgroundConverter.Instance}}">
-                                                                                            <TextBlock Text="{Binding Vendor}" FontSize="10" FontWeight="SemiBold"
-                                                                                                       TextTrimming="CharacterEllipsis"
-                                                                                                       Foreground="{Binding Vendor, Converter={x:Static views:VendorChipForegroundConverter.Instance}}" />
-                                                                                        </Border>
-                                                                                        <Border IsVisible="{Binding HasModel}" CornerRadius="999" MaxWidth="150"
-                                                                                                Padding="6,1" Margin="0,0,6,3" VerticalAlignment="Center"
-                                                                                                Background="{StaticResource KcapInfoDimBrush}">
-                                                                                            <TextBlock Text="{Binding Model}" FontSize="10"
-                                                                                                       Foreground="{StaticResource KcapInfoBrush}"
-                                                                                                       TextTrimming="CharacterEllipsis" />
-                                                                                        </Border>
-                                                                                        <Border IsVisible="{Binding MachineBadge, Converter={x:Static ObjectConverters.IsNotNull}}"
-                                                                                                Background="{StaticResource KcapSurfaceRaisedBrush}" MaxWidth="100"
-                                                                                                CornerRadius="3" Padding="4,0" Margin="0,0,6,3" VerticalAlignment="Center">
-                                                                                            <TextBlock Text="{Binding MachineBadge}" FontSize="10"
-                                                                                                       TextTrimming="CharacterEllipsis"
-                                                                                                       Foreground="{StaticResource KcapFaintBrush}" />
-                                                                                        </Border>
-                                                                                        <TextBlock Text="{Binding Meta}" FontSize="11" VerticalAlignment="Center"
-                                                                                                   Foreground="{StaticResource KcapFaintBrush}" />
-                                                                                    </WrapPanel>
-                                                                                </StackPanel>
-                                                                            </Grid>
-                                                                        </DockPanel>
-                                                                    </Button>
-                                                                </DataTemplate>
-                                                            </ItemsControl.ItemTemplate>
-                                                        </ItemsControl>
+                                                                            <Border Classes="vendorMark" Width="16" Height="16" Margin="0,0,6,0"
+                                                                                    VerticalAlignment="Center" Background="Transparent" IsVisible="{Binding HasVendor}"
+                                                                                    AutomationProperties.Name="{Binding Vendor, Converter={x:Static views:VendorLabelConverter.Instance}}">
+                                                                                <ContentControl HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                                                                Content="{Binding Vendor, Converter={x:Static views:VendorGlyphConverter.Instance}, ConverterParameter=14}" />
+                                                                        </Border>
+                                                                        <views:AgentStatusMark DataContext="{Binding Status}" MaxWidth="160" ToolTip.Tip="{x:Null}"
+                                                                                               Margin="0,0,6,0" VerticalAlignment="Center" />
+                                                                        <Border x:Name="SessionMachineBadge" Classes="railChip" IsVisible="{Binding MachineBadge, Converter={x:Static ObjectConverters.IsNotNull}}"
+                                                                                MaxWidth="140" Margin="0,0,6,0"
+                                                                                ToolTip.Tip="{Binding MachineTooltip}" AutomationProperties.Name="{Binding MachineTooltip}">
+                                                                            <TextBlock Text="{Binding MachineLabel}" Classes="railChipLabel" TextTrimming="CharacterEllipsis"
+                                                                                       Foreground="{StaticResource KcapMutedBrush}" />
+                                                                        </Border>
+                                                                        <Border Classes="railChip" IsVisible="{Binding IsTerminalSession}" Margin="0,0,6,0"
+                                                                                ToolTip.Tip="{x:Static vm:RailSessionViewModel.TerminalTooltip}"
+                                                                                AutomationProperties.Name="{x:Static vm:RailSessionViewModel.TerminalTooltip}">
+                                                                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                                                                <views:AppIcon Kind="Terminal" Size="12" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
+                                                                                <TextBlock Text="terminal" Classes="railChipLabel" Foreground="{StaticResource KcapMutedBrush}" />
+                                                                            </StackPanel>
+                                                                        </Border>
+                                                                        <TextBlock Text="{Binding RepoLabel}" Classes="railMeta" MaxWidth="140" Margin="0,0,6,0"
+                                                                                   IsVisible="{Binding ShowsRepo}" TextTrimming="CharacterEllipsis"
+                                                                                   Foreground="{StaticResource KcapMutedBrush}" />
+                                                                    <TextBlock x:Name="SessionMeta" Text="{Binding Meta}" Classes="railMeta" MaxWidth="180"
+                                                                               IsVisible="{Binding Meta, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                                                               TextTrimming="CharacterEllipsis" HorizontalAlignment="Left"
+                                                                               Foreground="{StaticResource KcapFaintBrush}" />
+                                                                    </WrapPanel>
+                                                                    <Border Grid.Column="1" Width="{Binding #SessionPullRequestLink.Bounds.Width}" Margin="8,0,0,0"
+                                                                            IsVisible="{Binding HasPullRequest}" />
+                                                                </Grid>
+                                                            </StackPanel>
+                                                        </Button>
+                                                            <Button x:Name="SessionPullRequestLink" Classes="railPr" Command="{Binding OpenPullRequestCommand}" Click="OnPullRequestClick"
+                                                                IsVisible="{Binding HasPullRequest}"
+                                                                AutomationProperties.Name="{Binding PullRequestAccessibleName}"
+                                                                ToolTip.Tip="{Binding PullRequestTooltip}"
+                                                                HorizontalAlignment="Right" HorizontalContentAlignment="Left" VerticalAlignment="Bottom" Margin="4,0,4,4"
+                                                                FontSize="11" Foreground="{StaticResource KcapMutedBrush}">
+                                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                                                <views:PullRequestStatusLabel Classes="railPrMark" DataContext="{Binding PullRequestStatus}"
+                                                                                              ShowText="False"
+                                                                                              IsVisible="{Binding $parent[Button].((vm:RailSessionViewModel)DataContext).HasPullRequestLifecycle}"
+                                                                                              VerticalAlignment="Center" />
+                                                                <TextBlock Text="{Binding PullRequestLabel}" Foreground="{StaticResource KcapMutedBrush}"
+                                                                           VerticalAlignment="Center" />
+                                                            </StackPanel>
+                                                        </Button>
+                                                        </Grid>
                                                     </Border>
-                                                </StackPanel>
-                                            </DataTemplate>
-                                        </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </Border>
                                 </StackPanel>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
-                </Panel>
+                    <StackPanel x:Name="RailPaging" DataContext="{Binding Rail}" x:DataType="vm:SessionRailViewModel"
+                                Margin="8,8,8,6" Spacing="4" IsVisible="{Binding Converter={x:Static ObjectConverters.IsNotNull}}">
+                        <Button x:Name="RailShowMoreButton" Classes="kcapGhost" Content="Load more ended sessions" Command="{Binding ShowMoreCommand}"
+                                IsVisible="{Binding ShowsShowMore}" HorizontalAlignment="Stretch" Padding="10,5" FontSize="12.5" />
+                        <TextBlock x:Name="RailLoadedText" Text="{Binding LoadedText}" Classes="railMeta" Foreground="{StaticResource KcapFaintBrush}"
+                                   TextWrapping="Wrap" Margin="8,0" IsVisible="{Binding LoadedText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        <TextBlock x:Name="RailCapNote" Text="{x:Static vm:SessionRailViewModel.CapNote}" Classes="railMeta"
+                                   Foreground="{StaticResource KcapFaintBrush}" Margin="8,0" TextWrapping="Wrap" IsVisible="{Binding AtCap}" />
+                        <TextBlock x:Name="RailLiveNotShownText" Text="{Binding LiveNotShownText}" Classes="railMeta"
+                                   Foreground="{StaticResource KcapFaintBrush}" Margin="8,0" TextWrapping="Wrap"
+                                   IsVisible="{Binding LiveNotShownText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    </StackPanel>
+                </StackPanel>
             </ScrollViewer>
         </DockPanel>
     </Border>

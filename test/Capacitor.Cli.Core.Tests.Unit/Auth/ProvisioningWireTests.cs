@@ -59,6 +59,32 @@ public class ProvisioningWireTests {
         await Assert.That(json).DoesNotContain("joinId");
     }
 
+    // An older server must keep seeing the body it always did, so no code means no member at all.
+    [Test]
+    public async Task ProvisionRequest_serializes_code_camelCase_and_omits_it_when_null() {
+        var with = JsonSerializer.Serialize(
+            new ProvisionRequest { OrgName = "Acme", Slug = "acme", Code = "ABCD" },
+            CapacitorJsonContext.Default.ProvisionRequest);
+
+        await Assert.That(with).Contains(@"""code"":""ABCD""");
+
+        var without = JsonSerializer.Serialize(
+            new ProvisionRequest { OrgName = "Acme", Slug = "acme" },
+            CapacitorJsonContext.Default.ProvisionRequest);
+
+        await Assert.That(without).DoesNotContain(@"""code""");
+    }
+
+    [Test]
+    public async Task ProvisionResponse_deserializes_requestUrl() {
+        var resp = JsonSerializer.Deserialize(
+            """{"reason":"invite_required","requestUrl":"https://www.kurrent.io/get-started#request"}""",
+            CapacitorJsonContext.Default.ProvisionResponse)!;
+
+        await Assert.That(resp.Reason).IsEqualTo("invite_required");
+        await Assert.That(resp.RequestUrl).IsEqualTo("https://www.kurrent.io/get-started#request");
+    }
+
     [Test]
     public async Task StatusResponse_deserializes_camelCase_workosOrgId() {
         var resp = JsonSerializer.Deserialize(

@@ -8,13 +8,13 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 public class AgentOrchestratorPermissionAttributionTests {
     const string S1 = "6ba7b8109dad11d180b400c04fd430c8";
 
-    static AgentInstance Agent(string id, string worktree, string? sessionId = null, PolicySnapshot? policy = null) =>
+    static AgentInstance Agent(string id, string worktree, string? sessionId = null, PolicySnapshot? policy = null, bool fresh = false) =>
         new(id, null, "", null, "/repo", "claude", new FakeHostedAgentRuntime("claude", true),
             new WorktreeInfo(worktree, "b", "/repo"), new CancellationTokenSource()) {
             ActivityClock = new AgentActivityClock(TimeProvider.System),
             CreatedAt     = DateTime.UtcNow,
             LastOutputAt  = DateTime.UtcNow,
-            SessionId = sessionId, PolicySnapshot = policy
+            SessionId = sessionId, PolicySnapshot = policy, BridgedSinceStart = fresh
         };
 
     static AgentOrchestrator Build() =>
@@ -63,32 +63,41 @@ public class AgentOrchestratorPermissionAttributionTests {
         await Assert.That(orch.HandleAttributePermission(new("a1", "nope", "/w1"))).IsNull();
     }
 
-    /// Pins that the launch-bound snapshot reaches the permission seam on EVERY rung, not just the
-    /// one a caller happened to exercise. The record's defaulted second argument means dropping it
-    /// from any of these returns still compiles and still attributes the right agent, so only an
-    /// assertion on the snapshot itself can catch that.
+    /// The launch-bound snapshot and whether this daemon launched the agent fresh reach the permission seam on
+    /// every rung. Both are defaulted record arguments, so dropping either from one return still compiles and
+    /// still attributes the right agent; only an assertion on the value catches it.
     [Test]
-    public async Task Every_attribution_rung_carries_the_agents_policy_snapshot() {
+    public async Task Every_attribution_rung_carries_the_agents_launch_facts() {
         var snap = new PolicySnapshot("snap-1", [], true, ["user policy unreadable"]);
 
         // No session id, so the session rung never matches and a cwd query falls through to it.
         await using var byId = Build();
-        byId.RegisterAgentForTest(Agent("6BA7B810-9DAD-11D1-80B4-00C04FD430C8", "/w1", policy: snap));
-
-        await Assert.That(byId.HandleAttributePermission(
-            new("6BA7B810-9DAD-11D1-80B4-00C04FD430C8", S1, null))!.Value.PolicySnapshot)
-            .IsSameReferenceAs(snap);                                                     // raw agent id
-        await Assert.That(byId.HandleAttributePermission(
-            new("6ba7b8109dad11d180b400c04fd430c8", S1, null))!.Value.PolicySnapshot)
-            .IsSameReferenceAs(snap);                                                     // canonical agent id
-        await Assert.That(byId.HandleAttributePermission(new(null, S1, "/w1"))!.Value.PolicySnapshot)
-            .IsSameReferenceAs(snap);                                                     // cwd
-
+        byId.RegisterAgentForTest(Agent("6BA7B810-9DAD-11D1-80B4-00C04FD430C8", "/w1", policy: snap, fresh: true));
         await using var bySession = Build();
-        bySession.RegisterAgentForTest(Agent("a1", "/w1", sessionId: S1, policy: snap));
+        bySession.RegisterAgentForTest(Agent("a1", "/w1", sessionId: S1, policy: snap, fresh: true));
 
-        await Assert.That(bySession.HandleAttributePermission(new(null, S1, null))!.Value.PolicySnapshot)
-            .IsSameReferenceAs(snap);                                                     // session id
+        AttributedAgent?[] rungs = [
+            byId.HandleAttributePermission(new("6BA7B810-9DAD-11D1-80B4-00C04FD430C8", S1, null)), // raw agent id
+            byId.HandleAttributePermission(new("6ba7b8109dad11d180b400c04fd430c8", S1, null)),     // canonical agent id
+            byId.HandleAttributePermission(new(null, S1, "/w1")),                                  // cwd
+            bySession.HandleAttributePermission(new(null, S1, null)),                              // session id
+        ];
+
+        foreach (var rung in rungs) await Assert.That(rung!.Value.PolicySnapshot).IsSameReferenceAs(snap);
+        await Assert.That(rungs[^1]!.Value.BridgedSinceStart).IsTrue();
+    }
+
+    /// Only the session a fresh agent reported as its own started under this daemon; one resumed inside it, or a
+    /// request naming another session, may carry refusals the daemon never saw.
+    [Test]
+    public async Task Only_a_fresh_agents_own_session_is_bridged_since_start() {
+        await using var orch = Build();
+        orch.RegisterAgentForTest(Agent("a1", "/w1", sessionId: S1, fresh: true));
+        orch.RegisterAgentForTest(Agent("a2", "/w2", sessionId: "6ba7b8119dad11d180b400c04fd430c8"));
+
+        await Assert.That(orch.HandleAttributePermission(new("a1", S1, null))!.Value.BridgedSinceStart).IsTrue();
+        await Assert.That(orch.HandleAttributePermission(new("a1", "ffffffffffffffffffffffffffffffff", null))!.Value.BridgedSinceStart).IsFalse();
+        await Assert.That(orch.HandleAttributePermission(new("a2", "6ba7b8119dad11d180b400c04fd430c8", null))!.Value.BridgedSinceStart).IsFalse();
     }
 
     [Test]
@@ -117,7 +126,7 @@ public class AgentOrchestratorPermissionAttributionTests {
 
     sealed class FakeServerConnectionForAttribution() : ServerConnection(
         new() { Name = "test", ServerUrl = "http://127.0.0.1:1" },
-        UnusedTokenStore.Create(),
+        new FixedCredentialSource(),
         Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
         Microsoft.Extensions.Logging.Abstractions.NullLogger<ServerConnection>.Instance, TimeProvider.System);
 }

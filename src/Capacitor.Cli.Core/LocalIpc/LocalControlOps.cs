@@ -4,8 +4,8 @@ using System.Text.Json.Serialization.Metadata;
 
 namespace Capacitor.Cli.Core.LocalIpc;
 
-/// Status: "stopped" | "failed" | "skipped" (StopAck vocabulary) or "error" (daemon Error
-/// frame; Error carries its display text). Ok is true only for "stopped".
+/// Status: "stopped" | "failed" | "skipped", or "error" for a daemon rejection or missing target.
+/// Error carries the display text; Ok is true only for "stopped".
 public sealed record StopAgentResult(bool Ok, string Status, string? Error);
 
 /// The SendTextAck's four members verbatim; Reason is "transport" when the exchange itself failed.
@@ -174,6 +174,17 @@ public sealed class LocalControlOps(DaemonStore store, string daemonName, TimePr
         }
     }
 
+    /// <summary>Asks the daemon to restart: <paramref name="mode"/> is "when-idle", "now" or "force". The ack,
+    /// "restarting" or "queued"; a refusal throws with reason daemon_rejected.</summary>
+    public async Task<string> RequestRestartAsync(string mode, CancellationToken ct) {
+        var reply = await ExchangeAsync(LocalFrame.Restart(mode), ReplyTimeout, ct);
+        return reply.Type switch {
+            FrameType.RestartAck => reply.Text,
+            FrameType.Error      => throw new LocalControlOpsException(DaemonRejected, reply.Text),
+            _ => throw new LocalControlOpsException(UnexpectedReply, $"unexpected daemon response to restart ({reply.Type})"),
+        };
+    }
+
     public async Task<DaemonSettingsAckDto> PutDaemonSettingsAsync(DaemonSettingsPutDto put, CancellationToken ct) {
         var json  = JsonSerializer.Serialize(put, SettingsIpcJsonContext.Default.DaemonSettingsPutDto);
         var reply = await ExchangeAsync(LocalFrame.SettingsJson(FrameType.DaemonSettingsPut, json), ReplyTimeout, ct);
@@ -225,9 +236,11 @@ public sealed class LocalControlOps(DaemonStore store, string daemonName, TimePr
             matches++;
             if (parts.Length == 2) status = parts[1];
         }
-        if (matches != 1 || status is not ("stopped" or "failed" or "skipped"))
+        if (matches != 1 || status is not ("stopped" or "failed" or "skipped" or "missing"))
             throw new LocalControlOpsException(UnexpectedReply, $"malformed StopAck reply for {agentId}");
-        return new StopAgentResult(status == "stopped", status, null);
+        return status == "missing"
+            ? new StopAgentResult(false, "error", $"no such agent {agentId}")
+            : new StopAgentResult(status == "stopped", status, null);
     }
 
     /// STJ source-gen does not enforce non-nullable members on deserialize — the daemon's own

@@ -18,8 +18,8 @@ public class FrameCodecRenameTests {
     [Test]
     public async Task Rename_frame_values_are_stable_wire_bytes() {
 #pragma warning disable TUnitAssertions0005
-        await Assert.That((byte)FrameType.SessionRename).IsEqualTo((byte)25);
-        await Assert.That((byte)FrameType.SessionRenameAck).IsEqualTo((byte)82);
+        await Assert.That((byte)FrameType.SessionRename).IsEqualTo((byte)33);
+        await Assert.That((byte)FrameType.SessionRenameAck).IsEqualTo((byte)88);
 #pragma warning restore TUnitAssertions0005
     }
 }

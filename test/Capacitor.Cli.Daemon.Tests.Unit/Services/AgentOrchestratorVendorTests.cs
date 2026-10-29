@@ -85,6 +85,66 @@ public class AgentOrchestratorVendorTests {
         await Assert.That(server.AgentRegisteredCallCount).IsEqualTo(2);
     }
 
+    /// <summary>A refusal is the server's answer rather than a transient failure: no retry, and no status that
+    /// could overwrite what the server recorded for the refused id.</summary>
+    [Test]
+    public async Task ReRegister_neither_retries_a_refusal_nor_sends_a_status_after_it() {
+        using var worktree = new TempDir();
+        string worktreePath = worktree.CreateDir("worktree");
+        var server = new CaptureServerConnection { RegistrationResponse = _ => new AgentRegisteredResponse(false, "recorded_failure") };
+
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        orch.RegisterAgentForTest(new AgentInstance(
+            "agent-refused", null, "", null, worktreePath, "claude",
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo(worktreePath, "", worktreePath, IsStandalone: true), new CancellationTokenSource()
+        ) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow
+        });
+
+        await server.ReRegisterAgentsHook!();
+        await server.ReRegisterAgentsHook!();
+        orch.ReportCommandsForTest("agent-refused", [new HostedAgentCommand("review", null, null)]);
+        var commands = orch.GetAgentForTest("agent-refused")!.Commands;
+        await orch.CleanupAgentForTest("agent-refused");
+
+        await Assert.That(server.AgentRegisteredCallCount).IsEqualTo(1);
+        await Assert.That(server.StatusChangedCalls).IsEmpty();
+        await Assert.That(server.AgentUnregisteredCalls).IsEmpty();
+        await Assert.That(server.CommandReports).IsEmpty();
+        await Assert.That(commands!.Single().Name).IsEqualTo("review");
+    }
+
+    /// <summary>A refused fresh launch keeps running locally, and nothing more reaches the server under its id.
+    /// Its stop still reaches the server as a status report, which is all that frees its slot there.</summary>
+    [Test]
+    public async Task A_refused_launch_keeps_running_and_sends_nothing_more_for_its_id() {
+        using var repoPath = GitRepo.CreateWithCommit();
+        var server = new CaptureServerConnection { RegistrationResponse = _ => new AgentRegisteredResponse(false, "launch_refused") };
+
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), AgentOrchestratorHarness.Launcher("claude"), allowedRepoPath: repoPath);
+
+        await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
+            AgentId: "refused-launch", Prompt: "hi", Model: "opus", Effort: null,
+            RepoPath: repoPath, Tools: null, AttachmentIds: null, Vendor: "claude"));
+
+        var agent = orch.GetAgentForTest("refused-launch");
+        await Assert.That(agent).IsNotNull();
+        await Assert.That(agent!.IsServerSilent).IsTrue();
+
+        // The spy process exits at once, so its own cleanup may already be running and this call returns early.
+        await orch.CleanupAgentForTest("refused-launch");
+        await WaitHarness.PollUntilAsync(() => server.StatusReports.Any(r => r.ActiveCount == 0));
+
+        await Assert.That(server.AgentRegisteredCallCount).IsEqualTo(1);
+        await Assert.That(server.StatusChangedCalls).IsEmpty();
+        await Assert.That(server.RunEvents.Any(e => e.AgentId == "refused-launch")).IsFalse();
+        await Assert.That(server.LaunchFailedCalls).IsEmpty();
+        await Assert.That(server.AgentUnregisteredCalls).IsEmpty();
+    }
+
     // A PTY codex runtime reports "pty" on AgentRegistered — the transport rides the runtime TYPE,
     // not the vendor (a codex agent is not automatically app-server).
     [Test]
@@ -108,6 +168,37 @@ public class AgentOrchestratorVendorTests {
 
         var (_, transport) = server.AgentRegisteredTransports.Single();
         await Assert.That(transport).IsEqualTo(CodexTransportDecision.Pty);
+    }
+
+    // A reconnect re-announces each agent with no launch on the server to read its vendor from, so
+    // every registration carries it — the first one and each re-announcement alike.
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Registration_reports_the_agents_vendor(bool reconnect) {
+        using var worktree = new TempDir();
+        string worktreePath = worktree.CreateDir("worktree");
+        var server = new CaptureServerConnection();
+
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        var agent = new AgentInstance(
+            "agent-claude", null, "", null, worktreePath, "claude",
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo(worktreePath, "", worktreePath, IsStandalone: true), new CancellationTokenSource()
+        ) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow
+        };
+
+        if (reconnect) {
+            orch.RegisterAgentForTest(agent);
+            await server.ReRegisterAgentsHook!();
+        } else {
+            await orch.RegisterAgentForTestAsync(agent);
+        }
+
+        await Assert.That(server.AgentRegisteredVendors.Single()).IsEqualTo(("agent-claude", (string?)"claude"));
     }
 
     [Test]
@@ -229,6 +320,24 @@ public class AgentOrchestratorVendorTests {
         await Assert.That(server.LaunchFailedCalls.Count).IsEqualTo(1);
         await Assert.That(server.LaunchFailedCalls[0].Reason).StartsWith("codex_posture_invalid:");
         await Assert.That(ptyFactory.SpawnCalls).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Unrecognised_expected_runtime_transport_is_rejected_as_semantic() {
+        var server = new SeqCaptureServerConnection();
+
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
+            server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
+            extraRuntimeFactories: [new SpyHostedAgentRuntimeFactory("codex") { SupportsUnattended = true }]);
+
+        await orch.SubmitLaunchAgentForTest(PostureCmd("agent-transport-tty", posture: null) with {
+            ExpectedRuntimeTransport = "tty", Epoch = orch.DaemonEpochForTest, Seq = 1, CommandId = "cmd-1",
+        });
+        await WaitHarness.SpinUntilAsync(() => server.Acks.Count > 0, WaitHarness.Bounded);
+
+        await Assert.That(server.Acks.Single().OutcomeKind).IsEqualTo(CommandOutcomeKind.LaunchRejected);
+        await Assert.That(server.Rejects.Single().Reason).IsEqualTo(CommandRejectedReason.Semantic);
+        await Assert.That(server.LaunchFaileds.Single().Reason).Contains("'tty'");
     }
 
     [Test]
@@ -370,7 +479,8 @@ public class AgentOrchestratorVendorTests {
             LaunchKind kind = LaunchKind.Default,
             bool borrowed = false,
             string vendor = "codex",
-            ILogger<AgentOrchestrator>? logger = null) {
+            ILogger<AgentOrchestrator>? logger = null,
+            string? expectedTransport = null) {
         var server     = new CaptureServerConnection();
         var ptyFactory = new SpyPtyProcessFactory();
         var codexSpy   = new SpyHostedAgentRuntimeFactory("codex") {
@@ -402,7 +512,8 @@ public class AgentOrchestratorVendorTests {
                 Kind: kind,
                 Borrowed: borrowed,
                 BorrowCwd: borrowed ? repoPath : null,
-                CodexPosture: posture));
+                CodexPosture: posture,
+                ExpectedRuntimeTransport: expectedTransport));
         } finally {
             if (startsReviewerBridge)
                 await orch.PermissionBridgeForTest.DisposeAsync();
@@ -437,6 +548,20 @@ public class AgentOrchestratorVendorTests {
         await Assert.That(codexSpy.LastContext!.CodexPosture!.Sandbox).IsEqualTo("danger-full-access");
         await Assert.That(codexSpy.LastContext!.CodexPosture!.Approval).IsEqualTo("untrusted");
 
+    }
+
+    /// <summary>The transport the server validates the registration against reaches the runtime factory,
+    /// which routes a pinned launch on it.</summary>
+    [Test]
+    [Arguments("app-server")]
+    [Arguments(null)]
+    public async Task Codex_launch_threads_the_expected_runtime_transport_into_the_start_context(string? expected) {
+        using var repoPath = GitRepo.CreateWithCommit();
+
+        var (_, codexSpy) = await LaunchForEchoAsync(repoPath, "agent-transport", posture: null, expectedTransport: expected);
+
+        await Assert.That(codexSpy.LastContext).IsNotNull();
+        await Assert.That(codexSpy.LastContext!.ExpectedRuntimeTransport).IsEqualTo(expected);
     }
 
     [Test]
@@ -714,7 +839,7 @@ public class AgentOrchestratorVendorTests {
         await orch.HandleLaunchAgentForTest(cmd);
 
         await Assert.That(server.LaunchFailedCalls).Count().IsEqualTo(1);
-        await Assert.That(server.LaunchFailedCalls[0].Reason).Contains("reviewer_certification_changed");
+        await Assert.That(server.LaunchFailedCalls[0].Reason).Contains("reviewer_certification_transient");
         await Assert.That(claudeSpy.PrepareCalls).IsEqualTo(0);
         await Assert.That(ptyFactory.SpawnCalls).IsEqualTo(0);
 
@@ -742,7 +867,7 @@ public class AgentOrchestratorVendorTests {
         await orch.HandleLaunchAgentForTest(cmd);
 
         await Assert.That(server.LaunchFailedCalls).Count().IsEqualTo(1);
-        await Assert.That(server.LaunchFailedCalls[0].Reason).Contains("reviewer_certification_changed");
+        await Assert.That(server.LaunchFailedCalls[0].Reason).Contains("reviewer_certification_transient");
         await Assert.That(claudeSpy.PrepareCalls).IsEqualTo(0);
         await Assert.That(ptyFactory.SpawnCalls).IsEqualTo(0);
     }
@@ -1053,21 +1178,36 @@ public class AgentOrchestratorVendorTests {
     }
 
     [Test]
-    public async Task Stopping_an_agent_releases_a_read_loop_blocked_on_a_full_terminal_queue() {
+    public async Task Stopping_an_agent_with_the_cloud_blocked_cancels_its_send_before_it_unregisters() {
         using var repoPath = GitRepo.CreateWithCommit();
 
-        // The send blocks (full/down queue) until its ct cancels; the PTY keeps the
-        // stream open so the read loop is genuinely parked inside the blocked send.
+        // The send blocks until its ct cancels; the PTY keeps the stream open so the pump is
+        // genuinely parked inside the blocked send.
         var sendEntered   = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var sendUnblocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var server     = new CaptureServerConnection { SendEntered = sendEntered, SendUnblocked = sendUnblocked };
+        // Handed over through a task: the capture records the call before it invokes this, so a
+        // poll on the call count can read a plain flag before the callback has written it.
+        var unblockedAtUnregister = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var server = new CaptureServerConnection {
+            SendEntered         = sendEntered,
+            SendUnblocked       = sendUnblocked,
+            OnAgentUnregistered = () => unblockedAtUnregister.TrySetResult(sendUnblocked.Task.IsCompleted)
+        };
         var ptyFactory = new FixedPtyProcessFactory(new OneChunkThenBlockPtyProcess());
         var claudeSpy  = new SpyHostedAgentLauncher("claude", cliPath: "spy-claude");
 
         var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = claudeSpy };
 
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, ptyFactory, launchers, allowedRepoPath: repoPath);
+
+        // A finite grace lets a starved scheduler abandon the pump and finalize before it truly
+        // ends — this test's ordering assertion must not read that abandonment as a defect.
+        orch.CloudSinkOptions = new CloudTerminalSinkOptions {
+            DrainBound        = TimeSpan.FromMilliseconds(100),
+            CancellationGrace = TimeSpan.FromMinutes(10),
+        };
 
         await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
             AgentId: "agent-bp",
@@ -1080,17 +1220,15 @@ public class AgentOrchestratorVendorTests {
             Vendor: "claude"
         ));
 
-        // Wait until the read loop has produced a chunk and is parked in the blocked send.
+        // The pump, not the read loop, is parked in the blocked send.
         await sendEntered.Task.WaitAsync(WaitHarness.Bounded);
 
-        // Stopping the agent cancels ReadCts. The blocked enqueue MUST be released by
-        // that cancellation; otherwise the read loop (and its finally-block cleanup)
-        // stalls until daemon shutdown. Before the fix the enqueue awaited the
-        // daemon-lifetime token instead, so this never completes.
+        // Stopping ends the read loop at once; its sink gets the drain bound, then its send is
+        // cancelled, and only then does the agent finalize and unregister.
         await orch.HandleStopAgentForTest("agent-bp");
 
-        await sendUnblocked.Task.WaitAsync(WaitHarness.Bounded);
-
+        await Assert.That(await unblockedAtUnregister.Task.WaitAsync(WaitHarness.Bounded)).IsTrue();
+        await Assert.That(server.AgentUnregisteredCalls.Count).IsEqualTo(1);
     }
 
     [Test]

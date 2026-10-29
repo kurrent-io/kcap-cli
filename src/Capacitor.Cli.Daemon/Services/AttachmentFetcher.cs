@@ -8,7 +8,7 @@ namespace Capacitor.Cli.Daemon.Services;
 /// Downloads a prompt's attachments into one staging directory and publishes it with a single
 /// rename, so a batch lands whole or not at all.
 internal sealed class AttachmentFetcher(
-        IHttpClientFactory http, Func<Task<TokenResolution>> tokens, ILogger logger) {
+        IHttpClientFactory http, ICredentialSource credentials, ILogger logger) {
     const int CopyBuffer = 64 * 1024;
 
     static readonly string OverCap = $"over the {InputWire.MaxAttachmentBytes / (1024 * 1024)} MB cap";
@@ -49,10 +49,10 @@ internal sealed class AttachmentFetcher(
 
             batch = new AttachmentBatch(staging, published, paths);
 
-            var resolution = await tokens();
+            var bearer = (await credentials.ResolveAsync(ct)).Bearer;
 
             foreach (var id in ids) {
-                var (fileName, error) = await FetchOneAsync(id, staging, resolution, ct);
+                var (fileName, error) = await FetchOneAsync(id, staging, bearer, ct);
 
                 if (error is not null) {
                     batch.Dispose();
@@ -106,11 +106,11 @@ internal sealed class AttachmentFetcher(
     }
 
     async Task<(string? FileName, string? Error)> FetchOneAsync(
-            string id, string staging, TokenResolution resolution, CancellationToken ct) {
+            string id, string staging, string? bearer, CancellationToken ct) {
         using var client = http.CreateClient("Attachments");
 
-        if (resolution.Tokens is not null)
-            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", resolution.Tokens.AccessToken);
+        if (bearer is not null)
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
 
         using var response = await client.GetAsync(
             $"/api/attachments/{id}", HttpCompletionOption.ResponseHeadersRead, ct);

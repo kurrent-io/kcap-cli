@@ -1,24 +1,44 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
+             xmlns:views="clr-namespace:Capacitor.App.Views"
              x:Class="Capacitor.App.Views.PullRequestStatusLabel"
+             x:Name="Root"
              x:DataType="vm:PullRequestStatus">
     <UserControl.Styles>
         <Style Selector="TextBlock.statusText">
             <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
-            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="LineHeight" Value="16" />
         </Style>
         <Style Selector="TextBlock.statusText.success"><Setter Property="Foreground" Value="{StaticResource KcapSuccessBrush}" /></Style>
         <Style Selector="TextBlock.statusText.warning"><Setter Property="Foreground" Value="{StaticResource KcapWarningBrush}" /></Style>
         <Style Selector="TextBlock.statusText.danger"><Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" /></Style>
-        <Style Selector="TextBlock.statusText.purple"><Setter Property="Foreground" Value="{StaticResource KcapPurpleBrush}" /></Style>
     </UserControl.Styles>
-    <Grid ColumnDefinitions="16,*" ColumnSpacing="6" ToolTip.Tip="{Binding Detail}" Classes.pulsing="{Binding IsPulsing}">
-        <Path Width="14" Height="14" Stretch="Uniform" Data="{Binding IconData}"
-              Stroke="{Binding #StatusText.Foreground}" StrokeThickness="1.4" StrokeLineCap="Round" StrokeJoin="Round"
-              VerticalAlignment="Center" />
+    <Grid ColumnDefinitions="Auto,*" ToolTip.Tip="{Binding Tip}">
+        <Panel Width="12" Height="16" VerticalAlignment="Top">
+            <Panel Width="12" Height="12" HorizontalAlignment="Center" VerticalAlignment="Center"
+                   IsVisible="{Binding UsesDiscIcon}">
+                <views:AppIcon Kind="CircleCheck" Size="12" IsVisible="{Binding IsSuccess}" Foreground="{StaticResource KcapSuccessBrush}" />
+                <views:AppIcon Kind="CircleX" Size="12" IsVisible="{Binding IsDanger}" Foreground="{StaticResource KcapDangerBrush}" />
+                <views:AppIcon Kind="Circle" Size="12" HorizontalAlignment="Center" VerticalAlignment="Center"
+                               IsVisible="{Binding IsWarning}" Foreground="{StaticResource KcapWarningBrush}" />
+                <Ellipse Width="5" Height="5" Fill="{StaticResource KcapWarningBrush}"
+                         HorizontalAlignment="Center" VerticalAlignment="Center" UseLayoutRounding="False" IsVisible="{Binding IsWarning}" />
+                <views:AppIcon Kind="Circle" Size="12" HorizontalAlignment="Center" VerticalAlignment="Center"
+                               IsVisible="{Binding IsPulsing}" Foreground="{StaticResource KcapMutedBrush}" />
+                <Border Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapMutedBrush}"
+                        HorizontalAlignment="Center" VerticalAlignment="Center" UseLayoutRounding="False" IsVisible="{Binding IsPulsing}"
+                        views:PulseClock.IsActive="{Binding IsPulsing}" />
+                <views:AppIcon Kind="CircleMinus" Size="12" HorizontalAlignment="Center" VerticalAlignment="Center"
+                               IsVisible="{Binding IsNeutralDisc}" Foreground="{StaticResource KcapMutedBrush}" />
+            </Panel>
+            <views:AppIcon Kind="{Binding IconKind}" Size="12" HorizontalAlignment="Center" VerticalAlignment="Center"
+                           IsVisible="{Binding UsesGlyphIcon}" Foreground="{Binding #StatusText.Foreground}" />
+        </Panel>
         <TextBlock x:Name="StatusText" Grid.Column="1" Classes="statusText" Text="{Binding Text}" TextWrapping="Wrap"
+                   Margin="9,0,0,0" IsVisible="{Binding #Root.ShowText}"
                    Classes.success="{Binding IsSuccess}" Classes.warning="{Binding IsWarning}"
-                   Classes.danger="{Binding IsDanger}" Classes.purple="{Binding IsPurple}" VerticalAlignment="Center" />
+                   Classes.danger="{Binding IsDanger}" VerticalAlignment="Top" />
     </Grid>
 </UserControl>

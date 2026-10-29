@@ -1,0 +1,25 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:Capacitor.App.Views"
+             x:Class="Capacitor.App.Views.CommandChip"
+             x:Name="Root" VerticalAlignment="Center">
+    <Border Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+            BorderThickness="1" CornerRadius="6" Padding="8,0,2,0">
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="4">
+            <!-- Scrolls rather than wraps: a break at a flag's hyphen reads as a different command. -->
+            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" VerticalAlignment="Center">
+                <SelectableTextBlock Text="{Binding #Root.Text}" TextWrapping="NoWrap" Margin="0,4"
+                                     FontFamily="{StaticResource OnboardingMonoFont}" FontSize="12"
+                                     Foreground="{StaticResource KcapTextBrush}" />
+            </ScrollViewer>
+            <Button x:Name="CopyButton" Grid.Column="1" Classes="kcapGhost kcapIcon" Padding="5" MinHeight="0"
+                    Click="OnCopyClick" ToolTip.Tip="Copy"
+                    AutomationProperties.Name="{Binding #Root.Text, StringFormat='Copy {0}'}">
+                <Panel>
+                    <views:AppIcon x:Name="CopyIcon" Kind="Copy" Size="12" />
+                    <views:AppIcon x:Name="CopiedIcon" Kind="Check" Size="12" IsVisible="False" />
+                </Panel>
+            </Button>
+        </Grid>
+    </Border>
+</UserControl>

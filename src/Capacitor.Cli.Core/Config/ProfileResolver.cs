@@ -1,3 +1,5 @@
+using Capacitor.Cli.Core.LocalEdition;
+
 namespace Capacitor.Cli.Core.Config;
 
 /// <param name="Source">
@@ -8,18 +10,46 @@ namespace Capacitor.Cli.Core.Config;
 /// </param>
 public record ResolvedProfile(
     string? ServerUrl, string? ProfileName, Profile? Profile, string? Warning,
-    UrlSource Source = UrlSource.Profile);
+    UrlSource Source = UrlSource.Profile) {
+    /// <summary>The profile a repository's <c>.kcap.json</c> named that does not exist here, when it was
+    /// passed over for the local installation.</summary>
+    public string? IgnoredRepoProfile { get; init; }
+
+    /// <summary>What <see cref="ServerUrl"/> is, measured against the installation registry.</summary>
+    public LocalEndpointClass Endpoint { get; init; } = new LocalEndpointClass.Ordinary();
+
+    /// <summary>A loopback origin that is, was, or may be a local installation. Nothing sends it a
+    /// bearer, whatever a token store holds, and the answer needs no token read or provider
+    /// discovery: discovery falls back to a stored token's provider when the server is down.</summary>
+    public bool SendsNoBearer => Endpoint is not LocalEndpointClass.Ordinary;
+
+    /// <summary>This resolution pointed at another server. The classification is recomputed with the
+    /// URL, never carried over from the one it replaces.</summary>
+    public ResolvedProfile Retargeted(string? serverUrl, LocalEndpoints local) =>
+        this with { ServerUrl = local.Canonicalize(serverUrl), Endpoint = local.Classify(serverUrl) };
+}
 
 public class ProfileResolver(
-        ProfileConfig config,
-        string?       cliServerUrl,
-        string?       envUrl,
-        string?       envProfile,
-        RepoConfig?   repoConfig,
-        string[]      repoRemoteUrls,
-        string?       repoPath
+        ProfileConfig   config,
+        string?         cliServerUrl,
+        string?         envUrl,
+        string?         envProfile,
+        RepoConfig?     repoConfig,
+        string[]        repoRemoteUrls,
+        string?         repoPath,
+        LocalEndpoints? local = null
     ) {
+    readonly LocalEndpoints _local = local ?? LocalEndpoints.None;
+
+    /// <summary>Whichever input wins, a URL naming the local installation comes out in its canonical
+    /// spelling.</summary>
     public ResolvedProfile Resolve() {
+        var resolved = ResolveAsWritten();
+
+        return resolved.Retargeted(resolved.ServerUrl, _local);
+    }
+
+    ResolvedProfile ResolveAsWritten() {
         // 1. CLI --server-url flag
         if (!string.IsNullOrEmpty(cliServerUrl))
             return new(AppConfig.NormalizeUrl(cliServerUrl), null, null, null, UrlSource.CommandLine);
@@ -54,14 +84,34 @@ public class ProfileResolver(
                 );
             }
 
-            return new(
-                null,
-                null,
-                null,
-                $"Profile '{repoProfileName}' from .kcap.json not found locally. Run: kcap profile add {repoProfileName} --server-url {repoConfig.ServerUrl}"
-            );
+            // On a machine with a local installation a team's binding names a server this machine does
+            // not record to, so the recording goes to the installation instead of nowhere.
+            if (_local.Active is not { } installation)
+                return new(
+                    null,
+                    null,
+                    null,
+                    $"Profile '{repoProfileName}' from .kcap.json not found locally. Run: kcap profile add {repoProfileName} --server-url {repoConfig.ServerUrl}"
+                );
+
+            return ResolveInstallation(installation) with { IgnoredRepoProfile = repoProfileName };
         }
 
+        return ResolveWithoutRepoConfig();
+    }
+
+    /// <summary>The installation, through the profile that names it when one does. Never another server:
+    /// the caller has already told the user the recording goes to the installation.</summary>
+    ResolvedProfile ResolveInstallation(LocalInstallation installation) {
+        var fallback = ResolveWithoutRepoConfig();
+        if (_local.Classify(fallback.ServerUrl) is LocalEndpointClass.Local) return fallback;
+
+        var named = config.Profiles.FirstOrDefault(p => _local.Classify(p.Value.ServerUrl) is LocalEndpointClass.Local).Key;
+
+        return named is not null ? ResolveByName(named) : new(installation.ServerUrl, null, null, null);
+    }
+
+    ResolvedProfile ResolveWithoutRepoConfig() {
         // 5. Git remote match
         string? remoteMatch;
 

@@ -4,8 +4,8 @@ using System.Reactive.Subjects;
 namespace Capacitor.App.Services;
 
 /// The app's server-side clients as one set with one cleanup. Ownership is here: the holder takes
-/// the two clients and owns the subject itself, with the cleanup task memoized, so the
-/// startup-failure and shutdown paths can both reach it, sequentially or overlapping, and nothing
+/// the launch client and the read sources and owns the subject itself, with the cleanup task
+/// memoized, so the startup-failure and shutdown paths can both reach it, sequentially or overlapping, and nothing
 /// is disposed twice. The sequence itself is the static below, which is deliberately not idempotent.
 public sealed class ServerClients : IAsyncDisposable {
     readonly Subject<Unit> _signIn = new();
@@ -13,11 +13,15 @@ public sealed class ServerClients : IAsyncDisposable {
     volatile bool _cleanupRequested;
     readonly Action _invalidateAuthentication;
 
-    public ServerClients(IAsyncDisposable? launch, IAsyncDisposable? workContext, IAsyncDisposable? pullRequests = null) {
-        _cleanup = new Lazy<Task>(() => CleanupAsync(launch, workContext, _signIn, pullRequests), LazyThreadSafetyMode.ExecutionAndPublication);
+    public ServerClients(IAsyncDisposable? launch, IAsyncDisposable? workContext, IAsyncDisposable? pullRequests = null,
+            IAsyncDisposable? plans = null, IAsyncDisposable? planArtifacts = null, IAsyncDisposable? senders = null) {
+        _cleanup = new Lazy<Task>(() => CleanupAsync(launch, workContext, _signIn, pullRequests, plans, planArtifacts, senders), LazyThreadSafetyMode.ExecutionAndPublication);
         _invalidateAuthentication = () => {
             (workContext as ServerWorkContextSource)?.InvalidateAuthentication();
             (pullRequests as ServerPullRequestSource)?.InvalidateAuthentication();
+            (plans as ServerPlanSource)?.InvalidateAuthentication();
+            (planArtifacts as ServerPlanArtifactSource)?.InvalidateAuthentication();
+            (senders as ServerMessageSenderSource)?.InvalidateAuthentication();
         };
     }
 
@@ -40,12 +44,17 @@ public sealed class ServerClients : IAsyncDisposable {
         return new(_cleanup.Value);
     }
 
-    /// Launch client, then the work-context source, then the subject completed and disposed —
-    /// each step guarded so a throwing disposal never skips the next.
-    internal static async Task CleanupAsync(IAsyncDisposable? launch, IAsyncDisposable? workContext, Subject<Unit> signIn, IAsyncDisposable? pullRequests = null) {
+    /// Launch client, then the sources, then the subject completed and disposed — each step guarded
+    /// so a throwing disposal never skips the next.
+    internal static async Task CleanupAsync(IAsyncDisposable? launch, IAsyncDisposable? workContext, Subject<Unit> signIn,
+            IAsyncDisposable? pullRequests = null, IAsyncDisposable? plans = null, IAsyncDisposable? planArtifacts = null,
+            IAsyncDisposable? senders = null) {
         await DisposeGuarded(launch, "launch client").ConfigureAwait(false);
         await DisposeGuarded(workContext, "work-context source").ConfigureAwait(false);
         await DisposeGuarded(pullRequests, "pull-request source").ConfigureAwait(false);
+        await DisposeGuarded(plans, "plan source").ConfigureAwait(false);
+        await DisposeGuarded(planArtifacts, "plan-artifacts source").ConfigureAwait(false);
+        await DisposeGuarded(senders, "message-sender source").ConfigureAwait(false);
         try {
             signIn.OnCompleted();
             signIn.Dispose();

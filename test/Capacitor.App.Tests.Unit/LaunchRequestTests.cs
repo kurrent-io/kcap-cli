@@ -1,14 +1,12 @@
 using System.Text.Json;
 using Capacitor.App.Services;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.App.Tests.Unit;
 
 public class LaunchRequestTests {
-    // The genuine on-wire options — same JsonSerializerOptions ServerConnectionService hands
-    // AddJsonProtocol, via the shared LaunchHubJson.Configure. Serializing through a bare
-    // context (as this test used to) proves nothing about what SignalR actually sends: the
-    // server applies snake_case to every hub payload, and camelCase keys here would have
-    // bound null server-side while every test stayed green.
+    // The naming policy ServerConnectionService hands AddJsonProtocol, via LaunchHubJson.Configure:
+    // camelCase keys would bind null server-side while every test stayed green.
     static readonly JsonSerializerOptions Options = BuildOptions();
 
     static JsonSerializerOptions BuildOptions() {
@@ -80,6 +78,23 @@ public class LaunchRequestTests {
     }
 
     [Test]
+    public async Task Codex_posture_is_carried_as_a_sandbox_and_approval_object() {
+        var json = Payload(new LaunchRequest("kcap-dev", "/repo", "codex", "go",
+            CodexPosture: new CodexLaunchPosture("read-only", "never")));
+        var posture = json.GetProperty("codex_posture");
+
+        await Assert.That(posture.EnumerateObject().Select(p => p.Name).ToArray()).IsEquivalentTo(["sandbox", "approval"]);
+        await Assert.That(posture.GetProperty("sandbox").GetString()).IsEqualTo("read-only");
+        await Assert.That(posture.GetProperty("approval").GetString()).IsEqualTo("never");
+    }
+
+    [Test]
+    public async Task No_codex_posture_is_sent_as_null() {
+        var json = Payload(new LaunchRequest("kcap-dev", "/repo", "codex", "go"));
+        await Assert.That(json.GetProperty("codex_posture").IsNull).IsTrue();
+    }
+
+    [Test]
     public async Task Attachment_ids_are_carried_when_the_launch_has_any() {
         var json = Payload(new LaunchRequest("kcap-dev", "/repo", "claude", "go", AttachmentIds: ["u1", "u2"]));
         var ids = json.GetProperty("attachment_ids").EnumerateArray().Select(e => e.GetString() ?? "").ToArray();
@@ -121,5 +136,27 @@ public class LaunchRequestTests {
             "attachment_ids", "visibility", "grants", "vendor", "codex_posture", "acp_permission_preset",
             "permission_mode"
         ]);
+    }
+
+    static readonly string[] TwelveKeys = [
+        "daemon_name", "prompt", "model", "effort", "repo_path", "tools",
+        "attachment_ids", "visibility", "grants", "vendor", "codex_posture", "acp_permission_preset"
+    ];
+
+    [Test]
+    public async Task A_chosen_account_adds_the_account_id_key() {
+        var json = Payload(new LaunchRequest("kcap-dev", "/repo", "claude", "go", AccountId: "a1"));
+        var keys = json.EnumerateObject().Select(p => p.Name).ToArray();
+
+        await Assert.That(keys).IsEquivalentTo([.. TwelveKeys, "account_id"]);
+        await Assert.That(json.GetProperty("account_id").GetString()).IsEqualTo("a1");
+    }
+
+    [Test]
+    public async Task A_blank_account_id_is_sent_as_no_key() {
+        var json = Payload(new LaunchRequest("kcap-dev", "/repo", "claude", "go", AccountId: "  "));
+        var keys = json.EnumerateObject().Select(p => p.Name).ToArray();
+
+        await Assert.That(keys).IsEquivalentTo(TwelveKeys);
     }
 }

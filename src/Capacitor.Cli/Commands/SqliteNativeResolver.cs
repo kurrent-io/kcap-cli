@@ -181,22 +181,7 @@ internal static class SqliteNativeResolver {
 
         // Some runtimes report a versioned/portable RID (e.g. "osx.15-arm64"); fall back to
         // a canonical os-arch[-musl] form.
-        var arch = RuntimeInformation.ProcessArchitecture switch {
-            Architecture.Arm64 => "arm64",
-            Architecture.X64   => "x64",
-            var other          => other.ToString().ToLowerInvariant(),
-        };
-        if (OperatingSystem.IsWindows()) return $"win-{arch}";
-        if (OperatingSystem.IsMacOS())   return $"osx-{arch}";
-        return IsMusl() ? $"linux-musl-{arch}" : $"linux-{arch}";
-    }
-
-    static bool IsMusl() {
-        try {
-            return Directory.Exists("/etc/apk")
-                || File.Exists("/lib/ld-musl-x86_64.so.1")
-                || File.Exists("/lib/ld-musl-aarch64.so.1");
-        } catch { return false; }
+        return RuntimeRid.Current();
     }
 
     internal static string SelfVersion() {

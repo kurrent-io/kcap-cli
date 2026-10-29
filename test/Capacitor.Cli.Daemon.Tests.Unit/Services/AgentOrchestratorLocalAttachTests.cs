@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.Resume;
 using Capacitor.Cli.Daemon.Harness.Claude;
 using Capacitor.Cli.Daemon.Harness.Codex;
 using Capacitor.Cli.Core.Policy;
@@ -11,6 +12,7 @@ using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Pty;
 using Microsoft.Extensions.Logging.Abstractions;
+using TUnit.Assertions.Enums;
 using TUnit.Core.Enums;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
@@ -71,10 +73,27 @@ public class AgentOrchestratorLocalAttachTests {
     }
 
     [Test]
-    public async Task Claude_passthrough_forwards_user_args_verbatim() {
+    public async Task Claude_passthrough_pins_a_fresh_session_ahead_of_the_user_args() {
         var launcher = new ClaudeLauncher(LauncherCfg(), TestHarnesses.Under(Home), NullLogger<ClaudeLauncher>.Instance);
         var a = launcher.BuildPassthrough(CtxFor("/r"), ["--model", "opus", "fix it"]);
-        await Assert.That(a.Args).IsEquivalentTo(new[] { "--model", "opus", "fix it" });
+
+        await Assert.That(Guid.TryParseExact(a.SessionId, "D", out _)).IsTrue();
+        await Assert.That(a.Args).IsEquivalentTo(new[] { "--session-id", a.SessionId!, "--model", "opus", "fix it" }, CollectionOrdering.Matching);
+    }
+
+    /// <summary>Claude refuses <c>--session-id</c> beside a flag that picks the session itself.</summary>
+    [Test]
+    public async Task Claude_passthrough_forwards_args_that_choose_the_session_verbatim() {
+        var launcher = new ClaudeLauncher(LauncherCfg(), TestHarnesses.Under(Home), NullLogger<ClaudeLauncher>.Instance);
+        const string resumed = "0123abcd-0000-4000-8000-0123456789ab";
+
+        var continued = launcher.BuildPassthrough(CtxFor("/r"), ["-c"]);
+        var resume    = launcher.BuildPassthrough(CtxFor("/r"), ["--resume", resumed]);
+
+        await Assert.That(continued.Args).IsEquivalentTo(new[] { "-c" });
+        await Assert.That(continued.SessionId).IsNull();
+        await Assert.That(resume.Args).IsEquivalentTo(new[] { "--resume", resumed });
+        await Assert.That(resume.SessionId).IsEqualTo(resumed);
     }
 
     [Test]
@@ -183,7 +202,9 @@ public class AgentOrchestratorLocalAttachTests {
         using var tmp = new TempDir();
         var server    = new TripwireServerConnection();
         var pty       = new EnvCapturingPtyFactory();
-        var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", "spy-claude") };
+        var launchers = new Dictionary<string, IHostedAgentLauncher> {
+            ["claude"] = new SpyHostedAgentLauncher("claude", "spy-claude") { PassthroughSessionId = "0123abcd-0000-4000-8000-0123456789ab" }
+        };
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, pty, launchers);
 
         foreach (var isPrivate in new[] { false, true }) {
@@ -229,6 +250,28 @@ public class AgentOrchestratorLocalAttachTests {
         await Assert.That(pubAgent.TranscriptPath).IsEqualTo("/q.jsonl");
         await Assert.That(pubServer.Calls).Contains(nameof(ServerConnection.AgentStatusChangedAsync));
         await Assert.That(pubServer.Calls).Contains(nameof(ServerConnection.AppendAgentRunEventAsync));
+    }
+
+    [Test]
+    public async Task Discovery_stops_when_agent_exits_before_writing_transcript() {
+        var server = new TripwireServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var agent = new AgentInstance("exit-1", null, "", null, "/r", "claude",
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow };
+        orch.RegisterAgentForTest(agent);
+
+        var run = orch.RunDiscoveryForTest(agent, _ => {
+            agent.ExitedCts.Cancel();
+            return ("sid-after-exit", "/late.jsonl");
+        });
+
+        await run;
+        await Assert.That(agent.SessionId).IsNull();
+        await Assert.That(agent.TranscriptPath).IsNull();
+        await Assert.That(server.Calls.Count).IsEqualTo(0);
     }
 
     [Test]
@@ -308,6 +351,27 @@ public class AgentOrchestratorLocalAttachTests {
         await Assert.That(pty.LastEnv!.ContainsKey("KCAP_URL")).IsTrue();
         await Assert.That(pty.LastEnv!.ContainsKey("KCAP_AGENT_ID")).IsTrue();
         await Assert.That(pty.LastEnv!.ContainsKey("KCAP_RENDERED_AGENT")).IsTrue();
+    }
+
+    [Test]
+    public async Task Registered_spawn_reports_the_frame_start_title() {
+        using var tmp = new TempDir();
+
+        var server    = new TripwireServerConnection();
+        var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", "spy-claude") };
+
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new EnvCapturingPtyFactory(), launchers);
+
+        var readBuf = new MemoryStream();
+        await FrameCodec.WriteAsync(readBuf, LocalFrame.Detach(), default);
+        readBuf.Position = 0;
+        using var client = new DuplexTestStream(readBuf, new MemoryStream());
+
+        var title = new AgentStartTitle("fix the login redirect", Derived: true);
+        var spawn = FrameCodec.Spawn("claude", WorkLocation.BorrowedCwd, isPrivate: false, tmp.Path, ["fix the login redirect"], 80, 24, title);
+        await orch.HandleLocalSpawnAsync(spawn, client, default);
+
+        await Assert.That(server.RegisteredTitles).IsEquivalentTo(new AgentStartTitle?[] { title });
     }
 
     // Consent: the owner consent gate lives in HandleLaunchAgentCore (the SERVER-driven launch
@@ -746,7 +810,7 @@ public class AgentOrchestratorLocalAttachTests {
             });
 
             var config = new DaemonConfig { Store = daemons.Store, Name = "test", ServerUrl = "http://127.0.0.1:1" };
-            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), NullLogger<LocalControlServer>.Instance);
+            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), TestFences.Ipc(config, orch), TestShutdown.Ipc(orch, TestCoordinator(daemons.Store)), TestAccountsIpc.Inert(), NullLogger<LocalControlServer>.Instance);
             await listener.StartAsync(cts.Token);
 
             var sockPath = daemons.Store.SocketPath("test");
@@ -785,7 +849,7 @@ public class AgentOrchestratorLocalAttachTests {
             var server = new CaptureServerConnection();
             orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
             orch.RegisterAgentForTest(new AgentInstance(
-                "agent-xyz", null, "", null, "/tmp/repo", "claude",
+                "agent-xyz", "Fix the flaky test", "", null, "/tmp/repo", "claude",
                 new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo("/tmp/repo", "", "/tmp/repo"), new CancellationTokenSource()
             ) {
             ActivityClock = new AgentActivityClock(TimeProvider.System),
@@ -795,7 +859,7 @@ public class AgentOrchestratorLocalAttachTests {
             });
 
             var config = new DaemonConfig { Store = daemons.Store, Name = "test", ServerUrl = "http://127.0.0.1:1" };
-            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), NullLogger<LocalControlServer>.Instance);
+            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), TestFences.Ipc(config, orch), TestShutdown.Ipc(orch, TestCoordinator(daemons.Store)), TestAccountsIpc.Inert(), NullLogger<LocalControlServer>.Instance);
             await listener.StartAsync(cts.Token);
 
             var sockPath = daemons.Store.SocketPath("test");
@@ -807,25 +871,20 @@ public class AgentOrchestratorLocalAttachTests {
             await sock.ConnectAsync(new UnixDomainSocketEndPoint(sockPath), cts.Token);
             await using var stream = new NetworkStream(sock, ownsSocket: false);
 
-            await FrameCodec.WriteAsync(stream, new LocalFrame(FrameType.List), cts.Token);
+            await FrameCodec.WriteAsync(stream, LocalFrame.ListWithTitles(), cts.Token);
             var resp = await FrameCodec.ReadAsync(stream, cts.Token);
 
             await Assert.That(resp!.Type).IsEqualTo(FrameType.AgentList);
             await Assert.That(resp.Text).Contains("agent-xyz");
             await Assert.That(resp.Text).Contains("Running");
+            await Assert.That(resp.Text).EndsWith("\tFix the flaky test");
         } finally {
             if (orch is not null) await orch.DisposeAsync();
             if (listener is not null) { await listener.StopAsync(CancellationToken.None); listener.Dispose(); }
         }
     }
 
-    /// <summary>
-    /// Pins the one hop nothing else exercises: <see cref="LocalControlServer"/> decoding a raw
-    /// StopV2 frame off a real socket and forwarding its force flag to the orchestrator. The codec
-    /// round-trip (FrameCodecTests) and the handler (StopV2AndReadReply above) are each covered in
-    /// isolation; only a real connection proves the server's frame switch wires them together.
-    /// </summary>
-    static async Task<LocalFrame?> StopV2OverRealSocketAsync(string daemonName, bool force, string agentId) {
+    static async Task<LocalFrame?> StopV2OverRealSocketAsync(string daemonName, LocalFrame request) {
         using var daemons = new TempDaemonStore();
         using var cts = new CancellationTokenSource(WaitHarness.Bounded);
 
@@ -838,7 +897,7 @@ public class AgentOrchestratorLocalAttachTests {
             orch.SeedAgentForTest("flow-1", kind: LaunchKind.ReviewFlow, flowRunId: "flow-7f3a", flowRole: "reviewer");
 
             var config = new DaemonConfig { Store = daemons.Store, Name = daemonName, ServerUrl = "http://127.0.0.1:1" };
-            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), NullLogger<LocalControlServer>.Instance);
+            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), TestFences.Ipc(config, orch), TestShutdown.Ipc(orch, TestCoordinator(daemons.Store)), TestAccountsIpc.Inert(), NullLogger<LocalControlServer>.Instance);
             await listener.StartAsync(cts.Token);
 
             var sockPath = daemons.Store.SocketPath(daemonName);
@@ -850,7 +909,7 @@ public class AgentOrchestratorLocalAttachTests {
             await sock.ConnectAsync(new UnixDomainSocketEndPoint(sockPath), cts.Token);
             await using var stream = new NetworkStream(sock, ownsSocket: false);
 
-            await FrameCodec.WriteAsync(stream, LocalFrame.StopV2(force, agentId), cts.Token);
+            await FrameCodec.WriteAsync(stream, request, cts.Token);
 
             return await FrameCodec.ReadAsync(stream, cts.Token);
         } finally {
@@ -861,7 +920,7 @@ public class AgentOrchestratorLocalAttachTests {
 
     [Test, ExcludeOn(OS.Windows)] // Unix-domain socket path
     public async Task Local_socket_stopv2_without_force_refuses_a_protected_agent_end_to_end() {
-        var resp = await StopV2OverRealSocketAsync("test-stopv2-refuse", force: false, "flow-1");
+        var resp = await StopV2OverRealSocketAsync("test-stopv2-refuse", LocalFrame.StopV2(force: false, "flow-1"));
 
         await Assert.That(resp!.Type).IsEqualTo(FrameType.Error);
         await Assert.That(resp.Text).Contains("--force");
@@ -869,10 +928,19 @@ public class AgentOrchestratorLocalAttachTests {
 
     [Test, ExcludeOn(OS.Windows)] // Unix-domain socket path
     public async Task Local_socket_stopv2_with_force_stops_a_protected_agent_end_to_end() {
-        var resp = await StopV2OverRealSocketAsync("test-stopv2-force", force: true, "flow-1");
+        var resp = await StopV2OverRealSocketAsync("test-stopv2-force", LocalFrame.StopV2(force: true, "flow-1"));
 
         await Assert.That(resp!.Type).IsEqualTo(FrameType.StopAck);
         await Assert.That(resp.Text).IsEqualTo("flow-1\tstopped");
+    }
+
+    [Test, ExcludeOn(OS.Windows)]
+    public async Task Local_socket_malformed_stopv2_returns_a_protocol_error() {
+        var resp = await StopV2OverRealSocketAsync("test-stopv2-invalid", new LocalFrame(FrameType.StopV2));
+
+        await Assert.That(resp).IsNotNull();
+        await Assert.That(resp!.Type).IsEqualTo(FrameType.Error);
+        await Assert.That(resp.Text).Contains("malformed StopV2");
     }
 
     [Test]
@@ -884,7 +952,7 @@ public class AgentOrchestratorLocalAttachTests {
         orch.SeedAgentForTest("flow-1", kind: LaunchKind.ReviewFlow, flowRunId: "flow-7f3a", flowRole: "reviewer");
 
         using var client = new DuplexTestStream(new MemoryStream(), new MemoryStream());
-        await orch.HandleLocalListAsync(client, default);
+        await orch.HandleLocalListAsync(withTitles: false, withState: false, client, default);
         client.WrittenStream.Position = 0;
         var reply = await FrameCodec.ReadAsync(client.WrittenStream, default);
 
@@ -953,12 +1021,57 @@ public class AgentOrchestratorLocalAttachTests {
         await Assert.That(pty.Writes).IsEquivalentTo(new[] { "hello" });
     }
 
+    /// A PR-review agent is a dialogue the reviewer types into, unlike a flow participant.
+    [Test]
+    public async Task Attaching_to_a_review_agent_stays_read_write() {
+        var             server = new TripwireServerConnection();
+        await using var orch   = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var             pty    = new RecordingPtyProcess();
+        orch.SeedAgentForTest("rev-1", kind: LaunchKind.Review, pty: pty);
+
+        var readBuf = new MemoryStream();
+        await FrameCodec.WriteAsync(readBuf, LocalFrame.Stdin("hello"u8.ToArray()), default);
+        await FrameCodec.WriteAsync(readBuf, LocalFrame.Detach(), default);
+        readBuf.Position = 0;
+        using var client = new DuplexTestStream(readBuf, new MemoryStream());
+
+        await orch.HandleLocalAttachAsync("rev-1", client, default);
+
+        client.WrittenStream.Position = 0;
+        var first = await FrameCodec.ReadAsync(client.WrittenStream, default);
+        await Assert.That(first!.Type).IsEqualTo(FrameType.Attached);
+        await Assert.That(pty.Writes).IsEquivalentTo(new[] { "hello" });
+    }
+
+    /// The stamp is the one the resume ledger records as started_at, so a client can tell which runtime it reached.
+    [Test]
+    public async Task An_attach_asking_for_the_runtime_is_told_its_start_before_the_acknowledgement() {
+        var             server = new TripwireServerConnection();
+        await using var orch   = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var             started = new DateTime(2026, 10, 20, 9, 30, 15, DateTimeKind.Utc).AddTicks(7);
+        orch.SeedAgentForTest("plain-1", createdAt: started, pty: new RecordingPtyProcess());
+
+        var readBuf = new MemoryStream();
+        await FrameCodec.WriteAsync(readBuf, LocalFrame.Detach(), default);
+        readBuf.Position = 0;
+        using var client = new DuplexTestStream(readBuf, new MemoryStream());
+
+        await orch.HandleLocalAttachAsync("plain-1", client, default, reportRuntime: true);
+
+        client.WrittenStream.Position = 0;
+        var first = await FrameCodec.ReadAsync(client.WrittenStream, default);
+        var second = await FrameCodec.ReadAsync(client.WrittenStream, default);
+        await Assert.That(first!.Type).IsEqualTo(FrameType.RuntimeStarted);
+        await Assert.That(first.StartedAt).IsEqualTo(new DateTimeOffset(started));
+        await Assert.That(second!.Type).IsEqualTo(FrameType.Attached);
+    }
+
     // ── Test doubles for the local-spawn lifecycle ──────────────────────
 
     sealed class EnvCapturingPtyFactory : IPtyProcessFactory {
         public Dictionary<string, string>? LastEnv { get; private set; }
 
-        public IPtyProcess Spawn(string command, string[] args, string cwd, Dictionary<string, string>? extraEnv = null, ushort cols = 120, ushort rows = 40) {
+        public IPtyProcess Spawn(string command, string[] args, string cwd, Dictionary<string, string>? extraEnv = null, ushort cols = 120, ushort rows = 40, IReadOnlyCollection<string>? removeEnv = null) {
             LastEnv = extraEnv;
 
             return new StubPtyProcess();
@@ -1040,7 +1153,7 @@ public class AgentOrchestratorLocalAttachTests {
     /// invoke none of them — the test asserts Calls is empty.
     sealed class TripwireServerConnection() : ServerConnection(
         new() { Name = "test", ServerUrl = "http://127.0.0.1:1" },
-        UnusedTokenStore.Create(),
+        new FixedCredentialSource(),
         NullLoggerFactory.Instance,
         NullLogger<ServerConnection>.Instance
     , TimeProvider.System) {
@@ -1052,9 +1165,10 @@ public class AgentOrchestratorLocalAttachTests {
 
         public override Task SendTerminalDimensionsAsync(string agentId, int cols, int rows) { LastDims = (cols, rows); Calls.Add(nameof(SendTerminalDimensionsAsync)); return Task.CompletedTask; }
         public override Task LaunchFailedAsync(string agentId, string reason) { Calls.Add(nameof(LaunchFailedAsync)); return Task.CompletedTask; }
-        public override Task AgentRegisteredAsync(string agentId, string? prompt, string? model, string? effort, string? repoPath, string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null, string? runtimeTransport = null) { Calls.Add(nameof(AgentRegisteredAsync)); return Task.CompletedTask; }
+        public ConcurrentBag<AgentStartTitle?> RegisteredTitles { get; } = [];
+        public override Task<AgentRegisteredResponse> AgentRegisteredAsync(string agentId, string? prompt, string? model, string? effort, string? repoPath, string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null, string? runtimeTransport = null, string? vendor = null, AgentStartTitle? title = null, string? continuesAgentId = null, string? accountDirectory = null, string? accountId = null, string? accountLabel = null) { Calls.Add(nameof(AgentRegisteredAsync)); RegisteredTitles.Add(title); return Task.FromResult(AgentRegisteredResponse.Accepted); }
         public override Task AgentStatusChangedAsync(string agentId, string status, string? sessionId) { Calls.Add(nameof(AgentStatusChangedAsync)); return Task.CompletedTask; }
-        public override Task AgentUnregisteredAsync(string agentId) { Calls.Add(nameof(AgentUnregisteredAsync)); return Task.CompletedTask; }
+        public override Task AgentUnregisteredAsync(string agentId, string? stopReason = null) { Calls.Add(nameof(AgentUnregisteredAsync)); return Task.CompletedTask; }
         public override Task UpdateRepoPathsAsync() { Calls.Add(nameof(UpdateRepoPathsAsync)); return Task.CompletedTask; }
         public override Task SendTerminalOutputAsync(string agentId, string base64Data, CancellationToken ct = default) { Calls.Add(nameof(SendTerminalOutputAsync)); return Task.CompletedTask; }
         public override Task AppendAgentRunEventAsync(string agentId, object evt) { Calls.Add(nameof(AppendAgentRunEventAsync)); RunEvents.Add(evt); return Task.CompletedTask; }
@@ -1182,16 +1296,20 @@ public class AgentOrchestratorLocalAttachTests {
     }
 
     [Test]
-    public async Task Stopping_a_flow_participant_with_force_succeeds() {
+    [Arguments("agent_exited", "agent_stopped")]
+    [Arguments("reviewer_ttl_expired", "reviewer_ttl_expired")]
+    public async Task Stopping_a_flow_participant_with_force_preserves_end_attribution(string reason, string expected) {
         var server = new TripwireServerConnection();
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         orch.SeedAgentForTest("flow-1", kind: LaunchKind.ReviewFlow, flowRunId: "flow-7f3a", flowRole: "reviewer");
+        orch.GetAgentForTest("flow-1")!.PendingEndReason = reason;
 
         var reply = await StopV2AndReadReply(orch, force: true, "flow-1");
 
         await Assert.That(reply!.Type).IsEqualTo(FrameType.StopAck);
         await Assert.That(reply.Text).IsEqualTo("flow-1\tstopped");
         await Assert.That(orch.GetAgentForTest("flow-1")!.Status).IsEqualTo("Completed");
+        await Assert.That(orch.GetAgentForTest("flow-1")!.PendingEndReason).IsEqualTo(expected);
     }
 
     [Test]
@@ -1215,7 +1333,7 @@ public class AgentOrchestratorLocalAttachTests {
     public async Task Stopping_a_prior_incarnation_flow_survivor_without_force_is_refused_before_reaping() {
         // Not in _agents — this daemon incarnation never saw it — but its persisted PID record
         // says it was a review-flow participant. The refusal must fire off the RECORD's Kind
-        // before TryStopByPidRecordAsync (and its live-process reap) ever runs.
+        // before StopByPidRecordAsync (and its live-process reap) ever runs.
         var server = new TripwireServerConnection();
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         orch.WritePidRecordForTest(new AgentPidRecord(
@@ -1233,7 +1351,7 @@ public class AgentOrchestratorLocalAttachTests {
 
     [Test]
     public async Task Stopping_a_prior_incarnation_flow_survivor_with_force_bypasses_the_kind_gate() {
-        // --force must reach TryStopByPidRecordAsync itself (kept policy-free) rather than being
+        // --force must reach StopByPidRecordAsync itself (kept policy-free) rather than being
         // turned back by the new gate above it.
         var server = new TripwireServerConnection();
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
@@ -1252,6 +1370,82 @@ public class AgentOrchestratorLocalAttachTests {
         await Assert.That(reply!.Type).IsEqualTo(FrameType.StopAck);
         await Assert.That(reply.Text).IsEqualTo("ghost-flow-2\tstopped");
         await Assert.That(orch.PidRecordsForTest().Any(r => r.AgentId == "ghost-flow-2")).IsFalse();
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Stopping_an_absent_agent_reports_missing(bool force) {
+        var server = new TripwireServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        var reply = await StopV2AndReadReply(orch, force, "finished-agent");
+
+        await Assert.That(reply!.Type).IsEqualTo(FrameType.StopAck);
+        await Assert.That(reply.Text).IsEqualTo("finished-agent\tmissing");
+    }
+
+    [Test]
+    public async Task Legacy_stop_of_an_absent_agent_keeps_its_error_response() {
+        var server = new TripwireServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        var reply = await StopAndReadReply(orch, "finished-agent");
+
+        await Assert.That(reply!.Type).IsEqualTo(FrameType.Error);
+        await Assert.That(reply.Text).IsEqualTo("no such agent finished-agent");
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Stopping_an_agent_with_a_corrupt_record_reports_failed(bool quarantined) {
+        var server = new TripwireServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var agentsDir = Path.Combine(orch.PidRecordRootForTest, "agents");
+        Directory.CreateDirectory(agentsDir);
+        var path = Path.Combine(agentsDir, AgentFileNames.For("corrupt-agent") + ".json");
+        File.WriteAllText(path, "{ broken record");
+        if (quarantined) orch.PidRecordsForTest();
+
+        var reply = await StopV2AndReadReply(orch, force: true, "corrupt-agent");
+
+        await Assert.That(reply!.Type).IsEqualTo(FrameType.StopAck);
+        await Assert.That(reply.Text).IsEqualTo("corrupt-agent\tfailed");
+        await Assert.That(File.Exists(path) || File.Exists(path + ".corrupt")).IsTrue();
+    }
+
+    [Test]
+    public async Task Stopping_an_agent_with_an_unreadable_record_directory_reports_failed() {
+        var server = new TripwireServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        Directory.CreateDirectory(orch.PidRecordRootForTest);
+        File.WriteAllText(Path.Combine(orch.PidRecordRootForTest, "agents"), "obstructed directory");
+
+        var reply = await StopV2AndReadReply(orch, force: true, "unknown-agent");
+
+        await Assert.That(reply!.Type).IsEqualTo(FrameType.StopAck);
+        await Assert.That(reply.Text).IsEqualTo("unknown-agent\tfailed");
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Stopping_a_survivor_with_unconfirmed_identity_reports_failed_and_retains_its_record(bool force) {
+        var server = new TripwireServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        using var dummy = DummyProcess.StartSleep(30);
+        await Assert.That(ProcessIdentity.MatchesTri(dummy.Pid, "")).IsNull();
+        orch.WritePidRecordForTest(new AgentPidRecord(
+            "unconfirmed-agent", dummy.Pid, "", PidIdentityKind.IdentityUnavailable, "Default", "codex",
+            "", "", orch.DaemonIdForTest, orch.DaemonEpochForTest, DateTimeOffset.UtcNow));
+
+        var reply = await StopV2AndReadReply(orch, force, "unconfirmed-agent");
+
+        await Assert.That(reply!.Type).IsEqualTo(FrameType.StopAck);
+        await Assert.That(reply.Text).IsEqualTo("unconfirmed-agent\tfailed");
+        await Assert.That(ProcessIdentity.IsAlive(dummy.Pid)).IsTrue();
+        await Assert.That(orch.PidRecordsForTest().Any(r => r.AgentId == "unconfirmed-agent")).IsTrue();
     }
 
     [Test]
@@ -1344,6 +1538,30 @@ public class AgentOrchestratorLocalAttachTests {
         public void Resize(ushort     _, ushort __) { }
         public void SendInterrupt() { }
     }
+    /// The title column only appears when the client asks: an older CLI refuses any table that is
+    /// not 3 or 6 columns wide.
+    [Test]
+    public async Task Local_list_appends_the_title_column_only_on_request() {
+        var server = new TripwireServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        orch.SeedAgentForTest("titled-1", prompt: "Fix the\tflaky test");
+
+        async Task<string[]> ListAsync(bool withTitles) {
+            using var client = new DuplexTestStream(new MemoryStream(), new MemoryStream());
+            await orch.HandleLocalListAsync(withTitles, withState: false, client, default);
+            client.WrittenStream.Position = 0;
+            var reply = await FrameCodec.ReadAsync(client.WrittenStream, default);
+
+            return reply!.Text.Split('\t');
+        }
+
+        await Assert.That((await ListAsync(withTitles: false)).Length).IsEqualTo(6);
+
+        var cols = await ListAsync(withTitles: true);
+        await Assert.That(cols.Length).IsEqualTo(7);
+        await Assert.That(cols[6]).IsEqualTo("Fix the flaky test");
+    }
+
     [Test]
     public async Task Local_list_neutralises_delimiters_inside_a_free_form_field() {
         // Repo paths and flow roles are free-form and may legally hold a tab or newline. Emitted
@@ -1356,7 +1574,7 @@ public class AgentOrchestratorLocalAttachTests {
             flowRunId: "flow\t7f3a", flowRole: "rev\niewer");
 
         using var client = new DuplexTestStream(new MemoryStream(), new MemoryStream());
-        await orch.HandleLocalListAsync(client, default);
+        await orch.HandleLocalListAsync(withTitles: false, withState: false, client, default);
         client.WrittenStream.Position = 0;
         var reply = await FrameCodec.ReadAsync(client.WrittenStream, default);
 
@@ -1370,4 +1588,102 @@ public class AgentOrchestratorLocalAttachTests {
         await Assert.That(cols[5]).IsEqualTo("rev iewer");
     }
 
+    /// Ledger rows ride only the state request: a client that never asked for the state column
+    /// would offer `stop --all` an agent that has no process to stop.
+    [Test]
+    public async Task Interrupted_ledger_entries_appear_in_the_agent_list() {
+        using var tmp = new TempDir();
+        var server = new TripwireServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var ledger = orch.ResumeLedger!;
+        var now    = TimeProvider.System.GetUtcNow();
+        var next   = ResumeLedgerEntries.For("next-1", ResumeState.Resuming);
+        ledger.Write(next with { UpdatedAt = now, ResumingAt = now, Launch = next.Launch with { WorktreePath = tmp.CreateDir("wt").Path, Title = "Coming back" } });
+        ledger.Write(ResumeLedgerEntries.For("gone-1", ResumeState.Interrupted) with { LastError = "worktree\tmissing", UpdatedAt = now });
+        orch.LoadResumeLedger();
+        orch.SeedAgentForTest("live-1");
+        ledger.Write(ResumeLedgerEntries.For("live-1", ResumeState.Running));
+
+        async Task<string[][]> ListAsync(bool withState) {
+            using var client = new DuplexTestStream(new MemoryStream(), new MemoryStream());
+            await orch.HandleLocalListAsync(withTitles: true, withState, client, default);
+            client.WrittenStream.Position = 0;
+            var reply = await FrameCodec.ReadAsync(client.WrittenStream, default);
+
+            return [.. reply!.Text.Split('\n').Select(l => l.Split('\t'))];
+        }
+
+        var rows = (await ListAsync(withState: true)).ToDictionary(r => r[0]);
+
+        await Assert.That(rows.Count).IsEqualTo(3);
+        await Assert.That(rows.Values.All(r => r.Length == 8)).IsTrue();
+        await Assert.That(rows["live-1"][7]).IsEqualTo("running");
+        await Assert.That(rows["next-1"][1]).IsEqualTo("Resuming");
+        await Assert.That(rows["next-1"][6]).IsEqualTo("Coming back");
+        await Assert.That(rows["next-1"][7]).IsEqualTo("resuming");
+        await Assert.That(rows["gone-1"][1]).IsEqualTo("Interrupted");
+        await Assert.That(rows["gone-1"][2]).IsEqualTo("/repo");
+        await Assert.That(rows["gone-1"][3]).IsEqualTo("agent");
+        await Assert.That(rows["gone-1"][7]).IsEqualTo("interrupted (worktree missing)");
+
+        var plain = await ListAsync(withState: false);
+        await Assert.That(plain.Length).IsEqualTo(1);
+        await Assert.That(plain[0].Length).IsEqualTo(7);
+    }
+
+    static async Task<LocalFrame?> StopV2Async(AgentOrchestrator orch, string agentId) {
+        using var client = new DuplexTestStream(new MemoryStream(), new MemoryStream());
+        await orch.HandleLocalStopV2Async(force: false, agentId, client, default);
+        client.WrittenStream.Position = 0;
+
+        return await FrameCodec.ReadAsync(client.WrittenStream, default);
+    }
+
+    static async Task<string[]> ListedIdsAsync(AgentOrchestrator orch) {
+        using var client = new DuplexTestStream(new MemoryStream(), new MemoryStream());
+        await orch.HandleLocalListAsync(withTitles: true, withState: true, client, default);
+        client.WrittenStream.Position = 0;
+        var reply = await FrameCodec.ReadAsync(client.WrittenStream, default);
+
+        return [.. reply!.Text.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.Split('\t')[0])];
+    }
+
+    [Test]
+    public async Task Stopping_an_interrupted_entry_deletes_it_and_its_ring() {
+        var server = new TripwireServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var ledger = orch.ResumeLedger!;
+        ledger.Write(ResumeLedgerEntries.For("gone-1", ResumeState.Interrupted) with { LastError = "worktree_missing" });
+        await File.WriteAllBytesAsync(ledger.RingPath("gone-1"), "earlier"u8.ToArray());
+
+        var reply = await StopV2Async(orch, "gone-1");
+
+        await Assert.That(reply!.Type).IsEqualTo(FrameType.StopAck);
+        await Assert.That(reply.Text).IsEqualTo("gone-1\tstopped");
+        await Assert.That(ledger.TryRead("gone-1")).IsNull();
+        await Assert.That(File.Exists(ledger.RingPath("gone-1"))).IsFalse();
+        await Assert.That(await ListedIdsAsync(orch)).DoesNotContain("gone-1");
+    }
+
+    [Test]
+    public async Task Stopping_a_resuming_candidate_keeps_the_lane_from_launching_it() {
+        using var tmp = new TempDir();
+        var server = new TripwireServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var ledger = orch.ResumeLedger!;
+        var now    = TimeProvider.System.GetUtcNow();
+        var next   = ResumeLedgerEntries.For("next-1", ResumeState.Resuming);
+        ledger.Write(next with { UpdatedAt = now, ResumingAt = now, Launch = next.Launch with { WorktreePath = tmp.CreateDir("wt").Path } });
+        orch.LoadResumeLedger();
+        var launched = false;
+        orch.ContinueEntry = (_, _, _) => { launched = true; return Task.FromResult(ResumeOutcome.Interrupted); };
+
+        var reply = await StopV2Async(orch, "next-1");
+        await orch.ResumeOnBootAsync(CancellationToken.None);
+
+        await Assert.That(reply!.Text).IsEqualTo("next-1\tstopped");
+        await Assert.That(launched).IsFalse();
+        await Assert.That(ledger.TryRead("next-1")).IsNull();
+        await Assert.That(await ListedIdsAsync(orch)).DoesNotContain("next-1");
+    }
 }

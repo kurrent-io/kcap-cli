@@ -8,13 +8,14 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.Daemon.Harness.Claude;
+using Capacitor.Cli.Daemon.Harness.Codex;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Capacitor.Cli.Daemon.Services;
 
 internal readonly record struct PermissionAttribution(string? AgentId, string SessionId, string? Cwd);
-internal readonly record struct AttributedAgent(string AgentId, PolicySnapshot? PolicySnapshot = null);
+internal readonly record struct AttributedAgent(string AgentId, PolicySnapshot? PolicySnapshot = null, bool BridgedSinceStart = false);
 
 /// <summary>
 /// Localhost-only HTTP bridge that fronts the server's permission flow for spawned
@@ -34,12 +35,15 @@ internal sealed partial class LocalPermissionBridge(
         ILoopbackPortSource            ports,
         TimeProvider time,
         PermissionPromptBroker?        broker      = null,
-        PermissionDecisionLog?         decisionLog = null
+        PermissionDecisionLog?         decisionLog = null,
+        PolicyJudgeGateway?            policyJudge = null,
+        ConfigRoot?                    judgeState  = null
     ) : IHostedService, IAsyncDisposable {
     const int    MaxBindAttempts = 15;
     const string PathSuffix        = "/permission-request";
     const string InputWaitSuffix   = "/input-wait";
     const string ToolSettledSuffix = "/tool-settled";
+    const string SubagentSuffix    = "/subagent";
 
     internal static readonly TimeSpan ResponseWriteTimeout = TimeSpan.FromSeconds(2);
     internal static readonly TimeSpan RequestReadTimeout   = TimeSpan.FromSeconds(2);
@@ -51,6 +55,7 @@ internal sealed partial class LocalPermissionBridge(
 
     readonly PermissionPromptBroker _broker      = broker ?? new();
     readonly PermissionDecisionLog? _decisionLog = decisionLog;
+    readonly PermissionRefusalLedger _refusals   = new();
     int _serverLegsInFlight;
 
     // One gate owns admission and the in-flight count together, so a snapshot taken under it
@@ -62,6 +67,9 @@ internal sealed partial class LocalPermissionBridge(
     internal int  InFlightHandlersForTest => Volatile.Read(ref _inFlight);
     internal bool AdmittingForTest { get { lock (_admission) return _admitting; } }
     internal Func<Task>? BeforeHandlerRunsForTest { get; set; }
+
+    /// <summary>The judge's share of one hosted permission request.</summary>
+    internal TimeSpan JudgeBudget { get; init; } = ClaudeHostedPolicySeam.JudgeBudget;
 
     internal PermissionPromptBroker BrokerForTest => _broker;
     internal PermissionDecisionLog? DecisionLogForTest => _decisionLog;
@@ -79,6 +87,12 @@ internal sealed partial class LocalPermissionBridge(
     /// Assigned by the orchestrator like <see cref="AttributeHandler"/>: receives the attributed
     /// agent id and what its hook reports as settled. Null = notices are acknowledged and dropped.
     internal Action<string, ToolSettledNotice>? ToolSettledHandler { get; set; }
+
+    /// Assigned by the orchestrator like <see cref="AttributeHandler"/>: receives the attributed
+    /// agent id, the subagent id a Claude hook reported, whether it reported the subagent alive,
+    /// and the report's <c>sent_at</c> in Unix milliseconds. Null = reports are acknowledged and
+    /// dropped.
+    internal Action<string, string, bool, long>? SubagentHandler { get; set; }
 
     internal int ServerLegsInFlightForTest => Volatile.Read(ref _serverLegsInFlight);
 
@@ -366,16 +380,21 @@ internal sealed partial class LocalPermissionBridge(
             : urlOrToken.Trim('/');
     }
 
+    // Runs until its own listener closes, not until the token fires: nothing else dequeues, and a
+    // context left queued is flushed by Close() with HttpListener's default empty 200, not a 503.
     async Task AcceptLoopAsync(CancellationToken ct) {
-        while (!ct.IsCancellationRequested && _listener!.IsListening) {
+        var listener = _listener!;
+        while (listener.IsListening) {
             HttpListenerContext context;
 
             try {
-                context = await _listener.GetContextAsync();
+                context = await listener.GetContextAsync();
             } catch (ObjectDisposedException) {
                 break;
             } catch (HttpListenerException) {
                 break;
+            } catch (InvalidOperationException) {
+                break;  // closed between the IsListening check and the call
             }
 
             bool admitted;
@@ -403,6 +422,10 @@ internal sealed partial class LocalPermissionBridge(
     }
 
     async Task HandleAsync(HttpListenerContext context, CancellationToken ct) {
+        // The hook denies any permission request the bridge does not answer, unseen by the ledger. A reviewer's
+        // requests never reach the judge, so only the shared token's count.
+        var permissionRequest = false;
+
         try {
             // This capability is deliberately routed before the permission-request parser. It has
             // one exact method/path, accepts no query or caller-selected path, and exists only on a
@@ -496,6 +519,13 @@ internal sealed partial class LocalPermissionBridge(
                 return;
             }
 
+            if (context.Request.HttpMethod == "POST" && path is not null
+             && path.EndsWith(SubagentSuffix, StringComparison.Ordinal)) {
+                await HandleSubagentAsync(context, path);
+
+                return;
+            }
+
             // Require token + vendor + endpoint match. The HttpListener prefix already routed us
             // here, but we re-validate explicitly so a stray prefix can't quietly admit anything.
             // Path shape: /{token}/{vendor}/permission-request.
@@ -544,6 +574,8 @@ internal sealed partial class LocalPermissionBridge(
                 return;
             }
 
+            permissionRequest = isShared;
+
             // Not bound to ct: a handler admitted before shutdown must still reach its own claim
             // below, so this reads under its own bounded RequestReadTimeout instead. Capped at
             // MaxPermissionRequestBodyBytes so an unbounded read from the local hook can't exhaust
@@ -552,8 +584,7 @@ internal sealed partial class LocalPermissionBridge(
             var       body    = await ReadCappedBodyAsync(context.Request.InputStream, MaxPermissionRequestBodyBytes, readCts.Token);
 
             if (body is null) {
-                context.Response.StatusCode = 413;
-                context.Response.Close();
+                RejectPermissionRequest(413);
 
                 return;
             }
@@ -566,15 +597,13 @@ internal sealed partial class LocalPermissionBridge(
                 // Malformed JSON from the local hook caller — that's a 400 (caller error),
                 // not a 500 (daemon failure). Without this branch the outer Exception catch
                 // would mislabel client-side parse errors as server faults.
-                context.Response.StatusCode = 400;
-                context.Response.Close();
+                RejectPermissionRequest(400);
 
                 return;
             }
 
             if (node is null) {
-                context.Response.StatusCode = 400;
-                context.Response.Close();
+                RejectPermissionRequest(400);
 
                 return;
             }
@@ -585,8 +614,7 @@ internal sealed partial class LocalPermissionBridge(
             var sessionId = node["session_id"]?.GetValue<string>()?.Replace("-", "");
 
             if (string.IsNullOrWhiteSpace(sessionId)) {
-                context.Response.StatusCode = 400;
-                context.Response.Close();
+                RejectPermissionRequest(400);
 
                 return;
             }
@@ -606,8 +634,7 @@ internal sealed partial class LocalPermissionBridge(
 
                 // Unattended participant: a well-formed tool name is required to classify.
                 if (string.IsNullOrWhiteSpace(toolName)) {
-                    context.Response.StatusCode = 400;
-                    context.Response.Close();
+                    RejectPermissionRequest(400);
 
                     return;
                 }
@@ -638,20 +665,23 @@ internal sealed partial class LocalPermissionBridge(
                 var canonicalSessionId = PermissionWire.Canonical(sessionId);
                 var attributed = canonicalSessionId is null ? null : AttributeHandler?.Invoke(new PermissionAttribution(
                     node["agent_id"]?.GetValue<string>(), canonicalSessionId, node["cwd"]?.GetValue<string>()));
+                // Every prompt of a run this daemon launched fresh passes through here, so its refusals are all known.
+                if (attributed is { BridgedSinceStart: true }) _refusals.MarkBridgedSinceStart(canonicalSessionId!);
                 var pending = attributed is { } a
                     ? BuildPending(Guid.NewGuid().ToString("N"), a.AgentId, canonicalSessionId!, vendor, toolName, toolInput, suggestions,
                         time.GetUtcNow().ToString("O"), ToolUseIdOf(node))
                     : null;
 
-                // The launched agent's own policy answers before a human is asked. The vendor gate
-                // is deliberate: a hosted Codex request parks unevaluated. Anything the evaluation
-                // throws leaves the request on the human lane rather than dropping it.
-                if (vendor is "claude" && attributed is { PolicySnapshot: { IsEmpty: false } snapshot } governed) {
+                // The launched agent's own policy, and the judge for a call no rule decided, answer
+                // before a human is asked. Anything the evaluation throws leaves the request on the human lane.
+                if (vendor is "claude" or "codex" && attributed is { PolicySnapshot: { IsEmpty: false } snapshot } governed) {
                     ClaudeHostedPolicyResult? policy = null;
                     try {
-                        policy = ClaudeHostedPolicySeam.Evaluate(
-                            canonicalSessionId!, governed.AgentId, snapshot, toolName, toolInput,
-                            node["cwd"]?.GetValue<string>(), time);
+                        var call = new ClaudeHostedPermissionCall(canonicalSessionId!, governed.AgentId, toolName, toolInput,
+                            node["cwd"]?.GetValue<string>(), ToolUseIdOf(node), TranscriptPathOf(node));
+                        policy = vendor == "codex"
+                            ? await CodexPtyPolicySeam.EvaluateAsync(call, snapshot, time, policyJudge, JudgeBudget, logger, _refusals, ct)
+                            : await ClaudeHostedPolicySeam.EvaluateAsync(call, snapshot, time, policyJudge, judgeState, JudgeBudget, logger, _refusals, ct);
                     } catch (Exception ex) {
                         LogPolicyEvaluationFailed(logger, ex, governed.AgentId);
                     }
@@ -667,7 +697,9 @@ internal sealed partial class LocalPermissionBridge(
                             _ = server.AppendAgentRunEventAsync(governed.AgentId, decided.Event);
                             // No Register: a call the policy answered raises no card, and the
                             // decision log plus the run event are its audit trail.
-                            await WriteResponseAsync(context, BuildHookResponseJson(new PermissionDecision(behavior, null, null), vendor), time);
+                            if (behavior == PermissionSettlements.Allow && pending is not null) _broker.OweCall(pending, SubagentIdOf(node));
+                            RecordRefusal(vendor, governed, canonicalSessionId, node, toolName, toolInput, behavior);
+                            await WriteResponseAsync(context, BuildHookResponseJson(new PermissionDecision(behavior, null, null), vendor, suggestions, toolName), time);
 
                             return;
                         }
@@ -685,6 +717,8 @@ internal sealed partial class LocalPermissionBridge(
                         LogRequestPermissionFailed(logger, ex, sessionId);
                         decision = new PermissionDecision("deny", null, null);
                     }
+
+                    RecordRefusal(vendor, attributed, canonicalSessionId, node, toolName, toolInput, decision.Behavior);
                 } else {
                     var settlementTask = _broker.Register(pending, SubagentIdOf(node));
                     _ = RunServerLegAsync(pending, toolName, toolInput, suggestions, settlementTask, ct);
@@ -696,7 +730,7 @@ internal sealed partial class LocalPermissionBridge(
                         // Shutdown: claim rather than inspect. Losing means another party settled first.
                         if (_broker.TrySettle(pending.RequestId, PermissionSettlements.DenyDecision,
                                 PermissionSettlements.Deny, PermissionSettlements.SourceDaemonShutdown)) {
-                            await WriteResponseAsync(context, BuildHookResponseJson(PermissionSettlements.DenyDecision, vendor), time);
+                            await WriteResponseAsync(context, BuildHookResponseJson(PermissionSettlements.DenyDecision, vendor, suggestions, toolName), time);
                             return;
                         }
                         settlement = await settlementTask;
@@ -705,14 +739,16 @@ internal sealed partial class LocalPermissionBridge(
                     _decisionLog?.Record(new PermissionDecisionRecord(
                         time.GetUtcNow().ToString("O"), pending.AgentId, pending.SessionId, pending.Vendor,
                         pending.ToolName, settlement.Outcome, settlement.Source));
-                    await WriteResponseAsync(context, BuildHookResponseJson(settlement.Decision, vendor), time);
+                    RecordRefusal(vendor, attributed, canonicalSessionId, node, toolName, toolInput, settlement.Decision.Behavior);
+                    await WriteResponseAsync(context, BuildHookResponseJson(settlement.Decision, vendor, suggestions, toolName), time);
                     return;
                 }
             }
 
-            await WriteResponseAsync(context, BuildHookResponseJson(decision, vendor), time);
+            await WriteResponseAsync(context, BuildHookResponseJson(decision, vendor, suggestions, toolName), time);
         } catch (Exception ex) {
             LogBridgeHandlerError(logger, ex);
+            if (permissionRequest) _refusals.MarkAllIncomplete();
 
             try {
                 context.Response.StatusCode = 500;
@@ -720,6 +756,13 @@ internal sealed partial class LocalPermissionBridge(
             } catch {
                 /* response already closed */
             }
+        }
+
+        // Which session was refused is unknown here, so every session loses its complete mark.
+        void RejectPermissionRequest(int status) {
+            if (permissionRequest) _refusals.MarkAllIncomplete();
+            context.Response.StatusCode = status;
+            context.Response.Close();
         }
     }
 
@@ -752,7 +795,8 @@ internal sealed partial class LocalPermissionBridge(
         var (sugg,  suggOmitted)    = Bound(suggestions);
         // Over-cap is dropped, not refused: the id only decorates a chat row.
         var id = toolUseId is { Length: > 0 } t && Encoding.UTF8.GetByteCount(t) <= PermissionWire.MaxToolUseIdBytes ? t : null;
-        return new PermissionPendingDto(requestId, agentId, sessionId, vendor, name, input, sugg, inputOmitted, suggOmitted, requestedAt, id);
+        return new PermissionPendingDto(requestId, agentId, sessionId, vendor, name, input, sugg, inputOmitted, suggOmitted, requestedAt, id,
+            SupportsAllowOnce: vendor is "claude" or "codex", SupportsAllowAlways: vendor == "claude");
 
         static (JsonElement?, bool) Bound(JsonElement? el) =>
             el is { } e && Encoding.UTF8.GetByteCount(e.GetRawText()) > PermissionWire.MaxElementBytes ? (null, true) : (el, false);
@@ -838,6 +882,34 @@ internal sealed partial class LocalPermissionBridge(
     static string? ToolUseIdOf(JsonNode node) =>
         node["tool_use_id"] is JsonValue v && v.TryGetValue<string>(out var id) ? id : null;
 
+    /// <summary>A human-lane deny reaches Claude or Codex as a hook deny, which neither transcript marks as a
+    /// refusal, so the judge learns of it only from here. Any deny counts: one no human gave can only make
+    /// the judge stricter.</summary>
+    void RecordRefusal(string vendor, AttributedAgent? attributed, string? sessionId, JsonNode node,
+            string? toolName, JsonElement? toolInput, string behavior) {
+        if (vendor is not ("claude" or "codex") || behavior != PermissionSettlements.Deny || sessionId is null)
+            return;
+
+        // A deny the ledger cannot describe still happened in the session, whichever agent it was attributed to.
+        if (attributed is not { PolicySnapshot.JudgeEnabled: true } governed) {
+            _refusals.MarkIncomplete(sessionId);
+            return;
+        }
+
+        try {
+            var call = new ClaudeHostedPermissionCall(sessionId, governed.AgentId,
+                toolName, toolInput, node["cwd"]?.GetValue<string>(), ToolUseIdOf(node), TranscriptPathOf(node));
+            if (vendor == "codex") CodexPtyPolicySeam.RecordRefusal(_refusals, call);
+            else ClaudeHostedPolicySeam.RecordRefusal(_refusals, call);
+        } catch (Exception ex) {
+            logger.LogDebug(ex, "Recording a hosted refusal for session {SessionId} failed", sessionId);
+            _refusals.MarkIncomplete(sessionId);
+        }
+    }
+
+    static string? TranscriptPathOf(JsonNode node) =>
+        node["transcript_path"] is JsonValue v && v.TryGetValue<string>(out var path) && path.Length > 0 ? path : null;
+
     static string? SubagentIdOf(JsonNode node) =>
         node["subagent_id"] is JsonValue v && v.TryGetValue<string>(out var id) && id.Length > 0 ? id : null;
 
@@ -915,7 +987,7 @@ internal sealed partial class LocalPermissionBridge(
     /// a body it cannot read a session and a verdict from.
     /// </summary>
     async Task HandleInputWaitAsync(HttpListenerContext context, string path) {
-        if (await ReadRelayAsync(context, path, InputWaitSuffix, reviewerAllowed: true) is not (var node, var sessionId)) return;
+        if (await ReadRelayAsync(context, path, InputWaitSuffix, reviewerAllowed: true) is not (var node, var sessionId, _)) return;
 
         var waiting = node["waiting"] is JsonValue verdict && verdict.TryGetValue<bool>(out var w) ? w : (bool?) null;
 
@@ -934,7 +1006,7 @@ internal sealed partial class LocalPermissionBridge(
     /// Shared token only: an unattended reviewer has no prompt a human could have answered, so
     /// its token buys it no say over the interactive agents' prompts.
     async Task HandleToolSettledAsync(HttpListenerContext context, string path) {
-        if (await ReadRelayAsync(context, path, ToolSettledSuffix, reviewerAllowed: false) is not (var node, var sessionId)) return;
+        if (await ReadRelayAsync(context, path, ToolSettledSuffix, reviewerAllowed: false) is not (var node, var sessionId, _)) return;
 
         if (!TryScope(node, "tool_use_id", PermissionWire.MaxToolUseIdBytes, out var toolUseId)
          || !TryScope(node, "subagent_id", PermissionWire.MaxAgentIdBytes, out var subagentId)) {
@@ -943,8 +1015,58 @@ internal sealed partial class LocalPermissionBridge(
             return;
         }
 
+        // Only a match key, never a scope: a name or input past the prompt's own caps was never
+        // held, so it is dropped and the notice still retires by id.
+        var toolName  = Str(node, "tool_name") is { Length: > 0 } name
+                     && Encoding.UTF8.GetByteCount(name) <= PermissionWire.MaxToolNameBytes ? name : null;
+        var toolInput = toolName is not null && ExtractElement(node, "tool_input") is { } input
+                     && Encoding.UTF8.GetByteCount(input.GetRawText()) <= PermissionWire.MaxElementBytes ? input : (JsonElement?)null;
+
+        var sentAt = node["sent_at"] is JsonValue stamp && stamp.TryGetValue<long>(out var ms) && ms > 0
+            ? DateTimeOffset.FromUnixTimeMilliseconds(ms) : (DateTimeOffset?)null;
+
         var attributed = AttributeHandler?.Invoke(new PermissionAttribution(Str(node, "agent_id"), sessionId, Str(node, "cwd")));
-        if (attributed is { } agent) ToolSettledHandler?.Invoke(agent.AgentId, new ToolSettledNotice(sessionId, toolUseId, subagentId));
+        if (attributed is { } agent)
+            ToolSettledHandler?.Invoke(agent.AgentId, new ToolSettledNotice(sessionId, toolUseId, subagentId, toolName, toolInput, sentAt));
+
+        Close(context, 204);
+    }
+
+    /// A Claude subagent's hook reporting the subagent alive or gone: <c>/{token}/claude/subagent</c>
+    /// with <c>session_id</c>, <c>subagent_id</c>, <c>live</c>, and the <c>agent_id</c>/<c>cwd</c> the
+    /// attribution ladder reads. Shared token only, like tool-settled: the ladder trusts the body's
+    /// own ids, so a reviewer token buys no say over another session's count. Only Claude's hooks
+    /// report subagents. A missing or non-integer <c>sent_at</c> is stamped on arrival. Answers 204
+    /// whether or not the ladder placed the agent.
+    async Task HandleSubagentAsync(HttpListenerContext context, string path) {
+        if (await ReadRelayAsync(context, path, SubagentSuffix, reviewerAllowed: false) is not (var node, var sessionId, var vendor)) return;
+
+        if (vendor is not "claude") {
+            Close(context, 404);
+
+            return;
+        }
+
+        if (!TryScope(node, "subagent_id", PermissionWire.MaxAgentIdBytes, out var subagentId) || subagentId is null) {
+            Close(context, 400);
+
+            return;
+        }
+
+        var live = node["live"] is JsonValue verdict && verdict.TryGetValue<bool>(out var l) ? l : (bool?) null;
+
+        if (live is null) {
+            Close(context, 400);
+
+            return;
+        }
+
+        var sentAt = node["sent_at"] is JsonValue stamp && stamp.TryGetValue<long>(out var s)
+            ? s
+            : time.GetUtcNow().ToUnixTimeMilliseconds();
+
+        var attributed = AttributeHandler?.Invoke(new PermissionAttribution(Str(node, "agent_id"), sessionId, Str(node, "cwd")));
+        if (attributed is { } agent) SubagentHandler?.Invoke(agent.AgentId, subagentId, live.Value, sentAt);
 
         Close(context, 204);
     }
@@ -963,7 +1085,7 @@ internal sealed partial class LocalPermissionBridge(
     /// The prologue the hook relays share: the shared token (or a live reviewer token, where the
     /// route admits one), a PTY vendor and a bounded JSON object carrying a session id. Null means
     /// the response is already closed with the refusal.
-    async Task<(JsonObject Node, string SessionId)?> ReadRelayAsync(
+    async Task<(JsonObject Node, string SessionId, string Vendor)?> ReadRelayAsync(
             HttpListenerContext context, string path, string suffix, bool reviewerAllowed) {
         var trimmed    = path.TrimStart('/');
         var firstSlash = trimmed.IndexOf('/');
@@ -1016,7 +1138,7 @@ internal sealed partial class LocalPermissionBridge(
             return null;
         }
 
-        return (node, sessionId);
+        return (node, sessionId, vendor);
     }
 
     static string? Str(JsonObject? node, string field) =>
@@ -1054,20 +1176,20 @@ internal sealed partial class LocalPermissionBridge(
         AgentActivityClock? ActivityClock = null,
         Func<string, string, CancellationToken, Task<(int Status, string Body)>>? SubmitForwarder = null);
 
-    static string BuildHookResponseJson(PermissionDecision decision, string vendor) =>
+    static string BuildHookResponseJson(PermissionDecision decision, string vendor, JsonElement? suggestions, string? toolName) =>
         vendor switch {
-            "claude" => BuildClaudeResponse(decision),
+            "claude" => BuildClaudeResponse(decision, suggestions, toolName),
             "codex"  => BuildCodexResponse(decision),
             _        => throw new InvalidOperationException($"Unsupported vendor: {vendor}")
         };
 
-    static string BuildClaudeResponse(PermissionDecision decision) {
-        // Mirrors the server-side BuildHookResponse. Claude expects camelCase keys here
-        // (hookSpecificOutput, hookEventName, applyPermissions, updatedInput) — these are
-        // outside the server's snake_case JSON convention because Claude defines them.
+    static string BuildClaudeResponse(PermissionDecision decision, JsonElement? suggestions, string? toolName) {
+        // Mirrors the server-side BuildHookResponse. The camelCase keys are Claude's own hook contract, outside kcap's
+        // snake_case convention.
         var decisionNode = new JsonObject { ["behavior"] = decision.Behavior };
 
-        if (decision.ApplyPermissions is { } ap) decisionNode["applyPermissions"] = JsonNode.Parse(ap.GetRawText());
+        if (decision.Behavior == PermissionSettlements.Allow && ClaudePermissions.UpdatesFor(decision.ApplyPermissions, suggestions, toolName) is { } updates)
+            decisionNode["updatedPermissions"] = updates;
         if (decision.UpdatedInput is { } ui) decisionNode["updatedInput"]         = JsonNode.Parse(ui.GetRawText());
 
         var payload = new JsonObject {

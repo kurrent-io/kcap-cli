@@ -5,10 +5,11 @@
                      x:Class="Capacitor.App.Views.ConsentPromptWindow"
                      x:TypeArguments="vm:ConsentPromptViewModel"
                      x:DataType="vm:ConsentPromptViewModel"
-                     Title="Kurrent Capacitor — launch approval"
-                     Icon="avares://Kurrent Capacitor/Assets/kcap-icon.png"
+                     Title="kcap — launch approval"
+                     Icon="avares://kcap-desktop/Assets/kcap-icon.png"
                      Width="460" Height="260"
-                     CanResize="False" Topmost="True" WindowStartupLocation="CenterScreen">
+                     CanResize="False" Topmost="True" WindowStartupLocation="CenterScreen"
+                     Background="{StaticResource KcapCanvasBrush}" Foreground="{StaticResource KcapTextBrush}">
     <Grid Margin="20" RowDefinitions="Auto,Auto,Auto,Auto,*,Auto">
         <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
             <TextBlock Grid.Column="0" x:Name="RequesterText" Text="{Binding RequesterText}"
@@ -35,16 +36,18 @@
                    VerticalAlignment="Top" Margin="0,14,0,0"
                    IsVisible="{Binding PhaseText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
 
+        <!-- No button answers Enter: this window is Topmost and can appear while the user is typing
+             elsewhere, and a keystroke must never approve a launch. Esc denies. -->
         <StackPanel Grid.Row="5" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right"
                     IsVisible="{Binding ButtonsVisible}">
-            <Button x:Name="AllowOnceButton" Content="Allow once"
-                    Command="{Binding AllowOnceCommand}" IsEnabled="{Binding ButtonsEnabled}" />
-            <Button x:Name="AllowRememberButton" Content="Allow &amp; remember"
+            <Button x:Name="DenyButton" Content="Deny" Classes="kcapChip" IsCancel="True"
+                    Command="{Binding DenyCommand}" IsEnabled="{Binding ButtonsEnabled}" />
+            <Button x:Name="AllowRememberButton" Content="Allow &amp; remember" Classes="kcapChip"
                     Command="{Binding AllowRememberCommand}" IsEnabled="{Binding ButtonsEnabled}"
                     IsVisible="{Binding AllowRememberVisible}"
                     ToolTip.Tip="Saves a rule allowing future launches from this requester. Existing deny rules — including Pause — take precedence until removed." />
-            <Button x:Name="DenyButton" Content="Deny"
-                    Command="{Binding DenyCommand}" IsEnabled="{Binding ButtonsEnabled}" />
+            <Button x:Name="AllowOnceButton" Content="Allow once" Classes="kcapPrimary"
+                    Command="{Binding AllowOnceCommand}" IsEnabled="{Binding ButtonsEnabled}" />
         </StackPanel>
     </Grid>
 </rxui:ReactiveWindow>

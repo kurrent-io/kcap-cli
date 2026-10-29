@@ -10,7 +10,9 @@ namespace Capacitor.App.ViewModels;
 /// daemon's delivery settles. A lost ack is an unknown outcome and the hint says so.
 internal sealed class LocalFrameChatInput : ChatInput {
     const string InputCapability = "input/1";
-    const string AttachCapability = "input/2";
+    /// The daemon capability that accepts uploaded attachment ids.
+    internal const string AttachCapability = "input/2";
+    internal const string DaemonNeedsAttachments = "attachments need the daemon updated";
     internal const string Unconfirmed = "delivery unconfirmed — check the chat before sending again";
     internal const string AttachmentsRefused = "attachments were refused";
 
@@ -61,6 +63,9 @@ internal sealed class LocalFrameChatInput : ChatInput {
         SendAvailability.Sending     => "Sending…",
         SendAvailability.Unsupported => "Update the daemon to send messages from the app",
         SendAvailability.Ended       => "This session has ended",
+        // An agent with no process: the daemon is bringing it back, or gave up.
+        _ when _presence.Dto?.Status == "Interrupted" => TerminalChatInput.InterruptedHint(_presence.Dto.Interruption),
+        _ when _presence.Dto?.Status == "Resuming" => "Waiting for the agent to resume after a daemon restart…",
         _                            => "Connecting to the agent…",
     };
 
@@ -79,7 +84,7 @@ internal sealed class LocalFrameChatInput : ChatInput {
     /// takes attachments, and blaming its version for that would be a guess.
     internal static string? AttachHintFor(AttachStatus status, AgentPresence presence, string fallback) =>
         status.Capabilities is null ? null
-        : !HasAttachCapability(status) ? "attachments need the daemon updated"
+        : !HasAttachCapability(status) ? DaemonNeedsAttachments
         : !IsOwnedWorktree(presence) ? "attachments aren't available for an in-place session"
         : fallback;
 
@@ -95,8 +100,6 @@ internal sealed class LocalFrameChatInput : ChatInput {
             result = attachmentIds.Count == 0
                 ? await _ops.SendTextAsync(_agentId, text, ct)
                 : await _ops.SendTextWithAttachmentsAsync(_agentId, text, attachmentIds, ct);
-        } catch (OperationCanceledException) {
-            return Settle(ChatSendOutcome.Unconfirmed, Unconfirmed);
         } catch (Exception) {
             return Settle(ChatSendOutcome.Unconfirmed, Unconfirmed);
         }

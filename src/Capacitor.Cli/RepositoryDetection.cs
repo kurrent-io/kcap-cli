@@ -263,7 +263,10 @@ static class RepositoryDetection {
 
         return kind switch {
             GitProviderKind.GitHub => await GitHubPrDetector.DetectAsync(cwd, detectCap, run)
-                                   ?? await DetectTrackedGitHubPrAsync(host, owner, repoName, branch, cwd, Remaining, run),
+                                   ?? await DetectTrackedGitHubPrAsync(host, owner, repoName, branch, cwd, Remaining, run)
+                                   ?? (owner is not null && repoName is not null
+                                          ? await GitHubPrDetector.DetectForHistoryAsync(host, owner, repoName, cwd, Remaining, run)
+                                          : null),
             GitProviderKind.GitLab when owner is not null && repoName is not null
                 => await GitLabPrDetector.DetectAsync(host, owner, repoName, branch, cwd, detectCap, run),
             _ => null

@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Text;
+using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
@@ -59,7 +61,11 @@ internal enum HookPostOutcome {
 /// A no-op for the <c>None</c> provider (posts normally, unauthenticated) and unchanged when authenticated.
 /// </summary>
 internal sealed class AgentHookPoster(
-        ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http, WatcherManager watchers, TimeProvider time) {
+        ConfigRoot config, ProfileContext profiles, ICapacitorHttpClient http, WatcherManager watchers, TimeProvider time,
+        TextWriter? stderr = null) {
+
+    // Read per write when none is given, so a caller that swaps the process's stderr is still heard.
+    TextWriter Stderr => stderr ?? Console.Error;
 
     // The one URL this process resolved. A hook posting to one server while its watcher streams to
     // another is not a configuration this can represent.
@@ -80,7 +86,7 @@ internal sealed class AgentHookPoster(
         // Guard BEFORE the factory closure is constructed. There is no spool on this path, so the
         // payload is dropped — Skipped, never Failed, which every caller maps to a non-zero exit.
         if (!HookHttp.IsPostable(Url)) {
-            Console.Error.WriteLine(UnusableUrlDiagnostic.Build(profiles.Resolution.Source, Url, $"{endpoint} dropped, not sent"));
+            Stderr.WriteLine(UnusableUrlDiagnostic.Build(profiles.Resolution.Source, Url, $"{endpoint} dropped, not sent"));
             return Task.FromResult(HookPostOutcome.Skipped);
         }
 
@@ -126,7 +132,7 @@ internal sealed class AgentHookPoster(
                     var code = (int)resp.StatusCode;
                     // These vendors have no systemMessage channel, so the stderr line is the only
                     // place a rejected credential can name its own fix.
-                    Console.Error.WriteLine(AuthRejectionNotice.VendorStderrLine(agentTag, endpoint, code));
+                    Stderr.WriteLine(AuthRejectionNotice.VendorStderrLine(agentTag, endpoint, code));
                     return HookPostOutcome.Failed;
                 }
 
@@ -153,7 +159,7 @@ internal sealed class AgentHookPoster(
         if (!HookHttp.IsPostable(Url)) {
             var spooled     = spool.Append(sessionId, route, body);
             var disposition = spooled ? $"{endpoint} spooled, not sent" : $"{endpoint} dropped (spool write failed)";
-            Console.Error.WriteLine(UnusableUrlDiagnostic.Build(profiles.Resolution.Source, Url, disposition));
+            Stderr.WriteLine(UnusableUrlDiagnostic.Build(profiles.Resolution.Source, Url, disposition));
 
             return Task.FromResult(spooled ? HookPostOutcome.Spooled : HookPostOutcome.Skipped);
         }
@@ -194,10 +200,10 @@ internal sealed class AgentHookPoster(
     /// may only be reported when something was actually written; a rejected key or a disk fault is
     /// <c>Skipped</c>, with a line saying the payload was lost.
     /// </summary>
-    static HookPostOutcome SpoolOrSkip(HookSpool spool, string sessionId, string route, string body, string agentTag) {
+    HookPostOutcome SpoolOrSkip(HookSpool spool, string sessionId, string route, string body, string agentTag) {
         if (spool.Append(sessionId, route, body)) return HookPostOutcome.Spooled;
 
-        Console.Error.WriteLine($"[kcap] {agentTag} {route}: dropped — the spool write failed");
+        Stderr.WriteLine($"[kcap] {agentTag} {route}: dropped — the spool write failed");
 
         return HookPostOutcome.Skipped;
     }
@@ -260,11 +266,13 @@ internal sealed class AgentHookPoster(
         // never reap anything.
         lifecycle.ReapOlderThan(TimeSpan.FromDays(30));
         transcript.ReapOlderThan(TimeSpan.FromDays(30));
+        SessionCommits.ReapOlderThan(config, TimeSpan.FromDays(30), time);
+        SpoolEnds(AgentSessions.OnThisMachine(config).ReapExited(Url), Url, lifecycle, time);
 
         // Distinct from the POST guards' diagnostic: a reader must be able to tell which guard fired,
         // and a test must be able to prove THIS one did.
         if (!HookHttp.IsPostable(Url)) {
-            Console.Error.WriteLine(UnusableUrlDiagnostic.Build(profiles.Resolution.Source, Url, "spool drain skipped (backlog retained)"));
+            Stderr.WriteLine(UnusableUrlDiagnostic.Build(profiles.Resolution.Source, Url, "spool drain skipped (backlog retained)"));
             return;
         }
 
@@ -283,11 +291,50 @@ internal sealed class AgentHookPoster(
                 await LifecycleSpoolDrain.RunAsync(
                     new CursorMarkers(config, time), client, Url!, lifecycle, transcript, sessionId, budget,
                     time, cts.Token,
-                    onWhatsDoneRequested: (sid, vendor) => watchers.SpawnWhatsDoneGenerator(sid, vendor));
+                    onWhatsDoneRequested: (id, vendor) => watchers.SpawnWhatsDoneGenerator(id, vendor, stderr));
             }
         } catch {
             // Best-effort — a drain hiccup must never disrupt the vendor's own hook.
         }
+    }
+
+    /// <summary>
+    /// Queues a SessionEnd for each session whose agent process is gone, so the app stops showing it as
+    /// live when nothing told the server (a private daemon agent, a daemon that cannot reach the server).
+    /// Only for a session recorded against the server this process posts to: one recorded elsewhere is
+    /// that server's to close, through its own sweep. The drain delivers the end like any spooled one,
+    /// and a server that already ended the session ignores it.
+    /// </summary>
+    internal static int SpoolEnds(
+            IReadOnlyList<ExitedSession> exited, string? url, HookSpool spool, TimeProvider time, Func<ExitedSession, bool>? hold = null) {
+        if (url is null) return 0;
+
+        hold ??= SessionEndFence.ShouldHold;
+
+        var spooled = 0;
+        foreach (var session in exited) {
+            if (session.Origin is not { Vendor: { } vendor, Server: { } server } origin || !AgentSessions.SameServer(server, url)) continue;
+            if (hold(session)) continue;
+
+            // The fields every vendor's session-end binding requires, as the watcher's own end sends them.
+            var body = new JsonObject {
+                ["session_id"]      = session.Session.Value,
+                ["transcript_path"] = origin.TranscriptPath ?? "",
+                ["cwd"]             = origin.Cwd ?? "",
+                ["hook_event_name"] = "SessionEnd",
+                ["reason"]          = "parent_exited",
+                ["ended_at"]        = time.GetUtcNow().ToString("O", CultureInfo.InvariantCulture),
+            }.ToJsonString();
+            // An earlier end of a session since resumed left a marker that would discard this one.
+            // What is spooled behind it are that run's stragglers, dropped as the drain would drop them.
+            if (spool.IsMarkedEnded(session.Session.Value)) {
+                spool.DiscardRemainder(session.Session.Value);
+                spool.ClearEnded(session.Session.Value);
+            }
+            if (spool.Append(session.Session.Value, $"session-end/{vendor}", body)) spooled++;
+        }
+
+        return spooled;
     }
 
     /// <summary>
@@ -325,11 +372,14 @@ internal sealed class AgentHookPoster(
     // that reaches the abandon path passes its own onAuthAbandoned instead.
     void HandOffRefresh() => RefreshTokenHandoff.Spawn(config, profiles.Name, SystemProcessStarter.Instance);
 
+    /// <param name="budget">When given, the POST's retries end at its <see cref="HookBudget.Remaining"/>
+    /// rather than the 30 s default, so a hook the host kills sooner spools instead of dying mid-POST.
+    /// Read after client creation, so the POST gets only what auth left.</param>
     internal async Task<HookPostOutcome> PostOrSpoolAsync(
             Func<Task<AuthAttempt>> clientFactory,
             string endpoint, string body, string agentTag,
             HookSpool spool, string sessionId, string route,
-            TimeSpan? authCap = null, Action? onAuthAbandoned = null) {
+            TimeSpan? authCap = null, Action? onAuthAbandoned = null, HookBudget? budget = null) {
         var created = await BoundedAuth.CreateClientWithinAsync(
             clientFactory, authCap ?? AuthCap, time, onAuthAbandoned ?? HandOffRefresh);
 
@@ -348,7 +398,7 @@ internal sealed class AgentHookPoster(
             using var content = new StringContent(body, Encoding.UTF8, "application/json");
 
             try {
-                using var resp = await client.PostWithRetryAsync($"{Url}/hooks/{endpoint}", content, time);
+                using var resp = await client.PostWithRetryAsync($"{Url}/hooks/{endpoint}", content, time, timeout: budget?.Remaining);
 
                 if (resp.IsSuccessStatusCode) {
                     return HookPostOutcome.Posted;
@@ -359,7 +409,7 @@ internal sealed class AgentHookPoster(
                 // Before the spool decision, so a 401 still names its fix: an outage spools silently,
                 // but a rejected credential needs the user, and stderr is the only channel here.
                 if (code == 401 || !HookSpool.IsRetryable(code)) {
-                    Console.Error.WriteLine(AuthRejectionNotice.VendorStderrLine(agentTag, endpoint, code));
+                    Stderr.WriteLine(AuthRejectionNotice.VendorStderrLine(agentTag, endpoint, code));
                 }
 
                 return HookSpool.IsRetryable(code)

@@ -241,7 +241,7 @@ public class RoutedReplayPrivatizeTests : IDisposable {
         }
         // Fails AFTER ImportSubagentsAsync has already posted the child's content.
         _server.Given(Request.Create().WithPath("/hooks/session-end/gemini").UsingPost())
-            .RespondWith(Response.Create().WithStatusCode(500));
+            .RespondWith(Response.Create().WithStatusCode(400));
         StubVisibilityPut();
 
         var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(

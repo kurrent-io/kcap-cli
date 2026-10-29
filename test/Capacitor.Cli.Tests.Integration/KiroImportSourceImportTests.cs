@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Harness.Kiro;
 using WireMock.RequestBuilders;
@@ -56,7 +57,7 @@ public class KiroImportSourceImportTests : IDisposable {
         using var client = new HttpClient();
         var source = new KiroImportSource(Config.Root,
             root,
-            new GitProviderRouter(), TimeProvider.System);
+            new KiroCrewPaths(root, null), new GitProviderRouter(), TimeProvider.System);
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         await Assert.That(discovered.Count).IsEqualTo(1);
@@ -82,5 +83,83 @@ public class KiroImportSourceImportTests : IDisposable {
         var resolved = ImportCommand.ResolveRoutedOutcomeForCounting(
             classified[0].Status, result.Outcome, result.SentChildContent);
         await Assert.That(resolved).IsNull();
+
+        // /hooks/harness-title is unstubbed (bare 404 → RouteMissing), so the title falls back to
+        // /hooks/set-title (stubbed above) — but the harness-title attempt still carries the kind
+        // Kiro always forwards (its own store carries no user-named distinction).
+        var titleAttempt = _server.FindLogEntries(Request.Create().WithPath("/hooks/harness-title").UsingPost());
+        await Assert.That(titleAttempt.Count).IsEqualTo(1);
+        var titleBody = System.Text.Json.Nodes.JsonNode.Parse(titleAttempt[0].RequestMessage.Body!)!;
+        await Assert.That(titleBody["kind"]!.GetValue<string>()).IsEqualTo("auto");
+    }
+
+    /// <summary>The server takes a bounded batch of children per session-start, so a Crew chat with more
+    /// sub-agents than that names every one across repeat session-starts rather than dropping the rest.</summary>
+    [Test]
+    public async Task ImportSession_names_every_crew_child_across_batches() {
+        var root = WriteSession();
+        var crew = new KiroCrewPaths(root, null);
+
+        _tmp.CreateFile(["crew", "session_map.json"], $$$"""{"dashboard:chat-1": {"sid": "{{{DashedSid}}}", "discarded_sid": "99999999-8888-7777-6666-555555555555"}}""");
+
+        var spawnedAt = new DateTimeOffset(2026, 6, 10, 21, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds();
+        var children  = Enumerable.Range(0, KiroCrewParentResolver.MaxChildrenPerStart + 1).Select(_ => Guid.NewGuid().ToString("D")).ToList();
+
+        foreach (var (child, i) in children.Select((c, i) => (c, i))) {
+            _tmp.CreateFile(["crew", "subagents", $"s{i:D3}", "state.json"],
+                $$"""{"session_id": "{{child}}", "parent_session": "dashboard:chat-1", "started": {{spawnedAt}}}""");
+        }
+
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":1}"""));
+        foreach (var route in new[] { "/hooks/session-start/kiro", "/hooks/set-title", "/hooks/session-end/kiro" }) {
+            _server.Given(Request.Create().WithPath(route).UsingPost())
+                .RespondWith(Response.Create().WithStatusCode(200));
+        }
+
+        using var client = new HttpClient();
+        var source = new KiroImportSource(Config.Root, root, crew, new GitProviderRouter(), TimeProvider.System);
+
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(discovered, new ClassifyContext(client, _server.Url!, MinLines: 0, Home: Home), CancellationToken.None);
+        await source.ImportSessionAsync(classified[0], new ImportContext(client, _server.Url!, ForcePrivate: false), CancellationToken.None);
+
+        var starts = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-start/kiro").UsingPost());
+        var named  = starts.SelectMany(e => System.Text.Json.Nodes.JsonNode.Parse(e.RequestMessage.Body!)!["subagent_session_ids"]!.AsArray())
+            .Select(n => n!.GetValue<string>())
+            .ToList();
+
+        await Assert.That(starts.Count).IsEqualTo(2);
+        await Assert.That(starts.Select(e => System.Text.Json.Nodes.JsonNode.Parse(e.RequestMessage.Body!)!["previous_session_id"]?.GetValue<string>() ?? ""))
+            .IsEquivalentTo(["99999999-8888-7777-6666-555555555555", "99999999-8888-7777-6666-555555555555"]);
+        await Assert.That(named).IsEquivalentTo(children);
+    }
+
+    /// <summary>A chat's replaced session, imported, names the session that replaced it, since a
+    /// parallel import may record it after its replacement.</summary>
+    [Test]
+    public async Task ImportSession_of_a_replaced_crew_session_names_its_replacement() {
+        var root = WriteSession();
+        var crew = new KiroCrewPaths(root, null);
+        _tmp.CreateFile(["crew", "session_map.json"], $$$"""{"dashboard:chat-1": {"sid": "99999999-8888-7777-6666-555555555555", "discarded_sid": "{{{DashedSid}}}"}}""");
+
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":1}"""));
+        foreach (var route in new[] { "/hooks/session-start/kiro", "/hooks/set-title", "/hooks/session-end/kiro" }) {
+            _server.Given(Request.Create().WithPath(route).UsingPost())
+                .RespondWith(Response.Create().WithStatusCode(200));
+        }
+
+        using var client = new HttpClient();
+        var source = new KiroImportSource(Config.Root, root, crew, new GitProviderRouter(), TimeProvider.System);
+
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(discovered, new ClassifyContext(client, _server.Url!, MinLines: 0, Home: Home), CancellationToken.None);
+        await source.ImportSessionAsync(classified[0], new ImportContext(client, _server.Url!, ForcePrivate: false), CancellationToken.None);
+
+        var start = System.Text.Json.Nodes.JsonNode.Parse(_server.FindLogEntries(Request.Create().WithPath("/hooks/session-start/kiro").UsingPost())[0].RequestMessage.Body!)!;
+
+        await Assert.That(start["next_session_id"]?.GetValue<string>()).IsEqualTo("99999999-8888-7777-6666-555555555555");
+        await Assert.That(start["previous_session_id"]).IsNull();
     }
 }

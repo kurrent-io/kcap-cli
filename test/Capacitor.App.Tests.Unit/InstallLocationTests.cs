@@ -1,4 +1,4 @@
-using Capacitor.App.Services;
+using Capacitor.App.Platform.Mac;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -7,12 +7,12 @@ public class InstallLocationTests {
 
     [Test]
     public async Task BundleRoot_is_the_app_ancestor_of_the_executable() {
-        await Assert.That(InstallLocation.BundleRoot("/Applications/Kurrent Capacitor.app/Contents/MacOS/Kurrent Capacitor"))
-            .IsEqualTo("/Applications/Kurrent Capacitor.app");
+        await Assert.That(InstallLocation.BundleRoot("/Applications/kcap.app/Contents/MacOS/kcap-desktop"))
+            .IsEqualTo("/Applications/kcap.app");
     }
 
     [Test]
-    [Arguments("/Users/dev/src/kcap-cli/src/Capacitor.App/bin/Debug/net10.0/Kurrent Capacitor")]
+    [Arguments("/Users/dev/src/kcap-cli/src/Capacitor.App/bin/Debug/net10.0/kcap")]
     [Arguments("")]
     [Arguments(null)]
     public async Task BundleRoot_is_null_outside_a_bundle(string? path) {
@@ -20,11 +20,11 @@ public class InstallLocationTests {
     }
 
     [Test]
-    [Arguments("/Applications/Kurrent Capacitor.app", InstallLocationKind.Applications)]
-    [Arguments("/Users/dev/Applications/Kurrent Capacitor.app", InstallLocationKind.UserApplications)]
-    [Arguments("/Volumes/Kurrent Capacitor/Kurrent Capacitor.app", InstallLocationKind.DmgVolume)]
-    [Arguments("/private/var/folders/xy/T/AppTranslocation/1F2E-3D4C/d/Kurrent Capacitor.app", InstallLocationKind.Translocated)]
-    [Arguments("/Users/dev/Downloads/Kurrent Capacitor.app", InstallLocationKind.Other)]
+    [Arguments("/Applications/kcap.app", InstallLocationKind.Applications)]
+    [Arguments("/Users/dev/Applications/kcap.app", InstallLocationKind.UserApplications)]
+    [Arguments("/Volumes/kcap/kcap.app", InstallLocationKind.DmgVolume)]
+    [Arguments("/private/var/folders/xy/T/AppTranslocation/1F2E-3D4C/d/kcap.app", InstallLocationKind.Translocated)]
+    [Arguments("/Users/dev/Downloads/kcap.app", InstallLocationKind.Other)]
     [Arguments(null, InstallLocationKind.NotABundle)]
     public async Task Classify_recognises_each_shape(string? root, InstallLocationKind expected) {
         await Assert.That(InstallLocation.Classify(root, Home)).IsEqualTo(expected);

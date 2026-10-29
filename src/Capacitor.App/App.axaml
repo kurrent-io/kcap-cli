@@ -1,26 +1,31 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:Capacitor.App.Views"
              x:Class="Capacitor.App.App"
-             Name="Kurrent Capacitor"
+             Name="kcap"
              RequestedThemeVariant="Dark">
     <Application.Resources>
-        <!-- The Home surface's design palette. Kcap-prefixed keys so these never
-             shadow a FluentTheme resource of the same short name — MainWindow's existing controls
-             stay on FluentTheme defaults untouched. ThemeVariant is Dark because every Kcap*
-             brush is a dark-canvas token: Fluent's light ButtonBackgroundPointerOver would paint
-             a near-white fill under our light Foreground and the control vanishes on hover. -->
+        <!-- The app palette. Kcap-prefixed keys never shadow a FluentTheme resource. ThemeVariant
+             is Dark because every Kcap* brush is a dark-canvas token: Fluent's light
+             ButtonBackgroundPointerOver would paint a near-white fill under our light Foreground
+             and the control vanishes on hover. -->
         <ResourceDictionary>
             <SolidColorBrush x:Key="KcapCanvasBrush" Color="#0B0D12" />
             <SolidColorBrush x:Key="KcapSurfaceBrush" Color="#12151D" />
             <SolidColorBrush x:Key="KcapSurfaceRaisedBrush" Color="#191D27" />
             <SolidColorBrush x:Key="KcapBorderBrush" Color="#2A3040" />
+            <!-- A rule that must read where content already carries Border-coloured chrome. -->
+            <SolidColorBrush x:Key="KcapBorderStrongBrush" Color="#414A5E" />
             <SolidColorBrush x:Key="KcapTextBrush" Color="#F1F3F7" />
-            <!-- Secondary / tertiary body text: both clear AA (≥4.5:1) on Canvas→Border.
-                 Faint was #6F7687 (~3.7:1 on Raised) — too dim for real copy. -->
+            <!-- Secondary / tertiary body text: both clear AA (≥4.5:1) on Canvas→Border. -->
             <SolidColorBrush x:Key="KcapMutedBrush" Color="#B0B7C6" />
             <SolidColorBrush x:Key="KcapFaintBrush" Color="#949BAA" />
-            <!-- Primary CTAs: near-white fill. Green (KcapSuccess*) is status/selection only. -->
+            <!-- Primary CTAs stay on the light ramp. Hover lifts toward white and press steps
+                 to a light off-white; a text grey as the fill drops the near-black label's contrast.
+                 Green is status only; a selection uses info blue. -->
             <SolidColorBrush x:Key="KcapPrimaryBrush" Color="#F1F3F7" />
+            <SolidColorBrush x:Key="KcapPrimaryHoverBrush" Color="#FFFFFF" />
+            <SolidColorBrush x:Key="KcapPrimaryPressedBrush" Color="#E4E7EE" />
             <SolidColorBrush x:Key="KcapOnPrimaryBrush" Color="#0B0D12" />
             <SolidColorBrush x:Key="KcapSuccessBrush" Color="#5BE0B3" />
             <SolidColorBrush x:Key="KcapSuccessDimBrush" Color="#173F36" />
@@ -33,16 +38,34 @@
             <SolidColorBrush x:Key="KcapInfoBrush" Color="#7BA7F7" />
             <SolidColorBrush x:Key="KcapInfoDimBrush" Color="#1B2740" />
             <SolidColorBrush x:Key="KcapSelectionBrush" Color="#1E2E52" />
+            <Color x:Key="ScrollBarThumbBackgroundColor">#3A66B8</Color>
+            <Color x:Key="ScrollBarPanningThumbBackgroundColor">#3A66B8</Color>
+            <SolidColorBrush x:Key="ScrollBarPanningThumbBackground" Color="#3A66B8" />
+            <SolidColorBrush x:Key="ScrollBarThumbFillPointerOver" Color="#5989E3" />
+            <SolidColorBrush x:Key="ScrollBarThumbFillPressed" Color="#7BA7F7" />
+            <SolidColorBrush x:Key="ScrollBarTrackFill" Color="#00000000" />
+            <SolidColorBrush x:Key="ScrollBarTrackFillPointerOver" Color="#1B2740" />
+            <SolidColorBrush x:Key="ScrollBarTrackStroke" Color="#00000000" />
+            <SolidColorBrush x:Key="ScrollBarTrackStrokePointerOver" Color="#1E2E52" />
+            <SolidColorBrush x:Key="ScrollBarBackground" Color="#00000000" />
+            <SolidColorBrush x:Key="ScrollBarBackgroundPointerOver" Color="#00000000" />
+            <SolidColorBrush x:Key="ScrollBarButtonBackground" Color="#00000000" />
+            <SolidColorBrush x:Key="ScrollBarButtonBackgroundPointerOver" Color="#00000000" />
+            <SolidColorBrush x:Key="ScrollBarButtonBackgroundPressed" Color="#00000000" />
+            <SolidColorBrush x:Key="ScrollViewerScrollBarsSeparatorBackground" Color="#00000000" />
             <ResourceDictionary.MergedDictionaries>
-                <ResourceInclude Source="avares://Kurrent Capacitor/Views/PendingCardTemplates.axaml" />
+                <ResourceInclude Source="avares://kcap-desktop/Views/PendingCardTemplates.axaml" />
+                <ResourceInclude Source="avares://kcap-desktop/Views/Onboarding/OnboardingResources.axaml" />
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>
     </Application.Resources>
     <Application.Styles>
         <FluentTheme />
         <StyleInclude Source="avares://MarkView.Avalonia/Themes/MarkdownTheme.axaml" />
-        <StyleInclude Source="avares://Kurrent Capacitor/Views/MarkdownStyles.axaml" />
-        <StyleInclude Source="avares://Kurrent Capacitor/Views/PullRequestStyles.axaml" />
+        <StyleInclude Source="avares://kcap-desktop/Views/MarkdownStyles.axaml" />
+        <StyleInclude Source="avares://kcap-desktop/Views/PullRequestStyles.axaml" />
+        <StyleInclude Source="avares://kcap-desktop/Views/ChatBubbleStyles.axaml" />
+        <StyleInclude Source="avares://kcap-desktop/Views/Onboarding/OnboardingStyles.axaml" />
         <!-- Popup panels drawn on our tokens: the flyout presenter IS the panel (no inner Border
              fighting the theme's own chrome). Opted into per flyout via FlyoutPresenterClasses.
              Fluent's ControlTheme defaults ScrollViewer.HorizontalScrollBarVisibility=Auto on the
@@ -72,15 +95,36 @@
             <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
             <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Disabled" />
         </Style>
+        <Style Selector="ToolTip">
+            <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="8" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+            <Setter Property="FontSize" Value="12" />
+        </Style>
+        <Style Selector="TextBox">
+            <Setter Property="ContextFlyout" Value="{x:Static views:TextContextMenu.ForTextBox}" />
+        </Style>
+        <!-- Fluent sets its menu under [IsEnabled=True], and a triggered style outranks a plain one. -->
+        <Style Selector="SelectableTextBlock[IsEnabled=True]">
+            <Setter Property="ContextFlyout" Value="{x:Static views:TextContextMenu.ForSelectableTextBlock}" />
+        </Style>
         <!-- A TextBox inside one of our cards: the card is its boundary, so the theme's focused
              ring and fill would read as a second box. Fluent's default placeholder follows the
-             system theme and goes near-black on our dark surfaces — pin a readable muted tone. -->
+             system theme and goes near-black on our dark surfaces — pin a readable muted tone.
+             Line box matches markdown body (15 / 24) so typed text and sent bubbles share a
+             rhythm; a hair of tracking keeps wrapped lines from reading as a solid block. -->
         <Style Selector="TextBox.kcapEmbedded">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
             <Setter Property="CaretBrush" Value="{StaticResource KcapTextBrush}" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="PlaceholderForeground" Value="{StaticResource KcapMutedBrush}" />
+            <Setter Property="FontSize" Value="15" />
+            <Setter Property="LineHeight" Value="24" />
+            <Setter Property="LetterSpacing" Value="0.2" />
         </Style>
         <Style Selector="TextBox.kcapEmbedded /template/ Border#PART_BorderElement,
                          TextBox.kcapEmbedded:focus /template/ Border#PART_BorderElement,
@@ -90,7 +134,7 @@
         </Style>
         <!-- Standalone fields (Settings, setup, sign-in prompts): pin the Fluent ring to our
              tokens. Fluent paints PART_BorderElement from TextControlBorderBrush, which reads as
-             a second white box on Kcap surfaces. -->
+             a second white box on kcap surfaces. -->
         <Style Selector="TextBox.kcapField">
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
@@ -190,6 +234,75 @@
         <Style Selector="ComboBox.kcapField ComboBoxItem:selected /template/ ContentPresenter">
             <Setter Property="Background" Value="{StaticResource KcapBorderBrush}" />
         </Style>
+        <Style Selector="TabControl.kcapSettingsTabs">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+        </Style>
+        <Style Selector="TabItem.kcapSettingsTab">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <!-- Six tabs at the default text size fit one row of the fixed-width Settings window. -->
+            <Setter Property="Padding" Value="10,8" />
+        </Style>
+        <Style Selector="TabItem.kcapSettingsTab /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+            <Setter Property="CornerRadius" Value="8" />
+        </Style>
+        <Style Selector="TabItem.kcapSettingsTab:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        </Style>
+        <Style Selector="TabItem.kcapSettingsTab:selected /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapSelectionBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapInfoBrush}" />
+        </Style>
+        <Style Selector="TabItem.kcapSettingsTab:selected /template/ Border#PART_SelectedPipe">
+            <Setter Property="Background" Value="{StaticResource KcapInfoBrush}" />
+        </Style>
+        <Style Selector="ToggleSwitch.kcapSwitch">
+            <Setter Property="Width" Value="44" />
+            <Setter Property="Height" Value="26" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Template">
+                <ControlTemplate TargetType="ToggleSwitch">
+                    <Grid Width="44" Height="24" VerticalAlignment="Center"
+                          Background="{TemplateBinding Background}"
+                          TemplatedControl.IsTemplateFocusTarget="True">
+                        <Border Name="SwitchTrack" CornerRadius="12"
+                                Background="{StaticResource KcapSurfaceRaisedBrush}"
+                                BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1" />
+                        <Canvas Name="PART_SwitchKnob" Width="22" Height="24" HorizontalAlignment="Left">
+                            <Grid Name="PART_MovingKnobs" Width="22" Height="24">
+                                <Border Name="SwitchThumb" Width="18" Height="18"
+                                        HorizontalAlignment="Center" VerticalAlignment="Center" CornerRadius="9"
+                                        Background="{StaticResource KcapMutedBrush}" />
+                            </Grid>
+                        </Canvas>
+                    </Grid>
+                </ControlTemplate>
+            </Setter>
+        </Style>
+        <Style Selector="ToggleSwitch.kcapSwitch:pointerover /template/ Border#SwitchTrack">
+            <Setter Property="BorderBrush" Value="{StaticResource KcapMutedBrush}" />
+        </Style>
+        <Style Selector="ToggleSwitch.kcapSwitch:focus-visible /template/ Border#SwitchTrack">
+            <Setter Property="BorderBrush" Value="{StaticResource KcapTextBrush}" />
+            <Setter Property="BorderThickness" Value="2" />
+        </Style>
+        <Style Selector="ToggleSwitch.kcapSwitch:checked /template/ Border#SwitchTrack">
+            <Setter Property="Background" Value="{StaticResource KcapInfoDimBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
+        </Style>
+        <Style Selector="ToggleSwitch.kcapSwitch:checked /template/ Border#SwitchThumb">
+            <Setter Property="Background" Value="{StaticResource KcapInfoBrush}" />
+        </Style>
+        <Style Selector="ToggleSwitch.kcapSwitch:disabled">
+            <Setter Property="Opacity" Value="0.45" />
+        </Style>
         <!-- Fluent's radio/check glyphs use the system accent (a bright blue on our canvas). -->
         <Style Selector="RadioButton /template/ Ellipse#OuterEllipse">
             <Setter Property="Stroke" Value="{StaticResource KcapBorderBrush}" />
@@ -261,10 +374,17 @@
             <Setter Property="LetterSpacing" Value="0.2" />
             <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
         </Style>
+        <!-- Two-line tooltips: extra info is the default (lighter) line; this caption under it
+             names the fragment. Solo captions stay unclassed so they match a one-line tip. -->
+        <Style Selector="TextBlock.kcapTipCaption">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
         <!-- Fluent paints hover/pressed on PART_ContentPresenter, not the Button.Background local
              value — so a chip that sets its own fill still gets a theme fill that clashes with
              KcapTextBrush. These classes pin the template chrome to our tokens (same footgun
-             HomeView.sessionCard / SessionRail.railRow already call out). -->
+             SessionRail.railRow already calls out). -->
         <Style Selector="Button.kcapChip">
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
             <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
@@ -288,6 +408,23 @@
             <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
             <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
+        </Style>
+        <!-- A link inside a line of text, coloured like a chat link. -->
+        <Style Selector="Button.kcapLink">
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="MinHeight" Value="0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Foreground" Value="{StaticResource KcapInfoBrush}" />
+        </Style>
+        <Style Selector="Button.kcapLink /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.kcapLink:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.kcapLink:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapInfoBrush}" />
+        </Style>
+        <Style Selector="Button.kcapLink TextBlock">
+            <Setter Property="TextDecorations" Value="Underline" />
         </Style>
         <!-- The chip look on a radio. Fluent draws an ellipse glyph beside the content, so this is a
              template swap rather than setters; the presenter is deliberately not named
@@ -341,10 +478,14 @@
             <Setter Property="BorderBrush" Value="{StaticResource KcapPrimaryBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapOnPrimaryBrush}" />
         </Style>
-        <Style Selector="Button.kcapPrimary:pointerover /template/ ContentPresenter#PART_ContentPresenter,
-                         Button.kcapPrimary:pressed /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="Background" Value="{StaticResource KcapPrimaryBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource KcapPrimaryBrush}" />
+        <Style Selector="Button.kcapPrimary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapPrimaryHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapPrimaryHoverBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapOnPrimaryBrush}" />
+        </Style>
+        <Style Selector="Button.kcapPrimary:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapPrimaryPressedBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapPrimaryPressedBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapOnPrimaryBrush}" />
         </Style>
         <Style Selector="Button.kcapPrimary:disabled /template/ ContentPresenter#PART_ContentPresenter">
@@ -352,25 +493,157 @@
             <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
         </Style>
+        <!-- Ghost rows (picker lists, help flyout): Fluent paints the presenter, so rest and hover
+             both have to pin it — otherwise the theme's grey hover bar shows on our dark panel. -->
+        <Style Selector="Button.kcapGhost">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+            <Setter Property="CornerRadius" Value="8" />
+        </Style>
+        <Style Selector="Button.kcapGhost /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        </Style>
         <Style Selector="Button.kcapGhost:pointerover /template/ ContentPresenter#PART_ContentPresenter,
                          Button.kcapGhost:pressed /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
             <Setter Property="BorderBrush" Value="Transparent" />
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
         </Style>
-        <!-- In-flight state markers (a starting session's dot, a running check) share one pulse. -->
-        <Style Selector=":is(Control).pulsing">
+        <Style Selector="Button.kcapGhost:disabled /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
+            <Setter Property="Opacity" Value="0.55" />
+        </Style>
+        <!-- Ghost sizes. Declared after the ghost rules on purpose: a later style wins, so a
+             size that also recolours has to come after the colour it replaces. -->
+        <Style Selector="Button.kcapGhost.kcapIcon">
+            <Setter Property="Padding" Value="7" />
+            <Setter Property="MinWidth" Value="30" />
+            <Setter Property="MinHeight" Value="30" />
+            <Setter Property="CornerRadius" Value="7" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+        <Style Selector="Button.kcapGhost.kcapQuiet">
+            <Setter Property="Padding" Value="8,5" />
+            <Setter Property="FontSize" Value="12.5" />
+            <Setter Property="CornerRadius" Value="6" />
+        </Style>
+        <Style Selector="Button.kcapGhost.kcapQuiet /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        </Style>
+        <Style Selector="Button.kcapGhost.kcapQuiet:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.kcapGhost.kcapQuiet:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        </Style>
+        <Style Selector="Button.kcapGhost.kcapQuiet:disabled /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
+        </Style>
+        <!-- A destructive primary: filled like kcapPrimary so it reads as the action, never bound to
+             Enter, so the default key cannot remove or stop anything. -->
+        <Style Selector="Button.kcapDangerFill">
+            <Setter Property="Background" Value="{StaticResource KcapDangerBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapDangerBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapOnPrimaryBrush}" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="16,8" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style Selector="Button.kcapDangerFill /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapDangerBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapDangerBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapOnPrimaryBrush}" />
+        </Style>
+        <!-- Hover dims the fill rather than swapping it, so the button still reads as destructive. -->
+        <Style Selector="Button.kcapDangerFill:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.kcapDangerFill:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapDangerBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapDangerBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapOnPrimaryBrush}" />
+            <Setter Property="Opacity" Value="0.85" />
+        </Style>
+        <Style Selector="Button.kcapDangerFill:disabled /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
+        </Style>
+        <!-- Destructive ghost (Stop): Fluent hover paints the presenter near-white, which hides
+             the danger colour. Rest and hover both pin KcapDangerBrush. -->
+        <Style Selector="Button.kcapDanger">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" />
+            <Setter Property="CornerRadius" Value="7" />
+        </Style>
+        <Style Selector="Button.kcapDanger /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" />
+        </Style>
+        <Style Selector="Button.kcapDanger:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.kcapDanger:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapDangerDimBrush}" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" />
+        </Style>
+        <Style Selector="Button.kcapDanger:disabled /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" />
+            <Setter Property="Opacity" Value="0.45" />
+        </Style>
+        <!-- Chat/Terminal/PR switch: a raised track with one selected cell, not underline tabs.
+             Fluent hover still paints the presenter, so rest and active both pin it. -->
+        <Style Selector="Border.kcapSegment">
+            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="3" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="Button.kcapSegmentItem">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="12,6" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="MinHeight" Value="0" />
+        </Style>
+        <Style Selector="Button.kcapSegmentItem /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+            <Setter Property="CornerRadius" Value="6" />
+        </Style>
+        <Style Selector="Button.kcapSegmentItem:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.kcapSegmentItem:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        </Style>
+        <Style Selector="Button.kcapSegmentItem.active /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.kcapSegmentItem.active:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.kcapSegmentItem.active:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapSelectionBrush}" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        </Style>
+        <!-- A refresh glyph turning while its read is in flight: the click's only feedback when
+             the result is unchanged. -->
+        <Style Selector="views|AppIcon.kcapSpinning">
+            <Setter Property="RenderTransform" Value="rotate(0deg)" />
             <Style.Animations>
-                <Animation Duration="0:0:1.1" IterationCount="Infinite">
-                    <KeyFrame Cue="0%">
-                        <Setter Property="Opacity" Value="0.35" />
-                    </KeyFrame>
-                    <KeyFrame Cue="50%">
-                        <Setter Property="Opacity" Value="1" />
-                    </KeyFrame>
-                    <KeyFrame Cue="100%">
-                        <Setter Property="Opacity" Value="0.35" />
-                    </KeyFrame>
+                <Animation Duration="0:0:0.9" IterationCount="Infinite">
+                    <KeyFrame Cue="0%"><Setter Property="RotateTransform.Angle" Value="0" /></KeyFrame>
+                    <KeyFrame Cue="100%"><Setter Property="RotateTransform.Angle" Value="360" /></KeyFrame>
                 </Animation>
             </Style.Animations>
         </Style>
@@ -385,25 +658,111 @@
             <Setter Property="BorderBrush" Value="{StaticResource KcapPrimaryBrush}" />
         </Style>
         <Style Selector="TextBlock.toolKindChip">
-            <Setter Property="FontSize" Value="10" />
+            <Setter Property="FontSize" Value="11.5" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
         </Style>
-        <!-- Live tool-call status: a soft pulse so an in-flight row is never a blank gap. -->
-        <Style Selector="Border.toolRunning">
-            <Style.Animations>
-                <Animation Duration="0:0:1.1" IterationCount="Infinite">
-                    <KeyFrame Cue="0%">
-                        <Setter Property="Opacity" Value="0.35" />
-                    </KeyFrame>
-                    <KeyFrame Cue="50%">
-                        <Setter Property="Opacity" Value="1" />
-                    </KeyFrame>
-                    <KeyFrame Cue="100%">
-                        <Setter Property="Opacity" Value="0.35" />
-                    </KeyFrame>
-                </Animation>
-            </Style.Animations>
+        <Style Selector="ScrollBar">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="ContextFlyout" Value="{x:Null}" />
         </Style>
+        <Style Selector="ScrollBar:vertical">
+            <Setter Property="Width" Value="12" />
+            <Setter Property="MinWidth" Value="12" />
+        </Style>
+        <Style Selector="ScrollBar:horizontal">
+            <Setter Property="Height" Value="12" />
+            <Setter Property="MinHeight" Value="12" />
+        </Style>
+        <Style Selector="ScrollBar /template/ Border#VerticalRoot,
+                         ScrollBar /template/ Border#HorizontalRoot,
+                         ScrollBar:pointerover /template/ Border#VerticalRoot,
+                         ScrollBar:pointerover /template/ Border#HorizontalRoot,
+                         ScrollBar:expanded /template/ Border#VerticalRoot,
+                         ScrollBar:expanded /template/ Border#HorizontalRoot">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+        </Style>
+        <Style Selector="ScrollBar /template/ Rectangle#TrackRect">
+            <Setter Property="Fill" Value="Transparent" />
+            <Setter Property="Stroke" Value="Transparent" />
+            <Setter Property="StrokeThickness" Value="0" />
+            <Setter Property="RadiusX" Value="6" />
+            <Setter Property="RadiusY" Value="6" />
+            <Setter Property="Margin" Value="1,2" />
+            <Setter Property="Opacity" Value="0" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <DoubleTransition Property="Opacity" Duration="0:0:0.14" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="ScrollBar:expanded /template/ Rectangle#TrackRect">
+            <Setter Property="Fill" Value="{StaticResource KcapInfoDimBrush}" />
+            <Setter Property="Stroke" Value="{StaticResource KcapSelectionBrush}" />
+            <Setter Property="StrokeThickness" Value="1" />
+            <Setter Property="Opacity" Value="0.65" />
+        </Style>
+        <Style Selector="ScrollBar /template/ RepeatButton#PART_LineUpButton,
+                         ScrollBar /template/ RepeatButton#PART_LineDownButton">
+            <Setter Property="IsVisible" Value="False" />
+        </Style>
+        <Style Selector="ScrollBar /template/ RepeatButton#PART_PageUpButton,
+                         ScrollBar /template/ RepeatButton#PART_PageDownButton">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Opacity" Value="0" />
+        </Style>
+        <Style Selector="ScrollBar /template/ Thumb,
+                         ScrollBar:vertical /template/ Thumb,
+                         ScrollBar:horizontal /template/ Thumb,
+                         ScrollBar:vertical:expanded /template/ Thumb,
+                         ScrollBar:horizontal:expanded /template/ Thumb">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="RenderTransform" Value="none" />
+            <Setter Property="Template">
+                <ControlTemplate TargetType="Thumb">
+                    <Border Name="ThumbPill"
+                            Background="{StaticResource KcapInfoBrush}"
+                            Opacity="0.45"
+                            CornerRadius="99"
+                            RenderTransformOrigin="50%,50%"
+                            RenderTransform="scale(1, 1)">
+                        <Border.Transitions>
+                            <Transitions>
+                                <DoubleTransition Property="Opacity" Duration="0:0:0.14" />
+                                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.12" Easing="CubicEaseOut" />
+                            </Transitions>
+                        </Border.Transitions>
+                    </Border>
+                </ControlTemplate>
+            </Setter>
+        </Style>
+        <Style Selector="ScrollBar:vertical /template/ Thumb">
+            <Setter Property="Width" Value="12" />
+            <Setter Property="MinWidth" Value="12" />
+        </Style>
+        <Style Selector="ScrollBar:horizontal /template/ Thumb">
+            <Setter Property="Height" Value="12" />
+            <Setter Property="MinHeight" Value="12" />
+        </Style>
+        <Style Selector="ScrollBar:vertical /template/ Thumb /template/ Border#ThumbPill">
+            <Setter Property="Margin" Value="3,2" />
+        </Style>
+        <Style Selector="ScrollBar:horizontal /template/ Thumb /template/ Border#ThumbPill">
+            <Setter Property="Margin" Value="2,3" />
+        </Style>
+        <Style Selector="ScrollBar:expanded /template/ Thumb /template/ Border#ThumbPill,
+                         ScrollBar /template/ Thumb:pointerover /template/ Border#ThumbPill">
+            <Setter Property="Opacity" Value="0.75" />
+        </Style>
+        <Style Selector="ScrollBar:vertical /template/ Thumb:pressed /template/ Border#ThumbPill">
+            <Setter Property="Opacity" Value="1" />
+            <Setter Property="RenderTransform" Value="scale(0.72, 0.97)" />
+        </Style>
+        <Style Selector="ScrollBar:horizontal /template/ Thumb:pressed /template/ Border#ThumbPill">
+            <Setter Property="Opacity" Value="1" />
+            <Setter Property="RenderTransform" Value="scale(0.97, 0.72)" />
+        </Style>
+        <StyleInclude Source="avares://kcap-desktop/Views/SectionStyles.axaml" />
     </Application.Styles>
 </Application>

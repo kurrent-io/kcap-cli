@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Telemetry;
+using Capacitor.Cli.Plans;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -22,12 +23,32 @@ public class McpPlansServerTests {
         return (root, doc);
     }
 
+    /// <summary>A linked worktree of the repo <see cref="SeedRepo"/> made, the way git lays one out: a
+    /// `.git` file naming its entry under the main `.git/worktrees`, whose `commondir` leads back.</summary>
+    TempDirHandle SeedWorktree(string at) {
+        var worktree = Tmp.CreateDir(at);
+        var entry    = Tmp.CreateDir("repo", ".git", "worktrees", "wt");
+        entry.CreateFile("commondir", "../..\n");
+        worktree.CreateFile(".git", $"gitdir: {entry.Path}\n");
+        worktree.CreateDir("docs").CreateFile("plan.md", "# Plan in the worktree\n");
+        return worktree;
+    }
+
     // ── tool schema ──────────────────────────────────────────────────────────
 
     [Test]
     public async Task Tools_list_exposes_the_four_plan_tools() {
         var names = McpPlansServer.BuildToolsList().Select(t => t.Name).ToArray();
         await Assert.That(names).IsEquivalentTo(new[] { "declare_plan_document", "set_plan_tasks", "update_plan_task", "get_plan" });
+    }
+
+    [Test]
+    public async Task Declare_document_names_where_the_content_goes() {
+        // An approval reviewer reads the tool description, not the server instructions: a tool that
+        // "records" a local file's content without saying where reads as an upload to nowhere.
+        var declare = McpPlansServer.BuildToolsList().Single(t => t.Name == "declare_plan_document");
+        await Assert.That(declare.Description).Contains("kcap server");
+        await Assert.That(declare.Description).Contains("kcap login");
     }
 
     [Test]
@@ -88,6 +109,25 @@ public class McpPlansServerTests {
     }
 
     [Test]
+    public async Task A_recorded_declaration_replays_every_argument_with_the_file_as_it_now_is() {
+        var (root, doc) = SeedRepo("# Spec\n");
+        var design = root.CreateFile(["docs", "design.md"], "# Design\n");
+        var first = McpPlansServer.BuildDeclaration(
+            Args("""{"session_id":"s1","kind":"spec","path":"docs/plan.md","argues_from":"docs/design.md","work_item_id":"wi-1"}"""), cwd: root, repoRoot: root);
+
+        await Assert.That(first.Document.Path).IsEqualTo(doc);
+        await Assert.That(first.Document.ArguesFrom).IsEqualTo(design);
+
+        File.WriteAllText(doc, "# Spec, revised\n");
+        var replay = McpPlansServer.BuildDeclaration(first.Document.ToArguments(first.SessionId), first.Document.Cwd, first.Document.RepoRoot);
+
+        var expected = first.Body.DeepClone().AsObject();
+        expected["content"]      = "# Spec, revised\n";
+        expected["content_hash"] = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("# Spec, revised\n")));
+        await Assert.That(JsonNode.DeepEquals(replay.Body, expected)).IsTrue();
+    }
+
+    [Test]
     public async Task Declaration_resolves_a_relative_path_against_the_project_directory() {
         var (root, _) = SeedRepo();
         var d = McpPlansServer.BuildDeclaration(Args("""{"session_id":"s1","kind":"spec","path":"docs/plan.md"}"""), cwd: root, repoRoot: root);
@@ -135,6 +175,84 @@ public class McpPlansServerTests {
         await Assert.That(d.Body["path"]!.GetValue<string>()).IsEqualTo(doc);
         await Assert.That(d.Body["workspace_root"]).IsNull();
         await Assert.That(d.WorkspaceRoot).IsNull();
+    }
+
+    [Test]
+    [Arguments("wt")]
+    [Arguments("repo/.claude/worktrees/wt")]
+    public async Task A_document_in_another_worktree_of_the_repo_is_keyed_off_that_worktree(string at) {
+        var (root, _) = SeedRepo();
+        var worktree  = SeedWorktree(at);
+        var doc       = Path.Combine(worktree.Path, "docs", "plan.md");
+
+        var d = McpPlansServer.BuildDeclaration(new JsonObject { ["session_id"] = "s1", ["kind"] = "plan", ["path"] = doc }, root, root);
+
+        await Assert.That(d.Body["path"]!.GetValue<string>()).IsEqualTo(doc);
+        await Assert.That(d.Body["workspace_root"]!.GetValue<string>()).IsEqualTo(worktree.Path);
+        await Assert.That(d.Body["content"]!.GetValue<string>()).IsEqualTo("# Plan in the worktree\n");
+
+        var replay = McpPlansServer.BuildDeclaration(d.Document.ToArguments(d.SessionId), d.Document.Cwd, d.Document.RepoRoot);
+        await Assert.That(JsonNode.DeepEquals(replay.Body, d.Body)).IsTrue();
+    }
+
+    [Test]
+    public async Task A_symlinked_spelling_of_the_session_checkout_is_still_the_session_checkout() {
+        // Creating a symlink needs a privilege the Windows CI runner lacks.
+        if (OperatingSystem.IsWindows()) return;
+
+        var (root, _) = SeedRepo();
+        var alias     = Tmp.PathTo("alias");
+        Directory.CreateSymbolicLink(alias, root.Path);
+        var direct    = McpPlansServer.BuildDeclaration(Args("""{"session_id":"s1","kind":"plan","path":"docs/plan.md"}"""), root, root);
+
+        var byPath  = McpPlansServer.BuildDeclaration(new JsonObject { ["session_id"] = "s1", ["kind"] = "plan", ["path"] = Path.Combine(alias, "docs", "plan.md") }, root, root);
+        var byNamed = McpPlansServer.BuildDeclaration(new JsonObject { ["session_id"] = "s1", ["kind"] = "plan", ["path"] = "docs/plan.md", ["workspace_root"] = alias }, root, root);
+
+        foreach (var d in (PlanDocumentDeclaration[])[byPath, byNamed]) {
+            await Assert.That(d.Body["path"]!.GetValue<string>()).IsEqualTo("docs/plan.md");
+            await Assert.That(d.Body["workspace_root"]!.GetValue<string>()).IsEqualTo(direct.Body["workspace_root"]!.GetValue<string>());
+        }
+    }
+
+    [Test]
+    public async Task A_checkout_of_another_repository_is_declared_only_when_named_as_the_workspace_root() {
+        var (root, _) = SeedRepo();
+        var other     = Tmp.CreateDir("other");
+        other.CreateDir(".git");
+        var doc = other.CreateDir("docs").CreateFile("plan.md", "# Other\n");
+
+        await Assert.That(() => McpPlansServer.BuildDeclaration(new JsonObject { ["session_id"] = "s1", ["kind"] = "plan", ["path"] = doc }, root, root))
+            .Throws<ArgumentException>().WithMessageContaining("workspace_root");
+
+        var args = new JsonObject { ["session_id"] = "s1", ["kind"] = "plan", ["path"] = "docs/plan.md", ["workspace_root"] = other.Path };
+        var d    = McpPlansServer.BuildDeclaration(args, root, root);
+
+        await Assert.That(d.Body["path"]!.GetValue<string>()).IsEqualTo(doc);
+        await Assert.That(d.Body["workspace_root"]!.GetValue<string>()).IsEqualTo(other.Path);
+
+        var replay = McpPlansServer.BuildDeclaration(d.Document.ToArguments(d.SessionId), d.Document.Cwd, d.Document.RepoRoot);
+        await Assert.That(JsonNode.DeepEquals(replay.Body, d.Body)).IsTrue();
+    }
+
+    [Test]
+    public async Task A_named_workspace_root_outside_any_git_tree_is_refused_and_still_bounds_the_path() {
+        var (root, _) = SeedRepo();
+        var loose     = Tmp.CreateDir("loose");
+        loose.CreateFile("plan.md", "x");
+
+        await Assert.That(() => McpPlansServer.BuildDeclaration(Args($$"""{"session_id":"s1","kind":"plan","path":"plan.md","workspace_root":{{JsonValue.Create(loose.Path).ToJsonString()}}}"""), root, root))
+            .Throws<ArgumentException>().WithMessageContaining("not inside a git working tree");
+        await Assert.That(() => McpPlansServer.BuildDeclaration(Args($$"""{"session_id":"s1","kind":"plan","path":"../secret.txt","workspace_root":{{JsonValue.Create(root.Path).ToJsonString()}}}"""), root, root))
+            .Throws<ArgumentException>().WithMessageContaining("outside the project root");
+    }
+
+    [Test]
+    public async Task Declaration_carries_a_named_plan_id() {
+        var (root, _) = SeedRepo();
+        var d = McpPlansServer.BuildDeclaration(Args("""{"session_id":"s1","kind":"plan","path":"docs/plan.md","plan_id":"p-1"}"""), root, root);
+
+        await Assert.That(d.Body["plan_id"]!.GetValue<string>()).IsEqualTo("p-1");
+        await Assert.That(d.Document.ToArguments("s1").ContainsKey("plan_id")).IsFalse();
     }
 
     [Test]
@@ -380,12 +498,12 @@ public class McpPlansServerTests {
     }
 
     // Resolutions.None: these tests exercise routing, not profile selection.
-    McpPlansServer Server() =>
+    McpPlansServer Server(TimeSpan? declareLockWait = null) =>
         new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), new FixedCapacitorHttpClient(), NoTelemetry.Startup,
-            new WorkingDirectory(AppContext.BaseDirectory), TimeProvider.System);
+            new WorkingDirectory(AppContext.BaseDirectory), TimeProvider.System) { DeclareLockWait = declareLockWait ?? TimeSpan.FromSeconds(5) };
 
     async Task<(ScriptedHandler Handler, string Response)> DispatchAsync(
-            string toolName, string argsJson, ScriptedHandler? handler = null, string? cwd = null, string? repoRoot = null) {
+            string toolName, string argsJson, ScriptedHandler? handler = null, string? cwd = null, string? repoRoot = null, McpPlansServer? server = null) {
         handler ??= new ScriptedHandler();
         using var client = new HttpClient(handler);
 
@@ -393,7 +511,7 @@ public class McpPlansServerTests {
             ["params"] = new JsonObject { ["name"] = toolName, ["arguments"] = JsonNode.Parse(argsJson) }
         };
 
-        var response = await Server().HandleToolCallAsync(JsonValue.Create(1)!, request, client, "http://x", cwd ?? Tmp.Path, repoRoot);
+        var response = await (server ?? Server()).HandleToolCallAsync(JsonValue.Create(1)!, request, client, "http://x", cwd ?? Tmp.Path, repoRoot);
 
         return (handler, response);
     }
@@ -422,6 +540,19 @@ public class McpPlansServerTests {
         await Assert.That(result["snapshot_attached"]!.GetValue<bool>()).IsTrue();
         await Assert.That(result["content_bytes"]!.GetValue<long>()).IsEqualTo(7L);
         await Assert.That(result["path"]!.GetValue<string>()).IsEqualTo("docs/plan.md");
+    }
+
+    [Test]
+    public async Task Dispatch_declare_asks_for_a_retry_rather_than_post_while_an_edit_refresh_holds_the_document() {
+        var (root, doc) = SeedRepo("# Plan\n");
+        using var held = await new DeclaredDocumentLedger(Config.Root, TimeProvider.System).LockAsync("s1", doc, TimeSpan.Zero);
+
+        var (h, response) = await DispatchAsync("declare_plan_document", """{"session_id":"s1","kind":"plan","path":"docs/plan.md"}""",
+            cwd: root, repoRoot: root, server: Server(declareLockWait: TimeSpan.FromMilliseconds(100)));
+
+        await Assert.That(h.Calls).IsEmpty();
+        await Assert.That(IsError(response)).IsTrue();
+        await Assert.That(ResultText(response)).Contains("call declare_plan_document again");
     }
 
     [Test]

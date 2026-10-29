@@ -1,0 +1,335 @@
+name: Desktop app
+
+on:
+  workflow_call:
+    inputs:
+      rid:
+        description: osx-arm64, win-x64 or linux-x64, which is also the Velopack channel.
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      release:
+        description: >-
+          Sign and notarize on macOS, Authenticode-sign on Windows when a certificate is configured,
+          diff against the published feed and refuse a version already in the bucket. Needs the
+          Apple, Windows and R2 secrets.
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    name: Build
+    runs-on: ${{ startsWith(inputs.rid, 'osx-') && 'macos-latest' || startsWith(inputs.rid, 'win-') && 'windows-latest' || 'ubuntu-latest' }}
+    timeout-minutes: ${{ startsWith(inputs.rid, 'osx-') && 90 || 60 }}
+    env:
+      # vpk is a framework-dependent global tool built for an older runtime than the pinned SDK.
+      DOTNET_ROLL_FORWARD: Major
+      VERSION: ${{ inputs.version }}
+      RID: ${{ inputs.rid }}
+      EXE: ${{ startsWith(inputs.rid, 'win-') && '.exe' || '' }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: ./.github/actions/setup-dotnet
+
+      - name: Install vpk
+        run: dotnet tool install -g vpk --version 1.2.0
+
+      - name: Install the smoke test's display
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb libice6 libsm6 libfontconfig1
+
+      - name: Download the CLI and daemon
+        uses: actions/download-artifact@v8
+        with:
+          name: release-${{ inputs.rid }}
+          path: trio/
+
+      # The bytes npm ships, recorded so publishing can prove the bundle carries them. The archive
+      # roots its binaries at bin/, and the macOS one already carries their digests.
+      - name: Extract the trio
+        run: |
+          set -euo pipefail
+          source scripts/lib/hash.sh
+          if [ -n "$EXE" ]; then unzip -q "trio/kcap-$RID.zip" -d trio; else tar -xzf "trio/kcap-$RID.tar.gz" -C trio; fi
+          if [ "$RUNNER_OS" = macOS ]; then
+            test -f trio/bin/daemon.sha256 && test -f trio/bin/kcap.sha256
+          else
+            sha256_of "trio/bin/kcap-daemon$EXE" > trio/bin/daemon.sha256
+            sha256_of "trio/bin/kcap$EXE" > trio/bin/kcap.sha256
+          fi
+
+      - name: Import signing keychain and notary profile
+        if: inputs.release && runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_NOTARY_KEY_P8: ${{ secrets.APPLE_NOTARY_KEY_P8 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: bash scripts/import-signing-keychain.sh
+
+      # The cheap first line of the immutability rule; publishing repeats it inside its concurrency
+      # group against the actual bytes.
+      - name: Refuse an already-published version
+        if: inputs.release
+        env: &r2
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: bash scripts/refuse-published-desktop.sh "$RID" "$VERSION"
+
+      - name: Publish app
+        run: >
+          dotnet publish src/Capacitor.App/Capacitor.App.csproj -c Release -r "$RID" --self-contained
+          -p:MinVerVersionOverride="$VERSION" -o publish/app/
+
+      - name: Sign the app's binaries
+        if: inputs.release && runner.os == 'macOS'
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          machos=()
+          while IFS= read -r f; do
+            if file "$f" | grep -q 'Mach-O'; then machos+=("$f"); fi
+          done < <(find publish/app -type f)
+          bash scripts/sign-macos.sh "$APPLE_SIGNING_IDENTITY" "$KEYCHAIN" src/Capacitor.App/Packaging/app.entitlements "${machos[@]}"
+
+      # The trio is copied as it arrived and never touched by codesign again. On Linux the CLI goes
+      # under bin/ because the plugin directory beside it is also named kcap.
+      - name: Assemble pack directory
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            macOS)
+              cp trio/bin/kcap trio/bin/kcap-daemon trio/bin/libpty_shim.dylib publish/app/
+              chmod +x publish/app/kcap publish/app/kcap-daemon "publish/app/kcap-desktop"
+              bash scripts/assemble-app-bundle.sh publish/app "publish/kcap.app" "$VERSION" ;;
+            Windows)
+              cp trio/bin/kcap.exe trio/bin/kcap-daemon.exe trio/bin/kcap-service.exe publish/app/
+              bash scripts/bundle-app-plugin.sh publish/app "$VERSION" ;;
+            Linux)
+              mkdir -p publish/app/bin
+              cp trio/bin/kcap trio/bin/kcap-daemon trio/bin/libpty_shim.so publish/app/bin/
+              bash scripts/bundle-app-plugin.sh publish/app "$VERSION" ;;
+          esac
+
+      - name: Fetch the delta baseline
+        if: inputs.release
+        env: *r2
+        run: |
+          mkdir -p releases
+          vpk download s3 --channel "$RID" --outputDir releases --endpoint "$R2_ENDPOINT" --bucket "$R2_BUCKET" \
+            --prefix "desktop/$RID" --keyId "$AWS_ACCESS_KEY_ID" --secret "$AWS_SECRET_ACCESS_KEY" \
+            || echo "no previous release to diff against"
+          bash scripts/desktop-baseline.sh releases "$VERSION"
+
+      # Windows signs only once a certificate is configured: an unsigned build still installs and
+      # updates, but SmartScreen warns on the first download.
+      - name: Pack
+        env:
+          RELEASE: ${{ inputs.release }}
+          APPLE_SIGNING_IDENTITY: ${{ startsWith(inputs.rid, 'osx-') && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          WINDOWS_CERTIFICATE_PFX: ${{ startsWith(inputs.rid, 'win-') && secrets.WINDOWS_CERTIFICATE_PFX || '' }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ startsWith(inputs.rid, 'win-') && secrets.WINDOWS_CERTIFICATE_PASSWORD || '' }}
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            macOS)   args=(--mainExe "kcap-desktop" --packDir "publish/kcap.app" --noInst) ;;
+            Windows) args=(--mainExe "kcap-desktop.exe" --packDir publish/app --icon src/Capacitor.App/Assets/kcap-icon.ico) ;;
+            Linux)   args=(--mainExe "kcap-desktop" --packDir publish/app --icon src/Capacitor.App/Assets/kcap-icon.png) ;;
+          esac
+          if [ "$RELEASE" = true ] && [ "$RUNNER_OS" = macOS ]; then
+            args+=(--signAppIdentity "$APPLE_SIGNING_IDENTITY" --signEntitlements src/Capacitor.App/Packaging/app.entitlements
+                   --signDisableDeep --notaryProfile kcap-notary --keychain "$KEYCHAIN")
+          fi
+          if [ "$RELEASE" = true ] && [ "$RUNNER_OS" = Windows ]; then
+            if [ -n "${WINDOWS_CERTIFICATE_PFX:-}" ]; then
+              printf '%s' "$WINDOWS_CERTIFICATE_PFX" | base64 -d > "$RUNNER_TEMP/kcap-sign.pfx"
+              args+=(--signParams "/fd sha256 /td sha256 /tr http://timestamp.digicert.com /f \"$RUNNER_TEMP/kcap-sign.pfx\" /p \"$WINDOWS_CERTIFICATE_PASSWORD\"")
+            else
+              echo "::warning::WINDOWS_CERTIFICATE_PFX is not configured; the Windows app ships unsigned"
+            fi
+          fi
+          vpk pack --packId kcap --packVersion "$VERSION" --packTitle "kcap" --packAuthors Kurrent \
+            --channel "$RID" --outputDir releases "${args[@]}"
+          rm -f "$RUNNER_TEMP/kcap-sign.pfx"
+
+      - name: Assert and smoke the packed bundle
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          mkdir -p extracted
+          ditto -x -k releases/kcap-osx-arm64-Portable.zip extracted
+          APP="extracted/kcap.app"
+          bash scripts/assert-app-plugin.sh "$APP" "$VERSION"
+          bash scripts/assert-app-cli-version.sh "$APP/Contents/MacOS/kcap" "$VERSION"
+          bash scripts/assert-bundle-digest.sh "$APP" trio/bin/daemon.sha256
+          "$APP/Contents/MacOS/kcap" --version --no-update-check
+          "$APP/Contents/MacOS/kcap-daemon" --version
+          # The app loads the patched Avalonia.Native; a bundle that carries the stock bytes under
+          # that name would reintroduce the accessibility leak without any other symptom.
+          test -f "$APP/Contents/MacOS/libAvaloniaNative.patched.dylib"
+          if cmp -s "$APP/Contents/MacOS/libAvaloniaNative.patched.dylib" "$APP/Contents/MacOS/libAvaloniaNative.dylib"; then
+            echo "::error::libAvaloniaNative.patched.dylib is the stock library"; exit 1
+          fi
+          # codesign refuses any file under Contents/MacOS that is not code.
+          not_code="$(find "$APP/Contents/MacOS" -type f -print0 | while IFS= read -r -d '' f; do
+            file -b "$f" | grep -q '^Mach-O' || echo "$f"
+          done)"
+          if [ -n "$not_code" ]; then
+            echo "::error::Contents/MacOS holds files codesign cannot sign:"; echo "$not_code"; exit 1
+          fi
+          # Signed, this is also JIT under the hardened runtime: the app must still be alive after 15 s.
+          SCRATCH="$(mktemp -d)"
+          KCAP_CONFIG_DIR="$SCRATCH" KCAP_APP_UPDATE_URL="http://127.0.0.1:9/" DO_NOT_TRACK=1 "$APP/Contents/MacOS/kcap-desktop" &
+          APP_PID=$!
+          sleep 15
+          kill -0 "$APP_PID" || { echo "::error::the packed app exited within 15 s"; exit 1; }
+          kill "$APP_PID" 2>/dev/null || true; wait "$APP_PID" 2>/dev/null || true
+
+      # The gates check the tree Setup.exe installs, which is what a user runs. A silent install
+      # does not launch the app, so the smoke below starts it.
+      - name: Install the packed app
+        if: runner.os == 'Windows'
+        run: bash scripts/install-windows-setup.sh releases/kcap-win-x64-Setup.exe
+
+      - name: Assert the installed app
+        if: runner.os == 'Windows'
+        run: |
+          set -euo pipefail
+          install="$(cygpath -u "$LOCALAPPDATA")/kcap"
+          bash scripts/assert-app-plugin.sh "$install/current" "$VERSION"
+          bash scripts/assert-app-cli-version.sh "$install/current/kcap.exe" "$VERSION"
+          bash scripts/assert-bundle-digest.sh "$install" trio/bin/daemon.sha256
+          "$install/current/kcap-daemon.exe" --version
+          "$install/current/kcap-service.exe" --version
+
+      # A missing native library or a platform-only call on the startup path ends the process
+      # within seconds.
+      - name: Smoke the installed app
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $cfg = Join-Path $env:RUNNER_TEMP 'kcap-smoke'
+          New-Item -ItemType Directory -Force $cfg | Out-Null
+          $env:KCAP_CONFIG_DIR = $cfg; $env:KCAP_APP_UPDATE_URL = 'http://127.0.0.1:9/'; $env:DO_NOT_TRACK = '1'
+          $p = Start-Process (Join-Path $env:LOCALAPPDATA 'kcap\current\kcap-desktop.exe') -PassThru
+          Start-Sleep 15
+          if ($p.HasExited) { Write-Error "the packed app exited within 15 s (exit $($p.ExitCode))"; exit 1 }
+          Stop-Process -Id $p.Id -Force
+
+      - name: Assert the packed app
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          (cd releases && ./kcap-linux-x64.AppImage --appimage-extract >/dev/null)
+          app=releases/squashfs-root/usr/bin
+          bash scripts/assert-app-plugin.sh "$app" "$VERSION"
+          bash scripts/assert-app-cli-version.sh "$app/bin/kcap" "$VERSION"
+          bash scripts/assert-bundle-digest.sh "$app" trio/bin/daemon.sha256
+          "$app/bin/kcap-daemon" --version
+          rm -rf releases/squashfs-root
+
+      # The smoke also proves the app copied its CLI out of the AppImage, which a daemon needs to
+      # outlive the app.
+      - name: Smoke the packed app
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          export KCAP_CONFIG_DIR="$RUNNER_TEMP/kcap-smoke" KCAP_APP_UPDATE_URL=http://127.0.0.1:9/ DO_NOT_TRACK=1
+          export APPIMAGE_EXTRACT_AND_RUN=1 XDG_DATA_HOME="$RUNNER_TEMP/kcap-data"
+          mkdir -p "$KCAP_CONFIG_DIR"
+          xvfb-run -a releases/kcap-linux-x64.AppImage > smoke.log 2>&1 &
+          pid=$!
+          sleep 20
+          if ! kill -0 "$pid" 2>/dev/null; then echo "::error::the packed app exited within 20 s"; cat smoke.log; exit 1; fi
+          staged="$XDG_DATA_HOME/kcap/desktop"
+          test -x "$staged/bin/kcap" && test -x "$staged/bin/kcap-daemon" && test -f "$staged/bin/libpty_shim.so" \
+            || { echo "::error::the app did not copy its CLI to $staged/bin"; ls -laR "$staged" || true; cat smoke.log; exit 1; }
+          test -f "$staged/kcap/.claude-plugin/plugin.json" || { echo "::error::the app did not copy its plugin"; exit 1; }
+          kill "$pid"
+
+      # Built from the same pack directory, so it carries the same CLI, daemon and plugin. Its own
+      # runtime directory keeps the AppImage smoke's instance lock from turning this launch away.
+      - name: Build, install and smoke the .deb
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          DEB="releases/kcap-$VERSION-linux-x64.deb"
+          bash scripts/build-deb.sh publish/app "$VERSION" "$DEB"
+          sudo apt-get install -y "./$DEB"
+          app=/usr/lib/kcap-desktop
+          bash scripts/assert-app-plugin.sh "$app" "$VERSION"
+          bash scripts/assert-app-cli-version.sh "$app/bin/kcap" "$VERSION"
+          bash scripts/assert-bundle-digest.sh "$app" trio/bin/daemon.sha256
+          export KCAP_CONFIG_DIR="$RUNNER_TEMP/kcap-deb-smoke" KCAP_APP_UPDATE_URL=http://127.0.0.1:9/ DO_NOT_TRACK=1
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/kcap-deb-runtime"
+          mkdir -p "$KCAP_CONFIG_DIR" && mkdir -m 0700 -p "$XDG_RUNTIME_DIR"
+          xvfb-run -a kcap-desktop > deb-smoke.log 2>&1 &
+          pid=$!
+          sleep 20
+          if ! kill -0 "$pid" 2>/dev/null; then echo "::error::the installed app exited within 20 s"; cat deb-smoke.log; exit 1; fi
+          kill "$pid"
+
+      # Pins the manifest field names the alias-promotion script reads. Captured rather than piped:
+      # grep -q closes the pipe at its first match, and a stable candidate prints a second line.
+      - name: Assert the feed manifest
+        if: '!inputs.release'
+        run: |
+          set -euo pipefail
+          aliases="$(bash scripts/promote-desktop-aliases.sh "releases/releases.$RID.json" "$VERSION")"
+          grep -qx beta <<<"$aliases"
+
+      - name: Build, sign, notarize and staple the DMG
+        if: inputs.release && runner.os == 'macOS'
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          DMG="releases/kcap-$VERSION-osx-arm64.dmg"
+          python3 -m venv "$RUNNER_TEMP/dmgbuild"
+          "$RUNNER_TEMP/dmgbuild/bin/pip" install --quiet --only-binary :all: --require-hashes -r scripts/dmg/requirements.txt
+          PATH="$RUNNER_TEMP/dmgbuild/bin:$PATH" bash scripts/build-dmg.sh "extracted/kcap.app" "$DMG"
+          codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" --keychain "$KEYCHAIN" "$DMG"
+          xcrun notarytool submit "$DMG" --keychain-profile kcap-notary --keychain "$KEYCHAIN" --wait --timeout 45m
+          xcrun stapler staple "$DMG"
+          spctl --assess -t open --context context:primary-signature -v "$DMG"
+
+      - name: Stage the release set
+        if: inputs.release
+        run: |
+          set -euo pipefail
+          cp trio/bin/daemon.sha256 trio/bin/kcap.sha256 releases/
+          case "$RUNNER_OS" in
+            Windows) mv "releases/kcap-$RID-Setup.exe" "releases/kcap-$VERSION-$RID-Setup.exe" ;;
+            Linux)   cp "releases/kcap-$RID.AppImage" "releases/kcap-$VERSION-$RID.AppImage" ;;
+          esac
+
+      - name: Upload the release set
+        if: inputs.release
+        uses: actions/upload-artifact@v7
+        with:
+          name: app-${{ inputs.rid }}
+          path: releases/
+
+      # Each path exists on one platform only.
+      - name: Upload the unsigned packages
+        if: '!inputs.release'
+        uses: actions/upload-artifact@v7
+        with:
+          name: app-${{ inputs.rid }}-unsigned
+          path: |
+            releases/kcap-osx-arm64-Portable.zip
+            releases/kcap-win-x64-Setup.exe
+            releases/kcap-linux-x64.AppImage
+            releases/kcap-*-linux-x64.deb

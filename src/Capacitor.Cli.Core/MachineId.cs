@@ -24,6 +24,10 @@ public sealed class MachineId(ConfigRoot config) {
     /// </summary>
     public string Get() => ReadPersisted() ?? Create();
 
+    /// <summary>Whether machine.json exists, readable or not — tells a machine that has never had an id
+    /// apart from one whose id is momentarily unreadable.</summary>
+    public bool IsPersisted => File.Exists(MachinePath);
+
     /// <summary>
     /// Reads the persisted id straight off disk — what a fresh process (or a fresh call after a
     /// peer process wrote it) would see. Returns null if machine.json doesn't exist yet or is

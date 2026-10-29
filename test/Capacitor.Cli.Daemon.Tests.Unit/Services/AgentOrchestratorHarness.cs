@@ -41,28 +41,32 @@ internal static class AgentOrchestratorHarness {
             bool                                                deferProcessorPublication = false,
             // Defaults to the no-network stub. A test that exercises attachment downloads passes a
             // factory pointed at its own stub server.
-            IHttpClientFactory?                                 httpClientFactory      = null
+            IHttpClientFactory?                                 httpClientFactory      = null,
+            // The clock behind the subagent-expiry timer and every activity clock a seeded agent
+            // gets by default; a test that drives expiry passes its own.
+            TimeProvider?                                       timeProvider           = null,
+            DaemonConfig?                                       sharedConfig           = null,
+            AccountReadingSink?                                 readings               = null
         ) {
         var daemonStore    = new TempDaemonStore();
         var configRoot   = new TempConfigRoot();
         var home         = new TempHome();
-        var config = new DaemonConfig {
-            Name                = "test",
-            ServerUrl           = "http://127.0.0.1:1",
-            ClaudePath          = "claude",
-            MaxConcurrentAgents = 5,
-            WorktreeRoot        = daemonStore.CreateDir("worktree"),
-            // Phase B (D4): the PID-record store, consent policy and decision log all hang off this
-            // directory, so each harness gets its own and nothing reaches the real daemons dir.
-            Store               = daemonStore.Store,
-            ConfigRoot          = configRoot.Root,
-            // Set like the entry point sets it, so a test configuring capture scope resolves `~`
-            // against its own temp home rather than throwing on an unset one.
-            Home                = home,
-            // Set like the entry point sets it: the orchestrator's own token reads name a profile,
-            // and an unset one throws rather than reporting "not authenticated".
-            Profiles            = Resolutions.None(configRoot.Root)
-        };
+        var time         = timeProvider ?? TimeProvider.System;
+        // A test whose server must read the orchestrator's config, as the one DI singleton does in
+        // production, passes the instance it built that server over.
+        var config = sharedConfig ?? new DaemonConfig();
+        config.Name                = "test";
+        config.ServerUrl           = "http://127.0.0.1:1";
+        config.ClaudePath          = "claude";
+        config.MaxConcurrentAgents = 5;
+        config.WorktreeRoot        = daemonStore.CreateDir("worktree");
+        // Each harness gets its own daemon store, so nothing reaches the real daemons dir.
+        config.Store               = daemonStore.Store;
+        config.ConfigRoot          = configRoot.Root;
+        // Set like the entry point sets them: a capture scope resolves `~` against this home, and the
+        // orchestrator's own token reads name a profile.
+        config.Home                = home;
+        config.Profiles            = Resolutions.None(configRoot.Root);
 
         if (allowedRepoPath is not null) {
             config.AllowedRepoPaths = [allowedRepoPath];
@@ -75,7 +79,7 @@ internal static class AgentOrchestratorHarness {
         var httpFactory      = httpClientFactory ?? new StubHttpClientFactory();
         var http             = new FixedCapacitorHttpClient();
         var tokens           = AuthFixtures.NewTokenStore(configRoot.Root);
-        var permissionBridge = new LocalPermissionBridge(server, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance, TimeProvider.System);
+        var permissionBridge = new LocalPermissionBridge(server, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance, time);
 
         // Mirror DaemonRunner's DI wiring: one PtyHostedAgentRuntimeFactory per registered launcher,
         // all sharing the same (spied) IPtyProcessFactory so SpyPtyProcessFactory's
@@ -86,7 +90,7 @@ internal static class AgentOrchestratorHarness {
         // test that still needs that vendor's launcher registered for the local-spawn path.
         var runtimeFactories = new Dictionary<string, IHostedAgentRuntimeFactory>();
         foreach (var l in launchers.Values)
-            runtimeFactories[l.Vendor] = new PtyHostedAgentRuntimeFactory(l, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
+            runtimeFactories[l.Vendor] = new PtyHostedAgentRuntimeFactory(l, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System, config.Home);
         foreach (var f in extraRuntimeFactories ?? [])
             runtimeFactories[f.Vendor] = f;
 
@@ -113,7 +117,9 @@ internal static class AgentOrchestratorHarness {
             lifetime ?? new StubHostLifetime(),
             logger ?? NullLogger<AgentOrchestrator>.Instance,
             consentGate,
-            deferProcessorPublication
+            deferProcessorPublication,
+            time,
+            readings
         );
     }
 
@@ -144,7 +150,9 @@ internal static class AgentOrchestratorHarness {
                 IHostApplicationLifetime                                lifetime,
                 ILogger<AgentOrchestrator>                              logger,
                 LaunchConsentGate                                       consentGate,
-                bool                                                    deferProcessorPublication
+                bool                                                    deferProcessorPublication,
+                TimeProvider                                            time,
+                AccountReadingSink?                                     readings
             ) : base(
             config,
             configRoot.Root,
@@ -162,12 +170,13 @@ internal static class AgentOrchestratorHarness {
             lifetime,
             logger,
             consentGate,
-            TimeProvider.System,
+            time,
             deferProcessorPublication,
             // Wired unconditionally so the launch path builds a snapshot exactly as production does.
             // The scratch config root and a fresh checkout carry no approval documents, so every test
             // that writes none still gets an empty snapshot and no upload.
-            policySnapshots: new PolicySnapshotProvider(configRoot.Root)
+            policySnapshots: new PolicySnapshotProvider(configRoot.Root),
+            readings: readings
         ) {
             _tmp    = tmp;
             _config = configRoot;
@@ -242,6 +251,20 @@ internal static class AgentOrchestratorHarness {
         };
 
         orch.RegisterAgentForTest(agent);
+
+        return agent;
+    }
+
+    /// <summary>What the orchestrator records once the server has bound an agent's transcript, without
+    /// standing up a server to bind it.</summary>
+    internal static AgentInstance BindTranscript(AgentInstance agent) {
+        agent.AcpForwarder = new AcpForwarderHandle(
+            new AcpTranscriptForwarder(
+                (_, _) => Task.FromResult(new AcpBatchAck(0, 0)), initialEnvelope: null,
+                System.Threading.Channels.Channel.CreateUnbounded<AcpEventEnvelope>().Reader, NullLogger.Instance, TimeProvider.System,
+                resumeFromSeq: 0),
+            Task.CompletedTask);
+        agent.TranscriptBound = true;
 
         return agent;
     }

@@ -23,6 +23,45 @@ public class ServiceStatusJsonTests {
     }
 
     [Test]
+    public async Task The_windows_service_fields_render_when_set_and_are_absent_otherwise() {
+        var q = new ServiceQuery(LabelProbe.Loaded, true, ServiceState.Running, "/u/kcap-daemon", 42);
+
+        var (withFields, _) = ServiceStatusRender.Render(q, "d", null, 42, false, false,
+            supervisor: "windows_service", serviceUpgradeAvailable: true, windowsServiceInstallable: false);
+        var (without, _) = ServiceStatusRender.Render(q, "d", null, 42, false, false);
+
+        using var doc = JsonDocument.Parse(withFields!);
+        await Assert.That(doc.RootElement.GetProperty("supervisor").GetString()).IsEqualTo("windows_service");
+        await Assert.That(doc.RootElement.GetProperty("service_upgrade_available").GetBoolean()).IsTrue();
+        await Assert.That(doc.RootElement.GetProperty("windows_service_installable").GetBoolean()).IsFalse();
+        using var bare = JsonDocument.Parse(without!);
+        await Assert.That(bare.RootElement.TryGetProperty("supervisor", out _)).IsFalse();
+        await Assert.That(bare.RootElement.TryGetProperty("service_upgrade_available", out _)).IsFalse();
+        await Assert.That(bare.RootElement.TryGetProperty("windows_service_installable", out _)).IsFalse();
+    }
+
+    [Test]
+    public async Task Render_carries_a_leftover_markers_details() {
+        var q = new ServiceQuery(LabelProbe.Loaded, true, ServiceState.Running, "/u/kcap-daemon", 42);
+        var marker = new TxnMarker(1, "replace", "bootstrapped", "absent|nounit||pid=", "no-unit", null);
+        var at = new DateTimeOffset(2026, 9, 11, 21, 52, 0, TimeSpan.Zero);
+        var (json, _) = ServiceStatusRender.Render(q, "default", null, 42, true, false, marker: marker, markedAt: at);
+        using var doc = JsonDocument.Parse(json!);
+        var r = doc.RootElement;
+        await Assert.That(r.GetProperty("txn_operation").GetString()).IsEqualTo("replace");
+        await Assert.That(r.GetProperty("txn_phase").GetString()).IsEqualTo("bootstrapped");
+        await Assert.That(r.GetProperty("txn_marked_at").GetDateTimeOffset()).IsEqualTo(at);
+    }
+
+    [Test]
+    public async Task Unfinished_marker_lines_name_the_repair_command() {
+        var marker = new TxnMarker(1, "replace", "bootstrapped", "absent|nounit||pid=", "no-unit", null);
+        var lines = DaemonServiceCommands.UnfinishedTxnLines("tony", marker, null);
+        await Assert.That(lines).Contains("service replace did not finish: it stopped at 'bootstrapped'.");
+        await Assert.That(lines).Contains("kcap daemon service install --replace --verify --name tony");
+    }
+
+    [Test]
     public async Task Unknown_probe_fails_nonzero() {
         var q = new ServiceQuery(LabelProbe.Unknown, true, ServiceState.NotInstalled, "/u/kcap-daemon", null);
         var (json, exit) = ServiceStatusRender.Render(q, "default", null, null, false, false);
@@ -75,5 +114,21 @@ public class ServiceStatusJsonTests {
         await Assert.That(r.GetProperty("unit_server_url").IsNull).IsTrue();
         await Assert.That(r.GetProperty("unit_expected_server").IsNull).IsTrue();
         await Assert.That(r.GetProperty("unit_consent_seed").IsNull).IsTrue();
+    }
+
+    [Test]
+    public async Task Render_carries_the_loaded_spawn_type() {
+        var q = new ServiceQuery(LabelProbe.Loaded, true, ServiceState.Running, "/u/kcap-daemon", 42, LoadedSpawnType: "adaptive");
+        var (json, _) = ServiceStatusRender.Render(q, "default", "/i/kcap-daemon", 42, false, false);
+        using var doc = JsonDocument.Parse(json!);
+        await Assert.That(doc.RootElement.GetProperty("loaded_spawn_type").GetString()).IsEqualTo("adaptive");
+    }
+
+    [Test]
+    public async Task Render_emits_null_spawn_type_for_an_unloaded_label() {
+        var q = new ServiceQuery(LabelProbe.Absent, true, ServiceState.NotInstalled, "/u/kcap-daemon", null);
+        var (json, _) = ServiceStatusRender.Render(q, "default", null, null, false, false);
+        using var doc = JsonDocument.Parse(json!);
+        await Assert.That(doc.RootElement.GetProperty("loaded_spawn_type").IsNull).IsTrue();
     }
 }

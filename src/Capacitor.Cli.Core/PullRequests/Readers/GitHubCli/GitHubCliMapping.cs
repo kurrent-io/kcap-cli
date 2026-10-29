@@ -35,8 +35,10 @@ public static class GitHubCliMapping {
         var links = new List<PullRequestLinkDto>();
         foreach (var row in document.RootElement.EnumerateArray()) {
             if (!row.IsObject || row.Prop("number") is not { } number || !number.IsNumber || !number.TryGetInt32(out var value) || value <= 0) continue;
+            var lifecycle = Lifecycle(Text(row, "state"), row.Bool("isDraft"));
             links.Add(new() { Provider = "github", Host = repository.Host, RepoHash = repository.RepoHash, Owner = repository.Owner, RepoName = repository.RepoName,
-                Number = value, Url = PullRequestWire.SafeLink(Text(row, "url")), Title = Text(row, "title"), HeadRef = Text(row, "headRefName") });
+                Number = value, Url = PullRequestWire.SafeLink(Text(row, "url")), Title = Text(row, "title"), HeadRef = Text(row, "headRefName"),
+                Lifecycle = lifecycle == "unknown" ? null : lifecycle });
             if (links.Count == 20) break;
         }
         return links;
@@ -48,11 +50,11 @@ public static class GitHubCliMapping {
 
     public const int BodyLimit = 262_144;
     public const int ToolListLimit = 100;
-    public const string ViewFields = "title,url,state,isDraft,headRefName,baseRefName,headRefOid,body,updatedAt,reviewDecision,author,statusCheckRollup,reviewRequests,latestReviews,reviews,comments";
+    public const string ViewFields = "title,url,state,isDraft,mergeable,headRefName,baseRefName,headRefOid,body,updatedAt,reviewDecision,author,statusCheckRollup,reviewRequests,latestReviews,reviews,comments";
 
     public static (string? Text, bool Truncated) Truncate(string? text) => text is { Length: > BodyLimit } ? (text[..BodyLimit], true) : (text, false);
 
-    public static GitHubCliView? View(string json, PullRequestSubjectDto subject, DateTime fetchedAt) {
+    public static GitHubCliView? View(string json, DateTime fetchedAt) {
         using var document = Parse(json);
         if (document is null || !document.RootElement.IsObject) return null;
         var root = document.RootElement;
@@ -71,7 +73,8 @@ public static class GitHubCliMapping {
         var requests = root.Prop("reviewRequests") is { } reviewRequests && reviewRequests.IsArray ? reviewRequests.EnumerateArray().ToArray() : [];
         var overview = new PullRequestOverviewDto {
             Title = Text(root, "title"), Url = PullRequestWire.SafeLink(Text(root, "url")), Lifecycle = Lifecycle(Text(root, "state"), root.Bool("isDraft")),
-            IsDraft = root.Bool("isDraft"), HeadRef = Text(root, "headRefName"), BaseRef = Text(root, "baseRefName"),
+            IsDraft = root.Bool("isDraft"), HeadRef = Text(root, "headRefName"),
+            Mergeable = Text(root, "mergeable") switch { "MERGEABLE" => true, "CONFLICTING" => false, _ => null }, BaseRef = Text(root, "baseRefName"),
             HeadSha = headSha, Description = description, DescriptionTruncated = truncated, UpdatedAt = Time(root, "updatedAt"),
             ReviewDecision = ReviewDecision(Text(root, "reviewDecision")), AccessCheckedFor = "your GitHub CLI sign-in",
             Checks = new() { Availability = availability, Rollup = Rollup(checks, checksCapped), HeadSha = headSha, Counts = counts },
@@ -239,7 +242,7 @@ public static class GitHubCliMapping {
 
     public static PullRequestRead<T> Failure<T>(GitHubCliResult result, PullRequestSubjectDto subject, DateTime now) where T : class {
         switch (result.Outcome) {
-            case GitHubCliOutcome.NotStarted: return new(PullRequestReadKind.Unavailable, Subject: subject, Reason: "tool_failed", AccessFailure: "transient");
+            case GitHubCliOutcome.NotStarted: return new(PullRequestReadKind.Unavailable, Subject: subject, Reason: "tool_failed", AccessFailure: "transient", Detail: FirstLine(result.Stderr));
             case GitHubCliOutcome.TimedOut: return new(PullRequestReadKind.TransportFailure, Subject: subject, Reason: "timeout", AccessFailure: "transient");
             case GitHubCliOutcome.Oversized: return new(PullRequestReadKind.InvalidProtocol, Subject: subject, Reason: "oversized", AccessFailure: "invalid");
         }
@@ -252,6 +255,12 @@ public static class GitHubCliMapping {
             return new(PullRequestReadKind.Unavailable, Subject: subject, Reason: "rate_limited", RetryAt: now.AddSeconds(60));
         if (message.Contains("HTTP 403", StringComparison.Ordinal))
             return new(PullRequestReadKind.Unavailable, Subject: subject, Reason: "tool_denied", AccessFailure: "denied");
-        return new(PullRequestReadKind.Unavailable, Subject: subject, Reason: "tool_failed", AccessFailure: "transient");
+        return new(PullRequestReadKind.Unavailable, Subject: subject, Reason: "tool_failed", AccessFailure: "transient", Detail: FirstLine(message));
+    }
+
+    /// One line of gh's error, capped: a notice has room for a cause, not a stack.
+    static string? FirstLine(string text) {
+        var line = text.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+        return line is { Length: > 200 } ? line[..200] + "…" : line;
     }
 }

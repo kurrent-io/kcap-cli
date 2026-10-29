@@ -7,6 +7,7 @@ using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Antigravity;
+using Capacitor.Cli.Harness.Titles;
 
 namespace Capacitor.Cli.Harness.Antigravity;
 
@@ -259,6 +260,7 @@ internal sealed class AntigravityImportSource : IImportSource {
             // (they were never emitted on the original import). Always attempted, always
             // before session-end.
             await PostUsageLinesAsync(ctx, c.SessionId, transcriptPath, c.Meta.FirstTimestamp, ct);
+            await PostHarnessTitleAsync(ctx, c.SessionId, transcriptPath, ct);
 
             if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-end/antigravity",
                     BuildSessionEndPayload(c.SessionId, c.Meta.Cwd, c.Meta.LastTimestamp), ct))
@@ -300,6 +302,7 @@ internal sealed class AntigravityImportSource : IImportSource {
         // Children as subagents — BEFORE session-end so SubagentCompleted precedes SessionEnded.
         // Subagent failures don't fail the (already-imported) parent; a re-import retries.
         await ImportChildrenAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, c.SourceMeta!, ctx.Progress, ct);
+        await PostHarnessTitleAsync(ctx, c.SessionId, transcriptPath, ct);
 
         if (!await PostHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-end/antigravity",
                 BuildSessionEndPayload(c.SessionId, c.Meta.Cwd, c.Meta.LastTimestamp), ct))
@@ -544,6 +547,11 @@ internal sealed class AntigravityImportSource : IImportSource {
             return false; // cost is always best-effort — never let a post failure surface
         }
     }
+
+    // Best-effort, before session-end like the usage pass; a store with no title sends nothing.
+    Task PostHarnessTitleAsync(ImportContext ctx, string sessionId, string transcriptPath, CancellationToken ct) =>
+        ImportHarnessTitle.PostFromStoreAsync(
+            AntigravitySummaryTitle.ForTranscript(transcriptPath), ctx.HttpClient, _time, ctx.BaseUrl, sessionId, ctx.Progress, ct);
 
     async Task<bool> PostHookAsync(HttpClient client, string baseUrl, string route, JsonObject payload, CancellationToken ct) {
         try {

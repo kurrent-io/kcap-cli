@@ -20,6 +20,9 @@
         <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
     </ItemGroup>
     <ItemGroup>
+        <None Include="Harness/Muse/fixtures/**/*" CopyToOutputDirectory="PreserveNewest" />
+    </ItemGroup>
+    <ItemGroup>
         <Using Include="Capacitor.Tests.Helpers" />
         <Using Include="Capacitor.Models.Transcripts" />
     </ItemGroup>

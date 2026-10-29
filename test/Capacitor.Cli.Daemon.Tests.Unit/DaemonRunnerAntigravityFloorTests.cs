@@ -2,6 +2,7 @@ using System.Runtime.Versioning;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Harness.Antigravity;
+using Capacitor.Cli.Daemon.Harness.Codex;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -13,6 +14,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit;
 /// <c>AntigravityReviewerLaunchTests</c>); what these pin is that the list this daemon advertises
 /// derives from that ladder rather than from a second, separately-maintained narrowing pass.
 /// </summary>
+[ParallelLimiter<SubprocessLimit>]
 public class DaemonRunnerAntigravityFloorTests {
     [TempDir] public required TempDir Tmp { get; init; }
 
@@ -273,8 +275,7 @@ public class DaemonRunnerAntigravityFloorTests {
     [UnsupportedOSPlatform("windows")]
     static TempDir StubAgy(string version, out string stubPath) {
         var tmp = new TempDir();
-        stubPath = tmp.CreateFile("agy", $"#!/bin/sh\necho 'Antigravity CLI {version}'\n");
-        File.SetUnixFileMode(stubPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        stubPath = tmp.CreateExecutable("agy", $"#!/bin/sh\necho 'Antigravity CLI {version}'\n");
         return tmp;
     }
 
@@ -293,7 +294,7 @@ public class DaemonRunnerAntigravityFloorTests {
         using var stubDir = StubAgy("1.1.10", out var stub);
 
         var capabilities = DaemonRunner.ComputeUnattendedVendorCapabilities(
-            [new FakeFactory("antigravity", advertised: true, cliPath: stub)], Config(),
+            [new FakeFactory("antigravity", advertised: true, cliPath: stub)], Config(), CodexTransportResolution.Unresolved,
             advertised: ["antigravity"]);
 
         var antigravity = capabilities.Single();
@@ -315,7 +316,7 @@ public class DaemonRunnerAntigravityFloorTests {
         using var stubDir = StubAgy("0.56.0", out var stub);
 
         var capabilities = DaemonRunner.ComputeUnattendedVendorCapabilities(
-            [new FakeFactory("gemini", advertised: true, cliPath: stub)], Config(), advertised: ["gemini"]);
+            [new FakeFactory("gemini", advertised: true, cliPath: stub)], Config(), CodexTransportResolution.Unresolved, advertised: ["gemini"]);
 
         var gemini = capabilities.Single();
 

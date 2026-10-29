@@ -1,0 +1,460 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:Capacitor.App.Views">
+    <!-- The kcap installer palette, for the onboarding pane only (onboarding-prefixed classes):
+         lavender controls, coral eyebrows, and plum cards over a matching bloom.
+         Outcome colours stay the app's KcapSuccess / KcapDanger, so a
+         tick here means what it means everywhere else. -->
+
+    <!-- Type -->
+    <Style Selector="TextBlock.onboardingEyebrow">
+        <Setter Property="FontFamily" Value="{StaticResource OnboardingMonoFont}" />
+        <Setter Property="FontSize" Value="11" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="LetterSpacing" Value="1.5" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingAtmosphereBrush}" />
+    </Style>
+    <Style Selector="TextBlock.onboardingHeadline">
+        <Setter Property="FontSize" Value="30" />
+        <Setter Property="FontWeight" Value="Bold" />
+        <Setter Property="LineHeight" Value="37" />
+        <Setter Property="LetterSpacing" Value="-0.75" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingTextBrush}" />
+    </Style>
+    <Style Selector="TextBlock.onboardingLede">
+        <Setter Property="MaxWidth" Value="500" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="LineHeight" Value="25" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingMutedBrush}" />
+    </Style>
+    <Style Selector="TextBlock.onboardingBody">
+        <Setter Property="FontSize" Value="13.5" />
+        <Setter Property="LineHeight" Value="21" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingMutedBrush}" />
+    </Style>
+    <!-- Section heads inside a card: "found on <machine>", "record", "how much history". -->
+    <Style Selector="TextBlock.onboardingMicro">
+        <Setter Property="FontFamily" Value="{StaticResource OnboardingMonoFont}" />
+        <Setter Property="FontSize" Value="10" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="LetterSpacing" Value="1.2" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingDimBrush}" />
+    </Style>
+    <Style Selector="TextBlock.onboardingLabel">
+        <Setter Property="FontSize" Value="13.5" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="LetterSpacing" Value="-0.1" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingTextBrush}" />
+    </Style>
+    <Style Selector="TextBlock.onboardingSignal">
+        <Setter Property="FontSize" Value="11.5" />
+        <Setter Property="FontWeight" Value="Medium" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingDimBrush}" />
+    </Style>
+    <Style Selector="TextBlock.onboardingNote">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="LineHeight" Value="18.5" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingDimBrush}" />
+    </Style>
+    <Style Selector="TextBlock.onboardingDetail">
+        <Setter Property="FontSize" Value="11.5" />
+        <Setter Property="LineHeight" Value="17" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingDimBrush}" />
+    </Style>
+    <Style Selector="TextBlock.onboardingMono">
+        <Setter Property="FontFamily" Value="{StaticResource OnboardingMonoFont}" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingTextBrush}" />
+    </Style>
+    <Style Selector="TextBlock.onboardingValue">
+        <Setter Property="FontFamily" Value="{StaticResource OnboardingMonoFont}" />
+        <Setter Property="FontSize" Value="26" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingTextBrush}" />
+    </Style>
+    <Style Selector="TextBlock.onboardingUnit">
+        <Setter Property="FontFamily" Value="{StaticResource OnboardingMonoFont}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingDimBrush}" />
+    </Style>
+    <Style Selector="TextBlock.onboardingError">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="LineHeight" Value="18" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" />
+    </Style>
+
+    <!-- Surfaces -->
+    <Style Selector="Border.onboardingCard">
+        <Setter Property="Background" Value="{StaticResource OnboardingSurfaceBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingSurfaceBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Padding" Value="22" />
+    </Style>
+    <Style Selector="Border.onboardingDivider">
+        <Setter Property="Height" Value="1" />
+        <Setter Property="Background" Value="{StaticResource OnboardingDividerBrush}" />
+    </Style>
+    <Style Selector="Border.onboardingRowRule">
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingDividerBrush}" />
+        <Setter Property="BorderThickness" Value="0,0,0,1" />
+    </Style>
+    <Style Selector="Border.onboardingWarning">
+        <Setter Property="Background" Value="{StaticResource OnboardingWarningFillBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingWarningBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Padding" Value="14,12" />
+    </Style>
+    <Style Selector="Border.onboardingCallout">
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingControlBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="Padding" Value="14,12" />
+    </Style>
+
+    <!-- Buttons: Primary, Secondary (a real alternative), Quiet (a costless dismissal), Link. Fluent
+         paints PART_ContentPresenter, so each state pins it, as the kcap button classes do. -->
+    <Style Selector="Button.onboardingPrimary, Button.onboardingSecondary, Button.onboardingQuiet, Button.onboardingLink">
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="Padding" Value="18,12" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.onboardingPrimary">
+        <Setter Property="Background" Value="{StaticResource OnboardingAccentBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingAccentOnBrush}" />
+    </Style>
+    <Style Selector="Button.onboardingPrimary /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource OnboardingAccentBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingAccentOnBrush}" />
+    </Style>
+    <Style Selector="Button.onboardingPrimary:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.onboardingPrimary:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource OnboardingAccentHoverBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentHoverBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingAccentOnBrush}" />
+    </Style>
+    <!-- A faded accent fill blends its label into the canvas; a disabled primary reads as an outline instead. -->
+    <Style Selector="Button.onboardingPrimary:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource OnboardingSurfaceBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingSurfaceBorderBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingDimBrush}" />
+    </Style>
+    <Style Selector="Button.onboardingSecondary:disabled, Button.onboardingQuiet:disabled, Button.onboardingLink:disabled">
+        <Setter Property="Opacity" Value="0.5" />
+    </Style>
+    <Style Selector="Button.onboardingSecondary">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingControlBorderBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingTextBrush}" />
+    </Style>
+    <Style Selector="Button.onboardingSecondary /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.onboardingSecondary:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingControlBorderBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingTextBrush}" />
+    </Style>
+    <Style Selector="Button.onboardingSecondary:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.onboardingSecondary:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingTextBrush}" />
+    </Style>
+    <Style Selector="Button.onboardingQuiet">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingNeutralBrush}" />
+        <Setter Property="Padding" Value="4,12" />
+    </Style>
+    <Style Selector="Button.onboardingQuiet /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.onboardingQuiet:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingNeutralBrush}" />
+    </Style>
+    <Style Selector="Button.onboardingQuiet:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.onboardingQuiet:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingTextBrush}" />
+    </Style>
+    <Style Selector="Button.onboardingLink">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingAccentBrush}" />
+        <Setter Property="Padding" Value="0,6" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="LetterSpacing" Value="0" />
+    </Style>
+    <Style Selector="Button.onboardingLink /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.onboardingLink:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingAccentBrush}" />
+    </Style>
+    <Style Selector="Button.onboardingLink:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.onboardingLink:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingAccentHoverBrush}" />
+    </Style>
+    <Style Selector="Button.onboardingEditionCard">
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="FocusAdorner" Value="{x:Null}" />
+        <Setter Property="Padding" Value="20,18" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Background" Value="{StaticResource OnboardingSurfaceBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingSurfaceBorderBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingTextBrush}" />
+    </Style>
+    <Style Selector="Button.onboardingEditionCard /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource OnboardingSurfaceBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingSurfaceBorderBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingTextBrush}" />
+    </Style>
+    <Style Selector="Button.onboardingEditionCard:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.onboardingEditionCard:pressed /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.onboardingEditionCard:focus-visible /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource OnboardingSurfaceBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingTextBrush}" />
+    </Style>
+    <!-- An edition this machine cannot take: the head fades, the footer saying why stays legible. -->
+    <Style Selector="Button.onboardingEditionCard:disabled Grid.onboardingEditionHead">
+        <Setter Property="Opacity" Value="0.5" />
+    </Style>
+    <Style Selector="StackPanel.onboardingEditionFooter">
+        <Setter Property="Spacing" Value="14" />
+        <Setter Property="Margin" Value="0,16,0,0" />
+    </Style>
+    <Style Selector="Button.onboardingCompact">
+        <Setter Property="Padding" Value="14,7" />
+        <Setter Property="FontSize" Value="12.5" />
+    </Style>
+
+    <!-- Fields inside the pane keep the app's kcapField chrome, on the card's own surface. -->
+    <Style Selector="TextBox.onboardingField">
+        <Setter Property="Background" Value="{StaticResource OnboardingFieldBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingTextBrush}" />
+        <Setter Property="CaretBrush" Value="{StaticResource OnboardingTextBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingControlBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="Padding" Value="12,10" />
+        <Setter Property="MinHeight" Value="40" />
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="PlaceholderForeground" Value="{StaticResource OnboardingDimBrush}" />
+    </Style>
+    <Style Selector="TextBox.onboardingField /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="{StaticResource OnboardingFieldBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingControlBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="4" />
+    </Style>
+    <Style Selector="TextBox.onboardingField:pointerover /template/ Border#PART_BorderElement,
+                     TextBox.onboardingField:focus /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="{StaticResource OnboardingFieldBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+    </Style>
+
+    <!-- Checkbox: a 16px square, accent fill when on. The theme draws it in a 32px row, which
+         sits the square between a name and the line under it. -->
+    <Style Selector="CheckBox.onboardingCheck">
+        <Setter Property="Foreground" Value="{StaticResource OnboardingTextBrush}" />
+        <Setter Property="MinWidth" Value="24" />
+        <Setter Property="MinHeight" Value="24" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="CheckBox.onboardingCheck /template/ Grid">
+        <Setter Property="Height" Value="16" />
+        <Setter Property="MinHeight" Value="0" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="CheckBox.onboardingCheck /template/ Border#NormalRectangle">
+        <Setter Property="Width" Value="16" />
+        <Setter Property="Height" Value="16" />
+        <Setter Property="VerticalAlignment" Value="Top" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingDimBrush}" />
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <!-- Center the visible square inside the table checkbox's 24px hit area. -->
+    <Style Selector="CheckBox.onboardingTableCheck /template/ Grid#RootGrid">
+        <Setter Property="Width" Value="20" />
+        <Setter Property="HorizontalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="CheckBox.onboardingCheck:pointerover /template/ Border#NormalRectangle">
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentBrush}" />
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="CheckBox.onboardingCheck:checked /template/ Border#NormalRectangle,
+                     CheckBox.onboardingCheck:checked:pointerover /template/ Border#NormalRectangle">
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentBrush}" />
+        <Setter Property="Background" Value="{StaticResource OnboardingAccentBrush}" />
+    </Style>
+    <!-- The theme lays the mark out in a 32px row. Pull it into the 16px square or the box clips it. -->
+    <Style Selector="CheckBox.onboardingCheck /template/ Viewbox">
+        <Setter Property="Width" Value="16" />
+        <Setter Property="Height" Value="16" />
+        <Setter Property="VerticalAlignment" Value="Top" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
+    </Style>
+    <Style Selector="CheckBox.onboardingTableCheck /template/ Border#NormalRectangle,
+                     CheckBox.onboardingTableCheck /template/ Viewbox">
+        <Setter Property="HorizontalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="CheckBox.onboardingCheck:checked /template/ Path#CheckGlyph,
+                     CheckBox.onboardingCheck:checked:pointerover /template/ Path#CheckGlyph,
+                     CheckBox.onboardingCheck:checked:pressed /template/ Path#CheckGlyph">
+        <Setter Property="Fill" Value="{StaticResource OnboardingAccentOnBrush}" />
+        <Setter Property="Width" Value="10" />
+        <Setter Property="HorizontalAlignment" Value="Center" />
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <!-- Mixed: an owner whose repositories disagree. Filled like checked, with the theme's dash. -->
+    <Style Selector="CheckBox.onboardingCheck:indeterminate /template/ Border#NormalRectangle,
+                     CheckBox.onboardingCheck:indeterminate:pointerover /template/ Border#NormalRectangle">
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentBrush}" />
+        <Setter Property="Background" Value="{StaticResource OnboardingAccentBrush}" />
+    </Style>
+    <Style Selector="CheckBox.onboardingCheck:indeterminate /template/ Path#CheckGlyph,
+                     CheckBox.onboardingCheck:indeterminate:pointerover /template/ Path#CheckGlyph,
+                     CheckBox.onboardingCheck:indeterminate:pressed /template/ Path#CheckGlyph">
+        <Setter Property="Fill" Value="{StaticResource OnboardingAccentOnBrush}" />
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="CheckBox.onboardingCheck:disabled">
+        <Setter Property="Opacity" Value="0.5" />
+    </Style>
+
+    <!-- A radio row: the whole option is the hit area, accent border and wash when chosen. -->
+    <Style Selector="RadioButton.onboardingOption">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="Padding" Value="10,8" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="Template">
+            <ControlTemplate TargetType="RadioButton">
+                <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                        BorderThickness="{TemplateBinding BorderThickness}"
+                        CornerRadius="{TemplateBinding CornerRadius}" Padding="{TemplateBinding Padding}">
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
+                        <Panel Width="15" Height="15" VerticalAlignment="Top" Margin="0,1,0,0">
+                            <Ellipse Name="Ring" Width="15" Height="15" StrokeThickness="1"
+                                     Stroke="{StaticResource OnboardingDimBrush}" Fill="Transparent" />
+                            <Ellipse Name="Dot" Width="7" Height="7" Fill="{StaticResource OnboardingAccentBrush}" IsVisible="False" />
+                        </Panel>
+                        <ContentPresenter Grid.Column="1" Name="OptionContent" Content="{TemplateBinding Content}"
+                                          ContentTemplate="{TemplateBinding ContentTemplate}" />
+                    </Grid>
+                </Border>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <!-- The wash and the filled ring mark the choice; an outline on top of both is one signal too many. -->
+    <Style Selector="RadioButton.onboardingOption:checked">
+        <Setter Property="Background" Value="{StaticResource OnboardingAccentWashBrush}" />
+    </Style>
+    <Style Selector="RadioButton.onboardingOption:checked /template/ Ellipse#Ring">
+        <Setter Property="Stroke" Value="{StaticResource OnboardingAccentBrush}" />
+    </Style>
+    <Style Selector="RadioButton.onboardingOption:checked /template/ Ellipse#Dot">
+        <Setter Property="IsVisible" Value="True" />
+    </Style>
+    <Style Selector="RadioButton.onboardingOption:disabled">
+        <Setter Property="Opacity" Value="0.5" />
+    </Style>
+
+    <!-- A segment of a picker row (the history window): dim border, accent when chosen. -->
+    <Style Selector="RadioButton.onboardingSegment">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingDimBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="Padding" Value="11,9" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="Template">
+            <ControlTemplate TargetType="RadioButton">
+                <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                        BorderThickness="{TemplateBinding BorderThickness}"
+                        CornerRadius="{TemplateBinding CornerRadius}" Padding="{TemplateBinding Padding}">
+                    <ContentPresenter Name="SegmentContent" Content="{TemplateBinding Content}"
+                                      ContentTemplate="{TemplateBinding ContentTemplate}" />
+                </Border>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <Style Selector="RadioButton.onboardingSegment:pointerover">
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentHoverBrush}" />
+    </Style>
+    <Style Selector="RadioButton.onboardingSegment:checked, RadioButton.onboardingSegment:checked:pointerover">
+        <Setter Property="Background" Value="{StaticResource OnboardingAccentWashBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentBrush}" />
+    </Style>
+    <Style Selector="RadioButton.onboardingSegment:disabled">
+        <Setter Property="Opacity" Value="0.5" />
+    </Style>
+    <!-- A list of choices drawn as option rows: accent border and wash on the chosen one. -->
+    <Style Selector="ListBox.onboardingList">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="0" />
+    </Style>
+    <Style Selector="ListBox.onboardingList ListBoxItem">
+        <Setter Property="Padding" Value="12,10" />
+        <Setter Property="Margin" Value="0,0,0,4" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingPanelBorderBrush}" />
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="ListBox.onboardingList ListBoxItem /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingPanelBorderBrush}" />
+        <Setter Property="CornerRadius" Value="4" />
+    </Style>
+    <Style Selector="ListBox.onboardingList ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentHoverBrush}" />
+    </Style>
+    <Style Selector="ListBox.onboardingList ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter,
+                     ListBox.onboardingList ListBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     ListBox.onboardingList ListBoxItem:selected:focus /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource OnboardingAccentWashBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentBrush}" />
+    </Style>
+    <Style Selector="views|AppIcon.onboardingChoiceMark">
+        <Setter Property="IsVisible" Value="False" />
+    </Style>
+    <Style Selector="ListBox.onboardingList ListBoxItem:selected views|AppIcon.onboardingChoiceMark,
+                     ListBox.onboardingList ListBoxItem:selected:pointerover views|AppIcon.onboardingChoiceMark">
+        <Setter Property="IsVisible" Value="True" />
+    </Style>
+
+    <!-- The 20px ring the page turns while it waits on something it cannot measure. -->
+    <Style Selector="Panel.onboardingSpinner">
+        <Setter Property="Width" Value="20" />
+        <Setter Property="Height" Value="20" />
+    </Style>
+</Styles>

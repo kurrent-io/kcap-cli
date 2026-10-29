@@ -2,15 +2,21 @@ using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Runtime.CompilerServices;
+using System.Net.WebSockets;
 using System.Text.Json;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Http;
 using Capacitor.Remote.Models;
 using Eventuous.SignalR;
 using Eventuous.SignalR.Client;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.AspNetCore.Http.Connections.Client;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.App.Services;
 
@@ -31,15 +37,18 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     readonly Func<Task<string?>> _token;
     /// SignalR's own reconnect ladder, which a test shortens; null keeps the client's default.
     readonly TimeSpan[]? _reconnectDelays;
+    readonly Action<ILoggingBuilder>? _hubLogging;
     readonly BehaviorSubject<ServerLaneStatus> _status = new(new(ServerLaneState.Dormant));
     readonly Subject<Unit> _agentsChanged = new();
     readonly Subject<Unit> _daemonsChanged = new();
+    readonly Subject<Unit> _daemonAccountsChanged = new();
     readonly Subject<LaunchFailure> _launchFailures = new();
     readonly Subject<string> _permissionPending = new();
     readonly Subject<PermissionRespondedPing> _permissionResponded = new();
     readonly Subject<ServerPermissionRequest> _permissionRequests = new();
     readonly Subject<ServerElicitationRequest> _elicitations = new();
     readonly Subject<string> _sessionAccessChanged = new();
+    readonly Subject<SessionPush> _sessionPushes = new();
     readonly Subject<PendingInputUpdate> _pendingInput = new();
     readonly Subject<TerminalOutputFrame> _terminalOutput = new();
     readonly Subject<TerminalSize> _terminalDimensions = new();
@@ -64,33 +73,46 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     Task _loop = Task.CompletedTask;
     volatile HubConnection? _hub;
 
-    public ServerConnectionService(ProfileContext? profiles, TokenStore tokenStore, TimeProvider time)
+    public ServerConnectionService(ProfileContext? profiles, ICredentialSource? credentials, TimeProvider time, LocalRoot? localRoot = null)
         : this(
             time,
             profiles?.Resolution.ServerUrl,
-            profiles is null
+            credentials is null
                 ? () => Task.FromResult<string?>(null)
-                : async () => (await tokenStore.GetValidTokensForServerAsync(
-                    profiles.Name, profiles.Resolution.ServerUrl!)).Tokens?.AccessToken) { }
+                : async () => (await credentials.ResolveAsync(default)).Bearer,
+            localRoot: localRoot,
+            refusal: profiles is null ? null : LocalDestination.Refusal(profiles.Resolution.ServerUrl, profiles.Resolution.Endpoint),
+            updateCheckOff: profiles?.Effective?.UpdateCheck == false) { }
+
+    readonly LocalRoot? _localRoot;
+    readonly string?    _refusal;
+    readonly bool       _updateCheckOff;
 
     internal ServerConnectionService(
             TimeProvider time, string? serverUrl, Func<Task<string?>> accessTokenProvider,
-            TimeSpan[]? reconnectDelays = null) {
+            TimeSpan[]? reconnectDelays = null, Action<ILoggingBuilder>? hubLogging = null,
+            LocalRoot? localRoot = null, string? refusal = null, bool updateCheckOff = false) {
+        _localRoot      = localRoot;
+        _refusal        = refusal;
+        _updateCheckOff = updateCheckOff;
         _time = time;
         _serverUrl = string.IsNullOrEmpty(serverUrl) ? null : serverUrl.TrimEnd('/');
         _token = accessTokenProvider;
         _reconnectDelays = reconnectDelays;
+        _hubLogging = hubLogging;
     }
 
     public IObservable<ServerLaneStatus> Status => _status.AsObservable();
     public IObservable<Unit> AgentInstancesChanged => _agentsChanged.AsObservable();
     public IObservable<Unit> DaemonsChanged => _daemonsChanged.AsObservable();
+    public IObservable<Unit> DaemonAccountsChanged => _daemonAccountsChanged.AsObservable();
     public IObservable<LaunchFailure> LaunchFailures => _launchFailures.AsObservable();
     public IObservable<string> PermissionPending => _permissionPending.AsObservable();
     public IObservable<PermissionRespondedPing> PermissionResponded => _permissionResponded.AsObservable();
     public IObservable<ServerPermissionRequest> PermissionRequests => _permissionRequests.AsObservable();
     public IObservable<ServerElicitationRequest> ElicitationRequests => _elicitations.AsObservable();
     public IObservable<string> SessionAccessChanged => _sessionAccessChanged.AsObservable();
+    public IObservable<SessionPush> SessionPushes => _sessionPushes.AsObservable();
     public IObservable<PendingInputUpdate> PendingInputChanged => _pendingInput.AsObservable();
     public IObservable<TerminalOutputFrame> TerminalOutput => _terminalOutput.AsObservable();
     public IObservable<TerminalSize> TerminalDimensions => _terminalDimensions.AsObservable();
@@ -100,11 +122,8 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         _ = RestartAsync();
     }
 
-    /// Same parked semantics as the 401-negotiate path in RunAsync (SignedOut, loop stopped) but
-    /// triggered from outside it — RemoteAgentsService's onUnauthorized, when its own HTTP fetch
-    /// hits a 401 the hub connection itself never saw. RestartAsync (wired to sign-in completion)
-    /// is what revives it.
-    public void ParkSignedOut() => ParkSignedOutCore(ifGeneration: null, detail: null);
+    /// Unconditional park, same semantics as the 401-negotiate path. RestartAsync revives it.
+    internal void ParkSignedOut() => ParkSignedOutCore(ifGeneration: null, detail: null);
 
     /// Parks only while `ifEpoch` is still the lane's current generation — the generation of the
     /// Connected status the caller's own decision was made under. RemoteAgentsService releases its
@@ -244,14 +263,54 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         }
     }
 
+    /// <summary>What SignalR's own WebSocket transport sends, after the destination check its handler factory cannot
+    /// see.</summary>
+    async ValueTask<WebSocket> ConnectWebSocketAsync(WebSocketConnectionContext context, CancellationToken ct) {
+        LocalDestination.Check(context.Uri, _localRoot, _serverUrl, _refusal);
+
+        var socket = new ClientWebSocket();
+        socket.Options.SetRequestHeader("X-Requested-With", "XMLHttpRequest");
+
+        if (context.Options.AccessTokenProvider is { } provider && await provider() is { Length: > 0 } token)
+            socket.Options.SetRequestHeader("Authorization", $"Bearer {token}");
+
+        try {
+            await socket.ConnectAsync(context.Uri, ct);
+            return socket;
+        } catch {
+            socket.Dispose();
+            throw;
+        }
+    }
+
+    static HttpMessageHandler NoRedirects(HttpMessageHandler handler) {
+        switch (handler) {
+            case HttpClientHandler h:  h.AllowAutoRedirect = false; break;
+            case SocketsHttpHandler s: s.AllowAutoRedirect = false; break;
+        }
+
+        return handler;
+    }
+
     HubConnection Build() {
         var builder = new HubConnectionBuilder()
-            .WithUrl($"{_serverUrl}/hubs/sessions", o => o.AccessTokenProvider = _token);
+            .WithUrl($"{_serverUrl}/hubs/sessions", o => {
+                o.AccessTokenProvider = _token;
+                HttpClientExtensions.AddObservationHeaders(o.Headers, _updateCheckOff);
+                // Every negotiation and every WebSocket upgrade, reconnects included.
+                // The guard follows redirects itself, so it can check each hop; the handler under it follows none.
+                o.HttpMessageHandlerFactory = inner => new LocalDestinationHandler(_localRoot, _serverUrl, _refusal, followRedirects: true) {
+                    InnerHandler = NoRedirects(inner),
+                };
+                o.WebSocketFactory = ConnectWebSocketAsync;
+            });
+        if (_hubLogging is { } logging) builder.ConfigureLogging(logging);
         var hub = (_reconnectDelays is { } delays ? builder.WithAutomaticReconnect(delays) : builder.WithAutomaticReconnect())
-            .AddJsonProtocol(o => o.PayloadSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower)
+            .AddJsonProtocol(o => LaunchHubJson.Configure(o.PayloadSerializerOptions))
             .Build();
         hub.On(HubBroadcasts.AgentInstancesChanged, () => _agentsChanged.OnNext(Unit.Default));
         hub.On(HubBroadcasts.DaemonsChanged, () => _daemonsChanged.OnNext(Unit.Default));
+        hub.On(HubBroadcasts.DaemonAccountsChanged, () => _daemonAccountsChanged.OnNext(Unit.Default));
         hub.On<string, string>(HubBroadcasts.LaunchFailed, (agentId, reason) => _launchFailures.OnNext(new(agentId, reason)));
         hub.On<string>(HubBroadcasts.PermissionPending, _permissionPending.OnNext);
         hub.On<string, string?>(HubBroadcasts.PermissionResponded, (sid, rid) => _permissionResponded.OnNext(new(sid, rid)));
@@ -263,13 +322,31 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         hub.On<string, string, string, JsonElement?, bool>(HubBroadcasts.AcpElicitationRequested,
             (sid, rid, prompt, options, multi) => _elicitations.OnNext(new(sid, rid, prompt, ServerPermissionRequest.ParseOptions(options) ?? [], multi)));
         hub.On<string>(HubBroadcasts.SessionAccessChanged, _sessionAccessChanged.OnNext);
+        hub.On<string>(HubBroadcasts.ActiveSessionAdded, id => _sessionPushes.OnNext(new(SessionPushKind.ActiveAdded, id)));
+        hub.On<string>(HubBroadcasts.ActiveSessionChanged, id => _sessionPushes.OnNext(new(SessionPushKind.ActiveChanged, id)));
+        hub.On<string>(HubBroadcasts.ActiveSessionRemoved, id => _sessionPushes.OnNext(new(SessionPushKind.ActiveRemoved, id)));
+        hub.On<string>(HubBroadcasts.SessionTitleChanged, id => _sessionPushes.OnNext(new(SessionPushKind.TitleChanged, id)));
+        hub.On<string>(HubBroadcasts.SessionDeleted, id => _sessionPushes.OnNext(new(SessionPushKind.Deleted, id)));
         hub.On<string, string, JsonElement?>(HubBroadcasts.PendingInputChanged, (_, sessionId, items) => {
             if (ParseQueue(items) is { } queue) _pendingInput.OnNext(new(sessionId, queue));
         });
         hub.On<string, string>(HubBroadcasts.TerminalOutput, (agentId, base64) => _terminalOutput.OnNext(new(agentId, base64)));
         hub.On<string, int, int>(HubBroadcasts.TerminalDimensions, (agentId, cols, rows) => _terminalDimensions.OnNext(new(agentId, cols, rows)));
+        foreach (var name in UnusedNudges) hub.On(name, static () => { });
+        foreach (var name in UnusedPings) hub.On<JsonElement>(name, static _ => { });
         return hub;
     }
+
+    /// Pushes the app has no use for, by arity. Each still gets a handler: SignalR binds a push with
+    /// none against no parameters, so one carrying an argument costs a thrown and caught exception.
+    /// The argument binds as a JsonElement, so only the count has to match the server's.
+    static readonly string[] UnusedNudges = [
+        HubBroadcasts.FlowsChanged, HubBroadcasts.WorkItemsChanged, HubBroadcasts.ProjectsChanged, HubBroadcasts.WelcomeStateChanged,
+    ];
+    static readonly string[] UnusedPings = [
+        HubBroadcasts.SessionEvalCompleted, HubBroadcasts.SessionWhatsDoneGenerated, HubBroadcasts.SubagentAdopted,
+        HubBroadcasts.RawStreamAccessRevoked,
+    ];
 
     /// Connected additionally requires `hub` to still be the live connection and still be connected
     /// at publish time: DiagnoseAsync's await can outlast either, and a Connected published over a
@@ -299,6 +376,16 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         if (hub is not { State: HubConnectionState.Connected }) return null;
         try {
             return await hub.InvokeAsync<List<DaemonInfo>>(HubMethods.GetConnectedDaemons, ct).ConfigureAwait(false);
+        } catch (Exception) {
+            return null;
+        }
+    }
+
+    public async Task<IReadOnlyList<DaemonAccountsDto>?> GetDaemonAccountsAsync(CancellationToken ct) {
+        var hub = _hub;
+        if (hub is not { State: HubConnectionState.Connected }) return null;
+        try {
+            return await hub.InvokeAsync<List<DaemonAccountsDto>>(HubMethods.GetDaemonAccounts, ct).ConfigureAwait(false);
         } catch (Exception) {
             return null;
         }
@@ -383,6 +470,8 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     // Three arguments always: the method's arity is frozen and SignalR does not backfill a
     // missing trailing one.
     public Task<HubCallOutcome> SendUserInputAsync(string agentId, string text, CancellationToken ct) => InvokeAsync(HubMethods.SendUserInput, ct, agentId, text, null);
+    public Task<HubCallOutcome> DiscardQueuedInputAsync(string agentId, Guid dispatchId, CancellationToken ct) =>
+        InvokeAsync(HubMethods.DiscardQueuedInput, ct, new DiscardQueuedInputRequest(agentId, dispatchId));
     public Task<HubCallOutcome> SendSpecialKeyAsync(string agentId, string key, CancellationToken ct) => InvokeAsync(HubMethods.SendSpecialKey, ct, agentId, key);
 
     /// Denied is the server's session-visibility refusal (HubException carrying WireTokens.
@@ -480,12 +569,14 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         _status.Dispose();
         _agentsChanged.Dispose();
         _daemonsChanged.Dispose();
+        _daemonAccountsChanged.Dispose();
         _launchFailures.Dispose();
         _permissionPending.Dispose();
         _permissionResponded.Dispose();
         _permissionRequests.Dispose();
         _elicitations.Dispose();
         _sessionAccessChanged.Dispose();
+        _sessionPushes.Dispose();
         _pendingInput.Dispose();
         _terminalOutput.Dispose();
         _terminalDimensions.Dispose();

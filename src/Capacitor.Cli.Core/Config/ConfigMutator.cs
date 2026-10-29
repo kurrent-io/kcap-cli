@@ -1,8 +1,9 @@
 using System.Text.Json;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.Cli.Core.Config;
 
-/// The ONE writer of config.json (spec decision 10). Field-scoped mutation under
+/// The ONE writer of config.json. Field-scoped mutation under
 /// ConfigFileLock: lock → re-read fresh → migrate in memory → apply the caller's mutation →
 /// publish via UNIQUE temp + rename. The critical section is synchronous on one thread —
 /// ConfigFileLock is a thread-affine named Mutex (WaitOne/ReleaseMutex), so no await may
@@ -26,9 +27,42 @@ public static class ConfigMutator {
         }
     }
 
-    /// Pure load: parse + migrate in memory, NEVER writes (decision 10 — the legacy
-    /// LoadProfileConfig persisted the v1→v2 migration during load, which under this API
-    /// would recursively acquire the same thread-affine mutex).
+    /// <see cref="MutateAsync"/> for a mutation whose decision depends on what the file says: an
+    /// unreadable file aborts before the callback runs and nothing is published. An absent file is a
+    /// fresh config, as in <see cref="Mutate"/>.
+    public static Task<ProfileConfig> MutateStrictAsync(
+            ConfigRoot config, Func<ProfileConfig, ProfileConfig> mutate, CancellationToken ct = default) =>
+        Task.Run(() => MutateStrict(config, mutate), ct);
+
+    /// <summary>The strict mutation with a durable publication: the directory chain is created and synced,
+    /// the temp file is flushed, and the directory is synced after the rename. <paramref name="home"/>
+    /// bounds the directory sync; with none the whole chain to the filesystem root is synced.</summary>
+    public static Task<ProfileConfig> MutateStrictAsync(
+            ConfigRoot config, Func<ProfileConfig, ProfileConfig> mutate, bool durable,
+            UserHome? home = null, CancellationToken ct = default) =>
+        Task.Run(() => MutateStrict(config, mutate, durable, home), ct);
+
+    public static ProfileConfig MutateStrict(ConfigRoot config, Func<ProfileConfig, ProfileConfig> mutate) =>
+        MutateStrict(config, mutate, durable: false);
+
+    public static ProfileConfig MutateStrict(
+            ConfigRoot config, Func<ProfileConfig, ProfileConfig> mutate, bool durable, UserHome? home = null) {
+        var path = AppConfig.GetConfigPath(config);
+        var dir  = Path.GetDirectoryName(path)!;
+
+        if (durable) DurableDirectory.Ensure(dir, DurableDirectory.AnchorFor(dir, home), null);
+        else Directory.CreateDirectory(dir);
+
+        using (config.AcquireLock(AppConfig.ConfigFileName)) {
+            if (!TryLoadPure(path, out var current)) throw new ConfigUnreadableException(path);
+            var next = mutate(current);
+            Publish(path, next, durable);
+            return next;
+        }
+    }
+
+    /// Pure load: parse + migrate in memory, NEVER writes — persisting the v1→v2 migration during
+    /// a load would recursively acquire the same thread-affine mutex.
     public static ProfileConfig LoadPure(string path) {
         TryLoadPure(path, out var config);
         return config;
@@ -52,7 +86,7 @@ public static class ConfigMutator {
         // proceed as though nothing were configured.
         string json;
         try {
-            json = File.ReadAllText(path);
+            json = ReadDuringPublish(path);
         } catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) {
             // A link at the exact path (dangling included), or a file/link ancestor, is
             // structural evidence — unreadable, not absence.
@@ -92,18 +126,45 @@ public static class ConfigMutator {
         }
     }
 
+    // On Windows a read that overlaps Publish's replace-into-place can hit a sharing violation; that
+    // is a writer mid-rename, not unreadable evidence, so it is retried rather than reported.
+    static string ReadDuringPublish(string path) {
+        for (var attempt = 0; ; attempt++) {
+            try {
+                return File.ReadAllTextShared(path);
+            } catch (IOException e) when (e.HResult == SharingViolation && attempt < 49) {
+                Thread.Sleep(20);
+            }
+        }
+    }
+
+    const int SharingViolation = unchecked((int)0x80070020);
+
     static ProfileConfig FreshDefault() => ProfileConfig.Fresh();
 
-    static void Publish(string path, ProfileConfig config) {
-        var tmp = path + ".tmp-" + Guid.NewGuid().ToString("N")[..8];
-        File.WriteAllBytes(tmp,
-            JsonSerializer.SerializeToUtf8Bytes(config, ProfileConfigJsonContextIndented.Default.ProfileConfig));
+    static void Publish(string path, ProfileConfig config, bool durable = false) {
+        var tmp   = path + ".tmp-" + Guid.NewGuid().ToString("N")[..8];
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(config, ProfileConfigJsonContextIndented.Default.ProfileConfig);
+
+        try {
+            using (var stream = new FileStream(tmp, FileMode.Create, FileAccess.Write)) {
+                stream.Write(bytes);
+                if (durable) FaultPoints.Hit($"flush:{path}");
+                stream.Flush(flushToDisk: true);
+            }
+        } catch {
+            try { File.Delete(tmp); } catch { /* best effort */ }
+            throw;
+        }
+
         // Windows denies replace-into-place while any reader holds the destination without
         // FILE_SHARE_DELETE; readers are short-lived, so retry briefly before surfacing.
         for (var attempt = 0; ; attempt++) {
             try {
+                if (durable) FaultPoints.Hit($"rename:{path}");
                 File.Move(tmp, path, overwrite: true);
-                return;
+                if (durable) FaultPoints.Hit($"renamed:{path}");
+                break;
             } catch (Exception e) when (e is UnauthorizedAccessException or IOException && attempt < 49) {
                 Thread.Sleep(20);
             } catch {
@@ -111,5 +172,7 @@ public static class ConfigMutator {
                 throw;
             }
         }
+
+        if (durable) DurableDirectory.Sync(Path.GetDirectoryName(path)!);
     }
 }

@@ -2,15 +2,23 @@ using System.Globalization;
 
 namespace Capacitor.Cli.Core.PullRequests.Readers.GitHubCli;
 
-public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider time) : IPullRequestReaderProvider, IDisposable {
+public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider time) : IPullRequestReaderProvider, IDisposable, IAsyncDisposable {
     static readonly PullRequestReaderTool GitHubCliTool = new("GitHub CLI", "https://cli.github.com",
         host => host is null ? "gh auth login" : "gh auth login --hostname " + host);
     readonly TimeProvider _time = time;
+    // Counted from the fetch, so a cached read carries only what is left of it.
+    static readonly TimeSpan Lease = TimeSpan.FromSeconds(30);
+    static readonly TimeSpan FreshFor = TimeSpan.FromSeconds(10);
+    // Past this a read waits for the refetch, so a caller renewing near expiry gets a whole lease, not the last seconds of one.
+    static readonly TimeSpan ReusableFor = Lease - FreshFor;
     readonly SemaphoreSlim _probeGate = new(1, 1);
     readonly GitHubCliCursors _cursors = new();
     readonly Lock _views = new();
-    readonly Dictionary<string, Task<(GitHubCliView? View, GitHubCliResult Result)>> _inflight = new(StringComparer.Ordinal);
+    readonly Dictionary<string, Task<(GitHubCliView? View, GitHubCliResult Result, long Fetched)>> _inflight = new(StringComparer.Ordinal);
     readonly Dictionary<string, (long At, GitHubCliView View)> _recent = new(StringComparer.Ordinal);
+    readonly Dictionary<string, Task<IReadOnlyList<PullRequestLinkDto>>> _inflightDiscovery = new(StringComparer.Ordinal);
+    readonly Dictionary<string, (long At, IReadOnlyList<PullRequestLinkDto> Links)> _recentDiscovery = new(StringComparer.Ordinal);
+    long _cacheGeneration;
     HashSet<string> _hosts = new(StringComparer.OrdinalIgnoreCase);
     Dictionary<string, string> _accounts = new(StringComparer.OrdinalIgnoreCase);
     PullRequestReaderStatus? _status;
@@ -51,8 +59,8 @@ public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider ti
         _accounts = accounts;
         _status = status;
         _probedAt = _time.GetTimestamp();
-        // A switched account can still return the previous one's view from the reuse window; drop it rather than serve it under a new identity.
-        if (Identity != previousIdentity) { lock (_views) _recent.Clear(); _cursors.Clear(); }
+        // A switched account can still return the previous one's view from the cache; drop it rather than serve it under a new identity.
+        if (Identity != previousIdentity) { ResetReadCache(); _cursors.Clear(); }
         return status;
     }
 
@@ -79,20 +87,50 @@ public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider ti
             && (actual.Equals(path, StringComparison.OrdinalIgnoreCase) || actual.Equals(path + "/files", StringComparison.OrdinalIgnoreCase)) ? safe : null;
     }
 
-    public async Task<IReadOnlyList<PullRequestLinkDto>> DiscoverAsync(PullRequestRepository repository, string branch, CancellationToken ct) {
-        if (!Serves(repository.Provider, repository.Host) || !GitHubCliRunner.ValidOwner(repository.Owner)
-            || !GitHubCliRunner.ValidRepo(repository.RepoName) || !GitHubCliRunner.ValidBranch(branch)) return [];
-        var result = await cli.RunAsync(["pr", "list", "--repo", Repo(repository.Host, repository.Owner, repository.RepoName), "--head", branch,
-            "--state", "all", "--limit", "20", "--json", "number,title,url,headRefName,state,isDraft"], ct: ct).ConfigureAwait(false);
-        return result.Outcome == GitHubCliOutcome.Ok ? GitHubCliMapping.Links(result.Stdout, repository) : [];
+    public Task<IReadOnlyList<PullRequestLinkDto>> DiscoverAsync(PullRequestRepository repository, string branch, CancellationToken ct) {
+        if (cli.IsStopped || !Serves(repository.Provider, repository.Host) || !GitHubCliRunner.ValidOwner(repository.Owner)
+            || !GitHubCliRunner.ValidRepo(repository.RepoName) || !GitHubCliRunner.ValidBranch(branch)) return Task.FromResult<IReadOnlyList<PullRequestLinkDto>>([]);
+        var key = $"{repository.Host}|{repository.Owner}|{repository.RepoName}".ToLowerInvariant() + $"|{branch}|{Identity}";
+        Task<IReadOnlyList<PullRequestLinkDto>> task;
+        lock (_views) {
+            var generation = _cacheGeneration;
+            key += "|" + generation.ToString(CultureInfo.InvariantCulture);
+            var age = _recentDiscovery.TryGetValue(key, out var recent) ? _time.GetElapsedTime(recent.At) : TimeSpan.MaxValue;
+            if (age < FreshFor) return Task.FromResult(recent.Links);
+            if (!_inflightDiscovery.TryGetValue(key, out task!)) {
+                task = FetchDiscoveryAsync(repository, branch, key, generation);
+                if (!task.IsCompleted) _inflightDiscovery[key] = task;
+            }
+            if (age < ReusableFor) return Task.FromResult(recent.Links);
+        }
+        return task.WaitAsync(ct);
+    }
+
+    async Task<IReadOnlyList<PullRequestLinkDto>> FetchDiscoveryAsync(PullRequestRepository repository, string branch, string key, long generation) {
+        try {
+            var fetched = _time.GetTimestamp();
+            var result = await cli.RunAsync(["pr", "list", "--repo", Repo(repository.Host, repository.Owner, repository.RepoName), "--head", branch,
+                "--state", "all", "--limit", "20", "--json", "number,title,url,headRefName,state,isDraft"], ct: CancellationToken.None).ConfigureAwait(false);
+            if (result.Outcome != GitHubCliOutcome.Ok) {
+                lock (_views) _recentDiscovery.Remove(key);
+                return [];
+            }
+            var links = GitHubCliMapping.Links(result.Stdout, repository);
+            lock (_views) {
+                if (generation == _cacheGeneration) {
+                    _recentDiscovery[key] = (fetched, links);
+                    while (_recentDiscovery.Count > 64) _recentDiscovery.Remove(_recentDiscovery.MinBy(pair => pair.Value.At).Key);
+                }
+            }
+            return links;
+        } finally { lock (_views) _inflightDiscovery.Remove(key); }
     }
 
     public async Task<PullRequestRead<PullRequestOverviewDto>> OverviewAsync(string sessionId, PullRequestSubjectDto subject, CancellationToken ct) {
         if (Refuse<PullRequestOverviewDto>(subject) is { } refused) return refused;
-        var started = _time.GetTimestamp();
-        var (view, result) = await ViewAsync(subject, ct).ConfigureAwait(false);
+        var (view, result, fetched) = await ViewAsync(subject, ct).ConfigureAwait(false);
         if (view is null) return result.Outcome == GitHubCliOutcome.Ok ? Invalid<PullRequestOverviewDto>(subject) : GitHubCliMapping.Failure<PullRequestOverviewDto>(result, subject, Now);
-        return Ready(view.Overview, subject, view.FetchedAt, started);
+        return Ready(view.Overview, subject, view.FetchedAt, fetched);
     }
 
     public async Task<PullRequestRead<PullRequestPageDto<T>>> PageAsync<T>(string sessionId, PullRequestSubjectDto subject, string section,
@@ -109,16 +147,15 @@ public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider ti
         if (section == "threads") return (PullRequestRead<PullRequestPageDto<T>>)(object)await ThreadsAsync(subject, cursor, resolved ?? "unresolved", ct).ConfigureAwait(false);
         if (section == "thread_comments") return (PullRequestRead<PullRequestPageDto<T>>)(object)await ThreadCommentsAsync(subject, cursor, threadId!, ct).ConfigureAwait(false);
         var key = Key(subject) + "|" + section;
-        var started = _time.GetTimestamp();
-        if (cursor is not null) return Slice<T>(cursor, key, null, subject, started);
-        var (view, result) = await ViewAsync(subject, ct).ConfigureAwait(false);
+        if (cursor is not null) return Slice<T>(cursor, key, null, subject, _time.GetTimestamp());
+        var (view, result, fetched) = await ViewAsync(subject, ct).ConfigureAwait(false);
         if (view is null) return result.Outcome == GitHubCliOutcome.Ok ? Invalid<PullRequestPageDto<T>>(subject) : GitHubCliMapping.Failure<PullRequestPageDto<T>>(result, subject, Now);
         (object Items, bool Capped) frozen = section switch {
             "checks" => ((object)view.Checks, view.ChecksCapped), "reviewers" => ((object)view.Reviewers, false),
             "reviews" => ((object)view.Reviews, view.ReviewsCapped), _ => ((object)view.Comments, view.CommentsCapped)
         };
-        var entry = new GitHubCliCursorEntry(GitHubCliCursors.NewHandle(), key, Now, section == "checks" ? view.HeadSha : null, frozen.Items, 0, null, frozen.Capped);
-        return Slice<T>(_cursors.Mint(entry), key, entry, subject, started);
+        var entry = new GitHubCliCursorEntry(GitHubCliCursors.NewHandle(), key, view.FetchedAt, section == "checks" ? view.HeadSha : null, frozen.Items, 0, null, frozen.Capped);
+        return Slice<T>(_cursors.Mint(entry), key, entry, subject, fetched);
     }
 
     PullRequestRead<PullRequestPageDto<T>> Slice<T>(string handle, string key, GitHubCliCursorEntry? entry, PullRequestSubjectDto subject, long started) where T : class {
@@ -199,53 +236,69 @@ public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider ti
         return Ready(data, subject, data.SnapshotCompletedAt, started);
     }
 
-    Task<(GitHubCliView? View, GitHubCliResult Result)> ViewAsync(PullRequestSubjectDto subject, CancellationToken ct) {
+    Task<(GitHubCliView? View, GitHubCliResult Result, long Fetched)> ViewAsync(PullRequestSubjectDto subject, CancellationToken ct) {
         // Identity-qualified: a fetch dispatched under one account must never satisfy or seed a request made under another.
         var key = Key(subject) + "|" + Identity;
-        Task<(GitHubCliView?, GitHubCliResult)> task;
+        Task<(GitHubCliView?, GitHubCliResult, long)> task;
         lock (_views) {
-            if (_recent.TryGetValue(key, out var recent) && _time.GetElapsedTime(recent.At) < TimeSpan.FromSeconds(10))
-                return Task.FromResult<(GitHubCliView?, GitHubCliResult)>((recent.View, new(GitHubCliOutcome.Ok, 0, "", "")));
+            var generation = _cacheGeneration;
+            key += "|" + generation.ToString(CultureInfo.InvariantCulture);
+            var age = _recent.TryGetValue(key, out var recent) ? _time.GetElapsedTime(recent.At) : TimeSpan.MaxValue;
+            if (age < FreshFor) return Hit(recent);
             if (!_inflight.TryGetValue(key, out task!)) {
-                task = FetchAsync(subject, key);
+                task = FetchAsync(subject, key, generation);
                 // A synchronously-completed fetch has already run its own removal (see FetchAsync's finally)
                 // before this line: inserting it now would stick forever, since nothing runs the finally twice.
                 if (!task.IsCompleted) _inflight[key] = task;
             }
+            if (age < ReusableFor) return Hit(recent);
         }
         return task.WaitAsync(ct);
     }
+    static Task<(GitHubCliView?, GitHubCliResult, long)> Hit((long At, GitHubCliView View) recent)
+        => Task.FromResult<(GitHubCliView?, GitHubCliResult, long)>((recent.View, new(GitHubCliOutcome.Ok, 0, "", ""), recent.At));
 
     // A shared fetch runs on its own token: one caller's cancellation must not fail its peers, and the runner's deadline bounds it.
-    async Task<(GitHubCliView?, GitHubCliResult)> FetchAsync(PullRequestSubjectDto subject, string key) {
+    async Task<(GitHubCliView?, GitHubCliResult, long)> FetchAsync(PullRequestSubjectDto subject, string key, long generation) {
         try {
+            var fetched = _time.GetTimestamp();
             var result = await cli.RunAsync(["pr", "view", subject.Number.ToString(CultureInfo.InvariantCulture), "--repo", Repo(subject.Host, subject.Owner, subject.RepoName),
                 "--json", GitHubCliMapping.ViewFields], GitHubCliRunner.ViewOutputLimit, CancellationToken.None).ConfigureAwait(false);
-            var view = result.Outcome == GitHubCliOutcome.Ok ? GitHubCliMapping.View(result.Stdout, subject, Now) : null;
-            if (view is not null) lock (_views) {
-                _recent[key] = (_time.GetTimestamp(), view);
-                while (_recent.Count > 64) _recent.Remove(_recent.MinBy(pair => pair.Value.At).Key);
+            var view = result.Outcome == GitHubCliOutcome.Ok ? GitHubCliMapping.View(result.Stdout, Now) : null;
+            lock (_views) {
+                if (view is null) _recent.Remove(key);
+                else if (generation == _cacheGeneration) {
+                    _recent[key] = (fetched, view);
+                    while (_recent.Count > 64) _recent.Remove(_recent.MinBy(pair => pair.Value.At).Key);
+                }
             }
-            return (view, result);
+            return (view, result, fetched);
         } finally { lock (_views) _inflight.Remove(key); }
     }
 
     PullRequestRead<T>? Refuse<T>(PullRequestSubjectDto subject) where T : class {
+        // Ahead of the cache and the cursors: a disposed reader serves nothing, cached or not.
+        if (cli.IsStopped) return new(PullRequestReadKind.Unavailable, Subject: subject, Reason: "tool_failed", AccessFailure: "transient");
         if (!Serves(subject.Provider, subject.Host)) return new(PullRequestReadKind.Unavailable, Subject: subject, Reason: "no_reader", AccessFailure: "invalid");
         if (!PullRequestWire.ValidSubject(subject) || !GitHubCliRunner.ValidHost(subject.Host) || !GitHubCliRunner.ValidOwner(subject.Owner)
             || !GitHubCliRunner.ValidRepo(subject.RepoName) || !GitHubCliRunner.ValidNumber(subject.Number)) return Invalid<T>(subject);
         return null;
     }
     static PullRequestRead<T> Ready<T>(T data, PullRequestSubjectDto subject, DateTime fetchedAt, long started) where T : class
-        => new(PullRequestReadKind.Ready, data, subject, fetchedAt, PollAfterSeconds: 30, AccessValidForSeconds: 30, RequestStarted: started);
+        => new(PullRequestReadKind.Ready, data, subject, fetchedAt, PollAfterSeconds: 30, AccessValidForSeconds: (int)Lease.TotalSeconds, RequestStarted: started);
     static PullRequestRead<T> Invalid<T>(PullRequestSubjectDto subject) where T : class
         => new(PullRequestReadKind.InvalidProtocol, Subject: subject, Reason: "protocol_error", AccessFailure: "invalid");
     DateTime Now => _time.GetUtcNow().UtcDateTime;
     static string Key(PullRequestSubjectDto subject) => $"{subject.Host}|{subject.Owner}|{subject.RepoName}|{subject.Number.ToString(CultureInfo.InvariantCulture)}".ToLowerInvariant();
 
-    public void ResetSession(string sessionId) { }
+    public void ResetSession(string sessionId) => ResetReadCache();
+    void ResetReadCache() {
+        lock (_views) { _cacheGeneration++; _recent.Clear(); _recentDiscovery.Clear(); }
+    }
 
     public static string Repo(string host, string owner, string name) => $"{host}/{owner}/{name}";
 
-    public void Dispose() => _probeGate.Dispose();
+    // Owns the runner: disposing cancels its in-flight gh runs. _probeGate is left alone so a probe racing teardown can still release it.
+    public void Dispose() => cli.Dispose();
+    public ValueTask DisposeAsync() => cli.DisposeAsync();
 }

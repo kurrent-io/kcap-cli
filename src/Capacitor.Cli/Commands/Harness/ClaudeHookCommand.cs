@@ -1,6 +1,8 @@
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness.Claude;
@@ -9,6 +11,8 @@ using Capacitor.Cli.SessionStartMemory;
 using Capacitor.Cli.Core.Harness;
 
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Harness.Claude;
+using Capacitor.Cli.Plans;
 using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands.Harness;
@@ -24,7 +28,7 @@ namespace Capacitor.Cli.Commands.Harness;
 public sealed class ClaudeHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
         HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
-        IProcessStarter starter, GitProviderRouter router, WorkingDirectory workdir) {
+        IProcessStarter starter, GitProviderRouter router, WorkingDirectory workdir, AccountStore accounts) {
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -45,9 +49,20 @@ public sealed class ClaudeHookCommand(
     /// not for kcap to spend.
     /// </summary>
     static TimeSpan Ceiling(string? command) => command switch {
-        "session-end" => TimeSpan.FromSeconds(15),
-        _             => TimeSpan.FromSeconds(5),
+        "session-end"   => TimeSpan.FromSeconds(15),
+        "session-start" => SessionStartCeiling,
+        _               => TimeSpan.FromSeconds(5),
     };
+
+    /// <summary>The session-start POST and the memory and flows fetches share what is left after
+    /// <see cref="HookBudget.Safety"/>; must match the session-start timeout in <c>kcap/hooks/hooks.json</c>.</summary>
+    internal static readonly TimeSpan SessionStartCeiling = TimeSpan.FromSeconds(9);
+
+    public Task<string> PrepareForDrain(string body) =>
+        ClaudeSessionStartClaim.PrepareAsync(body, config,
+            () => ProcessHelpers.GetCodingAgentPid("claude", allowFallback: false),
+            id => ShouldSuppressCaptureAsync(id, body, "session-start", profiles.Effective,
+                clock.Budget(Ceiling("session-start"))));
 
     public Task<int> Handle(TextReader stdin, TextWriter? stdout = null) {
         var spool = new HookSpool(config, clock.Time);
@@ -61,6 +76,164 @@ public sealed class ClaudeHookCommand(
         );
     }
 
+    /// <summary>The <c>timeout</c> <c>kcap/hooks/hooks.json</c> gives the synchronous PostToolUse entries: they block the
+    /// agent's tool call, so it is shorter than the other events', and <see cref="HookBudget.Safety"/> comes
+    /// out of it.</summary>
+    static readonly TimeSpan ToolHookCeiling = TimeSpan.FromSeconds(3);
+
+    /// <summary>
+    /// <c>kcap hook --claude --plan-read</c>: a synchronous PostToolUse on <c>Read</c>, separate from
+    /// the async catch-all because only a synchronous hook's context reaches the agent before its next
+    /// step. Asks the server whether the file is a plan the session has not declared, and passes the
+    /// answer on as hook context, once per session and document.
+    /// </summary>
+    public async Task<int> HandlePlanRead(TextReader stdin, TextWriter? stdout = null) {
+        HttpClient? client = null;
+        try {
+            return await HandlePlanReadCore(stdin, async cap => {
+                if (!HookHttp.IsPostable(Url)) return null;
+                var created = await BoundedAuth.CreateClientWithinAsync(
+                    () => http.ForHookAsync(), cap, clock.Time, () => RefreshTokenHandoff.Spawn(config, profiles.Name, starter));
+                return client = created?.Client;
+            }, stdout);
+        } finally {
+            client?.Dispose();
+        }
+    }
+
+    internal async Task<int> HandlePlanReadCore(
+            TextReader stdin, Func<TimeSpan, Task<HttpClient?>> clientWithin, TextWriter? stdout = null) {
+        try {
+            var body = await stdin.ReadToEndAsync();
+            if (ClaudePlanRead.Parse(body) is not { } read) return 0;
+
+            var profile = profiles.Effective;
+            if (profile?.DisablePlansNudge is true) return 0;
+            if (!McpServerNudgeAvailability.IsRegisteredFor(HarnessId.Claude, harnesses, "kcap-plans")) return 0;
+
+            var ledger = new PlanReadNudgeLedger(config);
+            if (ledger.WasNudged(read.SessionId, read.Path)) return 0;
+
+            var budget = clock.Budget(ToolHookCeiling);
+            if (await ShouldSuppressCaptureAsync(read.SessionId, body, "post-tool-use", profile, budget)) return 0;
+
+            if (await clientWithin(budget.Remaining) is not { } client) return 0;
+
+            using var content = new StringContent(read.ToRequest().ToJsonString(), Encoding.UTF8, "application/json");
+            using var resp    = await client.PostOnceAsync($"{Url}/hooks/plan-read", content, clock.Time, budget.Remaining);
+            if (!resp.IsSuccessStatusCode) return 0;
+
+            if (ClaudePlanRead.ReadNudge(await resp.Content.ReadAsStringAsync()) is not { } nudge) return 0;
+
+            await (stdout ?? Console.Out).WriteLineAsync(ClaudePlanRead.RenderHookOutput(nudge));
+            ledger.Record(read.SessionId, read.Path);
+            return 0;
+        } catch {
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// <c>kcap hook --claude --plan-edit</c>: a synchronous PostToolUse on Claude's file writes. When the
+    /// file is a document this session declared, declares it again, so the server's snapshot follows
+    /// the file instead of keeping the text it had when it was first declared. Synchronous so a
+    /// headless teardown cannot kill the last refresh.
+    /// </summary>
+    public async Task<int> HandlePlanEdit(TextReader stdin) {
+        HttpClient? client = null;
+        try {
+            return await HandlePlanEditCore(stdin, async cap => {
+                if (!HookHttp.IsPostable(Url)) return null;
+                var created = await BoundedAuth.CreateClientWithinAsync(
+                    () => http.ForHookAsync(), cap, clock.Time, () => RefreshTokenHandoff.Spawn(config, profiles.Name, starter));
+                return client = created?.Client;
+            });
+        } finally {
+            client?.Dispose();
+        }
+    }
+
+    internal async Task<int> HandlePlanEditCore(TextReader stdin, Func<TimeSpan, Task<HttpClient?>> clientWithin) {
+        try {
+            var body = await stdin.ReadToEndAsync();
+            if (ClaudePlanEdit.Parse(body) is not { } edit) return 0;
+            var ledger = new DeclaredDocumentLedger(config, clock.Time);
+            if (ledger.Find(edit.SessionId, edit.Path, Url) is null) return 0;
+
+            var budget = clock.Budget(ToolHookCeiling);
+            if (await ShouldSuppressCaptureAsync(edit.SessionId, body, "post-tool-use", profiles.Effective, budget)) return 0;
+            if (await clientWithin(budget.Remaining) is not { } client) return 0;
+
+            using var gate = await ledger.LockAsync(edit.SessionId, edit.Path, budget.Remaining);
+            if (gate is null) return 0;
+            // Read again under the lock: a declaration that held it may have changed the arguments.
+            if (ledger.Find(edit.SessionId, edit.Path, Url) is not { } document) return 0;
+
+            var declaration = McpPlansServer.BuildDeclaration(document.ToArguments(edit.SessionId), document.Cwd, document.RepoRoot);
+
+            using var content = new StringContent(declaration.Body.ToJsonString(), Encoding.UTF8, "application/json");
+            using var _       = await client.PostOnceAsync(McpPlansServer.DocumentsUrl(Url), content, clock.Time, budget.Remaining);
+            return 0;
+        } catch {
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// <c>kcap hook --claude --task-list</c>: a synchronous PostToolUse on Claude's own task tools, on
+    /// writes that may touch a workflow ledger, on subagent dispatches, and on the kcap-plans writes.
+    /// While the session has written no kcap plan tasks it reminds the agent to keep them, once when the
+    /// list or ledger is started and once when a task is first recorded finished; once it has, each
+    /// ledger line or dispatch the plan's last reported state lags is pointed out once. Local only: it
+    /// blocks the agent's tool call, so it never waits on the server.
+    /// </summary>
+    public async Task<int> HandleTaskList(TextReader stdin, TextWriter? stdout = null) {
+        try {
+            var body = await stdin.ReadToEndAsync();
+            if (ClaudeTaskListEvent.Parse(body) is not { } evt) return 0;
+
+            var profile = profiles.Effective;
+            if (await ShouldSuppressCaptureAsync(evt.SessionId, body, "post-tool-use", profile, clock.Budget(ToolHookCeiling))) return 0;
+
+            var ledger = new TaskListNudgeLedger(config);
+            if (evt.Kind == ClaudeTaskListEvent.Moment.PlanWritten) {
+                ledger.RecordPlan(evt.SessionId);
+                ledger.SaveTasks(evt.SessionId, evt.PlanTasks, evt.PlanTasksAreWhole);
+                return 0;
+            }
+
+            if (profile?.DisablePlansNudge is true) return 0;
+            if (!McpServerNudgeAvailability.IsRegisteredFor(HarnessId.Claude, harnesses, "kcap-plans")) return 0;
+
+            if (ledger.HasPlan(evt.SessionId)) {
+                var lagging = evt.Lagging(ledger.LoadTasks(evt.SessionId))
+                    .Where(l => ledger.TryClaimPairing(evt.SessionId, l.Task, l.Move.Status))
+                    .ToList();
+                if (ClaudeTaskListEvent.PairingNudge(lagging) is not { } pairing) return 0;
+
+                if (!await TryEmitAsync(pairing))
+                    foreach (var (move, task) in lagging) ledger.ReleasePairing(evt.SessionId, task, move.Status);
+                return 0;
+            }
+
+            if (evt.Nudge() is not { } nudge) return 0;
+            if (!ledger.TryClaimNudge(evt.SessionId, evt.Kind)) return 0;
+            if (!await TryEmitAsync(nudge)) ledger.ReleaseNudge(evt.SessionId, evt.Kind);
+            return 0;
+        } catch {
+            return 0;
+        }
+
+        async Task<bool> TryEmitAsync(string context) {
+            try {
+                await (stdout ?? Console.Out).WriteLineAsync(ClaudeTaskListEvent.RenderHookOutput(context));
+                return true;
+            } catch {
+                return false;
+            }
+        }
+    }
+
     internal async Task<int> HandleWithDeps(
             HookSpool spool, TextReader stdin,
             Func<Task<AuthAttempt>> clientFactory,
@@ -69,7 +242,8 @@ public sealed class ClaudeHookCommand(
         try { body = await stdin.ReadToEndAsync(); } catch { return 0; }
 
         // Minimal parse (no auth/git) so we can spool AND start the watcher even if client creation hangs.
-        string? command = null, sessionId = null, transcriptPath = null, cwd = null, source = null, agentId = null, toolUseId = null;
+        string? command = null, sessionId = null, transcriptPath = null, cwd = null, source = null, agentId = null, toolUseId = null, toolName = null;
+        JsonNode? toolInput = null;
         try {
             var node = JsonNode.Parse(body);
             var ev   = node?["hook_event_name"]?.GetValue<string>();
@@ -80,38 +254,59 @@ public sealed class ClaudeHookCommand(
             source         = node?["source"]?.GetValue<string>();
             agentId        = node?["agent_id"]?.GetValue<string>();
             toolUseId      = node?["tool_use_id"]?.GetValue<string>();
+            toolName       = node?["tool_name"]?.GetValue<string>();
+            toolInput      = node?["tool_input"]?.DeepClone();
+
+            // Ahead of both arms below, since each claims the new session before it posts.
+            if (node is JsonObject hook && PreviousSession.Stamp(hook, config, () => ProcessHelpers.GetCodingAgentPid("claude", allowFallback: false)))
+                body = hook.ToJsonString();
         } catch { }
+
+        if (command == "session-end" && SessionEndFence.ShouldHold(hosted, sessionId)) return 0;
 
         var budget = clock.Budget(Ceiling(command));
 
-        // Ahead of every gate below: the hosting daemon's turn-boundary hint is local, so neither
-        // the server's reachability nor the credential may hold it back. Spends this hook's own
-        // budget, which the clock has been counting since the process started. A subagent's tool
-        // call (agent_id set) runs this same hook with the parent's environment, but it is not the
-        // parent's turn: a background subagent must not clear a wait the parent just began.
-        if (agentId is null
-         && command switch { "stop" => true, "user-prompt-submit" or "pre-tool-use" => false, _ => (bool?) null } is { } waiting)
-            await DaemonBridgeRelay.NotifyInputWaitAsync(hosted, "claude", sessionId, cwd, waiting, budget.Remaining);
-
-        // The daemon holds a prompt until it hears the tool is done, and an answer given in the
-        // terminal is invisible to it. A finished tool names itself; a finished turn covers a
-        // terminal deny, which runs no tool; a finished subagent covers its own prompts, since the
-        // parent's turn ending says nothing about a background subagent's. The tool events have no
-        // server route and no other work, so they end here.
-        if (command is "post-tool-use" or "post-tool-use-failure") {
-            if (toolUseId is not null)
-                await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId, subagentId: null, budget.Remaining);
-
-            return 0;
-        }
-
-        if (command == "stop" && agentId is null)
-            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: null, budget.Remaining);
-
+        // Ahead of every gate below: the hosting daemon's hints are local, so neither the server's
+        // reachability nor the credential may hold them back. They spend this hook's own budget,
+        // which the clock has been counting since the process started.
+        //
         // Dashless, as NormalizeGuidField leaves the permission hook's agent_id before the bridge
         // stores it; the daemon matches the two exactly.
-        if (command == "subagent-stop" && agentId is not null)
-            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: agentId.Replace("-", ""), budget.Remaining);
+        var subagentId = agentId?.Replace("-", "");
+
+        // Retiring a held prompt goes first: it and the heartbeat below share this hook's budget
+        // and each post caps at 1s, so a wedged bridge must not let the heartbeat starve the notice
+        // that frees a prompt the daemon still holds — a stale subagent count instead recovers by
+        // its own expiry. A finished tool names itself, with its name and input as well, since
+        // Claude's permission prompt carries no tool id; a finished turn covers a terminal deny,
+        // which runs no tool; a finished subagent covers its own prompts, since the parent's turn
+        // ending says nothing about a background subagent's.
+        if (command is "post-tool-use" or "post-tool-use-failure" && toolUseId is not null)
+            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId, subagentId, budget, toolName, toolInput,
+                clock.Time.GetUtcNow().ToUnixTimeMilliseconds());
+
+        if (command == "stop" && agentId is null)
+            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: null, budget,
+                sentAtMs: clock.Time.GetUtcNow().ToUnixTimeMilliseconds());
+
+        if (command == "subagent-stop" && subagentId is not null)
+            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: subagentId, budget,
+                sentAtMs: clock.Time.GetUtcNow().ToUnixTimeMilliseconds());
+
+        // A subagent's hook (agent_id set) runs with the parent's environment but is not the
+        // parent's turn: it reports the subagent alive or gone and never touches the parent's
+        // wait — a background subagent must not clear a wait the parent just began.
+        if (subagentId is not null)
+            await DaemonBridgeRelay.NotifySubagentAsync(
+                hosted, "claude", sessionId, cwd, subagentId, live: command != "subagent-stop",
+                clock.Time.GetUtcNow().ToUnixTimeMilliseconds(), budget);
+        else if (command switch { "stop" => true, "user-prompt-submit" or "pre-tool-use" => false, _ => (bool?) null } is { } waiting)
+            await DaemonBridgeRelay.NotifyInputWaitAsync(hosted, "claude", sessionId, cwd, waiting, budget);
+
+        // The tool events have no server route and no other work, so they end here — after both
+        // notices above have had their chance to post.
+        if (command is "post-tool-use" or "post-tool-use-failure")
+            return 0;
 
         var clientCap = budget.Remaining;
 
@@ -133,8 +328,8 @@ public sealed class ClaudeHookCommand(
 
                 var rendered = hosted.IsRendered;
 
-                return await new Cli.Harness.Claude.ClaudePolicySeam(config, clock.Time)
-                    .HandlePreToolUseAsync(body, sessionId, rendered, stdout ?? Console.Out);
+                return await new Cli.Harness.Claude.ClaudePolicySeam(config, clock.Time, PolicyJudgeGateway.ForHook(http, Url, clock.Time))
+                    .HandlePreToolUseAsync(body, sessionId, rendered, stdout ?? Console.Out, JudgeShare(budget));
             } catch { return 0; }
         }
 
@@ -219,13 +414,16 @@ public sealed class ClaudeHookCommand(
             // Surface 3: the degraded arm spools via this path and bypasses HandleCore's stamp, so a
             // replayed session-start must still carry the harness inventory (the hook-ingest carrier).
             if (command == "session-start") SessionStartInventory.Stamp(node.AsObject(), config, harnesses, clock.Time);
+            DefaultLastAssistantMessage(node, command);
             return node.ToJsonString();
         } catch { return body; }
     }
 
-    internal static async Task<int> WithHardCap(Task<int> inner, TimeSpan budget, TimeProvider time) {
-        var winner = await Task.WhenAny(inner, Task.Delay(budget, time));
-        return winner == inner ? await inner : 0;
+    // Claude omits the key when a subagent ends on a tool call (SubagentHandback), and the server's
+    // stop contract requires it: without one the stop is rejected and the subagent never completes.
+    static void DefaultLastAssistantMessage(JsonNode node, string command) {
+        if (command == "subagent-stop" && node["last_assistant_message"] is null)
+            node["last_assistant_message"] = "";
     }
 
     // Await repo enrichment but never past the remaining hook budget. If it can't finish in time,
@@ -345,6 +543,8 @@ public sealed class ClaudeHookCommand(
         // route convention (`SessionStart` → `session-start`).
         var command = ToKebab(eventName);
 
+        if (command == "session-end" && SessionEndFence.ShouldHold(hosted, nativeSessionId)) return 0;
+
         // Taken out here, where the event is finally known. Its own rather than the caller's: this is
         // an entry point in its own right, and a budget is nothing but a ceiling read off the shared
         // clock, so both name the same deadline.
@@ -369,6 +569,8 @@ public sealed class ClaudeHookCommand(
                 // Surface 3: attach this machine's harness inventory, session-start only (the
                 // injections above apply to every event; the inventory is a session-start signal).
                 if (command == "session-start") SessionStartInventory.Stamp(node.AsObject(), config, harnesses, clock.Time);
+
+                DefaultLastAssistantMessage(node, command);
 
                 body = node.ToJsonString();
             }
@@ -402,8 +604,9 @@ public sealed class ClaudeHookCommand(
             var permProfile = profiles.Effective;
             var selfHeal    = !await IsSessionExcludedAsync(permProfile, body, budget);
 
+            // Read after the watcher self-heal inside Handle, which spends from the same budget.
             return await new PermissionRequestCommand(config, profiles, hosted, http, watchers, clock.Time)
-                .Handle(body, selfHeal, stdout);
+                .Handle(body, selfHeal, stdout, () => JudgeShare(budget));
         }
 
         // On session-start, clear the last-emitted repo cache so this session always gets a
@@ -546,8 +749,7 @@ public sealed class ClaudeHookCommand(
                                 await watchers.KillWatcher($"{sessionId}-{agentId}");
 
                                 if (transcriptPath is not null) {
-                                    var sessionDir          = Path.ChangeExtension(transcriptPath, null);
-                                    var agentTranscriptPath = Path.Combine(sessionDir, "subagents", $"agent-{agentId}.jsonl");
+                                    var agentTranscriptPath = ClaudeSubagentFiles.TranscriptPath(transcriptPath, agentId);
                                     await watchers.InlineDrainAsync(sessionId, agentTranscriptPath, agentId);
                                 }
                             },
@@ -648,7 +850,7 @@ public sealed class ClaudeHookCommand(
                 var slug = node?["slug"]?.GetValue<string>();
 
                 if (slug is not null) {
-                    var planContent = ReadPlanFile(slug, harnesses.Of<ClaudeHarness>().Paths);
+                    var planContent = ReadPlanFile(slug, ClaudeLayoutFor(transcriptPath));
 
                     if (planContent is not null) {
                         node!["plan_content"] = planContent;
@@ -671,26 +873,24 @@ public sealed class ClaudeHookCommand(
                 return 0;
             }
 
-            // Advertise the coordination-notices capability so the server MAY return work-overlap
-            // notices to render below (next to the memory index). Injected into a SEPARATE postBody,
-            // never `body`: `body` is what the transient-failure and ordering-guard paths spool, and a
-            // replay is a catch-up, not a live render — a spooled capability would let the server mark
-            // notices delivered that the replay can never inject (they stay in the bell/Slack and reach
-            // the next LIVE session-start instead). Live-only by construction: `kcap import` posts
-            // /hooks/session-start/{vendor} with origin=historical and never reaches here. Suppressed by
-            // the disable_coordination_notices opt-out, read from the EFFECTIVE profile (honoured for
-            // KCAP_URL users too, unlike the memory read above). Fail-open.
+            // The coordination-notices and next-work capabilities go on postBody only, never on the
+            // spooled `body`: a replay renders nothing, so a spooled capability would let the server
+            // mark notices delivered, or run the feed, for output no agent ever sees. Each opt-out is
+            // read from the effective profile, which also covers KCAP_URL users. The feed's guidance
+            // names kcap-workitems tools, so without them it is neither requested nor rendered.
+            var audience                    = SessionStartAudience.From(hosted);
             var coordinationNoticesDisabled = activeProfile?.DisableCoordinationNotices is true;
-            var postBody = body;
-            if (!coordinationNoticesDisabled) {
+            var nextWorkDisabled            = activeProfile?.DisableNextWorkNudge is true
+                                           || !WorkItemsNudgeEmitter.ToolsRegisteredFor(HarnessId.Claude, harnesses, audience: audience);
+            JsonNode? capabilityNode = null;
+            if (!coordinationNoticesDisabled || !nextWorkDisabled) {
                 try {
-                    var node = JsonNode.Parse(body);
-                    if (node is not null) {
-                        node["coordination_notices"] = CoordinationNoticesEmitter.CapabilityVersion;
-                        postBody                      = node.ToJsonString();
-                    }
+                    capabilityNode = JsonNode.Parse(body);
+                    if (capabilityNode is not null && !coordinationNoticesDisabled)
+                        capabilityNode["coordination_notices"] = AotJsonString(CoordinationNoticesEmitter.CapabilityVersion);
                 } catch {
                     // Best effort — never fail the hook building the capability field.
+                    capabilityNode = null;
                 }
             }
 
@@ -699,7 +899,7 @@ public sealed class ClaudeHookCommand(
             // a 401, or a budget overrun yields a null fragment and nothing is injected. Started
             // after the ordering-guard / backlog returns above so a spooled session-start doesn't
             // pay for a fetch it won't use.
-            var memoryDisabled = profiles.Resolution.Profile?.DisableMemoryIndex is true;
+            var memoryDisabled = profiles.Resolution.Profile?.DisableMemoryIndex is true || !audience.GetsDriverGuidance;
             var lifecycleReason = source?.ToLowerInvariant() switch {
                 "resume" => SessionLifecycleReason.Resume,
                 "reopen" => SessionLifecycleReason.Reopen,
@@ -707,20 +907,44 @@ public sealed class ClaudeHookCommand(
                 "compact" => SessionLifecycleReason.Compact,
                 _ => SessionLifecycleReason.New
             };
-            var memoryIndexTask = StartMemoryIndexTask(nativeSessionId, sessionCwd, memoryDisabled, lifecycleReason, budget.Remaining);
+            var flowsDisabled = SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Claude, harnesses, audience: audience);
+            var memoryIndexTask = StartMemoryIndexTask(nativeSessionId, sessionCwd, memoryDisabled, flowsDisabled, lifecycleReason, budget.Remaining);
 
             // 2. Single bounded POST — keep resp alive to read the response body for the
             //    context-envelope emission and plan-content POST on success.
             var remaining = budget.Remaining;
+
+            // The feed budget comes from the same snapshot the POST is bounded by, so it can never
+            // promise the server more time than the POST will wait.
+            var postBody         = body;
+            var nextWorkWithheld = false;
+            if (capabilityNode is not null) {
+                try {
+                    if (!nextWorkDisabled && NextWorkEmitter.FeedBudgetMs(remaining) is { } feedBudgetMs) {
+                        capabilityNode["next_work"]           = AotJsonString(NextWorkEmitter.CapabilityVersion);
+                        capabilityNode["next_work_budget_ms"] = feedBudgetMs;
+                    } else {
+                        nextWorkWithheld = !nextWorkDisabled;
+                    }
+                    postBody = capabilityNode.ToJsonString();
+                } catch {
+                    // Best effort — never fail the hook building the capability field.
+                }
+            }
+
             HttpResponseMessage? resp = null;
             try {
                 if (remaining > TimeSpan.Zero) {
-                    // postBody carries the coordination-notices capability; the spool below uses the
-                    // capability-free `body` so a replay never claims notices it cannot render.
+                    // postBody carries the live-only capabilities; the spool below uses the
+                    // capability-free `body` so a replay never claims what it cannot render.
                     using var content = new StringContent(postBody, Encoding.UTF8, "application/json");
                     resp = await client.PostOnceAsync($"{Url}/hooks/session-start", content, clock.Time, remaining, CancellationToken.None);
                 }
             } catch { resp = null; }
+
+            // Written after the POST, so a stalled stderr can neither spend the POST's time nor cost the body its capabilities.
+            if (nextWorkWithheld)
+                TryWriteDiagnostic($"session-start next-work list not requested: {remaining.TotalMilliseconds:F0}ms left of the hook budget");
 
             if (resp is null || !resp.IsSuccessStatusCode) {
                 var code      = resp is null ? 0 : (int)resp.StatusCode;
@@ -756,7 +980,7 @@ public sealed class ClaudeHookCommand(
                     var resolvedSlug = responseNode["slug"]?.GetValue<string>();
 
                     if (resolvedSlug is not null) {
-                        var planContent = ReadPlanFile(resolvedSlug, harnesses.Of<ClaudeHarness>().Paths);
+                        var planContent = ReadPlanFile(resolvedSlug, ClaudeLayoutFor(transcriptPath));
 
                         if (planContent is not null) {
                             await PostPlanContentAsync(client, clock.Time, Url, sessionId, planContent);
@@ -772,23 +996,23 @@ public sealed class ClaudeHookCommand(
 
             if (responseNode is not null) {
                 try {
-                    // The EFFECTIVE profile (the `activeProfile` resolved above), not
-                    // profiles.Resolution.Profile, which is null whenever --server-url or KCAP_URL
-                    // wins — so the resolution-only read silently ignored disable_session_guidelines
-                    // for every KCAP_URL user (the same defect the memory adapters already fixed).
-                    // Scoped to guidelines here; the memory read above keeps its existing behaviour.
+                    // The effective profile, not profiles.Resolution.Profile: the latter is null
+                    // whenever --server-url or KCAP_URL wins, which would ignore the opt-out.
                     var disabled        = activeProfile?.DisableSessionGuidelines is true;
                     var lessonsFragment = SessionGuidelinesEmitter.BuildFragment(responseNode, disabled);
+                    audience = audience.WithAck(responseNode);
+                    var nextWorkFragment = NextWorkEmitter.BuildFragmentOrInstruction(responseNode, nextWorkDisabled || !audience.GetsDriverGuidance);
                     // update_check=false opts out of ALL kcap update nudging, including the
                     // in-agent one — skip emission entirely rather than let a server that still
                     // sends `version` sneak the fragment past a locally-disabled preference.
                     var updateCheckOff  = profiles.Resolution.Profile?.UpdateCheck is false;
-                    var nudgeFragment   = updateCheckOff
+                    var nudgeFragment   = updateCheckOff || !audience.GetsOnboarding
                         ? null
                         : VersionNudgeEmitter.BuildFragment(responseNode, CapacitorVersion.CurrentDisplay());
                     // join the parallel memory-index fetch, bounded by the remaining
                     // hook budget so a slow fetch can't delay the hook (fail-open → null).
                     var memoryFragment = await AwaitMemoryFragmentAsync(memoryIndexTask, budget);
+                    if (!audience.GetsDriverGuidance) memoryFragment = null;
 
                     // Coordination notices ride the hook POST response (no extra fetch), same as the
                     // guidelines fragment. Gated on the same opt-out that suppressed the capability
@@ -797,15 +1021,23 @@ public sealed class ClaudeHookCommand(
                     var coordinationFragment = CoordinationNoticesEmitter.BuildFragment(
                         responseNode, coordinationNoticesDisabled);
 
-                    // The static nudges, each gated on its server being in the plugin's loaded .mcp.json.
-                    var workItemsNudge = WorkItemsNudgeEmitter.Resolve(
-                        HarnessId.Claude, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()));
-                    var plansNudge = PlansNudgeEmitter.Resolve(
-                        HarnessId.Claude, sessionId, activeProfile?.DisablePlansNudge is true, harnesses);
-                    var harnessNudge = HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time);
+                    // The static nudges, each gated on its server being loaded by this session.
+                    var sessionNudges = SessionNudges.Resolve(HarnessId.Claude, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience, sessionCwd, home);
+                    // Opted out for a hosted session, which leaves the first-run notice armed for a person's next one.
+                    var harnessNudge = HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true || !audience.GetsOnboarding, config, harnesses, clock.Time);
+                    var firstRunNotice = FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true || !audience.GetsOnboarding, config, HarnessId.Claude, harnesses);
 
-                    envelope = SessionStartAdditionalContext.BuildEnvelope(
-                        lessonsFragment, nudgeFragment, memoryFragment, coordinationFragment, workItemsNudge, plansNudge, harnessNudge);
+                    // Short instructions are funded first so the server-sized lists absorb the cap.
+                    envelope = SessionStartAdditionalContext.BuildRankedEnvelope([
+                        new(lessonsFragment, Rank: 2, Trimmable: true, Name: "guidelines"),
+                        new(nextWorkFragment, Rank: 1, Name: "next work"),
+                        new(nudgeFragment, Name: "version nudge"),
+                        new(coordinationFragment, Rank: 2, Trimmable: true, Name: "coordination notices"),
+                        new(sessionNudges, Name: "session nudges"),
+                        new(harnessNudge, Name: "harness nudge"),
+                        new(firstRunNotice, Name: "first-run notice"),
+                        new(memoryFragment, Rank: 3, Trimmable: true, Name: "memory and flows"),
+                    ], TryWriteDiagnostic);
                 } catch {
                     // Best effort — never break session capture for hook output emission.
                 }
@@ -837,7 +1069,11 @@ public sealed class ClaudeHookCommand(
 
             // The session is over and the server holds the uploaded snapshot, so nothing here is
             // read again — and session-end is the only thing that evicts these directories.
-            if (sessionId is not null) EvictPolicyState(sessionId);
+            if (sessionId is not null) {
+                EvictPolicyState(sessionId);
+                new PlanReadNudgeLedger(config).Evict(sessionId.Replace("-", ""));
+                new TaskListNudgeLedger(config).Evict(sessionId.Replace("-", ""));
+            }
 
             // Ordering guard: if this session's backlog couldn't fully drain, spool the fresh
             // session-end so a stranded session-start always reaches the server before it.
@@ -968,6 +1204,23 @@ public sealed class ClaudeHookCommand(
             return 1;
         }
 
+        if (command == "stop") {
+            string? ack = null;
+            try { ack = await response.Content.ReadAsStringAsync(); } catch { }
+
+            // The block's reason names kcap-workitems tools, so without them it is never sent.
+            var audience         = SessionStartAudience.From(hosted);
+            var nextWorkDisabled = activeProfile?.DisableNextWorkNudge is true
+                                || !WorkItemsNudgeEmitter.ToolsRegisteredFor(HarnessId.Claude, harnesses, audience: audience);
+            JsonNode? payload = null;
+            try { payload = JsonNode.Parse(body); } catch { }
+
+            if (ClaudeCompletionNudge.ShouldBlock(ack, nextWorkDisabled, payload, audience))
+                writer.WriteLine(ClaudeCompletionNudge.BlockDecision);
+        }
+
+        response.Dispose();
+
         switch (command) {
             case "subagent-start": {
                 var node           = JsonNode.Parse(body);
@@ -976,8 +1229,7 @@ public sealed class ClaudeHookCommand(
                 var transcriptPath = node?["transcript_path"]?.GetValue<string>();
 
                 if (sessionId is not null && agentId is not null && transcriptPath is not null) {
-                    var sessionDir          = Path.ChangeExtension(transcriptPath, null);
-                    var agentTranscriptPath = Path.Combine(sessionDir, "subagents", $"agent-{agentId}.jsonl");
+                    var agentTranscriptPath = ClaudeSubagentFiles.TranscriptPath(transcriptPath, agentId);
                     await watchers.EnsureWatcherRunning($"{sessionId}-{agentId}", agentTranscriptPath, agentId, sessionId);
                 }
 
@@ -1018,6 +1270,11 @@ public sealed class ClaudeHookCommand(
         }
     }
 
+    /// <summary>A diagnostic that fails to write is dropped: it must never cost the session its context.</summary>
+    static void TryWriteDiagnostic(string message) {
+        try { Console.Error.WriteLine($"[kcap] {message}"); } catch { /* stderr unavailable */ }
+    }
+
     /// <summary>
     /// Writes the session-start arm's single stdout object, folding a policy-degradation notice
     /// into whatever the flow produced. One object, never two: Claude parses the hook's stdout as
@@ -1047,6 +1304,9 @@ public sealed class ClaudeHookCommand(
         writer.WriteLine(merged.ToJsonString());
     }
 
+    static TimeSpan JudgeShare(HookBudget budget) =>
+        budget.Remaining < Cli.Harness.Claude.ClaudePolicySeam.JudgeBudget ? budget.Remaining : Cli.Harness.Claude.ClaudePolicySeam.JudgeBudget;
+
     /// <summary>Records how many tool calls ran past the policy engine unmatched, and resets the
     /// counter so a resumed session never re-reports them.</summary>
     void StampPassThroughCount(JsonNode node, string sessionId) {
@@ -1056,12 +1316,13 @@ public sealed class ClaudeHookCommand(
         } catch { }
     }
 
-    /// <summary>Drops the session's snapshot, journal and snapshot-upload markers. Best effort
+    /// <summary>Drops the session's snapshot, journal, judge scan state and snapshot-upload markers. Best effort
     /// throughout: a file that will not delete costs disk, never the hook.</summary>
     void EvictPolicyState(string sessionId) {
         var key = PolicySnapshotStore.Sanitize(sessionId);
         TryDelete(config.Path("policy", "sessions", $"{key}.json"));
         TryDelete(config.Path("policy", "journal", $"{key}.json"));
+        TryDelete(ClaudeJudgeDeclarationReader.StatePath(config, sessionId));
 
         try {
             var uploaded = config.Path("policy", "uploaded");
@@ -1099,7 +1360,7 @@ public sealed class ClaudeHookCommand(
     /// <c>session_start</c>, and <c>session-start</c> all return
     /// <c>session-start</c>.
     /// </summary>
-    static string ToKebab(string s) {
+    internal static string ToKebab(string s) {
         if (string.IsNullOrEmpty(s)) return s;
 
         var sb = new StringBuilder(s.Length + 4);
@@ -1132,22 +1393,25 @@ public sealed class ClaudeHookCommand(
         string? nativeSessionId,
         string? cwd,
         bool disabled,
+        bool flowsDisabled,
         SessionLifecycleReason reason,
         TimeSpan budget) {
-        if (disabled || string.IsNullOrEmpty(nativeSessionId) || budget <= TimeSpan.Zero)
+        if ((disabled && flowsDisabled) || string.IsNullOrEmpty(nativeSessionId) || budget <= TimeSpan.Zero)
             return null;
 
         // The memory subsystem is optional, and the whole fetch stays inside the fail-open boundary.
         try {
+            Action<string> diagnostic = message => Console.Error.WriteLine($"[kcap] {message}");
             var store    = SessionStartMemoryLeaseStore.Create(config, clock.Time);
-            var provider = new SessionStartMemoryContextProvider(
-                new SessionStartMemoryScopeResolver(router, config, workdir, clock.Time), http.ForMemoryAsync, clock.Time);
+            var provider = SessionStartMemoryHookSupport.CompositeProvider(router, config, workdir, http.ForMemoryAsync, clock.Time, diagnostic: diagnostic);
 
-            return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
+            // Claude's guidelines arrive with the SessionStart response, so the composite runs memory and flows only.
+            return await new SessionStartMemoryOrchestrator(store, provider, clock.Time, diagnostic).GetFragmentAsync(
                 new SessionMemoryLifecycle(HarnessId.Claude, nativeSessionId, null,
                     IsTopLevel: true, ClassificationAuthoritative: true, reason,
                     CallbackMayRepeat: false),
-                new SessionStartMemoryContextRequest(Url, cwd, disabled, budget, CancellationToken.None));
+                new SessionStartMemoryContextRequest(Url, cwd, disabled, budget, CancellationToken.None,
+                    GuidelinesDisabled: true, FlowsDisabled: flowsDisabled));
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return null;
         }
@@ -1156,10 +1420,22 @@ public sealed class ClaudeHookCommand(
     static async Task<string?> AwaitMemoryFragmentAsync(Task<string?> task, HookBudget budget) {
         try {
             var remaining = budget.Remaining;
-            if (remaining <= TimeSpan.Zero) return task.IsCompletedSuccessfully ? task.Result : null;
-            return await task.WaitAsync(remaining, budget.Time);
-        } catch { return null; }
+            if (remaining > TimeSpan.Zero) return await task.WaitAsync(remaining, budget.Time);
+            if (task.IsCompletedSuccessfully) return task.Result;
+        } catch (TimeoutException) {
+        } catch {
+            return null;
+        }
+
+        await Console.Error.WriteLineAsync("[kcap] session-start memory and flows context dropped: no response within the hook budget");
+        return null;
     }
+
+    ClaudePaths ClaudeLayoutFor(string? transcriptPath) =>
+        transcriptPath is not null && accounts.TryLoad() is { } registry
+     && AccountPaths.ClaudeForTranscript(transcriptPath, registry, home) is { } paths
+            ? paths
+            : harnesses.Of<ClaudeHarness>().Paths;
 
     static string? ReadPlanFile(string slug, ClaudePaths paths) {
         var planPath = Path.Combine(paths.Plans, $"{slug}.md");
@@ -1217,4 +1493,9 @@ public sealed class ClaudeHookCommand(
     /// </summary>
     static bool CurrentSessionHasBacklog(HookSpool spool, string? sid) =>
         sid is not null && spool.HasBacklog(sid);
+
+    // Under NativeAOT a string assigned into a JsonObject throws for want of type metadata (only
+    // bool/int/double have a reflection-free path), and the capability block's catch would then
+    // silently drop every capability; a parsed JSON string node avoids the metadata lookup.
+    static JsonNode AotJsonString(string value) => JsonNode.Parse($"\"{JsonEncodedText.Encode(value)}\"")!;
 }

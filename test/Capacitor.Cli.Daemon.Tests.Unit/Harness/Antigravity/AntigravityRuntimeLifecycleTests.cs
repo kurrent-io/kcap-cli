@@ -32,6 +32,32 @@ public class AntigravityRuntimeLifecycleTests {
     static readonly TimeSpan HangGuard = TimeSpan.FromSeconds(5);
 
     [Test]
+    public async Task A_seeded_conversation_id_is_passed_on_the_first_turn() {
+        string? seen = null;
+        await using var rt = new AntigravityHostedAgentRuntime(
+            spawnTurn: (_, conversationId, _) => {
+                seen = conversationId;
+                return Task.FromResult<IAgyTurnProcess>(new FakeAgyTurnProcess(FakeTurn.Normal, "seeded-conversation"));
+            },
+            logger: NullLogger.Instance,
+            timeProvider: TimeProvider.System,
+            resumeConversationId: "seeded-conversation");
+
+        await rt.SendUserInputAsync("hello").WaitAsync(HangGuard);
+        await rt.WaitForConversationIdAsync(CancellationToken.None).WaitAsync(HangGuard);
+
+        await Assert.That(seen).IsEqualTo("seeded-conversation");
+        await Assert.That(rt.AcpSessionId).IsEqualTo("seeded-conversation");
+    }
+
+    [Test]
+    public async Task The_factory_supports_restart_resume() {
+        var factory = new AntigravityHostedAgentRuntimeFactory(new DaemonConfig(), NullLoggerFactory.Instance, TimeProvider.System);
+
+        await Assert.That(factory.SupportsRestartResume(null)).IsTrue();
+    }
+
+    [Test]
     public async Task Between_turns_the_runtime_is_logically_alive() {
         await using var rt = FakeRuntime();
         await rt.SendUserInputAsync("hello").WaitAsync(HangGuard);

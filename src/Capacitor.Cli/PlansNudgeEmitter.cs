@@ -20,9 +20,10 @@ static class PlansNudgeEmitter {
     /// <paramref name="codexConfigPath"/> is the availability gate's test seam and is null in production.
     /// </summary>
     public static string? Resolve(HarnessId harness, string? sessionId, bool optedOut,
-                                  HarnessRegistry harnesses, string? codexConfigPath = null) {
+                                  HarnessRegistry harnesses, string? codexConfigPath = null,
+                                  SessionStartAudience? audience = null) {
         if (optedOut) return null;
-        if (!McpServerNudgeAvailability.IsRegisteredFor(harness, harnesses, "kcap-plans", codexConfigPath)) return null;
+        if (!McpServerNudgeAvailability.IsRegisteredFor(harness, harnesses, "kcap-plans", codexConfigPath, audience)) return null;
         return Build(sessionId);
     }
 
@@ -38,8 +39,8 @@ static class PlansNudgeEmitter {
         return
             "## Plans\n" +
             "Plans and tasks are declared through the kcap-plans MCP tools: when you write or are handed a " +
-            "plan, spec or design document, declare it with `declare_plan_document`; when a plan has discrete " +
-            "steps, declare them with `set_plan_tasks` and record every status change with `update_plan_task`. " +
+            "plan, spec or design document, declare it with `declare_plan_document`, and again after each change to it; " +
+            "when a plan has discrete steps, declare them with `set_plan_tasks` and record every status change with `update_plan_task`. " +
             $"After compaction `get_plan` returns the list, and if a tool cannot resolve the session, pass `session_id` (`{id}`) explicitly.";
     }
 }

@@ -8,22 +8,20 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
 
-/// One row of the decision log, projected for display. Time is a short local clock for the
-/// table; TimeTip carries the full local stamp for hover. An unparseable decided_at renders
-/// verbatim in both rather than throwing. IsAllowed drives the outcome color.
 public sealed record ActivityRow(
-    string Time, string TimeTip, string Outcome, bool IsAllowed, string Requester, string KindLabel,
-    string RepoLeaf, string RepoFull, string Vendor, string SourceLabel);
+    string Time, string TimeTip, string Outcome, bool IsAllowed,
+    string PrimaryDetail, string SecondaryLine, string SecondaryTip,
+    string RequesterFull, string RepoFull);
 
-/// Renders the consent decision log as the Activity tab (spec §7): pure file I/O via the injected
+/// Renders the consent decision log for the Launch approvals window: pure file I/O via the injected
 /// `read`, so the feed works with the daemon stopped or unreachable. No FileSystemWatcher —
-/// refreshed on tab visibility, a 2-tick stat poll while visible, and an own-resolution nudge (App
+/// refreshed on window visibility, a 2-tick stat poll while visible, and an own-resolution nudge (App
 /// wires RequestRefresh into ConsentPromptViewModel's onConcluded callback).
 ///
 /// Constructed once at the composition root and lives for the app's lifetime, like ConsentService
 /// — it subscribes to the SHARED ticker directly in the constructor rather than through
 /// WhenActivated/window activation, since the prompt-window factory must capture this same
-/// instance independently of MainWindowViewModel's own construction. The ticker already delivers
+/// instance independently of the main window's own construction. The ticker already delivers
 /// on the UI thread (UiTicker's doc comment), so no ObserveOn is needed here.
 ///
 /// That constructor-scoped subscription is why this is IDisposable: the shared ticker is
@@ -42,8 +40,30 @@ public sealed class ActivityViewModel : ReactiveObject, IDisposable {
     bool _isEmpty = true;
     public bool IsEmpty {
         get => _isEmpty;
-        private set => this.RaiseAndSetIfChanged(ref _isEmpty, value);
+        private set {
+            if (_isEmpty == value) return;
+            this.RaiseAndSetIfChanged(ref _isEmpty, value);
+            this.RaisePropertyChanged(nameof(ShowsEmpty));
+            this.RaisePropertyChanged(nameof(ShowsRows));
+        }
     }
+
+    bool _hasLoaded;
+    /// False until the first log read applies — so the window does not flash the empty copy first.
+    public bool HasLoaded {
+        get => _hasLoaded;
+        private set {
+            if (_hasLoaded == value) return;
+            this.RaiseAndSetIfChanged(ref _hasLoaded, value);
+            this.RaisePropertyChanged(nameof(IsLoading));
+            this.RaisePropertyChanged(nameof(ShowsEmpty));
+            this.RaisePropertyChanged(nameof(ShowsRows));
+        }
+    }
+
+    public bool IsLoading => !HasLoaded;
+    public bool ShowsEmpty => HasLoaded && IsEmpty;
+    public bool ShowsRows => HasLoaded && !IsEmpty;
 
     bool _visible;
     int _tickCount;
@@ -71,10 +91,8 @@ public sealed class ActivityViewModel : ReactiveObject, IDisposable {
         _tickSub.Dispose();
     }
 
-    /// Tab-visibility trigger (spec §7): a true transition (tab selected AND window visible, per
-    /// MainWindow.axaml.cs) does an immediate read and primes the poll's stat baseline so the very
-    /// next tick doesn't immediately re-read the same unchanged content. A no-op on a repeated call
-    /// with the same value.
+    /// Refreshes on becoming visible and primes the stat baseline to avoid a duplicate read
+    /// on the next tick. Repeated calls with the same visibility are ignored.
     public void OnTabVisibleChanged(bool visible) {
         if (visible == _visible) return;
         _visible = visible;
@@ -84,7 +102,7 @@ public sealed class ActivityViewModel : ReactiveObject, IDisposable {
         TriggerRefresh(RefreshMode.PrimeAndRead);
     }
 
-    /// Own-resolution nudge (spec §7): an immediate read now — the daemon appends the log record
+    /// Own-resolution nudge: an immediate read now — the daemon appends the log record
     /// AFTER completing the resolve (RunContinuationsAsynchronously), so this ack-triggered read
     /// can beat the append. Eventual consistency relies on the next stat-poll tick, not on this
     /// call firing a second time — including when the single-flight guard drops this call because
@@ -120,8 +138,7 @@ public sealed class ActivityViewModel : ReactiveObject, IDisposable {
         }
     }
 
-    // Gated (OnTick): re-reads only when the stat key changed since the previous check — the key
-    // still advances even if the read that follows throws, same as before this moved off-thread.
+    // Gated (OnTick): re-reads only when the stat key changed since the previous check.
     // PrimeAndRead (OnTabVisibleChanged true) always reads and always primes the baseline.
     // ReadOnly (RequestRefresh) never touches the stat key at all.
     (string? key, ConsentLogReadResult? result) ComputeOffUiThread(RefreshMode mode, string? previousKey) {
@@ -139,11 +156,19 @@ public sealed class ActivityViewModel : ReactiveObject, IDisposable {
 
     void ApplyOutcome(string? key, ConsentLogReadResult? result) {
         if (_disposed) return;
-        if (key is not null) _lastStatKey = key;
-        if (result is not null) Apply(result);
+        if (result is not null) {
+            // Prime the baseline only for a successful read — a throw leaves the key alone so the
+            // next gated tick can retry instead of treating the failed attempt as settled content.
+            if (key is not null) _lastStatKey = key;
+            Apply(result);
+            return;
+        }
+        // First open threw: leave Loading forever would be worse than the empty copy. Settle the
+        // gate without inventing rows; the next gated tick still retries (key was not primed).
+        if (!HasLoaded) HasLoaded = true;
     }
 
-    /// Display rule keyed off Complete (spec §7): a Complete read replaces the rows, including
+    /// Display rule keyed off Complete: a Complete read replaces the rows, including
     /// replacing them with the empty state when it is genuinely empty. An incomplete read never
     /// replaces existing rows — unless there are none yet, where the partial records are shown
     /// best-effort rather than leaving the feed with nothing at all.
@@ -152,14 +177,23 @@ public sealed class ActivityViewModel : ReactiveObject, IDisposable {
 
         _rowsSource.Load(result.Records.Select(ToRow));
         IsEmpty = _rowsSource.Count == 0;
+        HasLoaded = true;
     }
 
     static ActivityRow ToRow(ConsentDecisionRecord r) {
         var (time, tip) = FormatTime(r.DecidedAt);
+        var requester = RequesterOf(r);
+        var source = SourceLabelOf(r.Source);
+        var leaf = RepoLabel.Leaf(r.RepoPath);
         return new(
-            time, tip, r.Outcome, r.Outcome == "allowed", RequesterOf(r),
-            ConsentPromptViewModel.KindLabelOf(r.Kind), RepoLabel.Leaf(r.RepoPath), r.RepoPath, r.Vendor,
-            SourceLabelOf(r.Source));
+            time, tip,
+            OutcomeLabelOf(r.Outcome),
+            r.Outcome == "allowed",
+            PrimaryDetailOf(r.Vendor, r.Kind),
+            SecondaryLineOf(requester, leaf, source),
+            $"{requester}\n{r.RepoPath}",
+            requester,
+            r.RepoPath);
     }
 
     static string RequesterOf(ConsentDecisionRecord r) =>
@@ -185,4 +219,20 @@ public sealed class ActivityViewModel : ReactiveObject, IDisposable {
         "prompt_no_ui"   => "no UI attached",
         _ => source.StartsWith("rule[", StringComparison.Ordinal) && source.EndsWith(']') ? "rule" : source,
     };
+
+    internal static string OutcomeLabelOf(string outcome) => outcome switch {
+        "allowed" => "Allowed",
+        "denied"  => "Denied",
+        _         => outcome,
+    };
+
+    internal static string PrimaryDetailOf(string vendor, string kind) {
+        var kindLabel = kind == "agent" ? null : ConsentPromptViewModel.KindLabelOf(kind);
+        return kindLabel is null ? vendor : $"{vendor} · {kindLabel}";
+    }
+
+    internal static string SecondaryLineOf(string requesterDisplay, string repoLeaf, string sourceLabel) {
+        if (sourceLabel == "you") return $"{requesterDisplay} · {repoLeaf}";
+        return $"{requesterDisplay} · {repoLeaf} · {sourceLabel}";
+    }
 }

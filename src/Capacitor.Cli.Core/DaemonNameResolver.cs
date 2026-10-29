@@ -18,13 +18,12 @@ namespace Capacitor.Cli.Core;
 /// <item>Machine name, lowercased.</item>
 /// <item>The literal string <c>"daemon"</c>.</item>
 /// </list>
-///
-/// <para>Note: <c>DaemonRunner.RunAsync</c> previously had the env var
-/// unconditionally override <c>--name</c>. That was an unintentional
-/// inversion of the usual CLI convention (explicit flag wins). This
-/// fixes it so <c>--name</c> is the strongest signal as users expect.</para>
 /// </summary>
 public static class DaemonNameResolver {
+    /// <summary>Also exported into every agent the daemon hosts, so a kcap inside the agent addresses
+    /// that daemon.</summary>
+    public const string NameVar = "KCAP_DAEMON_NAME";
+
     /// <summary>
     /// Parse the daemon name from <paramref name="args"/>. Pass the profile-supplied default —
     /// <c>ProfileContext.DaemonName</c>, which states which profile that reads. Returns the
@@ -53,7 +52,7 @@ public static class DaemonNameResolver {
             return args[i + 1];
         }
 
-        if (Environment.GetEnvironmentVariable("KCAP_DAEMON_NAME") is { Length: > 0 } envName)
+        if (Environment.GetEnvironmentVariable(NameVar) is { Length: > 0 } envName)
             return envName;
 
         if (!string.IsNullOrEmpty(profileName))

@@ -31,6 +31,7 @@ public static class CapacitorHttpServices {
         services.AddSingleton<IProjectsApi, ProjectsApi>();
         services.AddSingleton<IRepositoriesApi, RepositoriesApi>();
         services.AddSingleton<IFeedbackApi, FeedbackApi>();
+        services.AddSingleton<IArtefactsApi, ArtefactsApi>();
         services.AddSingleton<IMachinesApi, MachinesApi>();
         services.AddSingleton<IReviewApi, ReviewApi>();
         services.AddTransient<ServerVersionCaptureHandler>();
@@ -41,22 +42,28 @@ public static class CapacitorHttpServices {
             ObservationHeaderHandler.ProcessVersion,
             sp.GetRequiredService<ProfileContext>().Effective?.UpdateCheck == false));
         services.AddTransient(sp => new UnauthorizedRecoveryHandler(sp.GetRequiredService<ICredentialSource>()));
+        services.AddTransient(sp => new LocalDestinationHandler(sp.GetRequiredService<CapacitorServer>()));
+
+        // Innermost, so it sees every hop of a redirect before it is sent.
+        static LocalDestinationHandler Redirecting(IServiceProvider sp) =>
+            new(sp.GetRequiredService<CapacitorServer>(), followRedirects: true);
 
         services.AddHttpClient(CapacitorClients.Default)
             .AddHttpMessageHandler<ServerVersionCaptureHandler>()
             .AddHttpMessageHandler<PlanEntitlementCaptureHandler>()
             .AddHttpMessageHandler<ObservationHeaderHandler>()
             .AddHttpMessageHandler<UnauthorizedRecoveryHandler>()
-            // Redirects are followed. The runtime drops Authorization only when a hop crosses origin,
-            // so refusing them buys nothing against leaking a bearer and turns a same-origin
-            // normalisation — or any 3xx at all on a server that needs no bearer — into a hard failure
-            // the hook callers classify as unretryable and never spool.
+            .AddHttpMessageHandler(Redirecting)
+            // Redirects are followed, by the destination handler rather than the runtime, so each hop is checked.
+            // Authorization is dropped only when a hop crosses origin, so refusing them buys nothing against
+            // leaking a bearer and turns a same-origin normalisation — or any 3xx at all on a server that needs no
+            // bearer — into a hard failure the hook callers classify as unretryable and never spool.
             //
             // The lifetime matters because an MCP server holds one of these for its whole life: the
             // factory rotates handlers, but not a handler this client already has, so the pool has to
             // retire its own sockets or a DNS change never reaches a process that never restarts.
             .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler {
-                AllowAutoRedirect        = true,
+                AllowAutoRedirect        = false,
                 PooledConnectionLifetime = TimeSpan.FromMinutes(2),
             })
             // Nothing is redacted by default, so a logging provider added later would print the bearer.
@@ -72,8 +79,9 @@ public static class CapacitorHttpServices {
             .AddHttpMessageHandler<ObservationHeaderHandler>()
             .AddHttpMessageHandler(sp => new UnauthorizedRecoveryHandler(
                 sp.GetRequiredService<ICredentialSource>(), recover: false))
+            .AddHttpMessageHandler(Redirecting)
             .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler {
-                AllowAutoRedirect        = true,
+                AllowAutoRedirect        = false,
                 PooledConnectionLifetime = TimeSpan.FromMinutes(2),
             })
             .RedactLoggedHeaders(["Authorization", "Cookie", "Set-Cookie"]);
@@ -83,6 +91,7 @@ public static class CapacitorHttpServices {
         // for the one the server served — and a hop that crosses origin drops the credential on the
         // way, so the substitute would not even be authenticated.
         services.AddHttpClient(CapacitorClients.Memory)
+            .AddHttpMessageHandler<LocalDestinationHandler>()
             .AddHttpMessageHandler<ServerVersionCaptureHandler>()
             .AddHttpMessageHandler<PlanEntitlementCaptureHandler>()
             .AddHttpMessageHandler<ObservationHeaderHandler>()
@@ -101,7 +110,8 @@ public static class CapacitorHttpServices {
             .AddHttpMessageHandler<ObservationHeaderHandler>()
             // With no bearer to strip there is nothing a redirect can break, and a download that
             // lands on an object store needs the hop followed.
-            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = true })
+            .AddHttpMessageHandler(Redirecting)
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false })
             // A caller may still set an Authorization header by hand on this lane.
             .RedactLoggedHeaders(["Authorization", "Cookie", "Set-Cookie"]);
 
@@ -110,6 +120,7 @@ public static class CapacitorHttpServices {
         // The observation tags ride here too, so a caller supplying its own bearer gets them without
         // attaching them itself. Registered centrally, the guarantee is a rule rather than a convention.
         services.AddHttpClient(CapacitorClients.Bearer)
+            .AddHttpMessageHandler<LocalDestinationHandler>()
             .AddHttpMessageHandler<ObservationHeaderHandler>()
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false })
             .RedactLoggedHeaders(["Authorization", "Cookie", "Set-Cookie"]);
@@ -137,6 +148,16 @@ public static class CapacitorHttpServices {
                 () => new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false })
             .RedactLoggedHeaders(["Authorization", "Cookie", "Set-Cookie"]);
 
+        services.AddHttpClient(CapacitorClients.LocalInstallation)
+            .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(5))
+            .ConfigurePrimaryHttpMessageHandler(
+                () => new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false });
+
+        services.AddHttpClient(CapacitorClients.Ollama)
+            .ConfigureHttpClient(c => c.Timeout = Timeout.InfiniteTimeSpan)
+            .ConfigurePrimaryHttpMessageHandler(
+                () => new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false });
+
         return services;
     }
 
@@ -152,6 +173,10 @@ public static class CapacitorHttpServices {
         // ones — so the clock they resolve has to be registered here too, not only beside those.
         services.TryAddSingleton(TimeProvider.System);
 
+        // A default rather than a requirement: every host but the desktop app is the CLI, and the desktop
+        // app registers its own ahead of this.
+        services.TryAddSingleton(ClientAgent.Cli);
+
         // No base address on either: their URLs come from the environment on every read, so one
         // pinned at container-build time would outlive the override it was resolved from.
         services.AddHttpClient<TenantProvisioningClient>();
@@ -166,6 +191,20 @@ public static class CapacitorHttpServices {
             // last segment instead of extending it.
             c.BaseAddress = new Uri("https://registry.npmjs.org/");
             c.Timeout     = TimeSpan.FromSeconds(5);
+            c.DefaultRequestHeaders.Add("User-Agent", "kcap-cli");
+        });
+
+        // Downloads a release archive, so the whole-request cap is generous; manifest reads carry their own.
+        // GitHub answers a release asset with a redirect to its storage host, which the default handler follows.
+        services.AddHttpClient<KcapReleaseClient>(c => {
+            c.Timeout = TimeSpan.FromMinutes(10);
+            c.DefaultRequestHeaders.Add("User-Agent", "kcap-cli");
+        });
+
+        // Same terms as the release client: the bundle is an archive, so the cap is generous and
+        // redirects are followed.
+        services.AddHttpClient<LocalBundleClient>(c => {
+            c.Timeout = TimeSpan.FromMinutes(10);
             c.DefaultRequestHeaders.Add("User-Agent", "kcap-cli");
         });
 

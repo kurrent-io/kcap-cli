@@ -35,6 +35,7 @@ public class UpdateNoticeIsHumanFacingTests {
     [Test]
     public async Task Watch_IsSuppressed() {
         await Assert.That(UpdateNotice.IsHumanFacing("watch", ["watch", "sid", "/tmp/t.jsonl"])).IsFalse();
+        await Assert.That(UpdateNotice.IsHumanFacing("muse-assistant", ["muse-assistant", "ingest", "/tmp/w"])).IsFalse();
     }
 
     // --- Suppressed: the whole `daemon` command family (there is no separate `run` subcommand —

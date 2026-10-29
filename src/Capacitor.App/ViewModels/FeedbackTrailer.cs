@@ -9,6 +9,6 @@ public static class FeedbackTrailer {
             : cliVersion is { Length: > 0 } installed ? $"cli {installed}"
             : "version unknown";
 
-        return $"Sent from Kurrent Capacitor Desktop {appVersion} · daemon {daemonName} {version}";
+        return $"Sent from kcap Desktop {appVersion} · daemon {daemonName} {version}";
     }
 }

@@ -8,6 +8,8 @@ using Capacitor.Cli.Core.Harness.Copilot;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Harness.Gemini;
 using Capacitor.Cli.Core.Harness.Kiro;
+using Capacitor.Cli.Core.Harness.MistralVibe;
+using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.Mcp;
@@ -82,6 +84,42 @@ public class FlowsDriverSchemaConformanceTests {
         await Assert.That(props.ContainsKey("vendor")).IsFalse()
             .Because($"{toolName} addresses an existing run whose vendor was pinned at start");
         await Assert.That(props.ContainsKey("model")).IsFalse();
+    }
+
+    /// <summary>The two STATUS tools: the only follow-ups a driver can make without the id, since a
+    /// harness abort of the start is exactly the case where it never received one.</summary>
+    public static IEnumerable<Func<string>> StatusTools() { yield return () => "get_review_flow_status"; yield return () => "get_flow_status"; }
+
+    [Test]
+    [MethodDataSource(nameof(StatusTools))]
+    public async Task A_status_tool_takes_flow_run_id_and_session_id_as_optional_strings(string toolName) {
+        var schema = Tool(toolName).InputSchema;
+
+        await Assert.That(schema.Properties["flow_run_id"].Type).IsEqualTo("string");
+        await Assert.That(schema.Properties["session_id"].Type).IsEqualTo("string");
+        await Assert.That(schema.Required).IsEmpty();
+    }
+
+    /// <summary>The four tools that hold the call open while a round runs.</summary>
+    public static IEnumerable<Func<string>> BlockingTools() {
+        yield return () => "start_review_flow";
+        yield return () => "submit_review_round";
+        yield return () => "start_flow";
+        yield return () => "send_to_participant";
+    }
+
+    // A harness that aborts the call words the error itself, so this description is the only
+    // guidance the driver can have read beforehand: what the abort means and the one call to make.
+    [Test]
+    [MethodDataSource(nameof(BlockingTools))]
+    public async Task A_blocking_tool_says_what_a_harness_timeout_means(string toolName) {
+        var description = Tool(toolName).Description;
+        var statusTool  = toolName is "start_review_flow" or "submit_review_round" ? "get_review_flow_status" : "get_flow_status";
+
+        await Assert.That(description).Contains("blocks for minutes");
+        await Assert.That(description).Contains("still running");
+        await Assert.That(description).Contains("do not start it again");
+        await Assert.That(description).Contains($"{statusTool} with wait: true");
     }
 
     // The description is the whole mechanism by which a driver LLM learns to pass the parameter.
@@ -192,10 +230,9 @@ public class FlowsDriverSchemaConformanceTests {
         Action<PluginEnvironment>       OptIn,
         Func<PluginEnvironment, string> ConfigPath,
         Func<string, Projection>        Extract,
-        bool                            BareInstall = false);
+        bool                            BareInstall = false,
+        bool                            JsonProjected = true);
 
-    /// <summary>Every environment variable any kcap path resolver consults. Kept together so a new
-    /// override cannot be added without this list being the obvious place to add it.</summary>
     /// <summary>Deterministic native-binary path injected into every installer arm. Registration
     /// writes the resolved binary as the command (default: Environment.ProcessPath) — under the
     /// test host that default would be the test-runner executable, so the suite injects its own
@@ -239,6 +276,15 @@ public class FlowsDriverSchemaConformanceTests {
         return new(harness, entry["command"]!.GetValue<string>(),
             [.. entry["args"]!.AsArray().Select(n => n!.GetValue<string>())]);
     };
+
+    /// <summary>Mistral Vibe keeps its servers in a <c>[[mcp_servers]]</c> array of tables keyed by
+    /// <c>name</c>, not Codex's table keyed by server.</summary>
+    static Projection FromVibeToml(string path) {
+        var servers = (TomlTableArray)TomlSerializer.Deserialize<TomlTable>(File.ReadAllText(path))!["mcp_servers"]!;
+        var entry   = servers.Single(t => (string)t["name"]! == "kcap-flows");
+        return new("Mistral Vibe", (string)entry["command"]!,
+            [.. ((TomlArray)entry["args"]!).Select(a => (string)a!)]);
+    }
 
     static Projection FromToml(string path) {
         var servers = (TomlTable)TomlSerializer.Deserialize<TomlTable>(File.ReadAllText(path))!["mcp_servers"]!;
@@ -286,6 +332,16 @@ public class FlowsDriverSchemaConformanceTests {
                      File.WriteAllText(env.Harnesses.Of<OpenCodeHarness>().Paths.KcapPlugin, "// stale"); },
             env => env.Harnesses.Of<OpenCodeHarness>().Paths.McpConfigJson, Json("OpenCode", "mcp", argvArray: true)),
 
+        // TOML, so it stamps its driver like the JSON harnesses but has no HarnessMcpProjections entry.
+        new("Mistral Vibe", "--mistral-vibe",
+            env => MistralVibeHooksInstaller.Install(env.Harnesses.Of<MistralVibeHarness>().Paths.HooksToml),
+            env => env.Harnesses.Of<MistralVibeHarness>().Paths.ConfigToml, FromVibeToml,
+            JsonProjected: false),
+
+        new("Muse Code", "--muse",
+            env => MuseHooksInstaller.Install(env.Harnesses.Of<MuseHarness>().Paths.SettingsJson),
+            env => env.Harnesses.Of<MuseHarness>().Paths.SettingsJson, Json("Muse Code", "mcp_servers")),
+
         // Codex installs unconditionally rather than through the `--if-installed` refresh branch, so
         // it takes the bare-install path and needs a planted plugin root. Flagged here rather than
         // hidden, because it is the one arm whose invocation differs.
@@ -299,12 +355,8 @@ public class FlowsDriverSchemaConformanceTests {
     /// server subset, the shape, or drops flows entirely — which is exactly the drift this suite
     /// claims to catch.</summary>
     static async Task<Projection> InstallAndRead(Arm arm) {
-        // EVERY known path override, cleared for EVERY arm — deliberately not a per-arm list. If any
-        // one is missed, the opt-in, the installer and the extractor all resolve OUTSIDE the fake
-        // home: the test then reads and rewrites the developer's real harness config, and can pass
-        // against a pre-existing entry. The names are easy to get individually wrong (GeminiPaths
-        // reads GEMINI_CLI_HOME, not GEMINI_HOME; OpenCode falls back to XDG_CONFIG_HOME; CodexPaths
-        // gives ambient CODEX_HOME precedence), which is exactly why the list is not per-arm.
+        // Hermetic: TestHarnesses.Under builds every harness's paths with explicit null overrides, so
+        // ambient *_HOME / XDG_* variables cannot move an arm outside the fake home.
         using var home      = new TempHome();
         var env = TestEnv(home.Path, arm.BareInstall ? PlantFakePlugin() : null);
 
@@ -414,7 +466,7 @@ public class FlowsDriverSchemaConformanceTests {
         await Assert.That(flows!.Args)
             .IsEquivalentTo(new[] { "mcp", "flows", "--driver", projection.Harness }, CollectionOrdering.Matching);
         // Flows launches a PAID hosted reviewer, so it must never be auto-approved on registration.
-        await Assert.That(flows.ReadOnly).IsFalse();
+        await Assert.That(flows.AutoApprove).IsFalse();
     }
 
     // Install/uninstall must read the SAME ownership tuple. If the remove paths or Kiro's "is the MCP
@@ -465,7 +517,7 @@ public class FlowsDriverSchemaConformanceTests {
     [Test]
     public async Task The_projection_list_matches_the_json_installer_arms() {
         var projected = HarnessMcpProjections.All.Select(p => p.Harness).ToArray();
-        var installed = Arms.Where(a => !a.BareInstall).Select(a => a.Flag.TrimStart('-')).ToArray();
+        var installed = Arms.Where(a => a is { BareInstall: false, JsonProjected: true }).Select(a => a.Flag.TrimStart('-')).ToArray();
 
         await Assert.That(projected).IsEquivalentTo(installed);
     }
@@ -618,6 +670,7 @@ public class FlowsDriverSchemaConformanceTests {
         var covered = Arms.Select(a => a.Flag)
             .Append("--claude")   // bundled kcap/.mcp.json, covered by the static-config test
             .Append("--pi")       // no MCP config at all, covered by the bridge test
+            .Append("--grok")     // writes no MCP config: Grok loads Claude's, covered by the static-config test
             .ToHashSet(StringComparer.Ordinal);
 
         foreach (var flag in VendorSelection.KnownVendorFlags)

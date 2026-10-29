@@ -1,16 +1,20 @@
 using System.Collections.Concurrent;
+using System.Collections.Frozen;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
+using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.FirstRun;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.RepoEvidence;
 using Capacitor.Cli.Harness.Claude;
+using Capacitor.Cli.Harness.Codex;
 using Capacitor.Cli.Harness.Cursor;
 using Spectre.Console;
 using Capacitor.Cli.PrDetection;
@@ -19,8 +23,26 @@ namespace Capacitor.Cli.Commands;
 
 class ImportCommand(
         ConfigRoot config, ProfileContext profiles, UserHome home, HarnessRegistry harnesses,
-        ICapacitorHttpClient http, GitProviderRouter router, TimeProvider time) {
+        ICapacitorHttpClient http, GitProviderRouter router, TimeProvider time, AccountStore? accounts = null) {
     static readonly TimeSpan ProgressPollGap = TimeSpan.FromMilliseconds(250);
+
+    // Read from parallel workers; keyed by the normalized home so two spellings of one directory share an index.
+    readonly ConcurrentDictionary<string, CodexImportTitles> _codexTitles = new(
+        OperatingSystem.IsLinux() ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase);
+
+    readonly Lazy<AccountRegistry?> _registry = new(() => accounts?.TryLoad());
+
+    /// <summary>The index of the Codex home the rollout lives in: an account's titles are never read from
+    /// another home's index. A rollout outside every account uses the environment home.</summary>
+    CodexImportTitles CodexTitlesFor(string transcriptPath) {
+        var codexHome = _registry.Value is { } registry
+                     && AccountPaths.CodexForRollout(transcriptPath, registry, home) is { } paths
+            ? paths.Home
+            : harnesses.Of<CodexHarness>().Paths.Home;
+
+        return _codexTitles.GetOrAdd(AccountDirectory.Normalize(codexHome), static (_, a) => new CodexImportTitles(a.Home, a.Time),
+                                     (Home: codexHome, Time: time));
+    }
 
     /// <summary>
     /// Maximum parallel worker count for the Importing phase. Both the
@@ -342,10 +364,11 @@ class ImportCommand(
 
         /// <summary>
         /// Populated when Status == Excluded OR when the session would otherwise be New/Partial
-        /// but its cwd maps to an excluded repo and the user has not yet been consulted.
-        /// Format: "{Owner}/{RepoName}".
+        /// but its cwd maps to an excluded repo and the user has not yet been consulted. The
+        /// recorded and the resolved cwd can name two different excluded repos, and each needs
+        /// its own opt-in. Format: "{Owner}/{RepoName}".
         /// </summary>
-        public string? ExcludedRepoKey { get; init; }
+        public IReadOnlyList<string> ExcludedRepoKeys { get; init; } = [];
 
         /// <summary>
         /// Populated when the session's cwd lies within a path configured via
@@ -655,13 +678,17 @@ class ImportCommand(
     /// </remarks>
     /// <summary>Reports a run that deliberately moved nothing: it reached a decision, and the decision
     /// was that there was nothing to do.</summary>
-    static void ReportNothing(Action<ImportRunOutcome>? onFinished) =>
+    static void ReportNothing(Action<ImportRunOutcome>? onFinished, Action<ImportRunSelection>? onSelected, bool capped) {
+        if (capped) onSelected?.Invoke(ImportRunSelection.Empty);
+
         onFinished?.Invoke(new ImportRunOutcome(
             new FinalCounts(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, RanBackground: false,
                             RequestedSummaries: false),
-            VisibilityFailures: 0));
+            VisibilityFailures: 0,
+            Partition: capped ? ImportRunPartition.Empty : null));
+    }
 
-    internal sealed record ImportRunOutcome(FinalCounts Counts, int VisibilityFailures) {
+    internal sealed record ImportRunOutcome(FinalCounts Counts, int VisibilityFailures, ImportRunPartition? Partition = null) {
         /// <summary>Anything the user asked for that did not happen.</summary>
         internal bool AnythingFailed => Counts.Failed > 0 || VisibilityFailures > 0;
     }
@@ -759,6 +786,8 @@ class ImportCommand(
             DateTimeOffset?               windowsAsOf             = null,
             Action<ImportRunOutcome>?     onFinished              = null,
             Action<ImportDiscoveryResult>? onDiscovered           = null,
+            int?                          maxSessions             = null,
+            Action<ImportRunSelection>?   onSelected              = null,
             bool                          nested                  = false
         ) {
         // A caller that wants the figures rather than the rendering says so by handing one over; the
@@ -799,7 +828,7 @@ class ImportCommand(
 
             // Zero is an answer, and a caller that hears nothing cannot tell it from a run that died
             // before it got here — the same rule the discovery report already follows.
-            ReportNothing(onFinished);
+            ReportNothing(onFinished, onSelected, maxSessions is not null);
 
             return 0;
         }
@@ -825,9 +854,9 @@ class ImportCommand(
             MinLines: minLines
         );
 
-        var discoveriesPerSource = await Task.WhenAll(
+        var discoveriesPerSource = FirstDiscoveryWins(await Task.WhenAll(
             sources.Select(s => s.DiscoverAsync(filters, CancellationToken.None))
-        );
+        ));
 
         for (var i = 0; i < sources.Count; i++) {
             var count = discoveriesPerSource[i].Count;
@@ -855,13 +884,10 @@ class ImportCommand(
 
             // Zero is an answer, and a caller that hears nothing cannot tell it from a run that died
             // before it got here — the same rule the discovery report already follows.
-            ReportNothing(onFinished);
+            ReportNothing(onFinished, onSelected, maxSessions is not null);
 
             return 0;
         }
-
-        // Build a vendor → source map for downstream lookups.
-        var byVendor = sources.ToDictionary(s => s.Vendor);
 
         // --- Cwd resolution for scope filtering ---
         // For file-based sources (Claude/Codex) extract cwd from the transcript.
@@ -1080,7 +1106,7 @@ class ImportCommand(
 
             // Zero is an answer, and a caller that hears nothing cannot tell it from a run that died
             // before it got here — the same rule the discovery report already follows.
-            ReportNothing(onFinished);
+            ReportNothing(onFinished, onSelected, maxSessions is not null);
 
             return 0;
         }
@@ -1185,11 +1211,19 @@ class ImportCommand(
         // Flatten classifications.
         var classifications = classificationsPerSource.SelectMany(c => c).ToList();
 
+        // One vendor can have a source per account root, so a session is routed back to the source that
+        // discovered it rather than to its vendor.
+        var sourceBySession = new Dictionary<(HarnessId Vendor, string SessionId), IImportSource>();
+
+        for (var i = 0; i < sources.Count; i++)
+            foreach (var c in classificationsPerSource[i])
+                sourceBySession.TryAdd((c.Vendor, c.SessionId), sources[i]);
+
         // Capture scope is decided here, over every source's output at once, and nowhere else.
         var captureScope = new CaptureScope(router, config, home,
                                             allowedPaths, excludedPaths, allowedRepos, excludedRepos, time);
 
-        if (captureScope.Configured) classifications = await captureScope.ApplyAsync(classifications);
+        if (captureScope.Configured) classifications = await captureScope.ApplyAsync(classifications, sessionCwds);
 
         // --- Resolve excluded-repo / excluded-path prompts (TTY only; non-TTY auto-skips) ---
         // Repo and path exclusions are independent gates: a session is included only when
@@ -1202,9 +1236,9 @@ class ImportCommand(
         var actionable = classifications.Where(CaptureScope.Actionable).ToList();
 
         var excludedByRepo = actionable
-            .Where(c => c.ExcludedRepoKey is not null)
-            .GroupBy(c => c.ExcludedRepoKey!, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+            .SelectMany(c => c.ExcludedRepoKeys.Select(key => (Key: key, Session: c)))
+            .GroupBy(p => p.Key, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Select(p => p.Session).ToList(), StringComparer.OrdinalIgnoreCase);
 
         var excludedByPath = actionable
             .Where(c => c.ExcludedPathKey is not null)
@@ -1322,9 +1356,22 @@ class ImportCommand(
         // or the parent was classified but excluded from import for any other reason) must import
         // standalone rather than being silently dropped by CursorImportSource.ImportSessionAsync's
         // nested-child skip.
-        routed = ReconcileOrphanedCursorSubagentChildren(routed);
-
+        routed.Sort(ImportOrdering.RoutedDispatch);
         var chains = BuildImportChains(fileBased);
+
+        // The cap narrows the plan before the reconcile, so the reconcile sees exactly the units
+        // that will run; a child never reaches it without its parent.
+        HashSet<string>? selectedIds = null;
+
+        if (maxSessions is { } cap) {
+            var plan = ForegroundSelection.Select(chains, routed, classifications, cap);
+            chains      = plan.Chains;
+            routed      = plan.Routed;
+            selectedIds = plan.Selection.SelectedIds.ToHashSet(StringComparer.Ordinal);
+            onSelected?.Invoke(plan.Selection);
+        }
+
+        routed = ReconcileOrphanedCursorSubagentChildren(routed);
 
         // --- Import ---
         // ConcurrentBag rather than List: OnTitleTaskReady / OnBackgroundWorkReady
@@ -1343,6 +1390,9 @@ class ImportCommand(
         var       titleFailures      = new ConcurrentBag<(string SessionId, string Reason)>();
         var       summaryFailures    = new ConcurrentBag<(string SessionId, string Reason)>();
         var       importedSessionIds = new ConcurrentBag<string>();
+        var       partitionSucceeded = new ConcurrentBag<string>();
+        var       partitionSkipped   = new ConcurrentBag<string>();
+        var       partitionFailed    = new ConcurrentBag<string>();
 
         void WarnSession(string sessionId, string message) => display.Line(
             $"! {sessionId}: {message}",
@@ -1357,13 +1407,15 @@ class ImportCommand(
                 $"  ↳ imported subagent {aid} ({lines} lines)",
                 $"  [dim]↳[/] imported subagent [cyan]{Markup.Escape(aid)}[/] ({lines} lines)"
             ),
-            OnSessionErrored = (_, sid, reason) => display.Line(
-                $"Skipping {sid} [{reason}]",
-                FormatSkippedReasonMarkup(sid, reason)
-            ),
+            OnSessionErrored = (_, sid, reason) => {
+                if (selectedIds?.Contains(sid) == true) partitionFailed.Add(sid);
+
+                display.Line($"Skipping {sid} [{reason}]", FormatSkippedReasonMarkup(sid, reason));
+            },
             OnSessionWarning = (_, sid, message) => WarnSession(sid, message),
             OnSessionEnded = (_, c, outcome, lines) => {
                 importedSessionIds.Add(c.SessionId);
+                if (selectedIds?.Contains(c.SessionId) == true) partitionSucceeded.Add(c.SessionId);
 
                 var verb = outcome == SessionImportOutcome.Resumed
                     ? $"resuming from line {c.ResumeFromLine}"
@@ -1384,7 +1436,7 @@ class ImportCommand(
                 // Cursor sets SupportsTitleGeneration=false because the composer
                 // header carries a name that the server maps to a
                 // SessionTitleCreatedEvent at ingest time.
-                if (byVendor.TryGetValue(vnd, out var src) && !src.SupportsTitleGeneration) return;
+                if (sourceBySession.TryGetValue((vnd, sid), out var src) && !src.SupportsTitleGeneration) return;
 
                 Interlocked.Increment(ref titleTaskCount);
 
@@ -1482,7 +1534,7 @@ class ImportCommand(
         // they asked for, whatever the transcript did.
         var visibilityFailures = 0;
         // Read-only inside the parallel loops below; resolved from the sources actually in play.
-        var replayChildContentVendors = byVendor.Values
+        var replayChildContentVendors = sources
             .Where(s => s.AttachesChildContentOnReplay)
             .Select(s => s.Vendor)
             .ToHashSet();
@@ -1518,6 +1570,10 @@ class ImportCommand(
         // it does not establish that anything is private. A session whose write was lost is dropped
         // from this run instead: uploading into it would publish new content to exactly the audience
         // the user just excluded, which is worse than not importing it at all.
+        IReadOnlySet<string> privacyBlocked = FrozenSet<string>.Empty;
+
+        // Not bounded by a cap's selection: narrowing is the safe direction, and a session this pass
+        // leaves for a later one must not stay shared if that later pass never runs.
         if (forcePrivate) {
             var existing = classifications
                 .Where(c => c.Status is ClassificationStatus.Partial
@@ -1533,6 +1589,7 @@ class ImportCommand(
 
                 if (unprivatized.Count > 0) {
                     var blocked = unprivatized.ToHashSet(StringComparer.Ordinal);
+                    privacyBlocked = blocked;
 
                     visibilityFailures += blocked.Count;
 
@@ -1567,7 +1624,8 @@ class ImportCommand(
             foreach (var c in classifications) {
                 if (c.Status is ClassificationStatus.New
                              or ClassificationStatus.Partial
-                             or ClassificationStatus.AlreadyLoaded) {
+                             or ClassificationStatus.AlreadyLoaded
+                 && (selectedIds is null || selectedIds.Contains(c.SessionId))) {
                     scopedSessionIds.Add(c.SessionId);
                 }
             }
@@ -1653,6 +1711,10 @@ class ImportCommand(
                                 },
                                 OnSessionEnded = (slot, c, _, _) => {
                                     importedSessionIds.Add(c.SessionId);
+                                    // Partition accounting must happen on BOTH the TTY and non-TTY
+                                    // paths (the base handler records it too); it drives the
+                                    // foreground outcome and the background-spawn decision.
+                                    if (selectedIds?.Contains(c.SessionId) == true) partitionSucceeded.Add(c.SessionId);
                                     // Snap the slot bar to 100% and park the stripe; the description
                                     // stays on the just-finished session until the next
                                     // OnSessionStarted swaps it.
@@ -1664,6 +1726,7 @@ class ImportCommand(
                                     // session while it ran; errors render via scrollback below.
                                 },
                                 OnSessionErrored = (slot, sid, reason) => {
+                                    if (selectedIds?.Contains(sid) == true) partitionFailed.Add(sid);
                                     bar.Increment(1);
                                     IdleSlot(slot);
                                     // Errors print to scrollback above the live region —
@@ -1702,6 +1765,18 @@ class ImportCommand(
             importResult = new(0, 0, 0);
         }
 
+        // Chains carry only New/Partial sessions; a Codex session loaded by an earlier import still takes the name
+        // Codex has given it since — unless --private could not narrow it, which chains and routed skip too.
+        await PostAlreadyLoadedCodexTitlesAsync(
+            httpClient, baseUrl,
+            classifications.Where(c => c.Status == ClassificationStatus.AlreadyLoaded
+                                    && (selectedIds is null || selectedIds.Contains(c.SessionId))
+                                    && !privacyBlocked.Contains(c.SessionId)),
+            new CallbackProgress(ev => {
+                if (ev is ImportWarning w) WarnSession(w.SessionId, w.Message);
+            }),
+            CancellationToken.None);
+
         // --- Routed-source import phase (every non-chain source) ---
         // Sessions without a FilePath are imported directly via the source's
         // ImportSessionAsync. They share the 4-worker concurrency budget with
@@ -1722,7 +1797,7 @@ class ImportCommand(
             );
 
             async Task<ImportSessionResult> ImportOne(SessionClassification c) {
-                if (!byVendor.TryGetValue(c.Vendor, out var src)) {
+                if (!sourceBySession.TryGetValue((c.Vendor, c.SessionId), out var src)) {
                     return ImportOutcome.Failed;
                 }
 
@@ -1743,6 +1818,15 @@ class ImportCommand(
             async Task<(ImportOutcome? Resolved, ImportOutcome Raw)> RecordRoutedResultAsync(SessionClassification c) {
                 var result  = await ImportOne(c);
                 var outcome = result.Outcome;
+
+                if (selectedIds?.Contains(c.SessionId) == true) {
+                    switch (outcome) {
+                        case ImportOutcome.Loaded or ImportOutcome.Resumed:      partitionSucceeded.Add(c.SessionId); break;
+                        case ImportOutcome.Skipped when result.SentChildContent: partitionSucceeded.Add(c.SessionId); break;
+                        case ImportOutcome.Skipped:                              partitionSkipped.Add(c.SessionId);   break;
+                        case ImportOutcome.Failed:                               partitionFailed.Add(c.SessionId);    break;
+                    }
+                }
 
                 // Capture for privatization BEFORE any Loaded/Failed/AlreadyLoaded classification
                 // — see the declaration comment on privateScopeSessionIds. Deliberately
@@ -1884,6 +1968,8 @@ class ImportCommand(
                 );
             }
         }
+
+        await RecordImportedRepositoriesAsync(classifications, selectedIds, sessionCwds, display);
 
         // --- An explicit visibility for everything this run touched ---
         //
@@ -2039,9 +2125,42 @@ class ImportCommand(
 
         display.WriteDoneGrid(final, doneBySource);
 
-        onFinished?.Invoke(new ImportRunOutcome(final, visibilityFailures));
+        ImportRunPartition? partition = null;
+
+        if (selectedIds is not null) {
+            var succeeded    = partitionSucceeded.Distinct(StringComparer.Ordinal).ToList();
+            var succeededSet = succeeded.ToHashSet(StringComparer.Ordinal);
+
+            partition = new ImportRunPartition(
+                succeeded,
+                partitionSkipped.Distinct(StringComparer.Ordinal).Where(id => !succeededSet.Contains(id)).ToList(),
+                partitionFailed.Distinct(StringComparer.Ordinal).Where(id => !succeededSet.Contains(id)).ToList());
+        }
+
+        onFinished?.Invoke(new ImportRunOutcome(final, visibilityFailures, partition));
 
         return 0;
+    }
+
+    /// <summary>Every in-scope session of this run counts, whatever its outcome: one the server already
+    /// holds lets a re-run fill the list, and a failed finalization may still have left its content on
+    /// the server.</summary>
+    async Task RecordImportedRepositoriesAsync(
+            IReadOnlyList<SessionClassification> classifications,
+            HashSet<string>?                     selectedIds,
+            IReadOnlyDictionary<string, string>  sessionCwds,
+            ImportDisplay                        display
+        ) {
+        var captured = classifications.Where(c => c.Status is ClassificationStatus.New
+                                                      or ClassificationStatus.Partial
+                                                      or ClassificationStatus.AlreadyLoaded
+                                               && (selectedIds is null || selectedIds.Contains(c.SessionId)));
+
+        try {
+            await new RepoPathStore(config, time).RecordAsync(ImportedRepositories.Collect(captured, sessionCwds));
+        } catch (Exception e) when (e is IOException or UnauthorizedAccessException or TimeoutException) {
+            display.Line($"Could not record imported repositories: {e.Message}");
+        }
     }
 
     /// <summary>
@@ -2056,11 +2175,16 @@ class ImportCommand(
     /// wrapped so a file deleted between discovery and chain building can't crash
     /// the whole import run; ordering is best-effort.
     /// </summary>
-    static DateTimeOffset ChainTimestamp(SessionClassification c) {
+    internal static DateTimeOffset ChainTimestamp(SessionClassification c) {
         if (c.Meta.FirstTimestamp is { } ts) return ts;
 
+        // A file that vanished between discovery and ordering makes GetLastWriteTimeUtc return the
+        // 1601 sentinel instead of throwing; treat any missing/unreadable path as an unknown
+        // timestamp so it sorts last, never as a real (ancient) time.
         try {
-            return new DateTimeOffset(File.GetLastWriteTimeUtc(c.FilePath), TimeSpan.Zero);
+            return File.Exists(c.FilePath)
+                ? new DateTimeOffset(File.GetLastWriteTimeUtc(c.FilePath), TimeSpan.Zero)
+                : DateTimeOffset.MinValue;
         } catch {
             return DateTimeOffset.MinValue;
         }
@@ -2920,28 +3044,36 @@ class ImportCommand(
     }
 
     /// <summary>
+    /// Drops a session an earlier source already discovered. Two account roots can hold the same
+    /// session file, and every later stage keys on the session id, so a second copy would be counted
+    /// and imported twice.
+    /// </summary>
+    static IReadOnlyList<DiscoveredSession>[] FirstDiscoveryWins(IReadOnlyList<DiscoveredSession>[] perSource) {
+        var seen = new HashSet<(HarnessId, string)>();
+
+        return [.. perSource.Select(IReadOnlyList<DiscoveredSession> (d) => [.. d.Where(s => seen.Add((s.Vendor, s.SessionId)))])];
+    }
+
+    /// <summary>
     /// Group the import-bound subset (New + Partial) into ordered chains by slug.
     /// A chain is a list of classifications sharing the same slug, ordered by
     /// FirstTimestamp ascending. Sessions without a slug (or with a unique slug)
-    /// become chains of length 1. Chain order (across chains) is stable by slug
-    /// string so re-runs import in the same order.
+    /// become chains of length 1. Chains are dispatched newest-first via
+    /// <see cref="ImportOrdering.ChainDispatch"/>; within-chain order is untouched.
     /// </summary>
     internal static List<List<SessionClassification>> BuildImportChains(List<SessionClassification> classifications) {
         var importable = classifications
             .Where(c => c.Status is ClassificationStatus.New or ClassificationStatus.Partial)
             .ToList();
 
-        var withSlug = importable
+        var chains = importable
             .Where(c => c.Meta.Slug is not null)
             .GroupBy(c => c.Meta.Slug!, StringComparer.Ordinal)
-            .OrderBy(g => g.Key, StringComparer.Ordinal);
-
-        var chains = withSlug.Select(group => group.OrderBy(ChainTimestamp)
-                .ThenBy(c => c.SessionId, StringComparer.Ordinal)
-                .ToList()
-            )
+            .Select(group => group.OrderBy(ChainTimestamp).ThenBy(c => c.SessionId, StringComparer.Ordinal).ToList())
             .ToList();
-        chains.AddRange(importable.Where(c => c.Meta.Slug is null).OrderBy(c => c.SessionId, StringComparer.Ordinal).Select(solo => (List<SessionClassification>)[solo]));
+        chains.AddRange(importable.Where(c => c.Meta.Slug is null).Select(solo => (List<SessionClassification>)[solo]));
+
+        chains.Sort(ImportOrdering.ChainDispatch);
 
         return chains;
     }
@@ -2977,7 +3109,9 @@ class ImportCommand(
                 InputTokens      = result.InputTokens,
                 OutputTokens     = result.OutputTokens,
                 CacheReadTokens  = result.CacheReadTokens,
-                CacheWriteTokens = result.CacheWriteTokens
+                CacheWriteTokens = result.CacheWriteTokens,
+                // A model-generated title, the same kind `kcap watch` sends as client-auto.
+                Source           = "client-auto"
             };
 
             var       payloadJson = JsonSerializer.Serialize(payload, CapacitorJsonContext.Default.SessionTitlePayload);
@@ -3132,9 +3266,10 @@ class ImportCommand(
     /// workspace_root discovery and repo detection agree with what the missing-cwd report
     /// showed the user — falling back to the raw transcript cwd when this session has no
     /// entry (e.g. a non-file source, or resolution failed to produce one). Shared by both
-    /// the New and Partial branches of <see cref="ImportSingleSessionAsync"/>.
+    /// the New and Partial branches of <see cref="ImportSingleSessionAsync"/> and by
+    /// <see cref="CaptureScope"/>, so the scope judges the cwd the hooks send.
     /// </summary>
-    static string? ResolveCwd(SessionClassification session, IReadOnlyDictionary<string, string>? sessionCwds) =>
+    internal static string? ResolveCwd(SessionClassification session, IReadOnlyDictionary<string, string>? sessionCwds) =>
         sessionCwds is not null && sessionCwds.TryGetValue(session.SessionId, out var resolvedCwd)
             ? resolvedCwd
             : session.Meta.Cwd ?? SessionImporter.DecodeCwdFromDirName(session.EncodedCwd);
@@ -3189,6 +3324,8 @@ class ImportCommand(
                     failOnError: true
                 );
 
+                var (_, resumeTitleCancelled) = await TryPostCodexHarnessTitleAsync(httpClient, baseUrl, session, perSessionProgress, ct);
+
                 // End-only reassertion: session-end has server-side idempotency guards,
                 // whereas the generic SessionStarted uses random ids — re-asserting start
                 // would duplicate it. So finalize a resumed session with end ONLY.
@@ -3204,8 +3341,16 @@ class ImportCommand(
                 if (resumeLastTs is not null) resumeEndHook["ended_at"] = resumeLastTs.Value.ToString("O");
 
                 using var endContent = new StringContent(resumeEndHook.ToJsonString(), Encoding.UTF8, "application/json");
-                using var endResp    = await httpClient.PostWithRetryAsync(
-                    $"{baseUrl}/hooks/session-end/{session.Vendor.VendorId}", endContent, time, ct: ct, retryStatuses: true);
+                HttpResponseMessage endPosted;
+                try {
+                    endPosted = await httpClient.PostWithRetryAsync(
+                        $"{baseUrl}/hooks/session-end/{session.Vendor.VendorId}", endContent, time,
+                        ct: resumeTitleCancelled ? CancellationToken.None : ct, retryStatuses: true);
+                } finally {
+                    // A held cancellation outranks however session-end ended.
+                    if (resumeTitleCancelled) ct.ThrowIfCancellationRequested();
+                }
+                using var endResp = endPosted;
 
                 if (!endResp.IsSuccessStatusCode) {
                     events.OnSessionErrored(slot, session.SessionId, $"resume session-end failed: HTTP {(int)endResp.StatusCode}");
@@ -3351,6 +3496,8 @@ class ImportCommand(
             return (SessionImportOutcome.Errored, 0);
         }
 
+        var (harnessTitled, titleCancelled) = await TryPostCodexHarnessTitleAsync(httpClient, baseUrl, session, perSessionProgress, ct);
+
         var lastTs = ExtractLastTimestamp(session.FilePath);
 
         var endHook = new JsonObject {
@@ -3370,7 +3517,8 @@ class ImportCommand(
         try {
             using var endContent = new StringContent(endHook.ToJsonString(), Encoding.UTF8, "application/json");
             using var endResp    = await httpClient.PostWithRetryAsync(
-                    $"{baseUrl}/hooks/session-end/{session.Vendor.VendorId}", endContent, time, ct: ct, retryStatuses: true);
+                    $"{baseUrl}/hooks/session-end/{session.Vendor.VendorId}", endContent, time,
+                    ct: titleCancelled ? CancellationToken.None : ct, retryStatuses: true);
 
             if (endResp.IsSuccessStatusCode) {
                 try {
@@ -3385,10 +3533,58 @@ class ImportCommand(
             /* best effort */
         }
 
-        events.OnTitleTaskReady((session.SessionId, session.FilePath, session.PreviousSessionId, session.Vendor));
+        if (titleCancelled) ct.ThrowIfCancellationRequested();
+
+        if (!harnessTitled) events.OnTitleTaskReady((session.SessionId, session.FilePath, session.PreviousSessionId, session.Vendor));
         events.OnBackgroundWorkReady((session.SessionId, generateWhatsDone, session.Vendor));
 
         return (SessionImportOutcome.Loaded, importResult.LinesSent);
+    }
+
+    // A cancellation during the title post is held until session-end has been sent, which then runs uncancelled and is
+    // bounded by its own retry budget: a session whose transcript fully landed must not be left open.
+    async Task<(bool Posted, bool Cancelled)> TryPostCodexHarnessTitleAsync(
+            HttpClient                  httpClient,
+            string                      baseUrl,
+            SessionClassification       session,
+            IProgress<ImportProgress>?  progress,
+            CancellationToken           ct
+        ) {
+        try {
+            return (await PostCodexHarnessTitleAsync(httpClient, baseUrl, session, progress, ct), false);
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            return (false, true);
+        }
+    }
+
+    Task<bool> PostCodexHarnessTitleAsync(
+            HttpClient                  httpClient,
+            string                      baseUrl,
+            SessionClassification       session,
+            IProgress<ImportProgress>?  progress,
+            CancellationToken           ct
+        ) =>
+        session.Vendor is HarnessId.Codex
+            ? CodexTitlesFor(session.FilePath).PostAsync(httpClient, baseUrl, session.SessionId, progress, ct)
+            : Task.FromResult(false);
+
+    /// <summary>Title-only pass for Codex sessions the server already holds: no transcript, lifecycle or generated
+    /// title, only the index name when there is one. A title the server did not record is reported to
+    /// <paramref name="progress"/>.</summary>
+    internal async Task PostAlreadyLoadedCodexTitlesAsync(
+            HttpClient                         httpClient,
+            string                             baseUrl,
+            IEnumerable<SessionClassification> sessions,
+            IProgress<ImportProgress>          progress,
+            CancellationToken                  ct
+        ) {
+        var codex = sessions.Where(s => s.Vendor is HarnessId.Codex && s.Status == ClassificationStatus.AlreadyLoaded).ToList();
+        if (codex.Count == 0) return;
+
+        await Parallel.ForEachAsync(
+            codex,
+            new ParallelOptions { MaxDegreeOfParallelism = ImportWorkerCount, CancellationToken = ct },
+            async (session, token) => await PostCodexHarnessTitleAsync(httpClient, baseUrl, session, progress, token));
     }
 
     sealed class CallbackProgress(Action<ImportProgress> onReport) : IProgress<ImportProgress> {
@@ -3412,7 +3608,7 @@ class ImportCommand(
             HashSet<string>       includedPathKeys,
             bool                  includeOutsideAllowlist = false
         ) {
-        if (c.ExcludedRepoKey is { } repoKey && !includedRepoKeys.Contains(repoKey)) return true;
+        if (c.ExcludedRepoKeys.Any(key => !includedRepoKeys.Contains(key))) return true;
         if (c.ExcludedPathKey is { } pathKey && !includedPathKeys.Contains(pathKey)) return true;
         if (c.OutsideAllowlist && !includeOutsideAllowlist) return true;
 

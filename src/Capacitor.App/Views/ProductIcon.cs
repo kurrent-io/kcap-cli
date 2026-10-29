@@ -4,18 +4,19 @@ using Avalonia.Platform;
 
 namespace Capacitor.App.Views;
 
-/// The product mark (Assets/kcap-icon.png), loaded once from its avares:// URI — spec §4's tray
-/// base bitmap, and also MainWindow's and the startup-error window's Icon, so every window
-/// surface uses the same asset. TrayIconRenderer draws Bitmap scaled into each per-state
-/// composite; MainWindow.axaml sets its own Icon via the same URI directly (Avalonia's
-/// IconTypeConverter resolves avares:// strings without needing this class), so only the
-/// startup-error window (built entirely in code) consumes WindowIcon here.
+/// The product mark, loaded once. TrayIconRenderer composites TrayBitmap, the small-size variant
+/// with heavier strokes; the windows built in code take WindowIcon. XAML windows name the same
+/// avares:// URI directly.
 static class ProductIcon {
-    const string AssetUri = "avares://Kurrent Capacitor/Assets/kcap-icon.png";
+    const string AssetUri = "avares://kcap-desktop/Assets/kcap-icon.png";
+    const string TrayAssetUri = "avares://kcap-desktop/Assets/kcap-tray-icon.png";
 
-    static readonly Lazy<Bitmap> LazyBitmap = new(() => new Bitmap(AssetLoader.Open(new Uri(AssetUri))));
+    static readonly Lazy<Bitmap> LazyBitmap = new(() => Load(AssetUri));
+    static readonly Lazy<Bitmap> LazyTrayBitmap = new(() => Load(TrayAssetUri));
     static readonly Lazy<WindowIcon> LazyWindowIcon = new(() => new WindowIcon(LazyBitmap.Value));
 
-    public static Bitmap Bitmap => LazyBitmap.Value;
+    public static Bitmap TrayBitmap => LazyTrayBitmap.Value;
     public static WindowIcon WindowIcon => LazyWindowIcon.Value;
+
+    static Bitmap Load(string uri) => new(AssetLoader.Open(new Uri(uri)));
 }

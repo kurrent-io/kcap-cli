@@ -1,0 +1,38 @@
+kcap local — Run the local installation that `kcap setup --local` made
+
+Usage: kcap local <subcommand> [options]
+
+Subcommands:
+  status                    Explain the installation's state: version, port, service, search, each store, what to do
+  start                     Start the server and wait until it is ready
+  stop                      Stop the server and wait until nothing of it is left; it stays stopped until start
+  restart                   Stop, then start
+  logs [-n|--lines N]       Print the last N lines (default 50) of each log: the server's, which carries
+                            Postgres's and KurrentDB's output too, and its startup output when it has any
+  open                      Open the web UI in a browser
+  upgrade [--json] [--if-installed]
+                            Move the stack forward to this kcap's version. A kcap at or below the
+                            stack's version changes nothing. Forward-only: a failure before the
+                            switch starts the old version again; after it, the new version stays
+                            selected and stopped, and kcap local start tries again.
+      --json                One JSON object per line on stdout, for the desktop app.
+      --if-installed        Print nothing when there is no installation.
+  uninstall [--purge] [--force] [--yes]
+                            Stop every kcap daemon and watcher and the local server, then remove the
+                            server's service and binaries. Its data and identity are kept, so
+                            `kcap setup --local` brings it back on the same URL.
+      --purge               Also delete its data, logs, downloaded models, pending recordings and
+                            caches, and clear every profile pointing at it. Its URL is retired: nothing is sent to it again,
+                            and a new installation gets a new port.
+      --force               Uninstall even while a daemon is running agents; they end with it.
+      --yes, -y             Do not ask for confirmation.
+  help                      Show this help
+
+status exits 0 only when the server is running and ready. start, stop, restart, upgrade and uninstall wait for
+any other kcap changing the installation, and first finish or undo a setup, upgrade or purge that was interrupted.
+
+upgrade exits 0 when it upgraded, 1 when it failed before the switch, 2 when it failed after the switch, 3
+when there was nothing to do, and 4 when no bundle is published for this version yet.
+
+The installation lives in ~/.config/kcap/local, or in KCAP_LOCAL_ROOT when it is set; its logs are
+in the logs directory under it.

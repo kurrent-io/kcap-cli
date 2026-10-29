@@ -5,8 +5,10 @@ Usage: kcap agent <subcommand>
 Subcommands:
   start <vendor> [flags] [-- <agent args>]
                           Start an agent the daemon hosts for you
-  ls                      List this daemon's agents (id, status, kind, repo)
+  ls                      List this daemon's agents (id, status, state, kind,
+                          repo, title)
   attach <agent-id>       Attach your terminal to a running agent
+  resume <agent-id>       Retry an interrupted agent
   stop <agent-id> [--force]
                           Stop an agent (graceful /exit, then terminate)
   stop --all [-y] [--force]
@@ -19,20 +21,36 @@ Options for start:
   --private               Keep the agent purely local: unregistered, not streamed
                           to the server, not shown in the web UI, and permission
                           prompts answered natively in your terminal
+  --title <text>, --title=<text>
+                          Title the agent's session. Without it the session starts
+                          titled after the prompt (the last agent arg, when it is
+                          not a flag or a flag's value) until a better title lands.
+                          No effect with --private
+  --account <id|dir>, --account=<id|dir>
+                          Run a claude or codex agent under a registered account:
+                          an id prefix (4+ characters) or its directory, as
+                          `kcap accounts` lists them. Refused, with nothing
+                          started, when it matches no account, matches several,
+                          or the daemon is too old to choose one
   -d, --detach            Start without attaching; prints the agent id
   --daemon <name>         Target a specific daemon (defaults to your profile's)
-  --                      Everything after this is passed to the vendor CLI verbatim
+  --                      Everything after this is passed to the vendor CLI verbatim.
+                          Claude also gets a fresh --session-id ahead of it unless
+                          these args choose the session themselves
 
 Options for stop:
   --all                   Stop every agent, including --private ones. Review and
                           review-flow agents are skipped unless --force is given.
+                          Only the displayed snapshot is stopped; agents started
+                          after the list was fetched remain running.
+                          Listed agents that finish before dispatch count as stopped.
   --force                 Stop a single review or review-flow agent that would
                           otherwise be refused, or include them under --all.
                           Stopping a flow participant mid-round leaves the flow
                           without it.
   --yes, -y               Skip the confirmation prompt for --all
 
-Options for ls, attach, stop:
+Options for ls, attach, stop, resume:
   --daemon <name>         Target a specific daemon (defaults to your profile's)
 
 Agent ids:
@@ -45,6 +63,17 @@ Review and flow agents:
   the flow tools. `attach` gives you a read-only view of one: you see its output,
   your input is not delivered, and your terminal size is not applied to it.
   `stop` refuses unless you pass --force.
+
+Daemon restarts:
+  A daemon restart stops the agents and the new daemon resumes them under the
+  same ids where the vendor session can be resumed. Where it cannot, or the
+  resume fails, the agent comes back as a fresh session under a new id, which
+  `ls` shows. The STATE column of `ls` reads `running`, `resuming`, or
+  `interrupted (<reason>)` for one that could not be brought back; `resume`
+  retries it, `stop` discards it, and the next daemon start discards it after
+  30 days. An attached terminal waits for its agent to come back (up to
+  KCAP_ATTACH_RECONNECT_SECONDS, default 90) and re-attaches on its own, or
+  prints why it did not and exits 1.
 
 Notes:
   The daemon owns the agent, not your terminal, so you can detach and the agent

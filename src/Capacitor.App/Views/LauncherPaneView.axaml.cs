@@ -1,7 +1,10 @@
+using Lucide.Avalonia;
+using System.ComponentModel;
 using System.Globalization;
 using System.Reactive.Linq;
 using System.Windows.Input;
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Data.Converters;
 using Avalonia.Input;
@@ -10,13 +13,22 @@ using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
+using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Harness;
 
 namespace Capacitor.App.Views;
 
-/// The launcher pane: DataContext is supplied externally (a plainly-constructed HomeViewModel),
-/// same contract as HomeView — this view never builds its own ViewModel.
+/// The launcher pane: DataContext is supplied externally (a plainly-constructed HomeViewModel);
+/// this view never builds its own ViewModel.
 public partial class LauncherPaneView : UserControl {
     AttachmentDropPaste? _attachments;
+    Flyout? _openMenu;
+
+    /// A picker search term matches a model by its label or its launch id, so a Pi row is found by
+    /// model name, provider, or `provider/` prefix alike.
+    internal static bool RowMatches(ModelChoice model, string term) =>
+        model.Label.Contains(term, StringComparison.OrdinalIgnoreCase)
+     || model.Slug.Contains(term, StringComparison.OrdinalIgnoreCase);
 
     public LauncherPaneView() {
         InitializeComponent();
@@ -26,7 +38,11 @@ public partial class LauncherPaneView : UserControl {
         GoalInput.AddHandler(KeyDownEvent, OnGoalKeyDown, RoutingStrategies.Tunnel);
     }
 
+    public void FocusComposer() => GoalInput.Focus();
+
     internal Task? PendingIntakeForTesting => _attachments?.PendingIntakeForTesting;
+
+    internal Flyout? OpenMenuForTesting => _openMenu;
 
     /// Paired with the visual tree rather than the constructor: a pane swap detaches and
     /// re-attaches the same view, and a behaviour disposed on the way out has to come back with it.
@@ -57,8 +73,9 @@ public partial class LauncherPaneView : UserControl {
     }
 
     // Repository picker: one flyout item per ListRepositoriesAsync entry — leaf name over full
-    // path, remembered-harness pill on the right, per the settled design. The scratch entry and
-    // the folder-picker affordance sit last, each behind a separator. Built as a kcapPanel Flyout
+    // path, remembered-harness pill on the right. The scratch entry and
+    // the add affordance sit last, each behind a separator; for a remote machine the add is a typed
+    // path, since the folder picker only sees this machine. Built as a kcapPanel Flyout
     // (same shape as the agent picker) rather than MenuFlyout — Fluent's radio MenuItem chrome
     // fights the dark palette.
     async void OnRepositoryChipClick(object? sender, RoutedEventArgs e) {
@@ -76,12 +93,18 @@ public partial class LauncherPaneView : UserControl {
             rows.Children.Add(RepositoryRow(vm, option, muted, flyout));
         }
         rows.Children.Add(ChoiceSeparator());
-        rows.Children.Add(ChoiceRow("Add repository…", selected: false, () => {
-            flyout.Hide();
-            _ = AddRepositoryAsync(vm);
-        }));
+        if (vm.RemoteMachineSelected)
+            rows.Children.Add(ChoiceRow($"Enter a path on {vm.SelectedMachine}…", selected: false, () => {
+                flyout.Hide();
+                ShowRemotePathEntry(vm, anchor);
+            }));
+        else
+            rows.Children.Add(ChoiceRow("Add repository…", selected: false, () => {
+                flyout.Hide();
+                _ = AddRepositoryAsync(vm);
+            }));
 
-        flyout.ShowAt(anchor);
+        ShowMenu(flyout, anchor);
     }
 
     Button RepositoryRow(HomeViewModel vm, RepositoryOption option, IBrush muted, Flyout flyout) {
@@ -89,7 +112,6 @@ public partial class LauncherPaneView : UserControl {
         var title = new TextBlock {
             Text = isScratch ? "No repository" : RepoLabel.Leaf(option.RepoPath),
             FontSize = 13.5,
-            FontWeight = option.Selected ? FontWeight.SemiBold : FontWeight.Normal,
             Foreground = Brush("KcapTextBrush"),
             VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
         };
@@ -108,7 +130,7 @@ public partial class LauncherPaneView : UserControl {
         };
 
         var grid = new Grid {
-            ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+            ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"),
             RowDefinitions = new RowDefinitions("Auto,Auto"),
             MinWidth = 260,
             // Stretch so the * column eats leftover width and the pill stays right-aligned
@@ -116,7 +138,10 @@ public partial class LauncherPaneView : UserControl {
             HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
         };
         grid.Children.Add(title);
-        Grid.SetColumn(pill, 1);
+        var check = SelectionCheck(option.Selected);
+        Grid.SetColumn(check, 1);
+        grid.Children.Add(check);
+        Grid.SetColumn(pill, 2);
         grid.Children.Add(pill);
 
         if (!isScratch) {
@@ -125,14 +150,17 @@ public partial class LauncherPaneView : UserControl {
                 Margin = new Thickness(0, 2, 0, 0),
             };
             Grid.SetRow(path, 1);
+            Grid.SetColumnSpan(path, 3);
             grid.Children.Add(path);
         }
 
         var repoPath = option.RepoPath;
-        return ChoiceButton(grid, () => {
+        var row = ChoiceButton(grid, () => {
             flyout.Hide();
             _ = SelectRepositoryObservedAsync(vm, repoPath);
         });
+        AutomationProperties.SetName(row, ChoiceName(title.Text, option.Selected));
+        return row;
     }
 
     // ChoiceButton's click is sync; keep flyout-close immediate and observe the async load so a
@@ -157,23 +185,18 @@ public partial class LauncherPaneView : UserControl {
         foreach (var option in await vm.ListMachinesAsync())
             rows.Children.Add(MachineRow(vm, option, muted, flyout));
 
-        flyout.ShowAt(anchor);
+        ShowMenu(flyout, anchor);
     }
 
     Button MachineRow(HomeViewModel vm, MachineOption option, IBrush muted, Flyout flyout) {
         var title = new TextBlock {
             Text = option.DaemonName,
             FontSize = 13.5,
-            FontWeight = option.Selected ? FontWeight.SemiBold : FontWeight.Normal,
             Foreground = option.Connected ? Brush("KcapTextBrush") : muted,
             VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
         };
 
-        var check = new TextBlock {
-            Text = "✓", FontSize = 13, IsVisible = option.Selected,
-            Foreground = Brush("KcapSuccessBrush"), Margin = new Thickness(12, 0, 0, 0),
-            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
-        };
+        var check = SelectionCheck(option.Selected);
 
         var subtitle = new TextBlock {
             Text = option.IsLocal ? "This machine" : option.Connected ? "Connected" : "Offline",
@@ -199,6 +222,7 @@ public partial class LauncherPaneView : UserControl {
             _ = SelectMachineObservedAsync(vm, daemonName, isLocal);
         });
         row.IsEnabled = option.Connected;
+        AutomationProperties.SetName(row, ChoiceName(option.DaemonName, option.Selected));
         return row;
     }
 
@@ -229,6 +253,47 @@ public partial class LauncherPaneView : UserControl {
         await vm.SelectRepositoryAsync(path);
     }
 
+    void ShowRemotePathEntry(HomeViewModel vm, Control anchor) {
+        var input = new TextBox { PlaceholderText = "/path/to/repository", MinWidth = 320 };
+        input.Classes.Add("kcapField");
+        AutomationProperties.SetName(input, $"Repository path on {vm.SelectedMachine}");
+        var error = new TextBlock {
+            FontSize = 11.5, Foreground = Brush("KcapDangerBrush"), IsVisible = false,
+            TextWrapping = TextWrapping.Wrap, MaxWidth = 320,
+        };
+        var hint = new TextBlock {
+            Text = "Checked on that machine when the session starts.",
+            FontSize = 11.5, Foreground = Brush("KcapMutedBrush"),
+        };
+
+        var body = new StackPanel { Spacing = 6, Margin = new Thickness(10) };
+        body.Children.Add(input);
+        body.Children.Add(error);
+        body.Children.Add(hint);
+        var flyout = PanelFlyout(body, minWidth: 340);
+
+        input.KeyDown += async (_, e) => {
+            if (e.Key == Key.Escape) {
+                e.Handled = true;
+                flyout.Hide();
+                return;
+            }
+            if (e.Key != Key.Enter) return;
+            e.Handled = true;
+            try {
+                var refusal = await vm.EnterRemoteRepositoryAsync(input.Text ?? "");
+                error.Text = refusal;
+                error.IsVisible = refusal is not null;
+                if (refusal is null) flyout.Hide();
+            } catch (Exception ex) {
+                Console.Error.WriteLine($"kcap: enter remote repository failed: {ex}");
+            }
+        };
+        flyout.Opened += (_, _) => input.Focus();
+
+        ShowMenu(flyout, anchor);
+    }
+
     // Effort picker over HostedHarnessCatalog.EffortLadder; Default hands the choice back to the
     // harness. A wrong value for a given vendor surfaces as that session's own launch error, same
     // as the CLI's --effort. Separator after Default matches Permissions (base vs escalations).
@@ -250,7 +315,7 @@ public partial class LauncherPaneView : UserControl {
                 flyout.Hide();
             }));
         }
-        flyout.ShowAt(anchor);
+        ShowMenu(flyout, anchor);
     }
 
     void OnPermissionChipClick(object? sender, RoutedEventArgs e) {
@@ -271,14 +336,39 @@ public partial class LauncherPaneView : UserControl {
                 flyout.Hide();
             }));
         }
-        flyout.ShowAt(anchor);
+        ShowMenu(flyout, anchor);
     }
 
-    // Shared chip-picker chrome: kcapPanel Flyout + ghost rows; selection is weight, not green.
+    void OnCodexSandboxChipClick(object? sender, RoutedEventArgs e) {
+        if (DataContext is HomeViewModel vm && sender is Control anchor)
+            ShowChoices(anchor, HostedHarnessCatalog.CodexSandboxes, vm.SelectedCodexSandbox, t => vm.SelectedCodexSandbox = t);
+    }
+
+    void OnCodexApprovalChipClick(object? sender, RoutedEventArgs e) {
+        if (DataContext is HomeViewModel vm && sender is Control anchor)
+            ShowChoices(anchor, HostedHarnessCatalog.CodexApprovals, vm.SelectedCodexApproval, t => vm.SelectedCodexApproval = t);
+    }
+
+    void ShowChoices(Control anchor, IReadOnlyList<PermissionModeChoice> choices, string current, Action<string> pick) {
+        var rows = new StackPanel { Spacing = 2, Margin = new Thickness(6) };
+        var flyout = PanelFlyout(rows, minWidth: 200);
+        foreach (var choice in choices) {
+            var token = choice.Token;
+            rows.Children.Add(ChoiceRow(choice.Label, string.Equals(current, token, StringComparison.Ordinal), () => {
+                pick(token);
+                flyout.Hide();
+            }));
+        }
+        ShowMenu(flyout, anchor);
+    }
+
+    // Shared chip-picker chrome: kcapPanel Flyout + ghost rows, the choice marked by
+    // SelectionCheck in every menu. Left-aligned: a menu wider than its chip, centred, overhangs
+    // the composer's left edge.
     static Flyout PanelFlyout(Control content, double minWidth) {
         var host = new Border { Child = content, MinWidth = minWidth };
         var flyout = new Flyout {
-            Placement = PlacementMode.Bottom, Content = host,
+            Placement = PlacementMode.BottomEdgeAlignedLeft, Content = host,
             // A few pixels of air between the chip and the panel — flush looks glued on.
             VerticalOffset = 6,
         };
@@ -286,14 +376,33 @@ public partial class LauncherPaneView : UserControl {
         return flyout;
     }
 
-    Button ChoiceRow(string label, bool selected, Action pick) {
-        var body = new TextBlock {
-            Text = label, FontSize = 13.5,
-            FontWeight = selected ? FontWeight.SemiBold : FontWeight.Normal,
-            Foreground = Brush("KcapTextBrush"),
-        };
-        return ChoiceButton(body, pick);
+    void ShowMenu(Flyout flyout, Control anchor) {
+        _openMenu = flyout;
+        flyout.ShowAt(anchor);
     }
+
+    Button ChoiceRow(string label, bool selected, Action pick) {
+        var body = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        body.Children.Add(new TextBlock {
+            Text = label, FontSize = 13.5, Foreground = Brush("KcapTextBrush"),
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+        });
+        var check = SelectionCheck(selected);
+        Grid.SetColumn(check, 1);
+        body.Children.Add(check);
+        var row = ChoiceButton(body, pick);
+        AutomationProperties.SetName(row, ChoiceName(label, selected));
+        return row;
+    }
+
+    /// The check mark is drawn only, so the selection has to be spoken in the row's name.
+    internal static string ChoiceName(string? label, bool selected) => selected ? $"{label}, selected" : label ?? "";
+
+    AppIcon SelectionCheck(bool selected) => new() {
+        Kind = LucideIconKind.Check, Size = 14, IsVisible = selected,
+        Foreground = Brush("KcapInfoBrush"), Margin = new Thickness(12, 0, 0, 0),
+        VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+    };
 
     static Button ChoiceButton(object content, Action pick) {
         var row = new Button {
@@ -317,6 +426,11 @@ public partial class LauncherPaneView : UserControl {
 
     IBrush Brush(string key) => (IBrush)this.FindResource(key)!;
 
+    /// The daemon advertises only the vendors it can host, so an unavailable one is either not
+    /// installed there or not hostable on its OS; it does not say which.
+    internal static string? UnavailableHarnessTip(HarnessOption option) =>
+        option.Available ? null : $"{option.Label} — not installed or not supported on this machine";
+
     /// The vendor's mark at a given size: the brand path when VendorIcons carries one, the tinted
     /// monogram otherwise (both from HostedHarnessCatalog.TileFor). UI-thread only (constructs
     /// thread-affine Geometry/brushes).
@@ -335,7 +449,7 @@ public partial class LauncherPaneView : UserControl {
         };
     }
 
-    // The combined harness+model picker, T3-shaped: a vendor icon rail on the left, an underlined
+    // The combined harness+model picker: a vendor icon rail on the left, an underlined
     // search over the model rows on the right. No search term = the active vendor tab's models;
     // typing searches ACROSS vendors and always offers the term verbatim as a custom model id, so
     // the curated catalog can drift without ever blocking a launch. Unavailable vendors stay
@@ -343,12 +457,13 @@ public partial class LauncherPaneView : UserControl {
     void OnAgentChipClick(object? sender, RoutedEventArgs e) {
         if (DataContext is not HomeViewModel vm || sender is not Control anchor) return;
 
-        var text = (IBrush)this.FindResource("KcapTextBrush")!;
-        var muted = (IBrush)this.FindResource("KcapMutedBrush")!;
-        var faint = (IBrush)this.FindResource("KcapFaintBrush")!;
-        var success = (IBrush)this.FindResource("KcapSuccessBrush")!;
-        var raised = (IBrush)this.FindResource("KcapSurfaceRaisedBrush")!;
-        var border = (IBrush)this.FindResource("KcapBorderBrush")!;
+        var text = Brush("KcapTextBrush");
+        var muted = Brush("KcapMutedBrush");
+        var faint = Brush("KcapFaintBrush");
+        var raised = Brush("KcapSurfaceRaisedBrush");
+        var border = Brush("KcapBorderBrush");
+        var warning = Brush("KcapWarningBrush");
+        var recording = RecordingStates.Token(RecordingState.Recording);
 
         var currentTab = vm.SelectedVendor;
 
@@ -358,9 +473,8 @@ public partial class LauncherPaneView : UserControl {
             VerticalContentAlignment = Avalonia.Layout.VerticalAlignment.Center,
         };
         var underline = new Border { Height = 1, Background = border };
-        var magnifier = new Avalonia.Controls.Shapes.Path {
-            Data = Geometry.Parse("M13.5,13.5 L10.4,10.4 M11.5,6.75 A4.75,4.75 0 1 1 2,6.75 A4.75,4.75 0 1 1 11.5,6.75"),
-            Stroke = muted, StrokeThickness = 1.7, Width = 16, Height = 16,
+        var magnifier = new AppIcon {
+            Kind = LucideIconKind.Search, Size = 16, Foreground = muted,
             Margin = new Thickness(14, 0, 6, 0), VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
         };
         var rows = new StackPanel { Spacing = 2, Margin = new Thickness(10, 8, 10, 10) };
@@ -388,7 +502,7 @@ public partial class LauncherPaneView : UserControl {
         root.Children.Add(right);
 
         var flyout = new Flyout {
-            Placement = PlacementMode.Bottom, Content = root, VerticalOffset = 6,
+            Placement = PlacementMode.BottomEdgeAlignedLeft, Content = root, VerticalOffset = 6,
         };
         flyout.FlyoutPresenterClasses.Add("kcapPanel");
 
@@ -406,34 +520,179 @@ public partial class LauncherPaneView : UserControl {
             sub.Children.Add(BuildGlyph(vendor, 10));
             sub.Children.Add(new TextBlock { Text = vendorLabel, FontSize = 11.5, Foreground = muted });
 
-            var body = new StackPanel();
-            body.Children.Add(new TextBlock {
+            var titles = new StackPanel();
+            titles.Children.Add(new TextBlock {
                 Text = label, FontSize = 13.5, FontWeight = FontWeight.SemiBold,
-                Foreground = selected ? success : enabled ? text : faint,
+                Foreground = enabled ? text : faint,
             });
-            body.Children.Add(sub);
+            titles.Children.Add(sub);
+
+            var body = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+            body.Children.Add(titles);
+            var check = SelectionCheck(selected);
+            Grid.SetColumn(check, 1);
+            body.Children.Add(check);
 
             var row = new Button {
                 Content = body, IsEnabled = enabled,
                 HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
-                HorizontalContentAlignment = Avalonia.Layout.HorizontalAlignment.Left,
+                HorizontalContentAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
                 Background = Brushes.Transparent, BorderThickness = new Thickness(0),
                 CornerRadius = new CornerRadius(8), Padding = new Thickness(10, 7),
             };
             row.Classes.Add("kcapGhost");
+            AutomationProperties.SetName(row, ChoiceName($"{label}, {vendorLabel}", selected));
             row.Click += (_, _) => pick();
             return row;
         }
 
-        void AddVendorRows(HarnessOption option, Func<string, bool> matches, bool includeDefault) {
+        async void PickAccount(string? accountId) {
+            await vm.PickAccountAsync(accountId);
+            RebuildRows();
+        }
+
+        IReadOnlyDictionary<string, AccountUsageView> drawnUsage = vm.AccountUsageById;
+
+        Control? UsageLine(AccountUsageView usage) {
+            var line = new WrapPanel {
+                Orientation = Avalonia.Layout.Orientation.Horizontal, Margin = new Thickness(0, 3, 0, 0),
+            };
+            void Add(Control c) {
+                c.Margin = new Thickness(0, 0, 10, 0);
+                c.VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center;
+                line.Children.Add(c);
+            }
+            TextBlock Faint(string t) => new() { Text = t, FontSize = 10.5, Foreground = faint };
+
+            if (usage.Bars.Count == 0) {
+                if (usage.LineText is not null) Add(Faint(usage.LineText));
+            } else {
+                foreach (var bar in usage.Bars) {
+                    var fill = new Border {
+                        Background = Brush(UsageToneBrushConverter.FillKey(bar.Tone)), CornerRadius = new CornerRadius(2),
+                        Width = UsageBarFillConverter.Width(bar, 46),
+                        HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left,
+                    };
+                    var track = new Border {
+                        Width = 46, Height = 4, Background = border, CornerRadius = new CornerRadius(2), Child = fill,
+                    };
+                    var mini = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 5 };
+                    mini.Children.Add(Faint(bar.Label));
+                    mini.Children.Add(track);
+                    mini.Children.Add(new TextBlock {
+                        Text = bar.PercentText, FontSize = 10.5,
+                        Foreground = Brush(UsageToneBrushConverter.TextKey(bar.Tone)),
+                    });
+                    track.VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center;
+                    Add(mini);
+                }
+                if (usage.NextResetText is { } reset) Add(Faint(reset));
+            }
+            if (usage.PerModelText is { } perModel) Add(Faint(perModel));
+            return line.Children.Count == 0 ? null : line;
+        }
+
+        Button AccountRow(AccountChoice choice) {
+            var account = choice.Row;
+            var title = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal };
+            title.Children.Add(new TextBlock {
+                Text = account.Label, FontSize = 13.5, FontWeight = FontWeight.SemiBold, Foreground = text,
+                VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            });
+            if (choice.Removed)
+                title.Children.Add(new TextBlock {
+                    Text = " — removed", FontSize = 13.5, Foreground = muted,
+                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                });
+            if (account.IsDefault)
+                title.Children.Add(new Border {
+                    Background = raised, BorderBrush = border, BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(999), Padding = new Thickness(8, 3), Margin = new Thickness(8, 0, 0, 0),
+                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                    Child = new TextBlock { Text = "Default", FontSize = 11, FontWeight = FontWeight.SemiBold, Foreground = muted },
+                });
+            var usage = choice.Removed || account.Id is not { } usageId ? null
+                : drawnUsage.TryGetValue(usageId, out var view) ? view : null;
+            if (usage?.BlockedText is { } blockedText)
+                title.Children.Add(new Border {
+                    Background = Brush("KcapDangerDimBrush"), CornerRadius = new CornerRadius(999),
+                    Padding = new Thickness(8, 3), Margin = new Thickness(8, 0, 0, 0),
+                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                    Child = new TextBlock { Text = blockedText, FontSize = 11, FontWeight = FontWeight.SemiBold, Foreground = Brush("KcapDangerBrush") },
+                });
+
+            var titles = new StackPanel();
+            titles.Children.Add(title);
+            // A removed row is the choice the snapshot no longer lists, so it has no directory or state to show.
+            if (!choice.Removed) {
+                var sub = new StackPanel {
+                    Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 2, 0, 0),
+                };
+                sub.Children.Add(new TextBlock { Text = account.Directory, FontSize = 10.5, Foreground = faint });
+                if (!string.Equals(account.RecordingState, recording, StringComparison.Ordinal))
+                    sub.Children.Add(new TextBlock {
+                        Text = RecordingStateLabels.Label(account.Vendor, account.RecordingState), FontSize = 10.5,
+                        Foreground = RecordingStateLabels.IsAttention(account.Vendor, account.RecordingState) ? warning : muted,
+                    });
+                titles.Children.Add(sub);
+                if (usage is not null && UsageLine(usage) is { } usageLine) titles.Children.Add(usageLine);
+            }
+
+            var body = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+            body.Children.Add(titles);
+            var check = SelectionCheck(choice.Selected);
+            Grid.SetColumn(check, 1);
+            body.Children.Add(check);
+
+            var id = account.Id;
+            var row = ChoiceButton(body, () => PickAccount(id));
+            row.Padding = new Thickness(10, 7);
+            AutomationProperties.SetName(row, ChoiceName(account.Label, choice.Selected));
+            return row;
+        }
+
+        // What the Account section draws, or null when it is absent: the rows belong to the selected
+        // vendor and are not searched. The pending line stands in for the rows even while the
+        // view-model still publishes rows, so they are left out of it.
+        (string? Pending, bool Retry, IReadOnlyList<AccountChoice> Rows)? AccountsToDraw() =>
+            vm.AccountSection && (searchBox.Text?.Trim() ?? "").Length == 0
+         && string.Equals(currentTab, vm.SelectedVendor, StringComparison.OrdinalIgnoreCase)
+                ? vm.AccountPendingText is { } pending ? (pending, vm.AccountRetryVisible, []) : (null, false, vm.AccountRows)
+                : null;
+
+        (string? Pending, bool Retry, IReadOnlyList<AccountChoice> Rows)? drawnAccounts = null;
+
+        void AddAccountSection(string? pending, bool retryVisible, IReadOnlyList<AccountChoice> choices) {
+            rows.Children.Add(new TextBlock { Text = "Account", Classes = { "sectionMeta" }, Margin = new Thickness(10, 4, 10, 2) });
+            if (pending is not null) {
+                var line = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(10, 4) };
+                line.Children.Add(new TextBlock {
+                    Text = pending, FontSize = 12.5, Foreground = muted,
+                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                });
+                if (retryVisible) {
+                    var retry = new Button {
+                        Content = "Retry", Command = vm.RetryAccountsCommand, Padding = new Thickness(10, 3), FontSize = 12,
+                    };
+                    retry.Classes.Add("kcapChip");
+                    Grid.SetColumn(retry, 1);
+                    line.Children.Add(retry);
+                }
+                rows.Children.Add(line);
+            } else {
+                foreach (var choice in choices) rows.Children.Add(AccountRow(choice));
+            }
+            rows.Children.Add(ChoiceSeparator());
+        }
+
+        void AddVendorRows(HarnessOption option, Func<ModelChoice, bool> matches, bool includeDefault) {
             var vendor = option.Vendor;
             var isCurrentVendor = string.Equals(vm.SelectedVendor, vendor, StringComparison.OrdinalIgnoreCase);
             if (includeDefault)
                 rows.Children.Add(Row(
                     vendor, option.Label, $"Default — {option.Label} chooses", option.Available,
                     isCurrentVendor && vm.SelectedModel.Length == 0, () => Pick(vendor, "")));
-            foreach (var model in vm.ModelChoicesFor(vendor)
-                         .Where(m => matches(m.Label) || matches(m.Slug)))
+            foreach (var model in vm.ModelChoicesFor(vendor).Where(matches))
                 rows.Children.Add(Row(
                     vendor, option.Label, model.Label, option.Available,
                     isCurrentVendor && string.Equals(vm.SelectedModel, model.Slug, StringComparison.OrdinalIgnoreCase),
@@ -443,8 +702,11 @@ public partial class LauncherPaneView : UserControl {
         void RebuildRows() {
             rows.Children.Clear();
             var term = searchBox.Text?.Trim() ?? "";
+            drawnAccounts = AccountsToDraw();
+            drawnUsage = vm.AccountUsageById;
 
             if (term.Length == 0) {
+                if (drawnAccounts is { } accounts) AddAccountSection(accounts.Pending, accounts.Retry, accounts.Rows);
                 var option = vm.Harnesses.FirstOrDefault(
                     o => string.Equals(o.Vendor, currentTab, StringComparison.OrdinalIgnoreCase));
                 if (option is not null) AddVendorRows(option, _ => true, includeDefault: true);
@@ -456,7 +718,7 @@ public partial class LauncherPaneView : UserControl {
                 var vendorMatches = Matches(option.Label) || Matches(option.Vendor);
                 AddVendorRows(
                     option,
-                    vendorMatches ? _ => true : Matches,
+                    vendorMatches ? _ => true : m => RowMatches(m, term),
                     includeDefault: vendorMatches || Matches("default"));
             }
 
@@ -488,7 +750,9 @@ public partial class LauncherPaneView : UserControl {
                     Opacity = option.Available ? 1 : 0.4,
                 };
                 tile.Classes.Add(active ? "kcapChip" : "kcapGhost");
-                ToolTip.SetTip(tile, $"{option.Label} — {HostedHarnessCatalog.DescriptionFor(option)}");
+                ToolTip.SetTip(tile, UnavailableHarnessTip(option) ?? $"{option.Label} — {HostedHarnessCatalog.DescriptionFor(option)}");
+                ToolTip.SetShowOnDisabled(tile, true);
+                AutomationProperties.SetName(tile, option.Label);
                 tile.Click += (_, _) => {
                     currentTab = vendor;
                     RebuildTabs();
@@ -498,21 +762,40 @@ public partial class LauncherPaneView : UserControl {
             }
         }
 
+        // The account choice can resolve while the panel is open; a closed panel keeps no handler.
+        // AccountRows is a fresh list on every listing or snapshot emission, and a rebuild drops focus
+        // and hover, so only a change to what the section draws rebuilds.
+        void OnAccountChanged(object? _, PropertyChangedEventArgs e) {
+            if (e.PropertyName is not (nameof(HomeViewModel.AccountSection) or nameof(HomeViewModel.AccountRows)
+                    or nameof(HomeViewModel.AccountPendingText) or nameof(HomeViewModel.AccountRetryVisible)
+                    or nameof(HomeViewModel.AccountUsageById)))
+                return;
+            var next = AccountsToDraw();
+            var same = drawnAccounts is { } drawn && next is { } now
+                ? drawn.Pending == now.Pending && drawn.Retry == now.Retry && drawn.Rows.SequenceEqual(now.Rows)
+                    && HomeViewModel.DrawnUsageEquals(drawnUsage, vm.AccountUsageById)
+                : drawnAccounts is null && next is null;
+            if (!same) RebuildRows();
+        }
+        vm.PropertyChanged += OnAccountChanged;
+        flyout.Closed += (_, _) => vm.PropertyChanged -= OnAccountChanged;
+
         searchBox.TextChanged += (_, _) => RebuildRows();
         RebuildTabs();
         RebuildRows();
-        flyout.ShowAt(anchor);
+        ShowMenu(flyout, anchor);
         searchBox.Focus();
     }
 }
 
-/// The vendor's mark as bindable content (AgentChip's leading glyph). One-way; parameter is the
-/// size in pixels. Bindings evaluate on the UI thread, which BuildGlyph requires.
+/// The vendor's mark as bindable content (AgentChip's leading glyph), from a vendor token or a
+/// HarnessId. One-way; parameter is the size in pixels. Bindings evaluate on the UI thread, which
+/// BuildGlyph requires.
 public sealed class VendorGlyphConverter : IValueConverter {
     public static readonly VendorGlyphConverter Instance = new();
 
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
-        value is string vendor
+        (value is HarnessId id ? id.VendorId : value) is string vendor
             ? LauncherPaneView.BuildGlyph(vendor, double.TryParse(parameter as string, out var size) ? size : 13)
             : null;
 
@@ -521,14 +804,16 @@ public sealed class VendorGlyphConverter : IValueConverter {
 }
 
 /// AgentChip's label: "Claude · Fable 5" — vendor label plus the model's label, resolved first
-/// against the server catalog (4th binding), then the curated fallback (raw slug when neither
-/// carries it, "Default" for the "" sentinel). Same "left · right" shape as Effort/Permissions.
+/// against the effective model catalog (4th binding), then the curated fallback (raw slug when neither
+/// carries it, "Default" for the "" sentinel). Same "left · right" shape as Effort/Permissions. The
+/// chosen account (5th binding) follows as "· work", and is null while the default is chosen.
 public sealed class AgentChipTextConverter : IMultiValueConverter {
     public static readonly AgentChipTextConverter Instance = new();
 
     public object? Convert(IList<object?> values, Type targetType, object? parameter, CultureInfo culture) =>
         values is [IReadOnlyList<HarnessOption> options, string vendor, string model, ..]
             ? $"{HostedHarnessCatalog.LabelFor(options, vendor)} · {ModelLabel(vendor, model, values.Count > 3 ? values[3] : null)}"
+              + (values.Count > 4 && values[4] is string account ? $" · {account}" : "")
             : "";
 
     static string ModelLabel(string vendor, string model, object? catalog) {

@@ -11,7 +11,7 @@ description: >-
 
 # Session Errors
 
-Extract tool call errors from an agent session recorded by Kurrent Capacitor. The output lists each failed tool call — bash commands, file reads/writes, agent delegations, etc. — along with the error message and the tool that caused it.
+Extract tool call errors from an agent session recorded by kcap. The output lists each failed tool call — bash commands, file reads/writes, agent delegations, etc. — along with the error message and the tool that caused it.
 
 ## Usage
 
@@ -65,4 +65,4 @@ The `KCAP_URL` environment variable overrides the default server URL (`http://lo
 
 - If the session is not found, the command prints an error and exits with code 1.
 - If no errors are found, the command prints "No errors found." — this is a good outcome.
-- If the Kurrent Capacitor server is unreachable, the command prints an HTTP error. Ensure the server is running.
+- If the kcap server is unreachable, the command prints an HTTP error. Ensure the server is running.

@@ -1,5 +1,8 @@
 using Capacitor.Cli.Commands;
+using System.Text.Json.Nodes;
 using Capacitor.Cli.Harness.Antigravity;
+using Microsoft.Data.Sqlite;
+using TUnit.Assertions.Enums;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -452,5 +455,74 @@ public class AntigravityImportTests : IDisposable {
         await Assert.That(posts.Contains("/hooks/session-start/antigravity")).IsTrue();
         await Assert.That(posts.Contains("/hooks/session-end/antigravity")).IsTrue();
         await Assert.That(posts.Contains("/hooks/transcript")).IsFalse();
+    }
+
+    void WriteSummary(string convId, string title) {
+        var path = Path.Combine(_home, ".gemini", "antigravity", "conversation_summaries.db");
+        using var conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString());
+        conn.Open();
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '');
+            INSERT INTO conversation_summaries(conversation_id, title) VALUES ($id, $title);
+            """;
+        cmd.Parameters.AddWithValue("$id", convId);
+        cmd.Parameters.AddWithValue("$title", title);
+        cmd.ExecuteNonQuery();
+    }
+
+    async Task<List<string>> ImportRootAsync() {
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(404));
+        foreach (var route in new[] {
+            "/hooks/session-start/antigravity", "/hooks/transcript", "/hooks/harness-title", "/hooks/session-end/antigravity"
+        }) {
+            _server.Given(Request.Create().WithPath(route).UsingPost())
+                .RespondWith(Response.Create().WithStatusCode(200));
+        }
+
+        using var client = new HttpClient();
+        var source = new AntigravityImportSource(new(new(_home), ""), TimeProvider.System);
+
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(
+            discovered, new ClassifyContext(client, _server.Url!, MinLines: 0, Home: Home), CancellationToken.None);
+
+        var outcome = await source.ImportSessionAsync(
+            classified[0], new ImportContext(client, _server.Url!, ForcePrivate: false), CancellationToken.None);
+        await Assert.That(outcome).IsEqualTo(ImportOutcome.Loaded);
+
+        return _server.LogEntries.Where(e => e.RequestMessage.Method == "POST").Select(e => e.RequestMessage.Path).ToList();
+    }
+
+    /// <summary>The summary title, keyed by the dashed conversation id, is posted under the dashless session id as an
+    /// untimed auto title before session-end.</summary>
+    [Test]
+    public async Task ImportSession_posts_the_summary_title_before_session_end() {
+        WriteTranscript(Root, "build it");
+        WriteSummary(Root, "Build the importer");
+
+        var posts = await ImportRootAsync();
+
+        await Assert.That(posts).IsEquivalentTo(
+            ["/hooks/session-start/antigravity", "/hooks/transcript", "/hooks/harness-title", "/hooks/session-end/antigravity"],
+            CollectionOrdering.Matching);
+
+        var title = JsonNode.Parse(_server.LogEntries.Single(e => e.RequestMessage.Path == "/hooks/harness-title").RequestMessage.Body!)!.AsObject();
+        await Assert.That(title["session_id"]!.GetValue<string>()).IsEqualTo(Dashless(Root));
+        await Assert.That(title["title"]!.GetValue<string>()).IsEqualTo("Build the importer");
+        await Assert.That(title["kind"]!.GetValue<string>()).IsEqualTo("auto");
+        await Assert.That(title.ContainsKey("changed_at")).IsFalse();
+    }
+
+    [Test]
+    public async Task ImportSession_posts_no_title_when_the_summary_is_blank() {
+        WriteTranscript(Root, "build it");
+        WriteSummary(Root, "");
+
+        var posts = await ImportRootAsync();
+
+        await Assert.That(posts.Contains("/hooks/harness-title")).IsFalse();
     }
 }

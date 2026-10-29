@@ -48,6 +48,31 @@ public class TranscriptIdsTests {
         await Assert.That(TranscriptIds.CodexRecord(line)).IsEqualTo(new Guid(XxHash128.Hash(Encoding.UTF8.GetBytes(line))));
     }
 
+    [Test]
+    public async Task Vibe_record_hashes_the_utf8_line() {
+        const string line = "{\"role\":\"user\",\"content\":\"hi\"}";
+        await Assert.That(TranscriptIds.VibeRecord(line)).IsEqualTo(new Guid(XxHash128.Hash(Encoding.UTF8.GetBytes(line))));
+        // Two genuinely distinct lines take distinct ids; the unified reader keeps entries distinct.
+        await Assert.That(TranscriptIds.VibeRecord(line)).IsNotEqualTo(TranscriptIds.VibeRecord(line + " "));
+    }
+
+    [Test]
+    public async Task Vibe_entry_hashes_the_prefixed_entry_id() {
+        await Assert.That(TranscriptIds.VibeEntry("user-turn-abc-1"))
+            .IsEqualTo(new Guid(XxHash128.Hash(Encoding.UTF8.GetBytes("vibe-entry:user-turn-abc-1"))));
+        await Assert.That(TranscriptIds.VibeEntry("a")).IsNotEqualTo(TranscriptIds.VibeEntry("b"));
+    }
+
+    [Test]
+    public async Task Muse_record_hashes_stream_and_record_id() {
+        const string stream = "01a13694-b0ad-7ae2-8bf5-2af6357a0847";
+        const string record = "e6b35c82-47c0-48f2-868a-0e369eccecc8";
+        await Assert.That(TranscriptIds.MuseRecord(stream, record))
+            .IsEqualTo(new Guid(XxHash128.Hash(Encoding.UTF8.GetBytes($"muse-record:{stream}:{record}"))));
+        await Assert.That(TranscriptIds.MuseRecord(stream, record)).IsNotEqualTo(TranscriptIds.MuseRecord(stream, "other"));
+        await Assert.That(TranscriptIds.MuseRecord(stream, record)).IsNotEqualTo(TranscriptIds.MuseRecord("other", record));
+    }
+
     /// Fixed vectors: a later change to any derivation fails here even if the framing tests are edited too.
     [Test]
     [Arguments("sibling", "580a4b24-18bc-bc19-9676-ed805dff4bdd")]
@@ -55,7 +80,12 @@ public class TranscriptIdsTests {
     [Arguments("claude-block", "de376eef-af14-5d28-b930-bbbef251635d")]
     [Arguments("claude-attachment", "c0331d1c-5d1f-a123-49d3-820902c4d48b")]
     [Arguments("codex-record", "b17e302c-b826-0247-6fda-5634e74c45ce")]
+    // kcap-server's CodexNormalizerTests pins the id it stores for this redacted line to the same value.
+    [Arguments("codex-redacted-user", "9f1a5a84-cd92-5e9f-72ff-6db814f55976")]
     [Arguments("codex-usage-backfill", "5bccf7a4-6eee-83b2-b58c-f10627871a82")]
+    [Arguments("vibe-record", "ca3c057b-649d-864f-339b-160c1c7fd711")]
+    [Arguments("vibe-entry", "d219bcea-d51a-d28e-6f8a-c4d4635844d0")]
+    [Arguments("muse-record", "d8a1a66a-0ef6-88fa-a0ea-41440eb74617")]
     public async Task Vectors_are_fixed(string name, string expected) {
         await Assert.That(Vector(name).ToString("D")).IsEqualTo(expected);
     }
@@ -66,7 +96,13 @@ public class TranscriptIdsTests {
         "claude-block"      => TranscriptIds.ClaudeBlock(Primary, 2),
         "claude-attachment" => TranscriptIds.ClaudeAttachment("sess:agent", Primary, 3),
         "codex-record"      => TranscriptIds.CodexRecord("{\"type\":\"response_item\",\"payload\":{}}"),
+        "codex-redacted-user" => TranscriptIds.CodexRecord("""
+            {"timestamp":"2026-10-21T02:10:01.207Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"use token [REDACTED:github-token]"}],"internal_chat_message_metadata_passthrough":{"turn_id":"01a15c38-f9fc-7eb3-a679-cc676926d28f","create_time":1792548601.2,"content_item_kinds":["user.text"]}}}
+            """),
         "codex-usage-backfill" => TranscriptIds.Sibling(Primary, "usage-backfill"),
+        "vibe-record"       => TranscriptIds.VibeRecord("{\"role\":\"user\",\"content\":\"hi\"}"),
+        "vibe-entry"        => TranscriptIds.VibeEntry("user-turn-abc-1"),
+        "muse-record"       => TranscriptIds.MuseRecord("01a13694-b0ad-7ae2-8bf5-2af6357a0847", "e6b35c82-47c0-48f2-868a-0e369eccecc8"),
         _                   => throw new ArgumentOutOfRangeException(nameof(name)),
     };
 }

@@ -150,6 +150,7 @@ public class CopilotImportSourceTests {
         await Assert.That(meta!.Cwd).IsEqualTo("/private/tmp/work");
         // Values containing ": " must not be truncated at the second colon.
         await Assert.That(meta.Name).IsEqualTo("Fix the bug: timestamps are wrong");
+        await Assert.That(meta.UserNamed).IsFalse();
         await Assert.That(meta.CreatedAt).IsEqualTo(DateTimeOffset.Parse("2026-06-10T20:23:25.556Z", CultureInfo.InvariantCulture));
         await Assert.That(meta.UpdatedAt).IsEqualTo(DateTimeOffset.Parse("2026-06-10T20:23:37.838Z", CultureInfo.InvariantCulture));
     }

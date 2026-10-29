@@ -42,6 +42,19 @@ public class ImportDiscoveryRenderTests {
         await Assert.That(windows[1]!["since"]).IsNull();
     }
 
+    /// A selection's count is a cell — this repository in that window — which neither margin gives.
+    [Test]
+    public async Task Json_carries_each_repos_own_count_per_window() {
+        var root    = JsonNode.Parse(ImportDiscoveryRender.ToJson(Sample()))!.AsObject();
+        var windows = root["repos"]!.AsArray()[0]!["windows"]!.AsArray();
+
+        await Assert.That(windows.Count).IsEqualTo(2);
+        await Assert.That(windows[0]!["since"]!.GetValue<string>()).IsEqualTo("2026-02-01");
+        await Assert.That(windows[0]!["sessions"]!.GetValue<int>()).IsEqualTo(1);
+        await Assert.That(windows[1]!["since"]).IsNull();
+        await Assert.That(windows[1]!["sessions"]!.GetValue<int>()).IsEqualTo(2);
+    }
+
     [Test]
     public async Task Json_names_everything_as_a_null_window_rather_than_omitting_it() {
         // A reader has to be able to tell "no cap" from "a window that happens to hold everything".

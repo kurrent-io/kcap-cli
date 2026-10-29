@@ -108,11 +108,15 @@ public class OpenCodeHostedLaunchTests {
     /// vendor read the same variable.
     /// </summary>
     [Test]
+    [NotInParallel]
     public async Task PluginSuppression_IsNotAppliedToOtherVendors() {
+        using var inherited = EnvScope.Exclusive(OpenCodeLaunchEnvironment.PureVariable, "inherited");
+
         var cursor = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
             AcpVendorDescriptors.Cursor, new DaemonConfig(), Ctx() with { Vendor = "cursor" });
 
-        await Assert.That(cursor.Environment.ContainsKey(OpenCodeLaunchEnvironment.PureVariable)).IsFalse();
+        await Assert.That(cursor.Environment.TryGetValue(OpenCodeLaunchEnvironment.PureVariable, out var pure) ? pure : null)
+            .IsEqualTo("inherited");
     }
 
     /// <summary>
@@ -168,7 +172,7 @@ public class OpenCodeHostedLaunchTests {
 
     sealed class StubServerConnection() : ServerConnection(
         new() { Name = "test", ServerUrl = "http://127.0.0.1:1" },
-        UnusedTokenStore.Create(),
+        new FixedCredentialSource(),
         Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
         Microsoft.Extensions.Logging.Abstractions.NullLogger<ServerConnection>.Instance, TimeProvider.System);
 }

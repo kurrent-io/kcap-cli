@@ -18,7 +18,13 @@ public class AgentAttachClientTests {
         // Attached frame before severing the connection — see the barrier comment at its
         // first use below.
         public readonly TaskCompletionSource AttachedObserved = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public Func<byte[], string?, CancellationToken, Task> OnAttached => (s, r, _) => { Attached.Add((s, r)); AttachedObserved.TrySetResult(); return Task.CompletedTask; };
+        public readonly List<DateTimeOffset?> RuntimeStarts = [];
+        public Func<AttachAck, CancellationToken, Task> OnAttached => (a, _) => {
+            Attached.Add((a.Snapshot, a.ReadOnlyReason));
+            RuntimeStarts.Add(a.RuntimeStartedAt);
+            AttachedObserved.TrySetResult();
+            return Task.CompletedTask;
+        };
         public Func<byte[], CancellationToken, Task> OnOutput => (b, _) => { Output.Add(b); return Task.CompletedTask; };
     }
 
@@ -68,6 +74,31 @@ public class AgentAttachClientTests {
     }
 
     [Test]
+    public async Task Attach_without_resize_keeps_input_available_and_leaves_sizing_to_the_viewer() {
+        var (server, tmp) = NewServer();
+        await using var _s = server; using var _t = tmp;
+        var rec = new Recorder();
+        await using var client = new AgentAttachClient(server.Path, AgentId, rec.OnAttached, rec.OnOutput,
+            resizeOnAttach: false);
+
+        var run = client.RunAsync(80, 24, CancellationToken.None);
+        await server.AcceptAndPumpInboundAsync();
+        await server.SendAttachedAsync(AgentId, []);
+        await rec.AttachedObserved.Task;
+        await client.SendInputAsync([42]);
+        await client.ResizeAsync(137, 41);
+        await server.SendExitedAsync(0);
+        await run;
+        await client.DisposeAsync();
+        await server.InboundDrained;
+
+        var received = server.SnapshotReceived();
+        await Assert.That(received.Single(f => f.Type == FrameType.Stdin).Bytes).IsEquivalentTo(new byte[] { 42 });
+        var resize = received.Single(f => f.Type == FrameType.Resize);
+        await Assert.That((resize.Cols, resize.Rows)).IsEqualTo(((ushort)137, (ushort)41));
+    }
+
+    [Test]
     public async Task Read_only_attach_carries_the_reason_and_sends_no_resize_nudge() {
         var (server, tmp) = NewServer();
         await using var _s = server; using var _t = tmp;
@@ -82,6 +113,47 @@ public class AgentAttachClientTests {
 
         await Assert.That(rec.Attached.Single().Reason).IsEqualTo("flow participant");
         await Assert.That(server.Received.Any(f => f.Type == FrameType.Resize)).IsFalse();
+    }
+
+    [Test]
+    public async Task An_attach_asking_for_the_runtime_hands_its_start_to_the_acknowledgement() {
+        var (server, tmp) = NewServer();
+        await using var _s = server; using var _t = tmp;
+        var rec = new Recorder();
+        var started = new DateTimeOffset(2026, 10, 20, 9, 30, 15, TimeSpan.Zero).AddTicks(42);
+        await using var client = new AgentAttachClient(server.Path, AgentId, rec.OnAttached, rec.OnOutput, requestRuntime: true);
+
+        var run = client.RunAsync(80, 24, CancellationToken.None);
+        await server.AcceptAndPumpInboundAsync();
+        var first = await server.FirstFrame.Task;
+        await server.SendAsync(LocalFrame.RuntimeStarted(started));
+        await server.SendAttachedReadOnlyAsync(AgentId, "review", [1]);
+        await server.SendExitedAsync(0);
+        await run;
+
+        await Assert.That(first.Type).IsEqualTo(FrameType.AttachWithRuntime);
+        await Assert.That(first.Text).IsEqualTo(AgentId);
+        await Assert.That(rec.RuntimeStarts.Single()).IsEqualTo(started);
+        await Assert.That(rec.Attached.Single().Reason).IsEqualTo("review");
+    }
+
+    /// Only an attach that asked for the stamp may receive one: anywhere else it is a protocol fault.
+    [Test]
+    public async Task A_runtime_stamp_the_attach_did_not_ask_for_fails_the_attach() {
+        var (server, tmp) = NewServer();
+        await using var _s = server; using var _t = tmp;
+        var rec = new Recorder();
+        await using var client = new AgentAttachClient(server.Path, AgentId, rec.OnAttached, rec.OnOutput);
+
+        var run = client.RunAsync(80, 24, CancellationToken.None);
+        await server.AcceptAndPumpInboundAsync();
+        var first = await server.FirstFrame.Task;
+        await server.SendAsync(LocalFrame.RuntimeStarted(DateTimeOffset.UnixEpoch));
+        var outcome = await run;
+
+        await Assert.That(first.Type).IsEqualTo(FrameType.Attach);
+        await Assert.That(outcome).IsTypeOf<AttachOutcome.Failed>();
+        await Assert.That(rec.Attached).IsEmpty();
     }
 
     [Test]
@@ -108,7 +180,7 @@ public class AgentAttachClientTests {
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         int concurrent = 0, maxConcurrent = 0, count = 0;
         await using var client = new AgentAttachClient(server.Path, AgentId,
-            (_, _, _) => Task.CompletedTask,
+            (_, _) => Task.CompletedTask,
             async (_, _) => {
                 var c = Interlocked.Increment(ref concurrent);
                 maxConcurrent = Math.Max(maxConcurrent, c);
@@ -253,7 +325,7 @@ public class AgentAttachClientTests {
         var (server, tmp) = NewServer(); await using var _s = server; using var _t = tmp;
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var client = new AgentAttachClient(server.Path, AgentId,
-            (_, _, _) => Task.CompletedTask,
+            (_, _) => Task.CompletedTask,
             async (_, ct) => { entered.SetResult(); await Task.Delay(Timeout.Infinite, ct); });
         var run = client.RunAsync(80, 24, CancellationToken.None);   // external token: none, never cancelled
         await server.AcceptAndPumpInboundAsync();
@@ -482,7 +554,7 @@ public class AgentAttachClientTests {
         var disposeStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         AgentAttachClient client = null!;
         client = new AgentAttachClient(server.Path, AgentId,
-            (_, _, _) => Task.CompletedTask,
+            (_, _) => Task.CompletedTask,
             async (_, _) => { await disposeStarted.Task; throw boom; },   // fault AFTER dispose claimed
             sink.Callback);
         var run = client.RunAsync(80, 24, CancellationToken.None);
@@ -505,7 +577,7 @@ public class AgentAttachClientTests {
         var sink = new RecordingSink();
         var boom = new InvalidOperationException("render exploded");
         var client = new AgentAttachClient(server.Path, AgentId,
-            (_, _, _) => Task.CompletedTask,
+            (_, _) => Task.CompletedTask,
             (_, _) => throw boom,
             sink.Callback);
         var run = client.RunAsync(80, 24, CancellationToken.None);
@@ -553,7 +625,7 @@ public class AgentAttachClientTests {
         var attachedObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var pumpParked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var client = new AgentAttachClient(server.Path, AgentId,
-            (_, _, _) => { attachedObserved.TrySetResult(); return Task.CompletedTask; },
+            (_, _) => { attachedObserved.TrySetResult(); return Task.CompletedTask; },
             // Parks the pump; only Dispose unblocks it. Signals on ENTRY, so the wait below is on
             // the pump actually being inside the callback rather than on it having had time to be.
             async (_, ct) => { pumpParked.TrySetResult(); await Task.Delay(Timeout.Infinite, ct); },
@@ -593,7 +665,7 @@ public class AgentAttachClientTests {
         var attachedObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var pumpBlocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var client = new AgentAttachClient(server.Path, AgentId,
-            (_, _, _) => { attachedObserved.TrySetResult(); return Task.CompletedTask; },
+            (_, _) => { attachedObserved.TrySetResult(); return Task.CompletedTask; },
             // Blocks the pump, then returns normally (no fault). Signals on ENTRY, so the wait below
             // is on the pump actually being inside the callback rather than on elapsed time.
             async (_, _) => { pumpBlocked.TrySetResult(); await gate.Task; },
@@ -725,7 +797,7 @@ public class AgentAttachClientTests {
         }
 
         var client = new AgentAttachClient(server.Path, AgentId,
-            (_, _, _) => { attachedObserved.TrySetResult(); return Task.CompletedTask; },
+            (_, _) => { attachedObserved.TrySetResult(); return Task.CompletedTask; },
             async (_, _) => { await proceed.Task; throw boom; },    // stdout callback: armed, not yet fired
             Sink);
         var run = client.RunAsync(80, 24, CancellationToken.None);

@@ -23,6 +23,10 @@ internal sealed class ResolvingCredentialSource(
         await (await ChooseAsync(ct)).RotateAsync(refused, ct);
 
     async Task<ICredentialSource> ChooseAsync(CancellationToken ct) {
+        // Ahead of discovery and the token store, both of which can answer with a stored token's
+        // provider while the local server is down.
+        if (server.Profiles.Resolution.SendsNoBearer) return NoCredentials.Instance;
+
         if (Volatile.Read(ref _chosen) is { } already) return already;
 
         var picked = await PickAsync(ct);

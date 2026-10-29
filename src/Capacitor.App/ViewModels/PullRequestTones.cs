@@ -38,9 +38,8 @@ public static class PullRequestTones {
         _ => "",
     };
 
-    /// The card's lifecycle label: the lifecycle word, except that an open PR with conflicts says so.
+    /// The lifecycle word alone: conflicts have their own status row beside checks and reviews.
     public static PullRequestStatus LifecycleStatus(PullRequestOverviewDto? overview) => overview is null ? new("Unknown") : overview.Lifecycle switch {
-        "open" when overview.Mergeable == false => new("Merge conflicts", "conflict"),
         "draft" => new("Draft", "draft"),
         "open" when overview.IsDraft == true => new("Draft", "draft"),
         "open" => new("Open", "open"),

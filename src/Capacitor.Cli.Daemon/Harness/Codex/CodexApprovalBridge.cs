@@ -23,6 +23,7 @@ internal sealed class CodexApprovalBridge {
     readonly ILogger  _logger;
     readonly TimeSpan _timeout;
     readonly TimeProvider _time;
+    readonly CodexHostedPolicySeam? _policy;
 
     // The option ids ARE the codex decision strings, so a resolved SelectedOptionId maps straight to
     // {decision: id}; Kind drives the allow-once / allow-for-session affordances server-side.
@@ -42,7 +43,8 @@ internal sealed class CodexApprovalBridge {
 
     public CodexApprovalBridge(
             Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>> requestInteraction,
-            string agentId, ILogger logger, TimeSpan timeout, TimeProvider time) {
+            string agentId, ILogger logger, TimeSpan timeout, TimeProvider time, CodexHostedPolicySeam? policy = null) {
+        _policy             = policy;
         _requestInteraction = requestInteraction;
         _agentId            = agentId;
         _logger             = logger;
@@ -75,6 +77,15 @@ internal sealed class CodexApprovalBridge {
                 return Deny();
             }
 
+            // The policy answers first; whatever it does not decide reaches the card as before. A permissions
+            // grant changes what the agent may do rather than running a call, so it stays the human's.
+            if (!isPermissionsGrant && _policy is { } policy && request.Params is { } governed) {
+                switch (await policy.EvaluateAsync(method, governed, ct).ConfigureAwait(false)) {
+                    case CodexHostedVerdict.Accept:  return ToElement(new JsonObject { ["decision"] = "accept" });
+                    case CodexHostedVerdict.Decline: return DeclineDecision();
+                }
+            }
+
             var interaction = new AcpInteractionRequest(
                 AgentId:      _agentId,
                 AcpSessionId: threadId,
@@ -91,13 +102,24 @@ internal sealed class CodexApprovalBridge {
 
             var decision = await _requestInteraction(interaction, timeoutCts.Token).ConfigureAwait(false);
 
-            return isPermissionsGrant ? MapPermissionsGrant(decision, request.Params) : MapDecision(decision);
+            if (isPermissionsGrant) return MapPermissionsGrant(decision, request.Params);
+
+            var mapped = MapDecision(decision);
+            if (mapped.GetProperty("decision").GetString() == "decline" && request.Params is { } refused)
+                _policy?.RecordUserDecline(method, refused);
+            return mapped;
         } catch (OperationCanceledException) {
             _logger.LogDebug("codex approval: {Method} cancelled or timed out; denying.", method);
-            return Deny();
+            return DeclineRecorded();
         } catch (Exception ex) {
             // The handler must never throw — the connection maps a throw to -32603. Deny with a valid body.
             _logger.LogWarning(ex, "codex approval: unexpected failure handling {Method}; denying.", method);
+            return DeclineRecorded();
+        }
+
+        // Codex saw a no either way, so the judge is told of it.
+        JsonElement DeclineRecorded() {
+            if (!isPermissionsGrant && request.Params is { } refused) _policy?.RecordUserDecline(method, refused);
             return Deny();
         }
     }

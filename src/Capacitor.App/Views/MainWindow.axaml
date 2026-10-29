@@ -3,171 +3,93 @@
                      xmlns:rxui="clr-namespace:ReactiveUI.Avalonia;assembly=ReactiveUI.Avalonia"
                      xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
                      xmlns:views="clr-namespace:Capacitor.App.Views"
+                     xmlns:svc="clr-namespace:Capacitor.App.Services"
+                     xmlns:onboarding="clr-namespace:Capacitor.App.Views.Onboarding"
                      x:Class="Capacitor.App.Views.MainWindow"
                      x:TypeArguments="vm:MainWindowViewModel"
                      x:DataType="vm:MainWindowViewModel"
-                     Title="Kurrent Capacitor Desktop"
-                     Icon="avares://Kurrent Capacitor/Assets/kcap-icon.png"
-                     Width="1200" MinWidth="1200" Height="760" MinHeight="560"
+                     Title="kcap Desktop"
+                     Icon="avares://kcap-desktop/Assets/kcap-icon.png"
+                     Width="{x:Static svc:WindowSizeMemory.DefaultWidth}"
+                     MinWidth="{x:Static svc:WindowSizeMemory.MinWidth}"
+                     Height="{x:Static svc:WindowSizeMemory.DefaultHeight}"
+                     MinHeight="{x:Static svc:WindowSizeMemory.MinHeight}"
                      Background="{StaticResource KcapCanvasBrush}"
                      ExtendClientAreaToDecorationsHint="True">
     <Window.KeyBindings>
         <KeyBinding Gesture="Meta+N" Command="{Binding CloseWorkspaceCommand}" />
         <KeyBinding Gesture="Ctrl+N" Command="{Binding CloseWorkspaceCommand}" />
     </Window.KeyBindings>
-    <!-- Sessions is the home surface: rail | launcher-or-workspace. The right pane's empty state
-         IS the launcher. Home stays in the tree but hidden (ShowHomeCommand still exists).
+    <!-- Rail | launcher-or-workspace. The right pane's empty state IS the launcher.
          Workspace content is a template so the terminal is only built once a session opens.
          ExtendClientAreaToDecorationsHint paints into the title bar; the transparent strip below
          only receives presses where no surface content is hit-testable — rail and workspace
          headers carry their own drag handlers. -->
     <Panel>
+        <!-- Outside the scale, so the drag strip stays the title bar's height at any zoom. -->
         <Border Height="40" VerticalAlignment="Top" Background="Transparent"
                 PointerPressed="OnChromePointerPressed" />
 
-        <Grid x:Name="HomeSurface" Margin="24,40,24,0"
-              IsVisible="{Binding IsHomeView}">
-            <ScrollViewer VerticalScrollBarVisibility="Auto">
-                <views:HomeView DataContext="{Binding Home}" />
-            </ScrollViewer>
-        </Grid>
+        <LayoutTransformControl x:Name="ScaleHost">
+            <Panel>
+                <Grid x:Name="SessionsSurface" ColumnDefinitions="330,*">
+                    <views:SessionRailView x:Name="SessionRail" Grid.Column="0" />
+                    <Panel x:Name="ContentPane" Grid.Column="1">
+                        <Grid x:Name="LauncherPane" RowDefinitions="Auto,*" Margin="24,20,24,24"
+                              IsVisible="{Binding CurrentWorkspace, Converter={x:Static ObjectConverters.IsNull}}">
+                            <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Background="Transparent"
+                                  PointerPressed="OnChromePointerPressed">
+                                <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" ColumnSpacing="6" RowSpacing="5"
+                                      IsVisible="{Binding HistoryImportVisible}" VerticalAlignment="Center" Margin="0,0,16,0">
+                                    <views:AppIcon Kind="LoaderCircle" Size="12" Foreground="{StaticResource KcapMutedBrush}"
+                                                   VerticalAlignment="Center" IsVisible="{Binding HistoryImportRunning}"
+                                                   Classes.kcapSpinning="{Binding HistoryImportRunning}" />
+                                    <TextBlock Grid.Column="1" Text="{Binding HistoryImportStatus}" FontSize="12"
+                                               Foreground="{StaticResource KcapMutedBrush}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                                    <ProgressBar x:Name="HistoryImportProgressBar" Grid.Row="1" Grid.Column="1" Height="3" MinHeight="3"
+                                                 Minimum="0" Maximum="100" Value="{Binding HistoryImportProgress}"
+                                                 IsVisible="{Binding HistoryImportRunning}" Foreground="{StaticResource KcapMutedBrush}" />
+                                </Grid>
+                                <!-- Daemon recovery sits in LauncherPaneView's connection banner (same
+                                     place as sign-in), not here in the chrome. -->
 
-        <Grid x:Name="SessionsSurface" ColumnDefinitions="310,*"
-              IsVisible="{Binding IsSessionsView}">
-            <views:SessionRailView x:Name="SessionRail" Grid.Column="0" />
-            <Panel Grid.Column="1">
-                <!-- The launcher pane: daemon status top-left, Activity top-right, the composer
-                     centered. Visible exactly while no workspace is open. -->
-                <Grid x:Name="LauncherPane" RowDefinitions="Auto,*" Margin="24,20,24,24"
-                      IsVisible="{Binding CurrentWorkspace, Converter={x:Static ObjectConverters.IsNull}}">
-                    <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Background="Transparent"
-                          PointerPressed="OnChromePointerPressed">
-                        <!-- Daemon recovery sits in LauncherPaneView's connection banner (same
-                             place as sign-in), not here in the chrome. -->
+                                <Button Grid.Column="1" x:Name="OpenWebButton" Classes="kcapChip" VerticalAlignment="Top"
+                                        HorizontalAlignment="Right" Command="{Binding Web.OpenCommand}"
+                                        IsVisible="{Binding Web.IsVisible, FallbackValue=False}"
+                                        ToolTip.Tip="{Binding Web.Tooltip}"
+                                        AutomationProperties.Name="{Binding Web.Label}">
+                                    <StackPanel Orientation="Horizontal" Spacing="7">
+                                        <TextBlock Text="{Binding Web.Label}" VerticalAlignment="Center" />
+                                        <views:AppIcon Kind="ExternalLink" Size="14" />
+                                    </StackPanel>
+                                </Button>
+                            </Grid>
 
-                        <!-- The consent-decision feed, as a transient panel off this chip rather
-                             than a section in the page flow. Opened/Closed drive the polling gate
-                             in code-behind, and opening a workspace closes it. -->
-                        <Button Grid.Column="1" x:Name="ActivityButton" Classes="kcapChip" VerticalAlignment="Top"
-                                HorizontalAlignment="Right"
-                                Background="{StaticResource KcapSurfaceRaisedBrush}"
-                                BorderBrush="{StaticResource KcapBorderBrush}" CornerRadius="7" Padding="12,6">                            <TextBlock Text="Activity" FontSize="12.5" FontWeight="SemiBold"
-                                       Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
-                            <Button.Flyout>
-                                <Flyout Placement="BottomEdgeAlignedRight" VerticalOffset="6"
-                                        FlyoutPresenterClasses="kcapPanel">
-                                    <!-- Fixed width + fixed column widths so header and rows share
-                                         one grid; vertical scroll after MaxHeight; horizontal only
-                                         if content truly overflows (presenter H-scroll stays off). -->
-                                    <Border Width="720" MaxHeight="420" Padding="14,12">
-                                        <Grid>
-                                            <StackPanel IsVisible="{Binding Activity.IsEmpty}"
-                                                        Spacing="6" Margin="0,28"
-                                                        HorizontalAlignment="Center" VerticalAlignment="Center">
-                                                <TextBlock x:Name="ActivityEmptyText" Text="No decisions yet"
-                                                           Foreground="{StaticResource KcapMutedBrush}"
-                                                           FontSize="13.5" HorizontalAlignment="Center" />
-                                                <TextBlock Text="Allow and deny choices from consent prompts show up here."
-                                                           Foreground="{StaticResource KcapFaintBrush}"
-                                                           FontSize="12" TextWrapping="Wrap" MaxWidth="300"
-                                                           TextAlignment="Center" HorizontalAlignment="Center" />
-                                            </StackPanel>
+                            <views:LauncherPaneView x:Name="LauncherView" Grid.Row="1" DataContext="{Binding Home}" />
+                        </Grid>
 
-                                            <DockPanel IsVisible="{Binding !Activity.IsEmpty}">
-                                                <Border DockPanel.Dock="Top"
-                                                        BorderBrush="{StaticResource KcapBorderBrush}"
-                                                        BorderThickness="0,0,0,1" Padding="4,0,4,8" Margin="0,0,0,2">
-                                                    <Grid x:Name="ActivityHeader"
-                                                          ColumnDefinitions="118,76,128,78,*,78,96"
-                                                          ColumnSpacing="10">
-                                                        <TextBlock Grid.Column="0" Text="Time" FontSize="11" FontWeight="SemiBold"
-                                                                   Foreground="{StaticResource KcapMutedBrush}" />
-                                                        <TextBlock Grid.Column="1" Text="Outcome" FontSize="11" FontWeight="SemiBold"
-                                                                   Foreground="{StaticResource KcapMutedBrush}" />
-                                                        <TextBlock Grid.Column="2" Text="Requester" FontSize="11" FontWeight="SemiBold"
-                                                                   Foreground="{StaticResource KcapMutedBrush}" />
-                                                        <TextBlock Grid.Column="3" Text="Kind" FontSize="11" FontWeight="SemiBold"
-                                                                   Foreground="{StaticResource KcapMutedBrush}" />
-                                                        <TextBlock Grid.Column="4" Text="Repo" FontSize="11" FontWeight="SemiBold"
-                                                                   Foreground="{StaticResource KcapMutedBrush}" />
-                                                        <TextBlock Grid.Column="5" Text="Vendor" FontSize="11" FontWeight="SemiBold"
-                                                                   Foreground="{StaticResource KcapMutedBrush}" />
-                                                        <TextBlock Grid.Column="6" Text="Source" FontSize="11" FontWeight="SemiBold"
-                                                                   Foreground="{StaticResource KcapMutedBrush}" />
-                                                    </Grid>
-                                                </Border>
+                        <ContentControl x:Name="WorkspaceHost" Content="{Binding CurrentWorkspace}"
+                                        IsVisible="{Binding CurrentWorkspace, Converter={x:Static ObjectConverters.IsNotNull}}">
+                            <ContentControl.DataTemplates>
+                                <views:RetainedViewTemplate x:DataType="vm:WorkspaceViewModel">
+                                    <views:WorkspaceView />
+                                </views:RetainedViewTemplate>
+                                <views:RetainedViewTemplate x:DataType="vm:RemoteSessionViewModel">
+                                    <views:RemoteSessionView />
+                                </views:RetainedViewTemplate>
+                            </ContentControl.DataTemplates>
+                        </ContentControl>
 
-                                                <ScrollViewer VerticalScrollBarVisibility="Auto"
-                                                              HorizontalScrollBarVisibility="Auto">
-                                                    <ItemsControl x:Name="ActivityItems" ItemsSource="{Binding Activity.Rows}"
-                                                                  HorizontalAlignment="Stretch">
-                                                        <!-- ContentPresenter defaults to Left; without Stretch each row
-                                                             sizes to its text and columns drift off the header. -->
-                                                        <ItemsControl.Styles>
-                                                            <Style Selector="ItemsControl > ContentPresenter">
-                                                                <Setter Property="HorizontalAlignment" Value="Stretch" />
-                                                            </Style>
-                                                        </ItemsControl.Styles>
-                                                        <ItemsControl.ItemTemplate>
-                                                            <DataTemplate x:DataType="vm:ActivityRow">
-                                                                <Border BorderBrush="{StaticResource KcapBorderBrush}"
-                                                                        BorderThickness="0,0,0,1" Padding="4,8">
-                                                                    <Grid ColumnDefinitions="118,76,128,78,*,78,96"
-                                                                          ColumnSpacing="10">
-                                                                        <TextBlock Grid.Column="0" Text="{Binding Time}" FontSize="12.5"
-                                                                                   Foreground="{StaticResource KcapTextBrush}"
-                                                                                   ToolTip.Tip="{Binding TimeTip}"
-                                                                                   TextTrimming="CharacterEllipsis" />
-                                                                        <TextBlock Grid.Column="1" Text="{Binding Outcome}" FontSize="12.5"
-                                                                                   TextTrimming="CharacterEllipsis"
-                                                                                   Foreground="{Binding IsAllowed, Converter={x:Static views:OutcomeBrushConverter.Instance}}" />
-                                                                        <TextBlock Grid.Column="2" Text="{Binding Requester}" FontSize="12.5"
-                                                                                   Foreground="{StaticResource KcapTextBrush}"
-                                                                                   ToolTip.Tip="{Binding Requester}"
-                                                                                   TextTrimming="CharacterEllipsis" />
-                                                                        <TextBlock Grid.Column="3" Text="{Binding KindLabel}" FontSize="12.5"
-                                                                                   Foreground="{StaticResource KcapTextBrush}"
-                                                                                   TextTrimming="CharacterEllipsis" />
-                                                                        <TextBlock Grid.Column="4" Text="{Binding RepoLeaf}" FontSize="12.5"
-                                                                                   Foreground="{StaticResource KcapTextBrush}"
-                                                                                   ToolTip.Tip="{Binding RepoFull}"
-                                                                                   TextTrimming="CharacterEllipsis" />
-                                                                        <TextBlock Grid.Column="5" Text="{Binding Vendor}" FontSize="12.5"
-                                                                                   Foreground="{StaticResource KcapTextBrush}"
-                                                                                   TextTrimming="CharacterEllipsis" />
-                                                                        <TextBlock Grid.Column="6" Text="{Binding SourceLabel}" FontSize="12.5"
-                                                                                   Foreground="{StaticResource KcapTextBrush}"
-                                                                                   ToolTip.Tip="{Binding SourceLabel}"
-                                                                                   TextTrimming="CharacterEllipsis" />
-                                                                    </Grid>
-                                                                </Border>
-                                                            </DataTemplate>
-                                                        </ItemsControl.ItemTemplate>
-                                                    </ItemsControl>
-                                                </ScrollViewer>
-                                            </DockPanel>
-                                        </Grid>
-                                    </Border>
-                                </Flyout>
-                            </Button.Flyout>
-                        </Button>
-                    </Grid>
-
-                    <views:LauncherPaneView Grid.Row="1" DataContext="{Binding Home}" />
+                        <Border x:Name="SwitchCover" Background="{StaticResource KcapCanvasBrush}" IsVisible="False">
+                            <views:StillImage x:Name="SwitchCoverStill" />
+                        </Border>
+                    </Panel>
                 </Grid>
-
-                <ContentControl x:Name="WorkspaceHost" Content="{Binding CurrentWorkspace}"
-                                IsVisible="{Binding CurrentWorkspace, Converter={x:Static ObjectConverters.IsNotNull}}">
-                    <ContentControl.DataTemplates>
-                        <DataTemplate x:DataType="vm:WorkspaceViewModel">
-                            <views:WorkspaceView />
-                        </DataTemplate>
-                        <DataTemplate x:DataType="vm:RemoteSessionViewModel">
-                            <views:RemoteSessionView />
-                        </DataTemplate>
-                    </ContentControl.DataTemplates>
-                </ContentControl>
             </Panel>
-        </Grid>
+        </LayoutTransformControl>
+
+        <!-- Unscaled like the strip above: the pane draws its own title-bar drag area. -->
+        <!-- Onboarding covers the rail and launcher until it hands over; see Onboarding. -->
+        <onboarding:OnboardingPaneView x:Name="OnboardingPane" DataContext="{x:Null}" IsVisible="False" />
     </Panel>
 </rxui:ReactiveWindow>

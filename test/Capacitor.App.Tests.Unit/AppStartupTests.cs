@@ -1,11 +1,14 @@
+using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.Services;
+using Capacitor.App.Services.LocalSetup;
 using Capacitor.App.Services.Mutation;
 using Capacitor.App.ViewModels;
+using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Remote.Models;
@@ -16,19 +19,15 @@ using Capacitor.Cli.Core;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// Regression coverage for a Critical bug found in review: OnFrameworkInitializationCompleted
-/// kicks off App.StartAsync fire-and-forget and returns immediately; Avalonia's
-/// StartWithClassicDesktopLifetime calls ShowMainWindow() exactly ONCE, synchronously, right
-/// after Start — and at that moment desktop.MainWindow was still null, because
-/// startup genuinely awaits real config I/O (and, in wizard-first mode, the whole wizard). By the
-/// time the continuation resumed and assigned desktop.MainWindow, nothing else ever called .Show()
-/// — the app booted a dispatcher loop showing nothing.
+/// OnFrameworkInitializationCompleted kicks off App.StartAsync fire-and-forget, and Avalonia's
+/// StartWithClassicDesktopLifetime calls ShowMainWindow() exactly ONCE, synchronously, while
+/// desktop.MainWindow is still null (startup awaits real config I/O and, in wizard-first mode,
+/// the whole wizard). Nothing else calls .Show(), so the continuation that assigns the window must
+/// show it itself, or the app boots a dispatcher loop showing nothing.
 ///
-/// That composition needs a real profile/daemon and isn't a seam a unit test can drive, so this
-/// exercises the closest testable seam: App.BuildAndShowMainWindow (internal, exposed to
-/// this assembly via InternalsVisibleTo) is the exact "build VM+window, assign, and Show()"
-/// continuation extracted out of StartAsync — this test proves THAT method actually leaves the
-/// window visible, against a fake service, without needing a real desktop lifetime or daemon.
+/// That composition needs a real profile/daemon, so this drives the closest seam:
+/// App.BuildAndShowMainWindow, the "build VM+window, assign, and Show()" continuation of
+/// StartAsync, proving it leaves the window visible against a fake service.
 public class AppStartupTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
     [TempDaemonPaths] public required TempDaemonStore Daemons { get; init; }
@@ -38,13 +37,15 @@ public class AppStartupTests {
             Task.FromResult(new LaunchOutcome(false, null, "unexpected launch"));
     }
 
+    AppStateStore AppState() => new(Config.Root.Path("app-state.json"));
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task BuildAndShowMainWindow_leaves_the_window_visible() {
         var isVisible = await AvaloniaSession.DispatchAsync(() => {
             var service = new FakeDaemonClientService();
             var (actions, notifier) = NewActions(service);
-            var window = AppUnderTest.BuildAndShowMainWindow(service, Config.Root, actions, notifier, new FakeTicker(), CancellationToken.None, TestActivity.New(), new NeverLaunchClient(), TimeProvider.System);
+            var window = AppUnderTest.BuildAndShowMainWindow(service, Config.Root, AppState(), actions, notifier, new FakeTicker(), CancellationToken.None, TestActivity.New(), new NeverLaunchClient(), TimeProvider.System);
             Dispatcher.UIThread.RunJobs(); // flush the deferred Loaded post (diagnostic parity with the smoke test)
 
             var visible = window.IsVisible;
@@ -55,8 +56,96 @@ public class AppStartupTests {
         await Assert.That(isVisible).IsTrue();
     }
 
+    /// The onboarding window becomes the main window in place: the same instance, its pane gone and
+    /// the rail and launcher back, rather than a second window opened beside a closed one.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task BuildAndShowMainWindow_takes_over_the_onboarding_window() {
+        var appState = AppState();
+        await appState.UpdateAsync(s => s with { WindowWidth = 1552, WindowHeight = 888 });
+        var savedState = await appState.LoadAsync();
+        // The handover uses its prepared snapshot, even if the store changes before it is applied.
+        await appState.UpdateAsync(s => s with { WindowWidth = 1600, WindowHeight = 900 });
+        var (same, paneVisible, surfaceVisible, handedVm, width, height) = await AvaloniaSession.DispatchAsync(async () => {
+            var (desktop, _) = FakeClassicDesktopLifetime.Create();
+            var wizard = new OnboardingViewModel([new FakeWizardStep(WizardStepId.Edition)]);
+            await wizard.PendingEnterForTesting;
+            var onboarding = AppUnderTest.ShowWizardWindow(desktop, wizard);
+            onboarding.Width = 820;
+            onboarding.Height = 700;
+            Dispatcher.UIThread.RunJobs();
+
+            var service = new FakeDaemonClientService();
+            var (actions, notifier) = NewActions(service);
+            var window = AppUnderTest.BuildAndShowMainWindow(
+                service, Config.Root, appState, actions, notifier, new FakeTicker(), CancellationToken.None,
+                TestActivity.New(), new NeverLaunchClient(), TimeProvider.System, adopt: (onboarding, savedState));
+            Dispatcher.UIThread.RunJobs();
+
+            var result = (ReferenceEquals(window, onboarding), window.OnboardingPane.IsVisible,
+                window.SessionsSurface.IsVisible, window.DataContext is MainWindowViewModel, window.Width, window.Height);
+            window.Close();
+            return result;
+        });
+
+        await Assert.That(same).IsTrue();
+        await Assert.That(paneVisible).IsFalse();
+        await Assert.That(surfaceVisible).IsTrue();
+        await Assert.That(handedVm).IsTrue();
+        await Assert.That(width).IsEqualTo(1552);
+        await Assert.That(height).IsEqualTo(888);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task BuildAndShowMainWindow_restores_the_remembered_window_placement() {
+        var appState = AppState();
+        await appState.UpdateAsync(s => s with { WindowWidth = 1552, WindowHeight = 888, WindowX = 120, WindowY = 80 });
+
+        var placement = await AvaloniaSession.DispatchAsync(() => {
+            var service = new FakeDaemonClientService();
+            var (actions, notifier) = NewActions(service);
+            var window = AppUnderTest.BuildAndShowMainWindow(service, Config.Root, appState, actions, notifier, new FakeTicker(), CancellationToken.None, TestActivity.New(), new NeverLaunchClient(), TimeProvider.System);
+            Dispatcher.UIThread.RunJobs();
+            var result = (window.Width, window.Height, window.Position.X, window.Position.Y);
+            window.Close();
+            return result;
+        });
+
+        await Assert.That(placement.Width).IsEqualTo(1552);
+        await Assert.That(placement.Height).IsEqualTo(888);
+        await Assert.That(placement.X).IsEqualTo(120);
+        await Assert.That(placement.Y).IsEqualTo(80);
+    }
+
+    /// Pins that the window keeps its state in the store it is handed. One it built itself over
+    /// the same file would carry its own lock, so its writes could interleave with the app's and
+    /// drop one. The handed store sits off the config root's own path — otherwise a window that
+    /// built its own would read and write the same file and this test would prove nothing.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task BuildAndShowMainWindow_keeps_its_state_in_the_store_it_is_handed() {
+        var handed = new AppStateStore(Config.PathTo("handed", "app-state.json"));
+        await handed.UpdateAsync(s => s with { WindowWidth = 1552, WindowHeight = 888 });
+
+        var restoredWidth = await AvaloniaSession.DispatchAsync(() => {
+            var service = new FakeDaemonClientService();
+            var (actions, notifier) = NewActions(service);
+            var window = AppUnderTest.BuildAndShowMainWindow(service, Config.Root, handed, actions, notifier, new FakeTicker(), CancellationToken.None, TestActivity.New(), new NeverLaunchClient(), TimeProvider.System);
+            Dispatcher.UIThread.RunJobs();
+            var width = window.Width;
+            window.Close(); // closing saves the placement, position included
+            Dispatcher.UIThread.RunJobs();
+            return width;
+        });
+
+        await Assert.That(restoredWidth).IsEqualTo(1552);
+        await Assert.That((await handed.LoadAsync()).WindowX).IsNotNull();
+        await Assert.That(File.Exists(Config.Root.Path("app-state.json"))).IsFalse();
+    }
+
     /// The service composition StartAsync builds once and shares between the window, the tray and
-    /// the pause controller (spec §7 one code path, §11 one banner/stderr channel).
+    /// the pause controller (one code path, one banner/stderr channel).
     static (AgentActionService Actions, IAppNotifier Notifier) NewActions(FakeDaemonClientService service) {
         var notifier = new AppNotifier();
         return (new AgentActionService(new ScriptedLocalControlOps(), notifier, new RecordingOpener(), service.SnapshotsSubject, CancellationToken.None, NeverConfirm.Confirm), notifier);
@@ -67,11 +156,11 @@ public class AppStartupTests {
     /// local-only AgentDirectory would leave the window looking identical for every LOCAL
     /// assertion, so this pins two REMOTE-only signals: the lane's own diagnostic (ServerLaneTip)
     /// and a remote-only row (never producible by the NoRemoteAgents/NoServerLane fallback)
-    /// reaching the rail's hosted count.
+    /// reaching the rail.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task BuildAndShowMainWindow_threads_the_injected_directory_and_lane_through() {
-        var (tip, hostedText) = await AvaloniaSession.DispatchAsync(() => {
+        var (tip, railRows) = await AvaloniaSession.DispatchAsync(() => {
             var service = new FakeDaemonClientService();
             var (actions, notifier) = NewActions(service);
             var remoteAgents = new FakeRemoteAgents();
@@ -83,12 +172,12 @@ public class AppStartupTests {
                 localMachineId: null, appServerUrl: null, TimeProvider.System);
 
             var window = AppUnderTest.BuildAndShowMainWindow(
-                service, Config.Root, actions, notifier, new FakeTicker(), CancellationToken.None, TestActivity.New(),
+                service, Config.Root, AppState(), actions, notifier, new FakeTicker(), CancellationToken.None, TestActivity.New(),
                 new NeverLaunchClient(), TimeProvider.System, directory: directory, remoteAgents: remoteAgents, lane: lane);
             Dispatcher.UIThread.RunJobs(); // ReactiveWindow<T>'s Loaded->Activator.Activate() wiring
 
             var vm = (MainWindowViewModel)window.DataContext!;
-            var result = (vm.ServerLaneTip, vm.Rail?.HostedText);
+            var result = (vm.ServerLaneTip, vm.Rail?.Groups.Sum(r => r.Sessions.Count));
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
@@ -96,14 +185,59 @@ public class AppStartupTests {
         });
 
         await Assert.That(tip).IsEqualTo("diagnostic-marker");
-        await Assert.That(hostedText).IsEqualTo("1 hosted");
+        await Assert.That(railRows).IsEqualTo(1);
     }
 
-    /// Regression coverage for a P2 bug found in review: the startup catch used to write to
-    /// Console.Error and call desktop.Shutdown(1) directly — but App is OutputType=WinExe, so a
-    /// normal GUI launch has no console, and a startup failure (bad config, window construction
-    /// throw) made the app silently vanish with zero actionable error. BuildStartupErrorWindow
-    /// is the replacement: a plain, visible window with a copyable (SelectableTextBlock) lead
+    sealed class AcceptingLaunchClient(string agentId) : ILaunchClient {
+        public Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct) =>
+            Task.FromResult(new LaunchOutcome(true, agentId, null));
+    }
+
+    /// Pins the wiring, not the rule: the launcher and the window only meet in the composition
+    /// root, so a failed launch hands the screen back only if the root ties the two together.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task BuildAndShowMainWindow_returns_a_failed_launch_to_the_launcher() {
+        const string agentId = "0123456789abcdef0123456789abcdef";
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var service = new FakeDaemonClientService();
+            service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            var (actions, notifier) = NewActions(service);
+            var lane = new FakeServerLane();
+            var attach = new FakeTerminalAttachClientFactory();
+
+            var window = AppUnderTest.BuildAndShowMainWindow(
+                service, Config.Root, AppState(), actions, notifier, new FakeTicker(), CancellationToken.None, TestActivity.New(),
+                new AcceptingLaunchClient(agentId), TimeProvider.System, lane: lane,
+                workspaceFactory: id => new WorkspaceViewModel(
+                    id, service, actions, attach.Factory, () => new FakeTerminalSurface(), TimeProvider.System, new RecordingOpener(),
+                    new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader()));
+            Dispatcher.UIThread.RunJobs();
+            var vm = (MainWindowViewModel)window.DataContext!;
+            var home = vm.Home!;
+
+            try {
+                await home.SelectRepositoryAsync("/repo/myproj");
+                home.Goal = "do the thing";
+                await home.StartCommand.Execute();
+                await Assert.That(vm.CurrentWorkspace?.AgentId).IsEqualTo(agentId);
+
+                lane.LaunchFailuresSubject.OnNext(new LaunchFailure(agentId, "launch_denied_by_owner: default"));
+                Dispatcher.UIThread.RunJobs();
+
+                await Assert.That(vm.CurrentWorkspace).IsNull();
+                await Assert.That(home.StartError).Contains("consent policy denied");
+            } finally {
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+            }
+        });
+    }
+
+    /// App is OutputType=WinExe, so a normal GUI launch has no console: a startup failure (bad
+    /// config, window construction throw) reported only to Console.Error would make the app
+    /// silently vanish. BuildStartupErrorWindow is a plain, visible window with a copyable (SelectableTextBlock) lead
     /// line plus the exception's full ToString(). This proves the rendered text actually carries
     /// both, the same way MainWindowSmokeTests proves bound VM text actually reaches the screen.
     [Test]
@@ -131,13 +265,12 @@ public class AppStartupTests {
         await Assert.That(rendered).Contains("boom-marker");
     }
 
-    /// Regression coverage for a P1 bug found in re-review: with the app's default ShutdownMode
-    /// (OnLastWindowClose, never set elsewhere), closing the error window used to exit 0 instead
-    /// of 1. Window.HandleClosed raises the CLR Closed event (our handler, calling Shutdown(1))
+    /// With the app's default ShutdownMode (OnLastWindowClose, never set elsewhere), closing the
+    /// error window would exit 0 instead of 1. Window.HandleClosed raises the CLR Closed event (our handler, calling Shutdown(1))
     /// BEFORE the routed WindowClosedEvent that OnLastWindowClose listens for; that routed event
     /// then drives an OnLastWindowClose TryShutdown() with its default exit code 0, which — via
     /// App.OnShutdownRequested's deferred cancel-then-retry dance — unconditionally overwrites
-    /// the exit code back to 0. ShowStartupError now pins ShutdownMode to OnExplicitShutdown
+    /// the exit code back to 0. ShowStartupError pins ShutdownMode to OnExplicitShutdown
     /// before showing the window, which disarms that whole branch. This drives ShowStartupError
     /// against a fake lifetime (no real desktop lifetime needed) and asserts: the mode is pinned
     /// and MainWindow assigned with no Shutdown call yet, then closing the window produces
@@ -169,19 +302,15 @@ public class AppStartupTests {
         await Assert.That(callsAfterClose).IsEquivalentTo([1], CollectionOrdering.Matching);
     }
 
-    /// Fix-round-1 regression coverage (Task 21), carried forward against Task 22's REAL
-    /// LifecyclePromptWindow/LifecyclePromptViewModel: the interim lifecycle prompt dialog used to
-    /// ignore its ConfirmAsync CancellationToken entirely — the tcs only ever resolved on a button
-    /// click or the window's own Closed event. Since ConfirmAndReplaceAsync holds the operation
-    /// gate across the whole ConfirmAsync await, a dialog left open through a lifetime-cancel (app
-    /// shutdown) would hold that gate forever, and QuiescedAsync (the very backstop shutdown
-    /// relies on) would never complete. WireDialogCancellation is the fix: a cancelled token
-    /// closes the dialog, which resolves false through the SAME Closed handler a manual
+    /// Against the REAL LifecyclePromptWindow/LifecyclePromptViewModel: ConfirmAndReplaceAsync
+    /// holds the operation gate across the whole ConfirmAsync await, so a dialog that ignored its
+    /// CancellationToken and stayed open through a lifetime-cancel (app shutdown) would hold that
+    /// gate forever, and QuiescedAsync (the backstop shutdown relies on) would never complete.
+    /// WireDialogCancellation closes the dialog on a cancelled token, which resolves false through the SAME Closed handler a manual
     /// Cancel/titlebar close uses (wired here exactly like App.ShowLifecyclePromptDialogAsync
     /// does, since that wiring — not the window itself — is what owns the fallback). The overall
-    /// dispatch is bounded (WaitAsync) so a reintroduced SizeToContent+Wrap headless hang (Task
-    /// 21's carried-forward finding) fails this test instead of hanging CI — LifecyclePromptWindow
-    /// deliberately uses a fixed Width/Height instead, see its .axaml.
+    /// dispatch is bounded (WaitAsync) so a SizeToContent+Wrap headless hang fails this test
+    /// instead of hanging CI.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task WireDialogCancellation_resolves_false_and_closes_the_dialog() {
@@ -243,33 +372,34 @@ public class AppStartupTests {
     /// forever until its ct is cancelled (RestartLoopAsync/DisposeAsync's normal teardown path)
     /// — enough to prove a DaemonClientService actually has a LIVE loop to dispose.
     sealed class ForeverRunClient {
-        public int LiveEnumerations;
+        readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        readonly TaskCompletionSource _ended   = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        int _live;
+
+        public int  LiveEnumerations => Volatile.Read(ref _live);
+        public Task Started          => _started.Task;
+        public Task Ended            => _ended.Task;
 
         public async IAsyncEnumerable<LocalControlEvent> Run([EnumeratorCancellation] CancellationToken ct) {
-            Interlocked.Increment(ref LiveEnumerations);
+            Interlocked.Increment(ref _live);
+            _started.TrySetResult();
             try {
                 yield return new LocalControlEvent.Connecting();
                 await Task.Delay(Timeout.Infinite, ct);
             } finally {
-                Interlocked.Decrement(ref LiveEnumerations);
+                if (Interlocked.Decrement(ref _live) == 0) _ended.TrySetResult();
             }
         }
     }
 
-    static async Task WaitUntilAsync(Func<bool> condition, TimeSpan? timeout = null) {
-        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(5));
-        while (!condition()) {
-            if (DateTime.UtcNow > deadline) throw new TimeoutException("condition not met in time");
-            await Task.Delay(10);
-        }
-    }
+    static readonly TimeSpan LoopSignalBound = TimeSpan.FromSeconds(30);
 
-    /// Regression coverage for a P2 bug found in review: a startup failure that happened AFTER
-    /// service.Start()/_service assignment (e.g. BuildAndShowMainWindow throwing) used to go
-    /// straight to ShowStartupError, abandoning the live IPC pump/socket — closing the error
-    /// window force-shuts-down via desktop.Shutdown(1), which bypasses OnShutdownRequested and
-    /// its async DisposeAsync entirely, so nothing else would ever clean it up. Drives the
-    /// extracted HandleStartupFailureAsync against a REAL DaemonClientService (constructed with
+    /// A startup failure AFTER service.Start()/_service assignment (e.g. BuildAndShowMainWindow
+    /// throwing) must dispose the live IPC pump/socket before ShowStartupError: closing the error
+    /// window force-shuts-down via desktop.Shutdown(1), which bypasses OnShutdownRequested and its
+    /// async DisposeAsync entirely, so nothing else would ever clean it up. Drives
+    /// HandleStartupFailureAsync against a REAL DaemonClientService (constructed with
     /// fakes, so disposal is directly observable) and asserts: the shutdown token is cancelled,
     /// the service's loop actually ends (proving DisposeAsync ran, not just was called), and the
     /// error window is still shown afterward exactly as ShowStartupError already guarantees.
@@ -279,7 +409,7 @@ public class AppStartupTests {
         var runClient = new ForeverRunClient();
         var service = new DaemonClientService("daemon-a", runClient.Run, _ => Task.FromResult<MutationOutcome>(new MutationOutcome.Refused("cli_not_found", RecoverySurface.Attention)));
         service.Start();
-        await WaitUntilAsync(() => runClient.LiveEnumerations >= 1);
+        await runClient.Started.WaitAsync(LoopSignalBound);
 
         var shutdown = new CancellationTokenSource();
 
@@ -294,18 +424,62 @@ public class AppStartupTests {
         await Assert.That(shutdown.IsCancellationRequested).IsTrue();
         await Assert.That(modeAfterShow).IsEqualTo(ShutdownMode.OnExplicitShutdown);
         await Assert.That(mainWindowAssigned).IsTrue();
-        await WaitUntilAsync(() => runClient.LiveEnumerations == 0, TimeSpan.FromSeconds(5));
+        await runClient.Ended.WaitAsync(LoopSignalBound);
+        await Assert.That(runClient.LiveEnumerations).IsEqualTo(0);
 
         // A second DisposeAsync (mirroring the real catch path's `_service = null` guard against
         // a later OnShutdownRequested double-dispose) must be a safe no-op, not a throw.
         await service.DisposeAsync();
     }
 
+    /// The error window's close shuts the app down directly, so this is the only place a running
+    /// upgrade is interrupted and waited for before the process can exit under a switch.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task HandleStartupFailureAsync_settles_a_running_local_upgrade_before_the_error_window() {
+        var interrupts = 0;
+        bool? windowShownAtInterrupt = null;
+        Func<bool>? windowShown = null;
+        var cli = new FakeKcapCli {
+            LocalUpgradeBehavior = async (_, interrupt, _) => {
+                var interrupted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                await using (interrupt.Register(() => {
+                    Interlocked.Increment(ref interrupts);
+                    windowShownAtInterrupt = windowShown?.Invoke();
+                    interrupted.TrySetResult();
+                })) {
+                    await interrupted.Task;
+                }
+                return new StreamingResult(1, false, []);
+            },
+        };
+        var upgrade = new LocalUpgradeController(() => cli, action => action());
+
+        var settled = await AvaloniaSession.DispatchAsync(async () => {
+            var (desktop, fake) = FakeClassicDesktopLifetime.Create();
+            windowShown = () => fake.MainWindow is not null;
+            await upgrade.StartAsync(CancellationToken.None);
+            await AppUnderTest.HandleStartupFailureAsync(
+                desktop, new InvalidOperationException("boom"), service: null, new CancellationTokenSource(), [],
+                upgrade: upgrade);
+            Dispatcher.UIThread.RunJobs();
+            var result = upgrade.Outcome is not null && !upgrade.Running;
+            // The headless session is shared by every UI test; an error window left open stays active.
+            fake.MainWindow?.Close();
+            return result;
+        });
+
+        await Assert.That(interrupts).IsEqualTo(1);
+        await Assert.That(windowShownAtInterrupt).IsNotNull();
+        await Assert.That(windowShownAtInterrupt!.Value).IsFalse();
+        await Assert.That(settled).IsTrue();
+    }
+
     sealed class NeverObservation : IDaemonObservation {
         public Task<ObservedEvidence?> ObserveAsync(MutationRequest request, CancellationToken ct) => Task.FromResult<ObservedEvidence?>(null);
     }
 
-    /// Task 10: the lane is disposed too during startup-failure cleanup (last, after
+    /// The lane is disposed too during startup-failure cleanup (last, after
     /// lifecycle/service — see HandleStartupFailureAsync's own ordering comment) — a disposed
     /// lane cancels every subsequent RunAsync immediately, the observable proof this step ran.
     [Test]
@@ -332,13 +506,12 @@ public class AppStartupTests {
         await Assert.ThrowsAsync<OperationCanceledException>(() => lane.RunAsync(request, CancellationToken.None));
     }
 
-    /// Regression coverage for a P2 bug found in re-review: TryShutdown() in the DEFERRED
-    /// shutdown path (OnShutdownRequested -> DisposeAndShutdownAsync — e.g. Cmd+Q while the
-    /// startup-error window is still up) used to be called with no exit code, defaulting to 0 —
-    /// silently overwriting the startup failure with an apparent success. Drives the extracted
+    /// TryShutdown() in the DEFERRED shutdown path (OnShutdownRequested -> DisposeAndShutdownAsync,
+    /// e.g. Cmd+Q while the startup-error window is still up) must carry the exit code: a default
+    /// 0 would overwrite the startup failure with an apparent success. Drives
     /// DisposeAndConfirmShutdownAsync directly: a real DaemonClientService (fakes, disposal
     /// observable) and the same fake IClassicDesktopStyleApplicationLifetime used above, with
-    /// exitCode: 1 (what StartAsync's catch now sets on _exitCode before a later
+    /// exitCode: 1 (what StartAsync's catch sets on _exitCode before a later
     /// OnShutdownRequested can reach this path). No Avalonia session needed — DispatchProxy and
     /// DaemonClientService are both plain .NET, same as DaemonClientServiceTests.
     [Test]
@@ -346,7 +519,7 @@ public class AppStartupTests {
         var runClient = new ForeverRunClient();
         var service = new DaemonClientService("daemon-a", runClient.Run, _ => Task.FromResult<MutationOutcome>(new MutationOutcome.Refused("cli_not_found", RecoverySurface.Attention)));
         service.Start();
-        await WaitUntilAsync(() => runClient.LiveEnumerations >= 1);
+        await runClient.Started.WaitAsync(LoopSignalBound);
 
         var (desktop, fake) = FakeClassicDesktopLifetime.Create();
         // Ordering pin: markConfirmed must observably run BEFORE TryShutdown is called — proven
@@ -361,30 +534,12 @@ public class AppStartupTests {
 
         await Assert.That(confirmedBeforeShutdownCall).IsTrue();
         await Assert.That(fake.ShutdownCalls).IsEquivalentTo([1], CollectionOrdering.Matching);
-        await WaitUntilAsync(() => runClient.LiveEnumerations == 0, TimeSpan.FromSeconds(5));
+        await runClient.Ended.WaitAsync(LoopSignalBound);
+        await Assert.That(runClient.LiveEnumerations).IsEqualTo(0);
     }
 
-    /// Same seam, but the normal (non-failure) exit code: a plain Cmd+Q with no prior startup
-    /// failure must still carry 0 through — this fix must not change the happy path.
-    [Test]
-    public async Task DisposeAndConfirmShutdownAsync_normal_shutdown_carries_exit_code_zero() {
-        var runClient = new ForeverRunClient();
-        var service = new DaemonClientService("daemon-a", runClient.Run, _ => Task.FromResult<MutationOutcome>(new MutationOutcome.Refused("cli_not_found", RecoverySurface.Attention)));
-        service.Start();
-        await WaitUntilAsync(() => runClient.LiveEnumerations >= 1);
-
-        var (desktop, fake) = FakeClassicDesktopLifetime.Create();
-
-        await AppUnderTest.DisposeAndConfirmShutdownAsync(service.DisposeAsync, markConfirmed: () => { }, desktop, exitCode: 0);
-
-        await Assert.That(fake.ShutdownCalls).IsEquivalentTo([0], CollectionOrdering.Matching);
-    }
-
-    /// Regression coverage for a Qodo review finding: DisposeAndConfirmShutdownAsync used to call
-    /// disposeAsync() with no surrounding try/catch/finally, so a throw left markConfirmed and
-    /// TryShutdown never called — _shutdownConfirmed stuck false while _shutdownStarted stayed
-    /// true, cancelling every later quit forever. Drives a disposeAsync delegate that throws and
-    /// asserts confirm still happens and TryShutdown still carries the exit code.
+    /// A throwing disposeAsync must still confirm and shut down: otherwise _shutdownConfirmed stays
+    /// false while _shutdownStarted is true, cancelling every later quit forever.
     [Test]
     public async Task DisposeAndConfirmShutdownAsync_confirms_and_shuts_down_when_dispose_throws() {
         var (desktop, fake) = FakeClassicDesktopLifetime.Create();
@@ -429,9 +584,9 @@ public class AppStartupTests {
         await Assert.That(fake.ShutdownCalls).IsEquivalentTo([0], CollectionOrdering.Matching);
     }
 
-    // spec §3.6: shutdown awaits DaemonLifecycleController.QuiescedAsync (mutations are never
+    // Shutdown awaits DaemonLifecycleController.QuiescedAsync (mutations are never
     // abandoned) but only up to a cap, since an internally-triggered mutation has no shutdown-token
-    // wiring of its own. AwaitQuiescedAsync is the extracted seam DisposeAndShutdownAsync wires it
+    // wiring of its own. AwaitQuiescedAsync is the seam DisposeAndShutdownAsync wires it
     // through — no live controller/App needed to drive it directly.
     [Test]
     public async Task AwaitQuiescedAsync_returns_once_the_wait_completes() {
@@ -460,8 +615,7 @@ public class AppStartupTests {
         public void Dispose() => onDispose();
     }
 
-    /// Ordering pin for spec §9's "quit never strands a menu-bar icon" and spec §5's consent
-    /// shutdown order: the UI-thread-owned disposables run, in the order given (tray icon first,
+    /// Ordering pin for "quit never strands a menu-bar icon" and the consent shutdown order: the UI-thread-owned disposables run, in the order given (tray icon first,
     /// then the prompt coordinator BEFORE the consent service it resolves against), all BEFORE the
     /// service dispose / markConfirmed / TryShutdown pass. Driven through a recording list rather
     /// than the real App fields, which no test can populate (StartAsync's composition needs a real
@@ -512,7 +666,7 @@ public class AppStartupTests {
         await Assert.That(fake.ShutdownCalls).IsEquivalentTo([1], CollectionOrdering.Matching);
     }
 
-    // ---- MainWindowCoordinator: hide-to-tray lifecycle (spec §9) ----
+    // ---- MainWindowCoordinator: hide-to-tray lifecycle ----
     //
     // Real headless MainWindows with no DataContext: these pin window lifecycle, not bindings
     // (MainWindowSmokeTests owns the bound-text coverage), and the coordinator's Closing
@@ -578,7 +732,7 @@ public class AppStartupTests {
         await Assert.That(stillTracked).IsFalse();
     }
 
-    /// Tray "Open Kurrent Capacitor" on a hidden window re-shows THAT window (no rebuild).
+    /// Tray "Open kcap" on a hidden window re-shows THAT window (no rebuild).
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task ShowMainWindow_reshows_same_instance() {
@@ -606,7 +760,7 @@ public class AppStartupTests {
 
     /// After a REAL close (quit path only) the tracked window is gone, so a later ShowMainWindow
     /// must build a fresh one from the factory — Avalonia throws on Show() of a closed window,
-    /// and no view state is lost (everything displayed comes from the live service, spec §9).
+    /// and no view state is lost (everything displayed comes from the live service).
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task ShowMainWindow_builds_fresh_after_real_close() {
@@ -636,13 +790,12 @@ public class AppStartupTests {
         await Assert.That(builds).IsEqualTo(2);
     }
 
-    /// Regression coverage for an Important finding in review: QuitInProgress used to be set
-    /// AFTER OnShutdownRequested's `_shutdownConfirmed` guard, so a coordinator that came into
-    /// existence BETWEEN the two passes was never flagged. Shape: a quit (or an OS logout) lands
+    /// QuitInProgress must be set BEFORE OnShutdownRequested's `_shutdownConfirmed` guard, or a
+    /// coordinator that comes into existence BETWEEN the two passes is never flagged. Shape: a quit (or an OS logout) lands
     /// while startup is still resolving (or still showing the wizard) — pass 1 sees a null coordinator — and
     /// StartAsync's continuation then builds the window during the deferred disposal's await.
-    /// Pass 2 closed the windows with hide-on-close still armed: the window cancelled its own
-    /// close, and (decompiler-verified) DoShutdown aborts once a close is cancelled with windows
+    /// Pass 2 would close the windows with hide-on-close still armed: the window cancels its own
+    /// close, and DoShutdown aborts once a close is cancelled with windows
     /// still open, after which every later quit early-returns on _shutdownConfirmed — an app that
     /// can only be force-quit, over an already-disposed service. Drives the real pass logic in
     /// the real order, with the deferred pass in between.
@@ -657,7 +810,7 @@ public class AppStartupTests {
 
             // StartAsync's continuation resumes DURING the deferred disposal's await and builds
             // the window. Its own `QuitInProgress = _shutdownStarted` belt-and-braces is
-            // deliberately NOT applied here: this test pins the guard-ordering half of the fix,
+            // deliberately NOT applied here: this test pins the guard ordering,
             // so the coordinator arrives unflagged and only pass 2 can save the shutdown.
             var (coordinator, _) = NewCoordinator();
             coordinator.ShowMainWindow();
@@ -683,7 +836,7 @@ public class AppStartupTests {
         await Assert.That(shutdownCalls).IsEquivalentTo([1], CollectionOrdering.Matching);
     }
 
-    /// Spec §9: on a startup failure the error window is the only surface. Tray creation is
+    /// On a startup failure the error window is the only surface. Tray creation is
     /// structurally the LAST step of StartAsync's success path, so the failure path cannot have
     /// created one — this pins the other half of that claim, that the failure path itself never
     /// registers a tray icon on the Application.
@@ -705,6 +858,75 @@ public class AppStartupTests {
 
         await Assert.That(trayIcons).IsEqualTo(0);
         await Assert.That(errorWindowShown).IsTrue();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Startup_failure_closes_the_main_window_and_disables_approval_menus() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var (desktop, fake) = FakeClassicDesktopLifetime.Create();
+            var (coordinator, _) = NewCoordinator();
+            coordinator.ShowMainWindow();
+            var main = coordinator.Window!;
+            desktop.MainWindow = main;
+            var bar = new AppMenuBar(new RecordingOpener(), () => [], () => null);
+            bar.SetLaunchApprovalsAction(() => { });
+            var originalMenu = bar.Build(main);
+            var approvals = ((NativeMenuItem)originalMenu.Items[0]).Menu!.Items
+                .OfType<NativeMenuItem>().Single(i => i.Header == "Launch approvals…");
+            await Assert.That(approvals.IsEnabled).IsTrue();
+            using var shutdown = new CancellationTokenSource();
+            await AppUnderTest.HandleStartupFailureAsync(
+                desktop, new InvalidOperationException("boom"), service: null, shutdown, [], menuBar: bar, coordinator: coordinator);
+            Dispatcher.UIThread.RunJobs();
+
+            try {
+                await Assert.That(coordinator.Window).IsNull();
+                await Assert.That((object?)AppUnderTest.MainWindowAction(coordinator)).IsNull();
+                coordinator.ShowMainWindow();
+                await Assert.That(coordinator.Window).IsNull();
+                await Assert.That(main.IsVisible).IsFalse();
+                await Assert.That(approvals.IsEnabled).IsFalse();
+                await Assert.That(fake.MainWindow).IsNotNull();
+                await Assert.That(fake.MainWindow!.IsVisible).IsTrue();
+                var errorMenu = bar.Build(fake.MainWindow);
+                var errorApprovals = ((NativeMenuItem)errorMenu.Items[0]).Menu!.Items
+                    .OfType<NativeMenuItem>().Single(i => i.Header == "Launch approvals…");
+                await Assert.That(errorApprovals.IsEnabled).IsFalse();
+            } finally {
+                fake.MainWindow?.Close();
+                Dispatcher.UIThread.RunJobs();
+            }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Startup_failure_closes_the_wizard_without_requesting_handover() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var (desktop, fake) = FakeClassicDesktopLifetime.Create();
+            using var shutdown = new CancellationTokenSource();
+            var wizard = new OnboardingViewModel([new FakeWizardStep(WizardStepId.Edition)], shutdown.Token);
+            await wizard.PendingEnterForTesting;
+            var window = AppUnderTest.ShowWizardWindow(desktop, wizard,
+                shuttingDown: () => shutdown.IsCancellationRequested);
+            var closed = false;
+            window.Closed += (_, _) => closed = true;
+
+            await AppUnderTest.HandleStartupFailureAsync(
+                desktop, new InvalidOperationException("boom"), service: null, shutdown, []);
+
+            try {
+                await Assert.That(shutdown.IsCancellationRequested).IsTrue();
+                await Assert.That(closed).IsTrue();
+                await Assert.That(wizard.Closed).IsFalse();
+                await Assert.That(fake.MainWindow).IsNotSameReferenceAs(window);
+                await Assert.That(fake.MainWindow!.IsVisible).IsTrue();
+            } finally {
+                fake.MainWindow?.Close();
+                Dispatcher.UIThread.RunJobs();
+            }
+        });
     }
 
     /// A failure LATER in the success path (e.g. the tray's own construction throwing) leaves the

@@ -17,7 +17,7 @@ namespace Capacitor.App.Tests.Unit;
 /// shares ONE live Dispatcher.UIThread across every [NotInParallel("AvaloniaSession")] test
 /// (AvaloniaSession is a process-global headless session). A REAL
 /// ClassicDesktopStyleApplicationLifetime's Shutdown()/TryShutdown() ends, unconditionally, in
-/// Dispatcher.UIThread.InvokeShutdown() (decompiler-verified) — that would tear down the shared
+/// Dispatcher.UIThread.InvokeShutdown(), which would tear down the shared
 /// dispatcher for every test that runs after this one. This fake never touches that machinery at
 /// all: it only records the calls, so it is safe to use inside the shared session.
 public class FakeClassicDesktopLifetime : DispatchProxy {

@@ -9,6 +9,9 @@ namespace Capacitor.App.ViewModels;
 /// a repository root is stripped as well.
 public static class ToolDetail {
     const int MaxLength = 80;
+    /// A question is read rather than scanned — the row wraps it instead of eliding — so the only
+    /// cap on it is the one that keeps an unbounded prompt out of a notification body.
+    const int MaxQuestionLength = 400;
     const string WorktreesSegment = "/.capacitor/worktrees/";
 
     static readonly string[] Keys = [
@@ -16,15 +19,85 @@ public static class ToolDetail {
     ];
     static readonly string[] PathKeys = ["file_path", "path", "notebook_path"];
 
-    public static string From(string? inputJson, string? root = null) {
+    public static string From(string? inputJson, string? root = null, ToolCategory category = ToolCategory.Other) {
         if (string.IsNullOrEmpty(inputJson)) return "";
         try {
             using var doc = JsonDocument.Parse(inputJson);
             if (!doc.RootElement.IsObject) return "";
-            foreach (var key in Keys) {
-                if (doc.RootElement.Str(key) is { } s && s.Trim().Length > 0)
-                    return FirstLine(PathKeys.Contains(key) ? Relative(s.Trim(), root) : s);
+            if (doc.RootElement.Arr("questions") is { } questions) {
+                foreach (var item in questions.EnumerateArray()) {
+                    if (item.Str("question") is { } text && text.Trim().Length > 0)
+                        return TextElision.End(FirstLine(text), MaxQuestionLength);
+                }
             }
+            if (category == ToolCategory.Question && doc.RootElement.Str("prompt") is { } prompt && prompt.Trim().Length > 0)
+                return TextElision.End(FirstLine(prompt), MaxQuestionLength);
+            foreach (var key in Keys) {
+                if (category == ToolCategory.Question && key == "prompt") continue;
+                if (doc.RootElement.Str(key) is { } s && s.Trim().Length > 0)
+                    return TextElision.Middle(FirstLine(PathKeys.Contains(key) ? Relative(s.Trim(), root) : s), MaxLength);
+            }
+        } catch (JsonException) { }
+        return "";
+    }
+
+    /// The one argument a catalogued kcap row shows, first line only, elided like any detail.
+    public static string ForKey(string? inputJson, string? key) {
+        var raw = RawForKey(inputJson, key);
+        return raw.Length > 0 ? TextElision.End(FirstLine(raw), MaxLength) : "";
+    }
+
+    public static string RawForKey(string? inputJson, string? key) {
+        if (string.IsNullOrEmpty(inputJson) || string.IsNullOrEmpty(key)) return "";
+        try {
+            using var doc = JsonDocument.Parse(inputJson);
+            if (!doc.RootElement.IsObject) return "";
+            return doc.RootElement.Str(key) is { } s && s.Trim().Length > 0 ? FirstLine(s) : "";
+        } catch (JsonException) {
+            return "";
+        }
+    }
+
+    public static string? ImageFile(string? inputJson) {
+        foreach (var key in PathKeys) {
+            var path = RawForKey(inputJson, key);
+            if (path.Length == 0) continue;
+            if (IsImageExtension(path)) return path;
+        }
+        return null;
+    }
+
+    internal static string? ResolvePreviewPath(string? path, string? root) {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        try {
+            if (Path.IsPathFullyQualified(path)) return path;
+            return string.IsNullOrEmpty(root) || !Path.IsPathFullyQualified(root)
+                ? null : Path.GetFullPath(path, root);
+        } catch (ArgumentException) {
+            return null;
+        }
+    }
+
+    internal static bool IsImageExtension(string path) {
+        var ext = System.IO.Path.GetExtension(path);
+        return ext.Equals(".png", StringComparison.OrdinalIgnoreCase)
+            || ext.Equals(".jpg", StringComparison.OrdinalIgnoreCase)
+            || ext.Equals(".jpeg", StringComparison.OrdinalIgnoreCase)
+            || ext.Equals(".gif", StringComparison.OrdinalIgnoreCase)
+            || ext.Equals(".webp", StringComparison.OrdinalIgnoreCase)
+            || ext.Equals(".bmp", StringComparison.OrdinalIgnoreCase)
+            || ext.Equals(".svg", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// For a tool nothing describes: the first string argument, in declaration order.
+    public static string FirstString(string? inputJson) {
+        if (string.IsNullOrEmpty(inputJson)) return "";
+        try {
+            using var doc = JsonDocument.Parse(inputJson);
+            if (!doc.RootElement.IsObject) return "";
+            foreach (var property in doc.RootElement.EnumerateObject())
+                if (property.Value.IsString && property.Value.GetString() is { } s && s.Trim().Length > 0)
+                    return TextElision.End(FirstLine(s), MaxLength);
         } catch (JsonException) { }
         return "";
     }
@@ -44,10 +117,6 @@ public static class ToolDetail {
     static string FirstLine(string text) {
         var line = text.Trim();
         var newline = line.IndexOfAny(['\r', '\n']);
-        if (newline >= 0) line = line[..newline].TrimEnd();
-        if (line.Length <= MaxLength) return line;
-        var cut = MaxLength - 1;
-        if (char.IsHighSurrogate(line[cut - 1])) cut--;
-        return string.Concat(line.AsSpan(0, cut), "…");
+        return newline < 0 ? line : line[..newline].TrimEnd();
     }
 }

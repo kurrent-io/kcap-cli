@@ -25,6 +25,19 @@ public class WatchSecondaryPullRequestTests {
         return state;
     }
 
+    /// The first probe waits for a root, then the next waits a minute after it.
+    [Test]
+    public async Task The_secondary_probe_is_due_only_once_a_root_is_known() {
+        var now   = DateTimeOffset.UnixEpoch.AddDays(1);
+        var empty = new WatchState { SecondaryRoots = new SecondaryRepoRoots(FakeFindRoot, "/h/dev/server") };
+        var known = StateWithSecondaryRoot();
+
+        await Assert.That(WatchCommand.SecondaryProbeDue(empty, now)).IsFalse();
+        await Assert.That(WatchCommand.SecondaryProbeDue(known, now)).IsTrue();
+        known.LastSecondaryProbe = now.AddSeconds(-30);
+        await Assert.That(WatchCommand.SecondaryProbeDue(known, now)).IsFalse();
+    }
+
     static RepositoryPayload CliPr(int number = 915, string host = "github.com") => new() {
         Host = host, Owner = "kurrent-io", RepoName = "kcap-cli", Branch = "feature", PrNumber = number, PrUrl = $"https://{host}/kurrent-io/kcap-cli/pull/{number}"
     };

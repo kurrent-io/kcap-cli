@@ -40,7 +40,7 @@ internal static class AcpPermissionPresetPolicy {
                  + "permission preset does not apply.";
 
         if (!AcpPermissionPresets.IsKnown(preset))
-            return $"acp_preset_invalid: unknown preset '{preset}'. Valid values: explore, edit.";
+            return $"acp_preset_invalid: unknown preset '{preset}'. Valid values: {string.Join(", ", AcpPermissionPresets.Advertised)}.";
 
         return null;
     }

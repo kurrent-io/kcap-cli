@@ -7,6 +7,30 @@ namespace Capacitor.Cli.Commands;
 /// typed argument must fail loudly rather than be dropped — while the rules the server owns
 /// (vocabularies, cross-entity constraints) surface as its coded 4xx bodies.</summary>
 static class McpToolArguments {
+    /// <summary>The refusal for a call to one of <paramref name="tools"/> that passes arguments its schema does not
+    /// declare, naming them and the ones it does; null otherwise, including for a tool not in the list, which its
+    /// server answers itself. An undeclared argument would otherwise be dropped, and a dropped filter reads as an
+    /// applied one.</summary>
+    internal static string? UndeclaredArguments(IReadOnlyList<McpTool> tools, JsonObject request) {
+        try {
+            if (request["params"] is not JsonObject parameters) return null;
+            if (parameters["name"] is not JsonValue nameValue || !nameValue.TryGetValue<string>(out var name)) return null;
+            if (tools.FirstOrDefault(t => t.Name == name) is not { } tool) return null;
+            if (parameters["arguments"] is not JsonObject arguments) return null;
+
+            var declared = tool.InputSchema.Properties;
+            List<string> unknown = [.. arguments.Select(a => a.Key).Where(key => !declared.ContainsKey(key))];
+            if (unknown.Count == 0) return null;
+
+            var accepted = declared.Count == 0 ? "it takes no arguments" : $"it takes {string.Join(", ", declared.Keys)}";
+
+            return $"{name} does not take {string.Join(", ", unknown)}: {accepted}. Nothing was done.";
+        } catch (ArgumentException) {
+            // A duplicated key surfaces on the first read of its object, and the tool's own handler answers it.
+            return null;
+        }
+    }
+
     /// <summary>A required non-blank string; absent, null, blank or wrong-typed throws the clean
     /// tool-error shape.</summary>
     internal static string RequireString(JsonObject? args, string key) {
@@ -18,6 +42,16 @@ static class McpToolArguments {
             throw new ArgumentException($"'{key}' must be a string.");
 
         if (string.IsNullOrWhiteSpace(value)) throw new ArgumentException($"'{key}' must not be blank.");
+
+        return value;
+    }
+
+    /// <summary>A required non-blank string, trimmed, of at most <paramref name="maxLength"/> characters.</summary>
+    internal static string RequireBoundedString(JsonObject? args, string key, int maxLength) {
+        var value = RequireString(args, key).Trim();
+
+        if (value.Length > maxLength)
+            throw new ArgumentException($"'{key}' is {value.Length} characters; the limit is {maxLength}.");
 
         return value;
     }
@@ -35,6 +69,18 @@ static class McpToolArguments {
         var trimmed = value.Trim();
 
         return trimmed.Length == 0 ? null : trimmed;
+    }
+
+    /// <summary>An optional boolean: absent or JSON null is null; a present non-boolean throws.</summary>
+    internal static bool? OptionalBool(JsonObject? args, string key) {
+        var node = args?[key];
+
+        if (node is null) return null;
+
+        if (node is not JsonValue jsonValue || !jsonValue.TryGetValue<bool>(out var value))
+            throw new ArgumentException($"'{key}' must be a boolean.");
+
+        return value;
     }
 
     /// <summary>Reads a numeric field as int. Returns false ONLY when the key is absent or JSON null;
@@ -68,5 +114,44 @@ static class McpToolArguments {
         }
 
         throw new ArgumentException($"'{key}' must be an integer.");
+    }
+
+    /// <summary>Reads a numeric field as long, false only when absent or JSON null. Besides a JSON
+    /// integer it takes a canonical integer string (<c>^-?(0|[1-9]\d*)$</c>), the other shape the
+    /// server's int64 fields are declared with, so a token copied verbatim from a response round-trips.
+    /// Any other present shape throws.</summary>
+    internal static bool TryReadLong(JsonObject? args, string key, out long value) {
+        value = 0;
+        var node = args?[key];
+
+        if (node is null) return false;
+
+        if (node is JsonValue v) {
+            if (v.TryGetValue<JsonElement>(out var el)) {
+                if (el.IsNumber && el.TryGetInt64(out value)) return true;
+                if (el.IsString && TryParseCanonical(el.GetString(), out value)) return true;
+            } else if (v.TryGetValue(out value)) {
+                return true;
+            } else if (v.TryGetValue<int>(out var iv)) {
+                value = iv;
+                return true;
+            } else if (v.TryGetValue<string>(out var sv) && TryParseCanonical(sv, out value)) {
+                return true;
+            }
+        }
+
+        throw new ArgumentException($"'{key}' must be an integer.");
+    }
+
+    static bool TryParseCanonical(string? s, out long value) {
+        value = 0;
+        if (string.IsNullOrEmpty(s)) return false;
+
+        var digits = s[0] == '-' ? s.AsSpan(1) : s.AsSpan();
+        if (digits.IsEmpty || (digits[0] == '0' && digits.Length > 1)) return false;
+        foreach (var c in digits)
+            if (c is < '0' or > '9') return false;
+
+        return long.TryParse(s, System.Globalization.NumberStyles.AllowLeadingSign, System.Globalization.CultureInfo.InvariantCulture, out value);
     }
 }

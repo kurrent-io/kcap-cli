@@ -30,7 +30,8 @@ public class LocalControlProbeTests {
     sealed class NoopPtyProcessFactory : IPtyProcessFactory {
         public IPtyProcess Spawn(
                 string command, string[] args, string cwd,
-                Dictionary<string, string>? extraEnv = null, ushort cols = 120, ushort rows = 40
+                Dictionary<string, string>? extraEnv = null, ushort cols = 120, ushort rows = 40,
+                IReadOnlyCollection<string>? removeEnv = null
             ) => throw new NotSupportedException("LocalControlProbeTests never spawns a PTY");
     }
 
@@ -61,7 +62,7 @@ public class LocalControlProbeTests {
         var consentIpc  = new LaunchConsentIpc(broker, store, config, NullLogger<LaunchConsentIpc>.Instance);
 
         var tokens           = AuthFixtures.NewTokenStore(Config.Root);
-        var connection       = new ServerConnection(config, tokens, NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, TimeProvider.System);
+        var connection       = new ServerConnection(config, new FixedCredentialSource(), NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, TimeProvider.System);
         var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
         var repoMatcher      = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance, TimeProvider.System);
         var permissionBridge = new LocalPermissionBridge(connection, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance, TimeProvider.System);
@@ -79,7 +80,7 @@ public class LocalControlProbeTests {
         var statusIpc = new DaemonStatusIpc(config, orchestrator, connection, notifier, TimeProvider.System);
         var settingsIpc = new DaemonSettingsIpc(config, orchestrator, notifier, NullLogger<DaemonSettingsIpc>.Instance);
         var restart = RestartCoordinator.ForTest(daemons.Store, daemonName, daemonName, new NoopRestartStrategy(), TimeProvider.System);
-        var server = new LocalControlServer(config, orchestrator, restart, consentIpc, permissionIpc, statusIpc, settingsIpc, NullLogger<LocalControlServer>.Instance);
+        var server = new LocalControlServer(config, orchestrator, restart, consentIpc, permissionIpc, statusIpc, settingsIpc, TestFences.Ipc(config, orchestrator), TestShutdown.Ipc(orchestrator, restart), TestAccountsIpc.Inert(), NullLogger<LocalControlServer>.Instance);
         await server.StartAsync(ct);
 
         var sockPath = daemons.Store.SocketPath(daemonName);

@@ -40,6 +40,8 @@ sealed class AntigravityHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
         HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
         GitProviderRouter router, WorkingDirectory workdir) {
+    readonly SessionStartAudience audience = SessionStartAudience.From(hosted);
+
     readonly AgentHookPoster _poster = new(config, profiles, http, watchers, clock.Time);
 
     string Url => profiles.Resolution.ServerUrl!;
@@ -188,8 +190,9 @@ sealed class AntigravityHookCommand(
         // Start the memory fetch so it OVERLAPS the lifecycle POST. Never before it, and never
         // awaited before it — the POST is what capture depends on.
         var memoryTask = StartMemoryIndexTask(sessionId, scopeRoot,
-            activeProfile?.DisableMemoryIndex is true,
+            activeProfile?.DisableMemoryIndex is true || !audience.GetsDriverGuidance,
             activeProfile?.DisableSessionGuidelines is true,
+            SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Antigravity, harnesses, audience: audience),
             budget.Remaining);
 
         // Task 6: spawn-before-post. Route through the shared spool-aware poster (which
@@ -217,9 +220,9 @@ sealed class AntigravityHookCommand(
         // re-injects them as another persistent userMessage step.
         var workItemsNudge = IsFirstInvocation(payload)
             ? HarnessNudgeEmitter.Combine(
-                WorkItemsNudgeEmitter.Resolve(HarnessId.Antigravity, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
-                PlansNudgeEmitter.Resolve(HarnessId.Antigravity, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
-                HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time))
+                SessionNudges.Resolve(HarnessId.Antigravity, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience, cwd, home),
+                HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true || !audience.GetsOnboarding, config, harnesses, clock.Time),
+                FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true || !audience.GetsOnboarding, config, HarnessId.Antigravity, harnesses))
             : null;
         WritePreInvocationOutput(stdout, fragment, workItemsNudge);
         await stdout.FlushAsync();
@@ -298,8 +301,9 @@ sealed class AntigravityHookCommand(
             string?    scopeRoot,
             bool       disabled,
             bool       guidelinesDisabled,
+            bool       flowsDisabled,
             TimeSpan   budget) {
-        if ((disabled && guidelinesDisabled) || string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(scopeRoot)
+        if ((disabled && guidelinesDisabled && flowsDisabled) || string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(scopeRoot)
          || budget <= TimeSpan.Zero
          || !HookHttp.IsPostable(Url))
             return null;
@@ -311,7 +315,7 @@ sealed class AntigravityHookCommand(
             return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
                 LifecycleFor(sessionId),
                 new SessionStartMemoryContextRequest(Url, scopeRoot, disabled, budget, CancellationToken.None,
-                    GuidelinesDisabled: guidelinesDisabled));
+                    GuidelinesDisabled: guidelinesDisabled, FlowsDisabled: flowsDisabled));
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return null;
         }

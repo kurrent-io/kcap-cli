@@ -1,6 +1,6 @@
 namespace Capacitor.Cli.Commands;
 
-sealed class CleanupCommand(WatcherManager watchers) {
+sealed class CleanupCommand(WatcherManager watchers, StandardStreams console) {
 
     public async Task<int> HandleCleanup() {
         // The directory WatcherPaths resolves, not the config default: a spawn writes its pid
@@ -8,7 +8,7 @@ sealed class CleanupCommand(WatcherManager watchers) {
         var watcherDir = watchers.GetWatcherDir();
 
         if (!Directory.Exists(watcherDir)) {
-            await Console.Out.WriteLineAsync("No watchers directory found.");
+            await console.Out.WriteLineAsync("No watchers directory found.");
 
             return 0;
         }
@@ -17,16 +17,20 @@ sealed class CleanupCommand(WatcherManager watchers) {
 
         var killed  = 0;
         var cleaned = 0;
+        var failed  = 0;
 
         foreach (var pidFile in pidFiles) {
             var key        = Path.GetFileNameWithoutExtension(pidFile);
-            var wasRunning = await watchers.KillWatcher(key);
+            var wasRunning = await watchers.KillWatcher(key, console.Error);
 
             if (wasRunning) {
-                await Console.Out.WriteLineAsync($"Killed watcher {key}");
+                await console.Out.WriteLineAsync($"Killed watcher {key}");
                 killed++;
+            } else if (File.Exists(pidFile)) {
+                await console.Out.WriteLineAsync($"Could not stop watcher {key}; kept its PID file");
+                failed++;
             } else {
-                await Console.Out.WriteLineAsync($"Cleaned up stale PID file for {key}");
+                await console.Out.WriteLineAsync($"Cleaned up stale PID file for {key}");
                 cleaned++;
             }
         }
@@ -37,8 +41,14 @@ sealed class CleanupCommand(WatcherManager watchers) {
         // them, and this also mops up orphans whose .pid was already gone.
         var purged = watchers.PurgeAuxiliaryFiles();
 
-        await Console.Out.WriteLineAsync(
+        await console.Out.WriteLineAsync(
             $"Done. Killed {killed} watcher(s), cleaned {cleaned} stale PID file(s), purged {purged} auxiliary file(s).");
+
+        if (failed > 0) {
+            await console.Out.WriteLineAsync($"{failed} watcher(s) could not be stopped; run kcap cleanup again.");
+
+            return 1;
+        }
 
         return 0;
     }

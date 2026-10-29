@@ -157,7 +157,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
     /// </summary>
     sealed class CaptureServerConnection() : ServerConnection(
             new() { Name = "test", ServerUrl = "http://127.0.0.1:1" },
-            UnusedTokenStore.Create(),
+            new FixedCredentialSource(),
             NullLoggerFactory.Instance,
             NullLogger<ServerConnection>.Instance
         , TimeProvider.System) {
@@ -780,6 +780,68 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
     }
 
     [Test]
+    public async Task BuildProcessStartInfo_marks_a_participant_with_its_kind_and_role() {
+        var psi = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
+            AcpVendorDescriptors.Cursor, new DaemonConfig(), ReviewContext() with { FlowRole = "reviewer" });
+
+        await Assert.That(psi.Environment["KCAP_SESSION_KIND"]).IsEqualTo("flow_participant");
+        await Assert.That(psi.Environment["KCAP_FLOW_ROLE"]).IsEqualTo("reviewer");
+    }
+
+    [Test]
+    public async Task BuildProcessStartInfo_marks_an_interactive_launch_as_a_hosted_agent() {
+        var psi = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
+            AcpVendorDescriptors.Cursor, new DaemonConfig(), MakeContext("agent-1"));
+
+        await Assert.That(psi.Environment["KCAP_SESSION_KIND"]).IsEqualTo("hosted_agent");
+    }
+
+    static readonly IReadOnlyDictionary<string, AcpVendorDescriptor> EveryAcpDescriptor =
+        new[] {
+            AcpVendorDescriptors.Cursor, AcpVendorDescriptors.Copilot, AcpVendorDescriptors.Kiro,
+            AcpVendorDescriptors.OpenCode, AcpVendorDescriptors.Grok, AcpVendorDescriptors.Gemini,
+        }.ToDictionary(d => d.Vendor);
+
+    public static IEnumerable<Func<(string Vendor, bool IsReviewFlow)>> EveryAcpLaunch() =>
+        from vendor in EveryAcpDescriptor.Keys
+        from isReviewFlow in new[] { false, true }
+        select (Func<(string, bool)>)(() => (vendor, isReviewFlow));
+
+    /// <summary>kcap's MCP servers inside an ACP child find their session by asking the named daemon
+    /// about the named agent, under a variable no hook reads: the daemon already records the session
+    /// from the ACP stream, so a hook must not link one to the agent as well. Another harness's session
+    /// ids are seeded, so their absence is the launch's own doing; Grok's is seeded too and must
+    /// survive, since a Grok child reads its own.</summary>
+    [Test, NotInParallel]
+    [MethodDataSource(nameof(EveryAcpLaunch))]
+    public async Task Every_acp_launch_names_its_agent_and_daemon_and_drops_inherited_sessions(string vendor, bool isReviewFlow) {
+        var descriptor = EveryAcpDescriptor[vendor];
+        Skip.When(OperatingSystem.IsWindows() && isReviewFlow && descriptor.Harness is HarnessId.Kiro or HarnessId.OpenCode,
+            "The Kiro and OpenCode reviewers are POSIX-only: their isolated home cannot be created owner-only on Windows.");
+
+        using var claude = EnvScope.Exclusive("CLAUDE_CODE_SESSION_ID", "inherited");
+        using var kcap   = EnvScope.Exclusive("KCAP_SESSION_ID", "inherited");
+        using var codex  = EnvScope.Exclusive("CODEX_THREAD_ID", "inherited");
+        using var grok   = EnvScope.Exclusive("GROK_SESSION_ID", "grok-own");
+
+        var config = new DaemonConfig { Name = "daemon-a", Store = NewPaths(), DaemonEpoch = "epoch-1" };
+        AcpHostedAgentRuntimeFactory.VersionStoreFor(config, descriptor.Vendor).Affirm("99.0.0");
+        var ctx = (isReviewFlow ? ReviewContext() : MakeContext("agent-1")) with { Vendor = vendor, DaemonName = "daemon-a" };
+
+        var env = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(descriptor, config, ctx, resolveGeminiVersion: _ => "99.0.0").Environment;
+
+        string? Carried(string name) => env.TryGetValue(name, out var value) ? value : null;
+
+        await Assert.That(Carried("KCAP_DAEMON_AGENT_ID")).IsEqualTo("agent-1");
+        await Assert.That(Carried("KCAP_DAEMON_NAME")).IsEqualTo("daemon-a");
+        await Assert.That(Carried("KCAP_AGENT_ID")).IsNotEqualTo("agent-1");
+        await Assert.That(Carried("CLAUDE_CODE_SESSION_ID")).IsNotEqualTo("inherited");
+        await Assert.That(Carried("KCAP_SESSION_ID")).IsNotEqualTo("inherited");
+        await Assert.That(Carried("CODEX_THREAD_ID")).IsNotEqualTo("inherited");
+        await Assert.That(Carried("GROK_SESSION_ID")).IsEqualTo("grok-own");
+    }
+
+    [Test]
     public async Task BuildProcessStartInfo_CursorReviewFlow_UsesCursorZeroPromptFlags() {
         var psi = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
             AcpVendorDescriptors.Cursor,
@@ -1181,17 +1243,17 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
         await fake.DisposeAsync();
     }
 
-    /// <summary>Test plan 3b: an allowlist entry that is flow-starting (recursion guard), unknown, or a
-    /// non-auto-approvable write server (kcap-memory) fails the launch BEFORE spawn — the reviewer
-    /// runs under the auto-approve bridge, so a write server must never reach it. Matches the
-    /// authoritative read-only reviewer policy the orchestrator enforces for Codex.</summary>
+    /// <summary>An unattended reviewer refuses flow-starting, unknown and write-capable MCP
+    /// servers before spawn because its bridge can call allowed tools without a prompt.</summary>
     [Test]
     [Arguments("kcap-flows")]
     [Arguments("KCAP-FLOWS")]
     [Arguments("kcap-memory")]
     [Arguments("kcap-workitems")]
     [Arguments("kcap-plans")]
+    [Arguments("kcap-pages")]
     [Arguments("kcap-analytics")]
+    [Arguments("kcap-knowledge")]
     [Arguments("totally-unknown")]
     public async Task ReviewFlow_NonAutoApprovableAllowlistEntry_ThrowsBeforeSpawn(string entry) {
         var (factory, spawns) = CountingSpawnFactory(SyntheticDescriptor(supportsMcpServers: true));

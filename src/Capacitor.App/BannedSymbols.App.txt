@@ -1,0 +1,1 @@
+M:Capacitor.App.Services.AppStateStore.#ctor(System.String);Take the IAppStateStore App holds. The lock is per instance, so a second store over app-state.json lets two read-modify-write cycles interleave and drop an update.

@@ -27,6 +27,9 @@ internal static class SetupDecisions {
         if (d.Pi)          names.Add("Pi");
         if (d.OpenCode)    names.Add("OpenCode");
         if (d.Antigravity) names.Add("Antigravity");
+        if (d.Vibe)        names.Add("Mistral Vibe");
+        if (d.Grok)        names.Add("Grok");
+        if (d.Muse)        names.Add("Muse Code");
 
         return names.Count == 0 ? null : string.Join(", ", names);
     }
@@ -75,6 +78,9 @@ internal static class SetupDecisions {
             SkipPi          = Skip(HarnessId.Pi, options.SkipPi),
             SkipOpenCode    = Skip(HarnessId.OpenCode, options.SkipOpenCode),
             SkipAntigravity = Skip(HarnessId.Antigravity, options.SkipAntigravity),
+            SkipMistralVibe = Skip(HarnessId.MistralVibe, options.SkipMistralVibe),
+            SkipGrok        = Skip(HarnessId.Grok, options.SkipGrok),
+            SkipMuse        = Skip(HarnessId.Muse, options.SkipMuse),
 
             // The hooks flag counts against TOOLS as well. `--skip-<vendor>-hooks` is a whole-vendor
             // opt-out, and the browser's separate tools axis must not re-enable the half of it the
@@ -85,6 +91,8 @@ internal static class SetupDecisions {
             SkipPiMcp          = Tools(HarnessId.Pi, options.SkipPi || options.SkipPiMcp),
             SkipOpenCodeMcp    = Tools(HarnessId.OpenCode, options.SkipOpenCode || options.SkipOpenCodeMcp),
             SkipAntigravityMcp = Tools(HarnessId.Antigravity, options.SkipAntigravity || options.SkipAntigravityMcp),
+            SkipMistralVibeMcp = Tools(HarnessId.MistralVibe, options.SkipMistralVibe || options.SkipMistralVibeMcp),
+            SkipMuseMcp        = Tools(HarnessId.Muse, options.SkipMuse || options.SkipMuseMcp),
 
             // Kiro is the exception, and stays one. `--skip-kiro-hooks` opts out of only the invasive
             // agent clone; the terminal path registers Kiro's MCP under it and says so. Carrying it
@@ -109,18 +117,16 @@ internal static class SetupDecisions {
     public record ImportDecision(ImportOutcome Outcome, string? SkipReason);
 
     /// <summary>
-    /// The eligibility + policy decision for Step 6 (import past sessions from the current
-    /// repository). Guard order: no resolvable current repo (no origin remote) → skip; auth
-    /// requirements unsatisfied → skip; <c>--skip-import</c> → skip; <c>--no-prompt</c> → run
-    /// without prompting (mirrors the Step-4 unified-install auto-yes under unattended setup);
-    /// otherwise the caller's interactive yes/no prompt decides.
+    /// The eligibility + policy decision for setup's import step (import past sessions machine-wide).
+    /// Guard order: auth requirements unsatisfied → skip; <c>--skip-import</c> → skip;
+    /// <c>--no-prompt</c> → run without prompting, since unattended setup must not block on a
+    /// question no one can answer; otherwise the caller's interactive yes/no prompt decides.
     /// </summary>
     public static ImportDecision DecideImport(
-            bool hasCurrentRepo, bool authSatisfied, bool skipImport, bool noPrompt, Func<bool> promptYesNo) {
-        if (!hasCurrentRepo) return new ImportDecision(ImportOutcome.Skip, "no origin remote — skipping import");
-        if (!authSatisfied)  return new ImportDecision(ImportOutcome.Skip, "not authenticated — skipping import");
-        if (skipImport)       return new ImportDecision(ImportOutcome.Skip, "--skip-import");
-        if (noPrompt)         return new ImportDecision(ImportOutcome.Run, null);
+            bool authSatisfied, bool skipImport, bool noPrompt, Func<bool> promptYesNo) {
+        if (!authSatisfied) return new ImportDecision(ImportOutcome.Skip, "not authenticated — skipping import");
+        if (skipImport)     return new ImportDecision(ImportOutcome.Skip, "--skip-import");
+        if (noPrompt)       return new ImportDecision(ImportOutcome.Run, null);
 
         return promptYesNo()
             ? new ImportDecision(ImportOutcome.Run, null)

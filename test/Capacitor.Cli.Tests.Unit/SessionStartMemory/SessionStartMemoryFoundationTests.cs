@@ -109,6 +109,85 @@ public class SessionStartMemoryFoundationTests {
     }
 
     [Test]
+    public async Task A_host_that_keeps_no_context_is_eligible_on_every_start() {
+        static SessionMemoryLifecycle Pi(SessionLifecycleReason reason, bool topLevel = true, bool authoritative = true) =>
+            new(HarnessId.Kiro, "s", null, topLevel, authoritative, reason, CallbackMayRepeat: true, HostKeepsContext: false);
+
+        await Assert.That(SessionStartMemoryLifecyclePolicy.Decide(Pi(SessionLifecycleReason.Resume)))
+            .IsEqualTo(SessionMemoryLifecycleDecision.EligibleEveryStart);
+        await Assert.That(SessionStartMemoryLifecyclePolicy.Decide(Pi(SessionLifecycleReason.Compact)))
+            .IsEqualTo(SessionMemoryLifecycleDecision.IneligibleNoCommit);
+        await Assert.That(SessionStartMemoryLifecyclePolicy.Decide(Pi(SessionLifecycleReason.New, topLevel: false)))
+            .IsEqualTo(SessionMemoryLifecycleDecision.IneligibleNoCommit);
+        await Assert.That(SessionStartMemoryLifecyclePolicy.Decide(Pi(SessionLifecycleReason.Unknown)))
+            .IsEqualTo(SessionMemoryLifecycleDecision.RetryLaterNoCommit);
+    }
+
+    [Test]
+    [Arguments(false, 2)]
+    [Arguments(true, 1)]
+    public async Task Every_start_of_a_session_whose_host_keeps_no_context_is_served(bool hostKeepsContext, int served) {
+        using var root = new TempDir();
+        var time = Stopped();
+        var fetches = 0;
+        var orchestrator = On(root, new DelegatingProvider(() => {
+            fetches++;
+            return new SessionStartMemoryContextResult(SessionStartMemoryDisposition.Ready, "FRAGMENT");
+        }), time);
+        var lifecycle = new SessionMemoryLifecycle(HarnessId.Kiro, "session-1", null, true, true,
+            SessionLifecycleReason.Resume, CallbackMayRepeat: true, HostKeepsContext: hostKeepsContext);
+        var request = new SessionStartMemoryContextRequest(
+            "https://example.test", "/repo", false, TimeSpan.FromSeconds(5), CancellationToken.None);
+
+        var first  = await orchestrator.GetFragmentAsync(lifecycle, request);
+        var second = await orchestrator.GetFragmentAsync(lifecycle, request);
+
+        await Assert.That(new[] { first, second }.Count(f => f == "FRAGMENT")).IsEqualTo(served);
+        await Assert.That(fetches).IsEqualTo(served);
+        if (!hostKeepsContext)
+            await Assert.That(Directory.EnumerateFiles(root.Path, "*", SearchOption.AllDirectories)).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_failed_fetch_for_a_host_that_keeps_no_context_is_retried_by_the_next_start() {
+        using var root = new TempDir();
+        var results = new Queue<SessionStartMemoryContextResult>([
+            SessionStartMemoryContextResult.Retry,
+            new(SessionStartMemoryDisposition.Ready, "FRAGMENT")
+        ]);
+        var orchestrator = On(root, new DelegatingProvider(results.Dequeue), Stopped());
+        var lifecycle = new SessionMemoryLifecycle(HarnessId.Kiro, "session-1", null, true, true,
+            SessionLifecycleReason.New, CallbackMayRepeat: true, HostKeepsContext: false);
+        var request = new SessionStartMemoryContextRequest(
+            "https://example.test", "/repo", false, TimeSpan.FromSeconds(5), CancellationToken.None);
+
+        await Assert.That(await orchestrator.GetFragmentAsync(lifecycle, request)).IsNull();
+        await Assert.That(await orchestrator.GetFragmentAsync(lifecycle, request)).IsEqualTo("FRAGMENT");
+    }
+
+    [Test]
+    public async Task A_retry_delivers_its_fragment_and_leaves_the_lease_open() {
+        using var root = new TempDir();
+        var time = Stopped();
+        var results = new Queue<SessionStartMemoryContextResult>([
+            new(SessionStartMemoryDisposition.RetryableFailure, "FLOWS"),
+            new(SessionStartMemoryDisposition.Ready, "MEMORY")
+        ]);
+        var orchestrator = On(root, new DelegatingProvider(results.Dequeue), time);
+        var lifecycle = new SessionMemoryLifecycle(HarnessId.Claude, "session-1", null, true, true,
+            SessionLifecycleReason.New, CallbackMayRepeat: false);
+        var request = new SessionStartMemoryContextRequest(
+            "https://example.test", "/repo", false, TimeSpan.FromSeconds(5), CancellationToken.None);
+
+        var first = await orchestrator.GetFragmentAsync(lifecycle, request);
+        time.Advance(TimeSpan.FromDays(1));
+        var second = await orchestrator.GetFragmentAsync(lifecycle with { Reason = SessionLifecycleReason.Resume }, request);
+
+        await Assert.That(first).IsEqualTo("FLOWS");
+        await Assert.That(second).IsEqualTo("MEMORY");
+    }
+
+    [Test]
     public async Task Typed_emitter_adds_marker_groups_and_never_accepts_bodies() {
         var entries = new[] {
             new SessionStartMemoryEntry("1", "org-rule", "org", "fact", "feedback"),
@@ -286,9 +365,9 @@ public class SessionStartMemoryFoundationTests {
         // An older server ignores include=projects and answers with the bare array it always sent.
         var bareArray = await Provider($"[{entry}]").GetAsync(request);
         var withProjects = await Provider(
-            $"{{\"entries\":[{entry}],\"projects\":[{{\"slug\":\"capacitor\",\"name\":\"Kurrent Capacitor\"}}]}}").GetAsync(request);
+            $"{{\"entries\":[{entry}],\"projects\":[{{\"slug\":\"capacitor\",\"name\":\"kcap\"}}]}}").GetAsync(request);
         var projectsOnly = await Provider(
-            "{\"entries\":[],\"projects\":[{\"slug\":\"capacitor\",\"name\":\"Kurrent Capacitor\"}]}").GetAsync(request);
+            "{\"entries\":[],\"projects\":[{\"slug\":\"capacitor\",\"name\":\"kcap\"}]}").GetAsync(request);
         var neither = await Provider("{\"entries\":[],\"projects\":[]}").GetAsync(request);
 
         await Assert.That(bareArray.Fragment).Contains("- s: d");
@@ -298,6 +377,24 @@ public class SessionStartMemoryFoundationTests {
         await Assert.That(projectsOnly.Disposition).IsEqualTo(SessionStartMemoryDisposition.Ready);
         await Assert.That(projectsOnly.Fragment).Contains("This repo belongs to project \"capacitor\"");
         await Assert.That(neither.Disposition).IsEqualTo(SessionStartMemoryDisposition.CompleteWithoutContext);
+    }
+
+    [Test]
+    public async Task Provider_counts_a_logs_open_entries_after_its_slug() {
+        const string body = "{\"entries\":[" +
+            "{\"memory_id\":\"1\",\"slug\":\"inbox\",\"audience\":\"org\",\"description\":\"d\",\"kind\":\"project\",\"scope_kind\":\"repo\",\"form\":\"log\",\"open_entries\":3}," +
+            "{\"memory_id\":\"2\",\"slug\":\"quiet\",\"audience\":\"org\",\"description\":\"d\",\"kind\":\"project\",\"form\":\"log\",\"open_entries\":0}," +
+            "{\"memory_id\":\"3\",\"slug\":\"doc\",\"audience\":\"org\",\"description\":\"d\",\"kind\":\"project\",\"form\":\"document\",\"open_entries\":null}" +
+            "],\"projects\":[]}";
+        var provider = new SessionStartMemoryContextProvider(new FixedScopeResolver("repo", "machine"),
+            Lazy(new HttpClient(new StaticHandler(HttpStatusCode.OK, body))), Stopped());
+
+        var result = await provider.GetAsync(new SessionStartMemoryContextRequest("https://example", "/repo", false,
+            TimeSpan.FromSeconds(1), CancellationToken.None));
+
+        await Assert.That(result.Fragment).Contains("- inbox (3 open) [repo]: d");
+        await Assert.That(result.Fragment).Contains("- quiet (0 open): d");
+        await Assert.That(result.Fragment).Contains("- doc: d");
     }
 
     [Test]

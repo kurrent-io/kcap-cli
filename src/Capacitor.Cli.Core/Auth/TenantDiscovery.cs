@@ -1,3 +1,5 @@
+using System.Collections.Frozen;
+using System.Globalization;
 using Capacitor.Cli.Core.Config;
 using Config_Profile = Capacitor.Cli.Core.Config.Profile;
 
@@ -39,21 +41,31 @@ public interface ITenantPicker {
 }
 
 public class TenantDiscovery(IAuthProxyClient proxy, ITenantPicker picker) {
+    /// <summary>
+    /// The error in words. A rejected token is the provider's rejection, so the lane names itself:
+    /// telling a WorkOS user that GitHub turned them away sends them to the wrong sign-in.
+    /// </summary>
+    internal static string Describe(DiscoveryError error, string provider) {
+        var who = provider == AuthProvider.WorkOS ? "WorkOS" : "GitHub";
+
+        return error switch {
+            DiscoveryError.ProxyUnreachable => "The Kurrent auth service is unreachable.",
+            DiscoveryError.TokenRejected    => $"{who} rejected the authentication token. Please sign in again.",
+            DiscoveryError.UpstreamError    => "Kurrent auth service returned an error. Try again later.",
+            _                               => "Tenant discovery failed."
+        };
+    }
+
     public async Task<DiscoveryOutcome> RunAsync(string proxyUrl, string githubAccessToken, CancellationToken ct = default) {
         var result = await proxy.DiscoverTenantsAsync(proxyUrl, githubAccessToken, ct);
 
         if (result.Error != DiscoveryError.None) {
-            return new([], null, result.Error switch {
-                DiscoveryError.ProxyUnreachable => "The Kurrent auth service is unreachable.",
-                DiscoveryError.TokenRejected    => "GitHub rejected the authentication token. Please sign in again.",
-                DiscoveryError.UpstreamError    => "Kurrent auth service returned an error. Try again later.",
-                _                               => "Tenant discovery failed."
-            });
+            return new([], null, Describe(result.Error, AuthProvider.GitHubApp));
         }
 
         if (result.Tenants.Length == 0) {
             return new([], null,
-                "No Capacitor tenants are linked to your GitHub orgs. Ask your admin to install the Kurrent GitHub App on your org, or re-run with --server-url <url> for a self-hosted server.",
+                "No kcap tenants are linked to your GitHub orgs. Ask your admin to install the Kurrent GitHub App on your org, or re-run with --server-url <url> for a self-hosted server.",
                 NoTenantsFound: true);
         }
 
@@ -66,6 +78,120 @@ public class TenantDiscovery(IAuthProxyClient proxy, ITenantPicker picker) {
         }
 
         return new(result.Tenants, picked, null);
+    }
+
+    /// <summary>
+    /// Names each tenant's profile before anything is written, so the config, the stamp and the
+    /// token all land under one name. A profile already on the tenant's server keeps its own name:
+    /// a hand-named profile is updated rather than twinned under the slug, and the `kcap use`
+    /// habits and profile bindings that name it keep working. Among several on that server the
+    /// active one wins, then the slug's. Profiles record no organization, so where tenants share a
+    /// server only a profile named for one of them is reused: handing out the rest would follow
+    /// discovery order and could swap their credentials between runs. No two tenants share a name:
+    /// a slug another tenant already claimed takes the first free numbered suffix.
+    /// </summary>
+    public static (DiscoveredTenant[] Tenants, DiscoveredTenant Picked) NameProfiles(
+            ProfileConfig existing, DiscoveredTenant[] tenants, DiscoveredTenant picked) {
+        var claimed = new HashSet<string>(StringComparer.Ordinal);
+        var names   = new string?[tenants.Length];
+
+        // A tenant listed twice is one tenant: its rows share a name rather than claiming two.
+        var first = tenants.Select((t, i) => Array.FindIndex(tenants, o => SameTenant(o, t))).ToArray();
+
+        // Tenants are named in an order of their own ids rather than the order discovery lists them,
+        // so a collision resolves the same way on every sign-in.
+        var order = Enumerable.Range(0, tenants.Length).Where(i => first[i] == i)
+            .OrderBy(i => StableKey(tenants[i]), StringComparer.Ordinal).ToArray();
+
+        bool AloneOnServer(int i) => !Enumerable.Range(0, tenants.Length).Any(k =>
+            first[k] == k && k != i && ServerIdentity.SameServer(tenants[k].Origin, tenants[i].Origin));
+
+        // A profile already named for the tenant, under any of its rows' names, on its server is that
+        // tenant's whatever order the tenants arrive in.
+        foreach (var i in order) {
+            names[i] = Enumerable.Range(0, tenants.Length)
+                .Where(j => first[j] == i)
+                .Select(j => tenants[j].ProfileName)
+                .FirstOrDefault(name => IsOnServer(existing, name, tenants[i]) && !claimed.Contains(name));
+            if (names[i] is { } own) claimed.Add(own);
+        }
+
+        foreach (var i in order)
+            if (names[i] is null && AloneOnServer(i) && ProfileOnServer(existing, tenants[i], claimed) is { } onServer && claimed.Add(onServer))
+                names[i] = onServer;
+
+        foreach (var i in order)
+            names[i] ??= Unclaimed(existing, claimed, tenants[i].ProfileName);
+
+        for (var i = 0; i < tenants.Length; i++)
+            names[i] ??= names[first[i]];
+
+        var named = tenants.Select((t, i) => t with { ProfileName = names[i]! }).ToArray();
+        var index = Array.IndexOf(tenants, picked);
+
+        return (named, index >= 0
+            ? named[index]
+            : picked with { ProfileName = ProfileOnServer(existing, picked, FrozenSet<string>.Empty) ?? picked.ProfileName });
+    }
+
+    /// <summary>Whether naming <paramref name="tenants"/> against <paramref name="config"/> still gives
+    /// the names in <paramref name="named"/>: the commit checks it under the config lock, because a
+    /// profile written after the names were chosen can change them.</summary>
+    public static bool NamesHold(
+            ProfileConfig config, DiscoveredTenant[] tenants, DiscoveredTenant picked,
+            DiscoveredTenant[] named, DiscoveredTenant namedPicked) {
+        var (now, nowPicked) = NameProfiles(config, tenants, picked);
+
+        return nowPicked.ProfileName == namedPicked.ProfileName
+            && now.Select(t => t.ProfileName).SequenceEqual(named.Select(t => t.ProfileName), StringComparer.Ordinal);
+    }
+
+    /// <summary>Rows naming one tenant on one server: the same provider-qualified id (a WorkOS
+    /// organization, a GitHub org), whatever slug each carries; rows without one match on name. One
+    /// id on two servers is two profiles.</summary>
+    static bool SameTenant(DiscoveredTenant a, DiscoveredTenant b) {
+        if (a.IsWorkOS != b.IsWorkOS || !(a.Origin == b.Origin || ServerIdentity.SameServer(a.Origin, b.Origin))) return false;
+
+        var idA = ProviderId(a);
+        var idB = ProviderId(b);
+
+        return !string.IsNullOrEmpty(idA) || !string.IsNullOrEmpty(idB) ? idA == idB : a.ProfileName == b.ProfileName;
+    }
+
+    static string StableKey(DiscoveredTenant t) =>
+        string.Join('\n', t.IsWorkOS ? "w" : "g", ProviderId(t) ?? "", t.ProfileName, t.Origin);
+
+    static string? ProviderId(DiscoveredTenant t) =>
+        t.IsWorkOS ? t.OrganizationId : t.OrgId != 0 ? t.OrgId.ToString(CultureInfo.InvariantCulture) : null;
+
+    static bool IsOnServer(ProfileConfig existing, string name, DiscoveredTenant tenant) =>
+        existing.Profiles.TryGetValue(name, out var profile)
+     && !string.IsNullOrWhiteSpace(profile.ServerUrl) && ServerIdentity.SameServer(profile.ServerUrl, tenant.Origin);
+
+    /// <summary>An existing profile on the tenant's server that no other tenant has taken: the active
+    /// one first, then the slug's, then the first by name.</summary>
+    static string? ProfileOnServer(ProfileConfig existing, DiscoveredTenant tenant, IReadOnlySet<string> claimed) {
+        var onServer = existing.Profiles
+            .Where(p => !claimed.Contains(p.Key) && IsOnServer(existing, p.Key, tenant))
+            .Select(p => p.Key)
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+        if (onServer.Count == 0) return null;
+        if (onServer.Contains(existing.ActiveName, StringComparer.Ordinal)) return existing.ActiveName;
+
+        return onServer.Contains(tenant.ProfileName, StringComparer.Ordinal) ? tenant.ProfileName : onServer[0];
+    }
+
+    /// <summary>The slug, or else the first numbered suffix no profile has: profiles record no
+    /// organization, so an existing numbered profile may be another tenant's.</summary>
+    static string Unclaimed(ProfileConfig existing, HashSet<string> claimed, string name) {
+        if (claimed.Add(name)) return name;
+
+        for (var n = 2; ; n++) {
+            var candidate = $"{name}-{n}";
+            if (!existing.Profiles.ContainsKey(candidate) && claimed.Add(candidate)) return candidate;
+        }
     }
 
     public static ProfileConfig MergeProfiles(

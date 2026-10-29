@@ -25,6 +25,20 @@ public class Utf8StreamDecoderTests {
         await Assert.That(snapshotPart + livePart).IsEqualTo("€");
     }
 
+    /// Pins that a replay decoded in pieces reads as one stream across piece seams (3-byte
+    /// characters straddle them) and that no piece reaches the large-object heap.
+    [Test]
+    public async Task A_replay_decodes_in_pieces_that_stay_off_the_large_object_heap() {
+        var replay = string.Concat(Enumerable.Repeat("a€", 100_000));
+        var decoder = new Utf8StreamDecoder();
+
+        var pieces = decoder.DecodePieces(System.Text.Encoding.UTF8.GetBytes(replay));
+
+        await Assert.That(string.Concat(pieces)).IsEqualTo(replay);
+        await Assert.That(pieces.Count).IsGreaterThan(1);
+        await Assert.That(pieces.Max(p => p.Length) * sizeof(char)).IsLessThan(85_000);
+    }
+
     [Test]
     public async Task Flush_emits_a_replacement_for_a_dangling_partial() {
         var decoder = new Utf8StreamDecoder();

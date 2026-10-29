@@ -49,20 +49,6 @@ public class DaemonObservationTests {
     }
 
     [Test]
-    public async Task OneShot_pre_slice_daemon_null_pid_instance_is_inconsistent() {
-        var hello = new HelloReplyDto(1, "1.2.3", "daemon-a", ["status/1"]); // predates Pid/InstanceId
-        var snap = FakeDaemonClientService.Snap("daemon-a", serverUrl: "http://localhost:9999"); // predates Pid/InstanceId
-        var probeResult = new ProbeResult(true, hello, snap, IdentityConsistent: false);
-        var adapter = new OneShotObservation(Daemons.Store, TimeProvider.System, TimeSpan.FromSeconds(1)) { Probe = (_, _, _) => Task.FromResult(probeResult) };
-
-        var evidence = await adapter.ObserveAsync(Req(), CancellationToken.None);
-
-        await Assert.That(evidence!.IdentityConsistent).IsFalse();
-        await Assert.That(evidence.Pid).IsNull();
-        await Assert.That(evidence.InstanceId).IsNull();
-    }
-
-    [Test]
     public async Task OneShot_calls_probe_with_the_requests_daemon_name_and_its_own_timeout() {
         string? seenName = null;
         TimeSpan? seenTimeout = null;

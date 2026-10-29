@@ -20,9 +20,9 @@ internal static class HarnessSetupNotice {
     /// (noise mid-command), for the <c>harness</c> group itself (dismissing must never print a fresh
     /// nudge), and for <c>status</c> (which already shows an inline "not configured" line).
     /// </summary>
-    static bool ShouldNotify(string command) {
+    internal static bool ShouldNotify(string command) {
         if (CrashReporter.FailOpenCommands.Contains(command)) return false;
-        return command is not ("mcp" or "watch" or "daemon" or "completion"
+        return command is not ("mcp" or "watch" or "daemon" or "muse-assistant" or "completion"
             or "update" or "uninstall" or "harness" or "status");
     }
 

@@ -7,8 +7,8 @@ using Capacitor.Cli.Core.Http;
 namespace Capacitor.App.Tests.Unit;
 
 public class FeedbackViewModelTests {
-    const string TrailerA = "Sent from Kurrent Capacitor Desktop 1.0.3 · daemon d cli 1.0.3";
-    const string TrailerB = "Sent from Kurrent Capacitor Desktop 1.0.3 · daemon d 1.0.3";
+    const string TrailerA = "Sent from kcap Desktop 1.0.3 · daemon d cli 1.0.3";
+    const string TrailerB = "Sent from kcap Desktop 1.0.3 · daemon d 1.0.3";
 
     sealed class ScriptedFeedbackApi : IFeedbackApi {
         readonly Queue<Func<FeedbackSubmission, FeedbackResult>> _script = new();
@@ -320,6 +320,74 @@ public class FeedbackViewModelTests {
         vm.Dispose();
 
         await Assert.That(vm.Dispose).ThrowsNothing();
+    }
+
+    static FeedbackViewModel MailVm(ScriptedFeedbackApi api, List<FeedbackSubmission> mailed, bool opened, bool cutShort, bool copied) =>
+        new(api, FeedbackCategory.Bug, new BehaviorSubject<string>(TrailerA), "macOS 15.6", null,
+            mail: s => {
+                mailed.Add(s);
+                return new FeedbackMailOutcome(new FeedbackMailDraft("mailto:team@kcap.ai", cutShort), opened, copied);
+            });
+
+    [Test]
+    public async Task With_mail_an_opened_draft_reads_as_sent_and_nothing_is_posted() {
+        var api    = new ScriptedFeedbackApi();
+        var mailed = new List<FeedbackSubmission>();
+        using var vm = MailVm(api, mailed, opened: true, cutShort: true, copied: true);
+        vm.Message = "It broke.";
+
+        await vm.SendCommand.Execute().ToTask();
+
+        await Assert.That(vm.IsSent).IsTrue();
+        await Assert.That(vm.SentMessage).Contains("on your clipboard");
+        await Assert.That(vm.FullReport).IsNull();
+        await Assert.That(api.Sent).IsEmpty();
+        await Assert.That(mailed.Single().Message).IsEqualTo("It broke.\n\n" + TrailerA);
+        await Assert.That(vm.SendLabel).IsEqualTo("Open email");
+        await Assert.That(vm.Subtitle).Contains("team@kcap.ai");
+    }
+
+    [Test]
+    public async Task With_mail_a_cut_short_draft_with_no_clipboard_keeps_the_form_holding_the_full_text() {
+        var mailed = new List<FeedbackSubmission>();
+        using var vm = MailVm(new ScriptedFeedbackApi(), mailed, opened: true, cutShort: true, copied: false);
+        vm.Message = "It broke.";
+
+        await vm.SendCommand.Execute().ToTask();
+
+        await Assert.That(vm.IsSent).IsFalse();
+        await Assert.That(vm.Message).IsEqualTo("It broke.");
+        await Assert.That(vm.Outcome).Contains("cut short");
+        await Assert.That(vm.FullReport).IsEqualTo(FeedbackMail.Body(mailed.Single()));
+
+        vm.Message = "It broke twice.";
+        await Assert.That(vm.FullReport).IsNull();
+    }
+
+    [Test]
+    public async Task With_mail_an_opened_draft_with_no_clipboard_keeps_the_form() {
+        var mailed = new List<FeedbackSubmission>();
+        using var vm = MailVm(new ScriptedFeedbackApi(), mailed, opened: true, cutShort: false, copied: false);
+        vm.Message = "It broke.";
+
+        await vm.SendCommand.Execute().ToTask();
+
+        await Assert.That(vm.IsSent).IsFalse();
+        await Assert.That(vm.Message).IsEqualTo("It broke.");
+        await Assert.That(vm.Outcome).Contains("team@kcap.ai");
+    }
+
+    [Test]
+    public async Task With_mail_no_mail_app_keeps_the_form_and_names_the_address() {
+        var mailed = new List<FeedbackSubmission>();
+        using var vm = MailVm(new ScriptedFeedbackApi(), mailed, opened: false, cutShort: false, copied: false);
+        vm.Message = "It broke.";
+
+        await vm.SendCommand.Execute().ToTask();
+
+        await Assert.That(vm.IsSent).IsFalse();
+        await Assert.That(vm.Outcome).Contains("team@kcap.ai");
+        await Assert.That(vm.CanSend).IsTrue();
     }
 
     sealed class BlockingFeedbackApi : IFeedbackApi {

@@ -780,6 +780,9 @@ public class WatchCommandTests {
     [Test]
     [Arguments("antigravity", true)]
     [Arguments("cursor",      true)]
+    [Arguments("mistral-vibe", true)]
+    [Arguments("grok",        true)]
+    [Arguments("muse",        true)]
     [Arguments("codex",       false)]
     [Arguments("claude",      false)]
     [Arguments("gemini",      false)]
@@ -932,12 +935,8 @@ public class UpdateClaudePendingToolCallsTests {
     }
 }
 
-// Codex counterpart of ClaudeToolTrackingSourceTests: both trackers must read the drain's RAW
-// lines, because RedactLine's oversize placeholder carries no call_id and no recognised type (#528).
+// Loss markers carry no correlation IDs, so local trackers must use raw source lines.
 public class CodexToolTrackingSourceTests {
-    // The tracker reads RAW lines, which are unbounded — so unlike when it read the 64 KiB-bounded
-    // redacted list, it must not run for vendors whose transcripts it can never match. Both roles
-    // for codex: a collab child needs it too, for ShouldPostSubagentStop.
     [Test]
     [Arguments("codex",  true)]
     [Arguments("claude", false)]
@@ -951,7 +950,7 @@ public class CodexToolTrackingSourceTests {
 
     static string OversizedFunctionCallOutput() =>
         "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call_big\",\"output\":\""
-      + new string('x', SecretRedactor.MaxRedactableLineChars + 1024)
+      + new string('x', SecretRedactor.MaxRecordBytes + 1024)
       + "\"}}";
 
     // A stranded call_id pins toolInFlight true, and for Codex the idle timeout is the only
@@ -993,19 +992,13 @@ public class ClaudeToolTrackingSourceTests {
     const string ToolUse =
         """{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_big","name":"Bash","input":{"command":"build"}}]}}""";
 
-    // Sized off the real threshold so a legitimate change to it can't quietly turn these into
-    // tests of the small-line path. The everyday size of a big file read or a build log.
     static string OversizedToolResult() =>
         "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"tool_use_id\":\"toolu_big\",\"type\":\"tool_result\",\"content\":\""
-      + new string('x', SecretRedactor.MaxRedactableLineChars + 1024)
+      + new string('x', SecretRedactor.MaxRecordBytes + 1024)
       + "\"}]}}";
 
     /// <summary>
-    /// Why the tracker is fed the drain's RAW lines and not the redacted ones it sends: RedactLine
-    /// swaps any line over 64 KiB for a placeholder carrying no tool ids at all. Feed it the
-    /// redacted list and an oversized tool_result never clears its id, toolInFlight stays true
-    /// forever, and the idle ceiling never fires — the leak this whole feature exists to fix,
-    /// silently reinstated on exactly the busiest sessions.
+    /// A dropped result must still clear local pending-tool state so the idle ceiling can fire.
     /// </summary>
     [Test]
     public async Task RedactedLines_StrandThePendingId_ButRawLinesClearIt() {
@@ -1032,7 +1025,7 @@ public class ClaudeToolTrackingSourceTests {
         await File.WriteAllLinesAsync(path, [ToolUse, """{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"still working"}]}}"""]);
 
         var pending = new HashSet<string>(StringComparer.Ordinal);
-        await WatchCommand.BackfillClaudePendingToolCallsAsync(pending, path, upToLine: 2, CancellationToken.None, time: TimeProvider.System);
+        await TranscriptReplay.ReplayAsync(path, 2, [WatchCommand.ClaudePendingToolCallsReplay(pending)], CancellationToken.None, _ => { });
 
         await Assert.That(pending.Contains("toolu_big")).IsTrue();
     }
@@ -1044,7 +1037,7 @@ public class ClaudeToolTrackingSourceTests {
         await File.WriteAllLinesAsync(path, [ToolUse, OversizedToolResult()]);
 
         var pending = new HashSet<string>(StringComparer.Ordinal);
-        await WatchCommand.BackfillClaudePendingToolCallsAsync(pending, path, upToLine: 2, CancellationToken.None, time: TimeProvider.System);
+        await TranscriptReplay.ReplayAsync(path, 2, [WatchCommand.ClaudePendingToolCallsReplay(pending)], CancellationToken.None, _ => { });
 
         await Assert.That(pending.Count).IsEqualTo(0);
     }
@@ -1058,7 +1051,7 @@ public class ClaudeToolTrackingSourceTests {
         await File.WriteAllLinesAsync(path, [ToolUse, OversizedToolResult()]);
 
         var pending = new HashSet<string>(StringComparer.Ordinal);
-        await WatchCommand.BackfillClaudePendingToolCallsAsync(pending, path, upToLine: 1, CancellationToken.None, time: TimeProvider.System);
+        await TranscriptReplay.ReplayAsync(path, 1, [WatchCommand.ClaudePendingToolCallsReplay(pending)], CancellationToken.None, _ => { });
 
         await Assert.That(pending.Contains("toolu_big")).IsTrue();
     }
@@ -1078,41 +1071,17 @@ public class ClaudeToolTrackingSourceTests {
         var lines = new List<string> { ToolUse };  // never resolved, then buried by later activity
         lines.AddRange(Enumerable.Repeat(
             """{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"later"}]}}""",
-            WatchCommand.ToolBackfillWindowLines + 10));
+            TranscriptReplay.WindowLines + 10));
 
         await File.WriteAllLinesAsync(path, lines);
 
         var pending = new HashSet<string>(StringComparer.Ordinal);
-        await WatchCommand.BackfillClaudePendingToolCallsAsync(pending, path, lines.Count, CancellationToken.None, TimeProvider.System);
+        await TranscriptReplay.ReplayAsync(path, lines.Count, [WatchCommand.ClaudePendingToolCallsReplay(pending)], CancellationToken.None, _ => { });
 
         await Assert.That(pending.Count).IsEqualTo(0);
     }
 
-    [Test]
-    public async Task Backfill_returns_silently_when_already_cancelled() {
-        using var tmp = new TempDir();
-        var path = tmp.PathTo("backfill.jsonl");
-        await File.WriteAllLinesAsync(path, [ToolUse]);
 
-        var pending = new HashSet<string>(StringComparer.Ordinal);
-        using var cancelled = new CancellationTokenSource();
-        await cancelled.CancelAsync();
-
-        await WatchCommand.BackfillClaudePendingToolCallsAsync(pending, path, upToLine: 1, cancelled.Token, time: TimeProvider.System);
-
-        await Assert.That(pending.Count).IsEqualTo(0);
-    }
-
-    [Test]
-    public async Task Backfill_on_a_missing_file_is_a_silent_no_op() {
-        using var tmp = TempDir.WithPathTo("missing.jsonl", out var missing);
-        var pending = new HashSet<string>(StringComparer.Ordinal);
-
-        await WatchCommand.BackfillClaudePendingToolCallsAsync(
-            pending, missing, upToLine: 5, CancellationToken.None, time: TimeProvider.System);
-
-        await Assert.That(pending.Count).IsEqualTo(0);
-    }
 }
 
 public class CodexTranscriptExtractionTests {

@@ -1,4 +1,5 @@
 using Capacitor.Cli.Services;
+using TUnit.Core.Enums;
 
 namespace Capacitor.Cli.Tests.Unit.Services;
 
@@ -12,12 +13,35 @@ public class ServiceManagerFactoryTests {
         await Assert.That(ServiceManagerFactory.ForPlatform(ServicePlatform.Launchd, Config.Root, Home, TimeProvider.System)).IsTypeOf<LaunchdServiceManager>();
         await Assert.That(ServiceManagerFactory.ForPlatform(ServicePlatform.Systemd, Config.Root, Home, TimeProvider.System)).IsTypeOf<SystemdServiceManager>();
         await Assert.That(ServiceManagerFactory.ForPlatform(ServicePlatform.WindowsScheduledTask, Config.Root, Home, TimeProvider.System)).IsTypeOf<WindowsScheduledTaskServiceManager>();
+        if (OperatingSystem.IsWindows())
+            await Assert.That(ServiceManagerFactory.ForPlatform(ServicePlatform.WindowsService, Config.Root, Home, TimeProvider.System)).IsTypeOf<WindowsServiceManager>();
+    }
+
+    [Test]
+    public async Task The_supervisor_word_names_each_manager() {
+        await Assert.That(ServiceManagerFactory.SupervisorWord(ServiceManagerFactory.ForPlatform(ServicePlatform.Launchd, Config.Root, Home, TimeProvider.System))).IsEqualTo("launchd");
+        await Assert.That(ServiceManagerFactory.SupervisorWord(ServiceManagerFactory.ForPlatform(ServicePlatform.WindowsScheduledTask, Config.Root, Home, TimeProvider.System))).IsEqualTo("windows_scheduled_task");
+        await Assert.That(ServiceManagerFactory.SupervisorWord(new WindowsServiceManager(Config.Root, new FakeServicePipe(), new FakeServiceEnrollmentStore(), null))).IsEqualTo("windows_service");
     }
 
     [Test]
     public async Task ForCurrentOs_does_not_throw_on_this_host() {
-        var mgr = ServiceManagerFactory.ForCurrentOs(Config.Root, Home, TimeProvider.System);
+        var mgr = ServiceManagerFactory.ForCurrentOs(Config.Root, Home, TimeProvider.System, systemdRunning: () => true);
         await Assert.That(mgr.Describe()).IsNotNull();
+    }
+
+    [Test]
+    [RunOn(OS.Linux)]
+    public async Task ForCurrentOs_on_Linux_without_systemd_has_no_service_manager() {
+        await Assert.That(() => ServiceManagerFactory.ForCurrentOs(Config.Root, Home, TimeProvider.System, systemdRunning: () => false))
+            .Throws<PlatformNotSupportedException>().WithMessageContaining("kcap daemon start -d");
+    }
+
+    [Test]
+    [RunOn(OS.Linux)]
+    public async Task ForCurrentOs_on_Linux_with_systemd_is_the_systemd_manager() {
+        await Assert.That(ServiceManagerFactory.ForCurrentOs(Config.Root, Home, TimeProvider.System, systemdRunning: () => true))
+            .IsTypeOf<SystemdServiceManager>();
     }
 
     [Test]

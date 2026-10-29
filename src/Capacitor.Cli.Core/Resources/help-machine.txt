@@ -15,13 +15,13 @@ Requires the owner or admin role in your organization.
 
 THE SECRET IS SHOWN ONCE
 
-  It is issued by WorkOS and never stored — not by this CLI, not by Capacitor,
+  It is issued by WorkOS and never stored — not by this CLI, not by kcap,
   and WorkOS will not show it again. If you lose it, revoke the machine and
   create a new one.
 
   That is deliberate rather than an inconvenience: a secret nobody stores is a
   secret nobody can leak. It travels from WorkOS to your terminal and stops
-  there; it never reaches the Capacitor server at all.
+  there; it never reaches the kcap server at all.
 
   The secret goes to stdout and everything else to stderr, so you can pipe it
   straight into a secret store without it touching disk.
@@ -36,7 +36,7 @@ Flags for create:
                      machine is never a project member). A machine is not steered
                      to private. Printed in the setup instructions — see below
                      for why it is set on the machine rather than here.
-  --role <role>      The machine's role in Capacitor. Default: member.
+  --role <role>      The machine's role in kcap. Default: member.
                      A machine is never an administrator whatever you pass.
 
 Full sequence:

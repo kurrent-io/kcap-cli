@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core.Telemetry;
@@ -172,7 +173,7 @@ public class CliTelemetryTests {
         await Assert.That(TelemetryDeviceId.ReadPersisted(Config.Root)).IsNotNull();
         await Assert.That(probe.Names.Contains("cli_first_run")).IsTrue();
 
-        var exit = await new ConfigCommand(Config.Root, new FixedCapacitorHttpClient(), probe.Telemetry)
+        var exit = await new ConfigCommand(Config.Root, new FixedCapacitorHttpClient(), probe.Telemetry, DaemonStore.FromEnvironment(), TimeProvider.System)
             .HandleAsync(["config", "set", "telemetry", "off"]);
 
         await Assert.That(exit).IsEqualTo(0);

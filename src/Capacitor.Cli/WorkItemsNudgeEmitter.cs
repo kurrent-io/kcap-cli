@@ -5,7 +5,7 @@ namespace Capacitor.Cli;
 
 /// <summary>
 /// Builds the SessionStart "work items" nudge fragment: short standing guidance telling the agent it
-/// is in a recorded Kurrent Capacitor session and that it should register the session with its work
+/// is in a recorded kcap session and that it should register the session with its work
 /// item and declare the work's structure (breakdown + dependencies) as it discovers them.
 ///
 /// <para>Unlike the team-memory index and judge-fact guidelines, this nudge takes no server round-trip
@@ -38,12 +38,18 @@ static class WorkItemsNudgeEmitter {
     /// </summary>
     public static string? Resolve(HarnessId harness, string? sessionId, bool optedOut,
                                   HarnessRegistry harnesses, PlanEntitlements plan,
-                                  string? codexConfigPath = null) {
+                                  string? codexConfigPath = null, SessionStartAudience? audience = null) {
         if (optedOut) return null;
         if (!plan.Allows(PlanFeature.WorkItems)) return null;
-        if (!McpServerNudgeAvailability.IsRegisteredFor(harness, harnesses, "kcap-workitems", codexConfigPath)) return null;
+        if (!ToolsRegisteredFor(harness, harnesses, codexConfigPath, audience)) return null;
         return Build(sessionId);
     }
+
+    /// <summary>Whether the harness has the <c>kcap-workitems</c> tools to call — fail closed, so
+    /// guidance naming them is never shown to an agent that cannot reach them.</summary>
+    public static bool ToolsRegisteredFor(HarnessId harness, HarnessRegistry harnesses,
+                                          string? codexConfigPath = null, SessionStartAudience? audience = null) =>
+        McpServerNudgeAvailability.IsRegisteredFor(harness, harnesses, "kcap-workitems", codexConfigPath, audience);
 
     public static string? Build(string? sessionId) {
         if (string.IsNullOrWhiteSpace(sessionId)) return null;
@@ -58,7 +64,7 @@ static class WorkItemsNudgeEmitter {
 
         return
             "## Work items\n" +
-            $"You are in a recorded Kurrent Capacitor session (id: `{id}`). When you start work on a " +
+            $"You are in a recorded kcap session (id: `{id}`). When you start work on a " +
             "tracked item, register this session with it using the kcap-workitems MCP tool " +
             "`declare_work_item` — attach by the issue key, PR number, or existing work-item id you are " +
             "working on; create a new item by title ONLY when there is genuinely no tracker item, and " +

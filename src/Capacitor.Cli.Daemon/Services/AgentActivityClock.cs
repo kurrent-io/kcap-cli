@@ -16,17 +16,35 @@ namespace Capacitor.Cli.Daemon.Services;
 /// (NTP, DST, a debugger pause) must not change <see cref="IdleForMs"/>, which is what makes a status
 /// report a proof rather than a snapshot.</para>
 /// </summary>
-internal sealed class AgentActivityClock(TimeProvider time) {
+/// <param name="initialSeq">Where a resumed agent's sequence continues from.</param>
+/// <param name="priorAgeMs">The age a resumed agent had already reached.</param>
+internal sealed class AgentActivityClock(TimeProvider time, ulong initialSeq = 1, ulong priorAgeMs = 0) {
     readonly Lock _gate = new();
 
     // Captured once at construction, on the same monotonic axis as _lastAdvanceTimestamp — never
     // re-read or reset. Backs AgeMs, the reaper's TTL input.
     readonly long _spawnTimestamp       = time.GetTimestamp();
     long    _lastAdvanceTimestamp = time.GetTimestamp();
-    ulong   _activitySeq = 1;
+    // Mode changes still prove that the process is alive, but do not extend a task's quiet
+    // window. Keep turn evidence separate from the liveness timestamp the reviewer reaper reads.
+    long    _lastTurnActivityTimestamp = time.GetTimestamp();
+    ulong   _activitySeq = initialSeq;
     bool    _turnInFlight;
     bool    _awaitingInput;
+    // Set when the wait came from silence rather than a turn end, so the next output can clear
+    // it. A hook verdict clears the bit and then owns the flag.
+    bool    _silenceWait;
+    long?   _viewerInputAt;
+    // A relayed prompt submit or tool call with no turn end since. Output and a cleared wait also
+    // describe an idle prompt, so this is a PTY vendor's only proof a turn is running.
+    bool    _hookTurn;
     ulong   _waitGeneration;
+    // When the flag last became false. Silence is measured from here as well as from the last
+    // output: a key that clears the wait must not be undone by the idle time already elapsed.
+    long    _notAwaitingSince = time.GetTimestamp();
+    // When the flag last went from true to false. Unlike _notAwaitingSince, a repeated "not
+    // waiting" verdict mid-turn (every pre-tool-use hook) must not move it.
+    long    _workingSince = time.GetTimestamp();
     string? _launchStage;
 
     /// <summary>Starts at 1 on spawn — a freshly-launched agent is never "already idle"; the
@@ -53,6 +71,17 @@ internal sealed class AgentActivityClock(TimeProvider time) {
     /// <summary>Fires outside <see cref="_gate"/> on every genuine <see cref="AwaitingInput"/>
     /// change, with the new value.</summary>
     public Action<bool>? OnAwaitingInputChanged { get; set; }
+
+    /// <summary>Positive evidence that a turn is running now: the ACP turn gate held, or a PTY
+    /// vendor's relayed prompt submit or tool call with no turn end or quiet mark since. False
+    /// means unproven, not idle: a delivered input or a keyed submit never sets it, because a
+    /// submit that starts no turn (a local slash command) looks the same.</summary>
+    public bool TurnAttested {
+        get { lock (_gate) return _turnInFlight || _hookTurn; }
+    }
+
+    /// <summary>Fires outside <see cref="_gate"/> on every genuine <see cref="TurnAttested"/> change.</summary>
+    public Action? OnTurnAttestedChanged { get; set; }
 
     /// <summary>Counts every observed turn end, whether or not it moved the flag: a PTY vendor
     /// relays only Stop, so a wait nothing cleared sees the next turn end as a second Stop with the
@@ -97,9 +126,7 @@ internal sealed class AgentActivityClock(TimeProvider time) {
     public ulong AgeMs {
         get {
             lock (_gate) {
-                var elapsed = time.GetElapsedTime(_spawnTimestamp);
-
-                return elapsed <= TimeSpan.Zero ? 0UL : (ulong) elapsed.TotalMilliseconds;
+                return priorAgeMs + Elapsed(_spawnTimestamp);
             }
         }
     }
@@ -115,7 +142,7 @@ internal sealed class AgentActivityClock(TimeProvider time) {
     public ActivitySnapshot Snapshot() {
         lock (_gate) {
             return new ActivitySnapshot(
-                _activitySeq, Elapsed(_lastAdvanceTimestamp), Elapsed(_spawnTimestamp), _turnInFlight);
+                _activitySeq, Elapsed(_lastAdvanceTimestamp), priorAgeMs + Elapsed(_spawnTimestamp), _turnInFlight);
         }
     }
 
@@ -126,10 +153,105 @@ internal sealed class AgentActivityClock(TimeProvider time) {
         return elapsed <= TimeSpan.Zero ? 0UL : (ulong) elapsed.TotalMilliseconds;
     }
 
-    /// <summary>Records one unit of activity: bumps <see cref="ActivitySeq"/> and resets the idle
-    /// window to zero from this instant. Called from all six sources (see the class doc).</summary>
+    /// <summary>A PTY vendor rewrites its status line about once a second for the whole turn, so
+    /// several seconds with no output is the turn having ended.</summary>
+    internal static readonly TimeSpan QuietTurn = TimeSpan.FromSeconds(8);
+
+    // A viewer's resize, scroll or pointer move makes the agent repaint, in several PTY chunks.
+    // Only a silence-based idle verdict is protected, and only briefly after each input: sustained
+    // output must still recover a missed turn-start hook. Input is recorded whether or not a wait
+    // exists yet, since the quiet deadline can fall between the input and its repaint.
+    internal static readonly TimeSpan TerminalRedrawGrace = TimeSpan.FromSeconds(1);
+
+    /// <summary>A viewer resized the terminal or sent input that submits nothing (a wheel or
+    /// pointer report, a keystroke before Enter). Call before the bytes reach the PTY.</summary>
+    public void NoteViewerInput() {
+        lock (_gate) {
+            _viewerInputAt = time.GetTimestamp();
+        }
+    }
+
+    /// <summary>How long the agent has been working: since its wait last cleared, or since spawn.
+    /// Null while it is waiting.</summary>
+    public TimeSpan? WorkingFor {
+        get {
+            lock (_gate) return _awaitingInput ? null : TimeSpan.FromMilliseconds((long) Elapsed(_workingSince));
+        }
+    }
+
+    /// <summary>All PTY output proves liveness. Only text can start a turn or extend its quiet
+    /// window; mode negotiation and cursor housekeeping cannot. A repaint answering viewer input
+    /// is not a turn either. Explicit input and turn signals use their ordinary paths.</summary>
+    public void AdvanceTerminalOutput(bool hasVisibleText) {
+        bool cleared;
+        lock (_gate) {
+            var redraw = _viewerInputAt is { } input && time.GetElapsedTime(input) < TerminalRedrawGrace;
+            cleared = hasVisibleText && !redraw && ClearSilenceLocked();
+            AdvanceLocked(turnActivity: hasVisibleText);
+        }
+        if (cleared) OnAwaitingInputChanged?.Invoke(false);
+    }
+
+    /// <summary>Records explicit activity: bumps <see cref="ActivitySeq"/> and resets the idle
+    /// window to zero from this instant. Clears a silence wait immediately; PTY bytes instead use
+    /// <see cref="AdvanceTerminalOutput"/> so viewer-driven repaints cannot start a turn.</summary>
     public void Advance() {
-        lock (_gate) AdvanceLocked();
+        bool cleared;
+        lock (_gate) {
+            cleared = ClearSilenceLocked();
+            AdvanceLocked();
+        }
+        if (cleared) OnAwaitingInputChanged?.Invoke(false);
+    }
+
+    /// <summary>How long until <see cref="TryMarkQuiet"/> could succeed, or null when this clock
+    /// is not a silence candidate (already waiting, a turn gate held, or a live subagent).</summary>
+    public TimeSpan? QuietDue(TimeSpan quiet) {
+        lock (_gate) return DueLocked(quiet);
+    }
+
+    /// <summary>The turn ended without a stop notice sticking: no output and no live subagent for
+    /// <paramref name="quiet"/>. A later <see cref="Advance"/> clears it; a hook verdict replaces it.</summary>
+    public bool TryMarkQuiet(TimeSpan quiet) {
+        bool attestedChanged;
+        lock (_gate) {
+            if (DueLocked(quiet) is not { } due || due > TimeSpan.Zero) return false;
+            attestedChanged = _hookTurn;
+            _silenceWait   = true;
+            _awaitingInput = true;
+            _hookTurn      = false;
+            _waitGeneration++;
+        }
+        if (attestedChanged) OnTurnAttestedChanged?.Invoke();
+        return true;
+    }
+
+    // Caller must hold _gate. Null when silence must not be applied.
+    TimeSpan? DueLocked(TimeSpan quiet) {
+        if (_awaitingInput || _turnInFlight || _silenceWait) return null;
+        if (CountLiveLocked() > 0) return null;
+        var idleLeft = quiet - TimeSpan.FromMilliseconds((long)Elapsed(_lastTurnActivityTimestamp));
+        var sinceLeft = quiet - TimeSpan.FromMilliseconds((long)Elapsed(_notAwaitingSince));
+        var due = idleLeft > sinceLeft ? idleLeft : sinceLeft;
+        return due <= TimeSpan.Zero ? TimeSpan.Zero : due;
+    }
+
+    // Caller must hold _gate.
+    int CountLiveLocked() {
+        if (!_subagentsReported) return 0;
+        var live = 0;
+        foreach (var record in _subagents.Values) if (record.Live) live++;
+        return live;
+    }
+
+    // Caller must hold _gate. True when a silence wait was cleared so the caller can notify.
+    bool ClearSilenceLocked() {
+        if (!_silenceWait) return false;
+        _silenceWait       = false;
+        _awaitingInput     = false;
+        _notAwaitingSince  = time.GetTimestamp();
+        _workingSince      = _notAwaitingSince;
+        return true;
     }
 
     /// <summary>Fired on the turn's FALLING edge only (in-flight true → false) — the moment the
@@ -140,34 +262,50 @@ internal sealed class AgentActivityClock(TimeProvider time) {
     /// <summary>Turn start/end — also counts as activity, independent of accompanying envelope
     /// traffic.</summary>
     public void SetTurnInFlight(bool value) {
-        bool ended, awaitingChanged;
+        bool ended, awaitingChanged, attestedChanged;
         lock (_gate) {
+            var attested = _turnInFlight || _hookTurn;
             ended = _turnInFlight && !value;
             _turnInFlight = value;
             // Only a genuine falling edge means a turn finished; a gate cleared without ever being
             // held (a runtime going terminal) says nothing about waiting.
             var awaiting = value ? false : ended || _awaitingInput;
+            _silenceWait = false;
             awaitingChanged = awaiting != _awaitingInput;
             if (ended) _waitGeneration++;
+            if (!awaiting) _notAwaitingSince = time.GetTimestamp();
+            if (_awaitingInput && !awaiting) _workingSince = _notAwaitingSince;
             _awaitingInput = awaiting;
+            _hookTurn = false;
+            attestedChanged = attested != value;
             AdvanceLocked();
         }
         // Outside the lock, same rule as OnLaunchStageChanged: the callback's send reads this
         // clock's own (independently guarded) properties.
         if (ended) OnTurnEnded?.Invoke();
         if (awaitingChanged) OnAwaitingInputChanged?.Invoke(!value);
+        if (attestedChanged) OnTurnAttestedChanged?.Invoke();
     }
 
-    /// <summary>The explicit path for sources that see no turn gate: a PTY vendor's hook relay
-    /// and a delivered input. Moves the flag alone — see <see cref="AwaitingInput"/>.</summary>
+    /// <summary>A PTY vendor's relayed hook verdict: Stop is true, a prompt submit or tool call
+    /// false. Moves the wait and <see cref="TurnAttested"/> alone — see <see cref="AwaitingInput"/>.</summary>
     public void SetAwaitingInput(bool value) {
-        bool changed;
+        bool changed, attestedChanged;
         lock (_gate) {
+            // A hook verdict replaces a silence wait, so later output cannot clear a real stop.
+            _silenceWait = false;
             changed = _awaitingInput != value;
+            attestedChanged = !_turnInFlight && _hookTurn == value;
             if (value) _waitGeneration++;
+            else {
+                _notAwaitingSince = time.GetTimestamp();
+                if (changed) _workingSince = _notAwaitingSince;
+            }
             _awaitingInput = value;
+            _hookTurn = !value;
         }
         if (changed) OnAwaitingInputChanged?.Invoke(value);
+        if (attestedChanged) OnTurnAttestedChanged?.Invoke();
     }
 
     /// <summary>Clears the wait a delivery answered, unless a newer one began since the caller
@@ -175,10 +313,136 @@ internal sealed class AgentActivityClock(TimeProvider time) {
     public void ClearAwaitingInputSince(ulong sampledGeneration) {
         lock (_gate) {
             if (!_awaitingInput || _waitGeneration != sampledGeneration) return;
-            _awaitingInput = false;
+            _silenceWait      = false;
+            _awaitingInput    = false;
+            _notAwaitingSince = time.GetTimestamp();
+            _workingSince     = _notAwaitingSince;
         }
         OnAwaitingInputChanged?.Invoke(false);
     }
+
+    /// <summary>A subagent id the hooks have reported: whether its last report said alive, the
+    /// monotonic instant that report arrived, and the <c>sent_at</c> it carried.</summary>
+    sealed class SubagentRecord {
+        public bool Live;
+        public long ReportedTimestamp;
+        public long SentAtMs;
+    }
+
+    readonly Dictionary<string, SubagentRecord> _subagents = new(StringComparer.Ordinal);
+    bool _subagentsReported;
+
+    /// <summary>A live id unreported this long is retired by <see cref="TakeSubagentExpiries"/>:
+    /// a SubagentStop is not guaranteed, so a lost one costs at most this much stale count.</summary>
+    internal static readonly TimeSpan SubagentLiveness = TimeSpan.FromMinutes(10);
+
+    /// <summary>How long, on the monotonic clock, a report's <c>sent_at</c> is compared against
+    /// later ones. Hooks and daemon read one wall clock, so a step misleads the comparison; past
+    /// this the next report for the id is taken on its freshness alone.</summary>
+    internal static readonly TimeSpan SubagentStampRetention = TimeSpan.FromMinutes(10);
+
+    /// <summary>A live report stamped this soon after its id's stop is the start hook scheduled
+    /// after its own stop hook (both run asynchronously), not a resume.</summary>
+    internal static readonly TimeSpan SubagentRestartWindow = TimeSpan.FromSeconds(30);
+
+    /// <summary>Null until the first subagent report of either kind, then the number of ids
+    /// reported alive and not since stopped or retired. No age filter at read time: the count
+    /// moves only through <see cref="SubagentSeen"/>, <see cref="SubagentStopped"/> and
+    /// <see cref="TakeSubagentExpiries"/>, each of which reports its change to the caller, so a
+    /// published snapshot and the report that settles an id can never disagree unannounced.</summary>
+    public int? LiveSubagents {
+        get {
+            lock (_gate) {
+                if (!_subagentsReported) return null;
+                var live = 0;
+                foreach (var record in _subagents.Values) if (record.Live) live++;
+                return live;
+            }
+        }
+    }
+
+    /// <summary>A hook reported the id alive. Returns whether the live set changed. Dropped when
+    /// stamped earlier than the latest report applied to the id, or within
+    /// <see cref="SubagentRestartWindow"/> after the id's stop, while that stamp is honoured.
+    /// Raises no callback: the orchestrator reschedules expiry before it announces.</summary>
+    public bool SubagentSeen(string id, long sentAtMs) {
+        lock (_gate) {
+            _subagentsReported = true;
+            var now = time.GetTimestamp();
+
+            if (!_subagents.TryGetValue(id, out var record)) {
+                _subagents[id] = new SubagentRecord { Live = true, ReportedTimestamp = now, SentAtMs = sentAtMs };
+                return true;
+            }
+
+            if (StampHonoured(record)) {
+                if (sentAtMs < record.SentAtMs) return false;
+                if (!record.Live && sentAtMs - record.SentAtMs <= SubagentRestartWindow.TotalMilliseconds) return false;
+            }
+
+            var added = !record.Live;
+            record.Live = true;
+            record.ReportedTimestamp = now;
+            record.SentAtMs = sentAtMs;
+            return added;
+        }
+    }
+
+    /// <summary>A hook reported the id gone. Returns whether the live set changed or this was the
+    /// first report. A stop for an id already stopped changes nothing, the stamp included; one
+    /// stamped earlier than a later live report is the overtaken stop of a resumed run.</summary>
+    public bool SubagentStopped(string id, long sentAtMs) {
+        lock (_gate) {
+            var first = !_subagentsReported;
+            _subagentsReported = true;
+            var now = time.GetTimestamp();
+
+            if (!_subagents.TryGetValue(id, out var record)) {
+                _subagents[id] = new SubagentRecord { Live = false, ReportedTimestamp = now, SentAtMs = sentAtMs };
+                return first;
+            }
+
+            if (!record.Live) return false;
+            if (StampHonoured(record) && sentAtMs < record.SentAtMs) return false;
+
+            record.Live = false;
+            record.ReportedTimestamp = now;
+            record.SentAtMs = sentAtMs;
+            return true;
+        }
+    }
+
+    /// <summary>The only place an id is retired for age. At one instant under the gate: retires
+    /// every live id unreported for <see cref="SubagentLiveness"/>, drops stop records past
+    /// <see cref="SubagentStampRetention"/>, and reports both what it retired and when the oldest
+    /// survivor falls due.</summary>
+    public SubagentExpiry TakeSubagentExpiries() {
+        lock (_gate) {
+            var retired = false;
+            TimeSpan? next = null;
+            List<string>? gone = null;
+
+            foreach (var (id, record) in _subagents) {
+                var age = time.GetElapsedTime(record.ReportedTimestamp);
+                if (record.Live && age < SubagentLiveness) {
+                    var due = SubagentLiveness - age;
+                    if (next is null || due < next) next = due;
+                    continue;
+                }
+                if (record.Live) retired = true;
+                else if (age < SubagentStampRetention) continue;
+                (gone ??= []).Add(id);
+            }
+
+            if (gone is not null) foreach (var id in gone) _subagents.Remove(id);
+
+            return new SubagentExpiry(retired, next);
+        }
+    }
+
+    // Caller must hold _gate.
+    bool StampHonoured(SubagentRecord record) =>
+        time.GetElapsedTime(record.ReportedTimestamp) < SubagentStampRetention;
 
     /// <summary>A handshake stage transition (spawned → initialized → session_created → model_set) —
     /// also counts as activity. The out-of-cycle report it fires is what keeps the worst evidence gap
@@ -205,9 +469,10 @@ internal sealed class AgentActivityClock(TimeProvider time) {
     }
 
     // Caller must hold _gate.
-    void AdvanceLocked() {
+    void AdvanceLocked(bool turnActivity = true) {
         _activitySeq++;
         _lastAdvanceTimestamp = time.GetTimestamp();
+        if (turnActivity) _lastTurnActivityTimestamp = _lastAdvanceTimestamp;
     }
 }
 

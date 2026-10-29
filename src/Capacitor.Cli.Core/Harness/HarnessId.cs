@@ -16,4 +16,7 @@ public enum HarnessId {
     Pi,
     OpenCode,
     Antigravity,
+    MistralVibe,
+    Grok,
+    Muse,
 }

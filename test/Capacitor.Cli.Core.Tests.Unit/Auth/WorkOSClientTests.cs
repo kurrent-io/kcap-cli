@@ -75,7 +75,7 @@ public class WorkOSClientTests : IDisposable {
         var workos = new SequencedHttpScript(Reply(HttpStatusCode.OK, Rotation));
 
         var result = await new WorkOSClient(new PlainHttpClientFactory(workos), TimeProvider.System)
-            .RefreshAsync("client_d", "rt1", CancellationToken.None);
+            .RefreshAsync(WorkOSClient.ApiBase, "client_d", "rt1", CancellationToken.None);
 
         await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.Rotated);
         await Assert.That(result.Response!.AccessToken).IsEqualTo("acc");
@@ -92,7 +92,7 @@ public class WorkOSClientTests : IDisposable {
         var workos = new SequencedHttpScript(Reply(HttpStatusCode.BadRequest, """{"error":"invalid_grant"}"""));
 
         var result = await new WorkOSClient(new PlainHttpClientFactory(workos), TimeProvider.System)
-            .RefreshAsync("client_d", "rt1", CancellationToken.None);
+            .RefreshAsync(WorkOSClient.ApiBase, "client_d", "rt1", CancellationToken.None);
 
         await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.Rejected);
         await Assert.That(result.Response).IsNull();
@@ -108,7 +108,7 @@ public class WorkOSClientTests : IDisposable {
     public async Task A_timed_out_refresh_is_replayed_inside_the_grace_window() {
         var workos = new SequencedHttpScript(Stall(), Reply(HttpStatusCode.OK, Rotation));
 
-        var result = await Client(workos).RefreshAsync("client_d", "rt1", CancellationToken.None);
+        var result = await Client(workos).RefreshAsync(WorkOSClient.ApiBase, "client_d", "rt1", CancellationToken.None);
 
         await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.Rotated);
         await Assert.That(result.Response!.RefreshToken).IsEqualTo("rt2");
@@ -123,7 +123,7 @@ public class WorkOSClientTests : IDisposable {
         var workos = new SequencedHttpScript(
             Reply(HttpStatusCode.ServiceUnavailable), Reply(HttpStatusCode.OK, Rotation));
 
-        var result = await Client(workos).RefreshAsync("client_d", "rt1", CancellationToken.None);
+        var result = await Client(workos).RefreshAsync(WorkOSClient.ApiBase, "client_d", "rt1", CancellationToken.None);
 
         await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.Rotated);
         await Assert.That(workos.Count).IsEqualTo(2);
@@ -136,7 +136,7 @@ public class WorkOSClientTests : IDisposable {
     public async Task An_unreadable_success_body_is_replayed_and_the_replay_rotates() {
         var workos = new SequencedHttpScript(Reply(HttpStatusCode.OK, "not-json"), Reply(HttpStatusCode.OK, Rotation));
 
-        var result = await Client(workos).RefreshAsync("client_d", "rt1", CancellationToken.None);
+        var result = await Client(workos).RefreshAsync(WorkOSClient.ApiBase, "client_d", "rt1", CancellationToken.None);
 
         await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.Rotated);
         await Assert.That(workos.Count).IsEqualTo(2);
@@ -150,7 +150,7 @@ public class WorkOSClientTests : IDisposable {
         var workos = new SequencedHttpScript(Stall());
 
         var started = Stopwatch.GetTimestamp();
-        var result  = await Client(workos).RefreshAsync("client_d", "rt1", CancellationToken.None);
+        var result  = await Client(workos).RefreshAsync(WorkOSClient.ApiBase, "client_d", "rt1", CancellationToken.None);
 
         await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.TransportFailed);
         await Assert.That(workos.Count).IsGreaterThan(1);
@@ -163,7 +163,7 @@ public class WorkOSClientTests : IDisposable {
     public async Task A_persistently_unreadable_success_is_rejected_once_replays_run_out() {
         var workos = new SequencedHttpScript(Reply(HttpStatusCode.OK, "not-json"));
 
-        var result = await Client(workos).RefreshAsync("client_d", "rt1", CancellationToken.None);
+        var result = await Client(workos).RefreshAsync(WorkOSClient.ApiBase, "client_d", "rt1", CancellationToken.None);
 
         await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.Rejected);
         await Assert.That(result.Response).IsNull();
@@ -176,7 +176,7 @@ public class WorkOSClientTests : IDisposable {
     public async Task An_unreadable_success_followed_by_outages_is_still_rejected() {
         var workos = new SequencedHttpScript(Reply(HttpStatusCode.OK, "not-json"), Reply(HttpStatusCode.ServiceUnavailable));
 
-        var result = await Client(workos).RefreshAsync("client_d", "rt1", CancellationToken.None);
+        var result = await Client(workos).RefreshAsync(WorkOSClient.ApiBase, "client_d", "rt1", CancellationToken.None);
 
         await Assert.That(result.Outcome).IsEqualTo(WorkOSRefreshOutcome.Rejected);
         await Assert.That(workos.Count).IsGreaterThan(2);
@@ -194,7 +194,7 @@ public class WorkOSClientTests : IDisposable {
             replayBudget:   TimeSpan.FromSeconds(60),
             replayBackoff:  TimeSpan.FromSeconds(1));
 
-        await Assert.That(async () => await client.RefreshAsync("client_d", "rt1", cts.Token))
+        await Assert.That(async () => await client.RefreshAsync(WorkOSClient.ApiBase, "client_d", "rt1", cts.Token))
             .Throws<OperationCanceledException>();
         await Assert.That(workos.Count).IsEqualTo(1);
     }

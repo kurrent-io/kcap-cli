@@ -1,6 +1,14 @@
 kcap status — Show server, auth, hook, and daemon status
 
-Usage: kcap status
+Usage: kcap status [--json]
+
+Options:
+  --json     Report the same facts as one JSON document on stdout and nothing
+             else, for a tool driving setup rather than a person reading it.
+             Carries a top-level `configured` flag: a server is set and this
+             CLI can authenticate to it -- it holds credentials, or the server
+             asks for none. An unreachable server is still configured -- that
+             is a network fact, not a setup one.
 
 Reports:
   Server     Configured base URL and reachability check
@@ -8,5 +16,10 @@ Reports:
   Hooks      Per-agent integration state: Claude plugin, Codex / Cursor /
              Copilot / Gemini / Kiro hooks, the Pi / OpenCode live-ingest
              extensions, and the Antigravity hooks block (✓ installed,
-             ✗ not installed)
+             ✗ not installed). Under it, whether each wired agent's hooks
+             run: when it last ran a kcap hook on this machine, or that it
+             has not yet (start a new session; Codex also needs its kcap
+             hooks trusted). --json carries it as last_hook_event.
+  Git        Shown only when kcap's commit hook is installed and git is
+             older than 2.54, which ignores it
   Daemon     Whether the daemon is running (PID file check)

@@ -1,7 +1,10 @@
+using System.Globalization;
 using System.Reactive.Subjects;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
+using Capacitor.Cli.Core;
 using Capacitor.Remote.Models;
+using Eventuous.SignalR;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Time.Testing;
 using static Capacitor.App.Tests.Unit.RemoteFixtures;
@@ -29,6 +32,22 @@ public class RemoteTranscriptFeedTests {
 
         public string Stream => StreamNames.AgentSession(_sessionId);
         public void Dispose() => Feed.Dispose();
+    }
+
+    [Test]
+    public async Task A_hidden_local_command_receipt_survives_the_remote_feed() {
+        using var h = new Harness(vendor: "claude");
+        h.Access.OnNext(SessionAccessState.Established);
+        await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
+        h.Feed.ReadAppended();
+        h.Lane.PushStreamEvent(Envelope("s1", 2, CanonicalEventTypes.UserMessageReceived,
+            """{"content":"<command-name>/rename</command-name><command-args>a &lt; b</command-args>","extensions":{"claude_code":{"local_command":"/rename a < b"}}}"""));
+        await WaitUntilAsync(() => h.Feed.CurrentOffset == 3, what: "the receipt");
+        var line = h.Feed.ReadAppended().Lines.Single();
+        await Assert.That(line.Offset).IsEqualTo(2);
+        await Assert.That(line.Projection.SubmittedInputs).IsEquivalentTo(new[] { "/rename a < b" });
+        await Assert.That(line.Projection.Envelopes).IsEmpty();
+        await Assert.That(line.Projection.LiteralInputs).IsEmpty();
     }
 
     [Test]
@@ -175,6 +194,30 @@ public class RemoteTranscriptFeedTests {
         await Assert.That(h.Feed.ReadAppended().Status).IsEqualTo(FeedStatus.Ok);
     }
 
+    /// A failure is logged once per outage: a repeat stays quiet until the stream delivers again.
+    [Test]
+    public async Task A_repeated_failure_is_logged_once_per_outage() {
+        using var h = new Harness();
+        h.Lane.TailHandler = (_, _) => new InvalidOperationException("dropped");
+        h.Access.OnNext(SessionAccessState.Established);
+        await WaitUntilAsync(() => h.Feed.WaitingToRetryForTesting, what: "the first retry");
+        h.Time.Advance(RemoteTranscriptFeed.Retry[0]);
+        await WaitUntilAsync(() => h.Lane.Tails.Count == 2 && h.Feed.WaitingToRetryForTesting, what: "the second retry");
+        await Assert.That(h.Logged.Count).IsEqualTo(1);
+
+        h.Lane.TailHandler = (_, _) => null;
+        h.Time.Advance(RemoteTranscriptFeed.Retry[1]);
+        await WaitUntilAsync(() => h.Lane.Tails.Count == 3, what: "the stream back");
+        h.Lane.PushStreamEvent(Envelope("s1", 2, CanonicalEventTypes.AssistantTextGenerated, """{"content":"more"}"""));
+        await WaitUntilAsync(() => h.Feed.CurrentOffset == 3, what: "the live event");
+
+        h.Lane.TailHandler = (_, _) => new InvalidOperationException("dropped");
+        h.Lane.CloseTail(h.Stream);
+        await WaitUntilAsync(() => h.Feed.WaitingToRetryForTesting, what: "the retry after the stream delivered");
+        h.Time.Advance(RemoteTranscriptFeed.Retry[0]);
+        await WaitUntilAsync(() => h.Logged.Count == 2, what: "the reason logged again");
+    }
+
     [Test]
     public async Task A_tail_that_ends_while_access_stands_resumes_after_the_retry_gap() {
         using var h = new Harness();
@@ -247,5 +290,106 @@ public class RemoteTranscriptFeedTests {
         await Assert.That(seed.Status).IsEqualTo(FeedStatus.Reset);
         await Assert.That(seed.Lines.Count).IsEqualTo(1);
         await Assert.That(h.Feed.ReadAppended().Status).IsEqualTo(FeedStatus.Ok);
+    }
+
+    /// A notification marked meta yields no row and no input, only its finish; the feed must keep it.
+    [Test]
+    public async Task A_signal_only_projection_survives_the_feed() {
+        using var h = new Harness(vendor: "claude");
+        h.Access.OnNext(SessionAccessState.Established);
+        await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
+        h.Feed.ReadAppended();
+        h.Lane.PushStreamEvent(Envelope("s1", 2, CanonicalEventTypes.UserMessageReceived,
+            """{"content":"<task-notification>\n<task-id>a9f262478e032f427</task-id>\n<tool-use-id>toolu_A</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>","extensions":{"claude_code":{"is_meta":true}}}"""));
+        await WaitUntilAsync(() => h.Feed.CurrentOffset == 3, what: "the position");
+
+        var line = h.Feed.ReadAppended().Lines.Single();
+        await Assert.That(line.Offset).IsEqualTo(2);
+        await Assert.That(line.Projection.Envelopes).IsEmpty();
+        await Assert.That(line.Projection.SubmittedInputs).IsEmpty();
+        var finished = (RunSignal.Finished)line.Projection.Runs.Single();
+        await Assert.That(finished.CallId).IsEqualTo("toolu_A");
+        await Assert.That(finished.AgentId).IsEqualTo("a9f262478e032f427");
+        await Assert.That(finished.Outcome).IsEqualTo(RunOutcome.Done);
+    }
+
+    /// A filtered user message with no ordinary display row still carries its literal candidate so
+    /// the chat can restore it when a matching send is queued.
+    [Test]
+    public async Task A_literal_only_projection_survives_the_feed() {
+        using var h = new Harness(vendor: "codex");
+        h.Access.OnNext(SessionAccessState.Established);
+        await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
+        h.Feed.ReadAppended();
+        h.Lane.PushStreamEvent(Envelope("s1", 2, CanonicalEventTypes.UserMessageReceived,
+            """{"content":"# AGENTS.md instructions\nLiteral example"}"""));
+        await WaitUntilAsync(() => h.Feed.CurrentOffset == 3, what: "the position");
+
+        var line = h.Feed.ReadAppended().Lines.Single();
+        await Assert.That(line.Offset).IsEqualTo(2);
+        await Assert.That(line.Projection.Envelopes).IsEmpty();
+        await Assert.That(line.Projection.LiteralInputs).IsEquivalentTo(new[] { "# AGENTS.md instructions\nLiteral example" });
+    }
+
+    /// The server's lifecycle event ends the row with no notification on the stream at all.
+    [Test]
+    public async Task The_servers_subagent_completion_ends_a_seeded_background_row() {
+        using var h = new Harness(vendor: "claude") {
+            NextDetail = new(Detail(
+                Event(0, CanonicalEventTypes.AssistantToolCallsGenerated,
+                    """{"tool_calls":[{"call_id":"toolu_A","tool_name":"Agent","arguments":{"subagent_type":"Explore","description":"look"}}],"timestamp":"2026-09-17T10:00:00Z"}"""),
+                Event(1, CanonicalEventTypes.ToolResultReceived,
+                    """{"call_id":"toolu_A","result":"launched","timestamp":"2026-09-17T10:00:01Z","extensions":{"claude_code":{"tool_use_result":{"status":"async_launched","agentId":"a9f262478e032f427"}}}}"""))),
+        };
+        var subagents = new SessionRuns(h.Time);
+        h.Access.OnNext(SessionAccessState.Established);
+        await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
+        foreach (var line in h.Feed.ReadAppended().Lines) subagents.Apply(line.Projection);
+        await Assert.That(subagents.RunningCount).IsEqualTo(1);
+
+        h.Lane.PushStreamEvent(Envelope("s1", 2, CanonicalEventTypes.SubagentCompleted,
+            """{"agent_id":"a9f262478e032f427","timestamp":"2026-09-17T10:02:05Z"}"""));
+        await WaitUntilAsync(() => h.Feed.CurrentOffset == 3, what: "the completion");
+        foreach (var line in h.Feed.ReadAppended().Lines) subagents.Apply(line.Projection);
+        await Assert.That(subagents.RunningCount).IsEqualTo(0);
+        await Assert.That(subagents.Rows.Single().State).IsEqualTo(RunState.Done);
+        await Assert.That(subagents.Rows.Single().EndedAt).IsEqualTo(DateTimeOffset.Parse("2026-09-17T10:02:05Z", CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind));
+    }
+
+    /// The payload's own time is transcript-authoritative; the stream envelope only carries when
+    /// the server happened to store it.
+    [Test]
+    public async Task A_live_event_dated_by_its_own_payload_keeps_that_time_not_the_storage_time() {
+        using var h = new Harness();
+        h.Access.OnNext(SessionAccessState.Established);
+        await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
+        h.Feed.ReadAppended();
+
+        h.Lane.PushStreamEvent(Envelope("s1", 2, CanonicalEventTypes.UserMessageReceived,
+            """{"content":"hello","timestamp":"2026-09-17T10:01:00Z"}"""));
+        await WaitUntilAsync(() => h.Feed.CurrentOffset == 3, what: "the live event");
+
+        var envelope = h.Feed.ReadAppended().Lines.Single().Projection.Envelopes.Single();
+        var at = DateTimeOffset.Parse(envelope.TimestampIso!, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+        await Assert.That(at).IsEqualTo(DateTimeOffset.Parse("2026-09-17T10:01:00Z", CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind));
+    }
+
+    [Test]
+    public async Task A_live_event_with_no_payload_timestamp_keeps_the_envelope_storage_time() {
+        using var h = new Harness();
+        h.Access.OnNext(SessionAccessState.Established);
+        await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
+        h.Feed.ReadAppended();
+
+        var storedAt = new DateTime(2026, 9, 17, 9, 0, 0, DateTimeKind.Utc);
+        h.Lane.PushStreamEvent(new StreamEventEnvelope {
+            EventId = Guid.NewGuid(), Stream = h.Stream, EventType = CanonicalEventTypes.UserMessageReceived,
+            StreamPosition = 2, GlobalPosition = 2, Timestamp = storedAt, JsonPayload = """{"content":"hello"}""",
+        });
+        await WaitUntilAsync(() => h.Feed.CurrentOffset == 3, what: "the live event");
+
+        var envelope = h.Feed.ReadAppended().Lines.Single().Projection.Envelopes.Single();
+        var at = DateTimeOffset.Parse(envelope.TimestampIso!, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+        await Assert.That(at).IsEqualTo((DateTimeOffset)storedAt);
     }
 }

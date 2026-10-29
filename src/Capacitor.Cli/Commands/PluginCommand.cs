@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Antigravity;
 using Capacitor.Cli.Core.Harness.Claude;
@@ -9,9 +10,13 @@ using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Harness.Copilot;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Harness.Gemini;
+using Capacitor.Cli.Core.Harness.Grok;
 using Capacitor.Cli.Core.Harness.Kiro;
+using Capacitor.Cli.Core.Harness.MistralVibe;
+using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
+using Capacitor.Cli.Core.Toml;
 using Capacitor.Cli.Core.Instructions;
 using Capacitor.Cli.Core.Mcp;
 
@@ -20,16 +25,13 @@ namespace Capacitor.Cli.Commands;
 public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdir) {
     static readonly JsonSerializerOptions WriteOpts = new() { WriteIndented = true };
 
-    const string CodexHookCommand   = "kcap hook --codex";
     const string CursorHookCommand  = "kcap hook --cursor";
     const string CopilotHookCommand = "kcap hook --copilot";
     const string KiroHookCommand    = "kcap hook --kiro";
 
-    // PermissionRequest must wait for the dashboard's decision; the daemon-side
-    // bridge call is intentionally infinite. 86400s = 24h keeps Codex from
-    // killing the hook before the user approves or denies.
-    const int PermissionRequestTimeout = 86400;
-    const int DefaultHookTimeout       = 30;
+    const int DefaultHookTimeout = 30;
+
+    bool _refreshFailed;
 
     /// <summary>Whether the bare <c>kcap</c> those commands invoke resolves on the same search path
     /// the vendors were found on — a hook writing a command this cannot find never fires.</summary>
@@ -42,17 +44,19 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             return 1;
         }
 
-        return args[1] switch {
+        _refreshFailed = false;
+        var exit = args[1] switch {
             "install" => await Install(args),
             "remove"  => await Remove(args),
             _         => PrintUsage()
         };
+        return args.Contains("--strict-refresh") && _refreshFailed ? 1 : exit;
     }
 
-    static readonly string[] ExclusiveTargetFlags = ["--codex", "--cursor", "--copilot", "--gemini", "--kiro", "--pi", "--opencode", "--antigravity", "--skills"];
+    static readonly string[] ExclusiveTargetFlags = ["--codex", "--cursor", "--copilot", "--gemini", "--kiro", "--pi", "--opencode", "--antigravity", "--mistral-vibe", "--grok", "--muse", "--skills"];
 
     const string MutuallyExclusiveMsg =
-        "--cursor, --codex, --copilot, --gemini, --kiro, --pi, --opencode, --antigravity, and --skills are mutually exclusive.";
+        "--cursor, --codex, --copilot, --gemini, --kiro, --pi, --opencode, --antigravity, --mistral-vibe, --grok, --muse, and --skills are mutually exclusive.";
 
     static bool HasConflictingTargets(string[] args) =>
         ExclusiveTargetFlags.Count(args.Contains) > 1;
@@ -65,17 +69,70 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         }
 
         if (args.Contains("--skills")) return await InstallSkills(args);
-        if (args.Contains("--codex")) return await InstallCodex(args);
-        if (args.Contains("--cursor")) return await InstallCursor(args);
-        if (args.Contains("--copilot")) return await InstallCopilot(args);
-        if (args.Contains("--gemini")) return await InstallGemini(args);
-        if (args.Contains("--kiro")) return await InstallKiro(args);
-        if (args.Contains("--pi")) return await InstallPi(args);
-        if (args.Contains("--opencode")) return await InstallOpenCode(args);
-        if (args.Contains("--antigravity")) return await InstallAntigravity(args);
 
-        return await InstallClaude(args);
+        var exit = await InstallHarness(args);
+
+        if (exit == 0 && !args.Contains(ToolsOnlyFlag)) {
+            var gitHook = new GitHookInstaller(env.Home, env.ResolveMcpBinaryPath);
+
+            // Refresh may repair a recording hook, but cannot opt into one.
+            if (args.Contains("--if-installed")) {
+                if (gitHook.IsInstalled() && !gitHook.Refresh()) {
+                    _refreshFailed = true;
+                    await env.Stderr.WriteLineAsync("Could not refresh the installed git hook.");
+                }
+            }
+            else gitHook.Install();
+        }
+
+        return exit;
     }
+
+    const string ToolsOnlyFlag = "--tools-only";
+
+    Task<int> InstallHarness(string[] args) {
+        if (args.Contains(ToolsOnlyFlag)) {
+            if (args.Contains("--codex"))
+                return RefuseToolsOnlyAsync("Codex", "its hooks and skills install as one unit");
+
+            if (args.Contains("--grok"))
+                return RefuseToolsOnlyAsync("Grok", "kcap installs no tools for it; Grok loads the ones set up for Claude Code");
+
+            if (!ExclusiveTargetFlags.Any(args.Contains))
+                return RefuseToolsOnlyAsync("Claude Code", "its MCP servers and skills ship inside the plugin that records sessions");
+        }
+
+        if (args.Contains("--codex")) return InstallCodex(args);
+        if (args.Contains("--cursor")) return InstallCursor(args);
+        if (args.Contains("--copilot")) return InstallCopilot(args);
+        if (args.Contains("--gemini")) return InstallGemini(args);
+        if (args.Contains("--kiro")) return InstallKiro(args);
+        if (args.Contains("--pi")) return InstallPi(args);
+        if (args.Contains("--opencode")) return InstallOpenCode(args);
+        if (args.Contains("--antigravity")) return InstallAntigravity(args);
+        if (args.Contains("--mistral-vibe")) return InstallVibe(args);
+        if (args.Contains("--grok")) return InstallGrok(args);
+        if (args.Contains("--muse")) return InstallMuse(args);
+
+        return InstallClaude(args);
+    }
+
+    async Task<int> RefuseToolsOnlyAsync(string vendor, string reason) {
+        await env.Stderr.WriteLineAsync(
+            $"--tools-only is not supported for {vendor}: {reason}. "
+          + "It applies to --cursor, --copilot, --gemini, --kiro, --pi, --opencode, --antigravity, --mistral-vibe and --muse."
+        );
+
+        return 1;
+    }
+
+    /// <summary>Whether to write only the tools: asked for, or a refresh of an install whose capture half
+    /// is absent — a refresh never adds capture to an install that has only the tools.</summary>
+    static bool ToolsOnly(string[] args, bool refreshOnly, bool captureInstalled) =>
+        args.Contains(ToolsOnlyFlag) || refreshOnly && !captureInstalled;
+
+    Task NoteCaptureSkippedAsync(string vendor) =>
+        env.Stdout.WriteLineAsync($"{vendor} capture unchanged (--tools-only): no recording hooks were added or removed.");
 
     async Task<int> Remove(string[] args) {
         if (HasConflictingTargets(args)) {
@@ -93,6 +150,9 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (args.Contains("--pi")) return await RemovePi(args);
         if (args.Contains("--opencode")) return await RemoveOpenCode(args);
         if (args.Contains("--antigravity")) return await RemoveAntigravity(args);
+        if (args.Contains("--mistral-vibe")) return await RemoveVibe(args);
+        if (args.Contains("--grok")) return await RemoveGrok(args);
+        if (args.Contains("--muse")) return await RemoveMuse(args);
 
         return await RemoveClaude(args);
     }
@@ -104,25 +164,36 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             ? Path.Combine(workdir.Path, ".claude", "settings.local.json")
             : env.Harnesses.Of<ClaudeHarness>().Paths.UserSettings;
 
-        // --if-installed: refresh-only mode used by the npm postinstall hook.
-        // Skip when the user never opted in; short-circuit when the marker
-        // already matches the current CLI version.
-        var refreshOnly = args.Contains("--if-installed");
+        // --if-installed: refresh-only mode used by the npm postinstall hook. It never adopts or
+        // rewrites a default layout the user never opted into. Paths can change at the same version.
+        var refreshOnly      = args.Contains("--if-installed");
+        var defaultInstalled = ClaudePluginInstaller.IsInstalled(settingsPath);
 
-        switch (refreshOnly) {
-            case true when !ClaudePluginInstaller.IsInstalled(settingsPath):
-            case true when
-                ClaudePluginInstaller.ReadMarker(settingsPath) == CapacitorVersion.Current():
-                return 0;
-        }
+        var skipDefault = refreshOnly && !defaultInstalled;
 
+        var exit = skipDefault ? 0 : await InstallClaudeLayout(settingsPath, scope, refreshOnly);
+
+        if (exit != 0 || scope != "user") return exit;
+
+        var defaultHome   = env.Harnesses.Of<ClaudeHarness>().Paths.Home;
+        var accountsWired = await WireUserAccountsAsync(
+            HarnessId.Claude, defaultHome,
+            adoptDefault: !refreshOnly || defaultInstalled, refreshOnly, enableNetwork: false);
+
+        // After adoption, which is what registers the default directory.
+        if (!skipDefault) accountsWired &= await DefaultStatusLineAsync(defaultHome, install: true);
+
+        return accountsWired || refreshOnly ? 0 : 1;
+    }
+
+    async Task<int> InstallClaudeLayout(string settingsPath, string scope, bool refreshOnly) {
         var pluginPath = env.ResolvePluginPath();
 
         if (pluginPath is null) {
-            if (refreshOnly) return 0;
+            if (refreshOnly) { _refreshFailed = true; return 0; }
 
-            await env.Stderr.WriteLineAsync("Plugin directory not found. Re-install kcap via npm:");
-            await env.Stderr.WriteLineAsync("  npm install -g @kurrent/kcap");
+            await env.Stderr.WriteLineAsync("Plugin directory not found. Re-install kcap:");
+            await env.Stderr.WriteLineAsync("  " + InstallProvenance.ReinstallCommand());
 
             return 1;
         }
@@ -147,7 +218,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 );
             }
         } else {
-            if (refreshOnly) return 0;
+            if (refreshOnly) { _refreshFailed = true; return 0; }
 
             await env.Stderr.WriteLineAsync("Could not update settings file.");
 
@@ -164,6 +235,50 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             ? Path.Combine(workdir.Path, ".claude", "settings.local.json")
             : env.Harnesses.Of<ClaudeHarness>().Paths.UserSettings;
 
+        var defaultHome = env.Harnesses.Of<ClaudeHarness>().Paths.Home;
+
+        // Before the layout goes, while the default directory is still registered.
+        var statusLineRestored = scope != "user" || await DefaultStatusLineAsync(defaultHome, install: false);
+
+        var exit = await RemoveClaudeLayout(settingsPath, scope);
+
+        if (scope == "user" && !await UnwireUserAccountsAsync(HarnessId.Claude, defaultHome))
+            exit = 1;
+
+        if (!statusLineRestored) exit = 1;
+
+        return exit;
+    }
+
+    /// <summary>The registered default directory's status line, which <see cref="UserAccountsAsync"/> leaves out.
+    /// False only for a fatal failure; an unusable registry is the usual warning.</summary>
+    async Task<bool> DefaultStatusLineAsync(string defaultDirectory, bool install) {
+        if (env.Accounts is not { } store) return true;
+
+        WiringStep? step;
+        try {
+            step = await LockedAsync(() =>
+                store.Load().Accounts.FirstOrDefault(a => a.Vendor == HarnessId.Claude && AccountDirectory.Same(a.Directory, defaultDirectory)) is { } account
+                    ? install ? AccountWiring.WireStatusLine(account.Id, env.Home, store) : AccountWiring.UnwireStatusLine(account.Id, env.Home, store)
+                    : new WiringStep("statusline", true, "default directory not registered"));
+        } catch (Exception ex) when (IsRegistryFailure(ex)) {
+            await RegistryUnavailableAsync(ex);
+
+            return true;
+        }
+
+        if (step is null || step.Succeeded) return true;
+
+        var fatal = AccountWiring.HasFatalFailure([step]);
+        _refreshFailed |= fatal;
+        await env.Stderr.WriteLineAsync(fatal
+            ? $"Could not {(install ? "wire" : "restore")} the Claude status line in {defaultDirectory}: {step.Name}: {step.Detail}"
+            : $"Warning: the Claude status line in {defaultDirectory}: {step.Name}: {step.Detail}");
+
+        return !fatal;
+    }
+
+    async Task<int> RemoveClaudeLayout(string settingsPath, string scope) {
         if (!File.Exists(settingsPath)) {
             await env.Stdout.WriteLineAsync("Nothing to remove — settings file not found.");
 
@@ -205,35 +320,13 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     /// <see cref="ClaudeRemovalOutcome.NotInstalled"/> when the file exists
     /// but contains no kcap entries.
     /// </summary>
-    public static ClaudeRemovalOutcome RemoveClaudePlugin(string settingsPath) {
-        if (!File.Exists(settingsPath)) return ClaudeRemovalOutcome.NotInstalled;
-
-        var text = File.ReadAllText(settingsPath);
-
-        if (JsonNode.Parse(text) is not JsonObject root) return ClaudeRemovalOutcome.Malformed;
-
-        var changed = false;
-
-        if (root["enabledPlugins"] is JsonObject enabled) {
-            changed |= enabled.Remove("kcap@kcap");
-            changed |= enabled.Remove("kcap@kurrent");
-            changed |= enabled.Remove("kapacitor@kapacitor");
-            changed |= enabled.Remove("kapacitor@kurrent");
-        }
-
-        if (root["extraKnownMarketplaces"] is JsonObject marketplaces) {
-            changed |= marketplaces.Remove("kcap");
-            changed |= marketplaces.Remove("kurrent");
-            changed |= marketplaces.Remove("kapacitor");
-        }
-
-        if (!changed) return ClaudeRemovalOutcome.NotInstalled;
-
-        File.WriteAllText(settingsPath, root.ToJsonString(WriteOpts));
-        ClaudePluginInstaller.DeleteMarker(settingsPath);
-
-        return ClaudeRemovalOutcome.Removed;
-    }
+    public static ClaudeRemovalOutcome RemoveClaudePlugin(string settingsPath) =>
+        ClaudePluginWriter.Remove(settingsPath) switch {
+            SettingsEdit.Changed   => ClaudeRemovalOutcome.Removed,
+            SettingsEdit.Malformed => ClaudeRemovalOutcome.Malformed,
+            SettingsEdit.Failed    => throw new IOException($"Could not write {settingsPath}."),
+            _                      => ClaudeRemovalOutcome.NotInstalled,
+        };
 
     public enum ClaudeRemovalOutcome {
         Removed,
@@ -262,11 +355,11 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         var pluginPath = env.ResolvePluginPath();
 
         if (pluginPath is null) {
-            if (refreshOnly) return 0;
+            if (refreshOnly) { _refreshFailed = true; return 0; }
 
             await env.Stderr.WriteLineAsync(
                 "Cannot install agent skills: kcap plugin folder not found. " +
-                "Re-install kcap via npm: npm install -g @kurrent/kcap"
+                "Re-install kcap: " + InstallProvenance.ReinstallCommand()
             );
 
             return 1;
@@ -275,18 +368,18 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         var skillsSource = Path.Combine(pluginPath, "skills");
 
         if (!Directory.Exists(skillsSource)) {
-            if (refreshOnly) return 0;
+            if (refreshOnly) { _refreshFailed = true; return 0; }
 
             await env.Stderr.WriteLineAsync(
                 $"Cannot install agent skills: 'skills' folder missing from {pluginPath}. " +
-                "Re-install kcap via npm: npm install -g @kurrent/kcap"
+                "Re-install kcap: " + InstallProvenance.ReinstallCommand()
             );
 
             return 1;
         }
 
         if (!AgentsSkillsInstaller.Install(skillsSource, env.Agents.UserSkillsDir)) {
-            if (refreshOnly) return 0;
+            if (refreshOnly) { _refreshFailed = true; return 0; }
 
             await env.Stderr.WriteLineAsync("Could not install agent skills.");
 
@@ -341,21 +434,37 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         var refreshOnly = args.Contains("--if-installed");
 
         if (refreshOnly) {
-            if (!CodexHooksInstaller.IsInstalled(hooksPath)) return 0;
+            var defaultInstalled = CodexHooksInstaller.IsInstalled(hooksPath);
 
             // The marker gates only the hooks write. The MCP registration is healed on every
             // refresh: the marker says nothing about config.toml, and a server that joined the
             // Codex set after the last full install is otherwise never registered.
             // Never fail the npm install path.
-            if (CodexHooksInstaller.ReadMarker(hooksPath) != CapacitorVersion.Current()) {
-                if (InstallCodexHooks(hooksPath))
-                    await env.Stdout.WriteLineAsync($"Codex hooks refreshed ({scope}: {hooksPath})");
-                else
-                    await env.Stderr.WriteLineAsync(
-                        $"Warning: could not refresh Codex hooks ({hooksPath}); continuing with MCP registration.");
+            if (defaultInstalled) {
+                // A byte-order mark makes Codex refuse the file whatever the marker says.
+                if (CodexHooksInstaller.ReadMarker(hooksPath) != CapacitorVersion.Current()
+                 || CodexHooksInstaller.StartsWithByteOrderMark(hooksPath)) {
+                    if (InstallCodexHooks(hooksPath))
+                        await env.Stdout.WriteLineAsync($"Codex hooks refreshed ({scope}: {hooksPath})");
+                    else {
+                        _refreshFailed = true;
+                        await env.Stderr.WriteLineAsync(
+                            $"Warning: could not refresh Codex hooks ({hooksPath}); continuing with MCP registration.");
+                    }
+                }
+
             }
 
-            await RegisterCodexMcpServersAsync();
+            try {
+                if (defaultInstalled || CodexConfigToml.HasMcpInstallRecord(codex.ConfigToml))
+                    await RegisterCodexMcpServersAsync();
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) {
+                _refreshFailed = true;
+                await env.Stderr.WriteLineAsync($"Warning: could not refresh Codex MCP servers in {codex.ConfigToml}: {ex.Message}");
+            }
+
+            if (scope == "user")
+                await WireUserAccountsAsync(HarnessId.Codex, codex.Home, adoptDefault: defaultInstalled, refreshOnly: true, enableNetwork: false);
 
             return 0;
         }
@@ -369,7 +478,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (pluginPath is null) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install Codex plugin: kcap plugin folder not found. " +
-                "Re-install kcap via npm: npm install -g @kurrent/kcap"
+                "Re-install kcap: " + InstallProvenance.ReinstallCommand()
             );
 
             return 1;
@@ -380,7 +489,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (!Directory.Exists(skillsSource)) {
             await env.Stderr.WriteLineAsync(
                 $"Cannot install Codex plugin: 'skills' folder missing from {pluginPath}. " +
-                "Re-install kcap via npm: npm install -g @kurrent/kcap"
+                "Re-install kcap: " + InstallProvenance.ReinstallCommand()
             );
 
             return 1;
@@ -398,7 +507,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             await env.Stderr.WriteLineAsync(
                 $"Cannot install Codex plugin: missing skill folder(s) under {skillsSource}: "
               + string.Join(", ", missingSkills)
-              + ". Re-install kcap via npm: npm install -g @kurrent/kcap"
+              + ". Re-install kcap: " + InstallProvenance.ReinstallCommand()
             );
 
             return 1;
@@ -431,7 +540,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         AgentsSkillsInstaller.CleanLegacyCodexSkills(codex.SkillsDir);
 
         // enable Codex sandbox network access so the skills just installed can
-        // reach the Capacitor server. Opt out with --skip-codex-network-access. The
+        // reach the kcap server. Opt out with --skip-codex-network-access. The
         // --if-installed refresh path returns earlier, so npm postinstall never flips this.
         if (!args.Contains("--skip-codex-network-access"))
             await EnableCodexNetworkAccessAsync();
@@ -446,24 +555,30 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 "Note: Codex requires the project's .codex directory to be trusted. " +
                 "Run `codex` once in this directory and accept the trust prompt."
             );
+
+            return 0;
         }
 
-        return 0;
+        var accountsWired = await WireUserAccountsAsync(
+            HarnessId.Codex, codex.Home, adoptDefault: true, refreshOnly: false,
+            enableNetwork: !args.Contains("--skip-codex-network-access"));
+
+        return accountsWired ? 0 : 1;
     }
 
     /// <summary>
     /// turn on Codex's <c>workspace-write</c> sandbox network access, constrained
-    /// to the Capacitor server(s) of every configured profile, so kcap skills can reach the
+    /// to the kcap server(s) of every configured profile, so kcap skills can reach the
     /// server. Never fails the install: a write error is a warning, not an error code.
     /// </summary>
     async Task EnableCodexNetworkAccessAsync() {
         var codex = env.Harnesses.Of<CodexHarness>().Paths;
 
-        var domains = CodexConfigToml.BuildAllowDomains(env.Profiles.Profiles.Values.Select(p => p.ServerUrl));
+        var domains = env.CodexNetworkAllowDomains();
 
         if (domains.Count == 0) {
             await env.Stdout.WriteLineAsync(
-                "No Capacitor server configured yet — run `kcap setup` to allow Codex network access for kcap skills.");
+                "No kcap server configured yet — run `kcap setup` to allow Codex network access for kcap skills.");
 
             return;
         }
@@ -498,6 +613,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 await env.Stdout.WriteLineAsync("Codex MCP servers already registered — no change needed.");
                 break;
             default:
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync(
                     $"Warning: could not register Codex MCP servers in {codex.ConfigToml} — see README to add them manually.");
                 break;
@@ -565,7 +681,9 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
         var legacy = AgentsSkillsInstaller.CleanLegacyCodexSkills(codex.SkillsDir);
 
-        if (hooksFailed || mcpFailed || agents.HadErrors || legacy.HadErrors) {
+        var accountsFailed = scope == "user" && !await UnwireUserAccountsAsync(HarnessId.Codex, codex.Home);
+
+        if (hooksFailed || mcpFailed || agents.HadErrors || legacy.HadErrors || accountsFailed) {
             await env.Stdout.WriteLineAsync("Removal incomplete — see errors above.");
 
             return 1;
@@ -578,159 +696,214 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         return 0;
     }
 
-    /// <summary>
-    /// Writes (or merges into) <paramref name="hooksPath"/> a hooks.json that
-    /// invokes <c>kcap codex-hook</c> for every Codex event. Existing
-    /// non-kcap entries are preserved; existing kcap entries are
-    /// replaced (so the timeout/command stay current after a CLI upgrade).
-    /// </summary>
-    public static bool InstallCodexHooks(string hooksPath) {
+    /// <summary>Every registered account of <paramref name="vendor"/> other than the
+    /// environment-derived one, which keeps its own install path. A registry that cannot be read,
+    /// locked or written is a warning, never a failure: the default layout must stay installable
+    /// and removable whatever state the registry is in.</summary>
+    async Task<IReadOnlyList<VendorAccount>> UserAccountsAsync(HarnessId vendor, string defaultDirectory, bool adoptDefault) {
+        if (env.Accounts is null) return [];
+
         try {
-            JsonObject root = [];
+            if (adoptDefault) AccountAdoption.EnsureDefault(env.Accounts, vendor, defaultDirectory, TimeProvider.System);
 
-            if (File.Exists(hooksPath)) {
-                try {
-                    if (JsonNode.Parse(File.ReadAllText(hooksPath)) is JsonObject obj) root = obj;
-                } catch {
-                    // Malformed — start fresh
-                }
-            }
+            return [.. AccountAdoption.Of(env.Accounts, vendor).Where(a => !AccountDirectory.Same(a.Directory, defaultDirectory))];
+        } catch (Exception ex) when (IsRegistryFailure(ex)) {
+            await RegistryUnavailableAsync(ex);
 
-            if (root["hooks"] is not JsonObject hooks) {
-                hooks         = [];
-                root["hooks"] = hooks;
-            }
-
-            foreach (var evt in CodexHooksParser.CodexHookEvents) {
-                var timeout = evt == "PermissionRequest" ? PermissionRequestTimeout : DefaultHookTimeout;
-
-                var kcapEntry = new JsonObject {
-                    ["hooks"] = new JsonArray(
-                        new JsonObject {
-                            ["type"]    = "command",
-                            ["command"] = CodexHookCommand,
-                            ["timeout"] = timeout
-                        }
-                    )
-                };
-
-                if (hooks[evt] is not JsonArray entries) {
-                    hooks[evt] = new JsonArray(kcapEntry);
-
-                    continue;
-                }
-
-                var preserved = new JsonArray();
-
-                foreach (var entry in entries) {
-                    if (entry is null) continue;
-
-                    if (!CodexHooksParser.EntryReferencesCapacitorCodexHook(entry)) {
-                        preserved.Add(entry.DeepClone());
-                    }
-                }
-
-                preserved.Add((JsonNode)kcapEntry);
-                hooks[evt] = preserved;
-            }
-
-            Directory.CreateDirectory(Path.GetDirectoryName(hooksPath)!);
-            File.WriteAllText(hooksPath, root.ToJsonString(WriteOpts));
-
-            CodexHooksInstaller.WriteMarker(hooksPath);
-
-            return true;
-        } catch {
-            return false;
+            return [];
         }
     }
 
+    static bool IsRegistryFailure(Exception ex) =>
+        ex is InvalidDataException or IOException or UnauthorizedAccessException or TimeoutException or WaitHandleCannotBeOpenedException;
+
+    /// <summary>
+    /// Whether a registry failure other than an unparseable file stopped this command reaching every
+    /// account. An unparseable registry names no account anyone could unwire, so deleting it loses
+    /// nothing; a locked or unreadable one may still list wired accounts, and only it can unwire them.
+    /// The exit code stays a warning's so <c>kcap plugin remove</c> keeps removing the default layout.
+    /// </summary>
+    public bool AccountsMayStillBeWired { get; private set; }
+
+    Task RegistryUnavailableAsync(Exception ex) {
+        _refreshFailed = true;
+        if (ex is not InvalidDataException) AccountsMayStillBeWired = true;
+
+        return env.Stderr.WriteLineAsync($"Could not read the kcap account registry ({ex.Message}); only the default directory was updated.");
+    }
+
+    /// <summary>Runs one account's wiring under the registry lock; null, after the registry warning, when the
+    /// lock cannot be taken. Never call <see cref="AccountAdoption.EnsureDefault"/> inside: the lock is not
+    /// re-entrant.</summary>
+    async Task<T?> LockedAsync<T>(Func<T> wiring) where T : class {
+        IDisposable lease;
+
+        try {
+            lease = env.Accounts!.Lock();
+        } catch (Exception ex) when (IsRegistryFailure(ex)) {
+            await RegistryUnavailableAsync(ex);
+
+            return null;
+        }
+
+        using (lease) return wiring();
+    }
+
+    async Task<bool> WireUserAccountsAsync(HarnessId vendor, string defaultDirectory, bool adoptDefault, bool refreshOnly, bool enableNetwork) {
+        WiringOptions? options = null;
+        var            ok      = true;
+
+        foreach (var account in await UserAccountsAsync(vendor, defaultDirectory, adoptDefault)) {
+            options ??= Wiring(enableNetwork);
+
+            var steps = await LockedAsync(() => WireOne(account, refreshOnly, options));
+            if (steps is null) break;
+
+            if (steps.Count > 0) ok &= await ReportAsync(account, steps, "Wired", "wire");
+        }
+
+        return ok;
+    }
+
+    /// <summary>No steps when a refresh leaves the account alone.</summary>
+    IReadOnlyList<WiringStep> WireOne(VendorAccount account, bool refreshOnly, WiringOptions options) {
+        if (refreshOnly) {
+            // A refresh never wires an account the user unwired: only an existing install is refreshed.
+            if (!IsInstalledIn(account)) return [];
+
+            if (account.Vendor is HarnessId.Codex) {
+                var paths = AccountLayouts.Codex(env.Home, account.Directory);
+                if (CodexConfigToml.RegisterKcapMcpServers(paths.ConfigToml, env.ResolveMcpBinaryPath) == CodexConfigToml.Change.Failed)
+                    _refreshFailed = true;
+                if (!CodexHooksInstaller.IsInstalled(paths.UserHooksJson)) return [];
+            }
+
+            if (account.Vendor != HarnessId.Claude && MarkerIsCurrent(account) && !RefusedByCodex(account)) return [];
+        }
+
+        return AccountWiring.Wire(account, env.Home, options, env.Accounts!);
+    }
+
+    async Task<bool> UnwireUserAccountsAsync(HarnessId vendor, string defaultDirectory) {
+        var ok = true;
+
+        foreach (var account in await UserAccountsAsync(vendor, defaultDirectory, adoptDefault: false)) {
+            var steps = await LockedAsync(() => AccountWiring.Unwire(account, env.Home, env.Accounts!));
+            if (steps is null) break;
+
+            ok &= await ReportAsync(account, steps, "Unwired", "unwire");
+        }
+
+        return ok;
+    }
+
+    bool IsInstalledIn(VendorAccount account) => account.Vendor switch {
+        HarnessId.Claude => ClaudePluginInstaller.IsInstalled(AccountLayouts.Claude(env.Home, account.Directory).UserSettings),
+        HarnessId.Codex  => CodexHooksInstaller.IsInstalled(AccountLayouts.Codex(env.Home, account.Directory).UserHooksJson)
+            || CodexConfigToml.HasMcpInstallRecord(AccountLayouts.Codex(env.Home, account.Directory).ConfigToml),
+        _                => false,
+    };
+
+    // A byte-order mark makes Codex refuse the file whatever the marker says.
+    bool RefusedByCodex(VendorAccount account) =>
+        account.Vendor is HarnessId.Codex
+     && CodexHooksInstaller.StartsWithByteOrderMark(AccountLayouts.Codex(env.Home, account.Directory).UserHooksJson);
+
+    bool MarkerIsCurrent(VendorAccount account) => account.Vendor switch {
+        HarnessId.Claude => ClaudePluginInstaller.ReadMarker(AccountLayouts.Claude(env.Home, account.Directory).UserSettings) == CapacitorVersion.Current(),
+        HarnessId.Codex  => CodexHooksInstaller.ReadMarker(AccountLayouts.Codex(env.Home, account.Directory).UserHooksJson) == CapacitorVersion.Current(),
+        _                => false,
+    };
+
+    WiringOptions Wiring(bool enableNetwork) {
+        var domains = enableNetwork ? env.CodexNetworkAllowDomains() : [];
+
+        return new(env.ResolvePluginPath(), env.Agents.UserSkillsDir, env.ResolveMcpBinaryPath, domains.Count == 0 ? null : domains);
+    }
+
+    async Task<bool> ReportAsync(VendorAccount account, IReadOnlyList<WiringStep> steps, string done, string attempt) {
+        var fatal = AccountWiring.HasFatalFailure(steps);
+        _refreshFailed |= fatal;
+
+        if (!fatal) await env.Stdout.WriteLineAsync($"{done} {account.Vendor} account {account.Label} ({account.Directory})");
+
+        if (!AccountWiring.Succeeded(steps)) {
+            var detail = AccountWiring.FailureSummary(steps);
+            await env.Stderr.WriteLineAsync(fatal
+                ? $"Could not {attempt} {account.Vendor} account {account.Label} ({account.Directory}): {detail}"
+                : $"Warning: {account.Vendor} account {account.Label} ({account.Directory}): {detail}");
+        }
+
+        return !fatal;
+    }
+
+    /// <summary>
+    /// Merges into <paramref name="hooksPath"/> a hooks.json entry that invokes <c>kcap hook --codex</c> for
+    /// every Codex event. Non-kcap entries are preserved; kcap entries are replaced, so the timeout and
+    /// command stay current after an upgrade.
+    /// </summary>
+    public static bool InstallCodexHooks(string hooksPath) =>
+        CodexHooksWriter.Install(hooksPath) is SettingsEdit.Changed or SettingsEdit.Unchanged;
+
     /// <summary>
     /// Removes every entry in <paramref name="hooksPath"/> whose command
-    /// invokes <c>kcap codex-hook</c>. Other entries are preserved.
+    /// invokes kcap's Codex hook. Other entries are preserved.
     /// Returns true if any entries were removed. Throws on I/O failure
     /// (caller decides how to surface partial writes); returns false only
     /// when there was genuinely nothing to remove.
     /// </summary>
-    public static bool RemoveCodexHooks(string hooksPath) {
-        if (!File.Exists(hooksPath)) return false;
-
-        if (JsonNode.Parse(File.ReadAllText(hooksPath)) is not JsonObject root) return false;
-        if (root["hooks"] is not JsonObject hooks) return false;
-
-        var changed = false;
-
-        foreach (var evt in CodexHooksParser.CodexHookEvents) {
-            if (hooks[evt] is not JsonArray entries) continue;
-
-            var preserved = new JsonArray();
-
-            foreach (var entry in entries) {
-                if (entry is null) continue;
-
-                if (CodexHooksParser.EntryReferencesCapacitorCodexHook(entry)) {
-                    changed = true;
-                } else {
-                    preserved.Add(entry.DeepClone());
-                }
-            }
-
-            hooks[evt] = preserved;
-        }
-
-        if (changed) {
-            File.WriteAllText(hooksPath, root.ToJsonString(WriteOpts));
-            CodexHooksInstaller.DeleteMarker(hooksPath);
-        }
-
-        return changed;
-    }
+    public static bool RemoveCodexHooks(string hooksPath) =>
+        CodexHooksWriter.Remove(hooksPath) switch {
+            SettingsEdit.Changed => true,
+            SettingsEdit.Failed  => throw new IOException($"Could not write {hooksPath}."),
+            _                    => false,
+        };
 
     async Task<int> InstallCursor(string[] args) {
-        var hooksPath = GetArg(args, "--cursor-hooks-path") ?? env.Harnesses.Of<CursorHarness>().Paths.UserHooksJson;
+        var cursor    = env.Harnesses.Of<CursorHarness>().Paths;
+        var hooksPath = GetArg(args, "--cursor-hooks-path") ?? cursor.UserHooksJson;
 
-        var refreshOnly = args.Contains("--if-installed");
+        var refreshOnly    = args.Contains("--if-installed");
+        var hooksInstalled = CursorHooksInstaller.IsInstalled(hooksPath);
+        var toolsOnly      = ToolsOnly(args, refreshOnly, hooksInstalled);
 
-        switch (refreshOnly) {
-            case true when !CursorHooksInstaller.IsInstalled(hooksPath):
-            case true when CursorHooksInstaller.ReadMarker(hooksPath) == CapacitorVersion.Current():
-                return 0;
-            // PATH precheck on the non-postinstall path. hooks.json writes the bare
-            // `kcap hook --cursor` command; we must verify Cursor will actually
-            // find it. Skip the precheck on the postinstall (--if-installed) path so
-            // an in-flight npm install doesn't fail just because the new symlink
-            // isn't on the child process's PATH yet.
-            case false when !KcapOnPath:
+        if (refreshOnly && !hooksInstalled && !HarnessMcpProjections.Cursor.OwnsAnything(cursor.UserMcpJson, env.Home))
+            return 0;
+
+        // Current recording hooks do not imply that the MCP executable path is current.
+        var hooksCurrent = refreshOnly && File.Exists(hooksPath)
+            && CursorHooksInstaller.ReadMarker(hooksPath) == CapacitorVersion.Current();
+        if (!toolsOnly && !hooksCurrent) {
+            if (!refreshOnly && !KcapOnPath) {
                 await env.Stderr.WriteLineAsync(
                     "Cannot install Cursor hooks: 'kcap' is not on PATH. "
-                  + "Re-install kcap via npm: npm install -g @kurrent/kcap"
+                  + "Re-install kcap: " + InstallProvenance.ReinstallCommand()
                 );
+                return 1;
+            }
+
+            if (!InstallCursorHooks(hooksPath)) {
+                if (refreshOnly) { _refreshFailed = true; return 0; }
+
+                await env.Stderr.WriteLineAsync("Could not write Cursor hooks file.");
 
                 return 1;
+            }
+
+            await env.Stdout.WriteLineAsync(
+                refreshOnly
+                    ? $"Cursor hooks refreshed ({hooksPath})"
+                    : $"Cursor hooks installed ({hooksPath})"
+            );
         }
 
-        if (!InstallCursorHooks(hooksPath)) {
-            if (refreshOnly) return 0;
-
-            await env.Stderr.WriteLineAsync("Could not write Cursor hooks file.");
-
-            return 1;
-        }
-
-        await env.Stdout.WriteLineAsync(
-            refreshOnly
-                ? $"Cursor hooks refreshed ({hooksPath})"
-                : $"Cursor hooks installed ({hooksPath})"
-        );
-
-        // Register the kcap MCP servers in ~/.cursor/mcp.json so Cursor picks them up
-        // with no manual JSON edit. Non-destructive + idempotent. Never fails the
-        // install: a write error is a warning, not an error code (mirrors Codex).
         if (!args.Contains("--skip-cursor-mcp"))
             await RegisterCursorMcpServersAsync();
 
         if (!args.Contains("--skip-cursor-skills"))
             await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
+
+        if (toolsOnly && !refreshOnly) await NoteCaptureSkippedAsync("Cursor");
 
         return 0;
     }
@@ -750,6 +923,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 await env.Stdout.WriteLineAsync($"Cursor MCP servers registered ({cursor.UserMcpJson}).");
                 break;
             case JsonMcpConfigWriter.Change.Failed:
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync(
                     $"Warning: could not update {cursor.UserMcpJson} to register Cursor MCP servers.");
                 break;
@@ -864,25 +1038,27 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         var refreshOnly      = args.Contains("--if-installed");
         var skipMcp          = args.Contains("--skip-pi-mcp");
         var skipInstructions = args.Contains("--skip-pi-instructions");
+        var ingestInstalled  = PiExtensionInstaller.IsInstalled(extensionPath);
+        var toolsOnly        = ToolsOnly(args, refreshOnly, ingestInstalled);
 
-        // Refresh-only mode never touches a machine that never opted into Pi. The
-        // live-ingest extension is the opt-in signal; if it's present, a refresh also
-        // heals the (newer) MCP bridge + AGENTS.md steering below — mirroring how the
-        // Gemini refresh heals MCP + instructions even when a prior version had hooks only.
-        if (refreshOnly && !PiExtensionInstaller.IsInstalled(extensionPath)) return 0;
+        // A refresh never touches a machine that never opted into Pi; once it has, the refresh also
+        // heals the MCP bridge + AGENTS.md steering below.
+        if (refreshOnly && !ingestInstalled
+         && !PiMcpExtensionInstaller.IsInstalled(mcpExtensionPath) && !AgentInstructionsWriter.IsInstalled(pi.AgentsMd))
+            return 0;
 
         // No stale-session report for Pi: it runs through a node shim, and node's process.title setter
         // rewrites the argv region — so the process is named `pi` with a command line of just "pi", or
         // named `node` with the package path intact, never both. A name this generic needs
         // corroboration, and the only corroborating signal disappears exactly when the name appears.
 
-        // Fresh install needs kcap on PATH: both extensions shell out to the bare
-        // `kcap` command (ingest → `kcap hook --pi`; bridge → `kcap mcp <name>`), so
-        // pi must find kcap on PATH. Skipped on the postinstall (--if-installed) path.
-        if (!refreshOnly && !KcapOnPath) {
+        // Both extensions shell out to the bare `kcap` (ingest → `kcap hook --pi`, bridge → `kcap mcp
+        // <name>`), so even --tools-only needs it unless the bridge is skipped. Not checked on the
+        // postinstall path.
+        if (!refreshOnly && (!toolsOnly || !skipMcp) && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install the Pi extension: 'kcap' is not on PATH. "
-              + "Re-install kcap via npm: npm install -g @kurrent/kcap"
+              + "Re-install kcap: " + InstallProvenance.ReinstallCommand()
             );
 
             return 1;
@@ -892,9 +1068,9 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
         // 1. Live-ingest extension (kcap.ts). On refresh, skip only when already current.
         var ingestCurrent = refreshOnly
-                         && PiExtensionInstaller.IsInstalled(extensionPath)
+                         && ingestInstalled
                          && PiExtensionInstaller.ReadMarker(extensionPath) == CapacitorVersion.Current();
-        if (!ingestCurrent) {
+        if (!toolsOnly && !ingestCurrent) {
             if (PiExtensionInstaller.Install(extensionPath)) {
                 await env.Stdout.WriteLineAsync(
                     refreshOnly
@@ -907,6 +1083,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 await env.Stderr.WriteLineAsync("Could not write the Pi extension file.");
                 extensionFailed = true;
             } else {
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync(
                     $"Warning: could not refresh the Pi extension ({extensionPath}); continuing with MCP + instructions.");
             }
@@ -924,6 +1101,8 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
         if (!args.Contains("--skip-pi-skills"))
             await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
+
+        if (toolsOnly && !refreshOnly) await NoteCaptureSkippedAsync("Pi");
 
         // Non-zero only when a FRESH ingest install failed (the integration is incomplete) —
         // the independent MCP bridge + AGENTS.md steering above were still installed.
@@ -951,6 +1130,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                     : $"Pi MCP extension installed ({mcpExtensionPath})"
             );
         } else {
+            _refreshFailed = true;
             await env.Stderr.WriteLineAsync(
                 $"Warning: could not write the Pi MCP extension ({mcpExtensionPath}).");
         }
@@ -971,6 +1151,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 await env.Stdout.WriteLineAsync($"Pi instructions installed ({pi.AgentsMd}).");
                 break;
             case AgentInstructionsWriter.Change.Failed:
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync(
                     $"Warning: could not update {pi.AgentsMd} to install Pi instructions.");
                 break;
@@ -1024,19 +1205,25 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     // ── OpenCode (SST): a TypeScript plugin, not a hooks.json ───────
 
     async Task<int> InstallOpenCode(string[] args) {
-        var pluginPath = GetArg(args, "--opencode-plugin-path") ?? env.Harnesses.Of<OpenCodeHarness>().Paths.KcapPlugin;
+        var opencode   = env.Harnesses.Of<OpenCodeHarness>().Paths;
+        var pluginPath = GetArg(args, "--opencode-plugin-path") ?? opencode.KcapPlugin;
 
-        var refreshOnly = args.Contains("--if-installed");
+        var refreshOnly     = args.Contains("--if-installed");
+        var pluginInstalled = OpenCodeExtensionInstaller.IsInstalled(pluginPath);
+        var toolsOnly       = ToolsOnly(args, refreshOnly, pluginInstalled);
 
         // Refresh-only mode never touches a machine that never opted in.
-        if (refreshOnly && !OpenCodeExtensionInstaller.IsInstalled(pluginPath)) return 0;
+        if (refreshOnly && !pluginInstalled
+         && !HarnessMcpProjections.OpenCode.OwnsAnything(opencode.McpConfigJson, env.Home)
+         && !AgentInstructionsWriter.IsInstalled(opencode.AgentsMd))
+            return 0;
 
-        // Fresh install needs kcap on PATH: the plugin shells out to the bare `kcap hook --opencode`
-        // command, so OpenCode must find kcap on PATH. Skipped on the --if-installed (postinstall) path.
-        if (!refreshOnly && !KcapOnPath) {
+        // The plugin shells out to the bare `kcap hook --opencode`; the MCP entries carry an absolute
+        // path. Not checked on the postinstall path.
+        if (!refreshOnly && !toolsOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install the OpenCode plugin: 'kcap' is not on PATH. "
-              + "Re-install kcap via npm: npm install -g @kurrent/kcap"
+              + "Re-install kcap: " + InstallProvenance.ReinstallCommand()
             );
 
             return 1;
@@ -1050,7 +1237,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         var pluginCurrent = refreshOnly
             && File.Exists(pluginPath)
             && OpenCodeExtensionInstaller.ReadMarker(pluginPath) == CapacitorVersion.Current();
-        if (!pluginCurrent) {
+        if (!toolsOnly && !pluginCurrent) {
             if (OpenCodeExtensionInstaller.Install(pluginPath)) {
                 await env.Stdout.WriteLineAsync(
                     refreshOnly
@@ -1065,6 +1252,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             } else {
                 // Refresh: the plugin write failed, but MCP + instructions live in separate files and
                 // are independent + idempotent — warn and still heal them below rather than bail.
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync(
                     $"Warning: could not refresh the OpenCode plugin ({pluginPath}); continuing with MCP + instructions.");
             }
@@ -1084,6 +1272,8 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (!args.Contains("--skip-opencode-skills"))
             await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
 
+        if (toolsOnly && !refreshOnly) await NoteCaptureSkippedAsync("OpenCode");
+
         return 0;
     }
 
@@ -1102,6 +1292,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 await env.Stdout.WriteLineAsync($"OpenCode MCP servers registered ({opencode.McpConfigJson}).");
                 break;
             case JsonMcpConfigWriter.Change.Failed:
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync(
                     $"Warning: could not update {opencode.McpConfigJson} to register OpenCode MCP servers.");
                 break;
@@ -1123,6 +1314,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 await env.Stdout.WriteLineAsync($"OpenCode instructions installed ({opencode.AgentsMd}).");
                 break;
             case AgentInstructionsWriter.Change.Failed:
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync(
                     $"Warning: could not update {opencode.AgentsMd} to install OpenCode instructions.");
                 break;
@@ -1176,19 +1368,25 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
     // ── Antigravity — a named block in Antigravity's hooks.json ────────
     async Task<int> InstallAntigravity(string[] args) {
-        var hooksPath = GetArg(args, "--antigravity-hooks-path") ?? env.Harnesses.Of<AntigravityHarness>().Paths.GlobalHooksJson;
+        var agy       = env.Harnesses.Of<AntigravityHarness>().Paths;
+        var hooksPath = GetArg(args, "--antigravity-hooks-path") ?? agy.GlobalHooksJson;
 
-        var refreshOnly = args.Contains("--if-installed");
+        var refreshOnly    = args.Contains("--if-installed");
+        var hooksInstalled = AntigravityHooksInstaller.IsInstalled(hooksPath);
+        var toolsOnly      = ToolsOnly(args, refreshOnly, hooksInstalled);
 
-        // Refresh-only mode never touches a machine that never opted in.
-        if (refreshOnly && !AntigravityHooksInstaller.IsInstalled(hooksPath)) return 0;
+        // Refresh-only mode never touches a machine that never opted in. GEMINI.md is no signal:
+        // the Gemini CLI writes the same block there.
+        if (refreshOnly && !hooksInstalled
+         && !HarnessMcpProjections.Antigravity.OwnsAnything(agy.McpConfigJson, env.Home)
+         && !AgentsSkillsInstaller.IsInstalled(agy.SkillsDir))
+            return 0;
 
-        // Fresh install needs kcap on PATH: hooks.json runs the bare `kcap hook --antigravity`
-        // command. Skipped on the --if-installed (postinstall) refresh path.
-        if (!refreshOnly && !KcapOnPath) {
+        // hooks.json runs the bare `kcap hook --antigravity`. Not checked on the postinstall path.
+        if (!refreshOnly && !toolsOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install Antigravity hooks: 'kcap' is not on PATH. "
-              + "Re-install kcap via npm: npm install -g @kurrent/kcap"
+              + "Re-install kcap: " + InstallProvenance.ReinstallCommand()
             );
 
             return 1;
@@ -1201,7 +1399,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         var hooksCurrent = refreshOnly && File.Exists(hooksPath)
                         && AntigravityHooksInstaller.ReadMarker(hooksPath) == CapacitorVersion.Current();
         var freshHookFailure = false;
-        if (!hooksCurrent) {
+        if (!toolsOnly && !hooksCurrent) {
             if (InstallAntigravityHooks(hooksPath)) {
                 await env.Stdout.WriteLineAsync(
                     refreshOnly
@@ -1212,6 +1410,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 await env.Stderr.WriteLineAsync($"Could not install Antigravity hooks at {hooksPath}.");
                 freshHookFailure = true;  // don't bail — the independent MCP/instructions/skills still install
             } else {
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync(
                     $"Warning: could not refresh Antigravity hooks ({hooksPath}); continuing with MCP + instructions + skills.");
             }
@@ -1231,6 +1430,8 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (!args.Contains("--skip-antigravity-skills"))
             await InstallAntigravitySkillsAsync(refreshOnly);
 
+        if (toolsOnly && !refreshOnly) await NoteCaptureSkippedAsync("Antigravity");
+
         return freshHookFailure ? 1 : 0;
     }
 
@@ -1246,6 +1447,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 await env.Stdout.WriteLineAsync($"Antigravity MCP servers registered ({agy.McpConfigJson}).");
                 break;
             case JsonMcpConfigWriter.Change.Failed:
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync(
                     $"Warning: could not update {agy.McpConfigJson} to register Antigravity MCP servers.");
                 break;
@@ -1264,6 +1466,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 await env.Stdout.WriteLineAsync($"Antigravity instructions installed ({agy.InstructionsMd}).");
                 break;
             case AgentInstructionsWriter.Change.Failed:
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync(
                     $"Warning: could not update {agy.InstructionsMd} to install Antigravity instructions.");
                 break;
@@ -1406,19 +1609,24 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     }
 
     async Task<int> InstallCopilot(string[] args) {
-        var hooksPath = GetArg(args, "--copilot-hooks-path") ?? env.Harnesses.Of<CopilotHarness>().Paths.KcapHooksJson;
+        var copilot   = env.Harnesses.Of<CopilotHarness>().Paths;
+        var hooksPath = GetArg(args, "--copilot-hooks-path") ?? copilot.KcapHooksJson;
 
-        var refreshOnly = args.Contains("--if-installed");
+        var refreshOnly    = args.Contains("--if-installed");
+        var hooksInstalled = CopilotHooksInstaller.IsInstalled(hooksPath);
+        var toolsOnly      = ToolsOnly(args, refreshOnly, hooksInstalled);
 
         // Refresh-only mode never touches a machine that never opted in.
-        if (refreshOnly && !CopilotHooksInstaller.IsInstalled(hooksPath)) return 0;
+        if (refreshOnly && !hooksInstalled
+         && !HarnessMcpProjections.Copilot.OwnsAnything(copilot.McpConfigJson, env.Home)
+         && !AgentInstructionsWriter.IsInstalled(copilot.InstructionsMd))
+            return 0;
 
-        // Fresh install needs kcap on PATH: kcap.json writes the bare `kcap hook --copilot` command,
-        // so Copilot must find kcap on PATH. Skipped on the --if-installed (postinstall) path.
-        if (!refreshOnly && !KcapOnPath) {
+        // kcap.json writes the bare `kcap hook --copilot`. Not checked on the postinstall path.
+        if (!refreshOnly && !toolsOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install Copilot hooks: 'kcap' is not on PATH. "
-              + "Re-install kcap via npm: npm install -g @kurrent/kcap"
+              + "Re-install kcap: " + InstallProvenance.ReinstallCommand()
             );
 
             return 1;
@@ -1428,7 +1636,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         // hooks write is skipped, still (re)register MCP + install instructions below: they live in
         // separate files and must be healed if a prior write failed (warning-only) or was deleted.
         var hooksCurrent = refreshOnly && CopilotHooksInstaller.ReadMarker(hooksPath) == CapacitorVersion.Current();
-        if (!hooksCurrent) {
+        if (!toolsOnly && !hooksCurrent) {
             if (InstallCopilotHooks(hooksPath)) {
                 await env.Stdout.WriteLineAsync(
                     refreshOnly
@@ -1443,6 +1651,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             } else {
                 // Refresh: the hook write failed, but MCP + instructions live in separate files and
                 // are independent + idempotent — warn and still heal them below rather than bail.
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync(
                     $"Warning: could not refresh Copilot hooks ({hooksPath}); continuing with MCP + instructions.");
             }
@@ -1462,6 +1671,8 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (!args.Contains("--skip-copilot-skills"))
             await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
 
+        if (toolsOnly && !refreshOnly) await NoteCaptureSkippedAsync("Copilot");
+
         return 0;
     }
 
@@ -1480,6 +1691,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 await env.Stdout.WriteLineAsync($"Copilot MCP servers registered ({copilot.McpConfigJson}).");
                 break;
             case JsonMcpConfigWriter.Change.Failed:
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync(
                     $"Warning: could not update {copilot.McpConfigJson} to register Copilot MCP servers.");
                 break;
@@ -1502,6 +1714,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 await env.Stdout.WriteLineAsync($"Copilot instructions installed ({copilot.InstructionsMd}).");
                 break;
             case AgentInstructionsWriter.Change.Failed:
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync(
                     $"Warning: could not update {copilot.InstructionsMd} to install Copilot instructions.");
                 break;
@@ -1617,36 +1830,38 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         var mcpPath   = GetArg(args, "--kiro-mcp-path")   ?? kiro.SettingsMcpJson;
 
         var refreshOnly = args.Contains("--if-installed");
+        var skipSkills  = args.Contains("--skip-kiro-skills");
 
-        // Kiro's MCP lives in a SEPARATE file (~/.kiro/settings/mcp.json), independent of the agent
-        // clone — so a prior `--skip-kiro-hooks` (or a clone that failed because kiro-cli was missing)
-        // can leave an MCP-only install with no agent marker.
-        var mcpInstalled = HarnessMcpProjections.Kiro.OwnsAnything(mcpPath, env.Home);
-
+        // The MCP file and ~/.kiro/skills are independent of the agent clone, so `--skip-kiro-hooks`,
+        // --tools-only, or a clone that failed for want of kiro-cli leaves them installed without it.
         var kiroAlreadyInstalled = KiroHooksInstaller.IsInstalled(agentPath);
+        var toolsOnly            = ToolsOnly(args, refreshOnly, kiroAlreadyInstalled);
 
-        if (refreshOnly) {
-            // Never touch a machine that never opted in (neither hooks nor MCP).
-            if (!KiroHooksInstaller.IsInstalled(agentPath) && !mcpInstalled) return 0;
+        if (refreshOnly && !kiroAlreadyInstalled
+         && !HarnessMcpProjections.Kiro.OwnsAnything(mcpPath, env.Home)
+         && !AgentsSkillsInstaller.IsInstalled(kiro.SkillsDir))
+            return 0;
 
-            // MCP-only install: heal JUST the independent MCP file + skills — do NOT fall through to
-            // the agent clone below, which would install the hooks the user opted out of. (Neither
-            // needs kcap on PATH, and the refresh path skips the PATH precheck anyway.)
-            if (!KiroHooksInstaller.IsInstalled(agentPath)) {
-                if (!args.Contains("--skip-kiro-mcp"))
-                    await RegisterKiroMcpServersAsync(mcpPath);
-                if (!args.Contains("--skip-kiro-skills"))
-                    await InstallKiroSkillsAsync(refreshOnly);
+        // No agent clone, no default-agent flip, no Crew hook: those are what record sessions. The MCP
+        // entries carry an absolute path, so none of this needs kcap on PATH.
+        if (toolsOnly) {
+            if (!args.Contains("--skip-kiro-mcp"))
+                await RegisterKiroMcpServersAsync(mcpPath);
+            if (!skipSkills)
+                await InstallKiroSkillsAsync(refreshOnly);
 
-                return 0;
-            }
+            await InstallKiroCrewAsync(refreshOnly, installSkills: !skipSkills, installHook: false);
+
+            if (!refreshOnly) await NoteCaptureSkippedAsync("Kiro");
+
+            return 0;
         }
 
-        // Fresh install needs kcap on PATH: the agent + the MCP servers run the bare `kcap` command.
+        // Fresh install needs kcap on PATH: the agent's hook runs the bare `kcap` command.
         if (!refreshOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install Kiro hooks: 'kcap' is not on PATH. "
-              + "Re-install kcap via npm: npm install -g @kurrent/kcap"
+              + "Re-install kcap: " + InstallProvenance.ReinstallCommand()
             );
 
             return 1;
@@ -1664,7 +1879,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         var hooksFailed = false;
         var hooksCurrent = refreshOnly && File.Exists(agentPath) && KiroHooksInstaller.ReadMarker(agentPath) == CapacitorVersion.Current();
         if (!hooksCurrent) {
-            if (InstallKiroHooks(agentPath, env.Harnesses)) {
+            if (InstallKiroHooks(agentPath, env.Harnesses, env.Stderr)) {
                 var clonedFrom = KiroHooksInstaller.ReadPreviousDefault(agentPath) ?? "your default agent";
                 await env.Stdout.WriteLineAsync(
                     refreshOnly
@@ -1693,13 +1908,16 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         // Install kcap's skills into ~/.kiro/skills so Kiro's agent is steered toward the kcap MCP
         // tools (the cloned agent's resources include skill:///~/.kiro/skills/*/SKILL.md). Independent
         // of the agent clone; non-fatal (a copy error is a warning). Mirrors the Antigravity path.
-        if (!args.Contains("--skip-kiro-skills"))
+        if (!skipSkills)
             await InstallKiroSkillsAsync(refreshOnly);
+
+        await InstallKiroCrewAsync(refreshOnly, installSkills: !skipSkills, installHook: true);
 
         await ReportStaleAgentsAsync(kiroRunningBefore, installed: !hooksFailed);
 
         // A fresh agent-clone failure is still an error exit (capture won't work without it), but the
         // independent MCP file + skills were still written above.
+        _refreshFailed |= hooksFailed;
         return hooksFailed && !refreshOnly ? 1 : 0;
     }
 
@@ -1711,6 +1929,57 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     /// </summary>
     Task InstallKiroSkillsAsync(bool refreshOnly) =>
         InstallVendorSkillsAsync(env.Harnesses.Of<KiroHarness>().Paths.SkillsDir, "Kiro", refreshOnly);
+
+    /// <summary>
+    /// Wires Kiro Crew when it is present: its agents run this same <c>kiro-cli</c> under profiles
+    /// Crew regenerates, so they never carry kcap.json's hook or read <c>~/.kiro/skills</c>. A refresh
+    /// wires a Crew installed since kcap, because the Kiro opt-in covers Crew — but once kcap has wired
+    /// Crew, a refresh only keeps what is still there, so a hook or skills the user deleted stay
+    /// deleted. Without the hook, a refresh only tops up skills already there. Never fails the install.
+    /// </summary>
+    async Task InstallKiroCrewAsync(bool refreshOnly, bool installSkills, bool installHook) {
+        var kiro = env.Harnesses.Of<KiroHarness>();
+        var crew = kiro.Crew;
+        if (!crew.IsPresent()) return;
+
+        if (!installHook) {
+            if (installSkills) await InstallVendorSkillsAsync(crew.SkillsDir, "Kiro Crew", refreshOnly);
+
+            return;
+        }
+
+        var wiredBefore = KiroCrewHookInstaller.IsInstalled(crew.SpawnHookScript) || KiroCrewHookInstaller.WasRemoved(crew.SpawnHookScript);
+        var kcapDir     = env.Binaries.Resolve("kcap") is { } kcap ? Path.GetDirectoryName(kcap) : null;
+
+        var outcome = refreshOnly && KiroCrewHookInstaller.WasRemoved(crew.SpawnHookScript)
+            ? KiroCrewHookInstaller.Outcome.Unchanged
+            : KiroCrewHookInstaller.Install(crew.SpawnHookScript, kcapDir);
+
+        switch (outcome) {
+            case KiroCrewHookInstaller.Outcome.Written:
+                await env.Stdout.WriteLineAsync(
+                    $"Kiro Crew hook installed ({crew.SpawnHookScript}). Restart Kiro Crew so its agents pick it up.");
+                break;
+            case KiroCrewHookInstaller.Outcome.Unowned:
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: {crew.SpawnHookScript} exists and was not written by kcap, so Kiro Crew sessions are not recorded. "
+                  + "Move it aside and re-run: kcap plugin install --kiro");
+                break;
+            case KiroCrewHookInstaller.Outcome.Failed:
+                _refreshFailed = true;
+                await env.Stderr.WriteLineAsync($"Warning: could not write the Kiro Crew hook to {crew.SpawnHookScript}.");
+                break;
+        }
+
+        if (!installSkills) return;
+
+        if (!refreshOnly)
+            await InstallVendorSkillsAsync(crew.SkillsDir, "Kiro Crew", refreshOnly: false);
+        else if (wiredBefore)
+            await InstallVendorSkillsAsync(crew.SkillsDir, "Kiro Crew", refreshOnly: true);
+        else if (AgentsSkillsInstaller.IsInstalled(kiro.Paths.SkillsDir))
+            await InstallVendorSkillsAsync(crew.SkillsDir, "Kiro Crew", refreshOnly: false);
+    }
 
     /// <summary>
     /// Registers the kcap MCP servers in Kiro's <c>~/.kiro/settings/mcp.json</c> (<c>mcpServers</c>
@@ -1725,6 +1994,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 await env.Stdout.WriteLineAsync($"Kiro MCP servers registered ({mcpPath}).");
                 break;
             case JsonMcpConfigWriter.Change.Failed:
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync(
                     $"Warning: could not update {mcpPath} to register Kiro MCP servers.");
                 break;
@@ -1758,6 +2028,27 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             await env.Stderr.WriteLineAsync($"Could not fully remove Kiro skills from {kiro.SkillsDir}.");
         }
 
+        var crew       = env.Harnesses.Of<KiroHarness>().Crew;
+        var crewFailed = false;
+
+        switch (KiroCrewHookInstaller.Remove(crew.SpawnHookScript)) {
+            case KiroCrewHookInstaller.Outcome.Removed:
+                await env.Stdout.WriteLineAsync($"Kiro Crew hook removed ({crew.SpawnHookScript}).");
+                break;
+            case KiroCrewHookInstaller.Outcome.Failed:
+                crewFailed = true;
+                await env.Stderr.WriteLineAsync($"Could not remove the Kiro Crew hook at {crew.SpawnHookScript}.");
+                break;
+        }
+
+        var crewSkills = AgentsSkillsInstaller.Remove(crew.SkillsDir);
+        if (crewSkills.RemovedAny) {
+            await env.Stdout.WriteLineAsync($"Kiro Crew skills removed ({crew.SkillsDir}).");
+        } else if (crewSkills.HadErrors) {
+            crewFailed = true;
+            await env.Stderr.WriteLineAsync($"Could not fully remove Kiro Crew skills from {crew.SkillsDir}.");
+        }
+
         try {
             // Restore the default agent kcap replaced (recorded at install time).
             // If kcap is currently the default and the restore write FAILS, abort
@@ -1766,7 +2057,12 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             // (marker line 2) is gone, so a retry can't recover. Leaving both in
             // place keeps `kcap plugin remove --kiro` retryable.
             var previousDefault = KiroHooksInstaller.ReadPreviousDefault(agentPath) ?? "kiro_default";
-            if (KiroSettings.ReadDefaultAgent(settingsPath) == KiroAgentName
+            // Strict only while there is an agent to keep for a retry; without one, a default still
+            // naming kcap points at a missing agent and is reset anyway.
+            var currentDefault = KiroHooksInstaller.IsInstalled(agentPath) || File.Exists(agentPath)
+                ? KiroSettings.ReadDefaultAgentStrict(settingsPath)
+                : KiroSettings.ReadDefaultAgent(settingsPath);
+            if (currentDefault == KiroAgentName
              && !KiroSettings.SetDefaultAgent(settingsPath, previousDefault)) {
                 await env.Stderr.WriteLineAsync(
                     $"Could not restore your default Kiro agent to '{previousDefault}' in {settingsPath}. "
@@ -1785,7 +2081,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                     : "Nothing to remove — Kiro agent hooks file not found."
             );
 
-            return mcpFailed || skills.HadErrors ? 1 : 0;
+            return mcpFailed || skills.HadErrors || crewFailed ? 1 : 0;
         } catch (Exception ex) {
             await env.Stderr.WriteLineAsync($"Could not remove Kiro hooks at {agentPath}: {ex.Message}");
 
@@ -1802,7 +2098,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     /// <c>chat.defaultAgent</c> to kcap. The replaced default is recorded in the
     /// marker for <c>plugin remove --kiro</c> to restore. Idempotent.
     /// </summary>
-    public static bool InstallKiroHooks(string agentJsonPath, HarnessRegistry harnesses) {
+    public static bool InstallKiroHooks(string agentJsonPath, HarnessRegistry harnesses, TextWriter stderr) {
         try {
             var settingsPath    = KiroSettingsPathFor(agentJsonPath);
             var currentDefault  = KiroSettings.ReadDefaultAgent(settingsPath) ?? "kiro_default";
@@ -1849,7 +2145,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 // previous default + paths so the user can restore it by hand,
                 // rather than returning the same opaque false as "kiro-cli missing".
                 if (!KiroSettings.SetDefaultAgent(settingsPath, recordedDefault)) {
-                    Console.Error.WriteLine(
+                    stderr.WriteLine(
                         $"[kcap] Kiro install could not be completed OR rolled back. "
                       + $"chat.defaultAgent may still be '{KiroAgentName}' with no install marker. "
                       + $"Your previous default agent was '{recordedDefault}' — restore it manually "
@@ -1888,7 +2184,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     }
 
     /// <summary>Derives <c>~/.kiro/settings/cli.json</c> from <c>~/.kiro/agents/kcap.json</c>.</summary>
-    static string KiroSettingsPathFor(string agentJsonPath) =>
+    internal static string KiroSettingsPathFor(string agentJsonPath) =>
         Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(agentJsonPath)!)!, "settings", "cli.json");
 
     static int RunKiroCli(string kiroCliPath, params string[] arguments) {
@@ -1993,17 +2289,20 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     async Task<int> InstallGemini(string[] args) {
         var settingsPath = GetArg(args, "--gemini-settings-path") ?? env.Harnesses.Of<GeminiHarness>().Paths.SettingsJson;
 
-        var refreshOnly = args.Contains("--if-installed");
+        var refreshOnly    = args.Contains("--if-installed");
+        var hooksInstalled = GeminiHooksInstaller.IsInstalled(settingsPath);
+        var toolsOnly      = ToolsOnly(args, refreshOnly, hooksInstalled);
 
-        // Refresh-only mode never touches a machine that never opted in.
-        if (refreshOnly && !GeminiHooksInstaller.IsInstalled(settingsPath)) return 0;
+        // Refresh-only mode never touches a machine that never opted in. GEMINI.md is no signal:
+        // Antigravity writes the same block there.
+        if (refreshOnly && !hooksInstalled && !HarnessMcpProjections.Gemini.OwnsAnything(settingsPath, env.Home))
+            return 0;
 
-        // Fresh install needs kcap on PATH: settings.json writes the bare `kcap hook --gemini`
-        // command, so Gemini must find kcap on PATH. Skipped on the --if-installed (postinstall) path.
-        if (!refreshOnly && !KcapOnPath) {
+        // settings.json writes the bare `kcap hook --gemini`. Not checked on the postinstall path.
+        if (!refreshOnly && !toolsOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install Gemini hooks: 'kcap' is not on PATH. "
-              + "Re-install kcap via npm: npm install -g @kurrent/kcap"
+              + "Re-install kcap: " + InstallProvenance.ReinstallCommand()
             );
 
             return 1;
@@ -2020,7 +2319,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         var hooksCurrent = refreshOnly && File.Exists(settingsPath)
                         && GeminiHooksInstaller.ReadMarker(settingsPath) == CapacitorVersion.Current();
         var freshHookFailure = false;
-        if (!hooksCurrent) {
+        if (!toolsOnly && !hooksCurrent) {
             if (InstallGeminiHooks(settingsPath)) {
                 await env.Stdout.WriteLineAsync(
                     refreshOnly
@@ -2041,6 +2340,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             } else {
                 // Refresh: the hook write failed, but instructions live in a separate file and MCP is
                 // independent + idempotent — warn and still heal them below rather than bail.
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync(
                     $"Warning: could not refresh Gemini hooks ({settingsPath}); continuing with MCP + instructions.");
             }
@@ -2059,6 +2359,8 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
         if (!args.Contains("--skip-gemini-skills"))
             await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
+
+        if (toolsOnly && !refreshOnly) await NoteCaptureSkippedAsync("Gemini");
 
         // Non-zero only when a FRESH hook install failed (the integration is incomplete) — the
         // independent GEMINI.md steering above was still installed.
@@ -2079,6 +2381,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 await env.Stdout.WriteLineAsync($"Gemini MCP servers registered ({settingsPath}).");
                 break;
             case JsonMcpConfigWriter.Change.Failed:
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync(
                     $"Warning: could not update {settingsPath} to register Gemini MCP servers.");
                 break;
@@ -2101,6 +2404,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 await env.Stdout.WriteLineAsync($"Gemini instructions installed ({gemini.GeminiMd}).");
                 break;
             case AgentInstructionsWriter.Change.Failed:
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync(
                     $"Warning: could not update {gemini.GeminiMd} to install Gemini instructions.");
                 break;
@@ -2160,6 +2464,245 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         }
 
         return hooksFailed || mcpFailed || instrFailed ? 1 : 0;
+    }
+
+    async Task<int> InstallGrok(string[] args) {
+        var hooksPath   = GetArg(args, "--grok-hooks-path") ?? env.Harnesses.Of<GrokHarness>().Paths.KcapHooksJson;
+        var refreshOnly = args.Contains("--if-installed");
+
+        if (refreshOnly && !GrokHooksInstaller.IsInstalled(hooksPath)) return 0;
+
+        // The hook file names the bare `kcap hook --grok` command, so Grok must find kcap on PATH.
+        if (!refreshOnly && !KcapOnPath) {
+            await env.Stderr.WriteLineAsync(
+                "Cannot install Grok hooks: 'kcap' is not on PATH. Re-install kcap: " + InstallProvenance.ReinstallCommand());
+            return 1;
+        }
+
+        if (!GrokHooksInstaller.Install(hooksPath)) {
+            _refreshFailed = true;
+            await env.Stderr.WriteLineAsync($"Could not write Grok hooks to {hooksPath}.");
+            return refreshOnly ? 0 : 1;
+        }
+
+        await env.Stdout.WriteLineAsync(refreshOnly ? $"Grok hooks refreshed ({hooksPath})" : $"Grok hooks installed ({hooksPath})");
+
+        if (!args.Contains("--skip-grok-skills"))
+            await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
+
+        return 0;
+    }
+
+    async Task<int> RemoveGrok(string[] args) {
+        var hooksPath = GetArg(args, "--grok-hooks-path") ?? env.Harnesses.Of<GrokHarness>().Paths.KcapHooksJson;
+
+        try {
+            await env.Stdout.WriteLineAsync(GrokHooksInstaller.Remove(hooksPath)
+                ? $"Grok hooks removed ({hooksPath})"
+                : "Grok hooks were not installed.");
+            return 0;
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            await env.Stderr.WriteLineAsync($"Could not remove Grok hooks at {hooksPath}: {ex.Message}");
+            return 1;
+        }
+    }
+
+    async Task<int> InstallVibe(string[] args) {
+        var vibe        = env.Harnesses.Of<MistralVibeHarness>().Paths;
+        var hooksPath   = GetArg(args, "--mistral-vibe-hooks-path")  ?? vibe.HooksToml;
+        var configPath  = GetArg(args, "--mistral-vibe-config-path") ?? vibe.ConfigToml;
+        var refreshOnly    = args.Contains("--if-installed");
+        var hooksInstalled = MistralVibeHooksInstaller.IsInstalled(hooksPath);
+        var toolsOnly      = ToolsOnly(args, refreshOnly, hooksInstalled);
+
+        if (refreshOnly && !hooksInstalled && !MistralVibeConfigToml.OwnsAnything(configPath)) return 0;
+
+        // hooks.toml writes the bare `kcap hook --mistral-vibe` command, so Vibe must find kcap on PATH.
+        if (!refreshOnly && !toolsOnly && !KcapOnPath) {
+            await env.Stderr.WriteLineAsync(
+                "Cannot install Vibe hooks: 'kcap' is not on PATH. "
+              + "Re-install kcap: " + InstallProvenance.ReinstallCommand());
+            return 1;
+        }
+
+        var hooksCurrent = refreshOnly && File.Exists(hooksPath)
+                        && MistralVibeHooksInstaller.ReadMarker(hooksPath) == CapacitorVersion.Current();
+        var freshHookFailure = false;
+        if (!toolsOnly && !hooksCurrent) {
+            if (MistralVibeHooksInstaller.Install(hooksPath) != TomlConfigFile.Outcome.Failed) {
+                await env.Stdout.WriteLineAsync(
+                    refreshOnly ? $"Vibe hooks refreshed ({hooksPath})" : $"Vibe hooks installed ({hooksPath})");
+            } else if (!refreshOnly) {
+                await env.Stderr.WriteLineAsync(
+                    $"Could not install Vibe hooks. If {hooksPath} exists, make sure it is valid TOML — "
+                  + "kcap leaves an unparseable hooks.toml untouched rather than overwrite your config. "
+                  + "Fix or remove it, then re-run.");
+                freshHookFailure = true;
+            } else {
+                _refreshFailed = true;
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not refresh Vibe hooks ({hooksPath}); continuing with MCP registration.");
+            }
+        }
+
+        // Register the kcap MCP servers in ~/.vibe/config.toml ([[mcp_servers]]) so Vibe picks them up
+        // with no manual TOML edit. Non-destructive + idempotent; never fails the install.
+        if (!args.Contains("--skip-mistral-vibe-mcp"))
+            await RegisterVibeMcpServersAsync(configPath);
+
+        if (!args.Contains("--skip-mistral-vibe-skills"))
+            await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
+
+        if (toolsOnly && !refreshOnly) await NoteCaptureSkippedAsync("Vibe");
+
+        return freshHookFailure ? 1 : 0;
+    }
+
+    async Task RegisterVibeMcpServersAsync(string configPath) {
+        switch (MistralVibeConfigToml.RegisterKcapMcpServers(configPath, env.ResolveMcpBinaryPath)) {
+            case TomlConfigFile.Outcome.Updated:
+                await env.Stdout.WriteLineAsync($"Vibe MCP servers registered ({configPath}).");
+                break;
+            case TomlConfigFile.Outcome.Failed:
+                _refreshFailed = true;
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not update {configPath} to register Vibe MCP servers.");
+                break;
+            // Unchanged: silent.
+        }
+    }
+
+    async Task<int> InstallMuse(string[] args) {
+        var settingsPath = GetArg(args, "--muse-settings-path") ?? env.Harnesses.Of<MuseHarness>().Paths.SettingsJson;
+
+        var refreshOnly    = args.Contains("--if-installed");
+        var hooksInstalled = MuseHooksInstaller.IsInstalled(settingsPath);
+        var toolsOnly      = ToolsOnly(args, refreshOnly, hooksInstalled);
+
+        if (refreshOnly && !hooksInstalled && !MuseSettingsJson.OwnsAnything(settingsPath, env.Home)) return 0;
+
+        // settings.json writes the bare `kcap hook --muse` command, so Muse must find kcap on PATH.
+        if (!refreshOnly && !toolsOnly && !KcapOnPath) {
+            await env.Stderr.WriteLineAsync(
+                "Cannot install Muse hooks: 'kcap' is not on PATH. "
+              + "Re-install kcap: " + InstallProvenance.ReinstallCommand());
+            return 1;
+        }
+
+        // A lone marker with settings.json gone is not "current": the hooks must be written again.
+        // The marker is written once any event is installed, so a current one proves nothing about the rest.
+        var hooksCurrent = refreshOnly && File.Exists(settingsPath)
+                        && MuseHooksInstaller.ReadMarker(settingsPath) == CapacitorVersion.Current()
+                        && MuseHooksInstaller.HasAllHooks(settingsPath);
+        var freshHookFailure = false;
+        var hooksIncomplete  = false;
+        if (!toolsOnly && !hooksCurrent) {
+            if (MuseHooksInstaller.Install(settingsPath) is SettingsEdit.Changed or SettingsEdit.Unchanged
+                && MuseHooksInstaller.HasAllHooks(settingsPath)) {
+                await env.Stdout.WriteLineAsync(
+                    refreshOnly ? $"Muse hooks refreshed ({settingsPath})" : $"Muse hooks installed ({settingsPath})");
+            } else if (!refreshOnly) {
+                await env.Stderr.WriteLineAsync(
+                    $"Could not install Muse hooks for every event in {settingsPath}. Make sure it is valid JSON and its hooks value "
+                  + "is an object of arrays — kcap never overwrites a settings.json it cannot merge into. "
+                  + "Fix or remove it, then re-run.");
+                freshHookFailure = true;
+            } else {
+                _refreshFailed = true;
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not refresh Muse hooks for every event in {settingsPath}; skipping MCP registration.");
+                hooksIncomplete = true;
+            }
+        }
+
+        if (!toolsOnly && MuseHooksInstaller.IsWired(settingsPath)
+            && !MuseHookRoots.Persist(env.Home, env.Harnesses.Of<MuseHarness>().Paths)) {
+            _refreshFailed = true;
+            await env.Stderr.WriteLineAsync(
+                $"Warning: could not write {MuseHookRoots.PathFor(env.Home)}; Muse hooks may look for sessions outside this shell's XDG roots.");
+        }
+
+        // Hooks and MCP share settings.json: a file the hooks could not be merged into is not written to here either.
+        if (!freshHookFailure && !hooksIncomplete && !args.Contains("--skip-muse-mcp"))
+            await RegisterMuseMcpServersAsync(settingsPath);
+
+        if (!args.Contains("--skip-muse-skills"))
+            await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
+
+        if (toolsOnly && !refreshOnly) await NoteCaptureSkippedAsync("Muse");
+
+        return freshHookFailure ? 1 : 0;
+    }
+
+    async Task RegisterMuseMcpServersAsync(string settingsPath) {
+        switch (MuseSettingsJson.RegisterKcapMcpServers(settingsPath, env.Home, env.ResolveMcpBinaryPath)) {
+            case JsonMcpConfigWriter.Change.Updated:
+                await env.Stdout.WriteLineAsync($"Muse MCP servers registered ({settingsPath}).");
+                break;
+            case JsonMcpConfigWriter.Change.Failed:
+                _refreshFailed = true;
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not update {settingsPath} to register Muse MCP servers.");
+                break;
+            // Unchanged: silent.
+        }
+    }
+
+    async Task<int> RemoveMuse(string[] args) {
+        var settingsPath = GetArg(args, "--muse-settings-path") ?? env.Harnesses.Of<MuseHarness>().Paths.SettingsJson;
+
+        var hooksFailed = false;
+        var outcome     = MuseHooksInstaller.Remove(settingsPath);
+        switch (outcome) {
+            case SettingsEdit.Changed:
+                await env.Stdout.WriteLineAsync($"Muse hooks removed ({settingsPath})");
+                break;
+            case SettingsEdit.Unchanged:
+                await env.Stdout.WriteLineAsync("Muse hooks were not installed.");
+                break;
+            default:
+                await env.Stderr.WriteLineAsync($"Could not update Muse hooks at {settingsPath}: the file is not valid JSON or cannot be written.");
+                hooksFailed = true;
+                break;
+        }
+
+        if (!hooksFailed) MuseHookRoots.Clear(env.Home);
+
+        var mcpChange = MuseSettingsJson.UnregisterKcapMcpServers(settingsPath, env.Home);
+        var mcpFailed = mcpChange == JsonMcpConfigWriter.Change.Failed;
+        if (mcpChange == JsonMcpConfigWriter.Change.Updated)
+            await env.Stdout.WriteLineAsync($"Muse MCP servers removed ({settingsPath}).");
+        else if (mcpFailed)
+            await env.Stderr.WriteLineAsync($"Could not update {settingsPath} to remove Muse MCP servers.");
+
+        return hooksFailed || mcpFailed ? 1 : 0;
+    }
+
+    async Task<int> RemoveVibe(string[] args) {
+        var vibe       = env.Harnesses.Of<MistralVibeHarness>().Paths;
+        var hooksPath  = GetArg(args, "--mistral-vibe-hooks-path")  ?? vibe.HooksToml;
+        var configPath = GetArg(args, "--mistral-vibe-config-path") ?? vibe.ConfigToml;
+
+        var hooksFailed = false;
+        try {
+            var outcome = MistralVibeHooksInstaller.Remove(hooksPath);
+            await env.Stdout.WriteLineAsync(
+                outcome == TomlConfigFile.Outcome.Updated ? $"Vibe hooks removed ({hooksPath})"
+                                                          : "Vibe hooks were not installed.");
+            if (outcome == TomlConfigFile.Outcome.Failed) hooksFailed = true;
+        } catch (Exception ex) {
+            await env.Stderr.WriteLineAsync($"Could not update Vibe hooks at {hooksPath}: {ex.Message}");
+            hooksFailed = true;
+        }
+
+        var mcpChange = MistralVibeConfigToml.UnregisterKcapMcpServers(configPath);
+        var mcpFailed = mcpChange == TomlConfigFile.Outcome.Failed;
+        if (mcpChange == TomlConfigFile.Outcome.Updated)
+            await env.Stdout.WriteLineAsync($"Vibe MCP servers removed ({configPath}).");
+        else if (mcpFailed)
+            await env.Stderr.WriteLineAsync($"Could not update {configPath} to remove Vibe MCP servers.");
+
+        return hooksFailed || mcpFailed ? 1 : 0;
     }
 
     /// <summary>
@@ -2267,9 +2810,9 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         return idx >= 0 && idx + 1 < args.Length ? args[idx + 1] : null;
     }
 
-    static int PrintUsage() {
-        Console.Error.WriteLine(
-            "Usage: kcap plugin <install|remove> [--project] [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--skills] [--if-installed]"
+    int PrintUsage() {
+        env.Stderr.WriteLine(
+            "Usage: kcap plugin <install|remove> [--project] [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity|--skills] [--tools-only] [--if-installed]"
         );
 
         return 1;

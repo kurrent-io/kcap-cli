@@ -441,6 +441,25 @@ public class PluginCommandCodexTests {
         await Assert.That(root["hooks"]).IsNull();
     }
 
+    /// A byte-order mark makes Codex refuse the file, so the refresh rewrites it even when the marker
+    /// says the entries are current.
+    [Test]
+    public async Task Install_codex_with_if_installed_strips_a_byte_order_mark_when_marker_matches() {
+        using var fakeHome = new TempDir();
+
+        var codexDir  = fakeHome.CreateDir(".codex");
+        var hooksPath = codexDir.PathTo("hooks.json");
+        PluginCommand.InstallCodexHooks(hooksPath);
+        fakeHome.CreateFile(".codex/hooks.json", "\uFEFF" + await File.ReadAllTextAsync(hooksPath));
+
+        var exit = await new PluginCommand(TestEnv(fakeHome.GetResolvedPath()), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
+            ["plugin", "install", "--codex", "--if-installed"]);
+        await Assert.That(exit).IsEqualTo(0);
+
+        await Assert.That(CodexHooksInstaller.StartsWithByteOrderMark(hooksPath)).IsFalse();
+        await Assert.That(CodexHooksInstaller.ReferencesKcapHook(hooksPath)).IsTrue();
+    }
+
     [Test]
     public async Task InstallCodexHooks_stamps_marker_on_success() {
         using var tmp  = new TempDir();
@@ -649,6 +668,34 @@ public class PluginCommandCodexInstallIntegrationTests {
         var toml = await File.ReadAllTextAsync(configPath);
         await Assert.That(toml).DoesNotContain("kcap-flows");
         await Assert.That(File.Exists(codexDir.PathTo("hooks.json"))).IsFalse();
+    }
+
+    [Test]
+    public async Task Refresh_relocates_owned_MCP_without_adding_recording_hooks_or_changing_custom_entries() {
+        using var home = new TempDir();
+        var config = home.GetResolvedPath(".codex", "config.toml");
+        CodexConfigToml.RegisterKcapMcpServers(config, () => "/Users/someone/Applications/kcap.app/Contents/MacOS/kcap");
+        File.AppendAllText(config, "\n[mcp_servers.user-tool]\ncommand = \"custom\"\n");
+        var env = TestEnv(home.GetResolvedPath()) with { ResolveMcpBinaryPath = () => "/Applications/kcap.app/Contents/MacOS/kcap" };
+        var exit = await new PluginCommand(env, new WorkingDirectory(home.GetResolvedPath())).HandleAsync(
+            ["plugin", "install", "--codex", "--if-installed", "--strict-refresh"]);
+        await Assert.That(exit).IsEqualTo(0);
+        var text = File.ReadAllText(config);
+        await Assert.That(text).Contains("/Applications/kcap.app/Contents/MacOS/kcap");
+        await Assert.That(text).DoesNotContain("/Users/someone/Applications/kcap.app");
+        await Assert.That(text).Contains("custom");
+        await Assert.That(File.Exists(home.GetResolvedPath(".codex", "hooks.json"))).IsFalse();
+    }
+
+    [Test]
+    public async Task Strict_refresh_reports_a_failed_owned_MCP_write() {
+        using var home = new TempDir();
+        var config = home.GetResolvedPath(".codex", "config.toml");
+        CodexConfigToml.RegisterKcapMcpServers(config, () => "/old/kcap");
+        File.WriteAllText(config, "mcp_servers = 42");
+        var exit = await new PluginCommand(TestEnv(home.GetResolvedPath()), new WorkingDirectory(home.GetResolvedPath())).HandleAsync(
+            ["plugin", "install", "--codex", "--if-installed", "--strict-refresh"]);
+        await Assert.That(exit).IsEqualTo(1);
     }
 
     [Test]

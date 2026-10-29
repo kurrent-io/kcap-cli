@@ -1,27 +1,33 @@
+using System.Runtime.CompilerServices;
 using Capacitor.Cli.Core.Telemetry;
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Reactive.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.Services;
+using Capacitor.App.Services.LocalSetup;
 using Capacitor.App.Services.Mutation;
 using Capacitor.App.Services.Onboarding;
 using Capacitor.App.ViewModels.Onboarding;
-using Capacitor.App.Views.Onboarding;
+using Capacitor.App.Views;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Setup;
+using TUnit.Assertions.Enums;
 using AppUnderTest = Capacitor.App.App;
 using Capacitor.Cli.Core.Harness;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// Shared fixtures for the wizard-first startup composition (decision 2). Kept out of the test
-/// classes so the graph harness, the §10 abandon rows and the rendering tests all compose the
+/// Shared fixtures for the wizard-first startup composition. Kept out of the test classes so the
+/// graph harness, the abandon cases and the rendering tests all compose the
 /// wizard the way App.RunWizardModeAsync does.
 static class WizardFixtures {
     internal sealed class NoopProcessRunner : IProcessRunner {
@@ -52,7 +58,7 @@ static class WizardFixtures {
         }
     }
 
-    /// A fixed-answer observation, for driving the daemon step past ClassifyLiveDaemonAsync's
+    /// A fixed-answer observation, for driving the daemon enabler past ClassifyLiveDaemonAsync's
     /// owned+matched branch (the only path that actually dials the ops factory).
     internal sealed class FixedObservation(ObservedEvidence? evidence) : IDaemonObservation {
         public Task<ObservedEvidence?> ObserveAsync(MutationRequest request, CancellationToken ct) =>
@@ -90,7 +96,7 @@ static class WizardFixtures {
     }
 
     /// The whole wizard graph over fakes: every daemon touchpoint is a counting factory, so "the
-    /// wizard built no daemon graph" and "the daemon step's ops/CLI are late-bound" are both
+    /// wizard built no daemon graph" and "the daemon enabler's ops/CLI are late-bound" are both
     /// directly observable.
     internal sealed class GraphHarness : IDisposable {
         readonly TempConfigRoot _config = new();
@@ -134,12 +140,20 @@ static class WizardFixtures {
         public bool ShimApplicable = true;
         public string? CliPath = "/opt/kcap/bin/kcap";
         public string? ShimTarget = "/opt/kcap/bin/kcap";
+        public ICliPathInstaller? ShimInstaller;
         public IReadOnlySet<HarnessId> Detected = VendorDetection.Build("claude");
+        public TimeProvider Time = TimeProvider.System;
+        // Matches DefaultDaemonName, so a sign-in keeps the name and writes no config of its own.
+        public Func<string?> ConfiguredDaemonName = () => "daemon-a";
+        public LocalRoot LocalRoot;
+        public bool LocalEditionSupported = true;
+        public string? ProfileOverride;
 
         public GraphHarness(ConfigRoot root) {
-            Root    = root;
+            Root      = root;
+            LocalRoot = new LocalRoot(_config.PathTo("local"));
             Claims  = new ConsentFlipClaims(_config.Root);
-            Bridges = WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System);
+            Bridges = WizardComposition.BuildBridges(action => action(), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults);
             Surface = new WizardLifecycleSurface((prompt, _) => {
                 Prompts.Add(prompt);
                 return Task.FromResult(false);
@@ -175,7 +189,7 @@ static class WizardFixtures {
             RunMutation: Lane.RunAsync,
             Observation: Observation,
             AppState: new NoopAppStateStore(),
-            ShimInstaller: new PathShimInstaller(new NoopProcessRunner(), Probe),
+            ShimInstaller: ShimInstaller ?? new PathShimInstaller(new NoopProcessRunner(), Probe),
             UrlOpener: UrlOpener,
             Probe: Probe,
             // A NEW feed per call: a composition that built one per step is caught by the factory
@@ -184,22 +198,28 @@ static class WizardFixtures {
                 DetectionFactoryCalls++;
                 return _ => {
                     Interlocked.Increment(ref DetectCalls);
-                    return Task.FromResult(Detected);
+                    return Task.FromResult<IReadOnlyDictionary<HarnessId, DetectedAgent>>(
+                        Detected.ToDictionary(id => id, _ => new DetectedAgent(true, false)));
                 };
             },
+            BuiltinOffer: _ => Task.FromResult<LocalEmbeddingModelManifest?>(null),
             CliPath: CliPath,
             ShimApplicable: ShimApplicable,
             ShimTarget: ShimTarget,
             DefaultDaemonName: "daemon-a",
-            Time: TimeProvider.System,
-            ShutdownToken: CancellationToken.None);
+            Time: Time,
+            ShutdownToken: CancellationToken.None,
+            LocalRoot: LocalRoot,
+            LocalEditionSupported: LocalEditionSupported,
+            ConfiguredDaemonName: ConfiguredDaemonName,
+            ProfileOverride: ProfileOverride);
 
         public void Dispose() => _config.Dispose();
     }
 }
 
 /// <summary>
-/// Decision 2's wizard-first startup: the wizard composition (no daemon graph at all) and the close
+/// The wizard-first startup: the wizard composition (no daemon graph at all) and the close
 /// boundary — cancel + await the sign-in's terminal answer, wait the lane out under the cap, then
 /// hand the outcome channel over. StartAsync itself needs a real daemon/profile (same reason
 /// AppStartupTests drives extracted statics), so this drives the seams it is composed from.
@@ -228,10 +248,10 @@ public class WizardStartupTests {
             };
 
             var graph = WizardComposition.BuildGraph(harness.Options());
-            var attempt = graph.Auth.Begin(new ConnectIntent.Discover(AuthProvider.GitHubApp));
+            var attempt = graph.Auth.Begin(new ConnectIntent.Discover());
             await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-            await AppUnderTest.HandoffAfterWizardAsync(graph.Auth, () => Task.CompletedTask, Cap, new OutcomeChannel(), TimeProvider.System)
+            await AppUnderTest.HandoffAfterWizardAsync(graph.Auth, graph.Install, () => Task.CompletedTask, Cap, new OutcomeChannel(), TimeProvider.System)
                 .WaitAsync(TimeSpan.FromSeconds(5));
 
             await Assert.That(await attempt.Result).IsTypeOf<AuthResult.Cancelled>();
@@ -266,7 +286,7 @@ public class WizardStartupTests {
                 channel, new FakeLifecycleSurface(), WizardFixtures.NeverRunMutation,
                 WizardFixtures.FixedTerminalPath("/usr/bin"), () => null, wizardCts.Token));
 
-            var handoff = AppUnderTest.HandoffAfterWizardAsync(graph.Auth, () => Task.CompletedTask, Cap, channel, TimeProvider.System);
+            var handoff = AppUnderTest.HandoffAfterWizardAsync(graph.Auth, graph.Install, () => Task.CompletedTask, Cap, channel, TimeProvider.System);
             await Task.Delay(50);
 
             await Assert.That(handoff.IsCompleted).IsFalse(); // the graph build waits on the terminal answer
@@ -286,7 +306,7 @@ public class WizardStartupTests {
         });
     }
 
-    /// spec §6a: past the cap the handoff proceeds, but it must SAY the lane is still live —
+    /// Past the cap the handoff proceeds, but it must SAY the lane is still live —
     /// otherwise the graph comes up driving automatic actions against a child that is still running.
     [Test]
     public async Task Handoff_past_the_cap_reports_an_unquiesced_lane_and_closes_auto_actions() {
@@ -295,7 +315,7 @@ public class WizardStartupTests {
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
         var quiesced = await AppUnderTest
-            .HandoffAfterWizardAsync(auth: null, () => never.Task, TimeSpan.FromMilliseconds(50), channel, TimeProvider.System)
+            .HandoffAfterWizardAsync(auth: null, install: null, () => never.Task, TimeSpan.FromMilliseconds(50), channel, TimeProvider.System)
             .WaitAsync(TimeSpan.FromSeconds(5));
 
         await Assert.That(sw.ElapsedMilliseconds).IsLessThan(5000);
@@ -308,7 +328,7 @@ public class WizardStartupTests {
     [Test]
     public async Task Handoff_within_the_cap_reports_a_quiesced_lane_and_leaves_auto_actions_open() {
         var quiesced = await AppUnderTest
-            .HandoffAfterWizardAsync(auth: null, () => Task.CompletedTask, Cap, new OutcomeChannel(), TimeProvider.System)
+            .HandoffAfterWizardAsync(auth: null, install: null, () => Task.CompletedTask, Cap, new OutcomeChannel(), TimeProvider.System)
             .WaitAsync(TimeSpan.FromSeconds(5));
 
         await Assert.That(quiesced).IsTrue();
@@ -344,7 +364,7 @@ public class WizardStartupTests {
             WizardFixtures.FixedTerminalPath("/usr/bin"), () => null, cts.Token);
 
         var handoff = AppUnderTest.HandoffAfterWizardAsync(
-            auth: null, () => quiesce.Task, TimeSpan.FromSeconds(30), channel, TimeProvider.System);
+            auth: null, install: null, () => quiesce.Task, TimeSpan.FromSeconds(30), channel, TimeProvider.System);
         await Task.Delay(50);
 
         await Assert.That(handoff.IsCompleted).IsFalse();
@@ -359,23 +379,23 @@ public class WizardStartupTests {
         await wizardConsumer.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
-    [Test]
-    public async Task Handoff_with_no_sign_in_attempt_still_transfers() {
-        var channel = new OutcomeChannel();
-        using var cts = new CancellationTokenSource();
-        var first = AppUnderTest.ConsumeMutationOutcomesAsync(
-            channel, new FakeLifecycleSurface(), WizardFixtures.NeverRunMutation,
-            WizardFixtures.FixedTerminalPath("/usr/bin"), () => null, cts.Token);
-
-        await AppUnderTest.HandoffAfterWizardAsync(auth: null, () => Task.CompletedTask, Cap, channel, TimeProvider.System)
-            .WaitAsync(TimeSpan.FromSeconds(5));
-
-        _ = channel.ConsumeAsync(CancellationToken.None);
-        await cts.CancelAsync();
-        await first.WaitAsync(TimeSpan.FromSeconds(5));
-    }
-
     // ── the consumer runs unchanged over the wizard's own surface ─────────────
+
+    /// A withdrawn line clears only while it is still the one shown; a newer line stays.
+    [Test]
+    public async Task The_wizard_surface_withdraws_only_the_line_it_still_shows() {
+        var surface = new WizardLifecycleSurface((_, _) => Task.FromResult(false), action => action());
+        const string report = "Daemon daemon-a is running for another server.";
+
+        surface.Attention(report);
+        surface.Withdraw(report);
+        await Assert.That(surface.AttentionText).IsNull();
+
+        surface.Attention(report);
+        surface.Attention("newer");
+        surface.Withdraw(report);
+        await Assert.That(surface.AttentionText).IsEqualTo("newer");
+    }
 
     [Test]
     public async Task The_outcome_consumer_presents_through_the_wizard_surface() {
@@ -385,12 +405,13 @@ public class WizardStartupTests {
 
         var consumer = AppUnderTest.ConsumeMutationOutcomesAsync(
             channel, surface, WizardFixtures.NeverRunMutation, WizardFixtures.FixedTerminalPath("/usr/bin"),
-            () => null, cts.Token);
+            () => null, cts.Token, AppUnderTest.WizardAttentionCopyFor);
 
         channel.Enqueue(WizardFixtures.Envelope("internal_error"));
         await WizardFixtures.WaitUntilAsync(() => surface.AttentionText is not null, what: "the wizard-surface presentation");
 
-        await Assert.That(surface.AttentionText).IsEqualTo(AppUnderTest.AttentionCopyFor("internal_error")!);
+        await Assert.That(surface.AttentionText).IsEqualTo(AppUnderTest.WizardAttentionCopyFor("internal_error")!);
+        await Assert.That(surface.AttentionText!).DoesNotContain("Start daemon");
 
         await cts.CancelAsync();
         await consumer.WaitAsync(TimeSpan.FromSeconds(5));
@@ -429,7 +450,7 @@ public class WizardStartupTests {
         channel.Enqueue(WizardFixtures.Envelope("internal_error"));
         await WizardFixtures.WaitUntilAsync(() => wizardSurface.Entered == 1, what: "the wizard consumer's presentation");
 
-        await AppUnderTest.HandoffAfterWizardAsync(auth: null, () => Task.CompletedTask, Cap, channel, TimeProvider.System);
+        await AppUnderTest.HandoffAfterWizardAsync(auth: null, install: null, () => Task.CompletedTask, Cap, channel, TimeProvider.System);
         var rootConsumer = AppUnderTest.ConsumeMutationOutcomesAsync(
             channel, rootSurface, WizardFixtures.NeverRunMutation, WizardFixtures.FixedTerminalPath("/usr/bin"),
             () => null, cts.Token);
@@ -456,7 +477,7 @@ public class WizardStartupTests {
             channel, wizardSurface, WizardFixtures.NeverRunMutation, WizardFixtures.FixedTerminalPath("/usr/bin"),
             () => null, cts.Token);
 
-        await AppUnderTest.HandoffAfterWizardAsync(auth: null, () => Task.CompletedTask, Cap, channel, TimeProvider.System);
+        await AppUnderTest.HandoffAfterWizardAsync(auth: null, install: null, () => Task.CompletedTask, Cap, channel, TimeProvider.System);
         var rootConsumer = AppUnderTest.ConsumeMutationOutcomesAsync(
             channel, rootSurface, WizardFixtures.NeverRunMutation, WizardFixtures.FixedTerminalPath("/usr/bin"),
             () => null, cts.Token);
@@ -486,10 +507,10 @@ public class WizardStartupTests {
             };
 
             var graph = WizardComposition.BuildGraph(harness.Options());
-            var attempt = graph.Auth.Begin(new ConnectIntent.Create());
+            var attempt = graph.Auth.Begin(new ConnectIntent.Discover(ForceDevice: true));
             await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-            await AppUnderTest.QuiesceAppAsync(graph.Auth, import: null, lifecycle: null, lane: null, Cap, TimeProvider.System)
+            await AppUnderTest.QuiesceAppAsync(graph.Auth, import: null, install: null, lifecycle: null, lane: null, Cap, TimeProvider.System)
                 .WaitAsync(TimeSpan.FromSeconds(5));
 
             await Assert.That(attempt.Result.IsCompleted).IsTrue();
@@ -501,11 +522,11 @@ public class WizardStartupTests {
 
     [Test]
     public async Task Shutdown_quiesce_with_no_wizard_is_the_existing_lifecycle_and_lane_wait() {
-        await AppUnderTest.QuiesceAppAsync(auth: null, import: null, lifecycle: null, lane: null, Cap, TimeProvider.System)
+        await AppUnderTest.QuiesceAppAsync(auth: null, import: null, install: null, lifecycle: null, lane: null, Cap, TimeProvider.System)
             .WaitAsync(TimeSpan.FromSeconds(5));
     }
 
-    /// decision 2: the cap is the LANE's, never the sign-in's — a post-boundary operation that is
+    /// The cap is the LANE's, never the sign-in's — a post-boundary operation that is
     /// still publishing when the cap window has long expired is awaited to its terminal answer.
     [Test]
     public async Task Shutdown_quiesce_awaits_a_post_boundary_sign_in_long_past_the_cap() {
@@ -524,7 +545,7 @@ public class WizardStartupTests {
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
             var quiesce = AppUnderTest.QuiesceAppAsync(
-                graph.Auth, import: null, lifecycle: null, lane: null, cap: TimeSpan.FromMilliseconds(20),
+                graph.Auth, import: null, install: null, lifecycle: null, lane: null, cap: TimeSpan.FromMilliseconds(20),
                 time: TimeProvider.System);
             await Task.Delay(400); // twenty cap windows
 
@@ -538,7 +559,35 @@ public class WizardStartupTests {
         });
     }
 
-    // The other half: the lifecycle/lane wait is still the capped one (spec §6a).
+    /// A quit mid-upgrade interrupts it once and waits, uncapped, for the CLI to say how it ended:
+    /// past the download nothing stops for the interrupt, and the app must not exit under a switch.
+    [Test]
+    public async Task Shutdown_quiesce_interrupts_a_local_upgrade_once_and_awaits_its_end_past_the_cap() {
+        var interrupts = 0;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cli = new FakeKcapCli {
+            LocalUpgradeBehavior = async (_, interrupt, _) => {
+                await using (interrupt.Register(() => Interlocked.Increment(ref interrupts))) await release.Task;
+                return new StreamingResult(0, false, []);
+            },
+        };
+        var upgrade = new LocalUpgradeController(() => cli, action => action());
+        await upgrade.StartAsync(CancellationToken.None);
+
+        var quiesce = AppUnderTest.QuiesceAppAsync(
+            auth: null, import: null, install: null, lifecycle: null, lane: null, cap: TimeSpan.FromMilliseconds(20),
+            time: TimeProvider.System, upgrade: upgrade);
+        await Task.Delay(400);
+
+        await Assert.That(quiesce.IsCompleted).IsFalse();
+        await Assert.That(interrupts).IsEqualTo(1);
+
+        release.SetResult();
+        await quiesce.WaitAsync(TimeSpan.FromSeconds(5));
+        await Assert.That(upgrade.Outcome).IsTypeOf<LocalUpgradeOutcome.Upgraded>();
+    }
+
+    // The other half: the lifecycle/lane wait is still the capped one.
     [Test]
     public async Task Shutdown_quiesce_still_caps_an_in_flight_lane_mutation() {
         var gate = new TaskCompletionSource<string?>();
@@ -556,60 +605,52 @@ public class WizardStartupTests {
             CancellationToken.None);
 
         await AppUnderTest
-            .QuiesceAppAsync(auth: null, import: null, lifecycle: null, lane, TimeSpan.FromMilliseconds(50), TimeProvider.System)
+            .QuiesceAppAsync(auth: null, import: null, install: null, lifecycle: null, lane, TimeSpan.FromMilliseconds(50), TimeProvider.System)
             .WaitAsync(TimeSpan.FromSeconds(5));
 
         gate.SetResult("9.9.9");
         await runTask.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
-    // Spec §7's close contract (KillTree + await exit) must run from the close boundary, not only CanLeaveAsync.
+    // The close contract (KillTree + await exit) must run from the close boundary, not only CanLeaveAsync.
+    static ImportDiscoveryReport OneRepo() =>
+        new([new ImportDiscoveryRepo("acme", "web", 3, DateTimeOffset.UnixEpoch, [])], 0, []);
+
+    static async Task<HistoryStepViewModel> ImportingAsync(FakeKcapCli cli) {
+        cli.DiscoverBehavior = _ => Task.FromResult<ImportDiscoveryReport?>(OneRepo());
+        var history = new HistoryStepViewModel(cli, () => [HarnessId.Claude], action => action(), "test-mac", TimeProvider.System);
+        await history.OnEnterAsync(CancellationToken.None);
+        await history.Discovery;
+        await history.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+
+        return history;
+    }
+
+    /// The import outlives onboarding: closing the wizard settles sign-in and hands the channel on,
+    /// and leaves the run to finish in the main window.
     [Test]
-    public async Task Handoff_cancels_an_in_flight_import_and_awaits_it_before_transferring() {
+    public async Task Handoff_leaves_a_running_history_import_alone() {
         await AvaloniaSession.DispatchAsync(async () => {
-            using var harness = new WizardFixtures.GraphHarness(Config.Root);
+            var cli = new FakeKcapCli();
             var entered = new TaskCompletionSource();
-            var cancelObserved = new TaskCompletionSource();
-            var release = new TaskCompletionSource();
-            harness.Cli.ImportBehavior = async (_, _, ct) => {
+            var cancelled = false;
+            cli.ImportBehavior = async (_, _, ct) => {
                 entered.TrySetResult();
-                await using var reg = ct.Register(() => cancelObserved.TrySetResult());
-                await cancelObserved.Task.ConfigureAwait(false);
-                // Mirrors ProcessRunner.RunStreamingAsync: the killed tree's pumps drain
-                // to EOF before the streaming call itself returns/throws.
-                await release.Task.ConfigureAwait(false);
-                throw new OperationCanceledException(ct);
+                await using var reg = ct.Register(() => cancelled = true);
+                await Task.Delay(Timeout.Infinite, ct);
+                return new StreamingResult(0, false, []);
             };
 
-            var graph = WizardComposition.BuildGraph(harness.Options());
-            var import = graph.Import;
-            import.Vendors[0].IsSelected = true; // RunCoreAsync no-ops with nothing selected
-            _ = import.RunAsync();
+            var history = await ImportingAsync(cli);
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            await Assert.That(import.Busy).IsTrue();
 
-            var channel = new OutcomeChannel();
-            using var wizardCts = new CancellationTokenSource();
-            var wizardConsumer = Task.Run(() => AppUnderTest.ConsumeMutationOutcomesAsync(
-                channel, new FakeLifecycleSurface(), WizardFixtures.NeverRunMutation,
-                WizardFixtures.FixedTerminalPath("/usr/bin"), () => null, wizardCts.Token));
+            await AppUnderTest.HandoffAfterWizardAsync(auth: null, install: null, () => Task.CompletedTask, Cap, new OutcomeChannel(), TimeProvider.System)
+                .WaitAsync(TimeSpan.FromSeconds(5));
 
-            var handoff = AppUnderTest.HandoffAfterWizardAsync(
-                auth: null, () => Task.CompletedTask, Cap, channel, TimeProvider.System, import);
-            await cancelObserved.Task.WaitAsync(TimeSpan.FromSeconds(5)); // CancelActiveRunAsync reached the CLI's own ct
-            await Task.Delay(50);
+            await Assert.That(cancelled).IsFalse();
+            await Assert.That(history.Run!.Running).IsTrue();
 
-            await Assert.That(handoff.IsCompleted).IsFalse(); // still draining the killed import
-            Assert.Throws<InvalidOperationException>(() => { _ = channel.ConsumeAsync(CancellationToken.None); });
-
-            release.SetResult();
-            await handoff.WaitAsync(TimeSpan.FromSeconds(5));
-
-            await Assert.That(import.Busy).IsFalse(); // the run fully finished before the handoff returned
-            _ = channel.ConsumeAsync(CancellationToken.None); // transferred only now
-
-            await wizardCts.CancelAsync();
-            await wizardConsumer.WaitAsync(TimeSpan.FromSeconds(5));
+            await history.CancelActiveRunAsync();
 
             return true;
         });
@@ -618,29 +659,418 @@ public class WizardStartupTests {
     [Test]
     public async Task Shutdown_quiesce_cancels_an_in_flight_import_and_awaits_it() {
         await AvaloniaSession.DispatchAsync(async () => {
-            using var harness = new WizardFixtures.GraphHarness(Config.Root);
+            var cli = new FakeKcapCli();
             var entered = new TaskCompletionSource();
-            var cancelObserved = new TaskCompletionSource();
-            harness.Cli.ImportBehavior = async (_, _, ct) => {
+            cli.ImportBehavior = async (_, _, ct) => {
                 entered.TrySetResult();
-                await using var reg = ct.Register(() => cancelObserved.TrySetResult());
-                await cancelObserved.Task.ConfigureAwait(false);
-                throw new OperationCanceledException(ct);
+                await Task.Delay(Timeout.Infinite, ct);
+                return new StreamingResult(0, false, []);
             };
 
-            var graph = WizardComposition.BuildGraph(harness.Options());
-            var import = graph.Import;
-            import.Vendors[0].IsSelected = true;
-            _ = import.RunAsync();
+            var history = await ImportingAsync(cli);
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-            await AppUnderTest.QuiesceAppAsync(auth: null, import, lifecycle: null, lane: null, Cap, TimeProvider.System)
+            await AppUnderTest.QuiesceAppAsync(auth: null, history, install: null, lifecycle: null, lane: null, Cap, TimeProvider.System)
                 .WaitAsync(TimeSpan.FromSeconds(5));
 
-            await Assert.That(import.Busy).IsFalse();
+            await Assert.That(history.Run!.State).IsEqualTo(ImportRunState.Cancelled);
 
             return true;
         });
+    }
+
+    // ── closing the wizard during a local install ─────────────────────────────
+
+    /// A `kcap setup --local` child that stops only when interrupted, and exits only once released.
+    sealed class InterruptibleSetup {
+        public int Signals;
+        public readonly TaskCompletionSource Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly TaskCompletionSource Release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<StreamingResult> RunAsync(Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct) {
+            var interrupted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            await using (interrupt.Register(() => {
+                Interlocked.Increment(ref Signals);
+                interrupted.TrySetResult();
+            })) {
+                Entered.TrySetResult();
+                await interrupted.Task;
+            }
+            await Release.Task;
+            onLine(new StreamedLine(ProcessStreamKind.Stdout, LocalSetupScript.Failed("cancelled")));
+
+            return new StreamingResult(130, false, []);
+        }
+    }
+
+    // RunWizardModeAsync over the harness: one install controller across every wizard shown, then
+    // show, let the test drive, wait for the close, hand off.
+    static Func<GateResult, ProfileContext?, Task<bool>> WizardRuns(
+            WizardFixtures.GraphHarness harness, List<(WizardGraph Graph, WizardStepId StartedAt)> shown,
+            Func<WizardGraph, Task> drive, CancellationToken shutdown, StrongBox<LocalInstallController?>? install = null) {
+        install ??= new StrongBox<LocalInstallController?>();
+
+        return async (_, _) => {
+            var options = harness.Options();
+            install.Value ??= WizardComposition.NewInstallController(options);
+            var graph = WizardComposition.BuildGraph(options with { Install = install.Value });
+            await graph.ViewModel.PendingEnterForTesting;
+            shown.Add((graph, graph.ViewModel.Current.Id));
+            await drive(graph);
+            await AppUnderTest.WaitForWizardCloseAsync(graph.ViewModel, shutdown);
+
+            return await AppUnderTest.HandoffAfterWizardAsync(
+                graph.Auth, graph.Install, () => Task.CompletedTask, Cap, new OutcomeChannel(), TimeProvider.System);
+        };
+    }
+
+    Func<Task<(GateResult Gate, ProfileContext? Profiles)>> Reevaluate(WizardFixtures.GraphHarness harness) =>
+        () => AppUnderTest.ResolveAndEvaluateGateAsync(
+            Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, harness.LocalRoot, TimeProvider.System,
+            CancellationToken.None);
+
+    [Test]
+    public async Task A_close_with_pending_local_setup_reopens_the_wizard_and_builds_no_graph() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        harness.LocalRoot = LocalSetupScript.PendingSetup(Config);
+        // An install that already failed leaves the journal standing, which is what the close re-reads.
+        const string message = "The download stalled.";
+        harness.Cli.SetupLocalBehavior = LocalSetupScript.Prints(1, LocalSetupScript.Failed("download_failed", message));
+        using var shutdown = new CancellationTokenSource();
+        var shown = new List<(WizardGraph Graph, WizardStepId StartedAt)>();
+        var builds = 0;
+        var buildsWhenReopened = -1;
+        string? reopenedMessage = null;
+
+        await AvaloniaSession.DispatchAsync(async () => {
+            var runs = WizardRuns(harness, shown, graph => {
+                if (shown.Count == 1) {
+                    graph.ViewModel.RequestClose();
+                } else {
+                    buildsWhenReopened = builds;
+                    reopenedMessage = graph.Steps.OfType<InstallStepViewModel>().Single().FailureDetail;
+                    shutdown.Cancel(); // ends the test's loop; a quit builds nothing either
+                }
+
+                return Task.CompletedTask;
+            }, shutdown.Token);
+
+            await AppUnderTest.RunWizardThenBuildGraphAsync(
+                    new GateResult.Incomplete(GateReason.LocalSetupPending), null, showWizard: true, runs,
+                    Reevaluate(harness), (_, _, _) => builds++, () => LocalSetupState.Pending(harness.LocalRoot), shutdown.Token)
+                .WaitAsync(TimeSpan.FromSeconds(10));
+
+            return true;
+        });
+
+        await Assert.That(shown.Select(s => s.StartedAt).ToList()).IsEquivalentTo([WizardStepId.Install, WizardStepId.Install]);
+        await Assert.That(buildsWhenReopened).IsEqualTo(0);
+        await Assert.That(builds).IsEqualTo(0);
+        // The reopened wizard shows the settled failure; it does not start a second child unasked.
+        await Assert.That(harness.Cli.SetupLocalCallCount).IsEqualTo(1);
+        await Assert.That(reopenedMessage).IsEqualTo(message);
+    }
+
+    /// A journal the CLI cannot read settles Permanent: no Try again and no Back, so reopening the
+    /// wizard on every close would leave only Quit.
+    [Test]
+    public async Task A_close_after_a_permanent_setup_failure_builds_one_degraded_graph() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        var root = new LocalRoot(Config.PathTo("local"));
+        root.EnsureCreated();
+        Config.CreateFile("local/journal.json", "{not json");
+        LocalEmbeddingFile.Write(root, LocalEmbeddingSetting.Ollama("mxbai-embed-large"));
+        harness.LocalRoot = root;
+        harness.Cli.SetupLocalBehavior = LocalSetupScript.Prints(1, LocalSetupScript.Failed("registry_unreadable", "The journal cannot be read."));
+        using var shutdown = new CancellationTokenSource();
+        var shown = new List<(WizardGraph Graph, WizardStepId StartedAt)>();
+        var install = new StrongBox<LocalInstallController?>();
+        var built = new List<(GateResult Gate, bool LaneQuiesced)>();
+
+        await AvaloniaSession.DispatchAsync(async () => {
+            var runs = WizardRuns(harness, shown, async graph => {
+                if (shown.Count > 1) {
+                    shutdown.Cancel(); // a reopen is the failure; end the loop it would otherwise repeat
+                    return;
+                }
+                await WizardFixtures.WaitUntilAsync(() => graph.Install.Outcome is not null, what: "the install to settle");
+                graph.ViewModel.RequestClose();
+            }, shutdown.Token, install);
+
+            await AppUnderTest.RunWizardThenBuildGraphAsync(
+                    new GateResult.Incomplete(GateReason.LocalSetupPending), null, showWizard: true, runs,
+                    Reevaluate(harness), (gate, _, quiesced) => built.Add((gate, quiesced)),
+                    () => LocalSetupState.Pending(harness.LocalRoot), shutdown.Token,
+                    () => AppUnderTest.LocalSetupCannotRetry(install.Value))
+                .WaitAsync(TimeSpan.FromSeconds(10));
+
+            return true;
+        });
+
+        await Assert.That(shown.Count).IsEqualTo(1);
+        await Assert.That(built.Count).IsEqualTo(1);
+        await Assert.That(AppUnderTest.AutoActionsPermanentlyClosed(built[0].Gate, built[0].LaneQuiesced)).IsTrue();
+    }
+
+    /// A profile mismatch refuses before any child starts, and a pending journal locks Edition, so the
+    /// page has no way forward either: a close must not reopen it.
+    [Test]
+    public async Task A_close_after_a_profile_refusal_under_a_pending_setup_builds_one_degraded_graph() {
+        WizardCompositionFixtures.WriteConfig(Config.Root,
+            new ProfileConfig { ActiveProfile = "personal", Profiles = new() { ["personal"] = new Profile() } });
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        harness.LocalRoot       = LocalSetupScript.PendingSetup(Config);
+        harness.Identity        = null;
+        harness.ProfileOverride = "work";
+        using var shutdown = new CancellationTokenSource();
+        var shown = new List<(WizardGraph Graph, WizardStepId StartedAt)>();
+        var install = new StrongBox<LocalInstallController?>();
+        var built = new List<(GateResult Gate, bool LaneQuiesced)>();
+
+        await AvaloniaSession.DispatchAsync(async () => {
+            var runs = WizardRuns(harness, shown, graph => {
+                if (shown.Count > 1) shutdown.Cancel(); // a reopen is the failure; end the loop it would otherwise repeat
+                else graph.ViewModel.RequestClose();
+
+                return Task.CompletedTask;
+            }, shutdown.Token, install);
+
+            await AppUnderTest.RunWizardThenBuildGraphAsync(
+                    new GateResult.Incomplete(GateReason.LocalSetupPending), null, showWizard: true, runs,
+                    Reevaluate(harness), (gate, _, quiesced) => built.Add((gate, quiesced)),
+                    () => LocalSetupState.Pending(harness.LocalRoot), shutdown.Token,
+                    () => AppUnderTest.LocalSetupCannotRetry(install.Value))
+                .WaitAsync(TimeSpan.FromSeconds(10));
+
+            return true;
+        });
+
+        await Assert.That(shown.Count).IsEqualTo(1);
+        await Assert.That(built.Count).IsEqualTo(1);
+        await Assert.That(AppUnderTest.AutoActionsPermanentlyClosed(built[0].Gate, built[0].LaneQuiesced)).IsTrue();
+        await Assert.That(harness.Cli.SetupLocalCallCount).IsEqualTo(0);
+    }
+
+    /// A gate that could not be read says nothing about the journal: pending setup still reopens the wizard.
+    [Test]
+    public async Task A_close_with_pending_setup_reopens_the_wizard_even_when_the_gate_cannot_be_read() {
+        var pending = true;
+        var shows = 0;
+        var builds = 0;
+
+        await AppUnderTest.RunWizardThenBuildGraphAsync(
+                new GateResult.Incomplete(GateReason.LocalSetupPending), null, showWizard: true,
+                (_, _) => {
+                    if (++shows == 2) pending = false;
+                    return Task.FromResult(true);
+                },
+                () => Task.FromResult<(GateResult, ProfileContext?)>((new GateResult.Incomplete(GateReason.EvaluationFailed), null)),
+                (_, _, _) => builds++, () => pending, CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        await Assert.That(shows).IsEqualTo(2);
+        await Assert.That(builds).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_close_after_installed_builds_exactly_one_graph() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        var root = LocalSetupScript.PendingSetup(Config);
+        harness.LocalRoot = root;
+        harness.Cli.SetupLocalBehavior = (onLine, _, _) => {
+            LocalStateFiles.ClearJournal(root);
+            onLine(new StreamedLine(ProcessStreamKind.Stdout, LocalSetupScript.Committed));
+            return Task.FromResult(new StreamingResult(0, false, []));
+        };
+        var shown = new List<(WizardGraph Graph, WizardStepId StartedAt)>();
+        var built = new List<GateResult>();
+
+        await AvaloniaSession.DispatchAsync(async () => {
+            var runs = WizardRuns(harness, shown, graph => {
+                graph.ViewModel.RequestClose();
+                return Task.CompletedTask;
+            }, CancellationToken.None);
+
+            await AppUnderTest.RunWizardThenBuildGraphAsync(
+                    new GateResult.Incomplete(GateReason.LocalSetupPending), null, showWizard: true, runs,
+                    Reevaluate(harness), (gate, _, _) => built.Add(gate), () => LocalSetupState.Pending(harness.LocalRoot), CancellationToken.None)
+                .WaitAsync(TimeSpan.FromSeconds(10));
+
+            return true;
+        });
+
+        await Assert.That(shown.Count).IsEqualTo(1);
+        await Assert.That(built.Count).IsEqualTo(1);
+        await Assert.That(built[0]).IsNotEqualTo(new GateResult.Incomplete(GateReason.LocalSetupPending));
+    }
+
+    [Test]
+    public async Task Quit_during_install_settles_the_child_and_builds_no_graph() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        harness.LocalRoot = LocalSetupScript.PendingSetup(Config);
+        var setup = new InterruptibleSetup();
+        harness.Cli.SetupLocalBehavior = setup.RunAsync;
+        using var shutdown = new CancellationTokenSource();
+        var shown = new List<(WizardGraph Graph, WizardStepId StartedAt)>();
+        var builds = 0;
+        Task? quit = null;
+
+        await AvaloniaSession.DispatchAsync(async () => {
+            var runs = WizardRuns(harness, shown, async graph => {
+                await setup.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                // The shutdown path and the startup handoff both settle the same running child.
+                quit = AppUnderTest.QuiesceAppAsync(
+                    auth: null, import: null, graph.Install, lifecycle: null, lane: null, Cap, TimeProvider.System);
+                await shutdown.CancelAsync();
+                _ = Task.Delay(100).ContinueWith(_ => setup.Release.TrySetResult(), TaskScheduler.Default);
+            }, shutdown.Token);
+
+            await AppUnderTest.RunWizardThenBuildGraphAsync(
+                    new GateResult.Incomplete(GateReason.LocalSetupPending), null, showWizard: true, runs,
+                    Reevaluate(harness), (_, _, _) => builds++, () => LocalSetupState.Pending(harness.LocalRoot), shutdown.Token)
+                .WaitAsync(TimeSpan.FromSeconds(10));
+            await quit!.WaitAsync(TimeSpan.FromSeconds(5));
+
+            return true;
+        });
+
+        var install = shown.Single().Graph.Install;
+        await Assert.That(setup.Signals).IsEqualTo(1);
+        await Assert.That(install.Running).IsFalse();
+        await Assert.That(install.Outcome).IsTypeOf<LocalInstallOutcome.Failed>();
+        await Assert.That(builds).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Cancel_then_quit_sends_one_interrupt() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        harness.LocalRoot = LocalSetupScript.PendingSetup(Config);
+        var setup = new InterruptibleSetup();
+        harness.Cli.SetupLocalBehavior = setup.RunAsync;
+
+        await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(harness.Options());
+            await graph.ViewModel.PendingEnterForTesting;
+            await setup.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            await graph.Steps.OfType<InstallStepViewModel>().Single().CancelCommand.Execute().ToTask();
+            var quit = AppUnderTest.QuiesceAppAsync(
+                auth: null, import: null, graph.Install, lifecycle: null, lane: null, Cap, TimeProvider.System);
+            await Task.Delay(50);
+
+            await Assert.That(quit.IsCompleted).IsFalse(); // the quit waits for the child's exit
+            setup.Release.SetResult();
+            await quit.WaitAsync(TimeSpan.FromSeconds(5));
+
+            await Assert.That(setup.Signals).IsEqualTo(1);
+            await Assert.That(graph.Install.Running).IsFalse();
+
+            return true;
+        });
+    }
+
+    /// A titlebar close mid-install undoes the install with the window still open on Install, and
+    /// only a close after the settle closes the wizard.
+    [Test]
+    public async Task A_window_close_during_install_interrupts_and_keeps_the_wizard_on_install() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        harness.LocalRoot = LocalSetupScript.PendingSetup(Config);
+        var setup = new InterruptibleSetup();
+        harness.Cli.SetupLocalBehavior = setup.RunAsync;
+
+        await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(harness.Options());
+            await graph.ViewModel.PendingEnterForTesting;
+            await setup.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            var heldFirst  = AppUnderTest.WizardWindowClosing(graph.ViewModel, graph.Install, userClose: true);
+            var heldSecond = AppUnderTest.WizardWindowClosing(graph.ViewModel, graph.Install, userClose: true);
+
+            await Assert.That(heldFirst).IsTrue();
+            await Assert.That(heldSecond).IsTrue();
+            await Assert.That(graph.ViewModel.Closed).IsFalse();
+            await Assert.That(graph.ViewModel.Current.Id).IsEqualTo(WizardStepId.Install);
+
+            setup.Release.SetResult();
+            await graph.Install.SettleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            await Assert.That(setup.Signals).IsEqualTo(1);
+            await Assert.That(graph.ViewModel.Closed).IsFalse();
+            await Assert.That(graph.ViewModel.Current.Id).IsEqualTo(WizardStepId.Install);
+
+            await Assert.That(AppUnderTest.WizardWindowClosing(graph.ViewModel, graph.Install, userClose: true)).IsFalse();
+            await Assert.That(graph.ViewModel.Closed).IsTrue();
+
+            return true;
+        });
+    }
+
+    /// A quit closes the window through the shutdown path, which settles the install itself.
+    [Test]
+    public async Task A_shutdown_close_during_install_is_not_held() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        harness.LocalRoot = LocalSetupScript.PendingSetup(Config);
+        var setup = new InterruptibleSetup();
+        harness.Cli.SetupLocalBehavior = setup.RunAsync;
+
+        await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(harness.Options());
+            await graph.ViewModel.PendingEnterForTesting;
+            await setup.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            await Assert.That(AppUnderTest.WizardWindowClosing(graph.ViewModel, graph.Install, userClose: false)).IsFalse();
+            await Assert.That(graph.ViewModel.Closed).IsTrue();
+            await Assert.That(setup.Signals).IsEqualTo(0);
+
+            setup.Release.SetResult();
+            await graph.Install.SettleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            return true;
+        });
+    }
+
+    /// Before a server is connected a closed window quits rather than opening an empty app; once one
+    /// is, it hands over. A finish that leaves the window up never quits.
+    [Test]
+    [Arguments(false, true, true)]
+    [Arguments(false, false, false)]
+    [Arguments(true, true, false)]
+    public async Task A_closed_window_quits_only_before_a_server_is_connected(bool connected, bool windowClosed, bool quits) {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+
+        var quit = await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(harness.Options() with { AlreadyAuthenticated = connected });
+            await graph.ViewModel.PendingEnterForTesting;
+            AppUnderTest.WizardWindowClosing(graph.ViewModel, graph.Install, userClose: true);
+
+            return AppUnderTest.QuitsAfterWizardClose(graph.ViewModel, windowClosed);
+        });
+
+        await Assert.That(quit).IsEqualTo(quits);
+    }
+
+    /// A close on Install once the server is up is connected, so the main window opens.
+    [Test]
+    public async Task A_closed_window_after_a_local_install_hands_over() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        var root = LocalSetupScript.PendingSetup(Config);
+        harness.LocalRoot = root;
+        harness.Cli.SetupLocalBehavior = (onLine, _, _) => {
+            LocalStateFiles.ClearJournal(root);
+            onLine(new StreamedLine(ProcessStreamKind.Stdout, LocalSetupScript.Committed));
+            return Task.FromResult(new StreamingResult(0, false, []));
+        };
+
+        var quit = await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(harness.Options());
+            await graph.ViewModel.PendingEnterForTesting;
+            await WizardFixtures.WaitUntilAsync(() => graph.Install.Outcome is not null, what: "the install to settle");
+            AppUnderTest.WizardWindowClosing(graph.ViewModel, graph.Install, userClose: true);
+
+            return AppUnderTest.QuitsAfterWizardClose(graph.ViewModel, windowClosed: true);
+        });
+
+        await Assert.That(quit).IsFalse();
     }
 
     // ── the wizard graph: composition invariants ──────────────────────────────
@@ -653,9 +1083,9 @@ public class WizardStartupTests {
             var graph = WizardComposition.BuildGraph(harness.Options());
 
             await Assert.That(graph.Steps.Select(s => s.Id).ToList()).IsEquivalentTo([
-                WizardStepId.Shim, WizardStepId.Connect, WizardStepId.SignIn, WizardStepId.Defaults,
-                WizardStepId.Agents, WizardStepId.Import, WizardStepId.Daemon, WizardStepId.Done,
-            ]);
+                WizardStepId.Edition, WizardStepId.Install, WizardStepId.SignIn,
+                WizardStepId.Harnesses, WizardStepId.Import, WizardStepId.Privacy, WizardStepId.Done,
+            ], CollectionOrdering.Matching);
             // No mutation, no IPC, no status read: composing the wizard never speaks to a daemon.
             await Assert.That(harness.Lane.Requests).IsEmpty();
             await Assert.That(harness.Ops.GetCalls).IsEqualTo(0);
@@ -673,42 +1103,50 @@ public class WizardStartupTests {
     }
 
     [Test]
-    public async Task An_inapplicable_shim_step_is_dropped_from_the_wizard_but_kept_in_the_summary() {
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task The_path_fix_is_offered_on_the_harnesses_page_only_when_applicable(bool applicable) {
         await AvaloniaSession.DispatchAsync(async () => {
             using var harness = new WizardFixtures.GraphHarness(Config.Root);
-            harness.ShimApplicable = false;
+            harness.ShimApplicable = applicable;
 
             var graph = WizardComposition.BuildGraph(harness.Options());
+            var harnesses = graph.Steps.OfType<HarnessesStepViewModel>().Single();
 
-            await Assert.That(graph.ViewModel.Steps.Any(s => s.Id == WizardStepId.Shim)).IsFalse();
-            await Assert.That(graph.Steps.Any(s => s.Id == WizardStepId.Shim)).IsTrue();
+            await Assert.That(harnesses.PathFix is not null).IsEqualTo(applicable);
+            await Assert.That(harnesses.PathHazard).IsEqualTo(applicable);
 
             return true;
         });
     }
 
+    /// History reads exactly the harnesses the Harnesses page left recording.
     [Test]
-    public async Task The_same_detection_feed_is_shared_by_the_agents_and_import_steps() {
+    public async Task History_discovers_for_the_harnesses_left_recording() {
         await AvaloniaSession.DispatchAsync(async () => {
             using var harness = new WizardFixtures.GraphHarness(Config.Root);
+            harness.ShimApplicable = false; // this page leaves only once the login shell can find kcap
+            harness.Detected = VendorDetection.Build("claude", "cursor");
 
             var graph = WizardComposition.BuildGraph(harness.Options());
-            var agents = graph.Steps.OfType<AgentsStepViewModel>().Single();
-            var import = graph.Steps.OfType<ImportStepViewModel>().Single();
+            var harnesses = graph.Steps.OfType<HarnessesStepViewModel>().Single();
 
-            await agents.OnEnterAsync(CancellationToken.None);
-            await import.OnEnterAsync(CancellationToken.None);
+            await harnesses.OnEnterAsync(CancellationToken.None);
+            harnesses.Visibility = "private";
+            harnesses.Rows.Single(r => r.Label == "Cursor").Record = false;
+            await harnesses.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+            await graph.History.OnEnterAsync(CancellationToken.None);
+            await graph.History.Discovery;
 
-            // ONE feed instance exists (the factory ran once) and BOTH steps went through it.
+            await Assert.That(harness.Cli.DiscoverCalls.Single()).IsEquivalentTo(["--claude"]);
             await Assert.That(harness.DetectionFactoryCalls).IsEqualTo(1);
-            await Assert.That(harness.DetectCalls).IsEqualTo(2);
 
             return true;
         });
     }
 
     [Test]
-    public async Task The_daemon_step_reads_status_through_a_freshly_resolved_cli() {
+    public async Task The_daemon_enabler_reads_status_through_a_freshly_resolved_cli() {
         await AvaloniaSession.DispatchAsync(async () => {
             using var harness = new WizardFixtures.GraphHarness(Config.Root);
             harness.Operation = (_, _) => Task.FromResult<AuthResult>(
@@ -716,15 +1154,14 @@ public class WizardStartupTests {
             harness.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(null);
 
             var graph = WizardComposition.BuildGraph(harness.Options());
-            var daemon = graph.Steps.OfType<DaemonStepViewModel>().Single();
             var signIn = graph.Steps.OfType<SignInStepViewModel>().Single();
             await signIn.SignInAsync().WaitAsync(TimeSpan.FromSeconds(5)); // the row's own precondition
 
-            await daemon.RefreshAsync(CancellationToken.None);
+            await graph.Daemon.EnsureAsync(CancellationToken.None);
             var afterFirst = harness.CliFactoryCalls;
-            await daemon.RefreshAsync(CancellationToken.None);
+            await graph.Daemon.EnsureAsync(CancellationToken.None);
 
-            // Every status read rebinds — a name written by the Defaults step lands on the next one.
+            // Every status read rebinds — a name saved since the last one lands on the next.
             await Assert.That(afterFirst).IsGreaterThan(0);
             await Assert.That(harness.CliFactoryCalls).IsGreaterThan(afterFirst);
 
@@ -733,39 +1170,41 @@ public class WizardStartupTests {
     }
 
     [Test]
-    public async Task The_daemon_step_requires_a_committed_sign_in_before_it_resolves_an_identity() {
+    public async Task The_daemon_enabler_requires_a_committed_sign_in_and_installs_once_it_lands() {
         await AvaloniaSession.DispatchAsync(async () => {
             using var harness = new WizardFixtures.GraphHarness(Config.Root);
             harness.Operation = (_, _) => Task.FromResult<AuthResult>(
                 new AuthResult.Committed("default", "https://acme.example:443", AuthProvider.None, "someone", []));
+            harness.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(
+                new ServiceSnapshot("daemon-a", false, "not_installed", null, "/opt/kcap/kcapd", null, null, false, false));
 
             var graph = WizardComposition.BuildGraph(harness.Options());
-            var daemon = graph.Steps.OfType<DaemonStepViewModel>().Single();
-            var connect = graph.Steps.OfType<ConnectStepViewModel>().Single();
+            var daemon = graph.Daemon;
+            var connect = graph.Connect;
             var signIn = graph.Steps.OfType<SignInStepViewModel>().Single();
 
-            await daemon.RefreshAsync(CancellationToken.None);
-            var beforeSignIn = daemon.Row;
+            await daemon.EnsureAsync(CancellationToken.None);
+            var beforeSignIn = (daemon.Row, harness.Cli.StatusCallCount, harness.Lane.Requests.Count);
 
             connect.Choice = ConnectChoice.Paste;
             connect.ServerInputText = "https://acme.example";
             await signIn.SignInAsync().WaitAsync(TimeSpan.FromSeconds(5));
-            harness.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(
-                new ServiceSnapshot("daemon-a", false, "not_installed", null, "/opt/kcap/kcapd", null, null, false, false));
-            await daemon.RefreshAsync(CancellationToken.None);
+            await daemon.EnsureAsync(CancellationToken.None); // waits out the ensure sign-in kicked
 
-            await Assert.That(beforeSignIn).IsEqualTo(DaemonRow.RequiresSignIn);
+            await Assert.That(beforeSignIn).IsEqualTo((DaemonRow.RequiresSignIn, 0, 0));
             await Assert.That(signIn.Satisfied).IsTrue();
             await Assert.That(daemon.Row).IsEqualTo(DaemonRow.NotInstalled);
+            await Assert.That(harness.Lane.Requests.Single().Verb).IsEqualTo(MutationVerb.Install);
+            await Assert.That(daemon.Satisfied).IsTrue();
 
             return true;
         });
     }
 
-    // ── the composition seam: one façade, provisioner armed, arming hook wired ─
+    // ── the composition seam: one façade, arming hook wired ───────────────────
 
     [Test]
-    public async Task The_facade_is_built_from_the_bridges_own_sink_picker_and_provisioner() {
+    public async Task The_facade_is_built_from_the_bridges_own_sink_and_picker() {
         await AvaloniaSession.DispatchAsync(async () => {
             using var harness = new WizardFixtures.GraphHarness(Config.Root);
 
@@ -774,8 +1213,6 @@ public class WizardStartupTests {
             await Assert.That(harness.Spec).IsNotNull();
             await Assert.That(harness.Spec!.Progress).IsSameReferenceAs(harness.Bridges.Progress);
             await Assert.That(harness.Spec.Picker).IsSameReferenceAs(harness.Bridges.Picker);
-            // A provisioner-less façade dead-ends "Create a workspace" at "ask your admin".
-            await Assert.That(harness.Spec.Provisioner).IsSameReferenceAs(harness.Bridges.Provisioner);
 
             return true;
         });
@@ -799,76 +1236,35 @@ public class WizardStartupTests {
 
     [Test]
     public async Task The_production_bridges_marshal_through_the_avalonia_dispatcher() {
-        var (marshalled, hasProvisioner) = await AvaloniaSession.DispatchAsync(async () => {
+        var marshalled = await AvaloniaSession.DispatchAsync(async () => {
             var bridges = WizardComposition.BuildBridges(
-            action => Dispatcher.UIThread.Post(action), new(new HttpClient()), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System);
+                action => Dispatcher.UIThread.Post(action), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults);
             var posted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
             // Posted from a background thread, exactly as the façade's flows raise their events.
             await Task.Run(() => bridges.Post(() => posted.TrySetResult(Dispatcher.UIThread.CheckAccess())));
             Dispatcher.UIThread.RunJobs();
 
-            // WizardBridges' own contract: the provisioner is built from the bridges' sink.
-            return (await posted.Task.WaitAsync(TimeSpan.FromSeconds(10)), bridges.Provisioner is not null);
+            return await posted.Task.WaitAsync(TimeSpan.FromSeconds(10));
         }).WaitAsync(TimeSpan.FromSeconds(30));
 
         await Assert.That(marshalled).IsTrue();
-        await Assert.That(hasProvisioner).IsTrue();
     }
 
-    // ── the Done step's summary (why-skipped notes) ───────────────────────────
+    // ── the Done step's facts ──────────────────────────────────────────────────
 
     [Test]
-    public async Task A_missing_cli_is_the_summary_note_for_every_step_that_needs_one() {
-        await AvaloniaSession.DispatchAsync(async () => {
-            using var harness = new WizardFixtures.GraphHarness(Config.Root);
-            harness.CliPath = null;
-            harness.Cli.CliPath = null;
-
-            var graph = WizardComposition.BuildGraph(harness.Options());
-            var summary = graph.Steps.OfType<DoneStepViewModel>().Single().Summary;
-
-            await Assert.That(summary.Count).IsEqualTo(7); // every step but Done itself
-            foreach (var title in new[] { "Use kcap in the terminal", "Install agent hooks", "Import past sessions", "Enable the daemon" })
-                await Assert.That(summary.Single(e => e.Title == title).Note).IsEqualTo(WizardComposition.CliMissingNote);
-
-            return true;
-        });
-    }
-
-    [Test]
-    public async Task An_unsigned_in_daemon_step_reads_as_requires_sign_in_in_the_summary() {
+    public async Task Done_does_not_claim_existing_connections_were_removed() {
         await AvaloniaSession.DispatchAsync(async () => {
             using var harness = new WizardFixtures.GraphHarness(Config.Root);
 
             var graph = WizardComposition.BuildGraph(harness.Options());
-            var daemon = graph.Steps.OfType<DaemonStepViewModel>().Single();
             var done = graph.Steps.OfType<DoneStepViewModel>().Single();
+            await done.OnEnterAsync(CancellationToken.None);
 
-            await daemon.RefreshAsync(CancellationToken.None);
-
-            await Assert.That(done.Summary.Single(e => e.Title == "Enable the daemon").Note)
-                .IsEqualTo(WizardComposition.RequiresSignInNote);
-
-            return true;
-        });
-    }
-
-    [Test]
-    public async Task A_chosen_workspace_names_how_sign_in_will_run() {
-        await AvaloniaSession.DispatchAsync(async () => {
-            using var harness = new WizardFixtures.GraphHarness(Config.Root);
-
-            var graph = WizardComposition.BuildGraph(harness.Options());
-            var connect = graph.Steps.OfType<ConnectStepViewModel>().Single();
-            var done = graph.Steps.OfType<DoneStepViewModel>().Single();
-
-            connect.Choice = ConnectChoice.Create; // Satisfied without any input
-
-            var entry = done.Summary.Single(e => e.Title == "Choose a workspace");
-            await Assert.That(entry.Satisfied).IsTrue();
-            await Assert.That(entry.Note).IsEqualTo("Create a new workspace");
-            await Assert.That(entry.Detail).IsEqualTo("Create a new workspace");
+            await Assert.That(done.Capture).IsEmpty();
+            await Assert.That(done.OpenInBrowserVisible).IsFalse();
+            await Assert.That(done.ShowsFigures).IsFalse();
 
             return true;
         });
@@ -877,12 +1273,12 @@ public class WizardStartupTests {
     // ── the shim step's pre-probe (latency the shipping default must not pay) ─
 
     [Test]
-    [Arguments(false, "/opt/kcap/bin/kcap")] // not macOS: the answer can't change the outcome
+    [Arguments(false, "/opt/kcap/bin/kcap")] // no installer for this OS: the answer cannot change the outcome
     [Arguments(true, null)]                  // no linkable target: same
-    public async Task The_path_probe_is_skipped_when_it_cannot_change_the_shim_decision(bool isMacOs, string? target) {
+    public async Task The_path_probe_is_skipped_when_it_cannot_change_the_shim_decision(bool hasInstaller, string? target) {
         var probes = 0;
 
-        var applicable = await AppUnderTest.ResolveShimApplicableAsync(isMacOs, target, _ => {
+        var applicable = await AppUnderTest.ResolveShimApplicableAsync(hasInstaller, target, _ => {
             probes++;
             return Task.FromResult<bool?>(false);
         }, CancellationToken.None);
@@ -922,35 +1318,47 @@ public class WizardStartupTests {
             true, "/opt/kcap/bin/kcap", ct => Task.FromCanceled<bool?>(ct), cts.Token));
     }
 
-    // ── the sign-in step's retarget answer ────────────────────────────────────
+    // ── the sign-in step's committed answer ───────────────────────────────────
 
+    static AuthResult.Committed CommittedSignIn() =>
+        new(ProfileConfig.DefaultName, "https://acme.example:443", AuthProvider.WorkOS, "sam", []);
+
+    static async Task<(WizardGraph Graph, SignInStepViewModel SignIn)> OnTheSignInStepAsync(WizardFixtures.GraphHarness harness) {
+        var graph = WizardComposition.BuildGraph(harness.Options());
+        await graph.ViewModel.PendingEnterForTesting;
+
+        await graph.Steps.OfType<EditionStepViewModel>().Single().SignInCommand.Execute().ToTask();
+        await WizardFixtures.WaitUntilAsync(
+            () => graph.ViewModel.Current.Id == WizardStepId.SignIn, what: "the jump to the sign-in step");
+
+        return (graph, graph.Steps.OfType<SignInStepViewModel>().Single());
+    }
+
+    /// A committed sign-in stays put. The forward button is what leaves the page.
     [Test]
-    public async Task A_retarget_prefills_the_connect_step_and_navigates_back_to_it() {
+    public async Task A_committed_sign_in_stays_until_the_user_continues() {
         await AvaloniaSession.DispatchAsync(async () => {
-            using var harness = new WizardFixtures.GraphHarness(Config.Root);
-            harness.Operation = (_, _) => Task.FromResult<AuthResult>(new AuthResult.Retarget("acme"));
+            var time = new FakeTimeProvider();
+            using var harness = new WizardFixtures.GraphHarness(Config.Root) { Time = time };
+            harness.Operation = (_, _) => Task.FromResult<AuthResult>(CommittedSignIn());
 
-            var graph = WizardComposition.BuildGraph(harness.Options());
-            var connect = graph.Steps.OfType<ConnectStepViewModel>().Single();
-            var signIn = graph.Steps.OfType<SignInStepViewModel>().Single();
-            await graph.ViewModel.PendingEnterForTesting;
-
-            graph.ViewModel.TryGoTo(WizardStepId.SignIn);
-            await WizardFixtures.WaitUntilAsync(
-                () => graph.ViewModel.Current.Id == WizardStepId.SignIn, what: "the jump to the sign-in step");
-
+            var (graph, signIn) = await OnTheSignInStepAsync(harness);
             await signIn.SignInAsync().WaitAsync(TimeSpan.FromSeconds(5));
-            await WizardFixtures.WaitUntilAsync(
-                () => graph.ViewModel.Current.Id == WizardStepId.Connect, what: "the retarget navigation");
 
-            await Assert.That(connect.ServerInputText).IsEqualTo("acme");
-            await Assert.That(connect.Choice).IsEqualTo(ConnectChoice.Paste);
+            time.Advance(TimeSpan.FromSeconds(5));
+            Dispatcher.UIThread.RunJobs();
+
+            await Assert.That(graph.ViewModel.Current.Id).IsEqualTo(WizardStepId.SignIn);
+
+            await graph.ViewModel.NextCommand.Execute().ToTask();
+
+            await Assert.That(graph.ViewModel.Current.Id).IsEqualTo(WizardStepId.Harnesses);
 
             return true;
         }).WaitAsync(TimeSpan.FromSeconds(30));
     }
 
-    // ── late binding (the adapters the daemon step is composed over) ──────────
+    // ── late binding (the adapters the daemon enabler is composed over) ──────────
 
     [Test]
     public async Task Late_bound_ops_resolve_a_fresh_socket_per_call() {
@@ -1008,62 +1416,44 @@ public class WizardStartupTests {
     static (OnboardingViewModel Wizard, WizardLifecycleSurface Surface) NewShell() {
         var surface = new WizardLifecycleSurface((_, _) => Task.FromResult(false), action => action());
         var wizard = new OnboardingViewModel(
-            [new StubStep(WizardStepId.Connect, "Connect to Capacitor")], CancellationToken.None, surface);
+            [new StubStep(WizardStepId.Edition, "Connect to kcap")], CancellationToken.None, surface);
 
         return (wizard, surface);
     }
 
+    /// The daemon's outcome lines land in the Done page's service card, behind See details, and the
+    /// shell's footer carries none of them.
     [Test]
-    public async Task The_wizard_window_renders_the_surfaces_status_line() {
-        var rendered = await AvaloniaSession.DispatchAsync(() => {
-            var (wizard, surface) = NewShell();
-            var window = new OnboardingWindow { DataContext = wizard };
+    public async Task A_daemon_outcome_line_lands_in_the_done_pages_service_card() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+
+        var (details, footerTexts) = await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(harness.Options());
+            var done = graph.Steps.OfType<DoneStepViewModel>().Single();
+            await done.OnEnterAsync(CancellationToken.None);
+
+            harness.Surface.Attention(AppUnderTest.WizardAttentionCopyFor("verify_viability")!);
+
+            var window = new MainWindow { Onboarding = graph.ViewModel };
             window.Show();
             Dispatcher.UIThread.RunJobs();
-
-            surface.Status("a status line from the consumer");
-            Dispatcher.UIThread.RunJobs();
-
-            var text = window.GetVisualDescendants().OfType<TextBlock>()
-                .FirstOrDefault(t => t.Name == "LifecycleStatusText")?.Text;
-
+            var footer = window.GetVisualDescendants().OfType<Border>().First(b => b.Name == "StepFooter")
+                .GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToList();
             window.Close();
             Dispatcher.UIThread.RunJobs();
 
-            return text;
+            return (done.ServiceDetails, footer);
         });
 
-        await Assert.That(rendered).IsEqualTo("a status line from the consumer");
-    }
-
-    [Test]
-    public async Task The_wizard_window_renders_the_surfaces_attention_line() {
-        var rendered = await AvaloniaSession.DispatchAsync(() => {
-            var (wizard, surface) = NewShell();
-            var window = new OnboardingWindow { DataContext = wizard };
-            window.Show();
-            Dispatcher.UIThread.RunJobs();
-
-            surface.Attention("a daemon mutation needs attention (some_token)");
-            Dispatcher.UIThread.RunJobs();
-
-            var text = window.GetVisualDescendants().OfType<TextBlock>()
-                .FirstOrDefault(t => t.Name == "LifecycleAttentionText")?.Text;
-
-            window.Close();
-            Dispatcher.UIThread.RunJobs();
-
-            return text;
-        });
-
-        await Assert.That(rendered).IsEqualTo("a daemon mutation needs attention (some_token)");
+        await Assert.That(details).Contains(AppUnderTest.WizardAttentionCopyFor("verify_viability")!);
+        await Assert.That(footerTexts).DoesNotContain(AppUnderTest.WizardAttentionCopyFor("verify_viability")!);
     }
 
     [Test]
     public async Task A_lifecycle_prompt_opens_a_dialog_owned_by_the_wizard_window() {
         var (owned, settled) = await AvaloniaSession.DispatchAsync(() => {
             var (wizard, _) = NewShell();
-            var window = new OnboardingWindow { DataContext = wizard };
+            var window = new MainWindow { Onboarding = wizard };
             window.Show();
             Dispatcher.UIThread.RunJobs();
 
@@ -1117,8 +1507,8 @@ public class WizardStartupTests {
     public async Task Closing_the_wizard_window_ends_the_close_wait() {
         await AvaloniaSession.DispatchAsync(async () => {
             var (wizard, _) = NewShell();
-            var window = new OnboardingWindow { DataContext = wizard };
-            window.Show();
+            var (desktop, _) = FakeClassicDesktopLifetime.Create();
+            var window = AppUnderTest.ShowWizardWindow(desktop, wizard);
             Dispatcher.UIThread.RunJobs();
 
             var wait = AppUnderTest.WaitForWizardCloseAsync(wizard, CancellationToken.None);
@@ -1148,11 +1538,11 @@ public class WizardStartupTests {
         }).WaitAsync(TimeSpan.FromSeconds(20));
     }
 
-    // ── the daemon step's row/ops identity derives from ResolveIdentity, never the claims
+    // ── the daemon enabler's row/ops identity derives from ResolveIdentity, never the claims
     // ── identity (ResolveConsentFlipIdentity stays literal, for TryConsume only) ──────
 
     [Test]
-    public async Task The_daemon_steps_row_reflects_ResolveIdentity_not_the_claims_identity() {
+    public async Task The_daemon_enablers_row_reflects_ResolveIdentity_not_the_claims_identity() {
         await AvaloniaSession.DispatchAsync(async () => {
             using var harness = new WizardFixtures.GraphHarness(Config.Root);
             harness.Operation = (_, _) => Task.FromResult<AuthResult>(
@@ -1164,11 +1554,11 @@ public class WizardStartupTests {
             harness.ConsentFlipIdentity = ("claims-profile", "https://claims.example", "claims-daemon");
 
             var graph  = WizardComposition.BuildGraph(harness.Options());
-            var daemon = graph.Steps.OfType<DaemonStepViewModel>().Single();
+            var daemon = graph.Daemon;
             var signIn = graph.Steps.OfType<SignInStepViewModel>().Single();
             await signIn.SignInAsync().WaitAsync(TimeSpan.FromSeconds(5));
 
-            await daemon.RefreshAsync(CancellationToken.None);
+            await daemon.EnsureAsync(CancellationToken.None);
 
             await Assert.That(daemon.Row).IsEqualTo(DaemonRow.NoServerConfigured);
             await Assert.That(harness.Cli.StatusCallCount).IsEqualTo(0); // refused before any status read
@@ -1191,7 +1581,7 @@ public class WizardStartupTests {
 
             var canonical = ServerIdentity.Canonicalize("https://row.example")!;
             var evidence = new ObservedEvidence(
-                Reachable: true, Capabilities: [DaemonStepViewModel.ConsentV3Capability], DaemonVersion: "1.0.0",
+                Reachable: true, Capabilities: [ConsentFlipCoordinator.ConsentV3Capability], DaemonVersion: "1.0.0",
                 ServerUrl: canonical, DaemonName: "row-daemon", Pid: 111, InstanceId: "instance-1", IdentityConsistent: true);
             var options = harness.Options() with { Observation = new WizardFixtures.FixedObservation(evidence) };
 
@@ -1200,11 +1590,11 @@ public class WizardStartupTests {
             harness.Claims.Arm(new ConsentFlipClaim("row-profile", canonical));
 
             var graph  = WizardComposition.BuildGraph(options);
-            var daemon = graph.Steps.OfType<DaemonStepViewModel>().Single();
+            var daemon = graph.Daemon;
             var signIn = graph.Steps.OfType<SignInStepViewModel>().Single();
             await signIn.SignInAsync().WaitAsync(TimeSpan.FromSeconds(5));
 
-            await daemon.RefreshAsync(CancellationToken.None);
+            await daemon.EnsureAsync(CancellationToken.None);
             await WizardFixtures.WaitUntilAsync(() => harness.Ops.PutV2Calls > 0, what: "the claim to apply");
 
             await Assert.That(daemon.Row).IsEqualTo(DaemonRow.AlreadyEnabled);
@@ -1225,7 +1615,7 @@ public class WizardStartupTests {
 
 /// <summary>
 /// The startup decisions that read real config: the single fresh resolution the graph is built on,
-/// and the §10 decision-2 abandon rows (zero service mutation, gate still incomplete afterwards).
+/// and the abandon cases (zero service mutation, gate still incomplete afterwards).
 ///
 /// [NotInParallel]: the process-global headless session, since composing the wizard constructs
 /// ReactiveUI ViewModels.
@@ -1254,7 +1644,7 @@ public class WizardStartupResolutionTests {
         WriteConfig(SingleProfileConfig(new Profile { ServerUrl = "file:///tmp/x" }));
 
         var (before, _) = await AppUnderTest.ResolveAndEvaluateGateAsync(
-                Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, TimeProvider.System, CancellationToken.None);
+                Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, NoLocalInstallation.Root, TimeProvider.System, CancellationToken.None);
 
         // What a committed wizard sign-in leaves behind: a real server plus its provider stamp.
         WriteConfig(SingleProfileConfig(new Profile {
@@ -1263,7 +1653,7 @@ public class WizardStartupResolutionTests {
         }));
 
         var (after, afterProfiles) = await AppUnderTest.ResolveAndEvaluateGateAsync(
-                Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, TimeProvider.System, CancellationToken.None);
+                Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, NoLocalInstallation.Root, TimeProvider.System, CancellationToken.None);
 
         await Assert.That(before).IsTypeOf<GateResult.Incomplete>();
         await Assert.That(((GateResult.Incomplete)before).Reason).IsEqualTo(GateReason.InvalidServerUrl);
@@ -1279,7 +1669,7 @@ public class WizardStartupResolutionTests {
     public async Task ResolveWizardIdentity_unreadable_config_is_null() {
         File.WriteAllText(ConfigPath, "{ this is not valid json");
 
-        var identity = AppUnderTest.ResolveWizardIdentity(Config.Root, ProfileOverrides.None);
+        var identity = AppUnderTest.ResolveWizardIdentity(Config.Root, ProfileOverrides.None, NoLocalInstallation.Root);
 
         await Assert.That(identity).IsNull();
     }
@@ -1288,7 +1678,7 @@ public class WizardStartupResolutionTests {
     public async Task ResolveWizardIdentity_a_profile_with_an_invalid_server_is_null() {
         WriteConfig(SingleProfileConfig(new Profile { ServerUrl = "file:///tmp/x" }));
 
-        var identity = AppUnderTest.ResolveWizardIdentity(Config.Root, ProfileOverrides.None);
+        var identity = AppUnderTest.ResolveWizardIdentity(Config.Root, ProfileOverrides.None, NoLocalInstallation.Root);
 
         await Assert.That(identity).IsNull();
     }
@@ -1300,7 +1690,7 @@ public class WizardStartupResolutionTests {
             Daemon    = new DaemonSettings { Name = "acme-daemon" },
         }));
 
-        var identity = AppUnderTest.ResolveWizardIdentity(Config.Root, ProfileOverrides.None);
+        var identity = AppUnderTest.ResolveWizardIdentity(Config.Root, ProfileOverrides.None, NoLocalInstallation.Root);
 
         await Assert.That(identity).IsNotNull();
         await Assert.That(identity!.Value.Profile).IsEqualTo(ProfileName);
@@ -1310,7 +1700,7 @@ public class WizardStartupResolutionTests {
 
     // An empty-name sentinel would dial the sanitized DEFAULT daemon socket — unreadable config must yield null.
     [Test]
-    public async Task Unreadable_config_shows_the_daemon_steps_not_ready_state_and_makes_no_status_or_ops_call() {
+    public async Task Unreadable_config_shows_the_daemon_enablers_not_ready_state_and_makes_no_status_or_ops_call() {
         File.WriteAllText(ConfigPath, "{ this is not valid json");
 
         await AvaloniaSession.DispatchAsync(async () => {
@@ -1318,14 +1708,14 @@ public class WizardStartupResolutionTests {
             harness.Operation = (_, _) => Task.FromResult<AuthResult>(
                 new AuthResult.Committed("default", "https://acme.example:443", AuthProvider.None, "someone", []));
 
-            var options = harness.Options() with { ResolveIdentity = () => AppUnderTest.ResolveWizardIdentity(Config.Root, ProfileOverrides.None) };
+            var options = harness.Options() with { ResolveIdentity = () => AppUnderTest.ResolveWizardIdentity(Config.Root, ProfileOverrides.None, NoLocalInstallation.Root) };
             var graph  = WizardComposition.BuildGraph(options);
-            var daemon = graph.Steps.OfType<DaemonStepViewModel>().Single();
+            var daemon = graph.Daemon;
             var signIn = graph.Steps.OfType<SignInStepViewModel>().Single();
             await signIn.SignInAsync().WaitAsync(TimeSpan.FromSeconds(5));
             await Assert.That(signIn.Satisfied).IsTrue(); // sign-in itself doesn't touch config.json
 
-            await daemon.RefreshAsync(CancellationToken.None);
+            await daemon.EnsureAsync(CancellationToken.None);
 
             await Assert.That(daemon.Row).IsEqualTo(DaemonRow.RequiresSignIn);
             await Assert.That(harness.Cli.StatusCallCount).IsEqualTo(0);
@@ -1352,11 +1742,11 @@ public class WizardStartupResolutionTests {
             // Abandon: the window closes without a single step being driven.
             graph.ViewModel.RequestClose();
             await AppUnderTest.HandoffAfterWizardAsync(
-                    graph.Auth, () => Task.CompletedTask, TimeSpan.FromSeconds(5), new OutcomeChannel(), TimeProvider.System)
+                    graph.Auth, graph.Install, () => Task.CompletedTask, TimeSpan.FromSeconds(5), new OutcomeChannel(), TimeProvider.System)
                 .WaitAsync(TimeSpan.FromSeconds(5));
 
             var (gate, _) = await AppUnderTest.ResolveAndEvaluateGateAsync(
-                Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, TimeProvider.System, CancellationToken.None);
+                Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, NoLocalInstallation.Root, TimeProvider.System, CancellationToken.None);
 
             await Assert.That(harness.Lane.Requests).IsEmpty();
             await Assert.That(harness.Ops.GetCalls).IsEqualTo(0);
@@ -1388,16 +1778,16 @@ public class WizardStartupResolutionTests {
             };
 
             var graph = WizardComposition.BuildGraph(harness.Options());
-            var attempt = graph.Auth.Begin(new ConnectIntent.Discover(AuthProvider.WorkOS));
+            var attempt = graph.Auth.Begin(new ConnectIntent.Discover());
             await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
             graph.ViewModel.RequestClose();
             await AppUnderTest.HandoffAfterWizardAsync(
-                    graph.Auth, () => Task.CompletedTask, TimeSpan.FromSeconds(5), new OutcomeChannel(), TimeProvider.System)
+                    graph.Auth, graph.Install, () => Task.CompletedTask, TimeSpan.FromSeconds(5), new OutcomeChannel(), TimeProvider.System)
                 .WaitAsync(TimeSpan.FromSeconds(5));
 
             var (gate, _) = await AppUnderTest.ResolveAndEvaluateGateAsync(
-                Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, TimeProvider.System, CancellationToken.None);
+                Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, NoLocalInstallation.Root, TimeProvider.System, CancellationToken.None);
 
             await Assert.That(await attempt.Result).IsTypeOf<AuthResult.Cancelled>();
             await Assert.That(await File.ReadAllTextAsync(ConfigPath)).IsEqualTo(configBefore);
@@ -1418,7 +1808,7 @@ public class WizardStartupResolutionTests {
 
         using var claimsRoot = new TempConfigRoot();
         var claims = new ConsentFlipClaims(claimsRoot.Root);
-        var bridges = WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System);
+        var bridges = WizardComposition.BuildBridges(action => action(), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults);
         using var handler = new StubAuthHandler();
 
         var operation = WizardComposition.BuildOperation(
@@ -1427,7 +1817,7 @@ public class WizardStartupResolutionTests {
             bridges, claims, TimeProvider.System,
             spec => WizardSignInOperation.For(new OnboardingFacade(
                 spec.Root, spec.TokenStore, spec.HttpFactory, spec.Proxy, spec.GitHub, spec.WorkOS, spec.Progress,
-                new RecordingBrowser(), spec.Picker, spec.Provisioner, spec.Telemetry, spec.Endpoints, TimeProvider.System,
+                new RecordingBrowser(), spec.Picker, null, spec.Telemetry, spec.Endpoints, TimeProvider.System,
                 spec.BeforeCommit), spec.Profile));
 
         var result = await operation(new ConnectIntent.Paste("https://acme.example"), CancellationToken.None)
@@ -1442,37 +1832,31 @@ public class WizardStartupResolutionTests {
         await Assert.That(handler.Requests.Any(r => r.Contains("/auth/config"))).IsTrue();
     }
 
-    /// Both zero-tenant intents run the DISCOVERY leg (the auth proxy), not a per-server login —
-    /// which is where the armed provisioner offers to create a workspace.
+    /// Both discovery intents run the DISCOVERY leg (the auth proxy), not a per-server login.
     [Test]
-    [Arguments("create")]
-    [Arguments("discover")]
-    public async Task Create_and_workos_discovery_route_through_the_auth_proxy(string intentName) {
+    [Arguments("device")]
+    [Arguments("browser")]
+    public async Task Workos_discovery_routes_through_the_auth_proxy(string intentName) {
         using var claimsRoot = new TempConfigRoot();
         var claims = new ConsentFlipClaims(claimsRoot.Root);
-        var bridges = WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System);
+        var bridges = WizardComposition.BuildBridges(action => action(), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults);
         using var handler = new StubAuthHandler { Status = HttpStatusCode.ServiceUnavailable };
-        ConnectIntent intent = intentName == "create"
-            ? new ConnectIntent.Create()
-            : new ConnectIntent.Discover(AuthProvider.WorkOS);
+        ConnectIntent intent = intentName == "device"
+            ? new ConnectIntent.Discover(ForceDevice: true)
+            : new ConnectIntent.Discover();
 
-        WizardFacadeSpec? spec = null;
         var operation = WizardComposition.BuildOperation(
             Config.Root, AuthFixtures.NewTokenStore(Config.Root), new PlainHttpClientFactory(handler),
             new AuthProxyClient(new HttpClient(handler, disposeHandler: false), TimeProvider.System), Github, Workos, ProfileName,
             bridges, claims, TimeProvider.System,
-            s => {
-                spec = s;
-                return WizardSignInOperation.For(new OnboardingFacade(
-                    s.Root, s.TokenStore, s.HttpFactory, s.Proxy, s.GitHub, s.WorkOS, s.Progress,
-                    new RecordingBrowser(), s.Picker, s.Provisioner, s.Telemetry, s.Endpoints, TimeProvider.System, s.BeforeCommit), s.Profile);
-            });
+            s => WizardSignInOperation.For(new OnboardingFacade(
+                s.Root, s.TokenStore, s.HttpFactory, s.Proxy, s.GitHub, s.WorkOS, s.Progress,
+                new RecordingBrowser(), s.Picker, null, s.Telemetry, s.Endpoints, TimeProvider.System, s.BeforeCommit), s.Profile));
 
         var result = await operation(intent, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
 
         await Assert.That(result).IsTypeOf<AuthResult.Failed>();
         await Assert.That(handler.Requests.Any(r => r.Contains("/config"))).IsTrue();
-        await Assert.That(spec!.Provisioner).IsSameReferenceAs(bridges.Provisioner);
     }
 
     /// Answers every GET with an auth-config body; the discovery rows flip Status so the proxy leg

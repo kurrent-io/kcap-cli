@@ -10,6 +10,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit;
 /// first word onto the version, advertising <c>"1.0.75.\nRun"</c> — which no version parser accepts.
 /// Each case below is real observed output from the installed CLI.</para>
 /// </summary>
+[ParallelLimiter<SubprocessLimit>]
 public class DaemonRunnerVersionProbeTests {
     [Test]
     public async Task Copilot_multiline_output_yields_just_the_version() {
@@ -66,10 +67,8 @@ public class DaemonRunnerVersionProbeTests {
         // `yes | head` pipeline could overrun it and be killed before it ever reached the stdout
         // echo, leaving stderr's flood as the only output to parse. 200 KB still exceeds the buffer
         // by 3x while finishing comfortably inside the budget.
-        var cli = tmp.CreateFile(
+        var cli = tmp.CreateExecutable(
             "faketool", "#!/bin/sh\nyes 0123456789ABCDEFGHIJ | head -c 200000 1>&2\necho 'faketool 9.9.9'\n");
-        if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(cli, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
         await Assert.That(DaemonRunner.ProbeCliVersionForLaunch(cli)).IsEqualTo("9.9.9");
     }
@@ -82,10 +81,8 @@ public class DaemonRunnerVersionProbeTests {
     public async Task A_version_at_the_front_survives_a_trailing_flood_on_the_same_stream() {
         Skip.Unless(!OperatingSystem.IsWindows(), "The stub binary is a POSIX shell script.");
         using var tmp = new TempDir();
-        var cli = tmp.CreateFile(
+        var cli = tmp.CreateExecutable(
             "faketool", "#!/bin/sh\necho 'faketool 9.9.9'\nyes 0123456789ABCDEFGHIJ | head -c 500000\n");
-        if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(cli, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
         await Assert.That(DaemonRunner.ProbeCliVersionForLaunch(cli)).IsEqualTo("9.9.9");
     }
@@ -103,13 +100,13 @@ public class DaemonRunnerVersionProbeTests {
         // Prints the version, then leaves a child holding the inherited stdout open after the CLI
         // itself exits — the shape that made ProbeCliVersionOnce block on a drain that never saw EOF.
         // The stub records the descendant's pid so the test can reap it: once reparented it is no
-        // longer anyone's child, and left alone it outlives the test host into teardown. The sidecar
-        // path comes from the fixture so the shell writer and the reaper cannot drift apart.
+        // longer the test's child to wait on, and left alone it outlives the test host into teardown. The marker
+        // in its command line is what proves a pid is still that descendant when the test reaps it.
+        // (`; :` keeps the shell from exec-ing sleep, which would drop the marker.)
         var pidFile = tmp.PathTo("faketool.pid");
-        var cli = tmp.CreateFile(
-            "faketool", $"#!/bin/sh\necho 'faketool 9.9.9'\nsleep 20 &\necho $! > '{pidFile}'\nexit 0\n");
-        if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(cli, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var marker  = $"kcap-probe-descendant-{Guid.NewGuid():N}";
+        var cli = tmp.CreateExecutable(
+            "faketool", $"#!/bin/sh\necho 'faketool 9.9.9'\nsh -c 'sleep 20; :' {marker} &\necho $! > {ShellQuote(pidFile)}\nexit 0\n");
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
         string? version = null;
@@ -126,32 +123,50 @@ public class DaemonRunnerVersionProbeTests {
         } finally {
             // In a finally so a failing probe or assertion still reaps — otherwise the same leaked
             // descendant turns a useful assertion failure into an exit-139 teardown failure.
-            await ReapDescendantAsync(pidFile);
+            await ReapDescendantAsync(pidFile, marker);
         }
     }
 
-    /// <summary>Kills the reparented descendant the stub left behind, so it cannot linger past this
-    /// test and into the host's teardown. Best-effort: a missing or already-gone pid is fine.</summary>
-    static async Task ReapDescendantAsync(string pidFile) {
-        for (var i = 0; i < 50 && !File.Exists(pidFile); i++) await Task.Delay(20);
-        if (!File.Exists(pidFile)) return;
-        if (!int.TryParse((await File.ReadAllTextAsync(pidFile)).Trim(), out var pid)) return;
+    /// <summary>Kills the reparented descendant so it cannot linger past this test into the host's
+    /// teardown. A pid is killed only when its captured incarnation still carries this test's marker:
+    /// a descendant that already exited may have had its pid reused, and that process is left alone.</summary>
+    static async Task ReapDescendantAsync(string pidFile, string marker) {
+        int pid = 0;
+        for (var i = 0; i < 50; i++) {
+            if (File.Exists(pidFile) && int.TryParse((await File.ReadAllTextAsync(pidFile)).Trim(), out pid)) break;
+            await Task.Delay(20);
+        }
+        if (pid <= 0) return;
 
-        // Capture the incarnation. Capture throws both when the pid is gone AND when a live process's
-        // identity is unreadable, so a bare catch is not proof of absence: only return when the pid is
-        // actually absent, and otherwise surface so a live descendant is never silently skipped.
+        // Capture throws both when the pid is gone AND when a live process's identity is unreadable,
+        // so a bare catch is not proof of absence.
         string identity;
         try { identity = Capacitor.Tests.Helpers.PidIdentity.Capture(pid); }
         catch {
             try {
-                using var descendant = System.Diagnostics.Process.GetProcessById(pid);
-                if (descendant.HasExited) return;
+                using var process = System.Diagnostics.Process.GetProcessById(pid);
+                if (process.HasExited) return;
             } catch (ArgumentException) { return; } // genuinely gone
             throw; // present but identity unreadable — do not assume it is gone
         }
 
-        // Kill against the captured incarnation, so a pid recycled since is never signalled.
-        Capacitor.Cli.Daemon.Services.ProcessTree.Kill(pid, identity);
+        // The marker is read after the capture and the identity checked again after the read, so the
+        // command line that carried the marker belongs to the captured incarnation.
+        if (!(await CommandLineAsync(pid)).Contains(marker, StringComparison.Ordinal)) return;
+        if (Capacitor.Tests.Helpers.PidIdentity.IsGone(pid, identity)) return;
+
+        Capacitor.Cli.Core.ProcessTree.Kill(pid, identity);
         await Capacitor.Tests.Helpers.PidIdentity.WaitUntilGoneAsync(pid, identity, TimeSpan.FromSeconds(5));
+    }
+
+    static string ShellQuote(string value) => "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
+
+    static async Task<string> CommandLineAsync(int pid) {
+        using var ps = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ps", ["-o", "args=", "-p", pid.ToString(System.Globalization.CultureInfo.InvariantCulture)]) {
+            RedirectStandardOutput = true, UseShellExecute = false,
+        })!;
+        var output = await ps.StandardOutput.ReadToEndAsync();
+        await ps.WaitForExitAsync();
+        return output;
     }
 }

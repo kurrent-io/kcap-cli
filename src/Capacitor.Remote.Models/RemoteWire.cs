@@ -7,6 +7,7 @@ public static class HubMethods {
     public const string RequestLaunchAgentV2   = "RequestLaunchAgentV2";
     public const string RequestStopAgent       = "RequestStopAgent";
     public const string SendUserInput          = "SendUserInput";
+    public const string DiscardQueuedInput     = "DiscardQueuedInput";
     public const string SendSpecialKey         = "SendSpecialKey";
     public const string SubscribeToTerminal    = "SubscribeToTerminal";
     public const string UnsubscribeFromTerminal = "UnsubscribeFromTerminal";
@@ -14,13 +15,12 @@ public static class HubMethods {
     public const string ReleaseResizeTerminal  = "ReleaseResizeTerminal";
     public const string SubscribeToChat        = "SubscribeToChat";
     public const string UnsubscribeFromChat    = "UnsubscribeFromChat";
-    public const string SubscribeToAcpEphemeral = "SubscribeToAcpEphemeral";
-    public const string SubscribeToStream      = "SubscribeToStream";
     public const string RegisterSessionAccessWatch = "RegisterSessionAccessWatch";
-    public const string ResolveAttribution     = "ResolveAttribution";
+    public const string GetDaemonAccounts      = "GetDaemonAccounts";
 }
 
-/// Server → UI-client pushes. Org-wide ones arrive with no join call; the rest are group-scoped.
+/// Server → UI-client pushes. Org-wide ones arrive with no join call; the rest follow the join or
+/// subscribe they belong to. The app registers a handler for every one, whether it uses it or not.
 public static class HubBroadcasts {
     public const string AgentInstancesChanged  = "AgentInstancesChanged";
     public const string DaemonsChanged         = "DaemonsChanged";
@@ -36,20 +36,36 @@ public static class HubBroadcasts {
     public const string ActiveSessionAdded     = "ActiveSessionAdded";
     public const string ActiveSessionChanged   = "ActiveSessionChanged";
     public const string ActiveSessionRemoved   = "ActiveSessionRemoved";
+    public const string SessionDeleted         = "SessionDeleted";
+    public const string SessionEvalCompleted   = "SessionEvalCompleted";
+    public const string SessionWhatsDoneGenerated = "SessionWhatsDoneGenerated";
+    public const string SubagentAdopted        = "SubagentAdopted";
+    public const string FlowsChanged           = "FlowsChanged";
+    public const string WorkItemsChanged       = "WorkItemsChanged";
+    public const string ProjectsChanged        = "ProjectsChanged";
+    public const string WelcomeStateChanged    = "WelcomeStateChanged";
     public const string SessionAccessChanged   = "SessionAccessChanged";
+    public const string RawStreamAccessRevoked = "RawStreamAccessRevoked";
+    public const string DaemonAccountsChanged  = "DaemonAccountsChanged";
 }
 
 public static class ApiRoutes {
     public const string AgentInstances = "api/agent-instances";
     public const string Daemons        = "api/daemons";
     public const string ModelOptions   = "api/agents/model-options";
+    public const string SessionOwners  = "api/sessions/owners";
+    public static string SessionListing(string state, string? owner, int limit, int offset) =>
+        $"api/sessions/listing?state={state}&limit={limit}&offset={offset}"
+        + (owner is null ? "" : $"&owner={Uri.EscapeDataString(owner)}");
     public static string SessionDetail(string sessionId) =>
         $"api/sessions/{Uri.EscapeDataString(sessionId)}/detail";
+    public static string SubagentEvents(string sessionId, string agentId, long from) =>
+        $"api/sessions/{Uri.EscapeDataString(sessionId)}/agents/{Uri.EscapeDataString(agentId)}/events?from={from}";
     public static string PermissionResponse(string sessionId, string requestId) =>
         $"api/sessions/{Uri.EscapeDataString(sessionId)}/permission-response/{Uri.EscapeDataString(requestId)}";
 }
 
-/// The daemon's fixed special-key vocabulary — anything else is a server-side no-op.
+/// Named keys understood by the daemon; wheel reports use TerminalScrollKey.
 public static class SpecialKeys {
     public const string Escape = "Escape";
     public const string Tab = "Tab";
@@ -65,6 +81,8 @@ public static class SpecialKeys {
 public static class WireTokens {
     /// LaunchFailed reason prefix for a consent-gate denial on the target machine.
     public const string LaunchDeniedByOwnerPrefix = "launch_denied_by_owner";
+    /// LaunchFailed reason for a launch its owner stopped before the agent registered.
+    public const string LaunchCancelled = "launch_cancelled";
     /// HubException message fragment for a session the caller may not see.
     public const string SessionNotVisible = "Session not visible to caller";
     /// HubException message for a transient post-admit re-check fault; retryable, never a denial.

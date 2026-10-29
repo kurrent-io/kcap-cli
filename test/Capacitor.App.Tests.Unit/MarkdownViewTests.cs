@@ -1,5 +1,4 @@
 using System.Reactive.Subjects;
-using System.Windows.Input;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
@@ -9,26 +8,16 @@ using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
-using Avalonia.VisualTree;
 using Capacitor.App.Views;
+using MarkView.Avalonia;
 using MarkView.Avalonia.Rendering.Inlines;
 using ReactiveUI.Reactive;
 using static Capacitor.App.Tests.Unit.AvaloniaSession;
+using static Capacitor.App.Tests.Unit.MarkdownViewHarness;
 
 namespace Capacitor.App.Tests.Unit;
 
 public class MarkdownViewTests {
-    static (Window Window, Control Root, List<string> Opened) Show(string markdown) {
-        var opened = new List<string>();
-        ICommand open = ReactiveCommand.Create<string>(opened.Add);
-        var view = new MarkdownView { Text = markdown, OpenLink = open, Width = 400 };
-        var window = new Window { Content = view, Width = 500, Height = 400 };
-        window.Show();
-        Dispatcher.UIThread.RunJobs();
-        window.UpdateLayout();
-        return (window, view, opened);
-    }
-
     static (Window Window, Control Root, List<string> Opened, List<string> Ran) ShowRunnable(string markdown) {
         var opened = new List<string>();
         var ran = new List<string>();
@@ -44,8 +33,6 @@ public class MarkdownViewTests {
         window.UpdateLayout();
         return (window, view, opened, ran);
     }
-
-    static IEnumerable<T> All<T>(Visual root) where T : Visual => root.GetVisualDescendants().OfType<T>();
 
     static List<Panel> Hosts(Visual root) => All<Panel>(root).Where(p => p.Classes.Contains("markdown-code-host")).ToList();
 
@@ -77,21 +64,6 @@ public class MarkdownViewTests {
         Dispatcher.UIThread.RunJobs();
     }
 
-    static IEnumerable<TextBlock> Paragraphs(Visual root) => All<TextBlock>(root).Where(t => t.Classes.Contains("markdown-paragraph"));
-
-    /// A text block built from inlines leaves Text null and carries its characters on the
-    /// inline collection, so a "what does this block read as" assertion has to consult both.
-    static string Reads(TextBlock block) => block.Text ?? block.Inlines?.Text ?? "";
-
-    static IEnumerable<T> Spans<T>(InlineCollection inlines) where T : Inline {
-        foreach (var inline in inlines) {
-            if (inline is T t) yield return t;
-            if (inline is Span span) foreach (var nested in Spans<T>(span.Inlines)) yield return nested;
-        }
-    }
-
-    static IEnumerable<MarkdownHyperlink> Links(Visual root) => Paragraphs(root).SelectMany(p => Spans<MarkdownHyperlink>(p.Inlines!));
-
     /// Pins the block map: emphasis and code spans as inlines, fenced code, bullets, a quote and
     /// a rule, each carrying the style class the app's theme keys on.
     [Test]
@@ -115,6 +87,28 @@ public class MarkdownViewTests {
         });
     }
 
+    /// Pins long-line readability in a code block: the viewer's horizontal scrollbar is off, so a
+    /// line wider than the column must wrap onto multiple visual lines instead of clipping at the
+    /// right border, while copying still hands back the single logical line.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_long_line_in_a_code_block_wraps_instead_of_clipping() {
+        await RunOnUiAsync(async () => {
+            const string line = "chat shows:    Your instructions for this session are in the file /Users/example/.config/kcap/daemons/state/prompts/prompt.md";
+            var (window, root, _, _) = ShowRunnable($"```\n{line}\n```");
+            try {
+                var border = All<Border>(root).Single(b => b.Classes.Contains("markdown-code-block"));
+                var code = All<TextBlock>(border).Single();
+                await Assert.That(code.TextWrapping).IsEqualTo(TextWrapping.Wrap);
+                await Assert.That(code.TextLayout.TextLines.Count).IsGreaterThan(1);
+
+                Click(window, Reveal(window, Hosts(root)[0], "markdown-code-copy"));
+                var clipboard = TopLevel.GetTopLevel(root)!.Clipboard!;
+                await Assert.That(await clipboard.TryGetTextAsync()).IsEqualTo(line);
+            } finally { window.Close(); }
+        });
+    }
+
     /// Pins the link affordance: a policy-approved link is an inline hyperlink that opens through
     /// the command on a pointer click, never through a self-navigating control.
     [Test]
@@ -126,14 +120,11 @@ public class MarkdownViewTests {
                 var link = Links(root).Single();
                 await Assert.That(link.NavigateUri?.ToString()).IsEqualTo("https://example.com/docs");
                 await Assert.That(All<Button>(root)).IsEmpty();
+                await Assert.That(ReferenceEquals(link.Foreground, window.FindResource("KcapInfoBrush"))).IsTrue()
+                    .Because("links are info blue; green is a status colour");
 
                 var paragraph = Paragraphs(root).Single();
-                var glyph = paragraph.TextLayout.HitTestTextPosition("See ".Length);
-                var point = paragraph.TranslatePoint(new Point(glyph.X + paragraph.Padding.Left + 2, glyph.Y + paragraph.Padding.Top + glyph.Height / 2), window)!.Value;
-                window.MouseMove(point);
-                window.MouseDown(point, MouseButton.Left);
-                window.MouseUp(point, MouseButton.Left);
-                Dispatcher.UIThread.RunJobs();
+                ClickAt(window, paragraph, "See ".Length);
                 await Assert.That(opened).IsEquivalentTo(new[] { "https://example.com/docs" });
             } finally { window.Close(); }
         });
@@ -490,6 +481,176 @@ public class MarkdownViewTests {
             try {
                 await Assert.That(Actions(Hosts(root)[0], "markdown-code-copy").Count).IsEqualTo(1);
                 await Assert.That(Actions(Hosts(root)[0], "markdown-code-run")).IsEmpty();
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins the cost of the binding order every chat row lands in: the command arriving after the
+    /// text adds the run offer to the strip already on screen, not a second build of the document.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_run_command_set_after_the_text_does_not_render_the_document_again() {
+        await RunOnUiAsync(async () => {
+            var view = new MarkdownView { Text = "```bash\n! kcap agent ls\n```\n\nSome prose.", Width = 400 };
+            var window = new Window { Content = view, Width = 500, Height = 400 };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            try {
+                var viewer = Viewer(view);
+                var renders = 0;
+                using var _ = MarkdownViewer.MarkdownProperty.Changed.Subscribe(e => {
+                    if (ReferenceEquals(e.Sender, viewer) && e.NewValue.GetValueOrDefault() is not null) renders++;
+                });
+                var prose = Paragraphs(view).Single();
+
+                view.RunCode = ReactiveCommand.Create<string>(_ => { });
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+
+                await Assert.That(renders).IsEqualTo(0);
+                await Assert.That(Paragraphs(view).Single()).IsSameReferenceAs(prose);
+                await Assert.That(Actions(Hosts(view)[0], "markdown-code-run").Count).IsEqualTo(1);
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins the reverse move: a command withdrawn from the view takes the run offer with it, and
+    /// the document on screen is still the one that was built.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_run_command_withdrawn_takes_the_offer_without_rendering_again() {
+        await RunOnUiAsync(async () => {
+            var (window, root, _, _) = ShowRunnable("```bash\n! kcap agent ls\n```\n\nSome prose.");
+            try {
+                var viewer = Viewer(root);
+                var renders = 0;
+                using var _ = MarkdownViewer.MarkdownProperty.Changed.Subscribe(e => {
+                    if (ReferenceEquals(e.Sender, viewer) && e.NewValue.GetValueOrDefault() is not null) renders++;
+                });
+                var prose = Paragraphs(root).Single();
+
+                ((MarkdownView)root).RunCode = null;
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+
+                await Assert.That(renders).IsEqualTo(0);
+                await Assert.That(Paragraphs(root).Single()).IsSameReferenceAs(prose);
+                await Assert.That(Actions(Hosts(root)[0], "markdown-code-run")).IsEmpty();
+                await Assert.That(Actions(Hosts(root)[0], "markdown-code-copy").Count).IsEqualTo(1);
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins the prompt's subset: emphasis, strikethrough, code, lists, quotes and a bare URL
+    /// render, and nothing else markdown would read into typed text does — a heading, a rule, a
+    /// setext underline, HTML, an entity, link syntax, an indented block or a backslash escape.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_prompt_renders_only_what_someone_types_on_purpose() {
+        await RunOnUiAsync(async () => {
+            var typed = "C:\\Users\\me\\.config \\*\n# not a heading\nunderlined\n---\n***\n&amp; <b>x</b> [label](l.example)\n    indented\n**bold** *em* ~~struck~~ `code` https://u.example\n\n```\nvar x = 1;\n```\n\n- one\n\n> quoted";
+            var (window, root, opened) = Show(typed, MarkdownFlavor.Prompt);
+            try {
+                var paragraph = Paragraphs(root).First();
+                await Assert.That(Reads(paragraph).ReplaceLineEndings("\n")).IsEqualTo(string.Join('\n',
+                    @"C:\Users\me\.config \*", "# not a heading", "underlined", "---", "***",
+                    "&amp; <b>x</b> [label](l.example)", "indented", "bold em struck code https://u.example"));
+                await Assert.That(Spans<Bold>(paragraph.Inlines!).Count()).IsEqualTo(1);
+                await Assert.That(Spans<Italic>(paragraph.Inlines!).Count()).IsEqualTo(1);
+                await Assert.That(Spans<Run>(paragraph.Inlines!).Any(r => r.Text == "code" && r.Classes.Contains("markdown-code-inline"))).IsTrue();
+                await Assert.That(Spans<MarkdownHyperlink>(paragraph.Inlines!).Select(l => l.NavigateUri!.ToString()))
+                    .IsEquivalentTo(["https://u.example/"]);
+                await Assert.That(All<Separator>(root).Any(s => s.Classes.Contains("markdown-thematic-break"))).IsFalse();
+                var code = All<Border>(root).Single(b => b.Classes.Contains("markdown-code-block"));
+                await Assert.That(Reads(All<TextBlock>(code).Single())).IsEqualTo("var x = 1;");
+                await Assert.That(All<TextBlock>(root).Count(t => t.Classes.Contains("markdown-list-marker") && t.Text == "•")).IsEqualTo(1);
+                var quote = All<Border>(root).Single(b => b.Classes.Contains("markdown-blockquote"));
+                await Assert.That(Paragraphs(quote).Select(Reads)).IsEquivalentTo(["quoted"]);
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins that a prompt keeps its line breaks and its runs of blank lines, where chat joins the
+    /// lines of a paragraph and collapses blank lines to one paragraph gap.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_prompt_keeps_its_newlines_and_blank_lines() {
+        await RunOnUiAsync(async () => {
+            const string typed = "one\ntwo\n\n\n\nthree";
+            var (window, root, _) = Show(typed, MarkdownFlavor.Prompt);
+            try {
+                await Assert.That(Reads(Paragraphs(root).Single()).ReplaceLineEndings("\n")).IsEqualTo(typed);
+            } finally { window.Close(); }
+
+            (window, root, _) = Show(typed);
+            try {
+                await Assert.That(string.Join('|', Paragraphs(root).Select(Reads))).IsEqualTo("one two|three");
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins the paragraph's last line for a code span that crosses a newline: the blank line after
+    /// it is counted from where the span ends, not from the line it starts on.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_prompt_counts_blank_lines_after_a_code_span_that_crosses_a_line() {
+        await RunOnUiAsync(async () => {
+            var (window, root, _) = Show("`x\ny`\n\nz", MarkdownFlavor.Prompt);
+            try {
+                await Assert.That(Reads(Paragraphs(root).Single()).ReplaceLineEndings("\n")).IsEqualTo("x y\n\nz");
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins that a rule standing on its own line stays text: Markdig's list parser opens one itself,
+    /// apart from the thematic break parser the prompt leaves out.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_prompt_shows_a_standalone_rule_as_typed() {
+        await RunOnUiAsync(async () => {
+            const string typed = "---\n\n- - -\n\n***\n\n___";
+            var (window, root, _) = Show(typed, MarkdownFlavor.Prompt);
+            try {
+                await Assert.That(All<Separator>(root).Any(s => s.Classes.Contains("markdown-thematic-break"))).IsFalse();
+                await Assert.That(Reads(Paragraphs(root).Single()).ReplaceLineEndings("\n")).IsEqualTo(typed);
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins the degrade for text Markdig refuses to parse (128 nested quotes): the source as plain
+    /// text, in either flavor, and the next parseable text renders as markdown again.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(MarkdownFlavor.Chat)]
+    [Arguments(MarkdownFlavor.GitHub)]
+    public async Task Text_too_deeply_nested_to_parse_shows_as_plain_text(MarkdownFlavor flavor) {
+        await RunOnUiAsync(async () => {
+            var deep = string.Concat(Enumerable.Repeat("> ", 128)) + "x";
+            var (window, root, _) = Show(deep, flavor);
+            try {
+                var view = (MarkdownView)root;
+                await Assert.That(All<MarkdownViewer>(root)).IsEmpty();
+                await Assert.That(All<TextBlock>(root).Select(Reads)).IsEquivalentTo([deep]);
+                var clipboard = TopLevel.GetTopLevel(view)!.Clipboard!;
+                All<SelectableTextBlock>(root).Single().Focus();
+                view.SelectAll();
+                await Assert.That(view.HasSelection).IsTrue();
+                await clipboard.SetTextAsync("stale");
+                var copy = Application.Current!.PlatformSettings!.HotkeyConfiguration.Copy[0];
+                window.KeyPressQwerty(PhysicalKey.C, (RawInputModifiers)copy.KeyModifiers);
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(await clipboard.TryGetTextAsync()).IsEqualTo(deep);
+
+                await clipboard.SetTextAsync("stale");
+                await view.CopySelectionAsync();
+                await Assert.That(await clipboard.TryGetTextAsync()).IsEqualTo(deep);
+
+                view.Flavor = flavor == MarkdownFlavor.Chat ? MarkdownFlavor.GitHub : MarkdownFlavor.Chat;
+                view.Text = "**bold**";
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+                await Assert.That(Spans<Bold>(Paragraphs(root).Single().Inlines!).Count()).IsEqualTo(1);
             } finally { window.Close(); }
         });
     }

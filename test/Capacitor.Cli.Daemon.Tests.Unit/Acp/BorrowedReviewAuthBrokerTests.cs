@@ -320,11 +320,10 @@ public class BorrowedReviewAuthBrokerTests {
     }
 
     /// <summary>
-    /// Enough to prove the pipe keeps being drained — a pipe buffer is 64 KiB, so a writer that
-    /// nobody reads blocks long before this — without spending so much of the machine that the
-    /// elapsed-time assertions below race whatever else the suite is running.
+    /// Past a pipe buffer (64 KiB), so a writer nobody reads blocks, and small enough that a
+    /// drained pipe still finishes inside the command timeout on a loaded runner.
     /// </summary>
-    const int FloodBytes = 4 * 1024 * 1024;
+    const int FloodBytes = 256 * 1024;
 
     static (string? Result, TimeSpan Elapsed) Timed(Func<string?> run) {
         var started = DateTime.UtcNow;

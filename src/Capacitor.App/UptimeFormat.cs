@@ -1,6 +1,6 @@
 namespace Capacitor.App;
 
-/// Compact agent-uptime text (spec §8): seconds-only under a minute, minutes-only under an hour,
+/// Compact agent-uptime text: seconds-only under a minute, minutes-only under an hour,
 /// hours+minutes under a day, days+hours at or above a day. A zero remainder in a two-unit bucket
 /// drops the second unit ("2h", not "2h 0m"). Negative input (clock skew, or CreatedAt landing a
 /// tick in the future) clamps to "0s" rather than printing a negative or garbage string.

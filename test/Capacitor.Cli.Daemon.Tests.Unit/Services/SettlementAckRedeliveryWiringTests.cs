@@ -51,6 +51,7 @@ public class SettlementAckRedeliveryWiringTests {
 
         // The POST-REGISTER hook (fires with IsReady == true) is where re-delivery is wired.
         await server.OnRegisteredHook!.Invoke();
+        await WaitHarness.PollUntilAsync(() => server.Acks.Count > proactive);
         await Assert.That(server.Acks.Count).IsEqualTo(proactive + 1);
         await Assert.That(server.Acks[^1].Seq).IsEqualTo(1L);
         await Assert.That(server.Acks[^1].State).IsEqualTo(CommandAckState.Processed);

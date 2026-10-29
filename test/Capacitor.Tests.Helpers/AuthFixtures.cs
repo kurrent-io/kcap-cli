@@ -38,13 +38,13 @@ public static class AuthFixtures {
             Func<IReadOnlyList<AuthIdentity>, CancellationToken, Task>? beforeCommit  = null,
             Func<CancellationToken, Task<WorkOSAuthResponse?>>?         workosLogin   = null,
             IBrowser?                                                   workosBrowser = null,
-            string?                                                     workosApiBase = null,
             IBrowserLauncher?                                           browser       = null,
             // A facade that is off unless a test hands one in, like every other collaborator
             // defaulted here: a test that does not observe telemetry must not have to name it, and
             // one that does gets an empty sink rather than a silent pass if it forgets.
             CliTelemetry?                                               telemetry     = null,
-            TimeProvider?                                               time          = null) {
+            TimeProvider?                                               time          = null,
+            Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>>? probe = null) {
         var factory = new PlainHttpClientFactory(handler);
         var clock   = time ?? TimeProvider.System;
 
@@ -55,9 +55,9 @@ public static class AuthFixtures {
                 progress, browser ?? new RecordingBrowser(),
                 picker ?? Substitute.For<ITenantPicker>(), provisioner,
                 telemetry ?? CliTelemetry.Disabled(clock), AuthEndpoints.Defaults, clock, beforeCommit) {
-            WorkOSOrglessLogin    = workosLogin,
-            WorkOSBrowser         = workosBrowser,
-            WorkOSApiBaseOverride = workosApiBase
+            WorkOSOrglessLogin = workosLogin,
+            WorkOSBrowser      = workosBrowser,
+            ProbeWorkspace     = probe
         };
     }
 

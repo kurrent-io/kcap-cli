@@ -1,0 +1,62 @@
+kcap muse-assistant — Record Muse Assistant chats
+
+Usage: kcap muse-assistant ingest <dir>
+       kcap muse-assistant scope add --chat <id> (--after-seq <seq> | --empty-chat | --include-history)
+       kcap muse-assistant scope remove --chat <id>
+       kcap muse-assistant scope reset
+       kcap muse-assistant scope show
+       kcap muse-assistant sweep
+
+Runs inside a Muse Assistant VM, driven by Muse: the kcap-recording skill
+runs `scope` in the turn where the user grants or withdraws recording, and a
+15-minute cron pages each granted chat with chat.read_messages into a fresh
+directory and runs `ingest` on it. Only user, assistant and commentary items
+are recorded, as private sessions owned by the signed-in kcap user; developer
+items are never sent. A new session starts after a gap of two hours or more; an
+idle session is closed once 2 h 30 m have passed by the time the walk was fetched.
+
+ingest <dir>   One walk of one chat: manifest.json plus page-000.json, page-001.json, …
+               in walk order, each page a complete chat.read_messages result and the
+               manifest naming the cursor each page was fetched with. Validated whole
+               before anything is posted; the per-chat watermark advances only after
+               the server accepts each call, so a rerun resends nothing and loses nothing.
+               The directory is never deleted here — the cron deletes it on exit 0.
+scope add      Grant one chat: --after-seq <seq> records items newer than the newest
+               seq read in the granting turn, --empty-chat every future item of a chat
+               with none yet (refused when re-granting a stopped chat that already has recorded
+               items), --include-history the whole chat (for a chat recorded before, back to
+               where its recording last stopped). Idempotent; a request whose boundary
+               differs from an active grant's exits 2 and changes nothing.
+scope remove   Withdraw a chat: revokes its grant, sends nothing further and attempts to close its
+               open session; if that post fails it exits 1 and `sweep` delivers it. A chat whose
+               state file is unreadable, malformed or belongs to another account is unlisted
+               and the file is renamed to <chat_key>.json.unusable-<epoch ms> (kept, never
+               read again); that run exits 3, and `scope add` then grants the chat afresh.
+               A listed chat whose state file is missing is unlisted and exits 3 as well:
+               a session it had open may stay open.
+scope reset    Withdraw every chat. A state file it cannot use is set aside as `scope remove`
+               does, and a listed chat with no state file is unlisted; either exits 3.
+scope show     Every chat with its status, boundary, watermark and open session.
+sweep          Replay interrupted lifecycle posts, reconcile the files, and print one
+               line per active chat for the cron:
+               key=<chat_key> watermark=<n|none> boundary=<…> after_seq=<n|none> chat=<id>
+               A listed chat with no usable state is named on stderr as `no usable state …
+               chat=<id>` and makes it exit 3 — or 1 when a lifecycle post also failed, so
+               read those lines whatever the exit code. Missing state: `scope remove`, then
+               `scope add`. An unreadable or mismatched file: the same two commands, since
+               `scope remove` sets the file aside.
+
+Exit codes: 0 done or nothing to do (also: another ingest holds the chat);
+            1 server, network or sign-in failure (a 401 means `kcap login --device`),
+              or an unexpected local failure such as a state file that cannot be written;
+            2 malformed or incomplete input, or a wrong argument shape;
+            3 chat not in scope, revoked, no grant recorded, or state from another
+              tenant or account (sweep: a listed chat is in that condition, unless a
+              failed lifecycle post makes it 1; scope reset: a state file was set
+              aside, unless a failed lifecycle post makes it 1);
+            4 scope remove or scope reset only: recording could not be confirmed
+              stopped (nothing revoked, or an unexpected error) — retry; retrying
+              is safe.
+
+State: ~/.config/kcap/muse-assistant/<sha256(server\nuser)>/ — scope.json, one
+<sha256(chat_id)>.json per chat, and the lock files beside them.

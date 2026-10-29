@@ -56,6 +56,23 @@ but no `summary.json`. Design consequence recorded in the spec: for Gemini, "spa
 "agent dead", and any kill must be process-tree-wide (the daemon's `AcpChildProcess` already kills
 the tree; the probe did not).
 
+## Re-probe: gemini 0.64.0 (2026-10-19)
+
+Run with the process-group kill (`os.killpg`, which covers Gemini's self-re-exec) and Vertex auth
+(`KCAP_PROBE_GCP_PROJECT` must name a project with billing enabled; location defaults to `global`).
+Two runs, the same result; the second is archived as `gemini-0.64.0-summary.json`.
+
+- **Crash persistence now works.** Turns A/B/C end `end_turn` with real output; after a mid-turn
+  SIGKILL of the whole group, a fresh process's `session/load` succeeds and replays the history,
+  and the post-load prompt works.
+- **The barrier does not hold.** The `session/load` response arrives after the first replayed
+  update; the rest of the replay follows it (`after_response_conversation`: 9 and 11, against 0 for
+  Cursor and Copilot). gemini-cli's `loadSession` starts `streamHistory` without awaiting it —
+  reported upstream as google-gemini/gemini-cli#29707, fix proposed in #29708.
+
+Gemini stays ineligible until a release carries that fix and this probe shows
+`after_response_conversation: 0` on it; enabling then needs that release as a version floor.
+
 ## Conclusions
 
 1. No vendor implements the `messageId` MAY → the streaming-preserving per-envelope dedup (AI-689

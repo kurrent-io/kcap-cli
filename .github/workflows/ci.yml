@@ -2,10 +2,9 @@ name: CI
 
 on:
   pull_request:
-    # Skip markdown-only PRs, EXCEPT under kcap/ — every file in the shipped plugin is a SKILL.md, so
-    # adding a skill is a markdown-only change. Ignoring those let two skills ship unlisted in
-    # AgentsSkillsInstaller.SourceNames without a red build; the guard that now catches it only helps
-    # if it runs on the PR that causes it. Order matters: later patterns re-include.
+    # Skip markdown-only PRs, except under kcap/: every file in the shipped plugin is a SKILL.md, so
+    # adding a skill is a markdown-only change, and the guard that catches an unlisted skill must
+    # run on the PR that adds it. Order matters: later patterns re-include.
     paths:
       - '**'
       - '!**.md'
@@ -35,17 +34,22 @@ jobs:
       matrix:
         include:
           - { os: ubuntu-latest,  modules: 3, tests: 4 }
-          - { os: macos-latest,   modules: 3, tests: 4 }
-          # Narrower, because this is the leg that loses the wall-clock budgets inside the code under
-          # test: at three-by-four it spent a 20s service-readiness budget and a 1s memory-fetch
-          # budget with nothing actually slow, and each one reads as a product failure.
+          - { os: getmac,         modules: 3, tests: 4 }
+          # Narrower: at three-by-four this leg spent a 20s service-readiness budget and a 1s
+          # memory-fetch budget inside the code under test with nothing actually slow.
           - { os: windows-latest, modules: 2, tests: 2 }
 
     steps:
       - uses: actions/checkout@v7
 
+      # GetMac VMs leave TMPDIR empty, and dotnet's named mutexes then fail on first run. The suite's
+      # socket paths need a short, symlink-free root, so not runner.temp.
+      - name: Set TMPDIR
+        if: runner.os == 'macOS'
+        run: '[ -n "${TMPDIR:-}" ] || echo "TMPDIR=/private/tmp" >> "$GITHUB_ENV"'
+
       - name: Setup .NET
-        uses: actions/setup-dotnet@v6
+        uses: ./.github/actions/setup-dotnet
         with:
           cache: true
           # No lock file to key on; CPM makes this the one file that pins every version.
@@ -59,10 +63,8 @@ jobs:
       - name: Build solution
         run: dotnet build Capacitor.slnx --no-restore
 
+      # Plain-Node assertion scripts, no framework or npm install. Bash gives -e on every leg.
       - name: Run npm wrapper tests
-        # Plain-Node assertion scripts for the npm launcher/refresh/resolve
-        # modules (no test framework, no npm install). `shell: bash` gives
-        # fail-fast -e semantics on every matrix leg.
         shell: bash
         run: |
           node npm/kcap/bin/kcap.test.js
@@ -73,23 +75,38 @@ jobs:
         if: runner.os == 'Linux'
         run: bash scripts/run-shell-tests.sh
 
+      # The runner has no user manager until lingering is on, and the local server's live service test
+      # needs one to load its unit.
+      - name: Start a systemd user session
+        if: runner.os == 'Linux'
+        run: |
+          sudo loginctl enable-linger "$USER"
+          uid=$(id -u)
+          for _ in $(seq 30); do [ -S "/run/user/$uid/bus" ] && break; sleep 1; done
+          [ -S "/run/user/$uid/bus" ] || { echo "no systemd user bus at /run/user/$uid/bus" >&2; exit 1; }
+          echo "XDG_RUNTIME_DIR=/run/user/$uid" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" >> "$GITHUB_ENV"
+
       - name: Run tests
+        env:
+          # The live launchd/systemd test loads a uniquely named unit; a disposable runner is the place for it.
+          KCAP_LOCAL_SERVICE_CHECK: ${{ runner.os != 'Windows' && '1' || '' }}
         # Assemblies and per-assembly width are per-leg, above: the ceiling is what the runner can
-        # carry without the wall-clock budgets inside the code under test expiring. Five modules was
-        # measured to starve those and to vanish an Integration test's temp working directory on
-        # Linux — a cross-assembly sharing point no in-assembly [NotInParallel] key can serialise.
-        # A keyed [NotInParallel] test still runs concurrently with every disjoint-key class, so
-        # anything touching process-global state must hold the SAME key as every other toucher. A
-        # width this narrow surfaces a missing key less readily than a dev machine does, where the
-        # default is four times the core count.
+        # carry without the wall-clock budgets inside the code under test expiring. Five modules
+        # starved those and vanished an Integration test's temp working directory on Linux, a
+        # cross-assembly sharing point no in-assembly [NotInParallel] key can serialise. A keyed
+        # [NotInParallel] test still runs concurrently with every disjoint-key class, so anything
+        # touching process-global state must hold the same key as every other toucher.
+        # --hangdump writes a mini dump after 10m with no test-host activity.
         run: >
           dotnet test --solution Capacitor.slnx --no-build
           --max-parallel-test-modules ${{ matrix.modules }}
           -- --maximum-parallel-tests ${{ matrix.tests }}
+          --hangdump --hangdump-timeout 10m --hangdump-type Mini
 
       # Kept on success too: the console prints nothing between banner and summary, so these are the
-      # only per-test timing record. File kinds and not the directory — upload-artifact roots the
-      # archive at the common ancestor of its paths — which also excludes the TRX attachment folder,
+      # only per-test timing record. File kinds and not the directory: upload-artifact roots the
+      # archive at the common ancestor of its paths, and this also skips the TRX attachment folder,
       # a second copy of the HTML report.
       #
       # continue-on-error: a diagnostic must never decide whether the tests passed. An artifact-service
@@ -104,6 +121,8 @@ jobs:
             TestResults/*.html
             TestResults/*.trx
             TestResults/*.tunit-report.json
+            TestResults/*.dmp
+            TestResults/*hang*
           retention-days: 3
           if-no-files-found: ignore
 
@@ -115,142 +134,73 @@ jobs:
       - name: Check for Linear issue ID tokens in src/**/*.cs and test/**/*.cs
         run: bash scripts/check-linear-ids.sh
 
-  aot-check:
-    name: AOT publish check
+  # One version for the daemon, the CLI, the app and the package, so the app's CLI floor assertion
+  # and Velopack's SemVer check see the same value.
+  version:
+    name: Version
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        project:
-          - src/Capacitor.Cli/Capacitor.Cli.csproj
-          - src/Capacitor.Cli.Daemon/Capacitor.Cli.Daemon.csproj
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v6
-        with:
-          cache: true
-          # No lock file to key on; CPM makes this the one file that pins every version.
-          cache-dependency-path: Directory.Packages.props
-
-      - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
-
-      # Whole solution, and the RID pulls ILCompiler — a superset of build-and-test's set.
-      - name: Restore solution
-        run: dotnet restore Capacitor.slnx -r linux-x64
-
-      - name: Publish AOT (linux-x64)
-        run: dotnet publish ${{ matrix.project }} -c Release -r linux-x64 --no-restore
-
-      - name: Check for trimming warnings
-        run: |
-          OUTPUT=$(dotnet publish ${{ matrix.project }} -c Release -r linux-x64 --no-restore 2>&1)
-          if echo "$OUTPUT" | grep -E 'IL[23][01][0-9]{2}'; then
-            echo "::error::AOT/trimming warnings detected"
-            echo "$OUTPUT" | grep -E 'IL[23][01][0-9]{2}'
-            exit 1
-          fi
-
-  app-bundle:
-    name: App bundle (osx-arm64)
-    runs-on: macos-latest
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
     env:
-      # vpk and minver-cli are framework-dependent global tools built for an older runtime
-      # than the .NET 10 SDK global.json pins and setup-dotnet installs.
+      # minver-cli is a framework-dependent global tool built for an older runtime than the pinned SDK.
       DOTNET_ROLL_FORWARD: Major
     steps:
-      # Full history and tags: MinVer derives the version from the nearest tag, and the app
-      # refuses a bundled CLI below its floor — a shallow checkout would compute a below-floor
-      # default version and fail the assertion below on every PR.
+      # Full history and tags: MinVer derives the version from the nearest tag, and a shallow checkout
+      # computes a default below the app's CLI floor.
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v6
+        uses: ./.github/actions/setup-dotnet
 
-      - name: Install tools
-        run: |
-          dotnet tool install -g minver-cli --version 8.0.0
-          dotnet tool install -g vpk --version 1.2.0
+      - name: Install minver
+        run: dotnet tool install -g minver-cli --version 8.0.0
 
-      # One version for the daemon, the CLI, the app and the package, so the floor assertion and
-      # Velopack's SemVer check see the same value. The standalone tool does not read
-      # MinVerTagPrefix from Directory.Build.props, hence the explicit prefix.
+      # The standalone tool does not read MinVerTagPrefix from Directory.Build.props.
       - name: Compute version
         id: version
-        shell: bash
         run: |
           set -euo pipefail
           FULL="$(minver --tag-prefix v)"
           echo "VERSION=${FULL%%+*}" >> "$GITHUB_OUTPUT"
           echo "computed $FULL"
 
-      - name: Publish daemon
-        run: >
-          dotnet publish src/Capacitor.Cli.Daemon/Capacitor.Cli.Daemon.csproj -c Release -r osx-arm64
-          -p:MinVerVersionOverride=${{ steps.version.outputs.VERSION }} -o publish/daemon/
+  cli:
+    name: CLI
+    needs: version
+    uses: ./.github/workflows/cli-build.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      # macOS runners are the org's scarcest pool, so PRs skip the macOS CLI and app. Pushes keep
+      # building both, because release waits on the tag's run.
+      rids: ${{ github.event_name == 'push' && 'osx-arm64 win-x64 linux-x64' || 'win-x64 linux-x64' }}
 
-      - name: Compute daemon digest
-        id: daemon-digest
-        shell: bash
+  desktop:
+    name: Desktop
+    needs: [version, cli]
+    strategy:
+      fail-fast: false
+      matrix:
+        rid: ${{ github.event_name == 'push' && fromJSON('["osx-arm64","win-x64","linux-x64"]') || fromJSON('["win-x64","linux-x64"]') }}
+    uses: ./.github/workflows/desktop.yml
+    with:
+      rid: ${{ matrix.rid }}
+      version: ${{ needs.version.outputs.version }}
+
+  # The one check the release waits on, so renaming or adding a job above never needs a matching
+  # change there.
+  ci-passed:
+    name: CI passed
+    if: always()
+    needs: [build-and-test, lint-linear-ids, cli, desktop]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every job to succeed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
-          set -euo pipefail
-          source scripts/lib/hash.sh
-          DIGEST="$(sha256_of publish/daemon/kcap-daemon)"
-          echo "DIGEST=$DIGEST" >> "$GITHUB_OUTPUT"
-          echo "$DIGEST" > publish/daemon.sha256
-
-      - name: Publish CLI
-        run: >
-          dotnet publish src/Capacitor.Cli/Capacitor.Cli.csproj -c Release -r osx-arm64
-          -p:MinVerVersionOverride=${{ steps.version.outputs.VERSION }}
-          -p:KcapDaemonDigest=${{ steps.daemon-digest.outputs.DIGEST }} -o publish/cli/
-
-      - name: Publish app
-        run: >
-          dotnet publish src/Capacitor.App/Capacitor.App.csproj -c Release -r osx-arm64 --self-contained
-          -p:MinVerVersionOverride=${{ steps.version.outputs.VERSION }} -o publish/app/
-
-      - name: Assemble pack directory
-        shell: bash
-        run: |
-          set -euo pipefail
-          cp publish/cli/kcap publish/daemon/kcap-daemon publish/daemon/libpty_shim.dylib publish/app/
-          chmod +x publish/app/kcap publish/app/kcap-daemon "publish/app/Kurrent Capacitor"
-          bash scripts/render-info-plist.sh "${{ steps.version.outputs.VERSION }}" publish/Info.plist
-
-      - name: Pack (unsigned)
-        shell: bash
-        run: >
-          vpk pack --packId KurrentCapacitor --packVersion "${{ steps.version.outputs.VERSION }}"
-          --packTitle "Kurrent Capacitor" --packAuthors Kurrent --mainExe "Kurrent Capacitor"
-          --packDir publish/app --plist publish/Info.plist --icon src/Capacitor.App/Assets/kcap-icon.icns
-          --channel osx-arm64 --noInst --outputDir releases
-
-      - name: Assert the bundle
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p extracted
-          ditto -x -k releases/KurrentCapacitor-osx-arm64-Portable.zip extracted
-          APP="extracted/Kurrent Capacitor.app"
-          bash scripts/assert-app-cli-version.sh "$APP/Contents/MacOS/kcap" "${{ steps.version.outputs.VERSION }}"
-          bash scripts/assert-bundle-digest.sh "$APP" publish/daemon.sha256
-          "$APP/Contents/MacOS/kcap" --version --no-update-check
-          "$APP/Contents/MacOS/kcap-daemon" --version
-          # Pins the manifest field names the alias-promotion script depends on. Captured rather
-          # than piped: grep -q closes the pipe at its first match, and a stable candidate prints a
-          # second line after it.
-          aliases="$(bash scripts/promote-desktop-aliases.sh releases/releases.osx-arm64.json "${{ steps.version.outputs.VERSION }}")"
-          grep -qx beta <<<"$aliases"
-
-      - name: Upload unsigned bundle
-        uses: actions/upload-artifact@v7
-        with:
-          name: app-osx-arm64-unsigned
-          path: releases/KurrentCapacitor-osx-arm64-Portable.zip
+          for result in $RESULTS; do
+            [ "$result" = success ] || { echo "::error::a CI job ended $result"; exit 1; }
+          done

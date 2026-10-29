@@ -15,41 +15,53 @@ public sealed class WorkContextPartViewModel(string title, WorkContextPartMark m
     public WorkContextPartMark Mark { get; } = mark;
     public bool IsSettled => Mark == WorkContextPartMark.Settled;
     public bool IsThisSession => Mark == WorkContextPartMark.ThisSession;
+    /// Purple is location (this session), green is settled — tip names the mark so colour is not alone.
+    public string MarkTip => Mark switch {
+        WorkContextPartMark.Settled => "Completed — settled on this work item.",
+        WorkContextPartMark.ThisSession => "In progress in this session.",
+        _ => "Not yet settled.",
+    };
 }
 
 /// A pull-request or issue card. The URL is server-returned, so it crosses the same trust boundary
 /// the chat tab applies before a link reaches the shell opener.
 public sealed class WorkContextLinkViewModel {
-    public string  Eyebrow { get; }
-    public string  Key     { get; }
-    public string  Title   { get; }
-    public string? Url     { get; }
-    public bool    CanOpen { get; }
+    public string  Eyebrow  { get; }
+    public string  Key      { get; }
+    public string  Title    { get; }
+    public string? Url      { get; }
+    /// Server kind/provider/value when projected from a work-item link; empty for legacy PR cards.
+    public string  Identity { get; }
+    public bool    CanOpen  { get; }
+    public string  AccessibleName => Title.Length == 0 ? Key : $"{Key}: {Title}";
     public ReactiveCommand<Unit, Unit> OpenCommand { get; }
 
-    public WorkContextLinkViewModel(string eyebrow, string key, string title, string? url, IUrlOpener opener) {
-        Eyebrow = eyebrow;
-        Key     = key;
-        Title   = title;
-        Url     = url;
-        CanOpen = LinkPolicy.IsOpenable(url);
+    public WorkContextLinkViewModel(string eyebrow, string key, string title, string? url, IUrlOpener opener, string identity = "") {
+        Eyebrow  = eyebrow;
+        Key      = key;
+        Title    = title;
+        Url      = url;
+        Identity = identity;
+        CanOpen  = LinkPolicy.IsOpenable(url);
         OpenCommand = ReactiveCommand.Create(() => LinkPolicy.Open(opener, url), Observable.Return(CanOpen));
     }
 }
 
-/// One person with a session attached to the work item. <see cref="AvatarUrl"/> is carried but not
-/// loaded: the pane draws the initial.
+/// One person with a session attached to the work item. The pane draws <see cref="Initial"/> beneath
+/// <see cref="AvatarUrl"/>, so a missing or failed picture shows the letter.
 public sealed class WorkContextPersonViewModel {
     public string  Name             { get; }
     public string  Initial          { get; }
     public string? AvatarUrl        { get; }
     public string  LastActivityText { get; }
+    public string  UserId           { get; }
 
-    public WorkContextPersonViewModel(string name, string? avatarUrl, DateTimeOffset? lastActivityAt, DateTimeOffset now) {
+    public WorkContextPersonViewModel(string name, string? avatarUrl, DateTimeOffset? lastActivityAt, DateTimeOffset now, string userId = "") {
         Name             = name;
         Initial          = InitialOf(name);
         AvatarUrl        = avatarUrl;
         LastActivityText = lastActivityAt is { } at ? RelativeTime.Format(at, now) : "";
+        UserId           = userId;
     }
 
     /// The first text element, so a surrogate pair or a combining sequence stays whole.

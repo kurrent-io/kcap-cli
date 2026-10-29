@@ -33,6 +33,10 @@ public sealed record AgentInstanceDto {
     [JsonPropertyName("approval_policy")]   public string? ApprovalPolicy { get; init; }
     [JsonPropertyName("daemon_name")]       public string? DaemonName { get; init; }
     [JsonPropertyName("permission_preset")] public string? PermissionPreset { get; init; }
+    [JsonPropertyName("account_directory")] public string? AccountDirectory { get; init; }
+    [JsonPropertyName("account_id")]        public string? AccountId { get; init; }
+    [JsonPropertyName("account_label")]     public string? AccountLabel { get; init; }
+    [JsonPropertyName("terminal_dialog")]   public AgentTerminalDialog? TerminalDialog { get; init; }
     [JsonPropertyName("title")]             public string? Title { get; init; }
 }
 

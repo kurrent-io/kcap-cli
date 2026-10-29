@@ -83,6 +83,97 @@ public class UnixPtyProcessSpawnTests {
         }
     }
 
+    /// <summary>A leader that ignores SIGTERM is only stopped by the SIGKILL fallback, and Terminate
+    /// must return with it reaped: a disposed runtime never checks again, so a leader still unreaped
+    /// at that point stays a zombie for the daemon's lifetime.</summary>
+    [Test]
+    public async Task Terminate_reaps_a_leader_that_only_the_kill_fallback_stops() {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
+
+        using var spawner = new UnixSpawnerThread();
+        var       factory = new UnixPtyProcessFactory(spawner, TimeProvider.System);
+        var proc = factory.Spawn(
+            "/bin/sh", ["-c", "trap '' TERM; echo \"CHILD:$$:DONE\"; while :; do sleep 1; done"],
+            AppContext.BaseDirectory);
+        try {
+            await Assert.That(await ReadReportedChildPidAsync(proc)).IsEqualTo(proc.Pid);
+
+            await proc.TerminateAsync(TimeSpan.FromMilliseconds(300));
+
+            // HasExited is set only when the runtime's own waitpid returned the leader, so it means
+            // reaped. Waiting on the pid again could steal a recycled pid from another test's child.
+            await Assert.That(proc.HasExited).IsTrue();
+        } finally {
+            await proc.DisposeAsync();
+        }
+    }
+
+    /// <summary>A spawned child that nothing came to own has to go down with its whole group. The
+    /// helper ignores SIGHUP, so closing the master alone leaves it running — only the group kill
+    /// reaches it.</summary>
+    [Test]
+    public async Task Abandoning_a_spawned_child_kills_its_whole_group_and_reaps_the_leader() {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
+
+        using var spawner = new UnixSpawnerThread();
+
+        var rc = UnixPtyInterop.pty_preflight(
+            "/bin/sh", ["sh", "-c", "(trap '' HUP; exec /bin/sleep 300) & echo \"CHILD:$!:DONE\"; wait", null],
+            [null], UnixPtyInterop.pty_probe_execveat(), out var plan);
+        await Assert.That(rc).IsEqualTo(0);
+
+        var result = spawner.SpawnOn(plan, [null], AppContext.BaseDirectory, 40, 120, Environment.ProcessId, -1);
+        UnixPtyInterop.pty_plan_free(ref plan);
+        await Assert.That(result.FailedStep).IsEqualTo(0);
+
+        var helperPid      = -1;
+        var helperIdentity = "";
+
+        try {
+            helperPid = ReadReportedChildPid(result.MasterFd);
+            await Assert.That(helperPid).IsGreaterThan(0);
+            helperIdentity = PidIdentity.Capture(helperPid);
+
+            UnixPtyProcess.Abandon(result.MasterFd, result.Pid);
+
+            // Reaped means no longer this process's child, which is what ECHILD says.
+            await Assert.That(UnixPtyInterop.waitpid(result.Pid, out _, UnixPtyInterop.WNOHANG)).IsEqualTo(-1);
+            await PidIdentity.WaitUntilGoneAsync(helperPid, helperIdentity, TimeSpan.FromSeconds(5));
+        } finally {
+            // Only while the leader is still this process's unreaped child is its pid — and so its
+            // group id — provably its own.
+            if (UnixPtyInterop.waitpid(result.Pid, out _, UnixPtyInterop.WNOHANG) == 0) {
+                UnixPtyInterop.kill(-result.Pid, UnixPtyInterop.SIGKILL);
+                UnixPtyInterop.waitpid(result.Pid, out _, 0);
+            }
+
+            if (helperPid > 0 && !PidIdentity.IsGone(helperPid, helperIdentity))
+                UnixPtyInterop.kill(helperPid, UnixPtyInterop.SIGKILL);
+        }
+    }
+
+    /// <summary>The raw-fd twin of <see cref="ReadReportedChildPidAsync"/>, for a child no
+    /// <see cref="UnixPtyProcess"/> owns.</summary>
+    static int ReadReportedChildPid(int masterFd) {
+        var buffer  = new System.Text.StringBuilder();
+        var chunk   = new byte[256];
+        var pfd     = new UnixPtyInterop.PollFd { fd = masterFd, events = UnixPtyInterop.POLLIN };
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+
+        while (System.Diagnostics.Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(10)) {
+            if (UnixPtyInterop.poll(ref pfd, 1, 200) <= 0 || (pfd.revents & UnixPtyInterop.POLLIN) == 0) continue;
+
+            var read = (int)UnixPtyInterop.read(masterFd, chunk, chunk.Length);
+            if (read <= 0) break;
+
+            buffer.Append(System.Text.Encoding.UTF8.GetString(chunk, 0, read));
+            var match = System.Text.RegularExpressions.Regex.Match(buffer.ToString(), @"CHILD:(\d+):DONE");
+            if (match.Success) return int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture);
+        }
+
+        return -1;
+    }
+
     /// <summary>Reads PTY output until the leader reports its backgrounded child as
     /// <c>CHILD:{pid}:DONE</c>. The trailing marker matters: without it a chunk boundary could
     /// split the digits and a prefix of the pid would parse as a (wrong, possibly live) pid.</summary>

@@ -3,6 +3,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.LocalEdition;
 using Microsoft.Extensions.DependencyInjection;
 using Capacitor.Cli.PrDetection;
 
@@ -19,18 +20,22 @@ public class SetupChosenServerTests {
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
-    SetupCommand Started(ProfileContext startup) {
+    [TempDir] public required TempDir Tmp { get; init; }
+
+    SetupCommand Started(ProfileContext startup, LocalRoot? local = null) {
         var factory = new PlainHttpClientFactory();
+        local ??= NoLocalInstallation.Root;
 
         return new SetupCommand(
             Config.Root, startup,
             AuthFixtures.NewTokenStore(Config.Root),
-            new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), new TenantProvisioningClient(new HttpClient()),
+            new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), new TenantProvisioningClient(new HttpClient(), ClientAgent.Cli),
             new AuthProviderDiscovery(factory, TimeProvider.System), NoTelemetry.Facade, AuthEndpoints.Defaults,
             new FakeFacadeFactory(_ => throw new InvalidOperationException("no façade in these tests")),
             FakeImportRunner.Succeeding(),
-            new ChosenServerHttp(Config.Root, startup, ProfileOverrides.None, MachineAuth.None), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), TimeProvider.System,
-            TestBinaries.None);
+            FakeBackgroundImportSpawner.Running(), FakeHandoffAgentLauncher.Ran(),
+            new ChosenServerHttp(Config.Root, startup, ProfileOverrides.None, MachineAuth.None, local), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), TimeProvider.System,
+            TestBinaries.None, TestAccounts.None, TestPluginEnvironment.For(Home, Home.PathTo("plugin")), local, FakeLocalInstallerFactory.Unused);
     }
 
     /// A first run: nothing resolved a server before the command started, which is the case that
@@ -67,5 +72,24 @@ public class SetupChosenServerTests {
         using var scoped = Started(startup).HttpForChosenServer("https://chosen.test");
 
         await Assert.That(scoped.GetRequiredService<CapacitorServer>().Profiles.Name).IsEqualTo(startup.Name);
+    }
+
+    /// <summary>Setup hands in contexts it built itself, after the installation exists; they must be
+    /// classified like any other, or a token left in the store is sent to a server that rejects it.</summary>
+    [Test]
+    public async Task A_context_setup_built_itself_is_classified_against_the_installation() {
+        var root = new LocalRoot(Tmp.CreateDir("local"));
+        root.EnsureCreated();
+        LocalStateFiles.PublishRegistry(root, InstallRegistry.Empty.WithActive(
+            new LocalInstallation("inst-1", 51234, "http://localhost:51234", "1.0.0")));
+
+        var built = new ProfileContext(new ResolvedProfile("http://127.0.0.1:51234", "default", null, null), new ProfileConfig());
+
+        using var scoped = Started(Resolutions.None(Config.Root), root).HttpForChosenServer("http://127.0.0.1:51234", built);
+
+        var server = scoped.GetRequiredService<CapacitorServer>();
+
+        await Assert.That(server.Profiles.Resolution.SendsNoBearer).IsTrue();
+        await Assert.That(server.Url).IsEqualTo("http://localhost:51234");
     }
 }

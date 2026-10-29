@@ -1,0 +1,10 @@
+using Capacitor.Cli.Core.Plans;
+
+namespace Capacitor.App.Services;
+
+/// One read of the plans a session works from, however the app reaches the server.
+public interface IPlanSource {
+    Task<SessionPlansRead> ReadAsync(string sessionId, CancellationToken ct);
+    /// The last read this viewer may still be shown, to fill a pane while it reads again.
+    SessionPlansRead? Cached(string sessionId);
+}

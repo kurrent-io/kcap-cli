@@ -226,11 +226,61 @@ public class CwdRemapperTests {
 
     [Test]
     public async Task Apply_matches_a_wildcard_head_written_with_the_other_separator() {
-        // A transcript recorded on Windows against a rule typed with '/': the
-        // head has to fail cleanly rather than half-match into the segment scan.
-        var rules  = new[] { R("/dev/repo/worktrees/*", "/dev/repo") };
-        var result = CwdRemapper.Apply(@"\dev\repo\worktrees\ai-1", rules, "/home/u", StringComparison.Ordinal);
-        await Assert.That(result).IsEqualTo(@"\dev\repo\worktrees\ai-1");
+        // A transcript recorded on Windows against a rule typed with '/'.
+        var rules  = new[] { R("C:/dev/repo/worktrees/*", "C:/dev/repo") };
+        var result = CwdRemapper.Apply(@"C:\dev\repo\worktrees\ai-1", rules, "/home/u", StringComparison.OrdinalIgnoreCase);
+        await Assert.That(result).IsEqualTo(@"C:\dev\repo");
+    }
+
+    [Test]
+    public async Task Apply_matches_a_literal_rule_written_with_the_other_separator() {
+        var rules  = new[] { R("~/dev/foo", "~/dev/bar") };
+        var result = CwdRemapper.Apply(@"C:\Users\u\dev\foo\src", rules, @"C:\Users\u", StringComparison.OrdinalIgnoreCase);
+        await Assert.That(result).IsEqualTo(@"C:\Users\u\dev\bar\src");
+    }
+
+    [Test]
+    public async Task Apply_leaves_a_backslash_in_to_alone_on_a_forward_slashed_cwd() {
+        // Off Windows '\' is a filename character, not a separator to rewrite.
+        var rules  = new[] { R("/dev/foo", @"/dev/odd\name") };
+        var result = CwdRemapper.Apply("/dev/foo/x", rules, "/home/u", StringComparison.Ordinal);
+        await Assert.That(result).IsEqualTo(@"/dev/odd\name/x");
+    }
+
+    [Test]
+    public async Task Apply_does_not_cross_a_boundary_written_with_the_other_separator() {
+        var rules  = new[] { R("C:/dev/foo", "C:/dev/bar") };
+        var result = CwdRemapper.Apply(@"C:\dev\foobar\x", rules, "/home/u", StringComparison.OrdinalIgnoreCase);
+        await Assert.That(result).IsEqualTo(@"C:\dev\foobar\x");
+    }
+
+    [Test]
+    public async Task Apply_matches_a_unc_cwd_against_a_rule_typed_with_slashes() {
+        var rules  = new[] { R("//server/share/old", "//server/share/new") };
+        var result = CwdRemapper.Apply(@"\\server\share\old\x", rules, "/home/u", StringComparison.OrdinalIgnoreCase);
+        await Assert.That(result).IsEqualTo(@"\\server\share\new\x");
+    }
+
+    // Off Windows '\' is a filename character: "team\project" is one directory, not two.
+    [Test]
+    public async Task Apply_does_not_read_a_posix_backslash_as_a_separator_inside_the_rule() {
+        var rules  = new[] { R("/tmp/team/project", "/dev/allowed") };
+        var result = CwdRemapper.Apply(@"/tmp/team\project", rules, "/home/u", StringComparison.Ordinal);
+        await Assert.That(result).IsEqualTo(@"/tmp/team\project");
+    }
+
+    [Test]
+    public async Task Apply_does_not_read_a_posix_backslash_as_a_boundary() {
+        var rules  = new[] { R("/tmp/team", "/dev/allowed") };
+        var result = CwdRemapper.Apply(@"/tmp/team\project", rules, "/home/u", StringComparison.Ordinal);
+        await Assert.That(result).IsEqualTo(@"/tmp/team\project");
+    }
+
+    [Test]
+    public async Task Apply_does_not_end_a_posix_wildcard_segment_at_a_backslash() {
+        var rules  = new[] { R("/tmp/worktrees/*", "/dev/repo") };
+        var result = CwdRemapper.Apply(@"/tmp/worktrees/a\b", rules, "/home/u", StringComparison.Ordinal);
+        await Assert.That(result).IsEqualTo("/dev/repo");
     }
 
     [Test]

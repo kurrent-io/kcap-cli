@@ -3,6 +3,7 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Time.Testing;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -32,7 +33,7 @@ public class CapacitorHttpContainerTests : IDisposable {
 
     public void Dispose() => _server.Stop();
 
-    ServiceProvider Container(string? serverUrl = null) {
+    ServiceProvider Container(string? serverUrl = null, TimeProvider? time = null) {
         var target   = serverUrl ?? Url;
         var services = new ServiceCollection();
 
@@ -43,6 +44,7 @@ public class CapacitorHttpContainerTests : IDisposable {
         services.AddSingleton(new CapacitorServer(target, Config.Root, profiles));
         // None so the credential source picks the token store — a machine credential wins over it,
         // and would mint against an endpoint no test here stubs.
+        if (time is not null) services.AddSingleton(time);
         services.AddCapacitorHttp(ProfileOverrides.None, MachineAuth.None);
 
         return services.BuildServiceProvider();
@@ -130,17 +132,84 @@ public class CapacitorHttpContainerTests : IDisposable {
     [Test]
     public async Task Setting_a_title_posts_the_session_id_beside_it() {
         StubProvider(AuthProvider.None);
-        _server.Given(Request.Create().WithPath("/hooks/set-title").UsingPost())
-            .RespondWith(Response.Create().WithStatusCode(200));
+        _server.Given(Request.Create().WithPath("/hooks/agent-title").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"applied":true,"title":"A better title"}"""));
 
         using var sp = Container();
 
-        await sp.GetRequiredService<ISessionsApi>().SetSessionTitleAsync("sess-3", "A better title");
+        var result = await sp.GetRequiredService<ISessionsApi>().SetSessionTitleAsync("sess-3", "A better title", rename: true);
 
-        var sent = RequestTo("/hooks/set-title").RequestMessage;
+        var sent = RequestTo("/hooks/agent-title").RequestMessage;
 
+        await Assert.That(result).IsTypeOf<SetTitleResult.Applied>();
         await Assert.That(sent.Method).IsEqualTo("POST");
-        await Assert.That(sent.Body).IsEqualTo("""{"session_id":"sess-3","title":"A better title"}""");
+        await Assert.That(sent.Body).IsEqualTo("""{"session_id":"sess-3","title":"A better title","rename":true}""");
+    }
+
+    [Test]
+    public async Task A_title_the_server_did_not_apply_carries_the_title_it_shows() {
+        StubProvider(AuthProvider.None);
+        _server.Given(Request.Create().WithPath("/hooks/agent-title").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"applied":false,"title":"Chosen at start"}"""));
+
+        using var sp = Container();
+
+        var result = await sp.GetRequiredService<ISessionsApi>().SetSessionTitleAsync("sess-3", "Mine", rename: false);
+
+        await Assert.That(result).IsEqualTo(new SetTitleResult.NotApplied("Chosen at start"));
+    }
+
+    [Test]
+    public async Task An_unreadable_title_answer_is_a_failure_rather_than_an_older_server() {
+        StubProvider(AuthProvider.None);
+        _server.Given(Request.Create().WithPath("/hooks/agent-title").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("ok"));
+
+        using var sp  = Container();
+        var       api = sp.GetRequiredService<ISessionsApi>();
+
+        await Assert.That(async () => await api.SetSessionTitleAsync("sess-3", "T", rename: true)).Throws<CapacitorApiException>();
+        await Assert.That(_server.FindLogEntries(Request.Create().WithPath("/hooks/set-title")).Count).IsEqualTo(0);
+    }
+
+    /// <summary>Only an uncoded 404 means a server without the route; a coded one is a refusal and is not retried
+    /// on the older route.</summary>
+    [Test]
+    public async Task A_coded_404_other_than_session_not_found_is_a_failure() {
+        StubProvider(AuthProvider.None);
+        _server.Given(Request.Create().WithPath("/hooks/agent-title").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(404).WithBody("""{"error":"something_else"}"""));
+
+        using var sp  = Container();
+        var       api = sp.GetRequiredService<ISessionsApi>();
+
+        var ex = await Assert.That(async () => await api.SetSessionTitleAsync("sess-3", "T", rename: true)).Throws<CapacitorApiException>();
+
+        await Assert.That(ex!.Status).IsEqualTo(404);
+        await Assert.That(_server.FindLogEntries(Request.Create().WithPath("/hooks/set-title")).Count).IsEqualTo(0);
+    }
+
+    /// <summary>A session titled on its first prompt can still be on its way into the read model the server checks
+    /// ownership against, so a coded 404 is asked again before it is final.</summary>
+    [Test]
+    public async Task A_session_the_server_cannot_see_yet_is_asked_again_before_it_is_not_found() {
+        StubProvider(AuthProvider.None);
+        _server.Given(Request.Create().WithPath("/hooks/agent-title").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(404).WithBody("""{"error":"session_not_found"}"""));
+
+        var time = new FakeTimeProvider();
+        using var sp = Container(time: time);
+
+        var request = sp.GetRequiredService<ISessionsApi>().SetSessionTitleAsync("sess-new", "T", rename: false);
+        using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!request.IsCompleted) {
+            await Task.Delay(10, guard.Token);
+            time.Advance(TimeSpan.FromSeconds(1));
+        }
+
+        await Assert.That(await request).IsTypeOf<SetTitleResult.SessionNotFound>();
+        await Assert.That(_server.FindLogEntries(Request.Create().WithPath("/hooks/agent-title")).Count).IsEqualTo(3);
+        await Assert.That(_server.FindLogEntries(Request.Create().WithPath("/hooks/set-title")).Count).IsEqualTo(0);
     }
 
     /// <summary>A session the server holds nothing for is an outcome, not a failure.</summary>
@@ -182,7 +251,7 @@ public class CapacitorHttpContainerTests : IDisposable {
         // No bearer is sent under the None provider, so there is nothing to rotate and the refusal
         // reaches the caller on the first attempt.
         StubProvider(AuthProvider.None);
-        _server.Given(Request.Create().WithPath("/hooks/set-title").UsingPost())
+        _server.Given(Request.Create().WithPath("/hooks/agent-title").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(401)
                 .WithHeader("Content-Type", "application/json")
                 .WithBody("""{"message":"Your seat was revoked. Ask an admin to re-invite you."}"""));
@@ -190,7 +259,7 @@ public class CapacitorHttpContainerTests : IDisposable {
         using var sp  = Container();
         var       api = sp.GetRequiredService<ISessionsApi>();
 
-        var ex = await Assert.That(async () => await api.SetSessionTitleAsync("sess-5", "t"))
+        var ex = await Assert.That(async () => await api.SetSessionTitleAsync("sess-5", "t", rename: true))
             .Throws<CapacitorApiException>();
 
         await Assert.That(ex!.Status).IsEqualTo(401);
@@ -199,18 +268,23 @@ public class CapacitorHttpContainerTests : IDisposable {
 
     /// <summary>
     /// A server that never answered is the same one exception with no status, so a caller needs no
-    /// second catch. Slow by construction: the whole 30s retry budget is spent before the transport
-    /// failure is final.
+    /// second catch. Drive the retry budget with fake time; the container and transport stay real.
     /// </summary>
     [Test]
     public async Task An_unreachable_server_throws_with_no_status_at_all() {
         const string dead = "http://127.0.0.1:1";
 
-        using var sp  = Container(dead);
+        var time = new FakeTimeProvider();
+        using var sp  = Container(dead, time);
         var       api = sp.GetRequiredService<ISessionsApi>();
 
-        var ex = await Assert.That(async () => await api.DeleteSessionAsync("sess-6"))
-            .Throws<CapacitorApiException>();
+        var request = api.DeleteSessionAsync("sess-6");
+        using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!request.IsCompleted) {
+            await Task.Delay(10, guard.Token);
+            time.Advance(TimeSpan.FromSeconds(1));
+        }
+        var ex = await Assert.That(async () => await request).Throws<CapacitorApiException>();
 
         await Assert.That(ex!.Status).IsNull();
         await Assert.That(ex.InnerException).IsTypeOf<HttpRequestException>();
@@ -734,6 +808,7 @@ public class CapacitorHttpContainerTests : IDisposable {
 
         await Assert.That(sp.GetService<TenantProvisioningClient>()).IsNotNull();
         await Assert.That(sp.GetService<ICapacitorHttpClient>()).IsNull();
+        await Assert.That(sp.GetService<ClientAgent>()).IsEqualTo(ClientAgent.Cli);
     }
 
     /// <summary>Our version tags are for our own server, and the signup control plane is not it.</summary>

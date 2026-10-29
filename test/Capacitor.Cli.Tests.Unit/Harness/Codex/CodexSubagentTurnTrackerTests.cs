@@ -121,7 +121,7 @@ public class CodexSubagentTurnTrackerTests {
         await Assert.That(Eligible(tracker)).IsTrue();
     }
 
-    // ── BackfillCodexWatcherStateAsync (resume recovery) ──────────────────
+    // ── CodexWatcherStateReplay (resume recovery) ──────────────────
     // A watcher resuming at the server watermark never sees the acknowledged prefix again, so
     // the backfill rebuilds from it what the drain can no longer deliver.
 
@@ -136,8 +136,8 @@ public class CodexSubagentTurnTrackerTests {
         await File.WriteAllLinesAsync(path, lines);
 
         var state = new WatchState();
-        await WatchCommand.BackfillCodexWatcherStateAsync(
-            state, path, isChildWatcher, upToLine ?? lines.Length, CancellationToken.None, TimeProvider.System);
+        await TranscriptReplay.ReplayAsync(
+            path, upToLine ?? lines.Length, [WatchCommand.CodexWatcherStateReplay(state, isChildWatcher)], CancellationToken.None, _ => { });
 
         return state;
     }
@@ -211,39 +211,14 @@ public class CodexSubagentTurnTrackerTests {
     public async Task Backfill_IgnoresACallOlderThanTheScanWindow() {
         using var tmp = new TempDir();
         var lines = new List<string> { FunctionCall };  // never resolved, then buried
-        lines.AddRange(Enumerable.Repeat(TokenCount, WatchCommand.ToolBackfillWindowLines + 10));
+        lines.AddRange(Enumerable.Repeat(TokenCount, TranscriptReplay.WindowLines + 10));
 
         var state = await BackfilledFrom(tmp, isChildWatcher: true, upToLine: null, [.. lines]);
 
         await Assert.That(state.PendingCodexToolCalls).IsEmpty();
     }
 
-    [Test]
-    public async Task Backfill_MissingFile_IsANoOp() {
-        var state = new WatchState();
 
-        await WatchCommand.BackfillCodexWatcherStateAsync(
-            state, "/nonexistent/rollout.jsonl", isChildWatcher: true, upToLine: 5, CancellationToken.None, time: TimeProvider.System);
-
-        await Assert.That(state.CodexSubagentTurn.TurnCompleted).IsFalse();
-        await Assert.That(state.PendingCodexToolCalls).IsEmpty();
-    }
-
-    [Test]
-    public async Task Backfill_ReturnsSilentlyWhenAlreadyCancelled() {
-        using var tmp = new TempDir();
-        var path = tmp.PathTo("rollout.jsonl");
-        await File.WriteAllLinesAsync(path, [FunctionCall]);
-
-        var       state     = new WatchState();
-        using var cancelled = new CancellationTokenSource();
-        await cancelled.CancelAsync();
-
-        await WatchCommand.BackfillCodexWatcherStateAsync(
-            state, path, isChildWatcher: true, upToLine: 1, cancelled.Token, time: TimeProvider.System);
-
-        await Assert.That(state.PendingCodexToolCalls).IsEmpty();
-    }
 
     // ── ResolveStopGrace ──────────────────────────────────────────────────
 

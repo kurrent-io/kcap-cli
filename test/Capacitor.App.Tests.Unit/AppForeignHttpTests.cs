@@ -31,6 +31,14 @@ public class AppForeignHttpTests {
         await Assert.That(sp.GetRequiredService<TenantProvisioningClient>()).IsNotNull();
     }
 
+    /// <summary>The desktop app's signups must reach kcap-web as Desktop, not as the CLI default.</summary>
+    [Test]
+    public async Task Signups_from_the_app_identify_as_the_desktop_app() {
+        using var sp = Build();
+
+        await Assert.That(sp.GetRequiredService<ClientAgent>()).IsEqualTo(ClientAgent.Desktop);
+    }
+
     /// <summary>
     /// The assumption the app rests on rather than states: the token store's refresh against our own
     /// server asks for a lane only <c>AddCapacitorHttp</c> registers, and this container does not

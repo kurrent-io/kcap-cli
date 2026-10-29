@@ -1,8 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
-using System.Text;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Harness.Antigravity;
-using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
 
 namespace Capacitor.Cli.Daemon.Harness.Pi;
@@ -73,6 +72,10 @@ internal interface IPiRpcProcess : IAsyncDisposable {
     /// <summary>Wait up to <paramref name="timeout"/> for the process to exit (returns silently on timeout).</summary>
     Task WaitForExitAsync(TimeSpan? timeout = null);
 
+    /// <summary>Closes the child's stdin, which Pi treats as the end of its session. Bounded by
+    /// <paramref name="timeout"/> when a write already holds stdin, and a no-op once closed.</summary>
+    Task CloseInputAsync(TimeSpan timeout);
+
     /// <summary>Terminate the process — an immediate kill of the whole process tree, matching
     /// <c>AgyTurnProcess</c> (not a graceful signal first) — within <paramref name="timeout"/>. Must
     /// be safe to call even after <see cref="IAsyncDisposable.DisposeAsync"/> has already run — see
@@ -109,8 +112,7 @@ internal sealed partial class PiRpcProcess : IPiRpcProcess {
     readonly TimeProvider            _time;
     readonly CancellationTokenSource _stderrDrainCts = new();
     readonly Task                    _stderrDrainTask;
-    readonly Lock                    _diagnosticsGate = new();
-    readonly StringBuilder           _diagnostics     = new();
+    readonly StderrHead              _diagnostics     = new(DiagnosticsCap);
     readonly SemaphoreSlim           _stdinGate       = new(1, 1);
 
     int _disposed;
@@ -155,7 +157,7 @@ internal sealed partial class PiRpcProcess : IPiRpcProcess {
     /// nothing. Read on a failed launch or an unexpected exit, to turn silence into a reason an
     /// operator can act on. Mirrors <c>AgyTurnProcess.Diagnostics</c>'s shape and naming.</summary>
     public string? Diagnostics {
-        get { lock (_diagnosticsGate) return _diagnostics.Length == 0 ? null : _diagnostics.ToString(); }
+        get => _diagnostics.Text;
     }
 
     /// <summary>This child's stdout, LF-framed, one JSONL line at a time, ending at EOF.</summary>
@@ -217,7 +219,7 @@ internal sealed partial class PiRpcProcess : IPiRpcProcess {
                 if (line is null) break;      // EOF — the child exited and closed the stream
                 if (line.Length == 0) continue;
 
-                Capture(line);
+                _diagnostics.Capture(line);
                 LogStderrShape(line.Length);
             }
         } catch (OperationCanceledException) {
@@ -226,14 +228,6 @@ internal sealed partial class PiRpcProcess : IPiRpcProcess {
             // Pipe torn down on teardown — expected.
         } catch (ObjectDisposedException) {
             // Stream disposed out from under the read — expected.
-        }
-    }
-
-    void Capture(string line) {
-        lock (_diagnosticsGate) {
-            if (_diagnostics.Length >= DiagnosticsCap) return;
-
-            _diagnostics.Append(line).Append('\n');
         }
     }
 
@@ -252,6 +246,28 @@ internal sealed partial class PiRpcProcess : IPiRpcProcess {
             }
         } catch {
             // Already exited or disposed — nothing left to wait for.
+        }
+    }
+
+    public async Task CloseInputAsync(TimeSpan timeout) {
+        if (IsDisposed) return;
+
+        bool acquired;
+
+        try {
+            acquired = await _stdinGate.WaitAsync(timeout).ConfigureAwait(false);
+        } catch {
+            return;
+        }
+
+        if (!acquired) return;
+
+        try {
+            if (!IsDisposed) _process.StandardInput.Close();
+        } catch {
+            // The child already exited, or its stdin is already gone.
+        } finally {
+            _stdinGate.Release();
         }
     }
 

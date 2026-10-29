@@ -1,7 +1,6 @@
 namespace Capacitor.App.Tests.Unit;
 
-/// UptimeFormat's bucket boundaries — the shared formatter behind SessionCardViewModel.Age and
-/// the rail rows' age sub-line.
+/// UptimeFormat's bucket boundaries — the formatter behind the rail rows' age sub-line.
 public class UptimeFormatTests {
     [Test]
     [Arguments(0, "0s")]

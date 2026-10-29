@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 namespace Capacitor.Cli.Core.Tests.Unit;
 
 public class AgentsSkillsInstallerTests {
-    static readonly string[] SourceNames = ["recap", "errors", "disable", "hide", "validate-plan", "review-flows", "agent-flows", "work-items", "plans", "guided-tour", "suggest-review-flow"];
+    static readonly string[] SourceNames = ["recap", "errors", "disable", "hide", "validate-plan", "review-flows", "agent-flows", "work-items", "plans", "guided-tour", "eval-watch", "start-agents", "connect-kcap", "pages", "worktrees"];
 
     [Test]
     public async Task Mirror_of_SourceNames_matches_the_installer() {
@@ -22,11 +22,13 @@ public class AgentsSkillsInstallerTests {
             .Where(d => File.Exists(Path.Combine(d, "SKILL.md")))
             .Select(Path.GetFileName)
             .OfType<string>()
+            // Retired paths may remain as explicit compatibility redirects for shared web links.
+            .Except(AgentsSkillsInstaller.RetiredSourceNames)
             .ToArray();
 
         await Assert.That(AgentsSkillsInstaller.SourceNames)
                     .IsEquivalentTo(shipped)
-                    .Because("every skill under kcap/skills/ must be listed in AgentsSkillsInstaller.SourceNames, "
+                    .Because("every non-retired skill under kcap/skills/ must be listed in AgentsSkillsInstaller.SourceNames, "
                            + "or it ships to users and reaches no agent. Add it there, and to help-plugin.txt.");
     }
 
@@ -219,6 +221,36 @@ public class AgentsSkillsInstallerTests {
         }
         await Assert.That(Directory.Exists(dst.PathTo("user-skill"))).IsTrue();
     }
+
+    [Test]
+    [Arguments("suggest-review-flow")]
+    [Arguments("connect-capacitor")]
+    public async Task Install_prunes_a_retired_skill_folder(string name) {
+        using var tmp    = new TempDir();
+        var       target = tmp.CreateDir("skills");
+        tmp.CreateFile($"skills/kcap-{name}/SKILL.md", "stale");
+
+        await Assert.That(AgentsSkillsInstaller.Install(RepoTree.SkillsSource(), target)).IsTrue();
+        await Assert.That(Directory.Exists(tmp.PathTo("skills", $"kcap-{name}"))).IsFalse();
+        await Assert.That(AgentsSkillsInstaller.HasSkill(target, "connect-kcap")).IsTrue();
+    }
+
+    [Test]
+    [Arguments("suggest-review-flow")]
+    [Arguments("connect-capacitor")]
+    public async Task Remove_also_removes_a_retired_skill_folder(string name) {
+        using var tmp    = new TempDir();
+        var       target = tmp.CreateDir("skills");
+        tmp.CreateFile($"skills/kcap-{name}/SKILL.md", "stale");
+
+        AgentsSkillsInstaller.Remove(target);
+
+        await Assert.That(Directory.Exists(tmp.PathTo("skills", $"kcap-{name}"))).IsFalse();
+    }
+
+    [Test]
+    public async Task A_retired_name_is_never_a_source_name() =>
+        await Assert.That(AgentsSkillsInstaller.RetiredSourceNames.Intersect(AgentsSkillsInstaller.SourceNames)).IsEmpty();
 
     [Test]
     public async Task Remove_returns_false_when_no_kcap_folders_present() {

@@ -9,21 +9,34 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Pi;
 
 /// <summary>
 /// Pi's hosted-launch invariants, asserted on the LAUNCH ARTIFACT — the
-/// <see cref="System.Diagnostics.ProcessStartInfo"/> <see cref="PiRpcHostedAgentRuntimeFactory.BuildPsi"/>
-/// actually produces — plus the factory's refusal ladder and DI registration.
+/// <see cref="System.Diagnostics.ProcessStartInfo"/>
+/// <see cref="PiRpcHostedAgentRuntimeFactory.BuildPsi(DaemonConfig, RuntimeStartContext)"/> actually
+/// produces — plus the factory's refusal ladder and DI registration.
 /// </summary>
 public class PiHostedLaunchTests {
     static RuntimeStartContext Ctx(
             string? model = null, string? prompt = "", bool isReview = false, bool isReviewFlow = false,
             WorkLocation work = WorkLocation.OwnedWorktree, string? serverUrl = "http://kcap.test",
-            string daemonId = "", string daemonEpoch = "") => new(
+            string daemonId = "", string daemonEpoch = "", string? resume = null) => new(
         AgentId: "agent-1", Vendor: "pi", SourceRepoPath: "/repo",
         Worktree: new WorktreeInfo(Path: "/abs/wt", Branch: "b", SourceRepo: "/repo"), Prompt: prompt,
         Model: model, Effort: null, Tools: null,
         IsReview: isReview, IsReviewFlow: isReviewFlow, Review: null,
         Cols: 80, Rows: 24,
         ServerUrl: serverUrl, DaemonBridgeUrl: null, CapacitorPath: "/usr/local/bin/kcap",
-        Work: work, DaemonId: daemonId, DaemonEpoch: daemonEpoch);
+        Work: work, DaemonId: daemonId, DaemonEpoch: daemonEpoch, ResumeSessionId: resume);
+
+    // ── BuildPsi: session markers ──
+
+    [Test]
+    public async Task BuildPsi_marks_a_participant_and_an_interactive_launch_by_kind() {
+        var participant = PiRpcHostedAgentRuntimeFactory.BuildPsi(new DaemonConfig(), Ctx(isReviewFlow: true) with { FlowRole = "reviewer" });
+        var interactive = PiRpcHostedAgentRuntimeFactory.BuildPsi(new DaemonConfig(), Ctx());
+
+        await Assert.That(participant.Environment["KCAP_SESSION_KIND"]).IsEqualTo("flow_participant");
+        await Assert.That(participant.Environment["KCAP_FLOW_ROLE"]).IsEqualTo("reviewer");
+        await Assert.That(interactive.Environment["KCAP_SESSION_KIND"]).IsEqualTo("hosted_agent");
+    }
 
     // ── BuildPsi: argv ──
 
@@ -32,6 +45,20 @@ public class PiHostedLaunchTests {
         var psi = PiRpcHostedAgentRuntimeFactory.BuildPsi(new DaemonConfig(), Ctx());
 
         await Assert.That(string.Join(" ", psi.ArgumentList)).IsEqualTo("--mode rpc");
+    }
+
+    [Test]
+    public async Task BuildPsi_with_resume_appends_session_after_mode_rpc() {
+        var psi = PiRpcHostedAgentRuntimeFactory.BuildPsi(new DaemonConfig(), Ctx(resume: "sess-1"));
+
+        await Assert.That(string.Join(" ", psi.ArgumentList)).IsEqualTo("--mode rpc --session sess-1");
+    }
+
+    [Test]
+    public async Task The_factory_supports_restart_resume() {
+        var factory = new PiRpcHostedAgentRuntimeFactory(new DaemonConfig(), NullLoggerFactory.Instance, TimeProvider.System);
+
+        await Assert.That(factory.SupportsRestartResume(null)).IsTrue();
     }
 
     [Test]
@@ -88,11 +115,18 @@ public class PiHostedLaunchTests {
     }
 
     [Test]
-    public async Task BuildPsi_OmitsDaemonIdAndEpoch_WhenContextCarriesNone() {
+    [NotInParallel]
+    public async Task BuildPsi_PassesInheritedDaemonIdAndEpochThrough_WhenContextCarriesNone() {
+        // The values must be seeded: with nothing inherited, a dropped variable would match.
+        using var id    = EnvScope.Exclusive("KCAP_DAEMON_ID", "inherited-id");
+        using var epoch = EnvScope.Exclusive("KCAP_DAEMON_EPOCH", "inherited-epoch");
+
         var psi = PiRpcHostedAgentRuntimeFactory.BuildPsi(new DaemonConfig(), Ctx(daemonId: "", daemonEpoch: ""));
 
-        await Assert.That(psi.Environment.ContainsKey("KCAP_DAEMON_ID")).IsFalse();
-        await Assert.That(psi.Environment.ContainsKey("KCAP_DAEMON_EPOCH")).IsFalse();
+        await Assert.That(psi.Environment.TryGetValue("KCAP_DAEMON_ID", out var actualId) ? actualId : null)
+            .IsEqualTo("inherited-id");
+        await Assert.That(psi.Environment.TryGetValue("KCAP_DAEMON_EPOCH", out var actualEpoch) ? actualEpoch : null)
+            .IsEqualTo("inherited-epoch");
     }
 
     [Test]
@@ -183,30 +217,6 @@ public class PiHostedLaunchTests {
     }
 
     [Test]
-    public async Task SupportsUnattended_IsFalse_InPr1() {
-        var factory = new PiRpcHostedAgentRuntimeFactory(new DaemonConfig(), NullLoggerFactory.Instance, TimeProvider.System);
-
-        await Assert.That(factory.SupportsUnattended).IsFalse();
-    }
-
-    [Test]
-    public async Task DescribeUnattendedSupport_WithheldReasonIsNull_PiNeverClaimedUnattendedSupport() {
-        // WithheldReason is reserved for a vendor this daemon's OWN config is refusing to offer —
-        // Pi simply doesn't support it yet, so the default IHostedAgentRuntimeFactory implementation
-        // (no override here) must report null, not a reason. A prior revision's override reported a
-        // non-null reason, which made every daemon with pi installed log a false "restart to enable"
-        // operator instruction at boot.
-        IHostedAgentRuntimeFactory factory = new PiRpcHostedAgentRuntimeFactory(new DaemonConfig(), NullLoggerFactory.Instance, TimeProvider.System);
-
-        // A default interface member is only reachable through the interface type — there is no
-        // override on the concrete class to call directly, which is the whole point of this fix.
-        var support = factory.DescribeUnattendedSupport();
-
-        await Assert.That(support.Supported).IsFalse();
-        await Assert.That(support.WithheldReason).IsNull();
-    }
-
-    [Test]
     public async Task SupportsModelSelection_IsTrue() {
         var factory = new PiRpcHostedAgentRuntimeFactory(new DaemonConfig(), NullLoggerFactory.Instance, TimeProvider.System);
 
@@ -226,19 +236,6 @@ public class PiHostedLaunchTests {
             () => factory.StartAsync(Ctx(isReview: true), CancellationToken.None));
 
         await Assert.That(ex!.Message).Contains("pi_pr_review_unsupported");
-    }
-
-    [Test]
-    public async Task StartAsync_RefusesAReviewFlowLaunch() {
-        var factory = new PiRpcHostedAgentRuntimeFactory(
-            new DaemonConfig(), NullLoggerFactory.Instance,
-            TimeProvider.System,
-            processSource: (_, _) => throw new InvalidOperationException("must not spawn"));
-
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => factory.StartAsync(Ctx(isReviewFlow: true), CancellationToken.None));
-
-        await Assert.That(ex!.Message).Contains("pi_reviewer_not_implemented");
     }
 
     [Test]
@@ -287,6 +284,7 @@ public class PiHostedLaunchTests {
 
         public Task WaitForExitAsync(TimeSpan? timeout = null) => Task.CompletedTask;
         public Task TerminateAsync(TimeSpan? timeout = null)   => Task.CompletedTask;
+        public Task CloseInputAsync(TimeSpan timeout)          => Task.CompletedTask;
         public ValueTask DisposeAsync()                        => ValueTask.CompletedTask;
     }
 
@@ -342,6 +340,7 @@ public class PiHostedLaunchTests {
         public Task WriteLineAsync(string json, CancellationToken ct) => Task.CompletedTask;
         public Task WaitForExitAsync(TimeSpan? timeout = null)        => Task.CompletedTask;
         public Task TerminateAsync(TimeSpan? timeout = null)          => Task.CompletedTask;
+        public Task CloseInputAsync(TimeSpan timeout)                 => Task.CompletedTask;
 
         public ValueTask DisposeAsync() {
             Disposed = true;

@@ -6,15 +6,13 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
 
-/// Renders ONE lifecycle prompt (spec §6 dialogs) — no queue, unlike ConsentPromptViewModel:
-/// LifecycleSurface's own SemaphoreSlim(1,1) already serializes ConfirmAsync calls one at a time,
-/// so at most one of these is ever live at once. Accept/Decline resolve the caller's
-/// TaskCompletionSource directly (constructor-injected, same shape the Task 21 interim window's
-/// button handlers used) and then fire CloseRequested so the window can close itself — the same
-/// split ConsentPromptWindow uses for its own CloseRequested subscription.
+/// Renders ONE lifecycle prompt — no queue, unlike ConsentPromptViewModel: LifecycleSurface's own
+/// SemaphoreSlim(1,1) already serializes ConfirmAsync calls, so at most one of these is ever live
+/// at once. Accept/Decline resolve the caller's constructor-injected TaskCompletionSource directly
+/// and then fire CloseRequested so the window can close itself.
 public sealed class LifecyclePromptViewModel : ReactiveObject {
-    // Decision-7 disclosure (spec §3.6, §4.1): the terminal PATH could not be determined, so a
-    // unit-writing mutation may not match the user's shell PATH.
+    // The terminal PATH could not be determined, so a unit-writing mutation may not match the
+    // user's shell PATH.
     const string DegradedPathSentence =
         "The terminal PATH could not be determined — the reinstalled service may not match your shell's PATH.";
 
@@ -24,18 +22,32 @@ public sealed class LifecyclePromptViewModel : ReactiveObject {
     public string Disclosure { get; }
     public bool PathDegraded { get; }
 
+    /// Null collapses the warning box.
+    public string? Warning { get; }
+
     /// False for the acknowledge-only kinds (quarantine, update info).
     public bool ShowDeclineButton { get; }
 
     public string AcceptButtonText { get; }
+
+    /// Removing a profile or uninstalling cannot be undone, so Accept is styled as destructive and
+    /// Enter does not press it.
+    public bool AcceptIsDestructive { get; }
 
     /// Null when PathDegraded is false — bound with StringConverters.IsNotNullOrEmpty so the
     /// degraded-PATH line collapses instead of reserving dead space (ConsentPromptWindow's same
     /// pattern for its countdown/phase lines).
     public string? DegradedPathText => PathDegraded ? DegradedPathSentence : null;
 
-    /// Fires once, on Accept or Decline — the window closes itself on this (spec §6); the
-    /// ViewModel owns no window.
+    /// Set only for an update-ready prompt, whose DaemonVersion carries the candidate and
+    /// CliVersion the installed build; other kinds use the two fields for daemon and CLI.
+    public string? InstalledVersion { get; }
+    public string? UpdateVersion { get; }
+    public bool ShowVersionChange => UpdateVersion is not null;
+    public bool ShowInstalledVersion => InstalledVersion is not null;
+
+    /// Fires once, on Accept or Decline — the window closes itself on this; the ViewModel owns no
+    /// window.
     public IObservable<Unit> CloseRequested => _closeRequested.AsObservable();
 
     public ReactiveCommand<Unit, Unit> AcceptCommand { get; }
@@ -45,14 +57,26 @@ public sealed class LifecyclePromptViewModel : ReactiveObject {
         Title             = TitleFor(prompt.Kind);
         Disclosure        = prompt.Disclosure;
         PathDegraded      = prompt.PathDegraded;
+        Warning           = prompt.Warning;
+        // The body text does not repeat the candidate, so it shows even without an installed version.
+        if (prompt is { Kind: LifecyclePrompt.KindUpdateReady, DaemonVersion: { } next }) {
+            UpdateVersion    = next;
+            InstalledVersion = prompt.CliVersion;
+        }
         ShowDeclineButton = prompt.Kind is not (LifecyclePrompt.KindQuarantine or LifecyclePrompt.KindUpdateInfo);
         AcceptButtonText  = prompt.Kind switch {
-            LifecyclePrompt.KindQuarantine  => "Acknowledge",
-            LifecyclePrompt.KindUpdateInfo  => "OK",
-            LifecyclePrompt.KindUpdateReady => "Restart now",
-            LifecyclePrompt.KindRename      => "Rename and restart",
-            _                               => "Continue",
+            LifecyclePrompt.KindQuarantine     => "Acknowledge",
+            LifecyclePrompt.KindUpdateInfo     => "Dismiss",
+            LifecyclePrompt.KindReloadService  => "Reload now",
+            LifecyclePrompt.KindUpdateReady    => "Restart now",
+            LifecyclePrompt.KindRename         => "Rename and restart",
+            LifecyclePrompt.KindRemoveProfile  => "Remove",
+            LifecyclePrompt.KindSetup          => "Restart and continue",
+            LifecyclePrompt.KindUninstall      => "Uninstall",
+            _                                  => "Continue",
         };
+
+        AcceptIsDestructive = prompt.Kind is LifecyclePrompt.KindRemoveProfile or LifecyclePrompt.KindUninstall;
 
         AcceptCommand  = ReactiveCommand.Create(() => Resolve(tcs, true));
         DeclineCommand = ReactiveCommand.Create(() => Resolve(tcs, false));
@@ -60,8 +84,7 @@ public sealed class LifecyclePromptViewModel : ReactiveObject {
 
     void Resolve(TaskCompletionSource<bool> tcs, bool result) {
         // TrySetResult, not SetResult: a window closed via the titlebar/Esc after ct already
-        // cancelled it (WireDialogCancellation, carried forward from Task 21) may have already
-        // resolved this tcs — a click landing on the same beat must be a silent no-op, not a
+        // cancelled it (WireDialogCancellation) may have already resolved this tcs — a click landing on the same beat must be a silent no-op, not a
         // throw.
         tcs.TrySetResult(result);
         _closeRequested.OnNext(Unit.Default);
@@ -73,7 +96,13 @@ public sealed class LifecyclePromptViewModel : ReactiveObject {
         LifecyclePrompt.KindQuarantine    => "Corrupted consent claims file",
         LifecyclePrompt.KindUpdateReady   => "Update ready",
         LifecyclePrompt.KindUpdateInfo    => "Software update",
+        LifecyclePrompt.KindReloadService => "Reload the daemon service",
         LifecyclePrompt.KindRename        => "Rename daemon",
+        LifecyclePrompt.KindRemoveProfile => "Remove profile",
+        LifecyclePrompt.KindSetup         => "Reopen setup",
+        LifecyclePrompt.KindUninstall     => "Uninstall kcap",
+        LifecyclePrompt.KindWindowsService       => "Run kcap as a Windows service",
+        LifecyclePrompt.KindWindowsServiceUpdate => "Update the kcap Windows service",
         _                                 => "Repair daemon service", // KindRepair and any future kind
     };
 }

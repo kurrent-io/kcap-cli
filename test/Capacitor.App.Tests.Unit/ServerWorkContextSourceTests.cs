@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core.Auth;
 using System.Net;
+using Microsoft.Extensions.Time.Testing;
 using System.Text;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
@@ -22,6 +23,7 @@ public class ServerWorkContextSourceTests {
         public readonly Queue<TaskCompletionSource> Gates = new();
         public int Sent;
         public bool Disposed;
+        public readonly List<string> Paths = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
             Interlocked.Increment(ref Sent);
@@ -29,7 +31,10 @@ public class ServerWorkContextSourceTests {
             lock (Gates) gate = Gates.Count > 0 ? Gates.Dequeue() : null;
             if (gate is not null) await gate.Task.WaitAsync(ct);
             var path = request.RequestUri!.AbsolutePath;
-            var body = path.Contains("/summary", StringComparison.Ordinal) ? """{"session_id":"s","repositories":[],"pull_requests":[]}""" : "[]";
+            lock (Paths) Paths.Add(path);
+            var body = path.Contains("/summary", StringComparison.Ordinal) ? """{"session_id":"s","repositories":[],"pull_requests":[]}"""
+                : path.EndsWith("/identity", StringComparison.Ordinal) ? """{"user_id":"user_a","avatar_url":"https://example.test/a.png","ids":["user_a"]}"""
+                : "[]";
             return new HttpResponseMessage(Status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
         }
 
@@ -42,13 +47,15 @@ public class ServerWorkContextSourceTests {
     static ProfileContext Profiles(ConfigRoot config) => Resolutions.At("http://server.test", config);
 
     static (ServerWorkContextSource Source, List<ScriptedHandler> Handlers) Build(
-            ConfigRoot config, ProfileContext? profiles, Func<AuthStatus>? status = null) {
+            ConfigRoot config, ProfileContext? profiles, Func<AuthStatus>? status = null, Action<ScriptedHandler>? created = null,
+            TimeProvider? time = null) {
         var handlers = new List<ScriptedHandler>();
         var source = new ServerWorkContextSource(config, profiles, ProfileOverrides.None, MachineAuth.None, (_, _, _, _) => {
             var handler = new ScriptedHandler();
+            created?.Invoke(handler);
             handlers.Add(handler);
             return Task.FromResult((new HttpClient(handler), status?.Invoke() ?? AuthStatus.Ok));
-        });
+        }, time);
         return (source, handlers);
     }
 
@@ -60,6 +67,66 @@ public class ServerWorkContextSourceTests {
 
         await Assert.That(read.Kind).IsEqualTo(WorkContextReadKind.SignedOut);
         await Assert.That(handlers).IsEmpty();
+        await source.DisposeAsync();
+    }
+
+    [Test]
+    public async Task The_viewer_is_asked_once_per_credential_and_carried_on_every_read() {
+        var (source, handlers) = Build(Config.Root, Profiles(Config.Root));
+
+        var first  = await source.ReadAsync(Session, CancellationToken.None);
+        var second = await source.ReadAsync(Session, CancellationToken.None);
+        source.InvalidateAuthentication();
+        await source.ReadAsync(Session, CancellationToken.None);
+
+        await Assert.That(first.Viewer!.AvatarUrl).IsEqualTo("https://example.test/a.png");
+        await Assert.That(second.Viewer!.AvatarUrl).IsEqualTo("https://example.test/a.png");
+        var asked = handlers.Sum(h => h.Paths.Count(p => p == "/api/users/me/identity"));
+        await Assert.That(asked).IsEqualTo(2);
+        await Assert.That(source.Cached(Session)!.Viewer!.AvatarUrl).IsEqualTo("https://example.test/a.png");
+        await source.DisposeAsync();
+    }
+
+    /// A token the recovery handler swaps in moves no generation, so only the lifetime brings the
+    /// identity back into question.
+    [Test]
+    public async Task A_settled_viewer_is_asked_again_once_its_lifetime_passes() {
+        var time = new FakeTimeProvider();
+        var (source, handlers) = Build(Config.Root, Profiles(Config.Root), time: time);
+        int Asked() => handlers.Sum(h => h.Paths.Count(p => p == "/api/users/me/identity"));
+
+        await source.ReadAsync(Session, CancellationToken.None);
+        time.Advance(ServerWorkContextSource.ViewerLifetime - TimeSpan.FromSeconds(1));
+        await source.ReadAsync(Session, CancellationToken.None);
+        await Assert.That(Asked()).IsEqualTo(1);
+
+        time.Advance(TimeSpan.FromSeconds(1));
+        await source.ReadAsync(Session, CancellationToken.None);
+        await Assert.That(Asked()).IsEqualTo(2);
+        await source.DisposeAsync();
+    }
+
+    /// The read parks all three requests before the credential changes, so its identity answer
+    /// arrives under a retired credential and must neither be served nor spare the next read its ask.
+    [Test]
+    public async Task A_viewer_read_under_a_retired_credential_settles_nothing() {
+        var gates = new[] { new TaskCompletionSource(), new TaskCompletionSource(), new TaskCompletionSource() };
+        var (source, handlers) = Build(Config.Root, Profiles(Config.Root), created: h => {
+            if (gates.Any(g => !g.Task.IsCompleted)) foreach (var gate in gates) h.Gates.Enqueue(gate);
+        });
+        var stale = source.ReadAsync(Session, CancellationToken.None);
+        await WorkspaceFixtures.WaitUntilAsync(
+            () => handlers.Count == 1 && handlers[0].Gates.Count == 0,
+            what: "the stale read's three requests parked on their gates");
+        source.InvalidateAuthentication();
+        foreach (var gate in gates) gate.SetResult();
+
+        var staleRead = await stale;
+        var next = await source.ReadAsync(Session, CancellationToken.None);
+
+        await Assert.That(staleRead.Viewer).IsNull();
+        await Assert.That(next.Viewer).IsNotNull();
+        await Assert.That(handlers[1].Paths).Contains("/api/users/me/identity");
         await source.DisposeAsync();
     }
 

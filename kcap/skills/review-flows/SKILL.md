@@ -8,7 +8,8 @@ description: >-
   this skill (and do NOT call the flows MCP tools) for an ordinary review
   request such as "review my PR", "review this diff/spec/design", or "code
   review" where the user just wants you to review it yourself — perform that
-  review directly instead.
+  review directly instead. For any other catalogue flow, or a flow offered
+  from your session context, use `agent-flows`.
 ---
 
 # Review Flows
@@ -19,7 +20,9 @@ These four tools are aliases of the generic flow tools (`start_flow`, `send_to_p
 
 ## Long rounds are normal
 
-`round_timeout` is an **inactivity** bound, not a wall-clock cap: a round only fails for taking too long if the reviewer goes genuinely quiet for that whole stretch — an actively-working reviewer can legitimately run a round for a long time. If a status check (or a `submit_review_round`/`start_review_flow` call) returns the benign "Flow still running" text, that is an expected outcome on a long round, not a problem — re-enter the wait with `get_review_flow_status(flow_run_id, wait: true)`, which blocks (via bounded, internally-retried checks — never a raw long-poll) until the round finishes or roughly 8 minutes pass, then call it again if it's still running. A round result of **`unclear` now genuinely means the reviewer went dead or silent** (no activity for the whole inactivity bound, or it crashed/was stopped) — it is no longer a symptom of a merely slow reviewer, so treat it as a liveness problem (see the `participant_unreachable` and `participant_died`/`participant_stopped` entries below), not as "the review is taking a while."
+`round_timeout` is an **inactivity** bound, not a wall-clock cap: a round only fails for taking too long if the reviewer goes genuinely quiet for that whole stretch — an actively-working reviewer can legitimately run a round for a long time. If a status check (or a `submit_review_round`/`start_review_flow` call) returns the benign "Flow still running" text, that is an expected outcome on a long round, not a problem — re-enter the wait with `get_review_flow_status(flow_run_id, wait: true)`, which blocks (via bounded, internally-retried checks — never a raw long-poll) until the round finishes or roughly 3.5 minutes pass, then call it again if it's still running. A round result of **`unclear` now genuinely means the reviewer went dead or silent** (no activity for the whole inactivity bound, or it crashed/was stopped) — it is no longer a symptom of a merely slow reviewer, so treat it as a liveness problem (see the `participant_unreachable` and `participant_died`/`participant_stopped` entries below), not as "the review is taking a while."
+
+**A harness tool timeout is not a flow failure.** `start_review_flow` and `submit_review_round` block for minutes while the reviewer works. If your harness aborts the call with its own tool timeout (on Codex the error reads `timed out awaiting tools/call`), the flow is still running server-side. Do not start a new flow and do not investigate — call `get_review_flow_status(wait: true)`. Without a `flow_run_id` it reads the newest open flow this session started (pass `session_id` for another session's), so it works even when the aborted start never handed you the id or context compaction dropped it; with several open flows it lists them for you to pick from. On a harness that gives the flows server no session identity, it reads the flows started from this workspace on this machine instead.
 
 ## Role-surface safety gate
 
@@ -44,6 +47,7 @@ Once the user has explicitly opted into a flow (see above), pick the `kind`:
 
 - Spec or design document → `kind: "spec-review"`
 - Code changes or a pull request → `kind: "code-review"`
+- Any other catalog definition → the `agent-flows` skill; its read-only `list_flow_definitions` shows every definition this server can start.
 
 ## Choosing the reviewer vendor
 
@@ -60,7 +64,7 @@ candidates remain after negation, ask the user to choose; never guess.
 
 Canonical reviewer aliases: Claude / Claude Code → `claude`; Codex / OpenAI Codex → `codex`;
 Cursor / cursor-agent → `cursor`; GitHub Copilot / Copilot CLI → `copilot`; Gemini / Gemini CLI →
-`gemini`; Kiro / Kiro CLI → `kiro`; Pi → `pi`; OpenCode → `opencode`; Antigravity / agy → `antigravity`.
+`gemini`; Kiro / Kiro CLI → `kiro`; Pi → `pi`; OpenCode → `opencode`; Antigravity / agy → `antigravity`; Grok / Grok Build → `grok`.
 Normalize only the reviewer-role mention. Positive contrast (for example, “from Codex, ask Claude”)
 selects Claude; negated names are removed; two remaining reviewer candidates are ambiguous.
 
@@ -130,17 +134,17 @@ After applying the role-surface safety gate, if `start_review_flow` / `submit_re
 
 ## Core rules
 
-1. **Start exactly one flow per user task.** Call `start_review_flow` once and hold the returned `flow_run_id`. Do NOT start a new flow for follow-up rounds — reuse the same ID.
+1. **Start exactly one flow per user task.** Call `start_review_flow` once and hold the returned `flow_run_id`. Do NOT start a new flow for follow-up rounds — reuse the same ID. If the id is gone (a harness timeout aborted the start, or compaction dropped it), get it back with `get_review_flow_status(wait: true)` — never by starting another flow.
 2. **After receiving a `findings` result**, address every finding, then call `submit_review_round` with the updated context and the same `flow_run_id`.
 3. **Do NOT finish the user task while the flow has unresolved findings.** Keep iterating until the reviewer returns `clean`.
 4. **Only call `close_review_flow` after a `clean` result.** Then report completion to the user.
 5. **If reviewer output is unclear or requires user input**, pause and ask the user before proceeding.
 6. **For code review, do NOT ask the reviewer to run tests.** CI covers test execution; reviewer feedback is on correctness, design, and adherence to conventions.
-7. **State where your changes live.** The reviewer's worktree is mirrored from **this session's project directory**, not from the directory you are working in, and no tool parameter can redirect it. So if you changed directory, are a subagent in another checkout, or the changeset lives in another worktree/repo/machine, the reviewer will NOT see it: say so in `context`, give it an explicit commit range (never `git diff origin/main...HEAD`), and inline the diffs — or pass `mode: "context-only"` to make your context the sole source of truth. The reviewer flags referenced changes it cannot find; incomplete context wastes a full round.
+7. **State where your changes live.** The reviewer's worktree is mirrored from **this session's project directory**, not from the directory you are working in. If the changeset lives in another checkout or worktree **on this machine**, pass its absolute path as `repo_path` (and the same `repo_path` to `list_reviewer_vendors`); a daemon must host that repository. A PR in another repository (`target_kind: "pr"`, its URL or `owner/repo#N` as `target_ref`, no `repo_path`) runs on a daemon that hosts that repository, in a worktree of its checkout rather than the PR's branch: name the commits to review in `context`. If several checkouts of it are registered, the server lists them: pass one as `repo_path` only if it is on this machine; otherwise name the commits in `context` and inline the diffs, or pass `mode: "context-only"`. Otherwise — you changed directory without passing `repo_path`, or the changeset lives on another machine — the reviewer will NOT see it: say so in `context`, give it an explicit commit range (never `git diff origin/main...HEAD`), and inline the diffs — or pass `mode: "context-only"` to make your context the sole source of truth. The reviewer flags referenced changes it cannot find; incomplete context wastes a full round. For a change too large to inline, in a repository a daemon hosts, pass `patch_path` (an absolute path to a `git diff` file, at most 4 MiB) and `base_commit` (the full SHA it applies to, such as `git merge-base origin/main HEAD`, pushed unless the daemon runs on this machine): the reviewer gets a worktree at that commit with the patch attached and applies it itself. Inline each follow-up round's own delta in `context`.
 
 ## Server errors to act on
 
-- **`400` starting `no_daemon_available:`** — no connected daemon has the repo checked out. Relay the server's remediation verbatim, then act on the part you can: run `kcap daemon start -d` on a machine with the repo cloned (add `--name <new-name>` if the account already runs a daemon elsewhere), or get the repo cloned on a machine that already runs one. **You cannot redirect the flow at another daemon or checkout** — these tools expose no daemon or repo-path parameter. If the server's text suggests passing `daemon_name` / `repo_path`, ignore that part: do not invent those arguments, and do not retry unchanged.
+- **`400` starting `no_daemon_available:`** — no connected daemon has the repo checked out. Relay the server's remediation verbatim, then act on the part you can: run `kcap daemon start -d` on a machine with the repo cloned (add `--name <new-name>` if the account already runs a daemon elsewhere), or get the repo cloned on a machine that already runs one. **You cannot pick a daemon**, and `repo_path` only names a checkout on this machine. If the server's text suggests passing `daemon_name`, ignore that part: do not invent that argument, and do not retry unchanged.
 - **`400` starting `daemon_outdated:`** — the daemon's kcap is too old to host flow participants. Relay the server error's remediation verbatim — it names the outdated daemon; the fix: update kcap (`npm i -g @kurrent/kcap`), then `kcap daemon restart --name <its-name>` (works for detached and service-managed daemons alike — a raw `daemon stop` deliberately refuses a service-managed one; `kcap daemon status` lists names, and `--when-idle` defers the restart if the daemon is busy).
 - **`reviewer_vendor_required`** — ask the user to name a reviewer vendor, pass it explicitly, and offer to save it (`kcap config set flows.reviewer_vendor <vendor>`); this appears only when the definition declares no vendor and no preference is saved.
 - **`reviewer_vendor_unavailable`** — the selected vendor is not installed/certified unattended on an eligible daemon; do not silently fall back to another vendor.
@@ -148,12 +152,15 @@ After applying the role-surface safety gate, if `start_review_flow` / `submit_re
 - **`client_upgrade_required`, `flow_client_protocol_required`, or `flow_client_protocol_unsupported`** — update kcap; reserved review aliases fail closed on stale clients.
 - **`reserved_review_alias_shape`** — an admin changed a reserved alias to an invalid participant shape; restore exactly one participant named `reviewer`.
 - **`409` containing `participant_unreachable`** — the reviewer's liveness is ambiguous right now: either its daemon disconnected/is restarting, or the server positively spotted a possibly-live prior agent and is refusing to relaunch until its absence is proven (never launching a duplicate reviewer beside a possibly-live one). This is retryable — **do not close the flow.** Submit the round again shortly with `submit_review_round`; the server relaunches the reviewer automatically once absence is proven (via the daemon reconnecting/reporting, or the agent's death being confirmed). If it keeps failing across many retries, that points at the daemon itself needing attention, not at the flow needing to be restarted — ask the user to check daemon status, or stop the reviewer (dashboard/API) to force a fresh relaunch.
-- **A round result of `unclear` whose text is exactly `participant_died`, `participant_stopped`, or `participant_parked`** — the reviewer crashed, was stopped, or was parked for resume mid-round. In every case the run stays open and you **submit another round** with `submit_review_round` to continue — no need to close and restart the flow. The difference is what the next round gets: for `participant_died`/`participant_stopped` a **fresh** reviewer relaunches with **no memory of prior rounds**, so restate any context it needs; for `participant_parked` the same reviewer **resumes with its prior context intact** (a resumable park frees the slot between rounds). Earlier spend still counts against the run budget. (An older server that predates the park signal reports a park as `participant_stopped` — still a resubmit trigger, so this works across the rollout.)
+- **A round result of `unclear` whose text is exactly `participant_died`, `participant_stopped`, or `participant_parked`** — the reviewer crashed, was stopped, or was parked for resume mid-round. In every case the run stays open and you **submit another round** with `submit_review_round` to continue — no need to close and restart the flow. The difference is what the next round gets: for `participant_died`/`participant_stopped` a **fresh** reviewer relaunches with **no memory of prior rounds**, so restate any context it needs; for `participant_parked` the same reviewer **resumes with its prior context intact** (a resumable park frees the slot between rounds). Earlier spend still counts against the run budget. (An older server that predates the park signal reports a park as `participant_stopped` — still a resubmit trigger, so this works across the rollout.) When the daemon itself ended the participant, a `stop_detail:` line beside `participant_died` names why — `pi_reviewer_turn_timeout`, for instance, means it went silent past its turn limit, so narrow the scope or pick another vendor before resubmitting rather than resending the same round unchanged. The one exception to resubmitting at once: `agent_stopped` means it was stopped from outside the flow — by hand (`kcap agent stop`) or by a stop sent to its daemon — not a crash, so ask the user before you submit the next round.
 
 ## Workflow
 
 ```
-start_review_flow(kind, target_kind, target_ref, target_title, context)
+get_flow_definition(definition_id: kind)
+  → follow its guide: what to submit, how to iterate (a server that publishes no guides says so; the rest of this skill applies)
+
+start_review_flow(kind, target_kind, target_ref, target_title, session_title, context)
   → reviewer returns a result: findings (with the findings text) | clean
 
 if clean:
@@ -173,21 +180,22 @@ if findings:
 
 | Tool | Required args | Optional args | When to call |
 |---|---|---|---|
-| `start_review_flow` | `kind` (`spec-review`\|`code-review`), `target_kind` (what is being reviewed: `spec`, `code`, `pr`, `branch`, `file`, etc.), `target_ref` (a path, branch name, or PR URL/number that identifies the target), `target_title` (short human-readable title, e.g. spec name or PR title), `context` (background context: what to focus on, constraints, definition of done) | `vendor` (explicit reviewer vendor; omit to use the definition's authored vendor, or your saved `flows.reviewer_vendor` preference if it declares none), `model` (explicit reviewer model override — REQUIRES `vendor`; only pass it when the user named a model), `instructions`, `mode` (`context-only` — optional) | Once, at the start of a review task. |
+| `start_review_flow` | `kind` (`spec-review`\|`code-review`), `target_kind` (what is being reviewed: `spec`, `code`, `pr`, `branch`, `file`, etc.), `target_ref` (a path, branch name, or PR URL/number that identifies the target), `target_title` (short human-readable title, e.g. spec name or PR title), `session_title` (the reviewer session's title: a short phrase naming this review, specific enough to tell it apart from other sessions — it replaces the generic "Review this PR/code" name), `context` (background context: what to focus on, constraints, definition of done) | `vendor` (explicit reviewer vendor; omit to use the definition's authored vendor, or your saved `flows.reviewer_vendor` preference if it declares none), `model` (explicit reviewer model override — REQUIRES `vendor`; only pass it when the user named a model), `instructions`, `mode` (`context-only` — optional), `repo_path` (absolute path to another checkout or worktree on this machine to review instead of this session's), `patch_path` + `base_commit` (review a patch file at a base commit instead of inline context) | Once, at the start of a review task. |
 | `submit_review_round` | `flow_run_id`, `context` | `instructions` | After addressing findings. Pass the same `flow_run_id` and the updated context. |
-| `get_review_flow_status` | `flow_run_id` | `wait` (`true`/`false`, defaults to `false`) — when `true`, blocks until the round is terminal or roughly 8 minutes pass, instead of returning the current snapshot immediately | Poll or check the current status of a flow (running, waiting, completed, failed). Use `wait: true` to ride out a long round instead of polling repeatedly yourself. |
+| `get_review_flow_status` | — | `flow_run_id` (omit to read the newest open flow this session started, or on a harness without a session identity the newest one started from this workspace; several open flows are listed instead), `session_id` (look up another session's flows; defaults to this session), `wait` (`true`/`false`, defaults to `false`) — when `true`, blocks until the round is terminal or roughly 3.5 minutes pass, instead of returning the current snapshot immediately | Poll or check the current status of a flow (running, waiting, completed, failed). Use `wait: true` to ride out a long round instead of polling repeatedly yourself, and omit `flow_run_id` to recover a flow whose id you never received or lost. |
 | `close_review_flow` | `flow_run_id` | — | Only after the reviewer returns `clean`. |
 
 ## Example (code review)
 
 ```
-# Step 1 — start (all five required args required; the reviewer sees a mirror of THIS SESSION's
+# Step 1 — start (all six args required; the reviewer sees a mirror of THIS SESSION's
 # project directory, not of the directory you are working in — pass mode="context-only" to opt out)
 start_review_flow(
   kind="code-review",
   target_kind="branch",
   target_ref="feature/add-null-check",
   target_title="Add null check on user input",
+  session_title="Review the null check on user input",
   context="Review the diff on this branch for correctness and adherence to project conventions."
 )
 # → returns flow_run_id, e.g. "flow_abc123"

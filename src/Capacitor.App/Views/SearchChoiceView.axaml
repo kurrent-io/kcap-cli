@@ -1,0 +1,109 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
+             x:Class="Capacitor.App.Views.SearchChoiceView"
+             x:DataType="vm:SearchChoiceViewModel">
+    <UserControl.Styles>
+        <Style Selector="TextBlock.detail">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        </Style>
+        <!-- A link inside a sentence: underlined text, no button chrome on hover or press. -->
+        <Style Selector="Button.inlineLink">
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="MinHeight" Value="0" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Cursor" Value="Hand" />
+        </Style>
+        <Style Selector="Button.inlineLink /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.inlineLink:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.inlineLink:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        </Style>
+        <Style Selector="Button.inlineLink TextBlock">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="TextDecorations" Value="Underline" />
+        </Style>
+        <!-- Nested under a filled search mode, a second fill stacks; the indent and the dot carry the model pick. -->
+        <Style Selector="RadioButton.onboardingOption.nested:checked">
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+        <Style Selector="RadioButton">
+            <Setter Property="FontSize" Value="13" />
+        </Style>
+    </UserControl.Styles>
+    <StackPanel Spacing="10">
+        <TextBlock Classes="detail" Text="{x:Static vm:SearchChoiceViewModel.Explainer}" />
+        <RadioButton x:Name="SearchKeywordOption" Classes="onboardingOption" AutomationProperties.Name="Search by keyword"
+                     AutomationProperties.HelpText="Find information using matching words. No AI model needed."
+                     IsChecked="{Binding UseKeyword, Mode=TwoWay}">
+            <StackPanel Spacing="3">
+                <TextBlock Text="Search by keyword" TextWrapping="Wrap" />
+                <TextBlock Classes="detail" Text="{x:Static vm:SearchChoiceViewModel.KeywordDetail}" IsVisible="{Binding !Reconfiguring}" />
+                <TextBlock Classes="detail" Text="Finds information using matching words. No AI model needed." IsVisible="{Binding Reconfiguring}" />
+            </StackPanel>
+        </RadioButton>
+        <StackPanel Spacing="2">
+            <RadioButton x:Name="SearchBuiltinOption" Classes="onboardingOption" AutomationProperties.Name="Search by meaning, built in"
+                         AutomationProperties.HelpText="{Binding BuiltinDescription}"
+                         IsChecked="{Binding UseBuiltin, Mode=TwoWay}" IsEnabled="{Binding BuiltinEnabled}">
+                <StackPanel Spacing="3">
+                    <TextBlock Text="Search by meaning, built in" TextWrapping="Wrap" />
+                    <TextBlock Classes="detail" Text="{Binding BuiltinDescription}" />
+                </StackPanel>
+            </RadioButton>
+            <TextBlock x:Name="BuiltinStatusText" Classes="detail" Text="{Binding BuiltinStatus}" Margin="35,0,11,0"
+                       IsVisible="{Binding BuiltinStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+        </StackPanel>
+        <StackPanel Spacing="2">
+            <RadioButton x:Name="SearchOllamaOption" Classes="onboardingOption" AutomationProperties.Name="Search by meaning with Ollama"
+                         AutomationProperties.HelpText="{x:Static vm:SearchChoiceViewModel.MeaningDetail}"
+                         IsChecked="{Binding UseOllama, Mode=TwoWay}" IsEnabled="{Binding OllamaEnabled}">
+                <StackPanel Spacing="3">
+                    <TextBlock Text="Search by meaning with Ollama" TextWrapping="Wrap" />
+                    <TextBlock Classes="detail" Text="{x:Static vm:SearchChoiceViewModel.MeaningDetail}" />
+                </StackPanel>
+            </RadioButton>
+            <!-- Outside the option, so Check again stays clickable while the option is disabled; the left
+                 margin lines it up with the option's text (border, padding, ring and gap). -->
+            <StackPanel Spacing="8" Margin="35,0,11,0"
+                  IsVisible="{Binding OllamaStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                <WrapPanel VerticalAlignment="Center">
+                    <TextBlock x:Name="OllamaStatusText" Classes="detail" Text="{Binding OllamaStatus}" Margin="0,0,4,0" />
+                    <Button x:Name="OllamaSiteLink" Classes="inlineLink" Command="{Binding OpenOllamaSiteCommand}"
+                            IsVisible="{Binding OllamaLinkVisible}" ToolTip.Tip="{x:Static vm:SearchChoiceViewModel.OllamaDownloadUrl}">
+                        <TextBlock Text="Get it free at ollama.com" />
+                    </Button>
+                </WrapPanel>
+                <Button HorizontalAlignment="Left" x:Name="CheckOllamaButton" Classes="kcapChip" Content="{Binding CheckLabel}"
+                        VerticalAlignment="Center" Command="{Binding CheckOllamaCommand}" IsVisible="{Binding OllamaMissing}" />
+            </StackPanel>
+        </StackPanel>
+        <StackPanel Spacing="8" Margin="28,0,0,0" IsVisible="{Binding ModelChoiceVisible}">
+            <RadioButton x:Name="SearchDefaultOption" Classes="onboardingOption nested"
+                         AutomationProperties.Name="{x:Static vm:SearchChoiceViewModel.DefaultLabel}"
+                         IsChecked="{Binding UseDefault, Mode=TwoWay}">
+                <StackPanel Spacing="3">
+                    <TextBlock Text="{x:Static vm:SearchChoiceViewModel.DefaultLabel}" TextWrapping="Wrap" />
+                    <TextBlock Classes="detail" Text="{x:Static vm:SearchChoiceViewModel.DefaultDetail}" />
+                </StackPanel>
+            </RadioButton>
+            <RadioButton x:Name="SearchOtherOption" Classes="onboardingOption nested" AutomationProperties.Name="Another Ollama model"
+                         IsChecked="{Binding UseOther, Mode=TwoWay}">
+                <StackPanel Spacing="6">
+                    <TextBlock Text="Another Ollama model" TextWrapping="Wrap" />
+                    <TextBox x:Name="SearchOtherModel" Classes="kcapField"
+                             PlaceholderText="Model name, e.g. nomic-embed-text" Text="{Binding OtherModel, Mode=TwoWay}"
+                             IsVisible="{Binding UseOther}" AutomationProperties.Name="Ollama embedding model" />
+                    <TextBlock x:Name="SearchOtherModelError" Classes="detail" Text="{Binding OtherModelError}"
+                               Foreground="{StaticResource KcapDangerBrush}"
+                               IsVisible="{Binding OtherModelError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+            </RadioButton>
+            <TextBlock Classes="detail" Text="{x:Static vm:SearchChoiceViewModel.ModelChangeDetail}" IsVisible="{Binding Reconfiguring}" />
+        </StackPanel>
+    </StackPanel>
+</UserControl>

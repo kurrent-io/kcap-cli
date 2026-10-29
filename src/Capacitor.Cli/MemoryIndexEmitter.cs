@@ -7,12 +7,12 @@ namespace Capacitor.Cli;
 /// <summary>
 /// builds the SessionStart "team memory" index
 /// fragment from the <c>GET /api/memories/index</c> response: entries of
-/// <c>{memory_id, slug, audience, description, kind, scope_kind, project_slug}</c>,
+/// <c>{memory_id, slug, audience, description, kind, scope_kind, project_slug, open_entries}</c>,
 /// already capped and ranked by the server, plus the cwd repo's projects.
 /// <para>
 /// Entries are grouped by <c>audience</c> (org → team → user), preserving the
-/// server's order within each group, and rendered as <c>slug [scope]: description</c>
-/// — one line per memory — under a heading that tells the agent to call
+/// server's order within each group, and rendered as <c>slug (N open) [scope]: description</c>
+/// — one line per memory, the count only on a log — under a heading that tells the agent to call
 /// <c>get_memory</c> / <c>search_memories</c> for full content. The <c>[scope]</c> tag
 /// annotates the memory's home scope (a project-scoped memory shows <c>[project: {slug}]</c>,
 /// a repo one <c>[repo]</c>, org-scoped and older servers render untagged). Bodies are
@@ -61,7 +61,8 @@ static class MemoryIndexEmitter {
             var slug = Normalize(entry.Slug, 128);
             var description = Normalize(entry.Description, 512);
             if (slug.Length == 0 || description.Length == 0) continue;
-            var line = $"- {slug}{ScopeTag(entry)}: {description}";
+            var open = entry.OpenEntries is { } n ? $" ({n} open)" : "";
+            var line = $"- {slug}{open}{ScopeTag(entry)}: {description}";
             switch (entry.Audience) {
                 case "org": org.Add(line); break;
                 case "team": team.Add(line); break;
@@ -102,7 +103,8 @@ static class MemoryIndexEmitter {
                     o["description"]?.GetValue<string>(),
                     o["kind"]?.GetValue<string>() ?? "feedback",
                     o["scope_kind"]?.GetValue<string>(),
-                    o["project_slug"]?.GetValue<string>()));
+                    o["project_slug"]?.GetValue<string>(),
+                    o["open_entries"] is JsonValue open && open.TryGetValue<int>(out var n) ? n : null));
             } catch {
                 continue; // skip a malformed entry rather than dropping the whole block
             }

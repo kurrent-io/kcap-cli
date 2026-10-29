@@ -32,6 +32,24 @@ public class ServiceEnvironmentTests {
         await Assert.That(env[Core.ConfigRoot.ConfigDirEnvVar]).IsEqualTo(Config.Directory);
     }
 
+    /// A scheduled task starts without the installing shell's HOME, and a rooted HOME decides the
+    /// fixed daemons directory: without it the daemon and its CLI resolve two different stores.
+    [Test]
+    public async Task Build_bakes_a_rooted_home_on_windows_only() {
+        var home = Config.Directory;
+        var src = new Dictionary<string, string> { ["HOME"] = home };
+
+        await Assert.That(ServiceEnvironment.Build(null, src, Config.Root, isWindows: true)["HOME"]).IsEqualTo(home);
+        await Assert.That(ServiceEnvironment.Build(null, src, Config.Root, isWindows: false).ContainsKey("HOME")).IsFalse();
+    }
+
+    [Test]
+    public async Task Build_skips_a_relative_home() {
+        var src = new Dictionary<string, string> { ["HOME"] = "relative/home" };
+
+        await Assert.That(ServiceEnvironment.Build(null, src, Config.Root, isWindows: true).ContainsKey("HOME")).IsFalse();
+    }
+
     [Test]
     public async Task Build_omits_profile_when_null_and_keeps_kcap_url() {
         var src = new Dictionary<string, string> { ["KCAP_URL"] = "https://x" };
@@ -252,12 +270,12 @@ public class ServiceEnvironmentTests {
             await Assert.That(env.ContainsKey(key)).IsFalse();
     }
 
-    /// <summary>Both Codex transport settings reach a service unit on BOTH platforms. The daemon reads
-    /// them from its own environment and nowhere else, so a unit missing them silently runs PTY.</summary>
+    /// <summary>The daemon reads the Codex switch from <c>experimental.json</c>, so a variable an
+    /// operator still exports must not be baked into a fresh unit.</summary>
     [Test]
     [Arguments(false)]
     [Arguments(true)]
-    public async Task Codex_transport_selection_survives_a_service_install(bool isWindows) {
+    public async Task Removed_codex_variables_are_not_carried_into_the_unit(bool isWindows) {
         var source = new Dictionary<string, string> {
             ["PATH"]                             = "/usr/bin",
             ["KCAP_CODEX_TRANSPORT"]             = "app-server",
@@ -266,8 +284,8 @@ public class ServiceEnvironmentTests {
 
         var env = ServiceEnvironment.Build(profileName: null, source: source, config: Config.Root, isWindows: isWindows);
 
-        await Assert.That(env.TryGetValue("KCAP_CODEX_TRANSPORT", out var t) ? t : null).IsEqualTo("app-server");
-        await Assert.That(env.TryGetValue("KCAP_CODEX_APPSERVER_INTERACTIVE", out var i) ? i : null).IsEqualTo("1");
+        await Assert.That(env.ContainsKey("KCAP_CODEX_TRANSPORT")).IsFalse();
+        await Assert.That(env.ContainsKey("KCAP_CODEX_APPSERVER_INTERACTIVE")).IsFalse();
     }
 
     /// <summary>

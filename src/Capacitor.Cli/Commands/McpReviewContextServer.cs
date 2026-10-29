@@ -13,9 +13,9 @@ namespace Capacitor.Cli.Commands;
 static class McpReviewContextServer {
     internal const string ModeEnvVar = "KCAP_REVIEW_CONTEXT_MODE";
     internal const string UrlEnvVar = "KCAP_REVIEW_CONTEXT_URL";
-    internal const string ToolName = "get_branch_authored_mcp_configs";
+    internal const string ToolName = KcapMcpRegistry.ReviewContextTool;
     const string RouteSuffix = "/review-context/workspace-mcp-configs";
-    const string Instructions =
+    internal const string Instructions =
         "Call get_branch_authored_mcp_configs before concluding a borrowed review is clean. " +
         "It returns the staged/committed Git index versions of workspace MCP configuration, not " +
         "working-tree bytes; unstaged and untracked config is deliberately omitted. Every returned " +
@@ -54,23 +54,13 @@ static class McpReviewContextServer {
         using var reader = new StreamReader(stdin, Encoding.UTF8);
         await using var writer = new StreamWriter(stdout, new UTF8Encoding(false)) { AutoFlush = true };
 
-        while (await reader.ReadLineAsync() is { } line) {
-            if (string.IsNullOrWhiteSpace(line)) continue;
-            JsonObject? request;
-            try { request = JsonNode.Parse(line)?.AsObject(); } catch { continue; }
-            if (request is null || request["id"] is not { } id) continue;
-
-            var method = request["method"]?.GetValue<string>();
-            var response = method switch {
-                "initialize" => BuildInitializeResponse(id, request),
-                "tools/list" => ToResponse(
-                    id, new McpToolsResult(tools), McpJsonContext.Default.McpToolsResult),
-                "tools/call" => await DispatchToolCallAsync(client, validated!, id, request),
-                _ => McpProtocol.TryHandleStandardMethod(method, id)
-                     ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
-            };
-            await writer.WriteLineAsync(response);
-        }
+        await McpStdioLoop.RunAsync(reader, writer, tools, (id, request) => DispatchToolCallAsync(client, validated!, id, request), (id, method, request) => method switch {
+            "initialize" => BuildInitializeResponse(id, request),
+            "tools/list" => ToResponse(
+                id, new McpToolsResult(tools), McpJsonContext.Default.McpToolsResult),
+            _ => McpProtocol.TryHandleStandardMethod(method, id)
+                 ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
+        }, "review");
         return 0;
     }
 
@@ -123,7 +113,8 @@ static class McpReviewContextServer {
             "Working-tree, unstaged, and untracked bytes are not included. Configs listed under " +
             "omittedForCapacity exist but were too large to ship: report them as unverifiable, " +
             "never as absent or clean.",
-            new McpInputSchema("object", [], []))
+            new McpInputSchema("object", [], []),
+            McpToolAnnotations.Read)
     ];
 
     static string BuildInitializeResponse(JsonNode id, JsonObject request) =>
@@ -131,7 +122,7 @@ static class McpReviewContextServer {
             id,
             new McpInitResult(
                 McpProtocol.NegotiateVersion(request), new(new()),
-                new("kcap-review-context", "1.0.0"), Instructions),
+                new(KcapMcpRegistry.ReviewContextServerId, "1.0.0"), Instructions),
             McpJsonContext.Default.McpInitResult);
 
     static string BuildToolResult(JsonNode id, string text, bool isError = false) =>

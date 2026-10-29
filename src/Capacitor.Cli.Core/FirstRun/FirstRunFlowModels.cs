@@ -4,14 +4,14 @@ namespace Capacitor.Cli.Core.FirstRun;
 
 /// <summary>
 /// One harness as this machine found it. <b>Both detection signals travel, never one <c>detected</c>
-/// flag</b> — the screen names the signal it saw, and the two do not mean the same thing per vendor:
-/// Claude and Codex are probed on PATH with no marker checked, Cursor the reverse.
+/// flag</b> — the screen names the signal it saw, and Cursor has no PATH signal at all.
 /// </summary>
 public sealed record FirstRunHarnessReport {
     /// <summary>The harness's binary resolved on this process's PATH.</summary>
     [JsonPropertyName("binary_on_path")] public required bool BinaryOnPath { get; init; }
 
-    /// <summary>Its own config directory or install marker exists.</summary>
+    /// <summary>Files it writes, or its desktop app, are on this machine. The server reads a vendor as
+    /// present only through these two flags, so the desktop-app signal travels here.</summary>
     [JsonPropertyName("config_found")] public required bool ConfigFound { get; init; }
 
     /// <summary>kcap is already installed into it — the same wired-check <c>kcap status</c> uses.</summary>
@@ -117,6 +117,26 @@ public sealed record ReportFirstRunImportOutcomeRequest {
     /// <summary>A <see cref="FirstRunImportOutcomeReasons"/> token, and only alongside three zeroes —
     /// the server rejects the whole report otherwise.</summary>
     [JsonPropertyName("reason")] public string? Reason { get; init; }
+
+    // Omitted rather than written as null, so a server that predates them sees the request it knows.
+
+    /// <summary>A <see cref="FirstRunImportBackground"/> token.</summary>
+    [JsonPropertyName("background")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Background { get; init; }
+
+    [JsonPropertyName("background_remaining")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BackgroundRemaining { get; init; }
+
+    /// <summary>Never sent alongside <see cref="HandoffSuppressed"/>.</summary>
+    [JsonPropertyName("handoff_prompt")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? HandoffPrompt { get; init; }
+
+    [JsonPropertyName("handoff_suppressed")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? HandoffSuppressed { get; init; }
 }
 
 /// <summary>

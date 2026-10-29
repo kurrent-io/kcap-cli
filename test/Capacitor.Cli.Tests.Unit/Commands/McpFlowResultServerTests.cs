@@ -1,5 +1,8 @@
+using System.Net;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core;
+using Microsoft.Extensions.Time.Testing;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -10,9 +13,9 @@ public class McpFlowResultServerTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     // Resolutions.None: these tests exercise routing, not profile selection.
-    McpFlowResultServer Server() =>
+    McpFlowResultServer Server(TimeProvider? time = null) =>
         new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root),
-            new FixedCapacitorHttpClient(), NoTelemetry.Startup, TimeProvider.System);
+            new FixedCapacitorHttpClient(), NoTelemetry.Startup, time ?? TimeProvider.System);
 
     static JsonObject Args(string? roundToken = "round-1", string? kind = "findings", string? findings = "1. issue") {
         var o = new JsonObject();
@@ -162,6 +165,141 @@ public class McpFlowResultServerTests {
         await Assert.That(server.LogEntries.Count).IsEqualTo(1);
     }
 
+    /// <summary>An uncoded 503 is the ingress in front of a restarting server: the submit waits it
+    /// out on the restart backoff rather than surfacing it to the reviewer.</summary>
+    [Test]
+    public async Task Submit_rides_out_an_uncoded_503_and_records_the_result() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/flows/reviewer/result").UsingPost())
+              .InScenario("restart")
+              .WillSetStateTo("up")
+              .RespondWith(Response.Create().WithStatusCode(503).WithBody("<html>503 Service Temporarily Unavailable</html>"));
+        server.Given(Request.Create().WithPath("/api/flows/reviewer/result").UsingPost())
+              .InScenario("restart")
+              .WhenStateIs("up")
+              .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"flow_run_id":"f1","round_id":"r1","round_number":1}"""));
+        using var client = new HttpClient();
+
+        var delays = new List<TimeSpan>();
+        var (text, isError) = await Server().SubmitCoreAsync(client, server.Url!, "agent-1", Args(), NoDelay(delays));
+
+        await Assert.That(isError).IsFalse();
+        await Assert.That(text).IsEqualTo("Result recorded. You may end your reply now.");
+        await Assert.That(delays).IsEquivalentTo([TimeSpan.FromSeconds(1)]);
+    }
+
+    [Test]
+    public async Task Submit_retries_a_refused_connection_and_records_the_result() {
+        var transport = new ScriptedTransport(
+            _ => throw new HttpRequestException("Connection refused"),
+            _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}") });
+        using var client = new HttpClient(transport);
+
+        var delays = new List<TimeSpan>();
+        var (text, isError) = await Server().SubmitCoreAsync(client, "http://kcap.test", "agent-1", Args(), NoDelay(delays));
+
+        await Assert.That(isError).IsFalse();
+        await Assert.That(text).IsEqualTo("Result recorded. You may end your reply now.");
+        await Assert.That(transport.Bodies).Count().IsEqualTo(2);
+        await Assert.That(transport.Bodies[1]).IsEqualTo(transport.Bodies[0]);
+    }
+
+    /// <summary>The restart window is bounded: its delays sum to about three minutes, after which the
+    /// reviewer is told the server is unreachable and to retry the tool itself.</summary>
+    [Test]
+    public async Task Submit_gives_up_after_the_restart_window_with_the_retry_hint() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/flows/reviewer/result").UsingPost())
+              .RespondWith(Response.Create().WithStatusCode(502));
+        using var client = new HttpClient();
+
+        var delays = new List<TimeSpan>();
+        var (text, isError) = await Server().SubmitCoreAsync(client, server.Url!, "agent-1", Args(), NoDelay(delays));
+
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).Contains("unreachable");
+        await Assert.That(text).Contains("Retry this tool call");
+        await Assert.That(delays.Aggregate(TimeSpan.Zero, (sum, d) => sum + d)).IsBetween(TimeSpan.FromMinutes(2.5), TimeSpan.FromMinutes(3.5));
+        await Assert.That(server.LogEntries.Count).IsEqualTo(delays.Count + 1);
+    }
+
+    /// <summary>The harness's per-server tool timeout must outlast the delivery deadline, or Codex
+    /// abandons a submit that is still riding out a restart.</summary>
+    [Test]
+    public async Task The_delivery_deadline_ends_inside_the_result_channel_tool_timeout() =>
+        await Assert.That(McpFlowResultServer.DeliveryDeadline)
+                    .IsLessThan(KcapMcpRegistry.ReservedResultChannelToolTimeout);
+
+    /// <summary>Race retries answer to the same deadline as restart retries: slow 503s spend most of
+    /// the window, and the race codes that follow must not carry the call past it.</summary>
+    [Test]
+    public async Task Submit_race_retries_stop_at_the_delivery_deadline() {
+        var time  = new FakeTimeProvider();
+        var start = time.GetUtcNow();
+
+        HttpResponseMessage Slow(int seconds, HttpStatusCode status, string body) {
+            time.Advance(TimeSpan.FromSeconds(seconds));
+            return new HttpResponseMessage(status) { Content = new StringContent(body) };
+        }
+
+        var transport = new ScriptedTransport([
+            ..Enumerable.Repeat<Func<HttpRequestMessage, HttpResponseMessage>>(
+                _ => Slow(15, HttpStatusCode.ServiceUnavailable, "<html>503</html>"), 6),
+            _ => Slow(18, HttpStatusCode.Conflict, """{"error":"no_open_round","message":"no round awaiting a result"}""")
+        ]);
+        using var client = new HttpClient(transport);
+
+        var (text, isError) = await Server(time).SubmitCoreAsync(
+            client, "http://kcap.test", "agent-1", Args(), d => { time.Advance(d); return Task.CompletedTask; });
+
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).Contains("no round awaiting a result");
+        await Assert.That(text).Contains("Retry this tool call");
+        await Assert.That(transport.Bodies.Count).IsGreaterThan(6);
+        await Assert.That(time.GetUtcNow() - start).IsLessThanOrEqualTo(McpFlowResultServer.DeliveryDeadline);
+    }
+
+    /// <summary>A 503 carrying a coded envelope is the server's own verdict, not restart noise.</summary>
+    [Test]
+    public async Task Submit_does_not_retry_a_coded_503() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/flows/reviewer/result").UsingPost())
+              .RespondWith(Response.Create().WithStatusCode(503).WithBody("""{"error":"settlement_outcome_uncertain","message":"outcome unknown"}"""));
+        using var client = new HttpClient();
+
+        var delays = new List<TimeSpan>();
+        var (text, isError) = await Server().SubmitCoreAsync(client, server.Url!, "agent-1", Args(), NoDelay(delays));
+
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).Contains("outcome unknown");
+        await Assert.That(delays).IsEmpty();
+        await Assert.That(server.LogEntries.Count).IsEqualTo(1);
+    }
+
+    /// <summary>A resend after an unanswered attempt can meet the round it already closed: the stale
+    /// token stays terminal and is never retried.</summary>
+    [Test]
+    public async Task Stale_round_token_after_a_restart_is_still_terminal() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/flows/reviewer/result").UsingPost())
+              .InScenario("restart")
+              .WillSetStateTo("up")
+              .RespondWith(Response.Create().WithStatusCode(504));
+        server.Given(Request.Create().WithPath("/api/flows/reviewer/result").UsingPost())
+              .InScenario("restart")
+              .WhenStateIs("up")
+              .RespondWith(Response.Create().WithStatusCode(409).WithBody("""{"error":"stale_round_token","message":"Discard this result entirely"}"""));
+        using var client = new HttpClient();
+
+        var delays = new List<TimeSpan>();
+        var (text, isError) = await Server().SubmitCoreAsync(client, server.Url!, "agent-1", Args(), NoDelay(delays));
+
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).Contains("Discard this result entirely");
+        await Assert.That(text).DoesNotContain("Retry this tool call");
+        await Assert.That(server.LogEntries.Count).IsEqualTo(2);
+    }
+
     [Test]
     public async Task Validation_failures_do_not_hit_the_network() {
         using var server = WireMockServer.Start();
@@ -232,6 +370,48 @@ public class McpFlowResultServerTests {
         foreach (var b in bodies) {
             await Assert.That(b).Contains("msg-stable");
         }
+    }
+
+    [Test]
+    public async Task Send_message_rides_out_a_restart_with_the_same_message_id() {
+        var transport = new ScriptedTransport(
+            _ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable),
+            _ => throw new HttpRequestException("Connection reset"),
+            _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}") });
+        using var client = new HttpClient(transport);
+
+        var delays = new List<TimeSpan>();
+        var (text, isError) = await Server().SendMessageCoreAsync(
+            client, "http://kcap.test", "agent-1", MessageArgs(), NoDelay(delays), messageId: "msg-stable"
+        );
+
+        await Assert.That(isError).IsFalse();
+        await Assert.That(text).Contains("Message sent to the flow driver");
+        await Assert.That(delays).Count().IsEqualTo(2);
+        await Assert.That(transport.Bodies).Count().IsEqualTo(3);
+        foreach (var b in transport.Bodies) {
+            await Assert.That(b).Contains("msg-stable");
+        }
+    }
+
+    /// <summary>A retried tool call mints a new message_id, so giving up must not ask for one: a send
+    /// that landed with its response lost would reach the driver twice.</summary>
+    [Test]
+    public async Task Send_message_gives_up_after_the_restart_window_without_asking_for_a_resend() {
+        var transport = new ScriptedTransport(_ => throw new HttpRequestException("Connection refused"));
+        using var client = new HttpClient(transport);
+
+        var delays = new List<TimeSpan>();
+        var (text, isError) = await Server().SendMessageCoreAsync(
+            client, "http://kcap.test", "agent-1", MessageArgs(), NoDelay(delays)
+        );
+
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).Contains("unreachable");
+        await Assert.That(text).Contains("may or may not have reached");
+        await Assert.That(text).DoesNotContain("Retry");
+        await Assert.That(transport.Bodies).Count().IsEqualTo(delays.Count + 1);
+        await Assert.That(delays.Aggregate(TimeSpan.Zero, (sum, d) => sum + d)).IsBetween(TimeSpan.FromMinutes(2.5), TimeSpan.FromMinutes(3.5));
     }
 
     [Test]
@@ -318,6 +498,19 @@ public class McpFlowResultServerTests {
         await Assert.That(text).Contains("try again in a few minutes");
         await Assert.That(delays).Count().IsEqualTo(0);
         await Assert.That(server.LogEntries.Count).IsEqualTo(1);
+    }
+
+    /// <summary>Answers each send with the next step; the last step repeats. Records every body sent.</summary>
+    sealed class ScriptedTransport(params Func<HttpRequestMessage, HttpResponseMessage>[] steps) : HttpMessageHandler {
+        int _sent;
+
+        public List<string> Bodies { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+            Bodies.Add(request.Content is null ? "" : await request.Content.ReadAsStringAsync(ct));
+
+            return steps[Math.Min(_sent++, steps.Length - 1)](request);
+        }
     }
 
     [Test]

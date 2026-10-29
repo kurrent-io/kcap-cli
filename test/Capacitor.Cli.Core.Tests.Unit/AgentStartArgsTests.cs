@@ -91,4 +91,107 @@ public class AgentStartArgsTests {
         await Assert.That(AgentStartArgs.Parse(["claude", "--name", "dev"]).Error).IsNotNull();
         await Assert.That(AgentStartArgs.Parse(["claude", "--detached"]).Error).IsNotNull();
     }
+
+    [Test]
+    public async Task Title_flag_is_parsed_and_becomes_an_explicit_start_title() {
+        var a = AgentStartArgs.Parse(["claude", "--title", "Fix login", "--", "fix the login redirect"]);
+
+        await Assert.That(a.Error).IsNull();
+        await Assert.That(a.Title).IsEqualTo("Fix login");
+        await Assert.That(a.StartTitle).IsEqualTo(new AgentStartTitle("Fix login", Derived: false));
+    }
+
+    [Test]
+    public async Task Without_a_title_the_prompt_gives_a_derived_start_title() {
+        var a = AgentStartArgs.Parse(["claude", "--", "--model", "opus", "fix the login redirect"]);
+
+        await Assert.That(a.Title).IsNull();
+        await Assert.That(a.StartTitle).IsEqualTo(new AgentStartTitle("fix the login redirect", Derived: true));
+    }
+
+    [Test]
+    public async Task Title_flag_requires_a_value() {
+        var a = AgentStartArgs.Parse(["claude", "--title"]);
+
+        await Assert.That(a.Error).IsEqualTo("--title requires a value");
+    }
+
+    [Test]
+    [Arguments("--private")]
+    [Arguments("--account=a1b2")]
+    public async Task Title_flag_followed_by_another_flag_is_an_error(string flag) {
+        var a = AgentStartArgs.Parse(["claude", "--title", flag]);
+
+        await Assert.That(a.Error).IsEqualTo("--title requires a value");
+        await Assert.That(a.Title).IsNull();
+        await Assert.That(a.Account).IsNull();
+    }
+
+    [Test]
+    [Arguments("")]
+    [Arguments("   ")]
+    public async Task Blank_title_is_an_error(string blank) {
+        var a = AgentStartArgs.Parse(["claude", "--title", blank]);
+
+        await Assert.That(a.Error).IsEqualTo("--title must not be blank");
+        await Assert.That(a.Title).IsNull();
+    }
+
+    [Test]
+    public async Task Title_in_equals_form_may_start_with_a_dash() {
+        var a = AgentStartArgs.Parse(["claude", "--title=-WIP- fix"]);
+
+        await Assert.That(a.Error).IsNull();
+        await Assert.That(a.Title).IsEqualTo("-WIP- fix");
+    }
+
+    [Test]
+    public async Task Title_in_spaced_form_may_start_with_a_dash() {
+        var a = AgentStartArgs.Parse(["claude", "--title", "-WIP- fix", "--private"]);
+
+        await Assert.That(a.Error).IsNull();
+        await Assert.That(a.Title).IsEqualTo("-WIP- fix");
+        await Assert.That(a.Private).IsTrue();
+    }
+
+    [Test]
+    public async Task Empty_equals_form_title_is_an_error() {
+        var a = AgentStartArgs.Parse(["claude", "--title="]);
+
+        await Assert.That(a.Error).IsEqualTo("--title must not be blank");
+        await Assert.That(a.Title).IsNull();
+    }
+
+    [Test]
+    public async Task Account_flag_with_a_value_parses() {
+        var spaced = AgentStartArgs.Parse(["codex", "--account", "ab12cd", "--private", "--", "fix"]);
+        var joined = AgentStartArgs.Parse(["claude", "--account=~/.claude-work", "-d"]);
+
+        await Assert.That(spaced.Error).IsNull();
+        await Assert.That(spaced.Account).IsEqualTo("ab12cd");
+        await Assert.That(spaced.Private).IsTrue();
+        await Assert.That(spaced.Passthrough).IsEquivalentTo(new[] { "fix" });
+        await Assert.That(joined.Error).IsNull();
+        await Assert.That(joined.Account).IsEqualTo("~/.claude-work");
+        await Assert.That(joined.Detached).IsTrue();
+        await Assert.That(AgentStartArgs.Parse(["claude"]).Account).IsNull();
+    }
+
+    [Test]
+    public async Task Account_flag_without_a_value_is_an_error() {
+        string[][] cases = [
+            ["claude", "--account"],
+            ["claude", "--account", ""],
+            ["claude", "--account", "--private"],
+            ["claude", "--account", "--title=t"],
+            ["claude", "--account="],
+        ];
+
+        foreach (var args in cases) {
+            var a = AgentStartArgs.Parse(args);
+
+            await Assert.That(a.Error).IsEqualTo("--account requires a value").Because(string.Join(' ', args));
+            await Assert.That(a.Account).IsNull();
+        }
+    }
 }

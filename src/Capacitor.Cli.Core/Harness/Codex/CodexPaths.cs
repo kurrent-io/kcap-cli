@@ -12,6 +12,22 @@ public sealed class CodexPaths {
     public string UserHooksJson => Path.Combine(Home, "hooks.json");
     public string ConfigToml    => Path.Combine(Home, "config.toml");
     public string SkillsDir     => Path.Combine(Home, "skills");
+    public string ModelsCache   => Path.Combine(Home, "models_cache.json");
+    public string AuthJson      => Path.Combine(Home, "auth.json");
+
+    /// <summary>
+    /// Whether Codex has run or signed in here, by files only it writes. Not <c>config.toml</c>,
+    /// <c>hooks.json</c> or <c>skills/</c>: kcap's MCP setup, hooks install and skills sync write those.
+    /// </summary>
+    public bool HasUserData() =>
+        Directory.Exists(Sessions)
+     || Directory.Exists(Path.Combine(Home, "archived_sessions"))
+     || File.Exists(AuthJson)
+     || File.Exists(ModelsCache)
+     || File.Exists(Path.Combine(Home, "history.jsonl"))
+     || File.Exists(Path.Combine(Home, "installation_id"))
+     || File.Exists(Path.Combine(Home, "version.json"))
+     || File.Exists(Path.Combine(Home, ".codex-global-state.json"));
 
     /// <summary>
     /// Matches Codex's own <c>[projects."&lt;path&gt;"]</c> key form: absolute, and on Windows

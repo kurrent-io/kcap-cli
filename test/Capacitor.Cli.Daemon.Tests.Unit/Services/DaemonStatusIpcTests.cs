@@ -39,7 +39,8 @@ public class DaemonStatusIpcTests {
     sealed class NoopPtyProcessFactory : IPtyProcessFactory {
         public IPtyProcess Spawn(
                 string command, string[] args, string cwd,
-                Dictionary<string, string>? extraEnv = null, ushort cols = 120, ushort rows = 40
+                Dictionary<string, string>? extraEnv = null, ushort cols = 120, ushort rows = 40,
+                IReadOnlyCollection<string>? removeEnv = null
             ) => throw new NotSupportedException("DaemonStatusIpcTests never spawns a PTY");
     }
 
@@ -94,7 +95,7 @@ public class DaemonStatusIpcTests {
     /// mirrors <c>AgentStatusSnapshotTests.Build</c> — for the pure write-path exception test
     /// below, which drives <see cref="DaemonStatusIpc.HandleSubscribeAsync"/> directly against a
     /// fake stream instead of a real connection.</summary>
-    (AgentOrchestrator Orchestrator, DaemonStatusIpc StatusIpc, TempDaemonStore Daemons) BuildBareStatusIpc(string name) {
+    (AgentOrchestrator Orchestrator, DaemonStatusIpc StatusIpc, TempDaemonStore Daemons, DaemonConfig Config) BuildBareStatusIpc(string name) {
         var daemons   = new TempDaemonStore();
         var stateRoot = daemons.Store.StateDirectory(name);
         var store       = new LaunchConsentStore(stateRoot, NullLogger.Instance, TimeProvider.System);
@@ -112,7 +113,7 @@ public class DaemonStatusIpcTests {
         var notifier         = new DaemonStatusNotifier();
         var tokens           = AuthFixtures.NewTokenStore(Config.Root);
         var connection       = new ServerConnection(
-            config, tokens, NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance,
+            config, new FixedCredentialSource(), NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance,
             TimeProvider.System, notifier);
         var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
         var repoMatcher      = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance, TimeProvider.System);
@@ -130,7 +131,7 @@ public class DaemonStatusIpcTests {
             Debounce = TimeSpan.FromMilliseconds(1),
         };
 
-        return (orchestrator, statusIpc, daemons);
+        return (orchestrator, statusIpc, daemons, config);
     }
 
     sealed record Harness(
@@ -167,7 +168,7 @@ public class DaemonStatusIpcTests {
         var notifier   = new DaemonStatusNotifier();
         var tokens     = AuthFixtures.NewTokenStore(Config.Root);
         var connection = new ServerConnection(
-            config, tokens, NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance,
+            config, new FixedCredentialSource(), NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance,
             TimeProvider.System, notifier);
         var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
         var repoMatcher      = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance, TimeProvider.System);
@@ -188,7 +189,7 @@ public class DaemonStatusIpcTests {
         var permissionIpc = new PermissionIpc(new PermissionPromptBroker(), NullLogger<PermissionIpc>.Instance);
         var settingsIpc = new DaemonSettingsIpc(config, orchestrator, notifier, NullLogger<DaemonSettingsIpc>.Instance);
         var restart = RestartCoordinator.ForTest(daemons.Store, daemonName, daemonName, new NoopRestartStrategy(), TimeProvider.System);
-        var server = new LocalControlServer(config, orchestrator, restart, consentIpc, permissionIpc, statusIpc, settingsIpc, NullLogger<LocalControlServer>.Instance);
+        var server = new LocalControlServer(config, orchestrator, restart, consentIpc, permissionIpc, statusIpc, settingsIpc, TestFences.Ipc(config, orchestrator), TestShutdown.Ipc(orchestrator, restart), TestAccountsIpc.Inert(), NullLogger<LocalControlServer>.Instance);
         await server.StartAsync(ct);
 
         var sockPath = daemons.Store.SocketPath(daemonName);
@@ -431,21 +432,68 @@ public class DaemonStatusIpcTests {
         });
     }
 
+    [Test]
+    public async Task Snapshot_reports_the_committed_codex_resolution() {
+        var (orchestrator, statusIpc, daemons, config) = BuildBareStatusIpc("status-ipc-experimental");
+        try {
+            config.CodexResolution = new(4, true, "0.150.0", true, null);
+            config.AcknowledgedCodexResolution = new(3, true, "0.150.0", true, null);
+
+            var dto = JsonSerializer.Deserialize(statusIpc.Snapshot(), StatusIpcJsonContext.Default.DaemonStatusDto)!;
+
+            await Assert.That(dto.Experimental!.Single()).IsEqualTo(
+                new ExperimentalFeatureStatusDto("codex-app-server", true, true, 4, false, "the server has not been told yet", false));
+
+            config.CodexRegistrationFailed(config.CodexResolution);
+            dto = JsonSerializer.Deserialize(statusIpc.Snapshot(), StatusIpcJsonContext.Default.DaemonStatusDto)!;
+
+            await Assert.That(dto.Experimental!.Single()).IsEqualTo(
+                new ExperimentalFeatureStatusDto("codex-app-server", true, true, 4, false, "the server has not been told yet", true));
+
+            config.CodexResolution = new(5, true, "0.100.0", false, "Codex is too old");
+            config.AcknowledgedCodexResolution = new(5, true, "0.100.0", false, "Codex is too old");
+
+            dto = JsonSerializer.Deserialize(statusIpc.Snapshot(), StatusIpcJsonContext.Default.DaemonStatusDto)!;
+
+            await Assert.That(dto.Experimental!.Single()).IsEqualTo(
+                new ExperimentalFeatureStatusDto("codex-app-server", true, false, 5, true, "Codex is too old", false));
+
+            config.CodexResolution = config.AcknowledgedCodexResolution = new(6, false, null, false, null);
+            config.ExperimentalSettingsProblem = "experimental.json is not valid JSON";
+            dto = JsonSerializer.Deserialize(statusIpc.Snapshot(), StatusIpcJsonContext.Default.DaemonStatusDto)!;
+
+            await Assert.That(dto.Experimental!.Single().Reason).IsEqualTo("experimental.json is not valid JSON");
+        } finally {
+            await orchestrator.DisposeAsync();
+            daemons.Dispose();
+        }
+    }
+
+    [Test]
+    public async Task Snapshot_carries_the_configured_vendor_models() {
+        var (orchestrator, statusIpc, daemons, config) = BuildBareStatusIpc("status-ipc-vendor-models");
+        try {
+            config.VendorModels = new(StringComparer.Ordinal) { ["pi"] = [new("p/a", "A · p")], ["kiro"] = [] };
+
+            var dto = JsonSerializer.Deserialize(statusIpc.Snapshot(), StatusIpcJsonContext.Default.DaemonStatusDto)!;
+
+            await Assert.That(dto.Daemon.VendorModels!["pi"].Single()).IsEqualTo(new VendorModelOption("p/a", "A · p"));
+            await Assert.That(dto.Daemon.VendorModels["kiro"]).IsEmpty();
+        } finally {
+            await orchestrator.DisposeAsync();
+            daemons.Dispose();
+        }
+    }
+
     /// <summary>
-    /// Qodo (production): a client vanishing mid-push makes <c>FrameCodec.WriteAsync</c> throw
-    /// <see cref="IOException"/>/<see cref="SocketException"/>, which only
-    /// <see cref="OperationCanceledException"/> was treated as normal termination for — the
-    /// exception bubbled out of <c>HandleSubscribeAsync</c> to <c>LocalControlServer</c>'s
-    /// generic catch and logged "Local control connection faulted" at Warning for a routine
-    /// disconnect. Drives <see cref="DaemonStatusIpc.HandleSubscribeAsync"/> directly against a
-    /// fake stream (no socket/LocalControlServer involved) whose first write (the immediate
-    /// snapshot) succeeds and whose second write throws — deterministic, no OS-level raciness
-    /// between the read-side EOF watcher and the write path. Before the fix, this IOException
-    /// escaped uncaught; after it, <c>HandleSubscribeAsync</c> returns cleanly.
+    /// A subscriber vanishing mid-push makes the write throw <see cref="IOException"/>, a routine
+    /// disconnect that <see cref="DaemonStatusIpc.HandleSubscribeAsync"/> must absorb rather than let
+    /// reach the server's faulted-connection warning. Drives it against a fake stream whose second
+    /// write throws, so the write path is hit deterministically.
     /// </summary>
     [Test]
     public async Task HandleSubscribeAsync_absorbs_a_write_side_disconnect_without_faulting() {
-        var (orchestrator, statusIpc, daemons) = BuildBareStatusIpc("status-ipc-throw-test");
+        var (orchestrator, statusIpc, daemons, _) = BuildBareStatusIpc("status-ipc-throw-test");
         try {
             var stream           = new VanishedSubscriberStream();
             var firstSnapshotSeen = false;
@@ -466,8 +514,6 @@ public class DaemonStatusIpcTests {
                 // exactly what a real vanished subscriber does mid-push.
                 orchestrator.SeedAgentForTest("throw-trigger");
 
-                // Must return cleanly within the deadline: before the fix this IOException would
-                // propagate out of HandleSubscribeAsync uncaught (only OCE was absorbed).
                 await handleTask.WaitAsync(TimeSpan.FromSeconds(5));
                 await Assert.That(statusIpc.ActiveSubscribersForTest).IsEqualTo(0);
             } finally {
@@ -523,7 +569,7 @@ public class DaemonStatusIpcTests {
         });
     }
 
-    [Test, ExcludeOn(OS.Windows)] // §5: StatusSubscribe on a shutting-down daemon — the connection just closes
+    [Test, ExcludeOn(OS.Windows)] // StatusSubscribe on a shutting-down daemon: the connection just closes
     public async Task Daemon_shutdown_closes_the_subscription() {
         await RunAsync("st-h", async (h, ct) => {
             await using var s = await ConnectAsync(h.SockPath, ct);

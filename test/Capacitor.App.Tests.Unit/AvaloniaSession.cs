@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Headless;
 using Avalonia.Threading;
+using Capacitor.App.Services;
 using ReactiveUI.Primitives.Reactive.Concurrency;
 using ReactiveUI.Reactive;
 using ReactiveUI.Reactive.Builder;
@@ -16,8 +17,10 @@ internal static class AvaloniaSession {
     sealed class TestAppBuilder {
         public static AppBuilder BuildAvaloniaApp() =>
             AppBuilder.Configure<Capacitor.App.App>()
+                .UseSkia()
+                .WithAppFont()
                 .UseReactiveUI(_ => { })
-                .UseHeadless(new AvaloniaHeadlessPlatformOptions());
+                .UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false });
     }
 
     /// One application for the whole assembly, not one per test: per-test isolation releases
@@ -34,75 +37,75 @@ internal static class AvaloniaSession {
     /// first instead makes the session's later app build fail VerifyAccess in the compositor ctor.
     /// Forcing one dispatch before any test in this assembly runs claims the thread first.
     [Before(Assembly)]
-    public static Task ClaimUiThread() => DispatchAsync(static () => { });
-
-    /// ReactiveUI's builder state is process-global and effectively one-shot: whatever ran first
-    /// keeps its registrations, so every later test inherits an Avalonia scheduler bound to a
-    /// dispatcher nothing pumps — no ObserveOn(RxSchedulers.MainThreadScheduler) ever delivers and
-    /// the failure reads as a dead pipeline rather than a scheduler. Rebuilding on the UI thread
-    /// per dispatch is what ReactiveUI.Avalonia's own headless harness does; assigning
-    /// MainThreadScheduler by hand instead loses to the builder.
-    static void RebuildReactiveUI() {
-        ReactiveUIBuilder.ResetBuilderStateForTests();
-        RxAppBuilder.CreateReactiveUIBuilder().WithAvalonia().WithCoreServices().BuildApp();
-        // WithAvalonia registers AvaloniaScheduler.Instance, a static whose Dispatcher is captured
-        // at type init — under a headless session that is not Dispatcher.UIThread, and rebuilding
-        // cannot change it. Left alone, every ObserveOn(RxSchedulers.MainThreadScheduler) posts to
-        // a dispatcher nothing pumps: no value is delivered and it reads as a dead pipeline.
-        RxSchedulers.MainThreadScheduler = _immediatePinned
-            ? ImmediateScheduler.Instance
-            : new AvaloniaScheduler(Dispatcher.UIThread);
+    public static Task ClaimUiThread() {
+        // The image fetcher is process-global and would reach for the network; a test that
+        // wants bytes back installs its own for the duration.
+        MarkdownImages.Fetch = static (_, _) => Task.FromResult<byte[]?>(null);
+        return DispatchAsync(static () => { });
     }
 
-    /// A rebuild happens on every dispatch, so WithImmediateRxScheduler's swap has to survive one
-    /// whichever way the two are nested.
-    static bool _immediatePinned;
+    static AvaloniaScheduler? _uiScheduler;
+    static IScheduler? _pinned;
+
+    static void EnsureReactiveUI() {
+        if (_uiScheduler is null) {
+            ReactiveUIBuilder.ResetBuilderStateForTests();
+            RxAppBuilder.CreateReactiveUIBuilder().WithAvalonia().WithCoreServices().BuildApp();
+            // AvaloniaScheduler.Instance captures its Dispatcher at type init, which under a
+            // headless session is not Dispatcher.UIThread.
+            _uiScheduler = new AvaloniaScheduler(Dispatcher.UIThread);
+        }
+        RxSchedulers.MainThreadScheduler = _pinned ?? _uiScheduler;
+    }
 
     public static Task<T> DispatchAsync<T>(Func<T> body) =>
-        Session.Value.Dispatch(() => { RebuildReactiveUI(); return body(); }, CancellationToken.None);
+        Session.Value.Dispatch(() => { EnsureReactiveUI(); return body(); }, CancellationToken.None);
 
     public static Task DispatchAsync(Action body) =>
-        Session.Value.Dispatch(() => { RebuildReactiveUI(); body(); return true; }, CancellationToken.None);
+        Session.Value.Dispatch(() => { EnsureReactiveUI(); body(); return true; }, CancellationToken.None);
 
-    /// Async-body variant: HeadlessUnitTestSession.Dispatch's Func&lt;Task&lt;T&gt;&gt; overload
-    /// runs `body` on the UI thread and, if it doesn't complete synchronously, pumps a
-    /// DispatcherFrame until it does — so an `await` inside `body` that captures the ambient
-    /// SynchronizationContext (e.g. `await someService.DisposeAsync()`, no ConfigureAwait) posts
-    /// its continuation back onto this same pumped loop instead of deadlocking, unlike a raw
-    /// `.GetAwaiter().GetResult()` block on the UI thread.
     public static Task<T> DispatchAsync<T>(Func<Task<T>> body) =>
-        Session.Value.Dispatch(() => { RebuildReactiveUI(); return body(); }, CancellationToken.None);
+        Session.Value.Dispatch(() => { EnsureReactiveUI(); return body(); }, CancellationToken.None);
 
     /// Pins RxSchedulers.MainThreadScheduler to an immediate System.Reactive IScheduler for
     /// the body and RESTORES the prior scheduler in finally (it is process-global). This is
     /// also the flavor pin: it only compiles if the scheduler IS a System.Reactive IScheduler
-    /// consumed by ObserveOn — the spec's scheduler-identity acceptance. (ReactiveUI 23.2.28
-    /// moved the ambient scheduler off the classic static `RxApp` type onto `RxSchedulers`;
-    /// `RxApp` scheduler properties no longer exist in this ReactiveUI line.)
-    public static async Task WithImmediateRxScheduler(Func<Task> body) {
+    /// consumed by ObserveOn. (The ambient scheduler lives on `RxSchedulers`; this ReactiveUI line
+    /// has no `RxApp` scheduler properties.)
+    public static Task WithImmediateRxScheduler(Func<Task> body) => WithRxScheduler(ImmediateScheduler.Instance, body);
+
+    static async Task WithRxScheduler(IScheduler scheduler, Func<Task> body) {
         // Start the process-wide session before snapshotting "prior": outside a dispatch nothing
         // has configured MainThreadScheduler yet, and the finally below would restore that
         // unconfigured default over the real one for every later test.
         _ = Session.Value;
 
         IScheduler prior = RxSchedulers.MainThreadScheduler;
-        _immediatePinned = true;
-        RxSchedulers.MainThreadScheduler = ImmediateScheduler.Instance;
+        _pinned = scheduler;
+        RxSchedulers.MainThreadScheduler = scheduler;
         try { await body(); } finally {
-            _immediatePinned = false;
+            _pinned = null;
             RxSchedulers.MainThreadScheduler = prior;
         }
     }
 
-    /// The standard wrapper for tests that need BOTH pieces at once: WithImmediateRxScheduler
-    /// nested INSIDE DispatchAsync. ObserveOn(RxSchedulers.MainThreadScheduler) projections need
-    /// the immediate scheduler to apply synchronously, while any Dispatcher.UIThread.InvokeAsync
-    /// hop needs the live pumped dispatcher loop DispatchAsync provides -- outside a Dispatch
-    /// frame the headless session's worker thread is blocked and a queued InvokeAsync never runs
-    /// (see TerminalTabViewModelTests' header comment for the full account).
+    /// The standard wrapper for UI tests: the body runs inside DispatchAsync, whose pumped loop a
+    /// Dispatcher.UIThread.InvokeAsync hop needs, with ObserveOn(RxSchedulers.MainThreadScheduler)
+    /// applying synchronously on the UI thread and marshalled to it from any other thread.
     public static Task RunOnUiAsync(Func<Task> body) =>
         DispatchAsync(async () => {
-            await WithImmediateRxScheduler(body);
+            await WithRxScheduler(new UiThreadImmediateScheduler(_uiScheduler!), body);
             return true;
         });
+
+    /// What the OS does when another app takes focus; headless Show() leaves a window active. The
+    /// platform layer's Deactivated hook is internal to Avalonia, so it is reached through the
+    /// interface map by member name.
+    public static void LoseKeyboardFocus(Avalonia.Controls.Window window) {
+        var impl = window.PlatformImpl!;
+        var contract = impl.GetType().GetInterfaces().First(i => i.Name == "IWindowBaseImpl");
+        var map = impl.GetType().GetInterfaceMap(contract);
+        var getter = Array.FindIndex(map.InterfaceMethods, m => m.Name == "get_Deactivated");
+        (map.TargetMethods[getter].Invoke(impl, null) as Action)?.Invoke();
+    }
 }

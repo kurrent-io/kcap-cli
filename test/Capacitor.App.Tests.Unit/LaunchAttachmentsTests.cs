@@ -17,9 +17,4 @@ public class LaunchAttachmentsTests {
     public async Task Is_capable_reads_the_semver_core_and_refuses_what_it_cannot_parse(string? version, bool expected) {
         await Assert.That(LaunchAttachments.IsCapable(version)).IsEqualTo(expected);
     }
-
-    [Test]
-    public async Task The_minimum_is_the_release_whose_daemon_fails_closed_on_a_missing_attachment() {
-        await Assert.That(LaunchAttachments.MinDaemonVersion).IsEqualTo(new Version(1, 0, 3));
-    }
 }

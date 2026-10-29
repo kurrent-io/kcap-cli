@@ -34,7 +34,8 @@ public class LocalControlHelloTests {
     sealed class NoopPtyProcessFactory : IPtyProcessFactory {
         public IPtyProcess Spawn(
                 string command, string[] args, string cwd,
-                Dictionary<string, string>? extraEnv = null, ushort cols = 120, ushort rows = 40
+                Dictionary<string, string>? extraEnv = null, ushort cols = 120, ushort rows = 40,
+                IReadOnlyCollection<string>? removeEnv = null
             ) => throw new NotSupportedException("LocalControlHelloTests never spawns a PTY");
     }
 
@@ -65,7 +66,7 @@ public class LocalControlHelloTests {
         var consentIpc  = new LaunchConsentIpc(broker, store, config, NullLogger<LaunchConsentIpc>.Instance);
 
         var tokens           = AuthFixtures.NewTokenStore(Config.Root);
-        var connection       = new ServerConnection(config, tokens, NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, TimeProvider.System);
+        var connection       = new ServerConnection(config, new FixedCredentialSource(), NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, TimeProvider.System);
         var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
         var repoMatcher      = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance, TimeProvider.System);
         var permissionBridge = new LocalPermissionBridge(connection, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance, TimeProvider.System);
@@ -83,7 +84,7 @@ public class LocalControlHelloTests {
         var statusIpc = new DaemonStatusIpc(config, orchestrator, connection, notifier, TimeProvider.System);
         var settingsIpc = new DaemonSettingsIpc(config, orchestrator, notifier, NullLogger<DaemonSettingsIpc>.Instance);
         var restart = RestartCoordinator.ForTest(daemons.Store, daemonName, daemonName, new NoopRestartStrategy(), TimeProvider.System);
-        var server = new LocalControlServer(config, orchestrator, restart, consentIpc, permissionIpc, statusIpc, settingsIpc, NullLogger<LocalControlServer>.Instance);
+        var server = new LocalControlServer(config, orchestrator, restart, consentIpc, permissionIpc, statusIpc, settingsIpc, TestFences.Ipc(config, orchestrator), TestShutdown.Ipc(orchestrator, restart), TestAccountsIpc.Inert(), NullLogger<LocalControlServer>.Instance);
         await server.StartAsync(ct);
 
         var sockPath = daemons.Store.SocketPath(daemonName);
@@ -118,9 +119,19 @@ public class LocalControlHelloTests {
     }
 
     static async Task<NetworkStream> ConnectAsync(string sockPath, CancellationToken ct) {
-        var sock = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-        await sock.ConnectAsync(new UnixDomainSocketEndPoint(sockPath), ct);
-        return new NetworkStream(sock, ownsSocket: true);
+        // Bind publishes the socket file before Listen. A connect in that gap is refused.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        while (true) {
+            var sock = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+            try {
+                await sock.ConnectAsync(new UnixDomainSocketEndPoint(sockPath), ct);
+                return new NetworkStream(sock, ownsSocket: true);
+            } catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionRefused) {
+                sock.Dispose();
+                if (DateTime.UtcNow >= deadline) throw;
+                await Task.Delay(20, ct);
+            }
+        }
     }
 
     [Test]
@@ -137,7 +148,7 @@ public class LocalControlHelloTests {
             await Assert.That(dto!.ProtocolVersion).IsEqualTo(1);
             await Assert.That(dto.DaemonVersion).IsNotEmpty();
             await Assert.That(dto.DaemonName).IsEqualTo(h.Config.Name);
-            await Assert.That(dto.Capabilities).IsEquivalentTo(new[] { "consent/1", "consent/2", "consent/3", "status/1", "permission/1", "input/1", "input/2", "settings/1", "rename/1" });
+            await Assert.That(dto.Capabilities).IsEquivalentTo(LocalControlCapabilities.Current);
         });
     }
 
@@ -153,7 +164,7 @@ public class LocalControlHelloTests {
             await Assert.That(dto!.ProtocolVersion).IsEqualTo(1);
             await Assert.That(dto.DaemonVersion).IsNotEmpty();
             await Assert.That(dto.DaemonName).IsEqualTo(h.Config.Name);
-            await Assert.That(dto.Capabilities).IsEquivalentTo(new[] { "consent/1", "consent/2", "consent/3", "status/1", "permission/1", "input/1", "input/2", "settings/1", "rename/1" });
+            await Assert.That(dto.Capabilities).IsEquivalentTo(LocalControlCapabilities.Current);
         });
     }
 
@@ -172,7 +183,7 @@ public class LocalControlHelloTests {
             await Assert.That(dto!.ProtocolVersion).IsEqualTo(1);
             await Assert.That(dto.DaemonVersion).IsNotEmpty();
             await Assert.That(dto.DaemonName).IsEqualTo(h.Config.Name);
-            await Assert.That(dto.Capabilities).IsEquivalentTo(new[] { "consent/1", "consent/2", "consent/3", "status/1", "permission/1", "input/1", "input/2", "settings/1", "rename/1" });
+            await Assert.That(dto.Capabilities).IsEquivalentTo(LocalControlCapabilities.Current);
         });
     }
 
@@ -212,6 +223,22 @@ public class LocalControlHelloTests {
             await Assert.That(resp!.Type).IsEqualTo(FrameType.SendTextAck);
             var ack = JsonSerializer.Deserialize(resp.Text, InputIpcJsonContext.Default.SendTextAckDto)!;
             await Assert.That(ack.Reason).IsEqualTo(SendTextReasons.NoSuchAgent);
+        });
+    }
+
+    /// <summary>The client a hosted agent's MCP server runs, against the real routing switch: it sends the
+    /// frame only after hello advertises it, and reads the agent's session from the reply.</summary>
+    [Test]
+    public async Task An_agent_session_query_is_advertised_routed_and_answered() {
+        await RunAsync("hello-session", async (h, ct) => {
+            AgentOrchestratorHarness.BindTranscript(
+                AgentOrchestratorHarness.SeedAcpAgent(h.Orchestrator, "agent-7", new FakeAcpRuntime { AcpSessionId = "ses_01JC7QY3VZ8K" }));
+
+            var bound   = await AgentSessionIpc.QueryAsync(h.Daemons.Store, h.Config.Name, "agent-7", TimeProvider.System, TimeSpan.FromSeconds(10), ct);
+            var unknown = await AgentSessionIpc.QueryAsync(h.Daemons.Store, h.Config.Name, "nobody", TimeProvider.System, TimeSpan.FromSeconds(10), ct);
+
+            await Assert.That(bound).IsEqualTo("ses_01JC7QY3VZ8K");
+            await Assert.That(unknown).IsNull();
         });
     }
 

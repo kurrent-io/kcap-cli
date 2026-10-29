@@ -5,54 +5,63 @@
         xmlns:cmd="clr-namespace:Capacitor.Cli.Core.Commands;assembly=Capacitor.Cli.Core"
         x:Class="Capacitor.App.Views.FeedbackWindow"
         x:DataType="vm:FeedbackViewModel"
-        Title="Kurrent Capacitor — Send feedback"
-        Icon="avares://Kurrent Capacitor/Assets/kcap-icon.png"
+        Title="kcap — Send feedback"
+        Icon="avares://kcap-desktop/Assets/kcap-icon.png"
         Width="560" Height="560" CanResize="False" WindowStartupLocation="CenterOwner"
         Background="{StaticResource KcapCanvasBrush}">
     <Grid Margin="28,24" RowDefinitions="Auto,*,Auto">
         <StackPanel Spacing="4">
             <TextBlock Classes="kcapTitle" Text="Send feedback" />
-            <TextBlock Classes="kcapSubtitle" Text="Goes to Kurrent support. Replies arrive by email." />
+            <TextBlock Classes="kcapSubtitle" Text="{Binding Subtitle}" TextWrapping="Wrap" />
         </StackPanel>
 
-        <StackPanel Grid.Row="1" Margin="0,18,0,0" Spacing="18" IsVisible="{Binding !IsSent}">
-            <StackPanel Spacing="8">
-                <TextBlock Classes="kcapLabel" Text="What is this about?" />
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <!-- The category is frozen with the rest of the report while a send is in flight;
-                         a two-way chip must not release that snapshot mid-send. -->
-                    <RadioButton x:Name="BugChip" Classes="kcapChoice" Content="Bug" GroupName="category"
-                                 IsEnabled="{Binding !IsBusy}"
-                                 IsChecked="{Binding Category, Converter={x:Static views:FeedbackCategoryConverter.Instance}, ConverterParameter={x:Static cmd:FeedbackCategory.Bug}}" />
-                    <RadioButton x:Name="FeedbackChip" Classes="kcapChoice" Content="Feedback" GroupName="category"
-                                 IsEnabled="{Binding !IsBusy}"
-                                 IsChecked="{Binding Category, Converter={x:Static views:FeedbackCategoryConverter.Instance}, ConverterParameter={x:Static cmd:FeedbackCategory.Feedback}}" />
+        <!-- Scrolls so the full-report fallback stays reachable in the fixed-size window. -->
+        <ScrollViewer Grid.Row="1" Margin="0,18,0,0" IsVisible="{Binding !IsSent}" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel Spacing="18">
+                <StackPanel Spacing="8">
+                    <TextBlock Classes="kcapLabel" Text="What is this about?" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <!-- The category is frozen with the rest of the report while a send is in flight;
+                             a two-way chip must not release that snapshot mid-send. -->
+                        <RadioButton x:Name="BugChip" Classes="kcapChoice" Content="Bug" GroupName="category"
+                                     IsEnabled="{Binding !IsBusy}"
+                                     IsChecked="{Binding Category, Converter={x:Static views:FeedbackCategoryConverter.Instance}, ConverterParameter={x:Static cmd:FeedbackCategory.Bug}}" />
+                        <RadioButton x:Name="FeedbackChip" Classes="kcapChoice" Content="Feedback" GroupName="category"
+                                     IsEnabled="{Binding !IsBusy}"
+                                     IsChecked="{Binding Category, Converter={x:Static views:FeedbackCategoryConverter.Instance}, ConverterParameter={x:Static cmd:FeedbackCategory.Feedback}}" />
+                    </StackPanel>
                 </StackPanel>
+                <StackPanel Spacing="8">
+                    <TextBlock Classes="kcapLabel" Text="Message" />
+                    <TextBox x:Name="MessageInput" Classes="kcapField" AcceptsReturn="True" TextWrapping="Wrap" Height="170"
+                             IsEnabled="{Binding !IsBusy}"
+                             PlaceholderText="What happened, and what you expected instead." Text="{Binding Message}" />
+                    <TextBlock x:Name="HintText" Classes="kcapHint" Text="{Binding Hint}" TextWrapping="Wrap" />
+                </StackPanel>
+                <TextBlock x:Name="OutcomeText" Classes="kcapHint" Foreground="{StaticResource KcapWarningBrush}"
+                           Text="{Binding Outcome}" TextWrapping="Wrap"
+                           IsVisible="{Binding Outcome, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                <TextBox x:Name="FullReportText" Classes="kcapField" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"
+                         Height="90" Text="{Binding FullReport}"
+                         IsVisible="{Binding FullReport, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
             </StackPanel>
-            <StackPanel Spacing="8">
-                <TextBlock Classes="kcapLabel" Text="Message" />
-                <TextBox x:Name="MessageInput" Classes="kcapField" AcceptsReturn="True" TextWrapping="Wrap" Height="170"
-                         IsEnabled="{Binding !IsBusy}"
-                         PlaceholderText="What happened, and what you expected instead." Text="{Binding Message}" />
-                <TextBlock x:Name="HintText" Classes="kcapHint" Text="{Binding Hint}" TextWrapping="Wrap" />
-            </StackPanel>
-            <TextBlock x:Name="OutcomeText" Classes="kcapHint" Foreground="{StaticResource KcapWarningBrush}"
-                       Text="{Binding Outcome}" TextWrapping="Wrap"
-                       IsVisible="{Binding Outcome, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-        </StackPanel>
+        </ScrollViewer>
 
         <StackPanel x:Name="SentPanel" Grid.Row="1" Margin="0,18,0,0" Spacing="12" IsVisible="{Binding IsSent}">
-            <TextBlock x:Name="SentText" Classes="kcapLabel" Text="{Binding ReporterEmail, StringFormat='Sent. Replies go to {0}.'}" />
+            <TextBlock x:Name="SentText" Classes="kcapLabel" Text="{Binding SentMessage}" TextWrapping="Wrap" />
         </StackPanel>
 
-        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="10" Margin="0,18,0,0">
+        <StackPanel x:Name="Actions" Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,18,0,0">
+            <Button x:Name="CancelButton" Classes="kcapChip" Content="Cancel" Click="OnCancel" IsVisible="{Binding !IsSent}"
+                    IsCancel="{Binding !IsSent}" />
+            <Button x:Name="CloseButton" Classes="kcapChip" Content="Close" Click="OnCancel" IsVisible="{Binding IsSent}"
+                    IsCancel="{Binding IsSent}" />
             <Button x:Name="SignInButton" Classes="kcapChip" Content="Sign in" Command="{Binding SignInCommand}"
                     IsVisible="{Binding SignInOffered}" />
             <Button x:Name="SendAnotherButton" Classes="kcapChip" Content="Send another" Command="{Binding SendAnotherCommand}"
                     IsVisible="{Binding IsSent}" />
-            <Button x:Name="CancelButton" Classes="kcapChip" Content="Cancel" Click="OnCancel" IsVisible="{Binding !IsSent}" />
-            <Button x:Name="CloseButton" Classes="kcapChip" Content="Close" Click="OnCancel" IsVisible="{Binding IsSent}" />
-            <Button x:Name="SendButton" Classes="kcapPrimary" Content="Send" Command="{Binding SendCommand}" IsVisible="{Binding !IsSent}" />
+            <Button x:Name="SendButton" Classes="kcapPrimary" Content="{Binding SendLabel}" Command="{Binding SendCommand}" IsVisible="{Binding !IsSent}"
+                    IsDefault="{Binding !IsSent}" />
         </StackPanel>
     </Grid>
 </Window>

@@ -56,7 +56,6 @@ public class PermissionRequestCommandTests {
         await Assert.That(bridge["agent_id"]!.GetValue<string>()).IsEqualTo("agent-1");
         await Assert.That(bridge["cwd"]!.GetValue<string>()).IsEqualTo("/repo");
         await Assert.That(bridge["tool_name"]!.GetValue<string>()).IsEqualTo("Bash");
-        await Assert.That(bridge["transcript_path"]).IsNull();
 
         var withoutAgent = PermissionRequestCommand.BuildBridgePayload(node, "abc", null);
         await Assert.That(withoutAgent["agent_id"]).IsNull();
@@ -75,6 +74,17 @@ public class PermissionRequestCommandTests {
 
         var withoutId = System.Text.Json.Nodes.JsonNode.Parse("""{"session_id":"abc","tool_name":"Bash","tool_input":{"command":"ls"}}""")!;
         await Assert.That(PermissionRequestCommand.BuildBridgePayload(withoutId, "abc", "agent-1")["tool_use_id"]).IsNull();
+    }
+
+    /// <summary>The daemon's policy judge reads the transcript for the human turns and refusals it
+    /// declares; without the path every hosted consultation is refused an allow.</summary>
+    [Test]
+    public async Task Bridge_payload_forwards_the_transcript_path() {
+        var node = System.Text.Json.Nodes.JsonNode.Parse("""{"session_id":"abc","tool_name":"Bash","tool_input":{"command":"ls"},"transcript_path":"/t.jsonl"}""")!;
+        await Assert.That(PermissionRequestCommand.BuildBridgePayload(node, "abc", "agent-1")["transcript_path"]!.GetValue<string>()).IsEqualTo("/t.jsonl");
+
+        var withoutPath = System.Text.Json.Nodes.JsonNode.Parse("""{"session_id":"abc","tool_name":"Bash","tool_input":{"command":"ls"}}""")!;
+        await Assert.That(PermissionRequestCommand.BuildBridgePayload(withoutPath, "abc", "agent-1")["transcript_path"]).IsNull();
     }
 
     /// The hook's own agent_id names the subagent whose tool this is. The daemon scopes the

@@ -1,0 +1,176 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:auth="clr-namespace:Capacitor.Cli.Core.Auth;assembly=Capacitor.Cli.Core"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels.Onboarding"
+             xmlns:views="clr-namespace:Capacitor.App.Views.Onboarding"
+             xmlns:icons="clr-namespace:Capacitor.App.Views"
+             x:Class="Capacitor.App.Views.Onboarding.SignInPaneView"
+             x:DataType="vm:SignInStepViewModel">
+    <StackPanel Spacing="16">
+        <Border Classes="onboardingCard" IsVisible="{Binding SignUpPanelVisible}">
+            <StackPanel Spacing="16">
+                <Button x:Name="ContinueAfterSignUpButton" Classes="onboardingPrimary" HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Center" Content="Continue"
+                        Command="{Binding ContinueAfterSignUpCommand}" />
+                <TextBlock Classes="onboardingNote" Text="Continue finds your new workspace and signs this machine in to it." />
+
+                <StackPanel Spacing="4" IsVisible="{Binding StatusLineVisible}">
+                    <TextBlock x:Name="SignUpStatusText" Classes="onboardingLabel" Text="{Binding Status}" TextWrapping="Wrap"
+                               Classes.failed="{Binding StatusIsError}">
+                        <TextBlock.Styles>
+                            <Style Selector="TextBlock.failed">
+                                <Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" />
+                            </Style>
+                        </TextBlock.Styles>
+                    </TextBlock>
+                    <TextBlock Classes="onboardingBody" Text="{Binding StatusDetail}"
+                               IsVisible="{Binding StatusDetail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+
+                <WrapPanel Orientation="Horizontal">
+                    <Button x:Name="ReopenSignUpButton" Classes="onboardingLink" Margin="0,0,24,0"
+                            Content="Open the sign-up page again" Command="{Binding ReopenSignUpCommand}" />
+                    <Button x:Name="SignUpUseCodeButton" Classes="onboardingLink" Margin="0,0,24,0" Content="Use a sign-in code"
+                            Command="{Binding UseCodeCommand}" />
+                    <Button x:Name="SignUpWorkspaceUrlButton" Classes="onboardingLink" Content="Use a workspace URL"
+                            Command="{Binding ToggleUrlPanelCommand}" />
+                </WrapPanel>
+
+                <StackPanel Spacing="8" IsVisible="{Binding UrlPanelVisible}">
+                    <TextBlock Classes="onboardingLabel" Text="Workspace name or URL" />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                        <TextBox x:Name="SignUpServerInputBox" Classes="onboardingField" PlaceholderText="acme  ·  https://acme.kcap.ai"
+                                 AutomationProperties.Name="Workspace name or URL"
+                                 Text="{Binding Connect.ServerInputText, Mode=TwoWay}" />
+                        <Button Grid.Column="1" x:Name="SignUpContinueWithUrlButton" Classes="onboardingSecondary" Content="Continue"
+                                Command="{Binding ContinueWithUrlCommand}" />
+                    </Grid>
+                    <TextBlock Classes="onboardingError" Text="{Binding Connect.InputError}"
+                               IsVisible="{Binding Connect.InputError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <Border Classes="onboardingCard" IsVisible="{Binding StartPanelVisible}">
+            <StackPanel Spacing="16">
+                <Button x:Name="WorkAccountButton" Classes="onboardingPrimary" HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Center" Content="{Binding WorkAccountLabel}"
+                        Command="{Binding ContinueWithWorkAccountCommand}"
+                        IsEnabled="{Binding Idle}" IsVisible="{Binding ShowPrimaryAction}" />
+                <TextBlock Classes="onboardingNote" Text="Sign in securely in your browser. You'll return here to finish setup."
+                           IsVisible="{Binding ShowPrimaryAction}" />
+
+                <StackPanel Orientation="Horizontal" Spacing="10" IsVisible="{Binding Satisfied}">
+                    <icons:AppIcon Kind="Check" Size="14" VerticalAlignment="Center" Foreground="{StaticResource KcapSuccessBrush}" />
+                    <StackPanel Spacing="2">
+                        <TextBlock x:Name="StartSignedInText" Classes="onboardingLabel" Text="{Binding ConnectionStatus}" />
+                        <TextBlock Classes="onboardingBody" Text="{Binding StatusDetail}"
+                                   IsVisible="{Binding StatusDetail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    </StackPanel>
+                </StackPanel>
+
+                <StackPanel Spacing="4" IsVisible="{Binding StatusLineVisible}">
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <Panel Classes="onboardingSpinner" IsVisible="{Binding Busy}">
+                            <icons:AppIcon Kind="LoaderCircle" Size="20" Classes.kcapSpinning="{Binding Busy}"
+                                           Foreground="{StaticResource OnboardingAccentBrush}" />
+                        </Panel>
+                        <TextBlock x:Name="SignInStatusText" Classes="onboardingLabel" Text="{Binding Status}" TextWrapping="Wrap"
+                                   VerticalAlignment="Center" Classes.failed="{Binding StatusIsError}">
+                            <TextBlock.Styles>
+                                <Style Selector="TextBlock.failed">
+                                    <Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" />
+                                </Style>
+                            </TextBlock.Styles>
+                        </TextBlock>
+                    </StackPanel>
+                    <TextBlock x:Name="SignInDetailText" Classes="onboardingBody" Text="{Binding StatusDetail}"
+                               IsVisible="{Binding StatusDetail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+
+                <Border Classes="onboardingCallout" IsVisible="{Binding BrowserUrl, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                    <StackPanel Spacing="8">
+                        <TextBlock Classes="onboardingMicro" Text="BROWSER DIDN'T OPEN?" />
+                        <StackPanel Orientation="Horizontal" Spacing="16">
+                            <Button x:Name="OpenSignInUrlButton" Classes="onboardingLink" Content="Open browser"
+                                    Command="{Binding OpenSignInUrlCommand}" />
+                            <Button x:Name="CopySignInUrlButton" Classes="onboardingLink" Content="Copy sign-in link" Click="OnCopySignInUrlClick" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <Border Classes="onboardingCallout" IsVisible="{Binding DeviceCode, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                    <StackPanel Spacing="8">
+                        <TextBlock Classes="onboardingMicro" Text="ENTER THIS CODE TO FINISH SIGNING IN" />
+                        <TextBlock x:Name="DeviceCodeText" Text="{Binding DeviceCode}" FontSize="28" FontWeight="Bold"
+                                   LetterSpacing="3" FontFamily="{StaticResource OnboardingMonoFont}"
+                                   Foreground="{StaticResource OnboardingTextBrush}" />
+                        <Button x:Name="OpenVerificationUriButton" Classes="onboardingLink" HorizontalAlignment="Left"
+                                Content="{Binding VerificationUri}" Command="{Binding OpenVerificationUriCommand}" />
+                        <Button Classes="onboardingLink" HorizontalAlignment="Left" Content="Copy code" Click="OnCopyDeviceCodeClick" />
+                    </StackPanel>
+                </Border>
+
+                <WrapPanel Orientation="Horizontal" IsVisible="{Binding ShowPrimaryAction}">
+                    <Button x:Name="UseCodeButton" Classes="onboardingLink" Margin="0,0,24,0" Content="Use a sign-in code"
+                            Command="{Binding UseCodeCommand}" />
+                    <Button x:Name="WorkspaceUrlButton" Classes="onboardingLink" Content="Use a workspace URL"
+                            Command="{Binding ToggleUrlPanelCommand}" />
+                </WrapPanel>
+                <Button x:Name="CancelSignInButton" Classes="onboardingLink" HorizontalAlignment="Left" Content="Cancel sign-in"
+                        Command="{Binding CancelCommand}" IsVisible="{Binding Busy}" />
+
+                <StackPanel Spacing="8" IsVisible="{Binding UrlPanelVisible}" IsEnabled="{Binding Idle}">
+                    <TextBlock Classes="onboardingLabel" Text="Workspace name or URL" />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                        <TextBox x:Name="ServerInputBox" Classes="onboardingField" PlaceholderText="acme  ·  https://acme.kcap.ai"
+                                 AutomationProperties.Name="Workspace name or URL"
+                                 Text="{Binding Connect.ServerInputText, Mode=TwoWay}" />
+                        <Button Grid.Column="1" x:Name="ContinueWithUrlButton" Classes="onboardingSecondary" Content="Continue"
+                                Command="{Binding ContinueWithUrlCommand}" IsEnabled="{Binding Idle}" />
+                    </Grid>
+                    <TextBlock x:Name="ConnectErrorText" Classes="onboardingError" Text="{Binding Connect.InputError}"
+                               IsVisible="{Binding Connect.InputError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <Border Classes="onboardingCard" IsVisible="{Binding TenantPickerVisible}">
+            <StackPanel Spacing="14">
+                <TextBlock Classes="onboardingMicro" Text="WORKSPACES FOR YOUR ACCOUNT" />
+                <ListBox x:Name="TenantList" Classes="onboardingList" ItemsSource="{Binding Tenants}"
+                         SelectedItem="{Binding SelectedTenant, Mode=TwoWay}"
+                         IsEnabled="{Binding TenantChoicePending}">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="auth:DiscoveredTenant">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                <StackPanel Spacing="2">
+                                    <TextBlock Classes="onboardingLabel" Text="{Binding Label}" />
+                                    <TextBlock Classes="onboardingSignal" Text="{Binding Origin}" TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                                <icons:AppIcon Kind="Check" Size="14" Grid.Column="1" Classes="onboardingChoiceMark" VerticalAlignment="Center"
+                                               Foreground="{StaticResource OnboardingAccentBrush}" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+                <StackPanel Orientation="Horizontal" Spacing="10" IsVisible="{Binding Satisfied}">
+                    <icons:AppIcon Kind="Check" Size="14" VerticalAlignment="Center" Foreground="{StaticResource KcapSuccessBrush}" />
+                    <StackPanel Spacing="2">
+                        <TextBlock x:Name="SignedInText" Classes="onboardingLabel" Text="{Binding ConnectionStatus}" />
+                        <TextBlock Classes="onboardingBody" Text="{Binding StatusDetail}"
+                                   IsVisible="{Binding StatusDetail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    </StackPanel>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <Border Classes="onboardingWarning" IsVisible="{Binding QuarantineNotice, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+            <StackPanel Spacing="10">
+                <TextBlock x:Name="QuarantineNoticeText" Classes="onboardingBody" Text="{Binding QuarantineNotice}" />
+                <Button x:Name="AcknowledgeQuarantineButton" Classes="onboardingSecondary" HorizontalAlignment="Left"
+                        Content="Acknowledge" Command="{Binding AcknowledgeQuarantineCommand}" />
+            </StackPanel>
+        </Border>
+    </StackPanel>
+</UserControl>

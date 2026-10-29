@@ -1,0 +1,190 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels.Onboarding"
+             xmlns:views="clr-namespace:Capacitor.App.Views.Onboarding"
+             xmlns:app="clr-namespace:Capacitor.App.Views"
+             x:Class="Capacitor.App.Views.Onboarding.OnboardingPaneView"
+             x:DataType="vm:OnboardingViewModel"
+             Background="{StaticResource OnboardingCanvasBrush}">
+    <!-- Per-step templates, selected by ViewModel type; the ContentControl below deliberately
+         sets no ContentTemplate, which would win over every one of these. -->
+    <UserControl.DataTemplates>
+        <DataTemplate DataType="vm:EditionStepViewModel">
+            <StackPanel Spacing="12">
+                <Border Classes="onboardingCallout" IsVisible="{Binding NoticeVisible}">
+                    <TextBlock x:Name="EditionNoticeText" Classes="onboardingBody" Text="{Binding Notice}" />
+                </Border>
+                <StackPanel x:Name="NewWorkspaceChoices" Spacing="12">
+                    <Button x:Name="LocalEditionButton" Classes="onboardingEditionCard" Command="{Binding ChooseLocalCommand}"
+                            AutomationProperties.Name="{x:Static vm:EditionStepViewModel.LocalTitle}"
+                            AutomationProperties.HelpText="{Binding LocalUnavailableReason}">
+                        <StackPanel>
+                            <Grid Classes="onboardingEditionHead" ColumnDefinitions="20,*" RowDefinitions="Auto,Auto" ColumnSpacing="14" RowSpacing="4">
+                                <app:AppIcon Kind="Laptop" Size="20" />
+                                <TextBlock Grid.Column="1" Classes="onboardingLabel" VerticalAlignment="Center"
+                                           Text="{x:Static vm:EditionStepViewModel.LocalTitle}" />
+                                <TextBlock Grid.Row="1" Grid.Column="1" Classes="onboardingDetail" Text="{x:Static vm:EditionStepViewModel.LocalDetail}" />
+                            </Grid>
+                            <StackPanel Classes="onboardingEditionFooter" IsVisible="{Binding LocalUnavailableVisible}">
+                                <Border Classes="onboardingDivider" />
+                                <Grid ColumnDefinitions="20,*" ColumnSpacing="14">
+                                    <app:AppIcon Kind="Info" Size="14" HorizontalAlignment="Center" VerticalAlignment="Top"
+                                                 Margin="0,2,0,0" Foreground="{StaticResource OnboardingDimBrush}" />
+                                    <TextBlock Grid.Column="1" x:Name="LocalUnavailableText" Classes="onboardingNote"
+                                               Foreground="{StaticResource OnboardingMutedBrush}" Text="{Binding LocalUnavailableReason}" />
+                                </Grid>
+                            </StackPanel>
+                        </StackPanel>
+                    </Button>
+
+                    <Button x:Name="CloudEditionButton" Classes="onboardingEditionCard" Command="{Binding ChooseCloudCommand}"
+                            AutomationProperties.Name="{x:Static vm:EditionStepViewModel.CloudTitle}">
+                        <Grid ColumnDefinitions="20,*" RowDefinitions="Auto,Auto" ColumnSpacing="14" RowSpacing="4">
+                            <app:AppIcon Kind="Users" Size="20" />
+                            <TextBlock Grid.Column="1" Classes="onboardingLabel" VerticalAlignment="Center"
+                                       Text="{x:Static vm:EditionStepViewModel.CloudTitle}" />
+                            <TextBlock Grid.Row="1" Grid.Column="1" Classes="onboardingDetail" Text="{x:Static vm:EditionStepViewModel.CloudDetail}" />
+                        </Grid>
+                    </Button>
+                </StackPanel>
+
+                <Border Classes="onboardingDivider" Margin="0,4" />
+
+                <Button x:Name="ExistingWorkspaceButton" Classes="onboardingEditionCard"
+                        AutomationProperties.Name="{x:Static vm:EditionStepViewModel.ExistingTitle}"
+                        Command="{Binding SignInCommand}">
+                    <Grid ColumnDefinitions="20,*" RowDefinitions="Auto,Auto" ColumnSpacing="14" RowSpacing="4">
+                        <app:AppIcon Kind="LogIn" Size="20" />
+                        <TextBlock Grid.Column="1" Classes="onboardingLabel" VerticalAlignment="Center"
+                                   Text="{x:Static vm:EditionStepViewModel.ExistingTitle}" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" Classes="onboardingDetail" Text="{x:Static vm:EditionStepViewModel.ExistingDetail}" />
+                    </Grid>
+                </Button>
+
+                <TextBlock Classes="onboardingNote" Margin="0,6,0,0" Text="{x:Static vm:SetupLocation.ReopenAnytimeNote}" />
+            </StackPanel>
+        </DataTemplate>
+
+        <DataTemplate DataType="vm:InstallStepViewModel">
+            <views:InstallPaneView />
+        </DataTemplate>
+
+        <DataTemplate DataType="vm:SignInStepViewModel">
+            <views:SignInPaneView />
+        </DataTemplate>
+
+        <DataTemplate DataType="vm:HarnessesStepViewModel">
+            <views:HarnessesPaneView />
+        </DataTemplate>
+
+        <DataTemplate DataType="vm:HistoryStepViewModel">
+            <views:HistoryPaneView />
+        </DataTemplate>
+
+        <DataTemplate DataType="vm:UsageDataStepViewModel">
+            <StackPanel Spacing="12">
+                <Border Classes="onboardingCard" IsVisible="{Binding ChoiceVisible}">
+                    <StackPanel Spacing="2">
+                        <RadioButton x:Name="ShareUsageOption" Classes="onboardingOption" GroupName="UsageData"
+                                     IsChecked="{Binding Share, Mode=TwoWay}">
+                            <StackPanel Spacing="2">
+                                <TextBlock Classes="onboardingLabel" FontSize="13" Text="{x:Static vm:UsageDataStepViewModel.ShareTitle}" />
+                                <TextBlock Classes="onboardingDetail" TextWrapping="Wrap" Text="{x:Static vm:UsageDataStepViewModel.ShareDetail}" />
+                            </StackPanel>
+                        </RadioButton>
+                        <RadioButton x:Name="DontShareUsageOption" Classes="onboardingOption" GroupName="UsageData"
+                                     IsChecked="{Binding DontShare, Mode=TwoWay}">
+                            <StackPanel Spacing="2">
+                                <TextBlock Classes="onboardingLabel" FontSize="13" Text="{x:Static vm:UsageDataStepViewModel.OffTitle}" />
+                                <TextBlock Classes="onboardingDetail" TextWrapping="Wrap" Text="{x:Static vm:UsageDataStepViewModel.OffDetail}" />
+                            </StackPanel>
+                        </RadioButton>
+                    </StackPanel>
+                </Border>
+                <TextBlock x:Name="UsageDataProblemText" Classes="onboardingError" TextWrapping="Wrap" Text="{Binding Problem}"
+                           IsVisible="{Binding Problem, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+            </StackPanel>
+        </DataTemplate>
+
+        <DataTemplate DataType="vm:DoneStepViewModel">
+            <views:DonePaneView />
+        </DataTemplate>
+    </UserControl.DataTemplates>
+
+
+    <Panel>
+        <!-- The setup page's bloom: behind the column, never under the pointer. -->
+        <Ellipse Width="900" Height="900" HorizontalAlignment="Center" VerticalAlignment="Center"
+                 Fill="{StaticResource OnboardingBloomBrush}" IsHitTestVisible="False" />
+
+        <Grid RowDefinitions="44,*">
+        <!-- The compact step title takes over as the large heading scrolls out of view.
+             Symmetric insets keep it centered and clear of the window controls. -->
+        <Border x:Name="TitleBar" Background="{StaticResource OnboardingCanvasBrush}" PointerPressed="OnChromePointerPressed">
+            <Panel>
+            <TextBlock x:Name="CompactStepTitle" Text="{Binding Current.Title}" Margin="96,0"
+                       FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource OnboardingTextBrush}"
+                       TextAlignment="Center" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                       Opacity="0" IsHitTestVisible="False" />
+            <Border x:Name="TitleBarRule" Height="1" VerticalAlignment="Bottom" Opacity="0" IsHitTestVisible="False"
+                    Background="{StaticResource OnboardingDividerBrush}">
+                <Border.Transitions>
+                    <Transitions>
+                        <DoubleTransition Property="Opacity" Duration="0:0:0.14" />
+                    </Transitions>
+                </Border.Transitions>
+            </Border>
+            </Panel>
+        </Border>
+
+        <!-- The footer scrolls with the page, so its actions sit below everything the step says; on a short
+             step the viewport-high grid still pins it to the bottom. -->
+        <ScrollViewer x:Name="StepScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                      ScrollChanged="OnStepScrolled">
+        <Grid RowDefinitions="*,Auto" MinHeight="{Binding #StepScroll.Viewport.Height}">
+            <StackPanel MaxWidth="620" HorizontalAlignment="Stretch" Margin="32,16,32,24" Spacing="26">
+                <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,-8">
+                    <app:ProductWordmark HorizontalAlignment="Left" />
+                    <Button Grid.Column="1" Classes="onboardingQuiet" Content="Finish later"
+                            Command="{Binding FinishLaterCommand}" IsVisible="{Binding FinishLaterVisible}"
+                            ToolTip.Tip="{x:Static vm:SetupLocation.FinishLaterTip}" />
+                </Grid>
+
+                <StackPanel Spacing="14">
+                    <TextBlock x:Name="StepEyebrowText" Classes="onboardingEyebrow" Text="{Binding Eyebrow}" />
+                    <!-- Fallback presenter: always shows the current step's title, template or not. -->
+                    <TextBlock x:Name="StepTitleText" Classes="onboardingHeadline" Text="{Binding Current.Title}" />
+                    <TextBlock x:Name="StepLedeText" Classes="onboardingLede" Text="{Binding Current.Lede}"
+                               IsVisible="{Binding Current.Lede, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+
+                <ContentControl x:Name="StepContent" Content="{Binding Current}" HorizontalAlignment="Stretch" />
+            </StackPanel>
+        <Border x:Name="StepFooter" Grid.Row="1" IsVisible="{Binding FooterVisible}" Background="{StaticResource OnboardingCanvasBrush}"
+                BorderBrush="{StaticResource OnboardingDividerBrush}" BorderThickness="0,1,0,0">
+                <StackPanel MaxWidth="620" HorizontalAlignment="Stretch" Margin="32,16,32,24" Spacing="10">
+                    <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="12">
+                        <Button x:Name="BackButton" Classes="onboardingQuiet" Content="Back"
+                                Command="{Binding BackCommand}" IsVisible="{Binding BackVisible}" />
+                        <Button Grid.Column="2" x:Name="SkipButton" Classes="onboardingSecondary" Command="{Binding SkipCommand}"
+                                Content="{Binding SkipLabel}"
+                                IsVisible="{Binding SkipVisible}" />
+                        <Button Grid.Column="2" x:Name="CancelTenantButton" Classes="onboardingSecondary" Content="Cancel"
+                                Command="{Binding CancelTenantCommand}" IsVisible="{Binding TenantActionsVisible}" />
+                        <Button Grid.Column="2" x:Name="OpenInBrowserButton" Classes="onboardingLink" Content="Open in browser"
+                                Command="{Binding OpenInBrowserCommand}" IsVisible="{Binding OpenInBrowserVisible}" />
+                        <Button Grid.Column="3" x:Name="ConfirmTenantButton" Classes="onboardingPrimary" Content="Continue"
+                                Command="{Binding ConfirmTenantCommand}" IsVisible="{Binding TenantActionsVisible}" />
+                        <Button Grid.Column="3" x:Name="NextButton" Command="{Binding NextCommand}"
+                                Classes.onboardingPrimary="{Binding NextIsPrimary}"
+                                Classes.onboardingSecondary="{Binding NextIsSecondary}"
+                                Content="{Binding NextLabel}"
+                                IsVisible="{Binding NextVisible}" />
+                    </Grid>
+                </StackPanel>
+        </Border>
+        </Grid>
+        </ScrollViewer>
+        </Grid>
+    </Panel>
+</UserControl>

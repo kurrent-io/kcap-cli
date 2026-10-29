@@ -49,6 +49,9 @@ public class ImportSkipTitleTests : IDisposable {
                     .IsGreaterThan(0)
                     .Because("without the flag import titles each session — if this stops holding, the "
                            + "skip-title assertion below proves nothing");
+        await Assert.That(TitleBodies().All(b => b.Contains("\"source\":\"client-auto\"", StringComparison.Ordinal)))
+                    .IsTrue()
+                    .Because("an untagged title is stored as a raw placeholder the server's backfill regenerates");
     }
 
     [Test]
@@ -83,8 +86,10 @@ public class ImportSkipTitleTests : IDisposable {
             skipTitle:        skipTitle);
     }
 
-    int TitlePostCount() =>
-        _server.LogEntries.Count(e => e.RequestMessage.Path == "/hooks/session-title");
+    int TitlePostCount() => TitleBodies().Count();
+
+    IEnumerable<string> TitleBodies() =>
+        _server.LogEntries.Where(e => e.RequestMessage.Path == "/hooks/session-title").Select(e => e.RequestMessage.Body ?? "");
 
     void StubHooks() {
         _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
@@ -110,12 +115,7 @@ public class ImportSkipTitleTests : IDisposable {
         public FakeClaudeOnPath() {
             _bin = new TempDir();
 
-            var script = _bin.CreateFile("claude", "#!/bin/sh\necho 'Retry the import loop'\n");
-
-            // Only the Unix-only positive control executes this; the guard is for the compiler.
-            if (!OperatingSystem.IsWindows())
-                File.SetUnixFileMode(script,
-                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            _bin.CreateExecutable("claude", "#!/bin/sh\necho 'Retry the import loop'\n");
 
             _path = EnvScope.Exclusive(
                 "PATH", _bin.Path + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH"));

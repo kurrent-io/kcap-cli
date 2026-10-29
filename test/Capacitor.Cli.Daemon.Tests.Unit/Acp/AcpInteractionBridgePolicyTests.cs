@@ -54,7 +54,7 @@ public class AcpInteractionBridgePolicyTests {
     }
 
     sealed class Harness {
-        public AcpInteractionBridge         Bridge    { get; init; } = null!;
+        public AcpInteractionBridge         Bridge    { get; set; } = null!;
         public List<PolicyDecisionEventV1>  Decisions { get; } = [];
         public List<AcpAutoApprovalNotice>  Notices   { get; } = [];
         public bool                         Forwarded { get; set; }
@@ -77,26 +77,73 @@ public class AcpInteractionBridgePolicyTests {
         AcpLaunchPermissionPreset? preset = null;
         if (presetToken is not null) AcpPermissionPresets.TryResolve(presetToken, out preset);
 
-        Harness harness = null!;
-        harness = new Harness {
-            Bridge = new AcpInteractionBridge(
-                requestInteraction: (_, _) => {
-                    harness.Forwarded = true;
+        var harness = new Harness();
+        harness.Bridge = new AcpInteractionBridge(
+            requestInteraction: (_, _) => {
+                harness.Forwarded = true;
 
-                    return Task.FromResult(new AcpInteractionDecision("cancel", null, null, null, null, null));
-                },
-                agentId: AgentId,
-                logger: NullLogger.Instance,
-                unattendedPolicy: policy,
-                preset: preset,
-                notifyAutoApproval: n => harness.Notices.Add(n),
-                policySnapshot: snapshot,
-                policyVendor: vendor,
-                notifyPolicyDecision: e => harness.Decisions.Add(e),
-                policyCwd: cwd, time: TimeProvider.System)
-        };
+                return Task.FromResult(new AcpInteractionDecision("cancel", null, null, null, null, null));
+            },
+            agentId: AgentId,
+            logger: NullLogger.Instance,
+            unattendedPolicy: policy,
+            preset: preset,
+            notifyAutoApproval: harness.Notices.Add,
+            policySnapshot: snapshot,
+            policyVendor: vendor,
+            notifyPolicyDecision: harness.Decisions.Add,
+            policyCwd: cwd, time: TimeProvider.System);
 
         return harness;
+    }
+
+    sealed class UnreadableRules : IReadOnlyList<PolicyRule> {
+        public PolicyRule this[int index] => throw new InvalidOperationException("unreadable policy");
+        public int Count => throw new InvalidOperationException("unreadable policy");
+        public IEnumerator<PolicyRule> GetEnumerator() => throw new InvalidOperationException("unreadable policy");
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    static PolicySnapshot Unreadable => new("snap-broken", [
+        new PolicyScopeDocument(PolicyScope.Repo, "/wt/.kcap/approvals.yaml", Rules, new PolicyDocument(1, new UnreadableRules(), null))], false, []);
+
+    /// <summary>A policy that fails to evaluate might have denied the call, so no preset approves it.</summary>
+    [Test]
+    [Arguments(AcpPermissionPresets.Edit, "edit")]
+    [Arguments(AcpPermissionPresets.Auto, "execute")]
+    public async Task A_policy_that_fails_to_evaluate_sends_the_call_to_a_human(string preset, string kind) {
+        var h = Build(Unreadable, preset);
+
+        await h.HandleAsync(kind == "execute" ? ShellFrame(kind, "git push --force", Standard) : PathFrame(kind, "/wt/src/a.cs", Standard));
+
+        await Assert.That(h.Forwarded).IsTrue();
+        await Assert.That(h.Notices).IsEmpty();
+    }
+
+    /// <summary>A call claiming a kind the policy governs, but missing the field its rules read, could be one
+    /// a rule denies, so no preset approves it.</summary>
+    [Test]
+    [Arguments(AcpPermissionPresets.Auto, """{"toolCallId":"call-1","title":"Run","kind":"execute","rawInput":{}}""")]
+    [Arguments(AcpPermissionPresets.Auto, """{"toolCallId":"call-1","title":"Fetch","kind":"fetch"}""")]
+    [Arguments(AcpPermissionPresets.Edit, """{"toolCallId":"call-1","title":"Touch","kind":"edit","locations":[{"path":""}]}""")]
+    public async Task A_call_the_policy_cannot_read_goes_to_a_human(string preset, string toolCall) {
+        var h = Build(Governed, preset);
+
+        await h.HandleAsync(Frame(toolCall, Standard));
+
+        await Assert.That(h.Forwarded).IsTrue();
+        await Assert.That(h.Notices).IsEmpty();
+    }
+
+    /// <summary>A call outside every governed kind is one the policy reads as it is, so Auto still approves it.</summary>
+    [Test]
+    public async Task Auto_approves_a_call_of_a_kind_the_policy_does_not_govern() {
+        var h = Build(Governed, AcpPermissionPresets.Auto);
+
+        var outcome = await h.HandleAsync(Frame("""{"toolCallId":"call-1","title":"mcp: search","kind":"other"}""", Standard));
+
+        await Assert.That(Harness.OptionId(outcome)).IsEqualTo("allow-once");
+        await Assert.That(h.Notices).HasSingleItem();
     }
 
     [Test]
@@ -167,8 +214,10 @@ public class AcpInteractionBridgePolicyTests {
     }
 
     [Test]
-    public async Task Ask_skips_a_preset_that_would_otherwise_auto_approve_the_kind() {
-        var h = Build(Governed, AcpPermissionPresets.Edit);
+    [Arguments(AcpPermissionPresets.Edit)]
+    [Arguments(AcpPermissionPresets.Auto)]
+    public async Task Ask_skips_a_preset_that_would_otherwise_auto_approve_the_call(string preset) {
+        var h = Build(Governed, preset);
 
         var outcome = await h.HandleAsync(PathFrame("edit", "/wt/secrets.env", Standard));
 
@@ -183,10 +232,15 @@ public class AcpInteractionBridgePolicyTests {
     }
 
     [Test]
-    public async Task Deny_beats_a_preset_that_covers_the_kind() {
-        var h = Build(Governed, AcpPermissionPresets.Edit);
+    [Arguments(AcpPermissionPresets.Edit, "edit")]
+    [Arguments(AcpPermissionPresets.Auto, "edit")]
+    [Arguments(AcpPermissionPresets.Auto, "execute")]
+    public async Task Deny_beats_a_preset_that_would_approve_the_call(string preset, string kind) {
+        var h = Build(Governed, preset);
 
-        var outcome = await h.HandleAsync(PathFrame("edit", "/wt/src/main.cs", Standard));
+        var outcome = await h.HandleAsync(kind == "execute"
+            ? ShellFrame(kind, "git push --force", Standard)
+            : PathFrame(kind, "/wt/src/main.cs", Standard));
 
         await Assert.That(Harness.Outcome(outcome)).IsEqualTo("selected");
         await Assert.That(Harness.OptionId(outcome)).IsEqualTo("reject-once");

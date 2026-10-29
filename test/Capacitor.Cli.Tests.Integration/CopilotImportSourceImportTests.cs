@@ -45,7 +45,7 @@ public class CopilotImportSourceImportTests : IDisposable {
             """{"type":"user.message","data":{"text":"hello"},"id":"e2","timestamp":"2026-06-10T20:23:50.000Z","parentId":"e1"}""",
             """{"type":"assistant.message","data":{"text":"hi there"},"id":"e3","timestamp":"2026-06-10T20:23:51.000Z","parentId":"e2"}"""
         });
-        File.WriteAllText(Path.Combine(dir, "workspace.yaml"), "cwd: /work/a\nname: proj\n");
+        File.WriteAllText(Path.Combine(dir, "workspace.yaml"), "cwd: /work/a\nname: proj\nuser_named: true\n");
         return _tempDir;
     }
 
@@ -89,5 +89,13 @@ public class CopilotImportSourceImportTests : IDisposable {
         var resolved = ImportCommand.ResolveRoutedOutcomeForCounting(
             classified[0].Status, result.Outcome, result.SentChildContent);
         await Assert.That(resolved).IsNull();
+
+        // /hooks/harness-title is unstubbed (bare 404 → RouteMissing), so the title falls back to
+        // /hooks/set-title (stubbed above) — but the harness-title attempt still carries the kind a
+        // user-named Copilot session forwards.
+        var titleAttempt = _server.FindLogEntries(Request.Create().WithPath("/hooks/harness-title").UsingPost());
+        await Assert.That(titleAttempt.Count).IsEqualTo(1);
+        var titleBody = System.Text.Json.Nodes.JsonNode.Parse(titleAttempt[0].RequestMessage.Body!)!;
+        await Assert.That(titleBody["kind"]!.GetValue<string>()).IsEqualTo("rename");
     }
 }

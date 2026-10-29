@@ -7,6 +7,10 @@ public static class PolicySeams {
     public const string ClaudePermissionRequest = "claude_permission_request";
     public const string HostedClaudePermission = "hosted_claude_permission";
     public const string AcpRequestPermission = "acp_request_permission";
+    public const string CodexPreToolUse = "codex_pre_tool_use";
+    public const string CodexPermissionRequest = "codex_permission_request";
+    public const string HostedCodexApproval = "hosted_codex_approval";
+    public const string HostedCodexPermission = "hosted_codex_permission";
 }
 
 public sealed record PolicyActionV1(
@@ -25,7 +29,7 @@ public sealed record PolicyDecisionEventV1(
     string EvaluationMode, string RequestedOutcome, string EffectiveOutcome, PolicyActionV1 Action,
     PolicyMatchedRuleV1[] MatchedRules, bool Degraded, string? FailureClass,
     string? CorrelationId, bool CorrelationAmbiguous, string DecidedAt,
-    bool? PendingAskConsumed = null, string? FreshOutcome = null);
+    bool? PendingAskConsumed = null, string? FreshOutcome = null, PolicyJudgeConsultationV1? Judge = null);
 
 public sealed record PolicySnapshotUploadV1(
     string SessionId, string SnapshotId, string EngineVersion, bool Degraded, string[] Degradations,
@@ -35,6 +39,25 @@ public sealed record PolicySnapshotDocV1(string Scope, string SourcePath, string
 
 public static class PolicyWire {
     public const int MaxRawPayloadBytes = 16 * 1024;
+
+    // The one place a PolicyDecisionEventV1 is built. Engine version, decided-at, the mode's wire
+    // spelling, and the snapshot id/degraded pair are derived rather than passed, so the same-typed
+    // strings a caller could transpose (vendor, seam, the outcomes) are the only ones left to name.
+    // A null snapshot is an ungoverned decision the seam still has to account for — id "unknown",
+    // undegraded.
+    public static PolicyDecisionEventV1 Decision(
+            string sessionId, string? agentId, string vendor, string seam,
+            PolicySnapshot? snapshot, EvaluationMode mode,
+            string requestedOutcome, string effectiveOutcome,
+            PolicyActionV1 action, PolicyMatchedRuleV1[] matchedRules, TimeProvider time,
+            string? failureClass = null, string? correlationId = null, bool correlationAmbiguous = false,
+            bool? pendingAskConsumed = null, string? freshOutcome = null, PolicyJudgeConsultationV1? judge = null) =>
+        new(
+            sessionId, agentId, vendor, seam, snapshot?.Id ?? "unknown", PolicyEngine.Version,
+            mode == EvaluationMode.Full ? "full" : "tighten_only", requestedOutcome, effectiveOutcome,
+            action, matchedRules, snapshot?.Degraded ?? false, failureClass,
+            correlationId, correlationAmbiguous, time.GetUtcNow().ToString("O"),
+            pendingAskConsumed, freshOutcome, judge);
 
     public static PolicyActionV1 ToWire(CanonicalAction a) {
         var raw = a.RawPayloadJson;

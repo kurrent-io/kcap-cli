@@ -3,7 +3,10 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Accounts.Readings;
 using Capacitor.Cli.Core.Acp;
+using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
@@ -108,6 +111,7 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
     // §2.4 envelope transcript: the mapper translates every app-server notification into
     // canonical/ephemeral envelopes, drained through the bounded forward buffer (IAcpTranscriptSource).
     readonly CodexNotificationMapper _mapper;
+    readonly CodexSubmittedInputs    _submitted;
     readonly CodexForwardBuffer      _forwardBuffer;
 
     CodexAppServerConnection? _connection;
@@ -148,13 +152,24 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
 
     const double DefaultApprovalTimeoutSeconds = 45;
 
+    // The launch's approval policy, ahead of the card; null for a reviewer or an ungoverned launch.
+    readonly CodexHostedPolicySeam? _policy;
+
+    // The launch's resolved account, at its launch generation; its limit updates attribute to it.
+    readonly ResolvedAccount?                              _account;
+    readonly Action<ResolvedAccount?, ReadingObservation>? _postReading;
+
     public CodexAppServerHostedAgentRuntime(
             CodexAppServerSpawn spawn, CodexAppServerLaunch launch, AgentActivityClock? clock,
             ILogger logger, TimeProvider timeProvider, TimeSpan? forwardStallTimeout = null,
             bool emitEnvelopeTranscript = false, bool deferFirstTurn = false,
             string? agentId = null,
             Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>>? requestInteraction = null,
-            TimeSpan? approvalTimeout = null, TranscriptJournal? journal = null) {
+            TimeSpan? approvalTimeout = null, TranscriptJournal? journal = null, CodexHostedPolicySeam? policy = null,
+            ResolvedAccount? account = null, Action<ResolvedAccount?, ReadingObservation>? postReading = null) {
+        _policy      = policy;
+        _account     = account;
+        _postReading = postReading;
         _spawn   = spawn;
         _launch  = launch;
         _clock   = clock;
@@ -168,7 +183,7 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
          && !string.Equals(_launch.Approval, "never", StringComparison.Ordinal)) {
             _approvalBridge = new CodexApprovalBridge(
                 requestInteraction, agentId, logger,
-                approvalTimeout ?? TimeSpan.FromSeconds(DefaultApprovalTimeoutSeconds), timeProvider);
+                approvalTimeout ?? TimeSpan.FromSeconds(DefaultApprovalTimeoutSeconds), timeProvider, policy);
         }
         _dispatcher = new CodexTurnInputDispatcher(
             startTurn: IssueTurnStartAsync, steerTurn: IssueTurnSteerAsync,
@@ -177,6 +192,7 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
             // the source-claim window enqueues and waits; BeginFirstTurnAsync unseals it.
             sealedAtStart: deferFirstTurn);
         _mapper = new CodexNotificationMapper(() => _resolvedModel, logger);
+        _submitted = new CodexSubmittedInputs(timeProvider);
         _forwardBuffer = new CodexForwardBuffer(
             ForwardBufferCapacity,
             forwardStallTimeout ?? TimeSpan.FromSeconds(DefaultForwardStallSeconds),
@@ -197,6 +213,14 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
     /// <summary>Resolved model from the <c>thread/start</c> response (never the requested one);
     /// null until the handshake completes. Feeds the existing launch-attempt reporting.</summary>
     public string? ResolvedModel => _resolvedModel;
+
+    readonly HostedAgentCommandsRelay _commandsRelay = new();
+
+    /// <inheritdoc/>
+    public Action<IReadOnlyList<HostedAgentCommand>>? OnCommandsAvailable {
+        get => _commandsRelay.Callback;
+        set => _commandsRelay.Callback = value;
+    }
 
     /// <summary>Daemon-held thread id — the deterministic session-id correlation that replaces the
     /// <c>CodexSessionRolloutLocator</c> timestamp race.</summary>
@@ -276,11 +300,17 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
                 // complete until BeginFirstTurnAsync unseals). Use CancellationToken.None as the per-input
                 // token because StartAsync's `linked` is disposed on return, long before the deferred
                 // send; the dispatcher's own runtime token (_cts.Token) still aborts it on teardown.
-                _firstTurnDispatch = _dispatcher.EnqueueAsync(_launch.InitialPrompt, CancellationToken.None);
+                _firstTurnDispatch = Submit(_launch.InitialPrompt, dispatchId: null, CancellationToken.None);
             } else {
-                await _dispatcher.EnqueueAsync(_launch.InitialPrompt, linked.Token).ConfigureAwait(false);
+                await Submit(_launch.InitialPrompt, dispatchId: null, linked.Token).ConfigureAwait(false);
             }
         }
+
+        // Discover skills off the launch-critical path: skills/list is optional, so a slow or hung
+        // request must not delay the first turn or consume the launch timeout. Fire-and-forget on the
+        // runtime lifetime token (teardown cancels it); the relay buffers the result until the
+        // orchestrator attaches its callback after registration.
+        _ = TryPublishSkillsAsync(_cts.Token);
     }
 
     /// <summary>
@@ -362,22 +392,22 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
         var listParams = new JsonObject { ["cwds"] = new JsonArray((JsonNode?) _launch.Cwd) };
         var result     = await RequestAsync("hooks/list", listParams, ct).ConfigureAwait(false);
 
-        var entries = new List<CodexHookEntry>();
-        if (result.Arr("data") is { } data) {
-            foreach (var group in data.EnumerateArray()) {
-                if (group.Arr("hooks") is not { } hooks) continue;
+        return CodexHookTrust.ParseHooksList(result);
+    }
 
-                foreach (var h in hooks.EnumerateArray()) {
-                    entries.Add(new CodexHookEntry(
-                        Key:         h.Str("key") ?? "",
-                        EventName:   h.Str("eventName") ?? "",
-                        Command:     h.Str("command") ?? "",
-                        CurrentHash: h.Str("currentHash"),
-                        TrustStatus: h.Str("trustStatus") ?? ""));
-                }
-            }
+    // Best-effort: surface Codex's skills as the composer's `/` picker entries. skills/list is not
+    // required for the launch, so an older app-server without the method — or an unexpected shape —
+    // must not fail it; the picker just shows nothing for Codex.
+    async Task TryPublishSkillsAsync(CancellationToken ct) {
+        try {
+            var listParams = new JsonObject { ["cwds"] = new JsonArray((JsonNode?) _launch.Cwd) };
+            var result     = await RequestAsync("skills/list", listParams, ct).ConfigureAwait(false);
+
+            var commands = CodexSkills.Extract(result);
+            if (commands.Count > 0) _commandsRelay.Publish(commands);
+        } catch (Exception ex) {
+            _logger.LogDebug(ex, "codex app-server: skills/list failed; no slash commands surfaced.");
         }
-        return entries;
     }
 
     async Task StartThreadAsync(CancellationToken ct) {
@@ -414,8 +444,13 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
         var result = await RequestAsync(method, startParams, ct).ConfigureAwait(false);
 
         _threadId      = result.Obj("thread")?.Str("id"); // same read for both start and resume
-        _resolvedModel = result.Str("model");
+        // Codex can answer with an empty model; usage attributed to "" can never be priced.
+        _resolvedModel = result.Str("model") is { Length: > 0 } model ? model
+                       : CodexLauncher.IsConcreteModel(_launch.Model) ? _launch.Model : null;
         _clock?.SetLaunchStage(isResume ? "thread_resumed" : "thread_started");
+
+        // A started thread has every approval it will raise pass through this runtime; a resumed one may not.
+        if (!isResume && _threadId is { Length: > 0 } started) _policy?.MarkBridgedSinceStart(started);
 
         if (string.IsNullOrEmpty(_threadId))
             throw new InvalidOperationException($"codex app-server: {method} returned no thread id.");
@@ -467,9 +502,27 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
         await RequestAsync("turn/steer", steerParams, ct).ConfigureAwait(false);
     }
 
-    public Task SendUserInputAsync(string text) => _dispatcher.EnqueueAsync(text);
+    public Task SendUserInputAsync(string text) => Submit(text, dispatchId: null);
 
-    public Task SendUserInputAndWaitForWriteAsync(string text) => _dispatcher.EnqueueAsync(text);
+    public Task SendUserInputAndWaitForWriteAsync(string text) => Submit(text, dispatchId: null);
+
+    public Task SendDispatchedInputAsync(string text, Guid dispatchId, bool waitForWrite) => Submit(text, dispatchId);
+
+    // Every input is recorded, dispatched or not: Codex's item for an earlier typed input must not claim a later
+    // dispatch with the same text.
+    Task Submit(string text, Guid? dispatchId, CancellationToken ct = default) {
+        var sent = _submitted.Add(text, dispatchId);
+        Task written;
+        try {
+            written = _dispatcher.EnqueueAsync(text, ct);
+        } catch {
+            _submitted.Remove(sent);
+            throw;
+        }
+        _ = written.ContinueWith(_ => _submitted.Remove(sent), CancellationToken.None,
+            TaskContinuationOptions.NotOnRanToCompletion | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        return written;
+    }
 
     public async Task WaitForTurnIdleAsync(CancellationToken ct) {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _cts.Token);
@@ -490,7 +543,7 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
             case "turn/completed": {
                 var turn = n.Params is { } p ? p.Obj("turn") : null;
                 if (turn?.Str("status") is "failed")
-                    _logger.LogWarning("codex app-server: turn completed with status=failed.");
+                    _logger.LogWarning("codex app-server: turn failed: {Error}", turn?.Obj("error")?.Str("message") ?? "(no error message)");
                 _dispatcher.OnTurnCompleted(turn?.Str("id"));
                 break;
             }
@@ -498,10 +551,17 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
                 _usage = ParseUsage(n.Params);
                 _clock?.Advance();
                 break;
+            case "account/rateLimits/updated":
+                // Posting only queues: this is the read loop.
+                if (_postReading is { } post && n.Params?.Obj("rateLimits") is { } snapshot
+                 && CodexRateLimits.FromAppServer(snapshot, _time.GetUtcNow()) is { } observation)
+                    post(_account, observation);
+                _clock?.Advance();
+                break;
             case "model/rerouted":
                 // The resolved model changed mid-thread; the mapper attributes each subsequent token
                 // delta to the model-at-instant, so per-interval attribution across a reroute is correct.
-                if (n.Params?.Str("model") is { } rerouted) _resolvedModel = rerouted;
+                if (n.Params?.Str("toModel") is { } rerouted) _resolvedModel = rerouted.Length > 0 ? rerouted : null;
                 _clock?.Advance();
                 break;
             default:
@@ -513,9 +573,27 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
         // drain them through the forward buffer. Runs on the read-loop thread, so a full buffer blocks
         // here (a canonical emit) — the intended lossless backpressure onto the app-server's stdout.
         // Gated off until §2.5 activates envelope-source ingestion (see _emitEnvelopeTranscript).
+        if (_policy is { } policy) ObservePolicyFacts(policy, n.Method, n.Params);
+
         if (_emitEnvelopeTranscript)
-            foreach (var env in _mapper.Map(n.Method, n.Params))
+            foreach (var mapped in _mapper.Map(n.Method, n.Params)) {
+                var env = _submitted.Stamp(mapped);
+                _policy?.Turns.Observe(env);
                 _forwardBuffer.Emit(env);
+            }
+    }
+
+    /// <summary>A file change's paths arrive on its started item and its patch updates; its approval names none.</summary>
+    static void ObservePolicyFacts(CodexHostedPolicySeam policy, string method, JsonElement? p) {
+        switch (method) {
+            case "item/fileChange/patchUpdated" when p?.Str("itemId") is { } itemId && p.Value.TryGetProperty("changes", out var changes):
+                policy.Paths.Observe(itemId, changes);
+                break;
+            case "item/started" when p?.Obj("item") is { } item && item.Str("type") == "fileChange" && item.Str("id") is { } id
+                                  && item.TryGetProperty("changes", out var started):
+                policy.Paths.Observe(id, started);
+                break;
+        }
     }
 
     // §2.4 stall watchdog: the forward buffer stayed full of canonical envelopes past the stall timeout

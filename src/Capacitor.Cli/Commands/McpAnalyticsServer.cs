@@ -56,17 +56,15 @@ sealed class McpAnalyticsServer(ConfigRoot config, ProfileContext profiles, Toke
 
         var urlOk = HttpClientExtensions.IsAcceptableUrl(baseUrl);
 
-        // Deferred authenticated client and cwd repository: auto-registered and spawned every
-        // session, so startup stays local-only until a tool is invoked. See McpMemoryServer for the
-        // nullable-field-not-Lazy rationale.
-        HttpClient? client = null;
+        // Created on first use, so a session that never calls a tool stays local-only.
+        using var sessionClient = new OnDemand<HttpClient>(() => http.ForSessionAsync());
 
         async Task<string> DispatchToolCallAsync(JsonNode callId, JsonObject callRequest) {
             if (!urlOk)
                 return BuildToolResult(callId, HttpClientExtensions.SchemeMissingHint, isError: true);
 
             try {
-                client ??= await http.ForSessionAsync();
+                var client = await sessionClient.GetAsync();
                 return await HandleToolCallAsync(callId, callRequest, client, baseUrl, await repository.GetHashAsync());
             } catch (Exception ex) {
                 await Console.Error.WriteLineAsync($"kcap mcp analytics: unexpected error handling tools/call: {ex}");
@@ -96,48 +94,18 @@ sealed class McpAnalyticsServer(ConfigRoot config, ProfileContext profiles, Toke
         await using var writer = new StreamWriter(stdout, new UTF8Encoding(false));
         writer.AutoFlush = true;
 
-        try {
-            while (await reader.ReadLineAsync() is { } line) {
-                if (string.IsNullOrWhiteSpace(line)) continue;
-
-                JsonObject? request;
-
-                try {
-                    request = JsonNode.Parse(line)?.AsObject();
-                } catch {
-                    continue; // skip malformed JSON
-                }
-
-                if (request is null) continue;
-
-                var id     = request["id"];
-                var method = (request["method"] as JsonValue)?.TryGetValue<string>(out var m) == true ? m : null;
-
-                if (id is null) continue; // notification — no response
-
-                var response = method switch {
-                    "initialize" => BuildInitializeResponse(id, request),
-                    "tools/list" => BuildToolsListResponse(id, tools),
-                    "tools/call" => await TimedDispatchToolCallAsync(id, request),
-                    _            => McpProtocol.TryHandleStandardMethod(method, id)
-                                    ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
-                };
-
-                await writer.WriteLineAsync(response);
-            }
-        } finally {
-            if (client is not null) {
-                try { client.Dispose(); } catch {
-                    /* swallow — best-effort cleanup */
-                }
-            }
-        }
+        await McpStdioLoop.RunAsync(reader, writer, tools, TimedDispatchToolCallAsync, (id, method, request) => method switch {
+            "initialize" => BuildInitializeResponse(id, request),
+            "tools/list" => BuildToolsListResponse(id, tools),
+            _            => McpProtocol.TryHandleStandardMethod(method, id)
+                            ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
+        }, "analytics");
 
         return 0;
     }
 
-    const string ServerInstructions =
-        "Query Kurrent Capacitor's AI coding-agent analytics (sessions, tool/skill/token usage, cost, " +
+    internal const string ServerInstructions =
+        "Query kcap's AI coding-agent analytics (sessions, tool/skill/token usage, cost, " +
         "commits, PRs, evals) with governed read-only SQL. Call get_analytics_schema once to learn the " +
         "views, then write Postgres SELECTs for query_analytics. Rejections include the reason — fix the " +
         "SQL and retry.";
@@ -389,7 +357,7 @@ sealed class McpAnalyticsServer(ConfigRoot config, ProfileContext profiles, Toke
             "The governed analytics schema: the v_an_* views and columns you may query, a terminology glossary, " +
             "SQL rules, and worked examples. Always call this once before writing SQL for query_analytics. " +
             "Covers sessions, tool/skill/token usage, cost, code changes, commits, PRs, evals, and work items.",
-            new("object", new(), [])),
+            new("object", new(), []), McpToolAnnotations.Read),
         new("query_analytics",
             "Run one governed read-only Postgres SELECT over the analytics views (see get_analytics_schema). " +
             "Answers questions about coding-agent sessions, usage, cost, and delivery telemetry. A rejected " +
@@ -398,6 +366,6 @@ sealed class McpAnalyticsServer(ConfigRoot config, ProfileContext profiles, Toke
                 ["sql"]      = new("string", "A single Postgres SELECT over the governed v_an_* views."),
                 ["scope"]    = new("string", "'repo' (default) = only the current repository, derived from the working directory; 'global' = all repositories in the org."),
                 ["max_rows"] = new("number", "Row cap for this query (default 300; clamped to the server's maximum).")
-            }, ["sql"]))
+            }, ["sql"]), McpToolAnnotations.Read)
     ];
 }

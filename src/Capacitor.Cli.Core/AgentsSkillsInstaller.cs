@@ -6,10 +6,10 @@ namespace Capacitor.Cli.Core;
 /// legacy <c>~/.codex/skills/kcap-*</c> folders left by prior installer versions.
 /// </summary>
 /// <remarks>
-/// The target is a parameter because there are three: the agent-agnostic <c>~/.agents/skills/</c>,
-/// plus <c>~/.kiro/skills/</c> and <c>~/.gemini/skills/</c> for the two vendors that read their own
-/// tree instead. So <see cref="SourceNames"/> decides what all three receive — a skill added here
-/// reaches Kiro and Antigravity as well.
+/// The target is a parameter because there are several: the agent-agnostic <c>~/.agents/skills/</c>,
+/// plus <c>~/.kiro/skills/</c>, <c>~/.kiro/crew/skills/</c> and <c>~/.gemini/skills/</c> for the
+/// vendors that read their own tree instead. So <see cref="SourceNames"/> decides what every target
+/// receives — a skill added here reaches Kiro, Kiro Crew and Antigravity as well.
 /// </remarks>
 public static class AgentsSkillsInstaller {
     /// <summary>
@@ -36,7 +36,18 @@ public static class AgentsSkillsInstaller {
         "work-items",
         "plans",
         "guided-tour",
-        "suggest-review-flow"
+        "eval-watch",
+        "start-agents",
+        "connect-kcap",
+        "pages",
+        "worktrees",
+    ];
+
+    /// <summary>Skills this installer once shipped. Their <c>kcap-</c> folders are deleted on install and remove,
+    /// so an upgraded user does not keep a skill that no longer matches the tools.</summary>
+    public static readonly string[] RetiredSourceNames = [
+        "suggest-review-flow",
+        "connect-capacitor"
     ];
 
     /// <summary>
@@ -78,6 +89,11 @@ public static class AgentsSkillsInstaller {
 
                 if (Directory.Exists(dst)) Directory.Delete(dst, recursive: true);
                 CopyDirectoryWithFrontmatterRewrite(src, dst, prefix);
+            }
+
+            foreach (var name in RetiredSourceNames) {
+                var retired = Path.Combine(targetDir, "kcap-" + name);
+                if (Directory.Exists(retired)) Directory.Delete(retired, recursive: true);
             }
 
             WriteMarker(targetDir);
@@ -179,7 +195,7 @@ public static class AgentsSkillsInstaller {
         var removed = false;
         var errors  = false;
 
-        foreach (var name in SourceNames) {
+        foreach (var name in SourceNames.Concat(RetiredSourceNames)) {
             var dst = Path.Combine(targetDir, "kcap-" + name);
 
             if (!Directory.Exists(dst)) continue;

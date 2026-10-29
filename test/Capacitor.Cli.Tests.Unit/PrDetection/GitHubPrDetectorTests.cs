@@ -111,4 +111,79 @@ public class GitHubPrDetectorTests {
         await Assert.That(await DetectForBranch(fake, host, owner, repo, branch)).IsNull();
         await Assert.That(spawned).IsFalse();
     }
+
+    const string History = "local1\nabc123\nolder\n";
+
+    static CommandRunner HistoryRunner(string? prs, string? history = History, List<string>? calls = null) =>
+        (cmd, args, _, _) => {
+            calls?.Add($"{cmd} {args}");
+            return Task.FromResult(cmd == "git" ? history : prs);
+        };
+
+    static Task<PrInfo?> DetectForHistory(CommandRunner run, string repo = "widget") =>
+        GitHubPrDetector.DetectForHistoryAsync("github.com", "acme", repo, "/cwd", () => TimeSpan.FromSeconds(2), run);
+
+    /// <summary>A branch pushed under another name with no upstream, and a local commit on top of
+    /// the pushed head: neither name nor HEAD matches, the history does.</summary>
+    [Test]
+    public async Task History_lookup_finds_the_pr_whose_head_is_behind_local_commits() {
+        var calls = new List<string>();
+        var run = HistoryRunner(
+            """[{"number":9,"title":"t","url":"u","headRefName":"fix/renamed","headRefOid":"ABC123","isCrossRepository":false}]""",
+            calls: calls);
+
+        var pr = await DetectForHistory(run);
+
+        await Assert.That(pr!.Number).IsEqualTo(9);
+        await Assert.That(pr.HeadRef).IsEqualTo("fix/renamed");
+        await Assert.That(calls).Contains("git rev-list -n 100 HEAD --not --remotes=*/HEAD");
+        await Assert.That(calls).Contains(
+            "gh pr list --repo github.com/acme/widget --author @me --state open --limit 100 --json number,title,url,headRefName,headRefOid,isCrossRepository");
+    }
+
+    [Test]
+    public async Task History_lookup_prefers_the_nearest_head() {
+        var run = HistoryRunner("""
+            [{"number":1,"headRefOid":"older","isCrossRepository":false},
+             {"number":2,"headRefOid":"abc123","isCrossRepository":false}]
+            """);
+
+        await Assert.That((await DetectForHistory(run))!.Number).IsEqualTo(2);
+    }
+
+    [Test]
+    [Arguments("""[{"number":9,"headRefOid":"abc123","isCrossRepository":true}]""")]
+    [Arguments("""[{"number":9,"headRefOid":"abc123"}]""")]
+    [Arguments("""[{"number":9,"headRefOid":"elsewhere","isCrossRepository":false}]""")]
+    [Arguments("""[]""")]
+    [Arguments("""{not json""")]
+    [Arguments(null)]
+    public async Task History_lookup_rejects_a_pr_not_on_this_history(string? prs) {
+        await Assert.That(await DetectForHistory(HistoryRunner(prs))).IsNull();
+    }
+
+    /// <summary>The nearest commit heads two PRs: neither is linked, nor the older commit's PR.</summary>
+    [Test]
+    public async Task History_lookup_links_nothing_when_the_nearest_head_is_shared() {
+        var run = HistoryRunner("""
+            [{"number":1,"headRefOid":"older","isCrossRepository":false},
+             {"number":2,"headRefOid":"abc123","isCrossRepository":false},
+             {"number":3,"headRefOid":"abc123","isCrossRepository":false}]
+            """);
+
+        await Assert.That(await DetectForHistory(run)).IsNull();
+    }
+
+    [Test]
+    public async Task History_lookup_needs_the_history() {
+        var run = HistoryRunner("""[{"number":9,"headRefOid":"abc123","isCrossRepository":false}]""", history: null);
+        await Assert.That(await DetectForHistory(run)).IsNull();
+    }
+
+    [Test]
+    public async Task History_lookup_never_spawns_with_an_unsafe_argument() {
+        var calls = new List<string>();
+        await Assert.That(await DetectForHistory(HistoryRunner("[]", calls: calls), repo: "-widget")).IsNull();
+        await Assert.That(calls).IsEmpty();
+    }
 }

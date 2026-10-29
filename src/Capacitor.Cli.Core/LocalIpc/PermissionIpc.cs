@@ -11,7 +11,8 @@ namespace Capacitor.Cli.Core.LocalIpc;
 public sealed record PermissionPendingDto(
     string RequestId, string AgentId, string SessionId, string Vendor, string ToolName,
     JsonElement? ToolInput, JsonElement? Suggestions, bool ToolInputOmitted, bool SuggestionsOmitted,
-    string RequestedAt, string? ToolUseId = null, string? ServerRequestId = null);
+    string RequestedAt, string? ToolUseId = null, string? ServerRequestId = null,
+    bool? SupportsAllowOnce = null, bool? SupportsAllowAlways = null);
 
 /// Decision: allow|deny|withdraw. A withdraw carries no answer: the app saw the tool's result in
 /// the transcript, so whoever prompted has already been answered elsewhere and the request is moot.

@@ -212,7 +212,7 @@ public class DeliveryTriggeredStatusReportTests {
     /// </summary>
     sealed class OrderingProbeServerConnection() : ServerConnection(
         new() { Name = "test", ServerUrl = "http://127.0.0.1:1" },
-        UnusedTokenStore.Create(),
+        new FixedCredentialSource(),
         NullLoggerFactory.Instance,
         NullLogger<ServerConnection>.Instance
     , TimeProvider.System) {

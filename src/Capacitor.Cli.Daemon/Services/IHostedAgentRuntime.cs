@@ -1,3 +1,5 @@
+using Capacitor.Cli.Core;
+
 namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
@@ -19,6 +21,10 @@ internal interface IHostedAgentRuntime : IAsyncDisposable {
     /// contract; only the Codex app-server runtime overrides it. A runtime owns its own transport, so
     /// the orchestrator never type-switches to derive it.</summary>
     string RuntimeTransport => "pty";
+
+    /// <summary>What the vendor's resume takes when it is not the session id; recorded as the vendor
+    /// session in the resume ledger. Null when the session id is enough.</summary>
+    string? VendorResumeToken => null;
 
     /// <summary>OS process id of the hosted agent (for logging).</summary>
     int Pid { get; }
@@ -52,6 +58,10 @@ internal interface IHostedAgentRuntime : IAsyncDisposable {
     /// </summary>
     bool EmitsTerminalOutput { get; }
 
+    /// <summary>Whether a dialog read off the terminal is holding the agent's input. Called on the
+    /// output read loop for the chunk it was read from, before the next chunk is read.</summary>
+    void NoteTerminalDialog(bool showing) { }
+
     /// <summary>
     /// Terminal byte stream consumed by the orchestrator read loop. PTY runtimes yield real
     /// terminal output; the ACP runtime yields an empty stream until a follow-up adds a terminal
@@ -75,6 +85,12 @@ internal interface IHostedAgentRuntime : IAsyncDisposable {
     /// full pending-turn queue, a terminal runtime): thrown synchronously by
     /// <see cref="SendUserInputAsync"/>, carried by the task from this method.</summary>
     Task SendUserInputAndWaitForWriteAsync(string text) => SendUserInputAsync(text);
+
+    /// <summary>Input a server dispatch delivered. A runtime that records the user message it sends stamps
+    /// the dispatch on it, so a viewer of its journal can ask the server who sent the message; the rest
+    /// send it as any other input.</summary>
+    Task SendDispatchedInputAsync(string text, Guid dispatchId, bool waitForWrite) =>
+        waitForWrite ? SendUserInputAndWaitForWriteAsync(text) : SendUserInputAsync(text);
 
     /// <summary>Wait until any prior structured prompt turn has received its terminal response.
     /// PTY runtimes have no structured turn boundary and use the completed default.</summary>
@@ -114,10 +130,22 @@ internal interface IHostedAgentRuntime : IAsyncDisposable {
     /// a follow-up adds a terminal capability.</summary>
     void Resize(ushort cols, ushort rows);
 
+    /// <summary>Set by the orchestrator after the runtime starts. The runtime invokes it whenever it
+    /// learns the harness's slash commands — an ACP <c>available_commands_update</c> or
+    /// <c>session/new</c> result, a Codex <c>skills/list</c>. A snapshot captured during start is
+    /// delivered the moment the callback attaches (see <see cref="HostedAgentCommandsRelay"/>), so
+    /// nothing races the attach. PTY runtimes never raise it — the orchestrator probes Claude
+    /// separately.</summary>
+    Action<IReadOnlyList<HostedAgentCommand>>? OnCommandsAvailable {
+        get => null;
+        set { }
+    }
+
     /// <summary>
     /// Request a graceful stop <b>before</b> <see cref="TerminateAsync"/>. PTY runtimes send the
     /// CLI's "/exit" so it can fire its own session-end hook; the ACP runtime sends
-    /// <c>session/cancel</c>. Best-effort — the orchestrator falls through to terminate.
+    /// <c>session/cancel</c> and closes the agent's stdin. Best-effort — the orchestrator falls
+    /// through to terminate.
     /// </summary>
     Task RequestGracefulStopAsync();
 

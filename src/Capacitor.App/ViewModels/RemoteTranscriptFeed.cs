@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
 using Capacitor.Remote.Models;
@@ -9,8 +8,7 @@ namespace Capacitor.App.ViewModels;
 /// The chat rows of a session on another machine: a seed from the session detail route, then a
 /// live tail of the session's stream from the position the seed ended at. Every access
 /// establishment restarts the tail from the last position seen; the seed is fetched only until
-/// one lands, so a reconnect resumes rather than replays. Rows queue here and the pane's poll
-/// drains them.
+/// one lands, so a reconnect resumes rather than replays. Changes wake the pane to drain rows.
 internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
     /// Gaps between tails that ended while access still stood; each further one is the next entry.
     internal static readonly TimeSpan[] Retry = [TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10)];
@@ -21,17 +19,18 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
     readonly IServerLane _lane;
     readonly TimeProvider _time;
     readonly Action<string> _log;
-    readonly ConcurrentDictionary<string, byte> _logged = new(StringComparer.Ordinal);
+    /// Under <see cref="_lock"/>, so a superseded attempt cannot clear what the current one logged.
+    readonly HashSet<string> _logged = new(StringComparer.Ordinal);
     readonly Lock _lock = new();
     readonly List<ProjectedLine> _pending = new();
     readonly IDisposable _access;
     readonly CancellationTokenSource _lifetime = new();
     FeedStatus _pendingStatus = FeedStatus.Ok;
-    /// The current attempt's Missing/Failed verdict, held apart from the seed's own rows so a
-    /// refusal landing after a successful seed never displaces the seed's still-undrained Reset,
-    /// and answered on every read with nothing else to deliver: the pane polls, and a verdict it
-    /// saw once would be gone by the next poll. A new attempt, or a seed, retires it.
+    /// A refusal cannot displace an undrained seed Reset. It repeats on subsequent reads until a
+    /// new attempt or seed retires it.
     (FeedStatus Status, string? Failure)? _verdict;
+    // A refusal behind a Reset needs another drain, without repeatedly waking for a held verdict.
+    bool _verdictRead;
     /// The last event number applied; null until the seed lands.
     long? _position;
     /// How many pending lines the seed committed, and the position it ended at. A live event that
@@ -43,6 +42,9 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
     CancellationTokenSource? _tailCts;
     volatile bool _waitingToRetry;
     bool _disposed;
+
+    internal event Action? Changed;
+    internal bool HasPendingChanges { get { lock (_lock) return _pending.Count > 0 || _pendingStatus == FeedStatus.Reset || _verdict is not null && !_verdictRead; } }
 
     internal Task? PendingRunForTesting { get; private set; }
     internal bool WaitingToRetryForTesting => _waitingToRetry;
@@ -63,7 +65,7 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
     }
 
     public long? CurrentOffset {
-        get { lock (_lock) return _position is { } p ? p + 1 : null; }
+        get { lock (_lock) return CurrentOffsetLocked(); }
     }
 
     public FeedRead ReadAppended() {
@@ -82,7 +84,10 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
                 _pending.Clear();
                 return new(FeedStatus.Ok, lines);
             }
-            if (_verdict is { } verdict) return new(verdict.Status, [], null, verdict.Failure);
+            if (_verdict is { } verdict) {
+                _verdictRead = true;
+                return new(verdict.Status, [], null, verdict.Failure);
+            }
             return new(FeedStatus.Ok, []);
         }
     }
@@ -103,6 +108,7 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
                 cts.Dispose();
             }, TaskScheduler.Default);
         }
+        Changed?.Invoke();
     }
 
     void StopTail() {
@@ -131,7 +137,7 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
                     : ex.Message);
                 return;
             } catch (Exception ex) {
-                LogOnce($"remote transcript: {ex.Message}");
+                LogOnce(attempt, $"remote transcript: {ex.Message}");
             }
             // The tail ended without a cancel: the connection dropped, or a newer subscribe on the
             // same stream replaced it. A superseded attempt stops; the current one waits and resumes.
@@ -169,6 +175,7 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
             _resetCount = lines.Count;
             _seedBoundary = CurrentOffsetLocked();
         }
+        Changed?.Invoke();
         return true;
     }
 
@@ -179,13 +186,16 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
         lock (_lock) from = _position is >= 0 ? (ulong)_position : null;
         var received = false;
         await foreach (var envelope in _lane.TailStreamAsync(StreamNames.AgentSession(_sessionId), from, ct).ConfigureAwait(false)) {
-            received = true;
             var line = Project(envelope.EventType, envelope.JsonPayload, (long)envelope.StreamPosition, envelope.Timestamp);
             lock (_lock) {
                 if (_attempt != attempt) return received;
+                // Once per outage: the stream delivering again ends it, however this tail later ends.
+                if (!received) _logged.Clear();
+                received = true;
                 _position = (long)envelope.StreamPosition;
                 if (line is { } l) _pending.Add(l);
             }
+            Changed?.Invoke();
         }
         return received;
     }
@@ -193,18 +203,27 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
     ProjectedLine? Project(string eventType, string json, long offset, DateTimeOffset? timestamp) {
         var payload = CanonicalEventJson.TryParse(eventType, json);
         if (payload is null) return null;
-        var projected = TranscriptChat.Project(new CanonicalEvent(eventType, payload, Guid.Empty, timestamp ?? _time.GetUtcNow()), _rules);
-        return projected.Envelopes.Count == 0 && projected.SubmittedInputs.Count == 0 ? null : new(projected, offset);
+        var at = CanonicalEventTime.Of(payload) ?? timestamp ?? _time.GetUtcNow();
+        var projected = TranscriptChat.Project(new CanonicalEvent(eventType, payload, Guid.Empty, at), _rules);
+        return projected.Envelopes.Count == 0 && projected.SubmittedInputs.Count == 0 && projected.LiteralInputs.Count == 0 && projected.Runs.Count == 0 ? null : new(projected, offset);
     }
 
     /// A verdict belongs to the attempt that reached it: one landing after its run was stopped
     /// must not become the current run's.
     void Enqueue(int attempt, FeedStatus status, string? failure = null) {
-        lock (_lock) { if (_attempt == attempt) _verdict = (status, failure); }
+        lock (_lock) {
+            if (_attempt != attempt) return;
+            _verdict = (status, failure);
+            _verdictRead = false;
+        }
+        Changed?.Invoke();
     }
 
-    void LogOnce(string reason) {
-        if (_logged.TryAdd(reason, 0)) _log(reason);
+    /// A superseded attempt's failure would mark a reason the current attempt has not hit.
+    void LogOnce(int attempt, string reason) {
+        bool first;
+        lock (_lock) first = _attempt == attempt && _logged.Add(reason);
+        if (first) _log(reason);
     }
 
     public void Dispose() {

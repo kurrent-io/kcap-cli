@@ -5,7 +5,7 @@
     </PropertyGroup>
     <ItemGroup>
         <!-- Core only, for code. The guards pin Core-owned process globals (KCAP_CONFIG_DIR,
-             KCAP_DAEMONS_DIR, McpMarker, AuthProviderCache). -->
+             KCAP_DAEMONS_DIR, KCAP_LOCAL_ROOT, McpMarker, AuthProviderCache). -->
         <ProjectReference Include="..\..\src\Capacitor.Cli.Core\Capacitor.Cli.Core.csproj" />
         <!-- Build ordering and a path, not code: ReferenceOutputAssembly="false" builds the CLI for
              KcapProcess to spawn while leaving it unreferenceable in C#. The binary is spawned from
@@ -33,5 +33,6 @@
         <PackageReference Include="TUnit.Core" />
         <!-- AuthFixtures substitutes the façade's tenant picker. -->
         <PackageReference Include="NSubstitute" />
+        <PackageReference Include="WireMock.Net" />
     </ItemGroup>
 </Project>

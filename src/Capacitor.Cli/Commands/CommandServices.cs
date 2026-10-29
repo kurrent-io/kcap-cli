@@ -1,11 +1,17 @@
 using Capacitor.Cli.Commands.Harness;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.Setup;
+using Capacitor.Cli.Core.Skills;
 using Capacitor.Cli.Core.Telemetry;
+using Capacitor.Cli.Harness.MuseAssistant;
+using Capacitor.Cli.LocalEdition;
 using Microsoft.Extensions.DependencyInjection;
 using Capacitor.Cli.PrDetection;
 
@@ -22,18 +28,20 @@ public static class CommandServices {
             this IServiceCollection services, ConfigRoot config, UserHome home, WorkingDirectory workdir, DaemonStore daemons,
             ProfileContext profiles, ProfileOverrides env, MachineAuth machine,
             AuthEndpoints endpoints, HookClock clock, string? baseUrl,
-            TelemetryStartup telemetryStartup) {
+            TelemetryStartup telemetryStartup, LocalRoot localRoot) {
         services
             .AddCapacitorContext(config, home, workdir, daemons, profiles)
             .AddCapacitorCommands();
 
         services.AddSingleton(endpoints);
+        services.AddSingleton(localRoot);
         services.AddSingleton(clock);
         // The hook's own clock, not a second one: every deadline a command measures has to share the
         // provider the budget was anchored on, or a faked one moves only half of them.
         services.AddSingleton(clock.Time);
         services.AddSingleton<IBrowserLauncher>(SystemBrowser.Instance);
         services.AddSingleton<IProcessStarter>(SystemProcessStarter.Instance);
+        services.AddSingleton<IHandoffAgentLauncher, HandoffAgentLauncher>();
         services.AddSingleton(_ => WatcherPaths.FromEnvironment(config));
         services.AddSingleton<IWatcherSpawner, ProcessWatcherSpawner>();
 
@@ -46,13 +54,18 @@ public static class CommandServices {
         services.AddSingleton(_ => HostedAgent.FromEnvironment());
         services.AddSingleton(sp => HarnessRegistry.FromEnvironment(
             sp.GetRequiredService<UserHome>(), sp.GetRequiredService<BinaryProbe>()));
+        services.AddSingleton(sp => LegacySkillsRoots.FromEnvironment(sp.GetRequiredService<UserHome>()));
+        services.AddSingleton(sp => AccountStore.Beside(sp.GetRequiredService<DaemonStore>()));
+        // Transient, so each command reads the console as it stands when it is built.
+        services.AddTransient(_ => StandardStreams.FromProcess());
         services.AddSingleton(sp => PluginEnvironment.FromProcess(
                 sp.GetRequiredService<ProfileContext>().Snapshot,
                 sp.GetRequiredService<UserHome>(),
                 sp.GetRequiredService<HarnessRegistry>(),
-                sp.GetRequiredService<BinaryProbe>()));
+                sp.GetRequiredService<BinaryProbe>(),
+                sp.GetRequiredService<AccountStore>()));
 
-        services.AddSingleton(_ => new CapacitorServer(baseUrl, config, profiles));
+        services.AddSingleton(_ => new CapacitorServer(baseUrl, config, profiles, localRoot));
         services.AddCapacitorHttp(env, machine);
         services.AddCapacitorTelemetry(config, telemetryStartup);
 
@@ -84,33 +97,59 @@ public static class CommandServices {
         // Shared by every hook lane and carrying no per-run state, unlike the commands below.
         services.AddSingleton<WatcherManager>();
 
+        services.AddTransient<AccountsCommand>();
         services.AddTransient<AgentCommand>();
         services.AddTransient<CleanupCommand>();
         services.AddTransient<ConfigCommand>();
+        services.AddTransient<ExperimentalCommand>();
         services.AddTransient<CurateCommand>();
+        services.AddTransient<MemoriesCommand>();
+        services.AddTransient<ArtefactCommand>();
         services.AddTransient<DaemonCommands>();
         services.AddTransient<ErrorsCommand>();
+        services.AddTransient<SetTitleCommand>();
         services.AddTransient<EvalCommand>();
-        services.AddTransient<FeedbackCommand>();
+        services.AddTransient(sp => new FeedbackCommand(
+            sp.GetRequiredService<IFeedbackApi>(),
+            sp.GetRequiredService<CapacitorServer>().IsLocal
+                ? s => FeedbackMail.Send(s, sp.GetRequiredService<IBrowserLauncher>(), Clipboard.TryCopy)
+                : null));
         services.AddTransient<HarnessCommand>();
         services.AddTransient<IgnoreCommand>();
         services.AddTransient<AllowCommand>();
         services.AddTransient<ImportCommand>();
+        services.AddTransient<IOutgoingRecorders, OutgoingRecorders>();
+        services.AddTransient<LocalCommand>();
+        services.AddTransient<Capture.CaptureRepairCommand>();
         services.AddTransient<LoginCommand>();
         services.AddTransient<MachineCommand>();
+        services.AddTransient<MuseAssistantCommand>();
+        services.AddTransient<MuseAssistantIngest>();
+        services.AddTransient<MuseAssistantScope>();
+        services.AddTransient<MuseAssistantIdentity>();
+        services.AddTransient<MuseAssistantActionRunner>();
+        services.AddSingleton<MuseAssistantStateStoreFactory>();
+        services.AddTransient<IMuseAssistantPoster, MuseAssistantHttpPoster>();
         services.AddTransient<PluginCommand>();
         services.AddTransient<ProfileCommand>();
         services.AddTransient<ProjectsCommand>();
         services.AddTransient<RecapCommand>();
+        services.AddTransient<RecapContinuation>();
         services.AddTransient<RemapCommand>();
         services.AddTransient<ReportVersionCommand>();
         services.AddTransient<ReposCommand>();
         services.AddTransient<ReviewCommand>();
         services.AddTransient<SessionsCommand>();
         services.AddTransient<SetupCommand>();
+        services.AddTransient<ILocalInstallerFactory, LocalInstallerFactory>();
+        services.AddTransient<ILocalStackFactory, LocalStackFactory>();
+        services.AddTransient<LocalUpgradeCommand>();
+        services.AddTransient<LocalCommand>();
         services.AddSingleton<ChosenServerHttp>();
         services.AddSingleton<IOnboardingFacadeFactory, SetupFacadeFactory>();
         services.AddSingleton<ISetupImportRunner, SetupImportRunner>();
+        services.AddSingleton<IBackgroundImportSpawner, BackgroundImportSpawner>();
+        services.AddTransient<DetachedImportPlanRunner>();
         services.AddTransient<SkillsCommand>();
         services.AddTransient<StatusCommand>();
         services.AddTransient<McpFlowResultServer>();
@@ -119,11 +158,21 @@ public static class CommandServices {
         services.AddTransient<McpSessionsServer>();
         services.AddTransient<McpWorkItemsServer>();
         services.AddTransient<McpPlansServer>();
+        services.AddTransient<McpHandoffServer>();
         services.AddTransient<McpAnalyticsServer>();
+        services.AddTransient<McpArtefactsServer>();
+        services.AddTransient<McpKnowledgeServer>();
         services.AddTransient<McpReviewServer>();
         services.AddTransient<McpJudgeServer>();
+        services.AddSingleton(sp => new KcapLinkRemover(KcapLinkFolders.For(sp.GetRequiredService<UserHome>()), Environment.ProcessPath ?? ""));
         services.AddTransient<UninstallCommand>();
         services.AddTransient<UpdateCommand>();
+        services.AddTransient<RefreshCommand>();
+        // A script install checks the installer's channel manifest; every other install checks npm.
+        services.AddTransient<IReleaseFeed>(sp => InstallProvenance.Kind() == InstallKind.Script
+            ? sp.GetRequiredService<KcapReleaseClient>()
+            : sp.GetRequiredService<NpmRegistryClient>());
+        services.AddTransient<ScriptUpdater>();
         services.AddTransient<UseCommand>();
         services.AddTransient<ValidatePlanCommand>();
         services.AddTransient<WatchCommand>();
@@ -138,6 +187,9 @@ public static class CommandServices {
         services.AddTransient<CursorHookCommand>();
         services.AddTransient<GeminiHookCommand>();
         services.AddTransient<KiroHookCommand>();
+        services.AddTransient<MistralVibeHookCommand>();
+        services.AddTransient<GrokHookCommand>();
+        services.AddTransient<MuseHookCommand>();
         services.AddTransient<OpenCodeHookCommand>();
         services.AddTransient<PiHookCommand>();
 

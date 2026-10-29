@@ -2,11 +2,13 @@ using Capacitor.Cli.Core.Auth;
 
 namespace Capacitor.App.Services.Onboarding;
 
-/// What the Connect step asked for; the composition root binds each case to one façade call.
+/// What the Sign-in step asked for; the composition root binds each case to one façade call.
 public abstract record ConnectIntent {
     public sealed record Paste(string ServerInput) : ConnectIntent;
-    public sealed record Discover(string Provider) : ConnectIntent;
-    public sealed record Create : ConnectIntent;
+
+    /// Single sign-on discovery. <paramref name="ConfirmPick"/> shows even a single workspace for the
+    /// user to confirm rather than signing in to it.
+    public sealed record Discover(bool ForceDevice = false, bool ConfirmPick = false) : ConnectIntent;
 }
 
 /// <summary>
@@ -91,7 +93,7 @@ public sealed class WizardAuthService(
         }
     }
 
-    /// Completes when no attempt is live — the close path's await after Cancel (decision 2).
+    /// Completes when no attempt is live — the close path's await after Cancel.
     public async Task QuiescedAsync() {
         while (true) {
             Task<AuthResult> live;

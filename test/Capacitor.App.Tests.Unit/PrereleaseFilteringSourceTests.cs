@@ -5,7 +5,7 @@ namespace Capacitor.App.Tests.Unit;
 
 public class PrereleaseFilteringSourceTests {
     static VelopackAsset Asset(string version) =>
-        new() { PackageId = "KurrentCapacitor", Version = SemanticVersion.Parse(version), Type = VelopackAssetType.Full, FileName = $"KurrentCapacitor-{version}-osx-arm64-full.nupkg" };
+        new() { PackageId = "kcap", Version = SemanticVersion.Parse(version), Type = VelopackAssetType.Full, FileName = $"kcap-{version}-osx-arm64-full.nupkg" };
 
     [Test]
     public async Task Stable_install_drops_prereleases() {

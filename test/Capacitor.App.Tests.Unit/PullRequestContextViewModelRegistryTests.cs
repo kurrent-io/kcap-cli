@@ -40,6 +40,20 @@ public class PullRequestContextViewModelRegistryTests {
         await h.Dispose();
     });
 
+    /// The daemon keeps reporting the branch the worktree was cut on; a PR opened after a switch is
+    /// on the branch HEAD names, and a discovery by the reported one would never find it.
+    [Test]
+    public Task Discovery_searches_the_branch_the_checkout_is_on_now() => RunOnUiAsync(async () => {
+        using var tmp = new TempDir();
+        var worktree = tmp.CreateDir("wt");
+        tmp.CreateFile("wt/.git/HEAD", "ref: refs/heads/switched\n");
+        var h = new Harness("github.com", new PullRequestRepository("github", "github.com", "example", "repo", "hash"));
+        h.Provider.Discovered = [Link("github.com", 9)];
+        h.Push(worktree); await h.Show();
+        await Assert.That(h.Provider.Discoveries[0].Branch).IsEqualTo("switched");
+        await h.Dispose();
+    });
+
     [Test]
     public Task A_subject_no_provider_serves_shows_the_no_reader_notice_without_the_capacitor_sign_in() => RunOnUiAsync(async () => {
         var h = new Harness("github.com");
@@ -80,7 +94,9 @@ public class PullRequestContextViewModelRegistryTests {
         await Assert.That(h.Vm.ReaderNote).IsEqualTo("GitHub CLI is not signed in. Run gh auth login to read pull requests here.");
         await Assert.That(h.Vm.ShowsInstallTool).IsFalse();
         h.Provider.Status = PullRequestReaderStatusKind.Ready;
-        h.Time.Advance(TimeSpan.FromSeconds(16));
+        // Cross the manual-refresh gap without also starting the 15-second automatic poll.
+        h.Time.Advance(TimeSpan.FromSeconds(3));
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
         await h.Vm.RefreshCommand.Execute();
         await WaitUntilAsync(() => h.Vm.CanReveal, what: "rechecked and reading");
         await Assert.That(h.Vm.HasReaderNote).IsFalse();
@@ -95,6 +111,48 @@ public class PullRequestContextViewModelRegistryTests {
         await WaitUntilAsync(() => !h.Vm.IsReading && h.Vm.HasChoice, what: "list applied");
         await Assert.That(h.Vm.ReaderNote).IsEqualTo("GitHub CLI is not signed in for ghe.example. Run gh auth login --hostname ghe.example to read it here.");
         await Assert.That(h.Vm.ShowsInstallTool).IsFalse();
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task An_outdated_tool_labels_its_button_update_not_install() => RunOnUiAsync(async () => {
+        var h = new Harness("github.com", Primary);
+        h.Provider.Status = PullRequestReaderStatusKind.Failed;
+        h.Provider.StatusReason = "unsupported_version";
+        h.Push(); h.Vm.SetForeground(true);
+        await WaitUntilAsync(() => !h.Vm.IsReading && h.Vm.HasReaderNote, what: "note shown");
+        await Assert.That(h.Vm.ReaderNote).IsEqualTo("Update GitHub CLI to read pull requests here.");
+        await Assert.That(h.Vm.ShowsInstallTool).IsTrue();
+        await Assert.That(h.Vm.InstallToolLabel).IsEqualTo("Update GitHub CLI");
+        await h.Dispose();
+    });
+
+    [Test]
+    [Arguments("protocol_error", "GitHub CLI returned a response the app could not read. Update GitHub CLI and refresh.")]
+    [Arguments("oversized", "This pull request is too large to read through GitHub CLI.")]
+    public Task An_unreadable_local_response_names_the_tool_not_the_server(string reason, string notice) => RunOnUiAsync(async () => {
+        var h = new Harness("github.com", Primary);
+        h.Push(); await h.Show();
+        h.Provider.OverviewResponses.Enqueue((subject, _) => Task.FromResult(new PullRequestRead<PullRequestOverviewDto>(PullRequestReadKind.InvalidProtocol, Subject: subject, Reason: reason, AccessFailure: "invalid")));
+        // Cross the manual-refresh gap without also starting the 15-second automatic poll.
+        h.Time.Advance(TimeSpan.FromSeconds(3));
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        await h.Vm.RefreshCommand.Execute();
+        await WaitUntilAsync(() => h.Vm.Notice == notice, what: "tool-named notice");
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task An_unclassified_local_failure_names_the_tool_not_the_server() => RunOnUiAsync(async () => {
+        var h = new Harness("github.com", Primary);
+        h.Push(); await h.Show();
+        h.Provider.OverviewResponses.Enqueue((subject, _) => Task.FromResult(new PullRequestRead<PullRequestOverviewDto>(PullRequestReadKind.TransportFailure, Subject: subject, Reason: "timeout", AccessFailure: "transient")));
+        // Cross the manual-refresh gap without also starting the 15-second automatic poll.
+        h.Time.Advance(TimeSpan.FromSeconds(3));
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        await h.Vm.RefreshCommand.Execute();
+        await WaitUntilAsync(() => h.Vm.FreshnessDetail == "Couldn't read this pull request through GitHub CLI. Refresh to try again.", what: "tool-named freshness detail");
+        await Assert.That(h.Vm.HasNotice).IsFalse();
         await h.Dispose();
     });
 
@@ -114,7 +172,9 @@ public class PullRequestContextViewModelRegistryTests {
         await h.Vm.ShowSectionCommand.Execute("checks");
         await Assert.That(h.Vm.IsReading).IsTrue();
         h.Provider.OverviewResponses.Enqueue((subject, _) => Task.FromResult(new PullRequestRead<PullRequestOverviewDto>(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed")));
-        h.Time.Advance(TimeSpan.FromSeconds(16));
+        // Cross the manual-refresh gap without also starting the 15-second automatic poll.
+        h.Time.Advance(TimeSpan.FromSeconds(3));
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
         await h.Vm.RefreshCommand.Execute();
         await WaitUntilAsync(() => !h.Vm.CanReveal, what: "integration restart clears protected state");
         h.Provider.PendingPage.SetResult(new PullRequestRead<PullRequestPageDto<PullRequestCheckDto>>(PullRequestReadKind.Ready,
@@ -136,7 +196,9 @@ public class PullRequestContextViewModelRegistryTests {
         await h.Vm.ShowSectionCommand.Execute("checks");
         await Assert.That(h.Vm.IsReading).IsTrue();
         h.Provider.OverviewResponses.Enqueue((subject, _) => Task.FromResult(new PullRequestRead<PullRequestOverviewDto>(PullRequestReadKind.Unavailable, Subject: subject, Reason: "no_reader", AccessFailure: "invalid")));
-        h.Time.Advance(TimeSpan.FromSeconds(16));
+        // Cross the manual-refresh gap without also starting the 15-second automatic poll.
+        h.Time.Advance(TimeSpan.FromSeconds(3));
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
         await h.Vm.RefreshCommand.Execute();
         await WaitUntilAsync(() => !h.Vm.CanReveal, what: "no-reader failure clears protected state");
         await Assert.That(h.Vm.Notice).IsEqualTo("No reader is available for this pull request's host.");
@@ -180,7 +242,8 @@ public class PullRequestContextViewModelRegistryTests {
             Registry = new(Links, [Provider], TimeProvider.System);
             Vm = new(Presence, Registry, Time, Opener, () => { }, primaryRepo: () => primary);
         }
-        internal void Push() => Presence.OnNext(Agent("agent", "claude", hasTerminal: false, sessionId: "session", branch: "feature"));
+        internal void Push(string? worktree = null) =>
+            Presence.OnNext(Agent("agent", "claude", hasTerminal: false, worktreePath: worktree, sessionId: "session", branch: "feature"));
         internal async Task Show() { Vm.SetForeground(true); await WaitUntilAsync(() => Vm.CanReveal, what: "PR overview admitted"); }
         internal async Task Dispose() { await Vm.TeardownAsync(); Presence.Dispose(); }
     }

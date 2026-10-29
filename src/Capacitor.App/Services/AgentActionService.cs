@@ -6,10 +6,10 @@ using Capacitor.Cli.Core.WorkItems;
 
 namespace Capacitor.App.Services;
 
-/// Shared by the tray menu and the main-window rows (spec §7: one code path) — the single place
+/// Shared by the tray menu and the main-window rows — the single place
 /// that calls ILocalControlOps.StopAgentAsync and builds the open-in-web URL, so both surfaces
 /// get identical in-flight gating, toast text, and link construction. No local cache mutation:
-/// a stopped agent's disappearance comes only from the next daemon snapshot (spec §7).
+/// a stopped agent's disappearance comes only from the next daemon snapshot.
 public sealed class AgentActionService {
     const string DaemonUnreachableReason = "daemon_unreachable";
     const string UnreachableCopy         = "The daemon is not reachable";
@@ -34,7 +34,7 @@ public sealed class AgentActionService {
     readonly BehaviorSubject<IReadOnlySet<string>> _stopsInFlight;
 
     /// <param name="confirmForceStop">
-    /// The confirm-then-force seam for a protected kind (decision 5): invoked with the agent's
+    /// The confirm-then-force seam for a protected kind: invoked with the agent's
     /// label, resolves true to proceed with force:true, false to no-op. The composed delegate is
     /// UI glue (a dialog Window) — this service only awaits it, never marshals to the UI thread
     /// itself; that is the caller's job (App.axaml.cs, via Dispatcher.UIThread.InvokeAsync).
@@ -79,29 +79,34 @@ public sealed class AgentActionService {
     /// CLI's `IsProtectedKind`.
     internal static bool IsProtectedKind(string kind) => kind is not "agent";
 
+    /// Whether the user can type at this kind, mirroring the daemon's AcceptsTypedInput: a PR-review
+    /// agent is a dialogue, a flow participant is not, and an unrecognised kind fails safe as read-only.
+    internal static bool AcceptsTypedInput(string kind) => kind is "agent" or "review";
+
     /// Per-agent gating: a second Stop for the same agent no-ops while one is pending — including
     /// while a protected kind's confirm-then-force dialog is still open, since the agent stays
     /// in-flight for the whole RunStopAsync call — other agents run concurrently.
     /// Never throws — this is a UI command target, not a Task the caller awaits.
-    public void RequestStop(string agentId, string label, string kind, AgentOrigin origin = AgentOrigin.Local) {
+    /// <paramref name="accepted"/> runs, off the UI thread, once the server accepts a remote stop.
+    public void RequestStop(string agentId, string label, string kind, AgentOrigin origin = AgentOrigin.Local, Action? accepted = null) {
         var key = StopKey(origin, agentId);
         lock (_lock) {
             if (_inFlight.Contains(key)) return;
             _inFlight = _inFlight.Add(key);
             _stopsInFlight.OnNext(_inFlight);
         }
-        _ = Task.Run(() => origin == AgentOrigin.Remote ? RunRemoteStopAsync(agentId, label, key) : RunStopAsync(agentId, label, kind, key));
+        _ = Task.Run(() => origin == AgentOrigin.Remote ? RunRemoteStopAsync(agentId, label, key, accepted) : RunStopAsync(agentId, label, kind, key));
     }
 
     /// A remote row's stop never reaches ILocalControlOps — it goes to the server hub, which
-    /// forwards it to the owning daemon. Ok is silent: the row's disappearance comes from the
+    /// forwards it to the owning daemon. Ok is not a toast: the row's disappearance comes from the
     /// next registry update, same as a local stop's confirmation-by-absence.
-    async Task RunRemoteStopAsync(string agentId, string label, string key) {
+    async Task RunRemoteStopAsync(string agentId, string label, string key, Action? accepted) {
         try {
             if (_lane is null) { _notifier.Notify("Not signed in to a server"); return; }
             var outcome = await _lane.RequestStopAgentAsync(agentId, _shutdownToken).ConfigureAwait(false);
             switch (outcome.Result) {
-                case HubCallResult.Ok: break;
+                case HubCallResult.Ok: accepted?.Invoke(); break;
                 case HubCallResult.NotConnected: _notifier.Notify("Not connected to the server"); break;
                 case HubCallResult.Denied: _notifier.Notify($"The server declined to stop {label}"); break;
                 default: _notifier.Notify($"Couldn't stop {label}: {outcome.Reason}"); break;
@@ -135,10 +140,9 @@ public sealed class AgentActionService {
                 case "skipped": _notifier.Notify($"The daemon declined to stop {label}"); break;
                 case "error":
                     // The daemon's Error text may name an id or CLI-speak ("Pass --force…") the
-                    // app cannot act on (spec §7) — never surfaced verbatim in the UI. The full
-                    // text goes to stderr only; the toast stays generic. With force-after-confirm
-                    // above, a legitimate protected-refusal Error should no longer occur — this
-                    // now covers unknown-id/stale cases.
+                    // app cannot act on — never surfaced verbatim in the UI. The full text goes to
+                    // stderr only; the toast stays generic. With force-after-confirm above, this
+                    // covers unknown-id/stale cases.
                     Console.Error.WriteLine($"kcap: stop {agentId} failed: {result.Error}");
                     _notifier.Notify($"Couldn't stop {label}");
                     break;
@@ -149,7 +153,7 @@ public sealed class AgentActionService {
             _notifier.Notify(ex.Reason == DaemonUnreachableReason ? UnreachableCopy : $"Couldn't stop {label}: {ex.Message}");
         } catch (Exception ex) {
             // An unmapped exception still gets a toast (never a silent drop) — AppNotifier.Notify
-            // covers both the toast AND stderr (spec §11), so this one call satisfies both
+            // covers both the toast AND stderr, so this one call satisfies both
             // without a separate Console.Error write. The finally below still runs either way.
             _notifier.Notify($"Couldn't stop {label}: {ex.Message}");
         } finally {
@@ -175,6 +179,10 @@ public sealed class AgentActionService {
     /// server than this machine's local one. Never throws.
     public void OpenInWebRemote(string agentId) =>
         OpenUrl(_remoteServerUrl, AgentPath(agentId), "Not signed in to a server");
+
+    /// A session's own page, for a row no agent stands behind. Never throws.
+    public void OpenSessionInWeb(string sessionId) =>
+        OpenUrl(_remoteServerUrl, $"/sessions/{Uri.EscapeDataString(sessionId)}", "Not signed in to a server");
 
     /// The work item's page, always on the app profile's own server: that is the server whose read
     /// named the id, and a daemon snapshot's server may be a different one. Never throws.

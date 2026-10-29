@@ -1,15 +1,11 @@
 using System.Reactive.Disposables.Fluent;
+using Avalonia.Input;
 using Capacitor.App.ViewModels;
 using ReactiveUI.Reactive;
 using ReactiveUI.Avalonia.Reactive;
 
 namespace Capacitor.App.Views;
 
-// ReactiveWindow<T> ties ViewModel.Activator to THIS window's Loaded/Unloaded lifecycle
-// (ConsentPromptWindow's same note) — irrelevant to LifecyclePromptViewModel itself (it has no
-// activation-scoped state, unlike the queue/ticker-driven ConsentPromptViewModel), but the
-// CloseRequested subscription below still rides the window's own WhenActivated so it is torn down
-// with the window rather than leaking past Close().
 public partial class LifecyclePromptWindow : ReactiveWindow<LifecyclePromptViewModel> {
     public LifecyclePromptWindow() {
         InitializeComponent();
@@ -18,4 +14,6 @@ public partial class LifecyclePromptWindow : ReactiveWindow<LifecyclePromptViewM
             ViewModel?.CloseRequested.Subscribe(_ => Close()).DisposeWith(disposables);
         });
     }
+
+    void OnChromePointerPressed(object? sender, PointerPressedEventArgs e) => WindowChrome.BeginDrag(this, e);
 }

@@ -20,6 +20,8 @@ public sealed record KcapMcpServerDescriptor(string Id, string[] Args, bool Star
 public sealed record ReservedResultChannelTool(string Name, bool UnattendedSafe);
 
 public static class KcapMcpRegistry {
+    static readonly KcapMcpServerDescriptor Pages = new("kcap-pages", ["mcp", "pages"], false);
+
     static readonly Dictionary<string, KcapMcpServerDescriptor> Entries = new(StringComparer.OrdinalIgnoreCase) {
         ["kcap-review"]    = new("kcap-review",    ["mcp", "review"],    false),
         ["kcap-sessions"]  = new("kcap-sessions",  ["mcp", "sessions"],  false),
@@ -27,13 +29,18 @@ public static class KcapMcpRegistry {
         ["kcap-flows"]     = new("kcap-flows",     ["mcp", "flows"],     true),
         ["kcap-workitems"] = new("kcap-workitems", ["mcp", "workitems"], false),
         ["kcap-plans"]     = new("kcap-plans",     ["mcp", "plans"],     false),
+        ["kcap-handoff"]   = new("kcap-handoff",   ["mcp", "handoff"],   false),
         ["kcap-analytics"] = new("kcap-analytics", ["mcp", "analytics"], false),
+        ["kcap-pages"]     = Pages,
+        // Stored flow definitions may still name the server `kcap-artefacts`.
+        ["kcap-artefacts"] = Pages,
+        ["kcap-knowledge"] = new("kcap-knowledge", ["mcp", "knowledge"], false),
     };
 
     /// <summary>Every registered id. Exposed so a conformance test can compare this list against the
     /// canonical registration list in BOTH directions — a registry-only entry is allowlistable but
     /// never registered with any harness, and checking only the other direction misses it.</summary>
-    public static IEnumerable<string> AllIds => Entries.Values.Select(d => d.Id);
+    public static IEnumerable<string> AllIds => Entries.Values.Select(d => d.Id).Distinct();
 
     /// <summary>Resolves an allowlist entry to its descriptor. Case-insensitive, trims
     /// surrounding whitespace. A null or blank name — e.g. a wire-deserialized allowlist
@@ -67,6 +74,20 @@ public static class KcapMcpRegistry {
     /// it, and every reviewer runtime must agree on that.</summary>
     public const string ReservedResultChannelId = "kcap-flow-result";
 
+    /// <summary>The server a borrowed-snapshot review is injected with, independent of the allowlist, and
+    /// the one tool it serves. Read-only, so every unattended reviewer may auto-approve it.</summary>
+    public const string ReviewContextServerId = "kcap-review-context";
+    public const string ReviewContextTool     = "get_branch_authored_mcp_configs";
+
+    /// <summary>Whether <paramref name="name"/> names the reserved result channel (case-insensitive).</summary>
+    public static bool IsReservedResultChannel(string name) =>
+        string.Equals(name, ReservedResultChannelId, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>How long a harness with a per-server tool timeout lets one result-channel call run.
+    /// It must exceed the channel's own delivery deadline, or the harness abandons a submit that is
+    /// still riding out a server restart.</summary>
+    public static readonly TimeSpan ReservedResultChannelToolTimeout = TimeSpan.FromSeconds(300);
+
     /// <summary>The ordered catalog of every tool the reserved result channel serves — the single
     /// source of truth. <c>McpFlowResultServer</c>'s <c>tools/list</c>, Copilot's ACP
     /// <c>--available-tools</c> argv, and <c>LocalPermissionBridge</c>'s unattended auto-approve are
@@ -99,7 +120,8 @@ public static class KcapMcpRegistry {
             },
             ["kcap-sessions"] = new HashSet<string>(StringComparer.Ordinal) {
                 "search_sessions", "list_repo_sessions", "get_session_summary", "get_session_transcript",
-                "get_turn", "list_turns",
+                "get_turn", "list_turns", "list_repo_plans", "get_declared_plans", "get_session_evals",
+                "get_eval_report", "list_eval_runs", "get_connection",
             },
         };
 

@@ -14,15 +14,12 @@ static class ServiceEnvironment {
     /// <summary>Variables carried from the installing shell into the service unit. No credentials —
     /// the unit is a file on disk.
     ///
-    /// <para>Two of the nine vendor path overrides, deliberately: a captured path is frozen at install
+    /// <para>Two of the vendor path overrides, deliberately: a captured path is frozen at install
     /// time, so carrying one for a vendor the operator has not pinned bakes in a stale location. The
     /// rest stay uncaptured until someone asks.</para></summary>
     static readonly string[] Keys =
         ["PATH", ProfileOverrides.ProfileVar, ProfileOverrides.UrlVar, HarnessId.Claude.PathEnvVar, HarnessId.Codex.PathEnvVar,
-         "KCAP_CONSENT_SEED_DEFAULT", "KCAP_EXPECT_SERVER_URL",
-         // Codex transport selection + interactive opt-in: the daemon reads both from its own
-         // environment and nowhere else, so the install has to carry them into the unit.
-         "KCAP_CODEX_TRANSPORT", "KCAP_CODEX_APPSERVER_INTERACTIVE"];
+         "KCAP_CONSENT_SEED_DEFAULT", "KCAP_EXPECT_SERVER_URL"];
 
     /// <summary>
     /// The unattended reviewers' opt-OUT switches. Carried on every platform: these are booleans, not
@@ -175,6 +172,13 @@ static class ServiceEnvironment {
         // nothing, so a captured root would be baked only when one happened to be exported — and the
         // supervisor's own HOME would decide the rest.
         env[Core.ConfigRoot.ConfigDirEnvVar] = config.Directory;
+
+        // A rooted HOME decides the fixed daemons directory before the profile folder does, and a
+        // scheduled task starts without the installing shell's HOME (Git Bash, MSYS or a redirected
+        // corporate home). Without it the daemon and the CLI that installed it look in two different
+        // places for each other and for the repo list.
+        if (isWindows && source.TryGetValue("HOME", out var home) && Path.IsPathFullyQualified(home))
+            env["HOME"] = home;
 
         return env;
     }

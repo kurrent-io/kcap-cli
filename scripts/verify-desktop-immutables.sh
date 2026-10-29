@@ -3,7 +3,7 @@
 # that already exists in the bucket must be byte-identical to the artifact about to be published.
 # Identical bytes are a retry; different bytes mean a second build of the same version won a race,
 # and this run must not overwrite what clients may already hold.
-# Usage: verify-desktop-immutables.sh <local-dir> <version> <fetch-script>
+# Usage: verify-desktop-immutables.sh <local-dir> <version> <fetch-script> [channel]
 #   <fetch-script> <object-name> <out-file> must exit 0 on a successful fetch, 44 when the object
 #   does not exist, and any other code on an error the caller cannot tell apart from "not
 #   published" — a transient fetch failure must never read as "safe to publish".
@@ -14,12 +14,16 @@ source "$here/lib/hash.sh"
 
 local_dir="${1:?usage: verify-desktop-immutables.sh <local-dir> <version> <fetch-script>}"
 version="${2:?usage: verify-desktop-immutables.sh <local-dir> <version> <fetch-script>}"
-fetch="${3:?usage: verify-desktop-immutables.sh <local-dir> <version> <fetch-script>}"
+fetch="${3:?usage: verify-desktop-immutables.sh <local-dir> <version> <fetch-script> [channel]}"
+channel="${4:-osx-arm64}"
 
 names=(
-  "KurrentCapacitor-$version-osx-arm64-full.nupkg"
-  "KurrentCapacitor-$version-osx-arm64-delta.nupkg"
-  "Kurrent-Capacitor-$version-osx-arm64.dmg"
+  "kcap-$version-$channel-full.nupkg"
+  "kcap-$version-$channel-delta.nupkg"
+  "kcap-$version-$channel.dmg"
+  "kcap-$version-$channel-Setup.exe"
+  "kcap-$version-$channel.AppImage"
+  "kcap-$version-$channel.deb"
 )
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 for name in "${names[@]}"; do

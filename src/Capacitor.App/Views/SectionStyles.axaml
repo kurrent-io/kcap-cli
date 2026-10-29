@@ -1,0 +1,62 @@
+<Styles xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:views="clr-namespace:Capacitor.App.Views">
+    <!-- Shared section headers and indented bodies for the work context and session rail. -->
+    <Style Selector="TextBlock.eyebrow">
+        <Setter Property="FontSize" Value="11.5" />
+        <Setter Property="FontWeight" Value="Bold" />
+        <Setter Property="LetterSpacing" Value="1.2" />
+        <Setter Property="LineHeight" Value="16" />
+        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="TextBlock.sectionMeta">
+        <Setter Property="FontSize" Value="11" />
+        <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.sectionHeader">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="8,0" />
+        <Setter Property="MinHeight" Value="28" />
+        <Setter Property="Margin" Value="-8,0" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Cursor" Value="Arrow" />
+    </Style>
+    <Style Selector="Button.sectionHeader.expandable">
+        <Setter Property="Cursor" Value="Hand" />
+    </Style>
+    <Style Selector="Button.sectionHeader /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Button.sectionHeader:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.sectionHeader:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Button.sectionHeader:pressed">
+        <Setter Property="RenderTransform" Value="scale(1)" />
+    </Style>
+    <Style Selector="Button.sectionHeader.expandable:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.sectionHeader.expandable:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Border.sectionBody">
+        <Setter Property="BorderThickness" Value="1,0,0,0" />
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        <Setter Property="Margin" Value="6,2,0,0" />
+        <Setter Property="Padding" Value="12,8,0,2" />
+    </Style>
+    <Style Selector="views|AppIcon.chevron">
+        <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
+    </Style>
+</Styles>

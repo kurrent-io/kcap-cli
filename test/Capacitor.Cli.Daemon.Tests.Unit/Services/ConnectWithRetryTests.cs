@@ -1,3 +1,6 @@
+using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Daemon.Harness.Codex;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -17,14 +20,17 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 public class ConnectWithRetryTests {
     static readonly TimeSpan HangGuard = TimeSpan.FromSeconds(5);
 
-    sealed class RetryTestConnection(DaemonStatusNotifier? notifier = null) : ServerConnection(
-        new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1" },
-        UnusedTokenStore.Create(),
-        NullLoggerFactory.Instance,
-        NullLogger<ServerConnection>.Instance,
-        TimeProvider.System,
-        notifier
-    ) {
+    sealed class RetryTestConnection : ServerConnection {
+        readonly DaemonConfig _config;
+
+        public RetryTestConnection(DaemonStatusNotifier? notifier = null, DaemonConfig? config = null)
+            : this(notifier, config ?? new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1" }, 0) { }
+
+        RetryTestConnection(DaemonStatusNotifier? notifier, DaemonConfig config, int _) : base(
+                config, new FixedCredentialSource(), NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance,
+                TimeProvider.System, notifier) =>
+            _config = config;
+
         public HubConnectionState State { get; set; } = HubConnectionState.Disconnected;
         public bool Ready { get; set; }
 
@@ -34,6 +40,9 @@ public class ConnectWithRetryTests {
         /// <summary>How many RegisterDaemonAsync calls should throw before they start
         /// succeeding — drives the "register failed after a successful start" path.</summary>
         public int FailRegisterRemaining { get; set; }
+
+        /// <summary>How many registrations the server accepts before agent re-registration then throws.</summary>
+        public int FailAgentRecoveryRemaining { get; set; }
 
         /// <summary>When set, every StartHubAsync call throws this instead of attempting the
         /// normal Disconnected-state contract — drives the initial-start-failure pulse test,
@@ -71,7 +80,7 @@ public class ConnectWithRetryTests {
         internal override Task StopHubAsync(CancellationToken ct) =>
             StopHold?.Task ?? Task.CompletedTask;
 
-        internal override Task RegisterDaemonAsync() {
+        internal override Task RegisterDaemonAsync(RegistrationAttempt attempt) {
             RegisterCalls++;
             OnRegisterAttempt?.Invoke();
 
@@ -86,6 +95,15 @@ public class ConnectWithRetryTests {
                 return Task.FromException(new InvalidOperationException("simulated DaemonConnect failure"));
             }
 
+            attempt.Sending(_config.Advertisement);
+            attempt.Accept();
+
+            if (FailAgentRecoveryRemaining > 0) {
+                FailAgentRecoveryRemaining--;
+
+                return Task.FromException(new InvalidOperationException("simulated agent re-registration failure"));
+            }
+
             Ready = true;
 
             return Task.CompletedTask;
@@ -93,6 +111,86 @@ public class ConnectWithRetryTests {
     }
 
     static TimeSpan[] FastDelays => [TimeSpan.FromMilliseconds(10)];
+
+    /// <summary>A daemon that boots while the server is down never reaches a registration, so the
+    /// connect loop itself must report the committed Codex resolution as not delivered; the first
+    /// successful connect then acknowledges it.</summary>
+    [Test]
+    public async Task A_hub_that_cannot_start_reports_the_codex_resolution_as_applied_locally() {
+        var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1" };
+        var codex  = CodexTransportResolution.Resolve(1, switchOn: true, () => "0.146.0");
+        config.CodexResolution = codex;
+        config.Advertise([], codex);
+        var conn = new RetryTestConnection(config: config) {
+            StartThrows        = new HttpRequestException("connection refused"),
+            ConnectRetryDelays = FastDelays,
+        };
+        DaemonStatusDto Status() =>
+            new(new DaemonInfoDto("test", "1", "http://127.0.0.1:1", "disconnected", 1, 0), [],
+                Experimental: DaemonStatusIpc.ExperimentalForStatus(config));
+
+        using (var cts = new CancellationTokenSource()) {
+            var loop = conn.ConnectWithRetryAsync(cts.Token);
+            while (conn.StartCalls == 0) await Task.Delay(5);
+            await cts.CancelAsync();
+            try { await loop.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        }
+
+        await Assert.That(Status().Experimental!.Single().RegistrationFailed == true).IsTrue();
+        await Assert.That(ExperimentalFeatureState.Classify(true, true, Status(), ExperimentalFeatures.CodexAppServer.Id).Kind)
+            .IsEqualTo(ExperimentalFeatureStateKind.AppliedLocally);
+
+        conn.StartThrows = null;
+        await conn.ConnectWithRetryAsync(CancellationToken.None).WaitAsync(HangGuard);
+
+        await Assert.That(Status().Experimental!.Single().RegistrationFailed == true).IsFalse();
+        await Assert.That(ExperimentalFeatureState.Classify(true, true, Status(), ExperimentalFeatures.CodexAppServer.Id).Kind)
+            .IsEqualTo(ExperimentalFeatureStateKind.Active);
+    }
+
+    /// <summary>A refresh commits a newer advertisement while an attempt is in flight; the attempt's
+    /// failure belongs to the advertisement it carried, so the newer one is not reported as undelivered.</summary>
+    [Test]
+    public async Task A_failed_attempt_marks_only_the_advertisement_it_carried() {
+        var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1" };
+        var carried = CodexTransportResolution.Resolve(1, switchOn: true, () => "0.146.0");
+        config.Advertise([], carried);
+        var start = new TaskCompletionSource();
+        var conn = new RetryTestConnection(config: config) {
+            StartHold          = start,
+            ConnectRetryDelays = [TimeSpan.FromMinutes(5)],
+        };
+
+        using var cts = new CancellationTokenSource();
+        var loop = conn.ConnectWithRetryAsync(cts.Token);
+        while (conn.StartCalls == 0) await Task.Delay(5);
+        config.Advertise([], CodexTransportResolution.Resolve(2, switchOn: false, () => "0.146.0"));
+        start.SetException(new HttpRequestException("connection refused"));
+        while (config.FailedCodexGeneration == 0) await Task.Delay(5);
+        await cts.CancelAsync();
+        try { await loop.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+
+        await Assert.That(config.FailedCodexGeneration).IsEqualTo(carried.Generation);
+    }
+
+    /// <summary>An attempt whose DaemonConnect the server accepted delivered its advertisement, even when
+    /// agent re-registration then fails and the loop retries.</summary>
+    [Test]
+    public async Task An_attempt_failing_after_the_server_accepted_it_is_not_marked_undelivered() {
+        var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1" };
+        var codex  = CodexTransportResolution.Resolve(1, switchOn: true, () => "0.146.0");
+        config.Advertise([], codex);
+        var conn = new RetryTestConnection(config: config) {
+            FailAgentRecoveryRemaining = 1,
+            ConnectRetryDelays         = FastDelays,
+        };
+
+        await conn.ConnectWithRetryAsync(CancellationToken.None).WaitAsync(HangGuard);
+
+        await Assert.That(conn.RegisterCalls).IsEqualTo(2);
+        await Assert.That(config.FailedCodexGeneration).IsEqualTo(0L);
+        await Assert.That(config.AcknowledgedCodexResolution).IsSameReferenceAs(codex);
+    }
 
     [Test]
     public async Task Live_registered_connection_is_left_alone() {

@@ -19,14 +19,15 @@ namespace Capacitor.Cli.Core;
 /// session 0 while the CLI runs in the login session. The lock therefore uses <c>Global\</c>
 /// explicitly, created with a DACL granting access to the CURRENT USER only, so another local
 /// user cannot squat or hold the name (an existing mutex we cannot open surfaces as an
-/// exception → callers fail closed). On non-Windows, .NET named mutexes are already
-/// machine-wide (per-user shared-memory files), so the plain name suffices. The name hashes
+/// exception → callers fail closed). On non-Windows, an unprefixed .NET named mutex is scoped to
+/// the login session, so the mutex is created current-user-only and not session-scoped: a shell
+/// in another terminal, the desktop app and a launchd/systemd daemon then exclude one another. The name hashes
 /// the canonical config path, which itself contains the user's home — distinct users get
 /// distinct names even before the DACL.</para>
 ///
-/// <para>Note: kcap versions predating this helper used a bare, differently-prefixed name for
-/// the Codex config lock, so mutual exclusion across a version transition is best-effort —
-/// accepted: the lock guards rare, explicit admin operations.</para>
+/// <para>An older kcap still running beside this one may lock with a session-scoped mutex, which
+/// does not exclude this one; exclusion across mixed versions is best-effort, accepted because the
+/// lock guards rare, explicit admin operations.</para>
 /// </summary>
 public static class ConfigFileLock {
     /// <summary>Acquires the lock for <paramref name="configPath"/>, waiting up to
@@ -47,7 +48,8 @@ public static class ConfigFileLock {
     }
 
     static Mutex CreateMutex(string name) {
-        if (!OperatingSystem.IsWindows()) return new Mutex(false, name);
+        if (!OperatingSystem.IsWindows())
+            return new Mutex(false, name, new NamedWaitHandleOptions { CurrentUserOnly = true, CurrentSessionOnly = false }, out _);
 
         // Global\ = cross-session (service daemon in session 0 vs. the login-session CLI);
         // the current-user-only DACL keeps other local users from squatting the name.

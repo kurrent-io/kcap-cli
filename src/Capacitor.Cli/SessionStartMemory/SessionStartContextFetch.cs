@@ -33,19 +33,9 @@ internal static class SessionStartContextFetch {
         return new SessionStartFetchOutcome(response.StatusCode, bytes, RetryAfter: null);
     }
 
-    static async Task<byte[]> ReadBoundedAsync(HttpContent content, CancellationToken ct) {
-        await using var stream = await content.ReadAsStreamAsync(ct);
-        var buffer = new byte[SessionStartMemoryConstants.MaxResponseBytes + 1];
-        var total  = 0;
-        while (total < buffer.Length) {
-            var read = await stream.ReadAsync(buffer.AsMemory(total, buffer.Length - total), ct);
-            if (read == 0) break;
-            total += read;
-        }
-        if (total > SessionStartMemoryConstants.MaxResponseBytes)
-            throw new InvalidDataException("SessionStart context response exceeded 256 KiB.");
-        return buffer.AsSpan(0, total).ToArray();
-    }
+    static async Task<byte[]> ReadBoundedAsync(HttpContent content, CancellationToken ct) =>
+        await BoundedHttpContent.ReadAsync(content, SessionStartMemoryConstants.MaxResponseBytes, ct)
+     ?? throw new InvalidDataException("SessionStart context response exceeded 256 KiB.");
 
     static TimeSpan? ParseRetryAfter(HttpResponseMessage response, TimeProvider time) {
         if (response.StatusCode != HttpStatusCode.TooManyRequests || response.Headers.RetryAfter is null) return null;

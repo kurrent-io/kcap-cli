@@ -9,6 +9,8 @@ riderModule.iml
 .worktrees/
 logs/
 .publish/
+/publish/
+/releases/
 .dev/
 **/.DS_Store
 .superpowers/
@@ -28,3 +30,6 @@ TestResults/
 # Probe harness bytecode
 __pycache__/
 *.pyc
+
+# Snap packaging (scripts/build-snap.sh)
+*.snap

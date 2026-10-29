@@ -41,7 +41,13 @@ public class AcpEventEnvelopeWireCompatTests {
             ContextWindowTokens: 200_000,
             TimestampIso:      "2026-07-08T00:00:00Z",
             Ephemeral:         true,
-            ItemId:            "item-42"
+            ItemId:            "item-42",
+            RepoOwner:         "kurrent-io",
+            RepoName:          "widgets",
+            RepoRemoteUrl:     "https://github.com/kurrent-io/widgets.git",
+            RepoBranch:        "main",
+            AgentId:           "agent-7",
+            AgentType:         "general-purpose"
         );
 
         var json = JsonSerializer.Serialize(env, CapacitorJsonContext.Default.AcpEventEnvelope);
@@ -58,6 +64,12 @@ public class AcpEventEnvelopeWireCompatTests {
         await Assert.That(json).Contains(@"""tool_kind"":""execute""");
         await Assert.That(json).Contains(@"""tool_result"":""ok""");
         await Assert.That(json).Contains(@"""tool_is_error"":true");
+        await Assert.That(json).Contains(@"""repo_owner"":""kurrent-io""");
+        await Assert.That(json).Contains(@"""repo_name"":""widgets""");
+        await Assert.That(json).Contains(@"""repo_remote_url"":""https://github.com/kurrent-io/widgets.git""");
+        await Assert.That(json).Contains(@"""repo_branch"":""main""");
+        await Assert.That(json).Contains(@"""agent_id"":""agent-7""");
+        await Assert.That(json).Contains(@"""agent_type"":""general-purpose""");
         await Assert.That(json).Contains(@"""model"":""claude-opus-4-8""");
         await Assert.That(json).Contains(@"""cwd"":""/repo""");
         await Assert.That(json).Contains(@"""raw_session_id"":""raw-sess-1""");
@@ -201,6 +213,35 @@ public class AcpEventEnvelopeWireCompatTests {
             @"{""outcome"":""rejected"",""ownership_token"":0,""accepted_seq"":0}",
             CapacitorJsonContext.Default.AcpSourceClaimOutcome);
         await Assert.That(rejected.Outcome).IsEqualTo(AcpBindOutcome.Rejected);
+    }
+
+    /// A server that predates the field rejects nothing it never sees, so it rides the wire only when set.
+    [Test]
+    public async Task SourceEventId_never_rides_the_wire() {
+        var json = JsonSerializer.Serialize(new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: "hi", SourceEventId: Guid.NewGuid()),
+            CapacitorJsonContext.Default.AcpEventEnvelope);
+
+        await Assert.That(json).IsEqualTo(JsonSerializer.Serialize(new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: "hi"),
+            CapacitorJsonContext.Default.AcpEventEnvelope));
+    }
+
+    [Test]
+    public async Task DispatchId_rides_the_wire_only_when_set() {
+        var dispatch = Guid.NewGuid();
+        var set   = JsonSerializer.Serialize(new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, DispatchId: dispatch), CapacitorJsonContext.Default.AcpEventEnvelope);
+        var unset = JsonSerializer.Serialize(new AcpEventEnvelope(Kind: AcpEventKind.UserMessage), CapacitorJsonContext.Default.AcpEventEnvelope);
+
+        await Assert.That(set).Contains($@"""dispatch_id"":""{dispatch}""");
+        await Assert.That(unset).DoesNotContain("dispatch_id");
+    }
+
+    [Test]
+    public async Task TurnId_rides_the_wire_only_when_set() {
+        var set   = JsonSerializer.Serialize(new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, TurnId: "turn-3"), CapacitorJsonContext.Default.AcpEventEnvelope);
+        var unset = JsonSerializer.Serialize(new AcpEventEnvelope(Kind: AcpEventKind.UserMessage), CapacitorJsonContext.Default.AcpEventEnvelope);
+
+        await Assert.That(set).Contains(@"""turn_id"":""turn-3""");
+        await Assert.That(unset).DoesNotContain("turn_id");
     }
 
     [Test]

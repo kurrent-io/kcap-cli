@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Telemetry;
@@ -5,10 +6,12 @@ using Capacitor.Cli.Core;
 using ProfileConfigJsonContextIndented = Capacitor.Cli.Core.Config.ProfileConfigJsonContextIndented;
 
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.Cli.Commands;
 
-public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http, CliTelemetry telemetry) {
+public sealed class ConfigCommand(
+        ConfigRoot config, ICapacitorHttpClient http, CliTelemetry telemetry, DaemonStore daemons, TimeProvider time) {
     public async Task<int> HandleAsync(string[] args) {
         if (args.Length < 2) {
             await Console.Error.WriteLineAsync("Usage: kcap config <show|set|unset> [key] [value]");
@@ -66,13 +69,14 @@ public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http, 
             value = result.Url;
         }
 
-        var profileName = "default";
+        var     profileName = "default";
+        Profile updated     = new();
 
         await ConfigMutator.MutateAsync(config, c => {
             profileName = c.ActiveName;
-            var profile = ApplySet(c.Profiles.GetValueOrDefault(profileName) ?? new Profile(), key, value);
+            updated     = ApplySet(c.Profiles.GetValueOrDefault(profileName) ?? new Profile(), key, value);
 
-            return c with { Profiles = new Dictionary<string, Profile>(c.Profiles) { [profileName] = profile } };
+            return c with { Profiles = new Dictionary<string, Profile>(c.Profiles) { [profileName] = updated } };
         });
 
         // Echo what was STORED, not what was typed: flows.reviewer_vendor is canonicalized on the way
@@ -90,7 +94,37 @@ public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http, 
                 $"Warning: '{stored}' is not a vendor this kcap version knows ({ReviewerVendors.Tokens}); " +
                 "the server has the authoritative list and will reject an unknown vendor at start time.");
 
+        if (key == "daemon.max_agents" && updated.Daemon is { } daemon) {
+            var name = DaemonNameResolver.Resolve([], daemon.Name);
+            await Console.Out.WriteLineAsync(
+                await ApplyCapacityLiveAsync(new LocalControlOps(daemons, name, time), name, daemon.MaxAgents, CancellationToken.None));
+        }
+
         return 0;
+    }
+
+    // A daemon launched with --max-agents takes that flag over the profile at every start.
+    const string FlagPrecedence = "A --max-agents flag in the daemon's launch command overrides it at startup.";
+
+    /// <summary>
+    /// Hands a new capacity to the running daemon, which applies it without a restart — a restart ends
+    /// every hosted agent. Returns the line telling the user where the value took effect.
+    /// </summary>
+    internal static async Task<string> ApplyCapacityLiveAsync(ILocalControlOps ops, string daemonName, int maxAgents, CancellationToken ct) {
+        try {
+            var ack = await ops.PutDaemonSettingsAsync(new DaemonSettingsPutDto(maxAgents), ct);
+
+            return ack.Ok
+                ? $"Applied to running daemon '{daemonName}'; no restart needed. {FlagPrecedence}"
+                : $"Daemon '{daemonName}' refused the value ({ack.Reason}); it keeps {ack.MaxAgents?.ToString(CultureInfo.InvariantCulture) ?? "its current capacity"}.";
+        } catch (LocalControlOpsException ex) when (ex.Reason == "daemon_unreachable") {
+            return $"Daemon '{daemonName}' is not running; it reads the new value when it starts. {FlagPrecedence}";
+        } catch (LocalControlOpsException ex) when (ex.Reason == "daemon_rejected") {
+            return $"Daemon '{daemonName}' cannot take the value live; it reads it when it restarts " +
+                   $"(`kcap daemon restart --name {daemonName} --when-idle` waits for its agents to finish). {FlagPrecedence}";
+        } catch (LocalControlOpsException ex) {
+            return $"Could not confirm the new value with daemon '{daemonName}' ({ex.Reason}); `kcap daemon status` shows its capacity.";
+        }
     }
 
     async Task<int> Unset(string key) {
@@ -159,11 +193,14 @@ public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http, 
         key switch {
             "server_url" => profile with { ServerUrl = value },
             "daemon.name" => profile with { Daemon = (profile.Daemon ?? new DaemonSettings()) with { Name = value } },
-            "daemon.max_agents" when int.TryParse(value, out var n) => profile with { Daemon = (profile.Daemon ?? new DaemonSettings()) with { MaxAgents = n } },
+            "daemon.max_agents" when int.TryParse(value, out var n) && n >= 0 => profile with { Daemon = (profile.Daemon ?? new DaemonSettings()) with { MaxAgents = n } },
+            "daemon.max_agents" => throw new ArgumentException($"Invalid value for daemon.max_agents: '{value}'. Must be 0 (unlimited) or a positive integer."),
             "daemon.claude_path" when !string.IsNullOrEmpty(value) => profile with { Daemon = (profile.Daemon ?? new DaemonSettings()) with { ClaudePath = value } },
             "daemon.claude_path" => throw new ArgumentException("Invalid value for daemon.claude_path: must not be empty."),
             "daemon.codex_path" when !string.IsNullOrEmpty(value) => profile with { Daemon = (profile.Daemon ?? new DaemonSettings()) with { CodexPath = value } },
             "daemon.codex_path" => throw new ArgumentException("Invalid value for daemon.codex_path: must not be empty."),
+            "daemon.auto_resume" when bool.TryParse(value, out var b) => profile with { Daemon = (profile.Daemon ?? new DaemonSettings()) with { AutoResume = b } },
+            "daemon.auto_resume" => throw new ArgumentException($"Invalid value for daemon.auto_resume: '{value}'. Must be true or false."),
             "update_check" when bool.TryParse(value, out var b) => profile with { UpdateCheck = b },
             "update_check" => throw new ArgumentException($"Invalid value for update_check: '{value}'. Must be true or false."),
             "disable_session_guidelines" when bool.TryParse(value, out var b) => profile with { DisableSessionGuidelines = b },
@@ -172,10 +209,16 @@ public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http, 
             "disable_memory_index" => throw new ArgumentException($"Invalid value for disable_memory_index: '{value}'. Must be true or false."),
             "disable_coordination_notices" when bool.TryParse(value, out var b) => profile with { DisableCoordinationNotices = b },
             "disable_coordination_notices" => throw new ArgumentException($"Invalid value for disable_coordination_notices: '{value}'. Must be true or false."),
+            "disable_first_run_notice" when bool.TryParse(value, out var b) => profile with { DisableFirstRunNotice = b },
+            "disable_first_run_notice" => throw new ArgumentException($"Invalid value for disable_first_run_notice: '{value}'. Must be true or false."),
             "disable_workitems_nudge" when bool.TryParse(value, out var b) => profile with { DisableWorkItemsNudge = b },
             "disable_workitems_nudge" => throw new ArgumentException($"Invalid value for disable_workitems_nudge: '{value}'. Must be true or false."),
+            "disable_nextwork_nudge" when bool.TryParse(value, out var b) => profile with { DisableNextWorkNudge = b },
+            "disable_nextwork_nudge" => throw new ArgumentException($"Invalid value for disable_nextwork_nudge: '{value}'. Must be true or false."),
             "disable_plans_nudge" when bool.TryParse(value, out var b) => profile with { DisablePlansNudge = b },
             "disable_plans_nudge" => throw new ArgumentException($"Invalid value for disable_plans_nudge: '{value}'. Must be true or false."),
+            "disable_relative_worktrees_nudge" when bool.TryParse(value, out var b) => profile with { DisableRelativeWorktreesNudge = b },
+            "disable_relative_worktrees_nudge" => throw new ArgumentException($"Invalid value for disable_relative_worktrees_nudge: '{value}'. Must be true or false."),
             "disable_harness_nudge" when bool.TryParse(value, out var b) => profile with { DisableHarnessNudge = b },
             "disable_harness_nudge" => throw new ArgumentException($"Invalid value for disable_harness_nudge: '{value}'. Must be true or false."),
             "use_provider_api_key" when bool.TryParse(value, out var b) => profile with { UseProviderApiKey = b },
@@ -202,6 +245,7 @@ public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http, 
         key switch {
             "flows.reviewer_vendor" => profile with { Flows = (profile.Flows ?? new FlowsSettings()) with { ReviewerVendor = null } },
             "skills.auto_sync" => profile with { Skills = (profile.Skills ?? new SkillsSettings()) with { AutoSync = null } },
+            "daemon.auto_resume" => profile with { Daemon = (profile.Daemon ?? new DaemonSettings()) with { AutoResume = null } },
             _ => throw new ArgumentException($"Unknown or non-unsettable config key: {key}")
         };
 
@@ -214,12 +258,16 @@ public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http, 
         Console.Error.WriteLine("  daemon.max_agents           Max concurrent hosted coding agents (0 = unlimited)");
         Console.Error.WriteLine("  daemon.claude_path          Path to claude binary (default: claude)");
         Console.Error.WriteLine("  daemon.codex_path           Path to codex binary (default: codex)");
+        Console.Error.WriteLine("  daemon.auto_resume          Resume hosted agents after a daemon restart (true/false, default true)");
         Console.Error.WriteLine("  update_check                All kcap update nudging: stderr hint, server headers (banner/notification), in-agent nudge (true/false)");
         Console.Error.WriteLine("  default_visibility          Default session visibility (private, project, org_public, public)");
         Console.Error.WriteLine("  disable_session_guidelines  Skip injecting recurring-lessons context at SessionStart (true/false)");
         Console.Error.WriteLine("  disable_workitems_nudge     Skip injecting the work-items nudge at SessionStart (true/false)");
+        Console.Error.WriteLine("  disable_nextwork_nudge      Skip the next-work list at SessionStart and the completion nudge (true/false)");
+        Console.Error.WriteLine("  disable_first_run_notice    Skip the one-shot notice in the first session after setup (true/false)");
         Console.Error.WriteLine("  disable_coordination_notices  Skip injecting coordination notices (others' overlapping work) at SessionStart (true/false)");
         Console.Error.WriteLine("  disable_harness_nudge       Skip new-harness setup nudges (in-session + CLI stderr) (true/false)");
+        Console.Error.WriteLine("  disable_relative_worktrees_nudge  Skip the SessionStart nudge to use relative worktree links in a sandbox (true/false)");
         Console.Error.WriteLine("  use_provider_api_key        Keep ANTHROPIC_API_KEY/OPENAI_API_KEY in headless agent spawns (true/false)");
         Console.Error.WriteLine("  excluded_repos              Excluded repos, comma-separated (owner/repo,owner/repo)");
         Console.Error.WriteLine("  allowed_repos               Capture only these repos, comma-separated; empty allows all");

@@ -116,7 +116,7 @@ internal sealed partial class CodexNotificationMapper {
             case "userMessage":
                 return One(new AcpEventEnvelope(
                     Kind: AcpEventKind.UserMessage, Text: JoinTexts(item.Arr("content")),
-                    ItemId: id, TimestampIso: ts));
+                    ItemId: id, TimestampIso: ts, TurnId: p.Str("turnId")));
 
             case "commandExecution":
                 // The tool-call OPEN came from item/started; the completed item is the authoritative result.

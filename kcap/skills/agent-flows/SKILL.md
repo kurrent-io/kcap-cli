@@ -1,28 +1,29 @@
 ---
 name: agent-flows
 description: >-
-  This skill should be used ONLY when the user explicitly asks to run a
-  structured agent *flow* by name or definition id — e.g. "start a flow",
-  "run the code-review flow", "run the X flow", "use flow definition X",
-  "kick off an agent flow", or wants an iterative loop run by a separate
-  hosted participant agent that continues until sign-off. It covers the same
-  underlying tools as the `review-flows` skill (`start_review_flow` etc. are
-  aliases of the generic tools documented here) — use `review-flows` for the
-  two built-in review kinds (`spec-review`, `code-review`) and this skill for
-  any other flow definition, or when the user names a `definition_id`
-  explicitly. Do NOT use this skill (and do NOT call the flows MCP tools) for
-  an ordinary request such as "review my PR", "do X for me", or "check this
-  over" where the user just wants you to do the work yourself — perform that
-  work directly instead.
+  Use this skill to drive a structured agent *flow*: a separate hosted
+  participant agent runs a definition from the server's flow catalogue and
+  iterates with you until sign-off. Use it when the user names a flow or
+  definition id ("run the code-review flow", "start a flow", "use flow
+  definition X"), when the user accepts a flow you offered, or when you are
+  about to offer one listed under "Flows you may offer" in your session
+  context because its when-to-use applies. Before starting a flow, call
+  get_flow_definition and follow its guide. Do NOT use this skill (and do NOT
+  call the flows MCP tools) for an ordinary request such as "review my PR",
+  "do X for me", or "check this over" where the user wants you to do the work
+  yourself — do it directly instead. To start a hosted agent that works on its
+  own, use `start-agents`.
 ---
 
 # Agent Flows
 
-Use the `kcap mcp flows` MCP tools (`start_flow`, `send_to_participant`, `get_flow_status`, `close_flow`) to run a structured agent **flow**: your work is handed to a **separate, hosted participant agent** driven by a flow definition from the server's catalog, which returns a result (kind `findings` with the participant's result text, or `clean`); you address a `findings` result and keep iterating until the clean signal. This is a deliberate, heavier workflow — use it only when the user explicitly opts into it.
+Use the `kcap mcp flows` MCP tools (`list_flow_definitions`, `get_flow_definition`, `start_flow`, `send_to_participant`, `get_flow_status`, `close_flow`) to run a structured agent **flow**: your work is handed to a **separate, hosted participant agent** driven by a flow definition from the server's catalog, which returns a result (kind `findings` with the participant's result text, or `clean`); you address a `findings` result and keep iterating until the clean signal. This is a deliberate, heavier workflow — use it when the user asks for a flow or accepts one you offered, never on your own initiative.
 
 ## Long rounds are normal
 
-`round_timeout` is an **inactivity** bound, not a wall-clock cap: a round only fails for taking too long if the participant goes genuinely quiet for that whole stretch — an actively-working participant can legitimately run a round for a long time. If a status check (or `start_flow`/`send_to_participant`) returns the benign "Flow still running" text, that is an expected outcome on a long round, not a problem — re-enter the wait with `get_flow_status(flow_run_id, wait: true)`, which blocks (via bounded, internally-retried checks — never a raw long-poll) until the round finishes or roughly 8 minutes pass, then call it again if it's still running. A round result of **`unclear` now genuinely means the participant went dead or silent** (no activity for the whole inactivity bound, or it crashed/was stopped) — it is no longer a symptom of a merely slow participant; see the `participant_unreachable` and `participant_died`/`participant_stopped` guardrail entries below.
+`round_timeout` is an **inactivity** bound, not a wall-clock cap: a round only fails for taking too long if the participant goes genuinely quiet for that whole stretch — an actively-working participant can legitimately run a round for a long time. If a status check (or `start_flow`/`send_to_participant`) returns the benign "Flow still running" text, that is an expected outcome on a long round, not a problem — re-enter the wait with `get_flow_status(flow_run_id, wait: true)`, which blocks (via bounded, internally-retried checks — never a raw long-poll) until the round finishes or roughly 3.5 minutes pass, then call it again if it's still running. A round result of **`unclear` now genuinely means the participant went dead or silent** (no activity for the whole inactivity bound, or it crashed/was stopped) — it is no longer a symptom of a merely slow participant; see the `participant_unreachable` and `participant_died`/`participant_stopped` guardrail entries below.
+
+**A harness tool timeout is not a flow failure.** `start_flow` and `send_to_participant` block for minutes while the participant works. If your harness aborts the call with its own tool timeout (on Codex the error reads `timed out awaiting tools/call`), the flow is still running server-side. Do not start a new flow and do not investigate — call `get_flow_status(wait: true)`. Without a `flow_run_id` it reads the newest open flow this session started (pass `session_id` for another session's), so it works even when the aborted start never handed you the id or context compaction dropped it; with several open flows it lists them for you to pick from. On a harness that gives the flows server no session identity, it reads the flows started from this workspace on this machine instead.
 
 ## Role-surface safety gate
 
@@ -36,15 +37,14 @@ and end the reviewer turn. The hosted-reviewer contract wins over driver-looking
 
 These tools do **not** perform the work themselves — they hand it off to a separate hosted participant agent running a named flow definition. If the user simply asked *you* to do something in a normal session — e.g. "review my PR", "review this diff", "check this spec", "do X" — just do it yourself and report the result directly. Do **NOT** call `start_flow` / `send_to_participant` for an ordinary request; that would spin up a hosted agent the user did not ask for.
 
-Only start a flow when the user explicitly asks for a flow — e.g. "start a flow", "run the code-review flow", "use flow definition X", or "re-review after I address the findings" via a flow.
+Only start a flow when the user explicitly asks for one — e.g. "start a flow", "run the code-review flow", "use flow definition X", or "re-review after I address the findings" via a flow — or accepts a flow you offered. Offer a flow only when your session context lists it under **Flows you may offer** and its when-to-use applies to what just happened; ask, and never start it before the user says yes. Skip the offer when the user asked you to do the work yourself, or while you are mid-task.
 
 ## Choosing the flow definition
 
-Once the user has explicitly opted into a flow (see above), pick the `definition_id`:
+Once the user has asked for a flow or accepted one you offered (see above), pick the `definition_id`:
 
-- Spec or design document → `definition_id: "spec-review"` (built-in; same as `review-flows`' `spec-review` kind)
-- Code changes or a pull request → `definition_id: "code-review"` (built-in; same as `review-flows`' `code-review` kind)
-- Anything else → the definition id the user named, or one you look up in the server's flow-definition catalog at `/admin/flows`. If you're unsure which definition applies, ask the user rather than guessing.
+- The flow the user named, or the one you offered and they accepted.
+- If the user has not named one → choose from `list_flow_definitions` (read-only), which lists every definition this server can start — operator-published ones included — with its version, description, participant roles and their authored vendor and model, and whether it is single- or multi-participant. Call it whenever the user has not named a definition, or named one you have not seen listed: a definition it does not list is disabled, deleted or unknown, and `start_flow` will refuse it. If several fit, ask the user rather than guessing. A server that answers that it cannot list definitions only predates the tool — the two built-ins and any id the user names still work.
 
 For the reserved `spec-review` and `code-review` aliases, reviewer-vendor language is role-bound:
 pass the one vendor explicitly named as the reviewer, ignore driver-harness mentions, honor
@@ -72,7 +72,7 @@ explicitly ask you to proceed with whatever vendor the definition or saved prefe
 Canonical reviewer aliases for reserved review flows: Claude / Claude Code → `claude`; Codex /
 OpenAI Codex → `codex`; Cursor / cursor-agent → `cursor`; GitHub Copilot / Copilot CLI → `copilot`;
 Gemini / Gemini CLI → `gemini`; Kiro / Kiro CLI → `kiro`; Pi → `pi`; OpenCode → `opencode`;
-Antigravity / agy → `antigravity`. Normalize only names bound to the reviewer role, honor negation and
+Antigravity / agy → `antigravity`; Grok / Grok Build → `grok`. Normalize only names bound to the reviewer role, honor negation and
 positive contrast, and ask rather than guessing when two reviewer candidates remain.
 
 For the reserved `spec-review`/`code-review` aliases only, `start_flow` also accepts a top-level
@@ -85,9 +85,13 @@ vendor supports this: the daemon must advertise a runtime model resolver for the
 (Claude and Codex today; other vendors keep vendor-only overrides with no model choice) or the
 server rejects the override outright.
 
+## Read the flow's guide first
+
+Before a catalogue start (`definition_id`), call `get_flow_definition(definition_id)`. The guide is written by whoever published the flow: what to put in `context`, which target to name, how to iterate on its results and when to close. Where it differs from the generic rules below, follow the guide. A server that does not publish guides says so; then work from the definition's description and the rules below. A flow started with an inline `definition_yaml` has no catalogue id and no guide: drive it by the generic rules and its own YAML.
+
 ## Composing a dynamic flow
 
-If nothing in the catalog fits — no `definition_id` covers the roles or workflow you need — compose one inline instead: pass `definition_yaml` to `start_flow` in place of `definition_id`. Provide exactly one of the two, never both. (`start_review_flow` / `submit_review_round` stay catalog-only — this only applies to the generic `start_flow`.)
+If nothing `list_flow_definitions` shows fits — no `definition_id` covers the roles or workflow you need — compose one inline instead: pass `definition_yaml` to `start_flow` in place of `definition_id`. Provide exactly one of the two, never both. (`start_review_flow` / `submit_review_round` stay catalog-only — this only applies to the generic `start_flow`.)
 
 YAML shape:
 
@@ -137,15 +141,15 @@ After applying the role-surface safety gate, if `start_flow` / `send_to_particip
 
 ## Core rules
 
-1. **Start exactly one flow per user task.** Call `start_flow` once and hold the returned `flow_run_id`. Do NOT start a new flow for follow-up rounds — reuse the same ID.
+1. **Start exactly one flow per user task.** Call `start_flow` once and hold the returned `flow_run_id`. Do NOT start a new flow for follow-up rounds — reuse the same ID. If the id is gone (a harness timeout aborted the start, or compaction dropped it), get it back with `get_flow_status(wait: true)` — never by starting another flow.
 2. **After receiving a non-clean result**, address it, then call `send_to_participant` with the same `flow_run_id` and the updated message.
 3. **Do NOT finish the user task while the flow has unresolved results.** Keep iterating until the definition's clean/complete signal.
 4. **Only call `close_flow` after the clean signal.** The run stays open until you explicitly close it — don't rely on it closing itself. Then report completion to the user.
 5. **If participant output is unclear or requires user input**, pause and ask the user before proceeding.
 6. **Never start a nested flow.** If you are the hosted participant (see above), do not call these tools yourself.
 7. **Address each role independently.** A flow definition declares one or more participant roles in its `participants` map (single-participant definitions use `reviewer`). A multi-participant `start_flow` returns no round — nothing has launched yet. Call `send_to_participant(flow_run_id, participant=<role>, message=…)` naming the role you want to address; its first message launches that role's agent lazily. Only one round is in flight per role at a time — sending to a role that's still working on a round gets a `409` naming the busy round — but every OTHER role stays addressable in the meantime. Sending an unknown role is rejected by the server, which names the valid roles in its error.
-8. **For a code review flow (`definition_id: "code-review"`), do NOT ask the participant to run tests.** CI covers test execution; participant feedback is on correctness, design, and adherence to conventions.
-9. **State where your changes live.** The participant's worktree is mirrored from **this session's project directory**, not from the directory you are working in, and no tool parameter can redirect it. So if you changed directory, are a subagent in another checkout, or the changeset lives in another worktree/repo/machine, the participant will NOT see it: say so in `context`/`message`, give it an explicit commit range (never `git diff origin/main...HEAD`), and inline the diffs — or pass `mode: "context-only"` to make your context the sole source of truth. The participant flags referenced changes it cannot find; incomplete context wastes a full round.
+8. **Ask the participant only for what the flow's guide allows.** If the guide says CI covers tests, do not ask the participant to run them; participant feedback is on what the flow exists to judge.
+9. **State where your changes live.** The participant's worktree is mirrored from **this session's project directory**, not from the directory you are working in. If the changeset lives in another checkout or worktree **on this machine**, pass its absolute path as `repo_path` (and the same `repo_path` to `list_reviewer_vendors`); a daemon must host that repository. A PR in another repository (`target_kind: "pr"`, its URL or `owner/repo#N` as `target_ref`, no `repo_path`) runs on a daemon that hosts that repository, in a worktree of its checkout rather than the PR's branch: name the commits to review in `context`. If several checkouts of it are registered, the server lists them: pass one as `repo_path` only if it is on this machine; otherwise name the commits in `context` and inline the diffs, or pass `mode: "context-only"`. Otherwise — you changed directory without passing `repo_path`, or the changeset lives on another machine — the participant will NOT see it: say so in `context`/`message`, give it an explicit commit range (never `git diff origin/main...HEAD`), and inline the diffs — or pass `mode: "context-only"` to make your context the sole source of truth. The participant flags referenced changes it cannot find; incomplete context wastes a full round. For a change too large to inline, in a repository a daemon hosts, pass `patch_path` (an absolute path to a `git diff` file, at most 4 MiB) and `base_commit` (the full SHA it applies to, such as `git merge-base origin/main HEAD`, pushed unless the daemon runs on this machine): the reviewer gets a worktree at that commit with the patch attached and applies it itself. Inline each follow-up round's own delta in `context`.
 
 ## Pending messages
 
@@ -159,18 +163,25 @@ The server enforces per-run budgets; watch for these in tool error responses:
 - **`400` containing `budget_exceeded: …`** — the run has **already failed** and all participant agents have stopped. Report this to the user; do NOT retry and do NOT call `close_flow` — closing a failed run overwrites the failure status in the read model (the projector flips `failed` → `closed`), hiding what went wrong.
 - **A round whose participant goes inactive for the definition's `round_timeout`** (an inactivity bound, not a wall-clock cap — an actively-working participant can run well past it) lands as a terminal **`unclear`** round, with the reason explained in its result text — if you check round status programmatically, look for `unclear` and read the text. This means the participant genuinely went dead or silent, not merely slow. The run itself stays open — you may submit another round to that role (it relaunches automatically, see the `participant_died`/`participant_stopped` entry below) or close the flow.
 - **Idle runs are auto-reaped** after the definition's `idle_ttl` (server default 24h). Don't rely on this — always call `close_flow` yourself once you're done, whether the outcome was clean or you're abandoning the task.
-- **`400` starting `no_daemon_available:`** — no connected daemon has the repo checked out. Relay the server's remediation verbatim, then act on the part you can: run `kcap daemon start -d` on a machine with the repo cloned (add `--name <new-name>` if the account already runs a daemon elsewhere), or get the repo cloned on a machine that already runs one. **You cannot redirect the flow at another daemon or checkout** — these tools expose no daemon or repo-path parameter. If the server's text suggests passing `daemon_name` / `repo_path`, ignore that part: do not invent those arguments, and do not retry unchanged.
+- **`400` starting `no_daemon_available:`** — no connected daemon has the repo checked out. Relay the server's remediation verbatim, then act on the part you can: run `kcap daemon start -d` on a machine with the repo cloned (add `--name <new-name>` if the account already runs a daemon elsewhere), or get the repo cloned on a machine that already runs one. **You cannot pick a daemon**, and `repo_path` only names a checkout on this machine. If the server's text suggests passing `daemon_name`, ignore that part: do not invent that argument, and do not retry unchanged.
 - **`400` starting `daemon_outdated:`** — the daemon's kcap is too old to host flow participants. Relay the server error's remediation verbatim — it names the outdated daemon; the fix: update kcap (`npm i -g @kurrent/kcap`), then `kcap daemon restart --name <its-name>` (works for detached and service-managed daemons alike — a raw `daemon stop` deliberately refuses a service-managed one; `kcap daemon status` lists names, and `--when-idle` defers the restart if the daemon is busy).
 - **`409` containing `participant_unreachable`** — that role's agent is in an ambiguous liveness state (its daemon disconnected or is restarting) or a possibly-live prior agent was spotted and the server is refusing to relaunch until its absence is proven, so it won't guess whether it's still alive rather than risk a duplicate launch. This is retryable — do not close the flow. Retry the send shortly; the server relaunches automatically once absence is proven, or ask the user to stop the participant (dashboard/API) and then re-send to force a fresh relaunch.
 - **Reserved-alias reviewer-model errors** (only when you passed `model`): `reviewer_model_protocol_required` — the server/daemon doesn't support a model override yet; drop `model` and retry, or tell the user to update. `reviewer_model_unavailable` — no resolver for that vendor recognizes the model; ask for a different one or drop the override. `model_vendor_mismatch` — the model belongs to a different vendor than the one selected; ask the user which vendor they meant. `reviewer_model_safe_settlement_required` — the server can't safely reapply this model on a heal/relaunch; close the flow and start a new one. `reviewer_model_unpriceable` — the model has no resolvable pricing to budget-check; ask for a differently-named/priced model.
-- **A round result of `unclear` whose text is exactly `participant_died`, `participant_stopped`, or `participant_parked`** — that role's agent crashed, was stopped, or was parked for resume mid-round. In every case the run stays **open** and you address the same role again with `send_to_participant` to continue. The difference is what the next round gets: for `participant_died`/`participant_stopped` a **fresh** agent relaunches with **no memory of prior rounds**, so restate any context it needs; for `participant_parked` the same agent **resumes with its prior context intact** (a resumable park frees the slot between rounds). Earlier spend still counts against the run budget. No need to close and restart the flow; other roles are unaffected and remain addressable. (An older server reports a park as `participant_stopped` — still a resubmit trigger, so this works across the rollout.)
+- **A round result of `unclear` whose text is exactly `participant_died`, `participant_stopped`, or `participant_parked`** — that role's agent crashed, was stopped, or was parked for resume mid-round. In every case the run stays **open** and you address the same role again with `send_to_participant` to continue. The difference is what the next round gets: for `participant_died`/`participant_stopped` a **fresh** agent relaunches with **no memory of prior rounds**, so restate any context it needs; for `participant_parked` the same agent **resumes with its prior context intact** (a resumable park frees the slot between rounds). Earlier spend still counts against the run budget. No need to close and restart the flow; other roles are unaffected and remain addressable. (An older server reports a park as `participant_stopped` — still a resubmit trigger, so this works across the rollout.) When the daemon itself ended the participant, a `stop_detail:` line beside `participant_died` names why — `pi_reviewer_turn_timeout`, for instance, means it went silent past its turn limit, so narrow the scope or pick another vendor before resubmitting rather than resending the same round unchanged. The one exception to resubmitting at once: `agent_stopped` means it was stopped from outside the flow — by hand (`kcap agent stop`) or by a stop sent to its daemon — not a crash, so ask the user before you submit the next round.
 
 ## Workflow
+
+A catalogue flow (`definition_id`) starts with its guide; an inline `definition_yaml` flow skips this step:
+
+```
+get_flow_definition(definition_id)
+  → read the driver guide; prepare the context it asks for
+```
 
 Single-participant definitions start eagerly — round 1 runs as part of `start_flow`:
 
 ```
-start_flow(definition_id, target_kind, target_ref, target_title, context)
+start_flow(definition_id, target_kind, target_ref, target_title, session_title, context)
   → participant returns a result: kind findings (with the result text) | kind clean
 
 if clean:
@@ -189,7 +200,7 @@ if findings:
 Multi-participant definitions start round-less — you address each role yourself, and the run is clean only in aggregate:
 
 ```
-start_flow(definition_id, target_kind, target_ref, target_title, context)
+start_flow(definition_id, target_kind, target_ref, target_title, session_title, context)
   → no round yet — roles have not launched
 
 send_to_participant(flow_run_id, participant="reviewer", message=…)
@@ -214,21 +225,24 @@ report completion to user
 
 | Tool | Required args | Optional args | When to call |
 |---|---|---|---|
-| `start_flow` | Exactly one of `definition_id` (catalog id, e.g. `spec-review`, `code-review`, or a custom catalog id) or `definition_yaml` (inline dynamic definition — see "Composing a dynamic flow"); plus `target_kind` (what is being worked on: `spec`, `code`, `pr`, `branch`, `file`, etc.), `target_ref` (a path, branch name, or PR URL/number that identifies the target), `target_title` (short human-readable title), `context` (background context: what to focus on, constraints, definition of done) | `vendor` (reserved aliases only — explicit reviewer vendor; omit to use the definition's authored vendor, or your saved `flows.reviewer_vendor` preference if it declares none), `model` (reserved aliases only — explicit reviewer model override; REQUIRES `vendor`, rejected on dynamic/multi-participant starts), `instructions`, `mode` (`context-only` — optional; by default the participant's worktree is mirrored from THIS SESSION's project directory, not from the directory you are working in. Pass `context-only` to opt out and treat the submitted context as authoritative) | Once, at the start of a flow task. |
+| `list_flow_definitions` | — | — | Before `start_flow`, whenever the user has not named a definition or named one you have not seen listed. Read-only: returns each runnable definition's id, version, description, whether it is single- or multi-participant, and its participants' role, authored vendor and model. A `server_catching_up` error is retryable — do not read it as an empty catalog. |
+| `get_flow_definition` | `definition_id` | — | Before every catalogue (`definition_id`) `start_flow`. Read-only: returns the definition's participants and when to use it, then its authored driver guide (what to submit, how to iterate, when to close). An unknown, disabled or deleted id is an error; an older server reports that it publishes no guides. |
+| `start_flow` | Exactly one of `definition_id` (catalog id, e.g. `spec-review`, `code-review`, or a custom catalog id) or `definition_yaml` (inline dynamic definition — see "Composing a dynamic flow"); plus `target_kind` (what is being worked on: `spec`, `code`, `pr`, `branch`, `file`, etc.), `target_ref` (a path, branch name, or PR URL/number that identifies the target), `target_title` (short human-readable title), `session_title` (the participant session's title: a short phrase naming this piece of work, specific enough to tell it apart from other sessions — it replaces the definition's generic opening instruction as the name), `context` (background context: what to focus on, constraints, definition of done) | `vendor` (reserved aliases only — explicit reviewer vendor; omit to use the definition's authored vendor, or your saved `flows.reviewer_vendor` preference if it declares none), `model` (reserved aliases only — explicit reviewer model override; REQUIRES `vendor`, rejected on dynamic/multi-participant starts), `instructions`, `mode` (`context-only` — optional; by default the participant's worktree is mirrored from THIS SESSION's project directory, not from the directory you are working in. Pass `context-only` to opt out and treat the submitted context as authoritative), `repo_path` (optional absolute path to another checkout or worktree on this machine to mirror instead), `patch_path` + `base_commit` (review a patch file at a base commit instead of inline context) | Once, at the start of a flow task. |
 | `send_to_participant` | `flow_run_id`, `participant` (role name declared in the flow definition's `participants` map; single-participant definitions use `reviewer` — an unknown role is rejected, naming the valid ones), `message` | `instructions`, `async` (defaults to `true`) | After addressing a non-clean result for that role, or to launch a role for the first time. Pass the same `flow_run_id`, the role's name, and the updated message. |
-| `get_flow_status` | `flow_run_id` | `wait` (`true`/`false`, defaults to `false`) — when `true`, blocks until the round is terminal or roughly 8 minutes pass, instead of returning the current snapshot immediately | Poll or check the current status of a flow run (running, waiting, completed, failed). Use `wait: true` to ride out a long round instead of polling repeatedly yourself. |
+| `get_flow_status` | — | `flow_run_id` (omit to read the newest open flow this session started, or on a harness without a session identity the newest one started from this workspace; several open flows are listed instead), `session_id` (look up another session's flows; defaults to this session), `wait` (`true`/`false`, defaults to `false`) — when `true`, blocks until the round is terminal or roughly 3.5 minutes pass, instead of returning the current snapshot immediately | Poll or check the current status of a flow run (running, waiting, completed, failed). Use `wait: true` to ride out a long round instead of polling repeatedly yourself, and omit `flow_run_id` to recover a flow whose id you never received or lost. |
 | `close_flow` | `flow_run_id` | — | Only after the definition's clean signal — or when abandoning the task early; the run otherwise stays open until closed. |
 
 ## Example (custom definition)
 
 ```
-# Step 1 — start (all five required args required; the participant sees a mirror of THIS SESSION's
+# Step 1 — start (all six args required; the participant sees a mirror of THIS SESSION's
 # project directory, not of the directory you are working in — pass mode="context-only" to opt out)
 start_flow(
   definition_id="code-review",
   target_kind="branch",
   target_ref="feature/add-null-check",
   target_title="Add null check on user input",
+  session_title="Review the null check on user input",
   context="Review the diff on this branch for correctness and adherence to project conventions."
 )
 # → returns flow_run_id, e.g. "flow_abc123"
@@ -257,6 +271,7 @@ start_flow(
   target_kind="branch",
   target_ref="feature/add-null-check",
   target_title="Add null check on user input",
+  session_title="Review and test the null check on user input",
   context="Review the diff on this branch and write/run tests for the new code path."
 )
 # → returns flow_run_id, e.g. "flow_xyz789"; no round in the response

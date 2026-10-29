@@ -6,7 +6,7 @@ using AppUnderTest = Capacitor.App.App;
 namespace Capacitor.App.Tests.Unit;
 
 /// Composition-root helpers wiring the mutation lane into App.axaml.cs: outcome-channel
-/// presentation routing, cliOverride absolute-pin resolution, and shutdown quiesce composition.
+/// presentation routing, pinned-CLI resolution, and shutdown quiesce composition.
 /// Plain TUnit, no Avalonia session needed — pure/async functions over interfaces and fakes
 /// (FakeLifecycleSurface/FakeKcapCli/FakeLoginShellProbe are shared from
 /// DaemonLifecycleControllerTests.cs, same namespace).
@@ -34,43 +34,23 @@ public class AppMutationLaneWiringTests {
 
     static Func<CancellationToken, Task<string?>> FixedTerminalPath(string? path) => _ => Task.FromResult(path);
 
-    // ---- ResolveCliOverrideCore ----
+    // ---- ResolvePinnedCliCore ----
 
+    /// A configured override pins itself or, when missing, refuses: neither falls through to the
+    /// bundled CLI. Only no override at all reaches the bundle, and "kcap" is a real override.
     [Test]
-    public async Task ResolveCliOverrideCore_no_override_is_null() {
-        await Assert.That(AppUnderTest.ResolveCliOverrideCore(null, _ => true, p => p)).IsNull();
-    }
+    [Arguments(null, true, "bundle", false)]
+    [Arguments("", true, "bundle", false)]
+    [Arguments(null, false, null, false)]
+    [Arguments("kcap", true, "full:kcap", false)]
+    [Arguments("/opt/kcap/kcap", false, null, true)]
+    public async Task ResolvePinnedCliCore_pins_the_override_else_the_bundle(
+            string? overrideEnv, bool filesExist, string? expectedPath, bool overrideMissing) {
+        var bundled = Path.Combine("/opt/app", CliResolver.BundledCliFileName);
+        var pin = AppUnderTest.ResolvePinnedCliCore(overrideEnv, "/opt/app", _ => filesExist, p => "full:" + p);
 
-    [Test]
-    public async Task ResolveCliOverrideCore_empty_override_is_null() {
-        await Assert.That(AppUnderTest.ResolveCliOverrideCore("", _ => true, p => p)).IsNull();
-    }
-
-    [Test]
-    public async Task ResolveCliOverrideCore_existing_override_is_absolute_pinned() {
-        // Absolute on every platform (a Windows leg exercises this with its own drive/backslash
-        // form), rather than a hardcoded Unix literal. Nothing reads it.
-        using var tmp = new TempDir();
-        var absRoot = tmp.PathTo("abs-root");
-        var overrideEnv = Path.Combine(".", "bin", "kcap");
-        var result = AppUnderTest.ResolveCliOverrideCore(overrideEnv, _ => true, p => Path.Combine(absRoot, p));
-        await Assert.That(result).IsEqualTo(Path.Combine(absRoot, overrideEnv));
-    }
-
-    [Test]
-    public async Task ResolveCliOverrideCore_broken_override_is_null_fail_closed() {
-        await Assert.That(AppUnderTest.ResolveCliOverrideCore("/opt/kcap/kcap", _ => false, p => p)).IsNull();
-    }
-
-    // A real override whose value happens to equal the no-override sentinel string ("kcap") must
-    // still resolve as a real, absolute-pinned override — not be silently treated as "no override
-    // set" via a string-compare ambiguity.
-    [Test]
-    public async Task ResolveCliOverrideCore_override_literally_named_kcap_is_not_confused_with_the_old_sentinel() {
-        using var tmp = new TempDir();
-        var absRoot = tmp.PathTo("abs-root");
-        var result = AppUnderTest.ResolveCliOverrideCore("kcap", _ => true, p => Path.Combine(absRoot, p));
-        await Assert.That(result).IsEqualTo(Path.Combine(absRoot, "kcap"));
+        await Assert.That(pin.Path).IsEqualTo(expectedPath == "bundle" ? bundled : expectedPath);
+        await Assert.That(pin.OverrideMissing).IsEqualTo(overrideMissing);
     }
 
     // ---- PresentOutcomeAsync: Takeover ----
@@ -145,72 +125,27 @@ public class AppMutationLaneWiringTests {
     }
 
     [Test]
-    public async Task Attention_surface_uses_human_copy_not_the_wire_token() {
+    [Arguments("internal_error", "failed")]
+    [Arguments("consent_seed_unwritable", "storage")]
+    [Arguments("stale_txn_marker", "repair")]
+    [Arguments("running_without_daemon_pid", "repair")]
+    [Arguments("daemon_running_outside_service", "repair")]
+    public async Task Attention_surfaces_use_human_copy_not_the_wire_token(string token, string kind) {
         var surface = new FakeLifecycleSurface();
-        var envelope = Envelope(new MutationOutcome.Failed(1, "internal_error", RecoverySurface.Attention));
+        MutationOutcome outcome = kind switch {
+            "failed" => new MutationOutcome.Failed(1, token, RecoverySurface.Attention),
+            "storage" => new MutationOutcome.Refused(token, RecoverySurface.Storage),
+            _ => new MutationOutcome.AttentionRepair(token),
+        };
 
         await AppUnderTest.PresentOutcomeAsync(
-            surface, envelope, NeverRunMutation, FixedTerminalPath("/usr/bin"), () => null, CancellationToken.None);
-
-        await Assert.That(surface.AttentionMessages.Count).IsEqualTo(1);
-        await Assert.That(surface.AttentionMessages[0]).IsEqualTo(AppUnderTest.AttentionCopyFor("internal_error")!);
-        await Assert.That(surface.AttentionMessages[0]).DoesNotContain("internal_error");
-        await Assert.That(surface.Prompts).IsEmpty();
-        await Assert.That(surface.StatusMessages).IsEmpty();
-    }
-
-    [Test]
-    public async Task Storage_surface_uses_human_copy_not_the_wire_token() {
-        var surface = new FakeLifecycleSurface();
-        var envelope = Envelope(new MutationOutcome.Refused("consent_seed_unwritable", RecoverySurface.Storage));
-
-        await AppUnderTest.PresentOutcomeAsync(
-            surface, envelope, NeverRunMutation, FixedTerminalPath("/usr/bin"), () => null, CancellationToken.None);
-
-        await Assert.That(surface.AttentionMessages.Count).IsEqualTo(1);
-        await Assert.That(surface.AttentionMessages[0]).IsEqualTo(AppUnderTest.AttentionCopyFor("consent_seed_unwritable")!);
-        await Assert.That(surface.AttentionMessages[0]).DoesNotContain("consent_seed_unwritable");
-    }
-
-    [Test]
-    public async Task AttentionSkew_uses_human_copy_for_known_ownership_tokens() {
-        var surface = new FakeLifecycleSurface();
-        var envelope = Envelope(new MutationOutcome.AttentionSkew("ownership_mismatch"));
-
-        await AppUnderTest.PresentOutcomeAsync(
-            surface, envelope, NeverRunMutation, FixedTerminalPath("/usr/bin"), () => null, CancellationToken.None);
-
-        await Assert.That(surface.AttentionMessages.Count).IsEqualTo(1);
-        await Assert.That(surface.AttentionMessages[0]).IsEqualTo(AppUnderTest.AttentionCopyFor("ownership_mismatch")!);
-        await Assert.That(surface.AttentionMessages[0]).DoesNotContain("ownership_mismatch");
-    }
-
-    [Test]
-    public async Task AttentionRepair_uses_human_copy_for_stale_txn_marker() {
-        var surface = new FakeLifecycleSurface();
-        var envelope = Envelope(new MutationOutcome.AttentionRepair("stale_txn_marker"));
-
-        await AppUnderTest.PresentOutcomeAsync(
-            surface, envelope, NeverRunMutation, FixedTerminalPath("/usr/bin"), () => null, CancellationToken.None);
-
-        await Assert.That(surface.AttentionMessages.Count).IsEqualTo(1);
-        await Assert.That(surface.AttentionMessages[0]).IsEqualTo(AppUnderTest.AttentionCopyFor("stale_txn_marker")!);
-        await Assert.That(surface.AttentionMessages[0]).DoesNotContain("stale_txn_marker");
-    }
-
-    [Test]
-    [Arguments("running_without_daemon_pid")]
-    [Arguments("daemon_running_outside_service")]
-    public async Task AttentionRepair_uses_human_copy_for_service_ownership_tokens(string token) {
-        var surface = new FakeLifecycleSurface();
-        var envelope = Envelope(new MutationOutcome.AttentionRepair(token));
-
-        await AppUnderTest.PresentOutcomeAsync(
-            surface, envelope, NeverRunMutation, FixedTerminalPath("/usr/bin"), () => null, CancellationToken.None);
+            surface, Envelope(outcome), NeverRunMutation, FixedTerminalPath("/usr/bin"), () => null, CancellationToken.None);
 
         await Assert.That(surface.AttentionMessages.Count).IsEqualTo(1);
         await Assert.That(surface.AttentionMessages[0]).IsEqualTo(AppUnderTest.AttentionCopyFor(token)!);
         await Assert.That(surface.AttentionMessages[0]).DoesNotContain(token);
+        await Assert.That(surface.Prompts).IsEmpty();
+        await Assert.That(surface.StatusMessages).IsEmpty();
     }
 
     [Test]
@@ -259,6 +194,28 @@ public class AppMutationLaneWiringTests {
             surface, envelope, NeverRunMutation, FixedTerminalPath("/usr/bin"), () => null, CancellationToken.None);
 
         await Assert.That(surface.AttentionMessages[0]).Contains(expectedDisplay);
+    }
+
+    [Test]
+    public async Task Reload_outcomes_are_acknowledged_without_posting_to_the_attention_lane() {
+        var surface = new FakeLifecycleSurface();
+        var request = new MutationRequest(MutationVerb.Reload, "default", "https://cap.example.test", "daemon-a");
+        var presented = 0;
+
+        foreach (MutationOutcome outcome in new MutationOutcome[] {
+                new MutationOutcome.Failed(1, "unit_missing", RecoverySurface.Attention),
+                new MutationOutcome.AttentionSkew("background_band"),
+                new MutationOutcome.Refused("reload_unsupported", RecoverySurface.Attention),
+                new MutationOutcome.UnconfirmedNoAttach() }) {
+            await AppUnderTest.PresentOutcomeAsync(
+                surface, new OutcomeEnvelope(request, outcome), (_, _) => throw new InvalidOperationException("no re-mutation"),
+                _ => Task.FromResult<string?>("/usr/bin"), () => "1.0.0", CancellationToken.None, markPresented: () => presented++);
+        }
+
+        await Assert.That(surface.AttentionMessages).IsEmpty();
+        await Assert.That(surface.StatusMessages).IsEmpty();
+        await Assert.That(surface.Prompts).IsEmpty();
+        await Assert.That(presented).IsEqualTo(4);
     }
 
     [Test]
@@ -410,7 +367,7 @@ public class AppMutationLaneWiringTests {
 
     // A presentation failure BEFORE the UI boundary (surface.Attention throwing) must requeue the
     // envelope for a re-presentation, never Ack-and-drop it — the loop itself survives either way
-    // (never faulted/canceled), but the outcome itself is no longer silently skipped.
+    // (never faulted/canceled), and the outcome itself is never silently skipped.
     [Test]
     public async Task ConsumeMutationOutcomesAsync_a_presentation_failure_requeues_and_re_presents_then_acks() {
         var inner = new FakeLifecycleSurface();

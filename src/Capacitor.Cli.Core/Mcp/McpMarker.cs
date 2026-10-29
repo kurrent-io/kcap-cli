@@ -17,6 +17,9 @@ public interface IMcpMarker {
     /// callers that cannot supply the written JSON.</summary>
     void Record(string configPath, IReadOnlyList<KeyValuePair<string, JsonNode?>> entries);
 
+    /// <summary>Drops the claims on the given names, leaving every other claim in place.</summary>
+    void Forget(string configPath, IReadOnlyCollection<string> names);
+
     IEnumerable<string> Owned(string configPath);
     void Clear(string configPath);
 }
@@ -58,6 +61,20 @@ public sealed class McpMarker(string harness, UserHome home, Func<string, string
         foreach (var (name, entry) in entries)
             existing[name] = entry is null ? null : McpFingerprint.Compute(entry);
 
+        Write(path, configPath, existing);
+    }
+
+    public void Forget(string configPath, IReadOnlyCollection<string> names) {
+        var path = MarkerPath(configPath);
+        var existing = ReadEntries(path, configPath);
+        var removed = false;
+        foreach (var name in names) removed |= existing.Remove(name);
+        if (!removed) return;
+
+        Write(path, configPath, existing);
+    }
+
+    void Write(string path, string configPath, Dictionary<string, string?> existing) {
         var servers = new JsonObject();
         foreach (var (name, fingerprint) in existing.OrderBy(kv => kv.Key, StringComparer.Ordinal))
             servers[name] = fingerprint is null ? null : JsonValue.Create(fingerprint);

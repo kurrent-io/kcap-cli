@@ -56,10 +56,25 @@ static class SystemdUnit {
     public static string[] StopArgs(string id)      => ["--user", "stop", UnitName(id)];
     public static string[] IsActiveArgs(string id)  => ["--user", "is-active", UnitName(id)];
     public static string[] IsEnabledArgs(string id) => ["--user", "is-enabled", UnitName(id)];
+    public static string[] NeedDaemonReloadArgs(string id) => ["--user", "show", "--property=NeedDaemonReload", "--value", UnitName(id)];
+    public static string[] MainPidArgs(string id) => ["--user", "show", "--property=MainPID", "--value", UnitName(id)];
 
-    public static ServiceState StatusFrom(string activeOut, int enabledExit) {
+    /// <summary>Reads <see cref="MainPidArgs"/> output: null when the unit has no main process (systemd prints 0).</summary>
+    public static int? MainPid(string output) =>
+        int.TryParse(output.Trim(), out var pid) && pid > 0 ? pid : null;
+
+    /// <summary>Reads <see cref="NeedDaemonReloadArgs"/> output: <c>yes</c> when systemd's copy of the unit is stale.</summary>
+    public static bool NeedsDaemonReload(string output) => output.Trim().Equals("yes", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// <paramref name="enabledOut"/> is <c>is-enabled</c>'s output. A unit someone disabled exits non-zero yet is
+    /// still installed when its file is ours (<paramref name="unitPresent"/>): <c>ensure</c> and the desktop app
+    /// start a present unit, and a verified start must not then call it missing.
+    /// </summary>
+    public static ServiceState StatusFrom(string activeOut, int enabledExit, string enabledOut = "", bool unitPresent = false) {
         if (activeOut.Trim().Equals("active", StringComparison.OrdinalIgnoreCase)) return ServiceState.Running;
-        return enabledExit == 0 ? ServiceState.Installed : ServiceState.NotInstalled;
+        if (enabledExit == 0) return ServiceState.Installed;
+        return unitPresent && enabledOut.Trim() == "disabled" ? ServiceState.Installed : ServiceState.NotInstalled;
     }
 
     /// <summary>
@@ -96,7 +111,87 @@ static class SystemdUnit {
         return UnescapeExpansions(sb.ToString());
     }
 
+    /// <summary>
+    /// The unit with its <c>ExecStart=</c> binary replaced by <paramref name="binary"/>, or null when the
+    /// binary is already that or the line is not shaped the way <see cref="Unit"/> writes it. Every other
+    /// byte of the unit survives.
+    /// </summary>
+    public static string? WithBinary(string unitText, string binary) {
+        var current = BinaryFromUnit(unitText);
+        if (current is null || current == binary) return null;
+
+        var oldPrefix = $"ExecStart={QuoteArg(current)}";
+        var lines     = unitText.Split('\n');
+        var index     = Array.FindIndex(lines, l => l.StartsWith("ExecStart=", StringComparison.Ordinal));
+        if (index < 0) return null;
+
+        var line = lines[index];
+        if (!line.StartsWith(oldPrefix, StringComparison.Ordinal)
+         || (line.Length > oldPrefix.Length && line[oldPrefix.Length] != ' ')) return null;
+
+        lines[index] = $"ExecStart={QuoteArg(binary)}{line[oldPrefix.Length..]}";
+        var rewritten = string.Join('\n', lines);
+
+        return BinaryFromUnit(rewritten) == binary ? rewritten : null;
+    }
+
+    /// <summary>
+    /// The unit with its <c>Environment=</c> assignment of <paramref name="key"/> set to
+    /// <paramref name="value"/>, added ahead of <c>ExecStart=</c> when absent; null when it already is that
+    /// or the unit has no <c>ExecStart=</c>.
+    /// </summary>
+    public static string? WithEnvironmentValue(string unitText, string key, string value) {
+        var before = EnvFromUnit(unitText);
+        if (before.TryGetValue(key, out var current) && current == value) return null;
+
+        ServiceText.RequireValidEnvName(key);
+        ServiceText.RequireNoControlCharacters(key, value);
+        var assignment = $"Environment={EnvAssignment(key, ServiceText.SystemdValue(value))}";
+
+        var lines = unitText.Split('\n').ToList();
+        if (current is not null) {
+            // Only the line Unit writes: a hand-written one may carry other assignments the rewrite would drop.
+            var ours  = $"Environment={EnvAssignment(key, ServiceText.SystemdValue(current))}";
+            var index = lines.FindIndex(l => l.Trim() == ours);
+            if (index < 0) return null;
+            lines[index] = assignment;
+        } else {
+            var exec = lines.FindIndex(l => l.StartsWith("ExecStart=", StringComparison.Ordinal));
+            if (exec < 0) return null;
+            lines.Insert(exec, assignment);
+        }
+
+        var rewritten = string.Join('\n', lines);
+
+        return EnvFromUnit(rewritten).TryGetValue(key, out var written) && written == value ? rewritten : null;
+    }
+
     static string UnescapeExpansions(string s) => s.Replace("%%", "%").Replace("$$", "$");
+
+    /// <summary>The <c>Environment=</c> assignments of a rendered unit, reversing <see cref="EnvAssignment"/>.</summary>
+    public static Dictionary<string, string> EnvFromUnit(string unitText) {
+        var env = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var raw in unitText.Split('\n')) {
+            var line = raw.Trim();
+            if (!line.StartsWith("Environment=", StringComparison.Ordinal)) continue;
+            var assignment = Unquote(line["Environment=".Length..]);
+            var eq = assignment.IndexOf('=');
+            if (eq <= 0) continue;
+            env[assignment[..eq]] = assignment[(eq + 1)..].Replace("%%", "%");
+        }
+        return env;
+    }
+
+    static string Unquote(string s) {
+        if (s.Length == 0 || s[0] != '"') return s;
+        var sb = new StringBuilder();
+        for (var i = 1; i < s.Length; i++) {
+            if (s[i] == '\\' && i + 1 < s.Length) { sb.Append(s[++i]); continue; }
+            if (s[i] == '"') break;
+            sb.Append(s[i]);
+        }
+        return sb.ToString();
+    }
 
     // ── systemd value/argument quoting ──
     // systemd splits Environment= and ExecStart on unquoted whitespace, so any
@@ -123,7 +218,7 @@ static class SystemdUnit {
     ///
     /// <para><see cref="FirstToken"/> reverses this, so <c>daemon doctor</c> still recovers the real path.</para>
     /// </summary>
-    static string QuoteArg(string a) {
+    internal static string QuoteArg(string a) {
         // No raw control character survives here, not only the line breaks. A newline is the worst case — the
         // line ends there and systemd reads the remainder as the next directive — but quoting does not make
         // U+0001, a backspace or a vertical tab valid unit syntax either, and this writer has no encoder for
@@ -163,6 +258,6 @@ static class SystemdUnit {
     static string EscapeExpansions(string s) => s.Replace("%", "%%").Replace("$", "$$");
 
     /// <summary>An <c>Environment=</c> assignment; the whole <c>KEY=VALUE</c> is quoted when VALUE needs it.</summary>
-    static string EnvAssignment(string key, string value) =>
+    internal static string EnvAssignment(string key, string value) =>
         NeedsQuote(value) ? $"\"{key}={Esc(value)}\"" : $"{key}={value}";
 }

@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
@@ -11,17 +12,17 @@ using ReactiveUI.Reactive;
 namespace Capacitor.App.ViewModels;
 
 /// Projects IDaemonClientService.Status/Snapshots + IPauseController.State +
-/// AgentActionService.StopsInFlight + IConsentService.PendingCount into the tray's menu model
-/// (spec §4, §5, §7, §8). Constructor-scoped, not WhenActivated: the tray icon exists before any
+/// AgentActionService.StopsInFlight + IConsentService.PendingCount into the tray's menu model.
+/// Constructor-scoped, not WhenActivated: the tray icon exists before any
 /// window is shown, so MenuModel must be live from construction, not gated on activation.
 public sealed class TrayViewModel : ReactiveObject, IDisposable {
     const string IncompatibleReason = "daemon_incompatible";
     const string UnreachableReason  = "daemon_unreachable";
     const string ConsentCapability  = "consent/1";
 
-    // Neutral wording (spec §5), duplicated from MainWindowViewModel's SkewMessage: §4.2's
-    // incompatibility classification is a broad heuristic — an unexpected frame can equally mean
-    // the APP is the older side — so the UI must not prescribe an upgrade direction.
+    // Neutral wording: the incompatibility classification is a broad heuristic — an unexpected
+    // frame can equally mean the APP is the older side — so the UI must not prescribe an upgrade
+    // direction.
     const string SkewMessage = "app and daemon are incompatible — make sure both are up to date";
 
     internal const string RestartPendingSuffix = "update pending";
@@ -32,8 +33,8 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
     readonly ObservableAsPropertyHelper<TrayMenuModel> _menuModel;
     public TrayMenuModel MenuModel => _menuModel.Value;
 
-    // Parameter is the desired checked value, frozen by the adapter at menu-rebuild time (spec
-    // §6) — the click handler never reads NativeMenuItem.IsChecked. Fire-and-forget by design:
+    // Parameter is the desired checked value, frozen by the adapter at menu-rebuild time — the
+    // click handler never reads NativeMenuItem.IsChecked. Fire-and-forget by design:
     // PauseController itself serializes (single-flight + one queued slot), so the command need
     // not track in-flight state.
     public ReactiveCommand<bool, Unit> TogglePauseCommand { get; }
@@ -48,21 +49,22 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
     public ReactiveCommand<string, Unit> StopAgentCommand { get; }
     public ReactiveCommand<string, Unit> OpenInWebCommand  { get; }
 
-    // Injected delegates (spec §5, §9): the tray adapter wires these to real menu items, but the
-    // VM owns the commands so tests can assert delegation without a live window/desktop lifetime.
-    // No-op defaults so this VM stays constructible before Task 7 supplies the real callbacks.
+    // Injected delegates: the tray adapter wires these to real menu items, but the VM owns the
+    // commands so tests can assert delegation without a live window/desktop lifetime. No-op
+    // defaults serve a caller without the real callbacks.
     public ReactiveCommand<Unit, Unit> OpenMainWindowCommand { get; }
     public ReactiveCommand<Unit, Unit> OpenSettingsCommand { get; }
+    public ReactiveCommand<Unit, Unit> OpenLaunchApprovalsCommand { get; }
     public ReactiveCommand<Unit, Unit> QuitCommand { get; }
 
-    // The tray menu's "Review pending launches…" target (spec §8); the coordinator itself
+    // The tray menu's "Review pending launches…" target; the coordinator itself
     // filters/marshals the raise, so this command is a plain delegate call, same shape as
     // OpenMainWindowCommand/QuitCommand above.
     public ReactiveCommand<Unit, Unit> ReviewPendingCommand { get; }
 
-    // The tray menu's "Install command-line tool…" target (spec §5) — CreateFromTask, not
-    // Create, since ShimOfferCoordinator.RunManualInstallAsync is async; a no-op default keeps
-    // this VM constructible for every test that predates the shim coordinator.
+    // The tray menu's "Install command-line tool…" target — CreateFromTask, not Create, since
+    // ShimOfferCoordinator.RunManualInstallAsync is async; a no-op default serves a caller
+    // without one.
     public ReactiveCommand<Unit, Unit> InstallShimCommand { get; }
 
     // The tray's single update item (check while idle, restart once a package is ready); the
@@ -70,20 +72,19 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
     public ReactiveCommand<Unit, Unit> UpdateActionCommand { get; }
 
     /// <param name="lifecycleAttention">
-    /// spec §6: ILifecycleSurface.Attention repair-affordance text (e.g. a
-    /// restore-verification failure). Null (most existing tests, and any caller without a live
-    /// lifecycle controller) means this stream never upgrades the tray state — see Build.
+    /// ILifecycleSurface.Attention repair-affordance text (e.g. a restore-verification failure).
+    /// Null (a caller without a live lifecycle controller) means this stream never upgrades the tray state — see Build.
     /// </param>
     /// <param name="shimOfferable">
-    /// spec §5: ShimOfferCoordinator.Offerable — true while the "Install command-line tool…"
-    /// item should show. Null (most existing tests) means the item never shows.
+    /// ShimOfferCoordinator.Offerable — true while the "Install command-line tool…" item should
+    /// show. Null (a caller without one) means the item never shows.
     /// </param>
     /// <param name="remote">
     /// The server lane's live-agent summary (an IAgentDirectory, via SummaryFrom below). Null
-    /// (every pre-existing test) keeps ProjectAggregate's verdict identical to Project's.
+    /// (a caller without one) keeps ProjectAggregate's verdict identical to Project's.
     /// </param>
     /// <param name="restartPending">
-    /// DaemonRestartPendingWatcher.Pending. Null (most tests) means the header never carries the
+    /// DaemonRestartPendingWatcher.Pending. Null (a caller without one) means the header never carries the
     /// suffix.
     /// </param>
     public TrayViewModel(
@@ -93,7 +94,7 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
             Func<Task>? installShim = null, IPermissionService? permissions = null,
             IObservable<RemoteTraySummary>? remote = null,
             IObservable<UpdateMenuItem>? updateMenu = null, Func<Task>? updateAction = null,
-            IObservable<bool>? restartPending = null, Action? openSettings = null) {
+            IObservable<bool>? restartPending = null, Action? openSettings = null, Action? openLaunchApprovals = null) {
         _pause = pause;
 
         TogglePauseCommand = ReactiveCommand.Create<bool>(pause.RequestToggle);
@@ -111,6 +112,8 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
         });
         OpenMainWindowCommand = ReactiveCommand.Create(openMainWindow ?? (() => { }));
         OpenSettingsCommand = ReactiveCommand.Create(openSettings ?? (() => { }), Observable.Return(openSettings is not null))
+            .DisposeWith(_disposables);
+        OpenLaunchApprovalsCommand = ReactiveCommand.Create(openLaunchApprovals ?? (() => { }), Observable.Return(openLaunchApprovals is not null))
             .DisposeWith(_disposables);
         QuitCommand = ReactiveCommand.Create(quit ?? (() => { }));
         ReviewPendingCommand = ReactiveCommand.Create(openReviewPrompts ?? (() => { }));
@@ -133,19 +136,15 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
         var shim = shimOfferable ?? Observable.Return(false);
         var pendingSummary = permissions?.Summary ?? Observable.Return(default(PendingSummary));
         var remoteSummary = remote ?? Observable.Return(default(RemoteTraySummary));
-        var projected = service.Status.CombineLatest(snapshots, pause.State, actions.StopsInFlight, consent.PendingCount, attention, pendingSummary, remoteSummary,
+        var projected = service.Status.CombineLatest(snapshots, pause.State.DistinctUntilChanged(), actions.StopsInFlight, consent.PendingCount, attention, pendingSummary, remoteSummary,
             (status, snap, pauseState, inFlight, pending, lifecycleMsg, summary, remoteFeed) =>
                 Build(service.DaemonName, status, snap, pauseState, inFlight, pending, lifecycleMsg, summary, remoteFeed));
 
-        // A second, narrower CombineLatest rather than folding `shim` into the six-source one
-        // above: it keeps Build's signature untouched (Build already reads awkwardly with six
-        // positional args) and ShimInstallVisible is orthogonal to everything Build computes —
-        // it never influences TrayState/Header/Agents/Pause. Same replay-1-shaped reasoning as
-        // the sources above applies to `shim`.
+        // Kept out of Build: it never affects TrayState/Header/Agents/Pause.
         var withShim = projected.CombineLatest(shim, (model, visible) => model with { ShimInstallVisible = visible });
 
-        // Same shape as the shim item: a narrow CombineLatest so Build stays untouched. Null (most
-        // tests) is Observable.Return(hidden), which seeds and completes like the sources above.
+        // Same shape as the shim item. Null is Observable.Return(hidden), which seeds and
+        // completes like the sources above.
         var update = updateMenu ?? Observable.Return(new UpdateMenuItem(false, ""));
         var withUpdate = withShim.CombineLatest(update, (model, item) => model with { UpdateItemLabel = item.Visible ? item.Label : null });
 
@@ -218,14 +217,15 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
         var (state, count) = ProjectAggregate(status, snap, remote);
         var baseState = state; // the connection/agent-count verdict, before either upgrade below
 
-        // Pending consent, a pending local permission/question, a pending server-lane
-        // permission/question, or a remote session needing attention asserts Attention only
-        // while its own lane is up (local: Connected; server: LaneConnected) — the owner has
-        // something waiting. Judged against baseState (not state) so a later independent upgrade
-        // can never make this fire retroactively; connection-trouble rows above already left
-        // baseState non-Idle/Running and keep precedence for free, and the running-count badge
-        // (count) keeps the agent count regardless.
-        var pendingAttention = ((status.State == AttachState.Connected && (pendingConsent > 0 || pendingSummary.LocalCount > 0))
+        // Only a live lane can assert pending attention. Connection trouble keeps precedence,
+        // and the badge always counts running agents.
+        var usageLimits = status.State == AttachState.Connected && snap is not null
+            ? snap.Agents.Count(a => a.Status == "Running" && UsageLimitNoticeDto.IsQuestion(a.UsageLimit))
+            : 0;
+        var terminalDialogs = status.State == AttachState.Connected && snap is not null
+            ? snap.Agents.Count(a => a.Status == "Running" && a.TerminalDialog is not null && !UsageLimitNoticeDto.IsQuestion(a.UsageLimit))
+            : 0;
+        var pendingAttention = ((status.State == AttachState.Connected && (pendingConsent > 0 || pendingSummary.LocalCount > 0 || usageLimits > 0 || terminalDialogs > 0))
             || (remote.LaneConnected && (pendingSummary.ServerCount > 0 || remote.SessionsNeedingAttention > 0)))
             && baseState is TrayState.Idle or TrayState.Running;
         if (pendingAttention) state = TrayState.Attention;
@@ -244,37 +244,41 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
         return new TrayMenuModel(
             state, count,
             HeaderText(daemonName, status, snap, state, count, pendingAttention, pendingConsent,
-                lifecycleAttentionActive ? lifecycleAttention : null, pendingSummary, remote.SessionsNeedingAttention),
+                lifecycleAttentionActive ? lifecycleAttention : null, pendingSummary, remote.SessionsNeedingAttention, usageLimits, terminalDialogs),
             BuildEntries(status, snap, stopsInFlight, remote), BuildPause(status, pauseState), pendingConsent);
     }
 
-    /// Pure ten-row mapping (spec §4), precedence top-down.
+    /// Pure mapping, precedence top-down.
     internal static (TrayState State, int Count) Project(AttachStatus status, DaemonStatusDto? snap) {
         if (status.State == AttachState.Unreachable) {
-            // Row 1: daemon_unreachable → Stopped. Rows 2 and 10 (daemon_incompatible and any
-            // other reason) collapse to Attention — the header distinguishes them (HeaderText).
-            return status.Reason == UnreachableReason ? (TrayState.Stopped, 0) : (TrayState.Attention, 0);
+            // daemon_unreachable → Stopped; an expected restart reads as connecting. daemon_incompatible
+            // and any other reason collapse to Attention — the header distinguishes them (HeaderText).
+            return status.Reason switch {
+                UnreachableReason => (TrayState.Stopped, 0),
+                ExpectedDaemonRestart.Reason => (TrayState.Connecting, 0),
+                _ => (TrayState.Attention, 0),
+            };
         }
 
-        if (status.State == AttachState.Connecting) return (TrayState.Connecting, 0); // row 3
+        if (status.State == AttachState.Connecting) return (TrayState.Connecting, 0);
 
         // Connected. Defensive only (cannot happen per the client pin): no snapshot yet.
         if (snap is null) return (TrayState.Connecting, 0);
 
         var connection = snap.Daemon.Connection;
-        if (connection == "connecting") return (TrayState.Connecting, 0);              // row 4
-        if (connection is "reconnecting" or "disconnected") return (TrayState.Attention, 0); // row 5
+        if (connection == "connecting") return (TrayState.Connecting, 0);
+        if (connection is "reconnecting" or "disconnected") return (TrayState.Attention, 0);
 
         if (connection == "connected") {
             var active = snap.Daemon.ActiveAgents;
             return active switch {
-                < 0 => (TrayState.Attention, 0),        // row 6 — malformed count
-                0   => (TrayState.Idle, 0),              // row 7
-                _   => (TrayState.Running, active),      // row 8
+                < 0 => (TrayState.Attention, 0),        // malformed count
+                0   => (TrayState.Idle, 0),
+                _   => (TrayState.Running, active),
             };
         }
 
-        return (TrayState.Attention, 0); // row 9 — unrecognized connection value
+        return (TrayState.Attention, 0); // unrecognized connection value
     }
 
     /// Layers the server lane's live count onto Project's local verdict: a local Stopped or Idle
@@ -302,9 +306,9 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
     /// attention.
     internal static IObservable<RemoteTraySummary> SummaryFrom(
             IAgentDirectory directory, IObservable<IReadOnlySet<string>>? sessionsWithAttention = null) {
-        var attention = sessionsWithAttention ?? Observable.Return((IReadOnlySet<string>)new HashSet<string>());
+        var attention = sessionsWithAttention ?? Observable.Return<IReadOnlySet<string>>(FrozenSet<string>.Empty);
         var remoteRows = directory.Rows.Connect()
-            .Filter(r => r.Origin == AgentOrigin.Remote && r.Status is "Starting" or "Running")
+            .Filter(r => r.Origin == AgentOrigin.Remote && r.Status is "Starting" or "Running" or "Idle")
             .QueryWhenChanged(q => (IReadOnlyList<AgentRow>)q.Items.ToList())
             .StartWith((IReadOnlyList<AgentRow>)[]);
         var laneConnected = directory.RemoteStale.Select(stale => !stale);
@@ -319,7 +323,7 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
     static string HeaderText(
             string daemonName, AttachStatus status, DaemonStatusDto? snap, TrayState state, int count,
             bool pendingAttention, int pendingConsent, string? lifecycleAttentionText, PendingSummary pendingSummary,
-            int remoteSessionsNeedingAttention) {
+            int remoteSessionsNeedingAttention, int usageLimits, int terminalDialogs) {
         if (state == TrayState.Attention && status.State == AttachState.Unreachable && status.Reason == IncompatibleReason)
             return SkewMessage; // no daemon-name prefix
 
@@ -330,10 +334,10 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
         // lane) — "not running" stays true of THIS machine, so the header says so instead of
         // claiming a local connection that isn't there.
         var body = pendingAttention
-            ? PendingBody(pendingSummary, pendingConsent, remoteSessionsNeedingAttention)
+            ? PendingBody(pendingSummary, pendingConsent, remoteSessionsNeedingAttention, usageLimits, terminalDialogs)
             : state switch {
                 TrayState.Stopped    => "not running",
-                TrayState.Connecting => "connecting…",
+                TrayState.Connecting => status.Reason == ExpectedDaemonRestart.Reason ? "restarting…" : "connecting…",
                 TrayState.Idle       => "connected — no agents",
                 TrayState.Running    => status.State == AttachState.Unreachable
                     ? $"not running — {count} agent(s) on other machines"
@@ -344,8 +348,10 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
         return $"{daemonName}: {body}";
     }
 
-    static string PendingBody(PendingSummary summary, int consent, int remoteSessionsNeedingAttention) {
-        var parts = new List<string>(4);
+    static string PendingBody(PendingSummary summary, int consent, int remoteSessionsNeedingAttention, int usageLimits, int terminalDialogs) {
+        var parts = new List<string>(6);
+        if (usageLimits > 0) parts.Add($"{usageLimits} usage limit{(usageLimits == 1 ? "" : "s")}");
+        if (terminalDialogs > 0) parts.Add($"{terminalDialogs} terminal dialog{(terminalDialogs == 1 ? "" : "s")} waiting");
         if (summary.Questions > 0) parts.Add($"{summary.Questions} question{(summary.Questions == 1 ? "" : "s")} waiting");
         if (summary.Permissions > 0) parts.Add($"{summary.Permissions} permission request{(summary.Permissions == 1 ? "" : "s")} waiting");
         if (consent > 0) parts.Add($"{consent} launch{(consent == 1 ? "" : "es")} awaiting approval");
@@ -354,11 +360,29 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
         return string.Join(", ", parts);
     }
 
-    // Rows 6 and 9 (connected, malformed count / unrecognized connection) and row 10 (unreachable,
-    // unrecognized reason) share the neutral fallback; rows 5's two connection values get their
-    // own copy.
+    // kcap login signs in whichever profile it resolves, so the variable that names one goes first.
+    // Quoted for the shell and scoped to the one command: the user's own shell keeps whatever profile
+    // it had. PowerShell has no per-command environment, so the login runs in a child PowerShell.
+    internal static string LoginHint(string profile) => LoginHint(profile, OperatingSystem.IsWindows());
+
+    internal static string LoginHint(string profile, bool windows) {
+        if (!windows) return $"run KCAP_PROFILE='{profile.Replace("'", "'\\''")}' kcap login";
+
+        var inner = $"$env:KCAP_PROFILE='{PowerShellQuoted(profile)}'; kcap login";
+        return $"in PowerShell, run powershell -NoProfile -Command '{PowerShellQuoted(inner)}'";
+    }
+
+    // PowerShell ends a single-quoted string at any of these, not only at ', and each is escaped by doubling.
+    static string PowerShellQuoted(string text) =>
+        string.Concat(text.Select(c => c is '\'' or '\u2018' or '\u2019' or '\u201A' or '\u201B' ? $"{c}{c}" : c.ToString()));
+
+    // A malformed count, an unrecognized connection value and an unrecognized unreachable reason
+    // share the neutral fallback; reconnecting and disconnected get their own copy.
     static string AttentionBody(AttachStatus status, DaemonStatusDto? snap) {
         if (status.State == AttachState.Connected && snap is not null) {
+            if (snap.Daemon is { Credential: not null } daemon && daemon.Connection != "connected")
+                return daemon.Profile is { Length: > 0 } profile ? $"signed out of {profile}: {LoginHint(profile)}" : "signed out";
+
             return snap.Daemon.Connection switch {
                 "reconnecting" => "reconnecting to server",
                 "disconnected" => "disconnected from server",
@@ -394,6 +418,7 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
 
     static string Label(AgentStatusDto agent) {
         var line = $"{agent.Kind} · {agent.Vendor} · {RepoLabel.Leaf(agent.RepoPath)}";
+        if (UsageLimitNoticeDto.IsQuestion(agent.UsageLimit)) line = $"{line} · usage limit";
 
         // A native menu row cannot ellipsize itself, so the title is cut before the separator.
         return agent.Title is null ? line

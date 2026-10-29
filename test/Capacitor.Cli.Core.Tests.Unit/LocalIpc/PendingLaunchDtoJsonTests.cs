@@ -9,13 +9,13 @@ public class PendingLaunchDtoJsonTests {
         var dto = new DaemonStatusDto(
             new DaemonInfoDto("main", "1", "u", "connected", 5, 0),
             [],
-            [new PendingLaunchDto("p1", "claude", "/repo", "Fix the flaky test", new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc), "spawned")]);
+            [new PendingLaunchDto("p1", "claude", "/repo", "Fix the flaky test", new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc), "spawned", "review")]);
 
         var json = JsonSerializer.Serialize(dto, StatusIpcJsonContext.Default.DaemonStatusDto);
 
         await Assert.That(json).EndsWith(
             """
-            "agents":[],"pending":[{"id":"p1","vendor":"claude","repo_path":"/repo","title":"Fix the flaky test","created_at":"2026-09-01T00:00:00Z","stage":"spawned"}]}
+            "agents":[],"pending":[{"id":"p1","vendor":"claude","repo_path":"/repo","title":"Fix the flaky test","created_at":"2026-09-01T00:00:00Z","stage":"spawned","kind":"review"}],"busy":null,"experimental":null}
             """);
     }
 

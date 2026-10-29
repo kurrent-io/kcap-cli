@@ -472,6 +472,22 @@ public class AcpHostedAgentRuntimeReconnectTests {
             c.Params!.Value.GetProperty("prompt")[0].GetProperty("text").GetString() == "after-chained-resume"));
     }
 
+    /// <summary>A graceful stop closes the agent's stdin, so the agent exits on its own before any
+    /// terminate: that exit is the stop, not a crash to resume.</summary>
+    [Test]
+    public async Task An_exit_after_a_graceful_stop_is_not_resumed() {
+        await using var h = new Harness();
+        await h.StartAsync();
+
+        var terminal = h.RuntimeTerminalAsync();
+
+        await h.Runtime.RequestGracefulStopAsync().WaitAsync(HangGuard);
+        h.Incarnations[0].Fake.SimulateCrash();
+
+        await terminal.WaitAsync(HangGuard);
+        await Assert.That(h.CandidateSpawns).IsEqualTo(0);
+    }
+
     [Test]
     public async Task Terminate_from_running_completes_the_finalize_signal() {
         await using var h = new Harness();

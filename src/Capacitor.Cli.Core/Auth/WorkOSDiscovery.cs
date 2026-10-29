@@ -49,7 +49,9 @@ public static class WorkOSDiscovery {
             ITenantProvisioner?                             provisioner = null,
             CancellationToken                               ct = default,
             IAuthProgress?                                  progress = null,
-            TenantPickContext?                              pickContext = null) {
+            TenantPickContext?                              pickContext = null,
+            Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>>? probe = null,
+            bool confirmPick = false) {
         progress ??= ConsoleAuthProgress.Instance;
 
         if (string.IsNullOrEmpty(proxyConfig.WorkOSClientId)) {
@@ -73,23 +75,27 @@ public static class WorkOSDiscovery {
 
         var result = await proxy.DiscoverWorkOSTenantsAsync(proxyUrl, auth.AccessToken, ct);
         if (result.Error != DiscoveryError.None) {
-            return Failed(progress, result.Error switch {
-                DiscoveryError.ProxyUnreachable => "The Kurrent auth service is unreachable.",
-                DiscoveryError.TokenRejected    => "WorkOS rejected the authentication token. Please sign in again.",
-                DiscoveryError.UpstreamError    => "Kurrent auth service returned an error. Try again later.",
-                _                               => "Tenant discovery failed."
-            }, ct);
+            return Failed(progress, TenantDiscovery.Describe(result.Error, AuthProvider.WorkOS), ct);
         }
 
-        if (result.Tenants.Length == 0) {
+        var (tenants, pending) = probe is null
+            ? (result.Tenants, [])
+            : await DropGoneAsync(result.Tenants, probe, auth.AccessToken, progress, ct);
+
+        if (tenants.Length == 0 && pending.Length > 0) {
+            return new WorkOSDiscoveryFlow.Failed(
+                $"{pending[0].Label} is still being created.", AuthFailureReason.ProvisioningInProgress);
+        }
+
+        if (tenants.Length == 0) {
             return await OfferCreateAsync(
                 proxyConfig, auth, orgSwitch, orglessRefresh, provisioner, funnel, time, ct, progress);
         }
 
-        var picked = result.Tenants.Length == 1
-            ? result.Tenants[0]
+        var picked = tenants.Length == 1 && !confirmPick && pending.Length == 0
+            ? tenants[0]
             : await picker.PickAsync(
-                result.Tenants,
+                tenants,
                 (pickContext ?? TenantPickContext.None) with {
                     Bearer      = auth.AccessToken,
                     ViaLoopback = !auth.ViaDeviceGrant
@@ -99,7 +105,38 @@ public static class WorkOSDiscovery {
         // one that contradicts it — "no tenant selected" reads as a choice on a session that had none.
         if (picked is null) return new WorkOSDiscoveryFlow.Failed("No tenant selected.");
 
-        return await SwitchAsync(picked, result.Tenants, auth, proxyConfig.WorkOSClientId!, orgSwitch, progress);
+        return await SwitchAsync(picked, tenants, auth, proxyConfig.WorkOSClientId!, orgSwitch, progress);
+    }
+
+    /// <summary>
+    /// A removed tenant can keep its WorkOS organization, so the proxy still lists it. Picking it would
+    /// configure a profile against a host that only answers 404; leaving it out lets an account whose
+    /// every workspace is gone reach the create offer instead. One still being created is left out too,
+    /// and returned apart so nothing is offered or taken in its place.
+    /// </summary>
+    internal static async Task<(DiscoveredTenant[] Kept, DiscoveredTenant[] Pending)> DropGoneAsync(
+            DiscoveredTenant[] tenants, Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>> probe,
+            string bearer, IAuthProgress progress, CancellationToken ct) {
+        var answers = await Task.WhenAll(tenants.Select(t => probe(t, bearer, ct)));
+        var kept    = new List<DiscoveredTenant>(tenants.Length);
+        var pending = new List<DiscoveredTenant>();
+
+        for (var i = 0; i < tenants.Length; i++) {
+            switch (answers[i]) {
+                case WorkspaceAnswer.Gone:
+                    progress.Notice($"{tenants[i].Label} ({tenants[i].Origin}) no longer answers, so it is left out.");
+                    break;
+                case WorkspaceAnswer.Pending:
+                    progress.Notice($"{tenants[i].Label} ({tenants[i].Origin}) is still being created, so it is left out for now.");
+                    pending.Add(tenants[i]);
+                    break;
+                default:
+                    kept.Add(tenants[i]);
+                    break;
+            }
+        }
+
+        return ([.. kept], [.. pending]);
     }
 
     static async Task<WorkOSDiscoveryFlow> OfferCreateAsync(
@@ -118,7 +155,7 @@ public static class WorkOSDiscovery {
         funnel.TenantNone(AuthProvider.WorkOS);
 
         if (provisioner is null) {
-            progress.Error("No Capacitor tenants are linked to your account. Ask your admin to invite you.");
+            progress.Error("No kcap tenants are linked to your account. Ask your admin to invite you.");
 
             return new WorkOSDiscoveryFlow.NoTenants();
         }
@@ -206,9 +243,7 @@ public static class WorkOSDiscovery {
             Func<IReadOnlyList<AuthIdentity>, CancellationToken, Task>? beforeCommit,
             TimeProvider                                                time,
             CancellationToken                                           ct) {
-        var picked = ready.Picked;
-
-        if (!ServerIdentity.TryCanonicalizeForStamping(picked.Origin, out var canonical, out var identityError)) {
+        if (!ServerIdentity.TryCanonicalizeForStamping(ready.Picked.Origin, out var canonical, out var identityError)) {
             progress.Error($"Error: {identityError}");
 
             return new AuthResult.Failed(identityError);
@@ -226,19 +261,26 @@ public static class WorkOSDiscovery {
             ServerUrl      = canonical
         };
 
-        var request = new CommitRequest(
-            [new AuthIdentity(picked.ProfileName, canonical)], AuthProvider.WorkOS, picked.ProfileName, canonical,
-            ConfigMutation: config => TenantDiscovery.MergeProfiles(config, ready.Tenants, picked),
-            PublishTokens: async saved => {
-                await store.SaveAsync(picked.ProfileName, tokens, CancellationToken.None);
-                saved();
+        if (await CommitBoundary.SettleLegacyCredentialAsync(root, store, ct) is { } settleError) {
+            progress.Error(settleError);
 
-                return ready.Username;
-            });
+            return new AuthResult.Failed(settleError);
+        }
 
-        var result = await CommitBoundary.CommitAsync(root, request, beforeCommit, progress, ct);
+        var result = await CommitBoundary.CommitNamedAsync(root, ready.Tenants, ready.Picked, (tenants, picked) => new CommitRequest(
+                [new AuthIdentity(picked.ProfileName, canonical)], AuthProvider.WorkOS, picked.ProfileName, canonical,
+                ConfigMutation: config => TenantDiscovery.MergeProfiles(config, tenants, picked),
+                PublishTokens: async saved => {
+                    var outcome = await store.SaveGuardedAsync(
+                        picked.ProfileName, tokens, cfg => cfg.Profiles.ContainsKey(picked.ProfileName), CancellationToken.None);
+                    if (outcome == GuardedWriteOutcome.Written) saved();
+                    else progress.Error($"Error: profile '{picked.ProfileName}' was removed during sign-in; nothing saved.");
 
-        if (result is AuthResult.Committed) progress.Notice($"Logged in as {ready.Username} → {picked.Label}");
+                    return ready.Username;
+                }),
+            beforeCommit, progress, ct);
+
+        if (result is AuthResult.Committed { CredentialSaved: true }) progress.Notice($"Logged in as {ready.Username} → {ready.Picked.Label}");
 
         return result;
     }

@@ -9,7 +9,7 @@ public class SpectreTenantPicker(Func<bool>? isInteractive = null) : ITenantPick
         PromptHygiene.DiscardTypeAhead();
 
         var prompt = new SelectionPrompt<DiscoveredTenant>()
-            .Title("Which Capacitor tenant would you like to use as default?")
+            .Title("Which kcap tenant would you like to use as default?")
             .UseConverter(t => $"{t.Label} · {t.Origin}")
             .AddChoices(tenants);
 

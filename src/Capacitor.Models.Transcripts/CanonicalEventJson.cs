@@ -8,7 +8,7 @@ namespace Capacitor.Models.Transcripts;
 public static class CanonicalEventJson {
     static readonly JsonParser Parser = new(JsonParser.Settings.Default.WithIgnoreUnknownFields(true));
 
-    /// Null for a type the chat does not render or a payload that does not parse as it.
+    /// Null for a type the chat does not read or a payload that does not parse as it.
     public static object? TryParse(string eventType, string json) {
         try {
             return eventType switch {
@@ -17,8 +17,13 @@ public static class CanonicalEventJson {
                 CanonicalEventTypes.AssistantThinkingGenerated  => Parser.Parse<AssistantThinkingGenerated>(json),
                 CanonicalEventTypes.AssistantToolCallsGenerated => Parser.Parse<AssistantToolCallsGenerated>(json),
                 CanonicalEventTypes.ToolResultReceived          => Parser.Parse<ToolResultReceived>(json),
+                CanonicalEventTypes.SubagentCompleted           => Parser.Parse<SubagentCompleted>(json),
+                CanonicalEventTypes.SubagentStarted             => Parser.Parse<SubagentStarted>(json),
+                CanonicalEventTypes.ContextCompacted            => System.Text.Json.JsonSerializer.Deserialize(json, Harness.Codex.CodexJsonContext.Default.ContextCompactedEvent),
                 _ => null,
             };
+        } catch (System.Text.Json.JsonException) {
+            return null;
         } catch (InvalidJsonException) {
             return null;
         } catch (InvalidProtocolBufferException) {

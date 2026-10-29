@@ -129,6 +129,13 @@ public class LocalPermissionBridgePolicyTests {
         await Assert.That(evt.RequestedOutcome).IsEqualTo("allow");
         await Assert.That(evt.EffectiveOutcome).IsEqualTo("allow");
         await Assert.That(evt.MatchedRules.Single().Outcome).IsEqualTo("allow");
+
+        // The allowed call is still owed its notice, which must not retire an identical prompt.
+        using var input = JsonDocument.Parse("""{"command":"git status"}""");
+        var waiting = h.Broker.Register(new PermissionPendingDto("waiting", "agent-1", Session, "claude", "Bash", input.RootElement.Clone(),
+            null, false, false, DateTimeOffset.UtcNow.ToString("O")));
+        await Assert.That(h.Broker.TryWithdrawTool("agent-1", Session, "toolu_p", toolName: "Bash", toolInput: input.RootElement.Clone())).IsFalse();
+        await Assert.That(waiting.IsCompleted).IsFalse();
     }
 
     [Test, NotInParallel(nameof(LocalPermissionBridgePolicyTests))]
@@ -174,18 +181,16 @@ public class LocalPermissionBridgePolicyTests {
         await Assert.That(h.Server.PolicyEvents().Length).IsEqualTo(0);
     }
 
+    /// A terminal-hosted Codex is governed by its launch's policy exactly as Claude is.
     [Test, NotInParallel(nameof(LocalPermissionBridgePolicyTests))]
-    public async Task A_hosted_codex_request_parks_untouched() {
+    public async Task A_hosted_codex_request_is_answered_by_its_policy() {
         await using var h = new Harness(Governed);
         await h.StartAsync();
 
-        var response = h.PostAsync("git push --force", vendor: "codex");
-        var pending  = await h.WaitPendingAsync();
-        await Assert.That(pending.Vendor).IsEqualTo("codex");
-        h.Broker.TrySettle(pending.RequestId, Allow, "allow", "app");
+        var response = await h.PostAsync("git push --force", vendor: "codex");
 
-        await Assert.That(await Harness.BehaviorOf(await response)).IsEqualTo("allow");
-        await Assert.That(h.Server.PolicyEvents().Length).IsEqualTo(0);
+        await Assert.That(await Harness.BehaviorOf(response)).IsEqualTo("deny");
+        await Assert.That(h.Server.PolicyEvents().Single().Vendor).IsEqualTo("codex");
     }
 }
 
@@ -194,7 +199,7 @@ public class LocalPermissionBridgePolicyTests {
 /// broker settles it.
 sealed class PolicyServerConnection() : ServerConnection(
         new() { Name = "test", ServerUrl = "http://127.0.0.1:1" },
-        UnusedTokenStore.Create(),
+        new FixedCredentialSource(),
         NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, TimeProvider.System) {
     readonly List<object> _runEvents = [];
     int _beginCount;
@@ -222,4 +227,11 @@ sealed class PolicyServerConnection() : ServerConnection(
 
     public override Task<RespondOutcome> RespondToPermissionAsync(string sessionId, string serverRequestId, PermissionDecision decision) =>
         Task.FromResult(new RespondOutcome(RespondOutcomeKind.Applied, null));
+
+    /// The answer to a request no agent was attributed for; unset, it stays open like any other.
+    public PermissionDecision? UnattributedAnswer { get; set; }
+
+    public override Task<PermissionDecision> RequestPermissionAsync(
+            string sessionId, string? toolName, JsonElement? toolInput, JsonElement? suggestions, CancellationToken ct = default) =>
+        UnattributedAnswer is { } answer ? Task.FromResult(answer) : base.RequestPermissionAsync(sessionId, toolName, toolInput, suggestions, ct);
 }

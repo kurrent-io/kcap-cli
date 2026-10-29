@@ -57,14 +57,8 @@ sealed class McpReviewServer(ConfigRoot config, ProfileContext profiles, TokenSt
         // or stderr). Used to fail gracefully instead of hard-exiting mid-request (below).
         var urlOk = HttpClientExtensions.IsAcceptableUrl(baseUrl);
 
-        // The authenticated client is created on the first tools/call, not at startup:
-        // kcap-review auto-registers, so Claude Code (and Codex) spawn `kcap mcp review` for
-        // every session — deferring keeps startup local-only (no GET /auth/config, token load,
-        // or stderr re-auth hint) for sessions that never invoke a review tool. Created on demand
-        // into a nullable field (rather than a Lazy<Task>) so a transient creation failure leaves
-        // it null and the next call retries, instead of a faulted task sticking for the rest of
-        // the session. Safe without locking: the stdio loop handles one request at a time.
-        HttpClient? client = null;
+        // Created on first use, so a session that never calls a tool stays local-only.
+        using var sessionClient = new OnDemand<HttpClient>(() => http.ForSessionAsync());
 
         // Guarded tool dispatch: never let the stdio JSON-RPC loop die on one bad request. An
         // unexpected failure would otherwise bubble out of the loop and kill the server mid-protocol;
@@ -74,7 +68,7 @@ sealed class McpReviewServer(ConfigRoot config, ProfileContext profiles, TokenSt
                 return BuildToolResult(callId, HttpClientExtensions.SchemeMissingHint, isError: true);
 
             try {
-                client ??= await http.ForSessionAsync();
+                var client = await sessionClient.GetAsync();
                 return await HandleToolCallAsync(callId, callRequest, client, baseUrl, sessionDefault);
             } catch (Exception ex) {
                 // Unexpected: log the detail to stderr (not to the client, which could leak local
@@ -106,43 +100,12 @@ sealed class McpReviewServer(ConfigRoot config, ProfileContext profiles, TokenSt
         await using var writer = new StreamWriter(stdout, new UTF8Encoding(false));
         writer.AutoFlush = true;
 
-        try {
-            while (await reader.ReadLineAsync() is { } line) {
-                if (string.IsNullOrWhiteSpace(line)) continue;
-
-                JsonObject? request;
-
-                try {
-                    request = JsonNode.Parse(line)?.AsObject();
-                } catch {
-                    continue; // skip malformed JSON
-                }
-
-                if (request is null) continue;
-
-                var id     = request["id"];
-                var method = request["method"]?.GetValue<string>();
-
-                // Notifications have no id — don't send a response
-                if (id is null) continue;
-
-                var response = method switch {
-                    "initialize" => BuildInitializeResponse(id, request),
-                    "tools/list" => BuildToolsListResponse(id, tools),
-                    "tools/call" => await TimedDispatchToolCallAsync(id, request),
-                    _            => McpProtocol.TryHandleStandardMethod(method, id)
-                                    ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
-                };
-
-                await writer.WriteLineAsync(response);
-            }
-        } finally {
-            if (client is not null) {
-                try { client.Dispose(); } catch {
-                    /* swallow — best-effort cleanup */
-                }
-            }
-        }
+        await McpStdioLoop.RunAsync(reader, writer, tools, TimedDispatchToolCallAsync, (id, method, request) => method switch {
+            "initialize" => BuildInitializeResponse(id, request),
+            "tools/list" => BuildToolsListResponse(id, tools),
+            _            => McpProtocol.TryHandleStandardMethod(method, id)
+                            ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
+        }, "review");
 
         return 0;
     }
@@ -165,7 +128,7 @@ sealed class McpReviewServer(ConfigRoot config, ProfileContext profiles, TokenSt
     // Server-level usage preamble (MCP `instructions`) — a model-facing hint some clients add to the
     // system prompt. Same "reach for kcap before native git/GitHub/grep for why/history" framing as the
     // per-tool descriptions, at the server level (belt-and-suspenders behind the descriptions).
-    const string ServerInstructions =
+    internal const string ServerInstructions =
         "Use these tools when reviewing a PR or asking why code was written this way. Reach for them before " +
         "native git/GitHub/grep for why / history / prior-work questions — they surface the implementer's " +
         "reasoning from the recorded session transcript, which commits and diffs don't capture — while you " +
@@ -300,7 +263,7 @@ sealed class McpReviewServer(ConfigRoot config, ProfileContext profiles, TokenSt
         return envelope.ToJsonString();
     }
 
-    static McpTool[] BuildToolsList() {
+    internal static McpTool[] BuildToolsList() {
         const string PrArgDescription =
             "Optional PR reference (e.g. 'owner/repo#123' or a github.com PR URL). " +
             "Defaults to the session's PR if launched via `kcap review`, otherwise auto-detected from current branch.";
@@ -309,12 +272,14 @@ sealed class McpReviewServer(ConfigRoot config, ProfileContext profiles, TokenSt
             new(
                 "get_pr_summary",
                 "Get an overview of the PR: which Claude Code sessions contributed, which files were changed (with event counts), and what test commands were run with their pass/fail outcomes. Call this first to orient yourself. When reviewing a PR or asking why code was written this way, reach for this before git blame or git log — and alongside the diff — because it surfaces the implementer's actual reasoning from the session transcript, which commits and diffs don't capture.",
-                new("object", new() { ["pr"] = new("string", PrArgDescription) }, [])
+                new("object", new() { ["pr"] = new("string", PrArgDescription) }, []),
+                McpToolAnnotations.Read
             ),
             new(
                 "list_pr_files",
                 "List all files changed in the PR with aggregated metadata: change types (read/edit/create), how many sessions touched each file, and total event count. Use this to understand the scope of changes.",
-                new("object", new() { ["pr"] = new("string", PrArgDescription) }, [])
+                new("object", new() { ["pr"] = new("string", PrArgDescription) }, []),
+                McpToolAnnotations.Read
             ),
             new(
                 "get_file_context",
@@ -326,7 +291,8 @@ sealed class McpReviewServer(ConfigRoot config, ProfileContext profiles, TokenSt
                         ["pr"]        = new("string", PrArgDescription)
                     },
                     ["file_path"]
-                )
+                ),
+                McpToolAnnotations.Read
             ),
             new(
                 "search_context",
@@ -338,12 +304,14 @@ sealed class McpReviewServer(ConfigRoot config, ProfileContext profiles, TokenSt
                         ["pr"]    = new("string", PrArgDescription)
                     },
                     ["query"]
-                )
+                ),
+                McpToolAnnotations.Read
             ),
             new(
                 "list_sessions",
                 "List all Claude Code sessions that contributed to this PR, with session IDs, titles, timestamps, and models used. Use this to understand the work timeline and pick sessions to drill into with get_transcript.",
-                new("object", new() { ["pr"] = new("string", PrArgDescription) }, [])
+                new("object", new() { ["pr"] = new("string", PrArgDescription) }, []),
+                McpToolAnnotations.Read
             ),
             new(
                 "get_transcript",
@@ -357,7 +325,8 @@ sealed class McpReviewServer(ConfigRoot config, ProfileContext profiles, TokenSt
                         ["take"]       = new("integer", "Number of events to return (for pagination)")
                     },
                     ["session_id"]
-                )
+                ),
+                McpToolAnnotations.Read
             )
         ];
     }
@@ -426,8 +395,10 @@ record McpServerInfo(string Name, string Version);
 
 record McpToolsResult(McpTool[] Tools);
 
-record McpTool(string Name, string Description, McpInputSchema InputSchema);
+record McpTool(string Name, string Description, McpInputSchema InputSchema, McpToolAnnotations Annotations);
 
+// No additionalProperties keyword: Gemini's function declarations reject it, and the stdio loop refuses an
+// undeclared argument on every host anyway.
 record McpInputSchema(string Type, Dictionary<string, McpSchemaProperty> Properties, string[] Required);
 
 // Items was added when the work-items server declared the first `array`-typed properties in any of
@@ -466,4 +437,5 @@ record SessionSearchQuery(string Query, int? Limit = null);
 [JsonSerializable(typeof(AckFlowMessagesDto))]
 [JsonSerializable(typeof(SendFlowMessageDto))]
 [JsonSerializable(typeof(ReviewerVendorsResult))]
+[JsonSerializable(typeof(StartAgentDto))]
 partial class McpJsonContext : JsonSerializerContext;

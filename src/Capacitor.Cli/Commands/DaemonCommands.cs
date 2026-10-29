@@ -5,7 +5,9 @@ using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
+using Capacitor.Cli.Core.Install;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.Resume;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Services;
 
@@ -13,7 +15,7 @@ namespace Capacitor.Cli.Commands;
 
 public sealed class DaemonCommands(
         DaemonStore store, ConfigRoot config, ProfileContext profiles, UserHome home,
-        HarnessRegistry harnesses, BinaryProbe binaries, TimeProvider time) {
+        HarnessRegistry harnesses, BinaryProbe binaries, TimeProvider time, StandardStreams console) {
     string LogPath { get; } = config.Path("daemon.log");
 
     /// <summary>The sibling capture for the daemon's raw stderr/stdout — where a detached start points
@@ -86,7 +88,7 @@ public sealed class DaemonCommands(
         var startLock = TryAcquireStartLock(name);
 
         if (startLock is null) {
-            await Console.Error.WriteLineAsync(
+            await console.Error.WriteLineAsync(
                 $"Another `kcap daemon start --name {name}` is already in progress or holds the daemon lock. "
               + $"Run `kcap daemon stop --name {name}` first or wait for the other start to complete."
             );
@@ -96,7 +98,7 @@ public sealed class DaemonCommands(
 
         try {
             if (DaemonPidProbe.ReadPidFile(store, name) is { } existing && DaemonPidProbe.IsOurDaemon(existing.Pid, existing.StartToken)) {
-                await Console.Error.WriteLineAsync(
+                await console.Error.WriteLineAsync(
                     $"Daemon '{name}' already running (PID {existing.Pid}). "
                   + $"Use `kcap daemon stop --name {name}` first."
                 );
@@ -114,7 +116,7 @@ public sealed class DaemonCommands(
         var daemonPath = UnitIdentity.ResolveDaemonBinary();
 
         if (daemonPath is null) {
-            await Console.Error.WriteLineAsync(DaemonNotFoundMessage());
+            await console.Error.WriteLineAsync(DaemonNotFoundMessage());
 
             return 1;
         }
@@ -134,7 +136,7 @@ public sealed class DaemonCommands(
         using var process = Process.Start(psi);
 
         if (process is null) {
-            await Console.Error.WriteLineAsync($"Failed to start {daemonPath}");
+            await console.Error.WriteLineAsync($"Failed to start {daemonPath}");
 
             return 1;
         }
@@ -163,7 +165,7 @@ public sealed class DaemonCommands(
         var startLock = TryAcquireStartLock(name);
 
         if (startLock is null) {
-            Console.Error.WriteLine(
+            console.Error.WriteLine(
                 $"Another `kcap daemon start --name {name}` is already in progress or holds the daemon lock. "
               + $"Run `kcap daemon stop --name {name}` first or wait for the other start to complete."
             );
@@ -174,7 +176,7 @@ public sealed class DaemonCommands(
         using var _ = startLock;
 
         if (DaemonPidProbe.ReadPidFile(store, name) is { } existing && DaemonPidProbe.IsOurDaemon(existing.Pid, existing.StartToken)) {
-            Console.Error.WriteLine(
+            console.Error.WriteLine(
                 $"Daemon '{name}' already running (PID {existing.Pid}). "
               + $"Use `kcap daemon stop --name {name}` first."
             );
@@ -185,12 +187,12 @@ public sealed class DaemonCommands(
         var daemonPath = UnitIdentity.ResolveDaemonBinary();
 
         if (daemonPath is null) {
-            Console.Error.WriteLine(DaemonNotFoundMessage());
+            console.Error.WriteLine(DaemonNotFoundMessage());
 
             return 1;
         }
 
-        if (DetachedDigestGate(daemonPath, Environment.GetEnvironmentVariable) is int gateExit) return gateExit;
+        if (DetachedDigestGate(daemonPath, Environment.GetEnvironmentVariable, console.Error) is int gateExit) return gateExit;
 
         // Redirect ALL three standard streams so the detached daemon does not
         // inherit our stdout/stderr. Left un-redirected, the daemon
@@ -249,7 +251,7 @@ public sealed class DaemonCommands(
         // (before SignalR connect), so 1.5s is more than enough to catch
         // an immediate exit without making the success path feel sluggish.
         if (process.WaitForExit(1500)) {
-            Console.Error.WriteLine(
+            console.Error.WriteLine(
                 $"Daemon '{name}' failed to start (exit code {process.ExitCode}). "
               + $"Check `kcap daemon doctor` to see whether the name is held by another process."
             );
@@ -266,10 +268,10 @@ public sealed class DaemonCommands(
         // write could recreate the file after a clean daemon exit and trip the
         // successor's unclean-exit breadcrumb falsely.
 
-        Console.Out.WriteLine($"Daemon '{name}' started (PID {process.Id})");
-        Console.Out.WriteLine($"  Log:       {LogPath}");
-        Console.Out.WriteLine($"  Stop with: kcap daemon stop --name {name}");
-        Console.Out.WriteLine($"  Status:    kcap daemon status --name {name}");
+        console.Out.WriteLine($"Daemon '{name}' started (PID {process.Id})");
+        console.Out.WriteLine($"  Log:       {LogPath}");
+        console.Out.WriteLine($"  Stop with: kcap daemon stop --name {name}");
+        console.Out.WriteLine($"  Status:    kcap daemon status --name {name}");
 
         return 0;
     }
@@ -341,17 +343,20 @@ public sealed class DaemonCommands(
     /// stdout/stderr/exit-code contract the app-side caller parses. <paramref name="env"/> is
     /// injected so this is testable without touching real process env.
     /// </summary>
-    internal static int? DetachedDigestGate(string daemonPath, Func<string, string?> env) {
+    internal static int? DetachedDigestGate(string daemonPath, Func<string, string?> env, TextWriter stderr) {
         if (env(SeedVar) is null) return null; // manual start: no gate
 
         if (DaemonDigest.Matches(daemonPath)) return null;
 
-        Console.Error.WriteLine("daemon_start_reason=package_inconsistent");
+        stderr.WriteLine("daemon_start_reason=package_inconsistent");
 
         return 43;
     }
 
     // ── stop ────────────────────────────────────────────────────────────────
+
+    /// <summary>The daemon's own stop fits in about 18 s; past this it is killed.</summary>
+    internal static readonly TimeSpan StopExitWait = TimeSpan.FromSeconds(30);
 
     async Task<int> StopAsync(string[] args) {
         string? name;
@@ -359,39 +364,42 @@ public sealed class DaemonCommands(
         try {
             name = ExtractFlagValue(args, "--name");
         } catch (ArgumentException ex) {
-            await Console.Error.WriteLineAsync(ex.Message);
+            await console.Error.WriteLineAsync(ex.Message);
 
             return 1;
         }
 
-        var yes = args.Contains("--yes") || args.Contains("-y");
+        var yes     = args.Contains("--yes") || args.Contains("-y");
+        // Only kcap-service needs it; under launchd or systemd a stop that skips the manager is restarted
+        var direct  = OperatingSystem.IsWindows() && args.Contains("--direct");
+        var request = new ShutdownRequestDto(args.Contains("--keep-agents") ? "keep" : "end", "final");
 
-        if (name is not null) return StopByName(name);
+        if (name is not null) return await StopByNameAsync(name, request, direct);
 
         // No --name: enumerate all running daemons.
         var candidates = EnumerateRunningNames();
 
         switch (candidates.Count) {
             case 0:
-                await Console.Out.WriteLineAsync("No daemons are running.");
+                await console.Out.WriteLineAsync("No daemons are running.");
 
                 return 0;
             case 1:
-                return StopByName(candidates[0]);
+                return await StopByNameAsync(candidates[0], request);
         }
 
-        await Console.Out.WriteLineAsync($"Found {candidates.Count} running daemons:");
+        await console.Out.WriteLineAsync($"Found {candidates.Count} running daemons:");
 
         foreach (var n in candidates) {
-            await Console.Out.WriteLineAsync($"  • {n}");
+            await console.Out.WriteLineAsync($"  • {n}");
         }
 
         if (!yes) {
-            await Console.Out.WriteAsync($"Stop all {candidates.Count}? [y/N] ");
-            var reply = await Console.In.ReadLineAsync();
+            await console.Out.WriteAsync($"Stop all {candidates.Count}? [y/N] ");
+            var reply = await console.In.ReadLineAsync();
 
             if (!string.Equals(reply?.Trim(), "y", StringComparison.OrdinalIgnoreCase)) {
-                await Console.Out.WriteLineAsync("Cancelled.");
+                await console.Out.WriteLineAsync("Cancelled.");
 
                 return 0;
             }
@@ -400,18 +408,20 @@ public sealed class DaemonCommands(
         var failed = 0;
 
         foreach (var n in candidates) {
-            if (StopByName(n) != 0) failed++;
+            if (await StopByNameAsync(n, request) != 0) failed++;
         }
 
         return failed == 0 ? 0 : 1;
     }
 
-    int StopByName(string name) {
-        var manager = TryServiceManager();
-        if (manager is not null && manager.Status(DaemonStore.Sanitize(name)).State != ServiceState.NotInstalled) {
-            Console.Out.WriteLine(
+    /// <param name="direct">Asks the daemon itself even when a service manages it: the Windows service's own
+    /// graceful stop, which would otherwise be refused here and sent back to the service</param>
+    async Task<int> StopByNameAsync(string name, ShutdownRequestDto request, bool direct = false) {
+        var manager = direct ? null : TryServiceManager();
+        if (manager is not null && ManagedState(manager, DaemonStore.Sanitize(name)) != ServiceState.NotInstalled) {
+            console.Out.WriteLine(
                 $"Daemon '{name}' is managed by {manager.Describe()}; a raw stop would be auto-restarted.");
-            Console.Out.WriteLine($"Use: kcap daemon service stop --name {name}  (or uninstall to remove it)");
+            console.Out.WriteLine($"Use: kcap daemon service stop --name {name}  (or uninstall to remove it)");
 
             return 0;
         }
@@ -421,7 +431,7 @@ public sealed class DaemonCommands(
             // unparseable one (empty/partial — e.g. a mid-write SIGKILL; it no
             // longer unlinks the latter).
             if (!File.Exists(store.PidPath(name))) {
-                Console.Error.WriteLine($"No daemon '{name}' running (no PID file found).");
+                console.Error.WriteLine($"No daemon '{name}' running (no PID file found).");
 
                 return 1;
             }
@@ -431,17 +441,19 @@ public sealed class DaemonCommands(
             // so we can't race a concurrent `daemon start` that just wrote a valid
             // PID and delete a LIVE daemon's file.
             if (TryCleanupMarkersUnderLock(name)) {
-                Console.Out.WriteLine($"Daemon '{name}' was not running (removed unusable PID file).");
+                console.Out.WriteLine($"Daemon '{name}' was not running (removed unusable PID file).");
 
                 return 0;
             }
 
-            Console.Error.WriteLine(
+            console.Error.WriteLine(
                 $"Daemon '{name}' appears to be running (its lock is held) but its PID file is unreadable; "
               + $"not removing it. Retry, or run `kcap daemon doctor`.");
 
             return 1;
         }
+
+        var outcome = ShutdownOutcome.NoAnswer;
 
         try {
             // entry is bound ONCE above and reused for both the ownership classification and (on
@@ -453,9 +465,9 @@ public sealed class DaemonCommands(
                 // A dead/foreign PID. Clean up under the flock so we don't unlink a
                 // PID a concurrent start wrote after our read (TOCTOU).
                 if (TryCleanupMarkersUnderLock(name))
-                    Console.Out.WriteLine($"Daemon '{name}' was not running (stale PID file).");
+                    console.Out.WriteLine($"Daemon '{name}' was not running (stale PID file).");
                 else
-                    Console.Out.WriteLine($"Daemon '{name}' is running (started concurrently); leaving it.");
+                    console.Out.WriteLine($"Daemon '{name}' is running (started concurrently); leaving it.");
 
                 return 0;
             }
@@ -472,11 +484,22 @@ public sealed class DaemonCommands(
             // That is exactly how this surfaced: a random, always-different CI test failing
             // with an identical stack, because the pid file named the test runner itself.
             if (entry.Pid == Environment.ProcessId) {
-                Console.Error.WriteLine(
+                console.Error.WriteLine(
                     $"Daemon '{name}' resolves to the current process (PID {entry.Pid}); refusing to stop it. "
                   + $"Its PID file at {store.PidPath(name)} does not describe a daemon.");
 
                 return 1;
+            }
+
+            // Re-checked after the wait: a daemon that finished its stop just past the bound has left its
+            // ledger as it meant to, and its pid may already name another process.
+            outcome = await DaemonShutdownClient.StopAsync(store, name, request, StopExitWait, time, CancellationToken.None);
+
+            if (outcome == ShutdownOutcome.Exited || !DaemonPidProbe.IsOurDaemon(entry.Pid, entry.StartToken)) {
+                console.Out.WriteLine($"Daemon '{name}' stopped (PID {entry.Pid}).");
+                TryCleanupMarkersUnderLock(name);
+
+                return 0;
             }
 
             var process = Process.GetProcessById(entry.Pid);
@@ -495,13 +518,13 @@ public sealed class DaemonCommands(
                 //
                 // No test: reproducing it needs the process to exit inside that window, which cannot
                 // be scheduled deterministically. Distinguished by HasExited rather than by message.
-                Console.Out.WriteLine($"Daemon '{name}' was not running.");
+                console.Out.WriteLine($"Daemon '{name}' was not running.");
             } catch (InvalidOperationException ex) {
                 // What remains is the safety rejection: .NET refuses to kill a process tree that
                 // contains the caller. The self-PID guard above handles the case we can name in
                 // advance; this covers the ANCESTOR case, which cannot be detected portably. Report
                 // which daemon and which PID rather than letting an unattributed exception escape.
-                Console.Error.WriteLine(
+                console.Error.WriteLine(
                     $"Daemon '{name}' (PID {entry.Pid}) could not be stopped: {ex.Message} "
                   + $"Its PID file at {store.PidPath(name)} appears not to describe a daemon.");
 
@@ -512,11 +535,13 @@ public sealed class DaemonCommands(
                 // Wait for it to actually exit so the kernel releases its flock before
                 // we try to reclaim it for cleanup below.
                 try { process.WaitForExit(5000); } catch { /* best-effort */ }
-                Console.Out.WriteLine($"Daemon '{name}' stopped (PID {entry.Pid}).");
+                console.Out.WriteLine($"Daemon '{name}' stopped (PID {entry.Pid}).");
             }
         } catch (ArgumentException) {
-            Console.Out.WriteLine($"Daemon '{name}' was not running.");
+            console.Out.WriteLine($"Daemon '{name}' was not running.");
         }
+
+        MarkLedgerInterrupted(store, name, time, console.Error, KeepsSavedResumes(request, outcome));
 
         // Clean up the killed daemon's markers. The kill was a SIGKILL, so the
         // daemon's own Dispose never ran. Do it under the flock: if a `daemon
@@ -527,6 +552,20 @@ public sealed class DaemonCommands(
 
         return 0;
     }
+
+    /// <summary>A killed daemon's agents are not resumed, except those <paramref name="where"/> excludes.</summary>
+    internal static void MarkLedgerInterrupted(DaemonStore store, string name, TimeProvider time, TextWriter stderr, Func<ResumeLedgerEntry, bool>? where = null) {
+        try {
+            ResumeLedgerStore.For(store, name, time).MarkInterrupted("stopped_by_operator", where);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            stderr.WriteLine($"Daemon '{name}': could not mark its resume ledger interrupted ({ex.Message}).");
+        }
+    }
+
+    /// <summary>A keep-agents stop that overran had already stopped some agents cleanly and recorded them
+    /// resuming; only the rest are killed mid-run. Null marks every entry.</summary>
+    internal static Func<ResumeLedgerEntry, bool>? KeepsSavedResumes(ShutdownRequestDto request, ShutdownOutcome outcome) =>
+        request.Agents == "keep" && outcome == ShutdownOutcome.Overran ? e => e.State != ResumeState.Resuming : null;
 
     /// <summary>
     /// Remove the daemon-owned on-disk markers (PID file + version marker) for
@@ -576,7 +615,7 @@ public sealed class DaemonCommands(
         try {
             name = ExtractFlagValue(args, "--name");
         } catch (ArgumentException ex) {
-            await Console.Error.WriteLineAsync(ex.Message);
+            await console.Error.WriteLineAsync(ex.Message);
 
             return 1;
         }
@@ -586,7 +625,7 @@ public sealed class DaemonCommands(
         var targets = name is not null ? [name] : EnumerateRunningNames();
 
         if (targets.Count == 0) {
-            await Console.Out.WriteLineAsync("No daemons are running.");
+            await console.Out.WriteLineAsync("No daemons are running.");
 
             return 0;
         }
@@ -601,33 +640,29 @@ public sealed class DaemonCommands(
     }
 
     async Task<int> RestartOne(string name, string mode) {
-        var socketPath = store.SocketPath(name);
-
-        using var sock = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        LocalFrame? reply;
 
         try {
-            await sock.ConnectAsync(new UnixDomainSocketEndPoint(socketPath));
+            reply = await DaemonRestartClient.RequestAsync(store, name, mode, default);
         } catch (Exception ex) when (ex is SocketException or IOException) {
-            await Console.Error.WriteLineAsync($"Daemon '{name}': not reachable ({ex.Message}).");
+            await console.Error.WriteLineAsync($"Daemon '{name}': not reachable ({ex.Message}).");
 
             return 1;
         }
 
-        await using var stream = new NetworkStream(sock, ownsSocket: false);
-        await FrameCodec.WriteAsync(stream, LocalFrame.Restart(mode), default);
-        var reply = await FrameCodec.ReadAsync(stream, default);
-
         switch (reply?.Type) {
             case FrameType.RestartAck:
-                await Console.Out.WriteLineAsync($"Daemon '{name}': restart {reply.Text}.");
+                await console.Out.WriteLineAsync(reply.Text == "restarting"
+                    ? $"Daemon '{name}': restart accepted; agents are stopped and resumed on the new daemon."
+                    : $"Daemon '{name}': restart {reply.Text}.");
 
                 return 0;
             case FrameType.Error:
-                await Console.Error.WriteLineAsync($"Daemon '{name}': {reply.Text}");
+                await console.Error.WriteLineAsync($"Daemon '{name}': {reply.Text}");
 
                 return 1;
             default:
-                await Console.Error.WriteLineAsync($"Daemon '{name}': unexpected reply.");
+                await console.Error.WriteLineAsync($"Daemon '{name}': unexpected reply.");
 
                 return 1;
         }
@@ -654,13 +689,20 @@ public sealed class DaemonCommands(
             ? $"running (PID {pid})"
             : $"running (PID {pid}, starting — not yet serving)";
 
+    /// <summary>The status line for a service job launchd holds in the background band; null for any
+    /// other spawn type, including none.</summary>
+    internal static string? DescribePriority(string daemonName, string? loadedSpawnType) =>
+        SpawnTypes.IsBackgroundBand(loadedSpawnType)
+            ? $"  priority: loaded as {loadedSpawnType} — background priority; run `kcap daemon service refresh --name {daemonName} --force` to reload (its agents are stopped and resumed)"
+            : null;
+
     async Task<int> Status(string[] args) {
         string? explicitName;
 
         try {
             explicitName = ExtractFlagValue(args, "--name");
         } catch (ArgumentException ex) {
-            await Console.Error.WriteLineAsync(ex.Message);
+            await console.Error.WriteLineAsync(ex.Message);
 
             return 1;
         }
@@ -673,7 +715,7 @@ public sealed class DaemonCommands(
             : EnumerateRunningNames().Concat(serviceIds).Distinct().Order().ToList();
 
         if (names.Count == 0) {
-            await Console.Out.WriteLineAsync("Daemon: not running");
+            await console.Out.WriteLineAsync("Daemon: not running");
 
             return 0;
         }
@@ -692,22 +734,22 @@ public sealed class DaemonCommands(
 
         foreach (var (name, entry) in entries) {
             if (entry is not { } pe) {
-                await Console.Out.WriteLineAsync($"Daemon '{name}': not running");
+                await console.Out.WriteLineAsync($"Daemon '{name}': not running");
             } else if (DaemonPidProbe.IsOurDaemon(pe.Pid, pe.StartToken)) {
                 // Socket-reachable is the serving signal: a daemon that accepts the control-socket
                 // connection has bound its listener, so it is serving even if it is an older build
                 // that cannot answer the Hello frame. Only a refused or timed-out connection —
                 // unreachable — is the still-starting daemon a validated PID alone cannot tell apart.
                 var serving = servingProbes.TryGetValue(name, out var probe) && probe.Result.Reachable;
-                await Console.Out.WriteLineAsync($"Daemon '{name}': {DescribeRunningDaemon(pe.Pid, serving)}");
+                await console.Out.WriteLineAsync($"Daemon '{name}': {DescribeRunningDaemon(pe.Pid, serving)}");
 
                 // Version of the *running* daemon (from the marker it wrote at
                 // startup), so the user can confirm a self-update took effect.
                 if (DaemonVersionMarker.TryRead(store, name) is { } version)
-                    await Console.Out.WriteLineAsync($"  version: {CapacitorVersion.Display(version)}");
+                    await console.Out.WriteLineAsync($"  version: {CapacitorVersion.Display(version)}");
 
                 if (DaemonRestartMarker.TryRead(store, name) is { } marker)
-                    await Console.Out.WriteLineAsync($"  {marker.Describe()}");
+                    await console.Out.WriteLineAsync($"  {marker.Describe()}");
             } else {
                 // report the stale PID file but do NOT delete it. Its
                 // presence is now the durable hard-death signal the next daemon
@@ -716,17 +758,34 @@ public sealed class DaemonCommands(
                 // negative (run status after a SIGKILL, lose the trace). Cleanup of
                 // stale entries stays with the explicit paths — `daemon stop` and
                 // `daemon doctor --clean`.
-                await Console.Out.WriteLineAsync($"Daemon '{name}': not running (stale PID file)");
+                await console.Out.WriteLineAsync($"Daemon '{name}': not running (stale PID file)");
             }
 
             if (manager is not null) {
-                var st = manager.Status(DaemonStore.Sanitize(name)).State;
-                if (st != ServiceState.NotInstalled)
-                    await Console.Out.WriteLineAsync($"  service: {st} ({manager.Describe()})");
+                var query = manager.Query(DaemonStore.Sanitize(name));
+                if (query.Probe == LabelProbe.Loaded && query.State != ServiceState.NotInstalled)
+                    await console.Out.WriteLineAsync($"  service: {query.State} ({manager.Describe()})");
+                if (DescribePriority(name, query.LoadedSpawnType) is { } priority)
+                    await console.Out.WriteLineAsync(priority);
             }
+
+            if (DescribeResumeLedger(ResumeLedgerStore.For(store, name).ReadAll()) is { } ledger)
+                await console.Out.WriteLineAsync(ledger);
         }
 
         return 0;
+    }
+
+    /// <summary>Null when no entry is resuming or interrupted.</summary>
+    internal static string? DescribeResumeLedger(IReadOnlyList<ResumeLedgerEntry> entries) {
+        var resuming    = entries.Count(e => e.State == ResumeState.Resuming);
+        var interrupted = entries.Where(e => e.State == ResumeState.Interrupted).ToList();
+        if (resuming == 0 && interrupted.Count == 0) return null;
+
+        var reasons = interrupted.Select(e => e.LastError ?? "unknown").Distinct().Order(StringComparer.Ordinal).ToList();
+
+        return $"  resuming: {resuming}  interrupted: {interrupted.Count}"
+             + (reasons.Count > 0 ? $" ({string.Join(", ", reasons)})" : "");
     }
 
     // ── doctor ──────────────────────────────────────────────────────────────
@@ -748,25 +807,25 @@ public sealed class DaemonCommands(
         // with no daemon state still has registrations worth checking (duplicate Claude-scope
         // entries cost one extra server process per session; a stale absolute binary path
         // breaks the servers outright after an npm re-layout).
-        await McpDoctorSection.RunAsync(Console.Out, clean,
+        await McpDoctorSection.RunAsync(console.Out, clean,
             claude.UserConfigJson, claude.UserSettings,
             McpDoctorSection.DefaultJsonRegistrations(harnesses),
             harnesses.Of<CodexHarness>().Paths.ConfigToml,
-            Environment.ProcessPath);
-        await Console.Out.WriteLineAsync();
+            Environment.ProcessPath is { } exe ? InstallPaths.Stabilize(exe) : null);
+        await console.Out.WriteLineAsync();
 
         store.EnsureDirectory();
 
         var names = store.EnumerateNames();
 
         if (names.Count == 0) {
-            await Console.Out.WriteLineAsync($"No daemon files found under {store.Directory}.");
+            await console.Out.WriteLineAsync($"No daemon files found under {store.Directory}.");
             await ReportInstalledServices();
 
             return 0;
         }
 
-        await Console.Out.WriteLineAsync($"Inspecting {store.Directory}\n");
+        await console.Out.WriteLineAsync($"Inspecting {store.Directory}\n");
         var staleCount = 0;
         var heldCount  = 0;
 
@@ -815,7 +874,7 @@ public sealed class DaemonCommands(
                         : pidEntry is null
                             ? "(no pid file)"
                             : "(stale pid)";
-                    await Console.Out.WriteLineAsync($"  {name,-20}  HELD     instance={instancePrefix}  {aliveStr}");
+                    await console.Out.WriteLineAsync($"  {name,-20}  HELD     instance={instancePrefix}  {aliveStr}");
 
                     break;
                 }
@@ -826,7 +885,7 @@ public sealed class DaemonCommands(
                     // start writes one) rather than always blaming the pid file.
                     staleCount++;
                     var leftovers = File.Exists(pidPath) ? "orphan pid file, no lock" : "marker-only, no lock/pid";
-                    await Console.Out.WriteLineAsync($"  {name,-20}  STALE    instance=(none)   ({leftovers})");
+                    await console.Out.WriteLineAsync($"  {name,-20}  STALE    instance=(none)   ({leftovers})");
 
                     if (clean) {
                         // No lock file now, but a `daemon start` could be creating
@@ -841,7 +900,7 @@ public sealed class DaemonCommands(
                 }
                 default: {
                     staleCount++;
-                    await Console.Out.WriteLineAsync($"  {name,-20}  STALE    instance={instancePrefix}  (no holder)");
+                    await console.Out.WriteLineAsync($"  {name,-20}  STALE    instance={instancePrefix}  (no holder)");
 
                     if (clean) {
                         // Delete the daemon-owned markers WHILE still holding the
@@ -870,10 +929,10 @@ public sealed class DaemonCommands(
             }
         }
 
-        await Console.Out.WriteLineAsync($"\n{heldCount} held, {staleCount} stale.");
+        await console.Out.WriteLineAsync($"\n{heldCount} held, {staleCount} stale.");
 
         if (staleCount > 0 && !clean) {
-            await Console.Out.WriteLineAsync("Re-run with --clean to remove stale entries.");
+            await console.Out.WriteLineAsync("Re-run with --clean to remove stale entries.");
         }
 
         await ReportInstalledServices();
@@ -949,7 +1008,7 @@ public sealed class DaemonCommands(
         shown |= await TailAsync(StderrCapturePath, skipIfEmpty: true);
 
         if (!shown) {
-            await Console.Error.WriteLineAsync("No log file found.");
+            await console.Error.WriteLineAsync("No log file found.");
 
             return 1;
         }
@@ -961,7 +1020,7 @@ public sealed class DaemonCommands(
     /// false if it is absent (or empty, when <paramref name="skipIfEmpty"/>). Read write-sharing: the
     /// daemon holds both this log and the stderr capture open for its whole life, and a plain read
     /// denies it Write on Windows.</summary>
-    static async Task<bool> TailAsync(string path, bool skipIfEmpty = false) {
+    async Task<bool> TailAsync(string path, bool skipIfEmpty = false) {
         if (!File.Exists(path)) return false;
         if (skipIfEmpty && new FileInfo(path).Length == 0) return false;
 
@@ -971,9 +1030,9 @@ public sealed class DaemonCommands(
         var start = Math.Max(0, count - 50);
 
         for (var i = start; i < count; i++)
-            await Console.Out.WriteLineAsync(lines[i].TrimEnd('\r'));
+            await console.Out.WriteLineAsync(lines[i].TrimEnd('\r'));
 
-        await Console.Error.WriteLineAsync($"\n--- {path} ({count} lines total) ---");
+        await console.Error.WriteLineAsync($"\n--- {path} ({count} lines total) ---");
 
         return true;
     }
@@ -984,6 +1043,14 @@ public sealed class DaemonCommands(
     IServiceManager? TryServiceManager() {
         try { return ServiceManagerFactory.ForCurrentOs(config, home, time); }
         catch (PlatformNotSupportedException) { return null; }
+    }
+
+    /// <summary>A Windows service that does not answer counts as managing the name: a raw stop under it would
+    /// be relaunched. Every other manager reports as it always has</summary>
+    static ServiceState ManagedState(IServiceManager manager, string id) {
+        if (manager is not WindowsServiceManager) return manager.Status(id).State;
+        try { return manager.Status(id).State; }
+        catch (InvalidOperationException) { return ServiceState.Installed; }
     }
 
     /// <summary>
@@ -998,25 +1065,38 @@ public sealed class DaemonCommands(
         var installed = manager.ListInstalled();
         if (installed.Count == 0) return;
 
-        await Console.Out.WriteLineAsync($"\nInstalled services ({manager.Describe()}):");
+        await console.Out.WriteLineAsync($"\nInstalled services ({manager.Describe()}):");
 
         foreach (var sid in installed) {
             var st   = manager.Status(sid);
             var bad  = st.BinaryPath is { } b && !File.Exists(b);
             var note = bad ? "  ⚠ binary missing — re-run `kcap daemon service install`" : "";
-            await Console.Out.WriteLineAsync($"  {sid,-20}  {st.State}{note}");
+            await console.Out.WriteLineAsync($"  {sid,-20}  {st.State}{note}");
         }
 
-        await ReportUnitDirectoryExposure(Console.Out, manager.UnitDirectory);
+        await ReportUnitDirectoryExposure(console.Out, manager.UnitDirectory);
     }
 
-    /// <summary>Reports directories on the path to the unit directory that their group can write.
+    /// <summary>Reports the directories on the path to the unit directory that another account owns, and
+    /// the ones their group can write.
     ///
     /// <para>Advisory, not a failure: whether this matters depends on who else is in that group, which the
     /// bits do not say — umask 002 against a user-private group produces it for a group of one, and that is
     /// the common case on Debian and Ubuntu. Install refuses only the world-writable form, which no umask
     /// produces. Reporting is what is left for the case a program cannot judge but an operator can.</para></summary>
     internal static async Task ReportUnitDirectoryExposure(TextWriter output, string unitDirectory) {
+        if (!OperatingSystem.IsWindows() && !FileOwner.Available)
+            await output.WriteLineAsync(
+                "\n  ⚠ could not check who owns the directories on the path to the unit directory: no working `stat` found");
+        else if (DirectoryExposure.ForeignOwned(unitDirectory) is { Count: > 0 } foreign) {
+            await output.WriteLineAsync("\n  ⚠ owned by another account on the path to the unit directory:");
+
+            foreach (var (d, owner) in foreign) await output.WriteLineAsync($"      {d}  (uid {owner})");
+
+            await output.WriteLineAsync(
+                "    That account can replace the unit the daemon loads, whatever the directory's mode.");
+        }
+
         if (DirectoryExposure.GrantingWrite(unitDirectory, UnixFileMode.GroupWrite) is not { Count: > 0 } shared)
             return;
 
@@ -1032,24 +1112,25 @@ public sealed class DaemonCommands(
     internal static string DaemonNotFoundMessage() =>
         $"kcap-daemon binary not found next to {AppContext.BaseDirectory}. Reinstall the kcap package.";
 
-    static int PrintUsage() {
-        Console.Error.WriteLine("Usage: kcap daemon <start|stop|restart|status|logs|doctor|service|shim|consent|reviewer>");
-        Console.Error.WriteLine();
-        Console.Error.WriteLine("  start [-d] [--name <n>]    Start the daemon (foreground, or -d for background)");
-        Console.Error.WriteLine("  stop [--name <n>] [--yes]  Stop a running daemon (prompts on multi unless --yes)");
-        Console.Error.WriteLine("  restart [--name <n>] [--when-idle] [--force]  Restart daemon (now if idle; --when-idle queues; --force overrides)");
-        Console.Error.WriteLine("  status [--name <n>]        Show daemon status (lists all when --name omitted)");
-        Console.Error.WriteLine("  logs                       Show recent daemon log output");
-        Console.Error.WriteLine("  doctor [--clean]           Diagnose lock-file state, optionally clean stale entries");
-        Console.Error.WriteLine("  service <action>           Manage the OS service (launchd/systemd/Scheduled Task)");
-        Console.Error.WriteLine("  consent <verb>             Manage the launch-consent policy (run `kcap daemon consent` for verbs)");
-        Console.Error.WriteLine();
-        Console.Error.WriteLine("Options for start:");
-        Console.Error.WriteLine("  --name <name>         Daemon name (defaults to OS username)");
-        Console.Error.WriteLine("  --server-url <url>    Server URL");
-        Console.Error.WriteLine("  --max-agents <n>      Max concurrent hosted coding agents (default: 5; 0 = unlimited)");
-        Console.Error.WriteLine("  --log-file <path>     Log to file instead of console");
-        Console.Error.WriteLine("  -d, --detach          Run in background (logs to file automatically)");
+    int PrintUsage() {
+        console.Error.WriteLine("Usage: kcap daemon <start|stop|restart|status|logs|doctor|service|shim|consent|reviewer>");
+        console.Error.WriteLine();
+        console.Error.WriteLine("  start [-d] [--name <n>]    Start the daemon (foreground, or -d for background)");
+        console.Error.WriteLine("  stop [--name <n>] [--yes] [--keep-agents]  Stop a running daemon and end its agents (prompts on multi unless --yes);");
+        console.Error.WriteLine("                             --keep-agents keeps them for the next start to resume");
+        console.Error.WriteLine("  restart [--name <n>] [--when-idle] [--force]  Restart now, resuming its agents (--when-idle queues; --force skips the flow-round wait)");
+        console.Error.WriteLine("  status [--name <n>]        Show daemon status (lists all when --name omitted)");
+        console.Error.WriteLine("  logs                       Show recent daemon log output");
+        console.Error.WriteLine("  doctor [--clean]           Diagnose lock-file state, optionally clean stale entries");
+        console.Error.WriteLine("  service <action>           Manage the OS service (launchd/systemd/Scheduled Task)");
+        console.Error.WriteLine("  consent <verb>             Manage the launch-consent policy (run `kcap daemon consent` for verbs)");
+        console.Error.WriteLine();
+        console.Error.WriteLine("Options for start:");
+        console.Error.WriteLine("  --name <name>         Daemon name (defaults to OS username)");
+        console.Error.WriteLine("  --server-url <url>    Server URL");
+        console.Error.WriteLine("  --max-agents <n>      Max concurrent hosted coding agents (default: 5; 0 = unlimited)");
+        console.Error.WriteLine("  --log-file <path>     Log to file instead of console");
+        console.Error.WriteLine("  -d, --detach          Run in background (logs to file automatically)");
 
         return 1;
     }

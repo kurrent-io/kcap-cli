@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Capacitor.Cli.Core.PullRequests;
+using Capacitor.Cli.Core.PullRequests.Readers;
 using Capacitor.Cli.Core.PullRequests.Readers.GitHubCli;
 
 namespace Capacitor.Cli.Core.Tests.Unit.PullRequests.Readers.GitHubCli;
@@ -17,11 +18,29 @@ public class GitHubCliReaderProviderReadTests {
     }
 
     [Test]
+    public async Task Reset_starts_a_fresh_view_and_an_old_completion_cannot_replace_its_cache() {
+        using var h = await Ready(Tmp);
+        var pending = new TaskCompletionSource<ProcessResult>();
+        h.Process.WhenPending(["pr", "view"], pending);
+        var old = h.Provider.OverviewAsync("session", Subject, default);
+        h.Provider.ResetSession("session");
+        h.Process.When(["pr", "view"], GhHarness.Fixture("pr-view.json").Replace("Add the thing", "Fresh snapshot", StringComparison.Ordinal));
+        var fresh = h.Provider.OverviewAsync("session", Subject, default);
+        await Assert.That(h.Process.Calls.Count(call => call.Args[0] == "pr")).IsEqualTo(2);
+        var current = await fresh;
+        pending.SetResult(new(0, GhHarness.Fixture("pr-view.json"), "", false));
+        await old;
+        await Assert.That(current.Data!.Title).IsEqualTo("Fresh snapshot");
+        await Assert.That((await h.Provider.OverviewAsync("session", Subject, default)).Data!.Title).IsEqualTo("Fresh snapshot");
+        await Assert.That(h.Process.Calls.Count(call => call.Args[0] == "pr")).IsEqualTo(2);
+    }
+
+    [Test]
     public async Task Overview_maps_lifecycle_decision_rollup_and_summaries_with_a_constant_lease() {
         using var h = await Ready(Tmp);
         var read = await h.Provider.OverviewAsync("session", Subject, default);
         await Assert.That(h.LastArgs).IsEquivalentTo(new[] { "pr", "view", "12", "--repo", "github.com/example/repo", "--json",
-            "title,url,state,isDraft,headRefName,baseRefName,headRefOid,body,updatedAt,reviewDecision,author,statusCheckRollup,reviewRequests,latestReviews,reviews,comments" });
+            "title,url,state,isDraft,mergeable,headRefName,baseRefName,headRefOid,body,updatedAt,reviewDecision,author,statusCheckRollup,reviewRequests,latestReviews,reviews,comments" });
         await Assert.That(read.Kind).IsEqualTo(PullRequestReadKind.Ready);
         await Assert.That(read.AccessValidForSeconds).IsEqualTo(30);
         await Assert.That(read.PollAfterSeconds).IsEqualTo(30);
@@ -29,6 +48,7 @@ public class GitHubCliReaderProviderReadTests {
         var data = read.Data!;
         await Assert.That(data.Title).IsEqualTo("Add the thing");
         await Assert.That(data.Lifecycle).IsEqualTo("open");
+        await Assert.That(data.Mergeable == false).IsTrue();
         await Assert.That(data.HeadSha).IsEqualTo("8dc30b635dcd4aac3970e376d5c2d55fc33b91da");
         await Assert.That(data.Description).IsEqualTo("Adds the thing.\n\nCloses #1");
         await Assert.That(data.ReviewDecision).IsEqualTo("changes_requested");
@@ -191,7 +211,7 @@ public class GitHubCliReaderProviderReadTests {
     }
 
     [Test]
-    public async Task Concurrent_reads_of_one_subject_share_a_single_spawn_and_a_completed_view_is_reused_for_ten_seconds() {
+    public async Task Concurrent_reads_share_a_spawn_and_a_view_is_served_on_its_fetch_time_lease() {
         using var h = new GhHarness(Tmp); h.SignedIn("github.com");
         var pending = new TaskCompletionSource<ProcessResult>();
         h.Process.WhenPending(["pr", "view"], pending);
@@ -207,9 +227,33 @@ public class GitHubCliReaderProviderReadTests {
         await h.Provider.OverviewAsync("session", Subject, default);
         await Assert.That(h.Process.Calls.Count(call => call.Args[0] == "pr")).IsEqualTo(1);
         h.Time.Advance(TimeSpan.FromSeconds(2));
-        h.Process.When(["pr", "view"], GhHarness.Fixture("pr-view.json"));
-        await h.Provider.OverviewAsync("session", Subject, default);
+        var refetch = new TaskCompletionSource<ProcessResult>();
+        h.Process.WhenPending(["pr", "view"], refetch);
+        var stale = await h.Provider.OverviewAsync("session", Subject, default);
+        await Assert.That(stale.RemainingSeconds(h.Time)).IsEqualTo(19);
+        h.Time.Advance(TimeSpan.FromSeconds(9));
+        var waiting = h.Provider.OverviewAsync("session", Subject, default);
+        await Task.Delay(50);
+        await Assert.That(waiting.IsCompleted).IsFalse();
         await Assert.That(h.Process.Calls.Count(call => call.Args[0] == "pr")).IsEqualTo(2);
+        refetch.SetResult(new(0, GhHarness.Fixture("pr-view.json"), "", false));
+        await Assert.That((await waiting).RemainingSeconds(h.Time)).IsEqualTo(21);
+    }
+
+    [Test]
+    public async Task A_failed_refetch_evicts_the_view_instead_of_serving_it_on() {
+        using var h = await Ready(Tmp);
+        await h.Provider.OverviewAsync("session", Subject, default);
+        h.Time.Advance(TimeSpan.FromSeconds(11));
+        h.Process.When(["pr", "view"], "", exitCode: 1, stderr: "not found");
+        await h.Provider.OverviewAsync("session", Subject, default);
+        var cold = new TaskCompletionSource<ProcessResult>();
+        h.Process.WhenPending(["pr", "view"], cold);
+        var waiting = h.Provider.OverviewAsync("session", Subject, default);
+        await Task.Delay(50);
+        await Assert.That(waiting.IsCompleted).IsFalse();
+        cold.SetResult(new(0, GhHarness.Fixture("pr-view.json"), "", false));
+        await Assert.That((await waiting).Kind).IsEqualTo(PullRequestReadKind.Ready);
     }
 
     [Test]
@@ -229,7 +273,7 @@ public class GitHubCliReaderProviderReadTests {
     }
 
     [Test]
-    public async Task A_synchronously_completed_fetch_does_not_pin_the_subject_after_the_reuse_window() {
+    public async Task A_synchronously_completed_fetch_does_not_pin_the_subject_past_the_fresh_window() {
         using var h = await Ready(Tmp);
         await h.Provider.OverviewAsync("session", Subject, default);
         h.Time.Advance(TimeSpan.FromSeconds(11));
@@ -272,6 +316,17 @@ public class GitHubCliReaderProviderReadTests {
         if (reason == "rate_limited") await Assert.That(read.RetryAt).IsEqualTo(h.Time.GetUtcNow().UtcDateTime.AddSeconds(60));
     }
 
+    /// <summary>A failure no reason names carries gh's first error line, so the notice says what actually went wrong.</summary>
+    [Test]
+    public async Task An_unrecognised_failure_carries_the_first_line_of_gh_stderr() {
+        using var h = new GhHarness(Tmp); h.SignedIn("github.com");
+        h.Process.When(["pr", "view"], "", exitCode: 1, stderr: "\n  error connecting to api.github.com  \ncheck your internet connection\n");
+        await h.Provider.ProbeAsync(false, default);
+        var read = await h.Provider.OverviewAsync("session", Subject, default);
+        await Assert.That(read.Reason).IsEqualTo("tool_failed");
+        await Assert.That(read.Detail).IsEqualTo("error connecting to api.github.com");
+    }
+
     [Test]
     public async Task Timeouts_oversized_and_malformed_output_map_to_transport_and_protocol_failures() {
         using var h = new GhHarness(Tmp); h.SignedIn("github.com");
@@ -296,5 +351,96 @@ public class GitHubCliReaderProviderReadTests {
         await Assert.That((await h.Provider.PageAsync<PullRequestCheckDto>("session", Subject, "checks", "not-a-handle", null, null, default)).Kind).IsEqualTo(PullRequestReadKind.InvalidProtocol);
         await Assert.That((await h.Provider.PageAsync<PullRequestReviewDto>("session", Subject, "checks", null, null, null, default)).Kind).IsEqualTo(PullRequestReadKind.InvalidProtocol);
         await Assert.That(h.Process.Calls.Count).IsEqualTo(calls);
+    }
+
+    /// <summary>A section page served from the cache dates its snapshot to the fetch that produced the data, as the overview does.</summary>
+    [Test]
+    public async Task A_section_page_from_the_reuse_window_carries_the_view_fetch_time() {
+        using var h = await Ready(Tmp);
+        var fetchedAt = h.Time.GetUtcNow().UtcDateTime;
+        await h.Provider.OverviewAsync("session", Subject, default);
+        h.Time.Advance(TimeSpan.FromSeconds(9));
+        var read = await h.Provider.PageAsync<PullRequestCheckDto>("session", Subject, "checks", null, null, null, default);
+        await Assert.That(h.Process.Calls.Count(call => call.Args[0] == "pr")).IsEqualTo(1);
+        await Assert.That(read.FetchedAt).IsEqualTo(fetchedAt);
+        await Assert.That(read.Data!.SnapshotStartedAt).IsEqualTo(fetchedAt);
+        await Assert.That(read.Data.SnapshotCompletedAt).IsEqualTo(fetchedAt);
+    }
+
+    /// <summary>Disposing the provider at app teardown ends an in-flight shared fetch as a typed read, never an exception.</summary>
+    [Test]
+    public async Task Disposing_the_provider_mid_fetch_ends_the_read_as_tool_failed() {
+        using var h = new GhHarness(Tmp); h.SignedIn("github.com");
+        h.Process.WhenPending(["pr", "view"], new TaskCompletionSource<ProcessResult>());
+        await h.Provider.ProbeAsync(false, default);
+        var overview = h.Provider.OverviewAsync("session", Subject, default);
+        var checks = h.Provider.PageAsync<PullRequestCheckDto>("session", Subject, "checks", null, null, null, default);
+        h.Provider.Dispose();
+        var overviewRead = await overview.WaitAsync(TimeSpan.FromSeconds(10));
+        var checksRead = await checks.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(overviewRead.Kind).IsEqualTo(PullRequestReadKind.Unavailable);
+        await Assert.That(overviewRead.Reason).IsEqualTo("tool_failed");
+        await Assert.That(checksRead.Kind).IsEqualTo(PullRequestReadKind.Unavailable);
+        await Assert.That(checksRead.Reason).IsEqualTo("tool_failed");
+    }
+
+    [Test]
+    public async Task A_read_after_the_provider_is_disposed_fails_without_spawning_gh() {
+        using var h = await Ready(Tmp);
+        var calls = h.Process.Calls.Count;
+        h.Provider.Dispose();
+        var read = await h.Provider.OverviewAsync("session", Subject, default);
+        await Assert.That(read.Reason).IsEqualTo("tool_failed");
+        await Assert.That(h.Process.Calls.Count).IsEqualTo(calls);
+    }
+
+    [Test]
+    public async Task A_cached_view_is_not_served_after_the_provider_is_disposed() {
+        using var h = await Ready(Tmp);
+        await h.Provider.OverviewAsync("session", Subject, default);
+        var calls = h.Process.Calls.Count;
+        h.Provider.Dispose();
+        var overview = await h.Provider.OverviewAsync("session", Subject, default);
+        var checks = await h.Provider.PageAsync<PullRequestCheckDto>("session", Subject, "checks", null, null, null, default);
+        await Assert.That(overview.Reason).IsEqualTo("tool_failed");
+        await Assert.That(checks.Reason).IsEqualTo("tool_failed");
+        await Assert.That(h.Process.Calls.Count).IsEqualTo(calls);
+    }
+
+    /// <summary>Teardown awaits the killed gh, so shutdown cannot complete while one is still exiting.</summary>
+    [Test]
+    public async Task Async_disposal_waits_for_an_in_flight_gh_to_finish() {
+        using var h = new GhHarness(Tmp); h.SignedIn("github.com");
+        var exited = new TaskCompletionSource();
+        h.Process.WhenPending(["pr", "view"], new TaskCompletionSource<ProcessResult>(), onCancel: exited.Task);
+        await h.Provider.ProbeAsync(false, default);
+        var overview = h.Provider.OverviewAsync("session", Subject, default);
+        await Task.Delay(50);
+        var disposal = h.Provider.DisposeAsync().AsTask();
+        await Task.Delay(50);
+        await Assert.That(disposal.IsCompleted).IsFalse();
+        exited.SetResult();
+        await disposal.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That((await overview).Reason).IsEqualTo("tool_failed");
+    }
+
+    /// <summary>Startup-failure teardown and a later quit both dispose; the second must not wait out the cap on slots the first still holds.</summary>
+    [Test]
+    public async Task A_second_async_disposal_completes_at_once() {
+        using var h = await Ready(Tmp);
+        await h.Provider.DisposeAsync();
+        var second = h.Provider.DisposeAsync().AsTask();
+        await Assert.That(second.IsCompleted).IsTrue();
+    }
+
+    [Test]
+    public async Task A_cancelled_caller_still_sees_its_own_cancellation() {
+        using var h = new GhHarness(Tmp); h.SignedIn("github.com");
+        h.Process.WhenPending(["pr", "list"], new TaskCompletionSource<ProcessResult>());
+        await h.Provider.ProbeAsync(false, default);
+        using var cts = new CancellationTokenSource();
+        var discover = h.Provider.DiscoverAsync(new PullRequestRepository("github", "github.com", "example", "repo", "hash"), "feature", cts.Token);
+        await cts.CancelAsync();
+        await Assert.That(async () => await discover).Throws<OperationCanceledException>();
     }
 }

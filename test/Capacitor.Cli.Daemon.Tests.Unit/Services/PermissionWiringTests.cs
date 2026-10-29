@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Services;
@@ -35,7 +36,8 @@ public class PermissionWiringTests {
     sealed class NoopPtyProcessFactory : IPtyProcessFactory {
         public IPtyProcess Spawn(
                 string command, string[] args, string cwd,
-                Dictionary<string, string>? extraEnv = null, ushort cols = 120, ushort rows = 40
+                Dictionary<string, string>? extraEnv = null, ushort cols = 120, ushort rows = 40,
+                IReadOnlyCollection<string>? removeEnv = null
             ) => throw new NotSupportedException("PermissionWiringTests never spawns a PTY");
     }
 
@@ -60,6 +62,7 @@ public class PermissionWiringTests {
         services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
         services.AddSingleton(Config.Root);
         services.AddSingleton(AuthFixtures.NewTokenStore(Config.Root));
+        services.AddSingleton<ICredentialSource>(new FixedCredentialSource());
         services.AddSingleton<DaemonStatusNotifier>();
         services.AddSingleton(Home.Home);
         services.AddSingleton(TestHarnesses.Under(Home));
@@ -104,6 +107,14 @@ public class PermissionWiringTests {
             await Assert.That(ReferenceEquals(ipc.BrokerForTest, broker)).IsTrue();
             await Assert.That(bridge.InputWaitHandler).IsNotNull();
             await Assert.That(bridge.ToolSettledHandler).IsNotNull();
+
+            // A turn's end reaches the broker with its stamp: one sent before the prompt leaves it.
+            var held = broker.Register(new Capacitor.Cli.Core.LocalIpc.PermissionPendingDto(
+                "r1", "agent-1", "s1", "codex", "Bash", null, null, false, false, DateTimeOffset.UtcNow.ToString("O"), null));
+            bridge.ToolSettledHandler!("agent-1", new ToolSettledNotice("s1", null, null, SentAt: DateTimeOffset.UtcNow.AddMinutes(-1)));
+            await Assert.That(held.IsCompleted).IsFalse();
+            bridge.ToolSettledHandler!("agent-1", new ToolSettledNotice("s1", null, null, SentAt: DateTimeOffset.UtcNow.AddMinutes(1)));
+            await Assert.That(held.IsCompleted).IsTrue();
 
             await Assert.That(bridge.DecisionLogForTest).IsNotNull();
             await Assert.That(ReferenceEquals(

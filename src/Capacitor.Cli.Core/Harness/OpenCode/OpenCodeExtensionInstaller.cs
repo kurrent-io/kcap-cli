@@ -28,7 +28,7 @@ public static class OpenCodeExtensionInstaller {
     /// </summary>
     public const string ExtensionContent =
         """
-        // kcap.ts — Kurrent Capacitor live-ingest plugin for SST OpenCode.
+        // kcap.ts — kcap live-ingest plugin for SST OpenCode.
         //
         // Installed by `kcap setup` / `kcap plugin install --opencode` into
         // ~/.config/opencode/plugins/kcap.ts, which OpenCode auto-loads in-process.
@@ -42,6 +42,7 @@ public static class OpenCodeExtensionInstaller {
         //     client and append any new {info,parts} as JSONL lines to that file; the
         //     watcher streams them. The server's OpenCodeTranscriptNormalizer dedupes by
         //     deterministic part id, so re-appending an updated message is safe.
+        //   - tool.execute.before → a kcap MCP call that names no session_id gets the calling session's.
         //
         // Dependency-free (only node: builtins) and fail-safe by default.
 
@@ -66,9 +67,9 @@ public static class OpenCodeExtensionInstaller {
 
           // Team-memory index, keyed by TOP-LEVEL session id. The value is whatever
           // `kcap hook --opencode --event session-start` printed on stdout: the fragment, or "" when
-          // there is none. kcap owns every decision behind it (auth, scope, the once-per-session
-          // durable lease, byte budget) — this plugin never talks to the server and never renders
-          // anything.
+          // there is none. kcap owns every decision behind it (auth, scope, byte budget) — this plugin
+          // never talks to the server and never renders anything. A new process starts empty, and kcap
+          // serves the fragment again on that process's first start.
           const memory = new Map<string, string>()
           // In-flight CLASSIFY+START per session id, published synchronously by ensureStarted so a
           // chat.system.transform racing it has something to await rather than concluding there is
@@ -78,7 +79,7 @@ public static class OpenCodeExtensionInstaller {
           const MEMORY_MAX_SESSIONS = 64      // bounded: never an unbounded process-global map
           // Matches runKcap's own 10s ceiling. Only ever paid on a session's FIRST request, and only
           // while the start is genuinely still running — a shorter bound would silently give up on a
-          // slow-but-healthy fetch and lose the one injection that session's lease paid for.
+          // slow-but-healthy fetch and leave the session without its index until the next start.
           const MEMORY_WAIT_MS = 10000
           // Cold-start attempts per session from the TRANSFORM path, and why it is bounded: a session
           // whose classification keeps failing never reaches start(), so `started` never records it and
@@ -88,6 +89,31 @@ public static class OpenCodeExtensionInstaller {
           // indefinitely. Found by review tracing the `!started.has(sid)` guard.
           const MEMORY_COLD_START_ATTEMPTS = 3
           const coldStarts = new Map<string, number>()
+          const TITLE_MAX_SESSIONS = 64
+          const lastTitle = new Map<string, string>()   // dedupes session.updated noise per session
+          // kcap MCP tools, as `<server>_<tool>`, whose optional session_id names the CALLING session.
+          // Elsewhere it is a filter or a session to read, which a default would silently narrow or
+          // replace; close_loose_end treats a session it defaulted differently from one it was given.
+          const CALLER_SESSION_TOOLS = new Set([
+            "kcap-workitems_declare_work_item", "kcap-workitems_get_session_work_items",
+            "kcap-workitems_detach_work_item", "kcap-workitems_declare_work_incomplete",
+            "kcap-workitems_declare_loose_end",
+            "kcap-workitems_claim_loose_end", "kcap-workitems_release_loose_end",
+            "kcap-plans_declare_plan_document", "kcap-plans_set_plan_tasks",
+            "kcap-plans_update_plan_task", "kcap-plans_get_plan",
+            "kcap-flows_start_agent", "kcap-flows_get_flow_status", "kcap-flows_get_review_flow_status",
+          ])
+
+          // Bounded like the memory cache: most sessions end without a session.deleted. Re-inserting keeps the most
+          // recently titled sessions; an evicted one only writes its title line again.
+          function rememberTitle(id: string, title: string) {
+            lastTitle.delete(id)
+            if (lastTitle.size >= TITLE_MAX_SESSIONS) {
+              const oldest = lastTitle.keys().next()
+              if (!oldest.done) lastTitle.delete(oldest.value)
+            }
+            lastTitle.set(id, title)
+          }
 
           function rememberMemory(sid: string, fragment: string) {
             if (!fragment) return
@@ -170,9 +196,8 @@ public static class OpenCodeExtensionInstaller {
             started.add(sid)
             try { mkdirSync(dir, { recursive: true }); appendFileSync(file(sid), "") } catch {}
             // --memory-contract declares that THIS plugin captures and delivers the command's stdout.
-            // A binary that understands it only then fetches the index and spends the session's
-            // once-only injection lease; an older plugin, which discards stdout, sends no flag and the
-            // binary spends nothing on output nobody will deliver.
+            // A binary that understands it only then fetches the index; an older plugin, which
+            // discards stdout, sends no flag and the binary fetches nothing nobody will deliver.
             const args = ["hook", "--opencode", "--event", "session-start", "--session", sid,
                           "--file", file(sid), "--memory-contract", "1"]
             const cwd = info?.directory ?? directory
@@ -410,7 +435,7 @@ public static class OpenCodeExtensionInstaller {
                 if (fragment === undefined) {
                   // The classify+start for a brand-new session runs CONCURRENTLY with its first
                   // request, so without this wait the very first turn — often the only turn — would
-                  // miss the fragment its once-per-session lease has already been spent on.
+                  // miss the fragment its start is already fetching.
                   const pending = pendingStart.get(sid)
                   if (pending) {
                     await Promise.race([
@@ -447,16 +472,37 @@ public static class OpenCodeExtensionInstaller {
             event: async ({ event }: any) => {
               try {
                 const type = event?.type
+                if (type === "session.updated") {
+                  const info = event?.properties?.info
+                  const id = info?.id
+                  const title = info?.title
+                  if (id && info?.parentID) { children.add(id); return }
+                  if (!id || children.has(id) || typeof title !== "string" || /^New session - \d{4}-/.test(title)) return
+                  if (lastTitle.get(id) === title) return
+                  mkdirSync(dir, { recursive: true })
+                  // time only when OpenCode supplied one: an invented time would outrank a later Regenerate.
+                  const line: any = { type: "session_title", title }
+                  if (typeof info?.time?.updated === "number") line.time = info.time.updated
+                  appendFileSync(file(id), JSON.stringify(line) + "\n")
+                  // Only after the append succeeds, so a failed write is retried by the next update.
+                  rememberTitle(id, title)
+                  return
+                }
+                if (type === "session.deleted") {
+                  // Unlike other events, session.deleted carries properties.info (a Session), not
+                  // properties.sessionID — fall back so this never skips cleanup below.
+                  const id = event?.properties?.info?.id ?? event?.properties?.sessionID
+                  if (!id) return
+                  // Drop this session's cached fragment promptly rather than waiting for the bounded
+                  // map to evict it. The bound is the guarantee; this is the tidy path.
+                  memory.delete(id)
+                  coldStarts.delete(id)
+                  lastTitle.delete(id)
+                  return
+                }
                 const sid = event?.properties?.sessionID
                 if (!sid) return
                 if (children.has(sid)) return  // known subagent — its parent streams it
-                if (type === "session.deleted") {
-                  // Drop this session's cached fragment promptly rather than waiting for the bounded
-                  // map to evict it. The bound is the guarantee; this is the tidy path.
-                  memory.delete(sid)
-                  coldStarts.delete(sid)
-                  return
-                }
                 if (type === "session.created") {
                   // START a top-level session only on a CONFIRMED classification — never on
                   // "unknown" (a session.get hiccup), which would misfile a child as both a
@@ -475,6 +521,27 @@ public static class OpenCodeExtensionInstaller {
                   writeMessages(file(sid), msgs)
                   await flushSubagents(sid, msgs)
                 }
+              } catch {
+                // never disrupt the OpenCode session
+              }
+            },
+            // OpenCode tells an MCP server nothing about the session calling it, so a kcap call that
+            // names none is stamped with the caller's. The args object is the one OpenCode sends on, so
+            // it is mutated in place, never replaced. Only a session proven top-level is stamped: a
+            // subagent's id names no session the server stores, and one still being classified may be one.
+            "tool.execute.before": async (input: any, output: any) => {
+              try {
+                const sid = input?.sessionID
+                const args = output?.args
+                if (!sid || !CALLER_SESSION_TOOLS.has(input?.tool)) return
+                if (!args || typeof args !== "object") return
+                if (args.session_id !== undefined && args.session_id !== null && args.session_id !== "") return
+                if (!started.has(sid)) {
+                  const pending = pendingStart.get(sid)
+                  if (pending) await Promise.race([pending, new Promise((res) => setTimeout(res, MEMORY_WAIT_MS))])
+                }
+                if (!started.has(sid) || children.has(sid)) return
+                args.session_id = sid
               } catch {
                 // never disrupt the OpenCode session
               }

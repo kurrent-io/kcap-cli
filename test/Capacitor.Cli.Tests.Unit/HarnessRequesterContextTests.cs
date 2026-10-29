@@ -145,4 +145,134 @@ public class HarnessRequesterContextTests {
         await Assert.That(resolved.SessionId).IsNull();
         await Assert.That(resolved.ProjectDir).IsNull();
     }
+
+    const string GrokSession = "01a1378d-a97a-7420-88e0-65e6248fe6d2";
+
+    static Func<CodingAgentAncestor?> Nearest(string? vendor) => () => vendor is null ? null : new CodingAgentAncestor(vendor, 4242);
+
+    static HarnessRequesterContext.Resolved ResolveUnder(
+            string? nearest, Dictionary<string, string?> env, string? grokCwd = null, Func<string, string?>? daemon = null) =>
+        HarnessRequesterContext.Resolve(
+            Env(env), directoryExists: _ => true, Nearest(nearest), processCwd: pid => pid == 4242 ? grokCwd : null,
+            hostedAgentSession: daemon ?? (_ => null));
+
+    /// <summary>Grok exports its own session to every MCP server it starts, but also passes through the
+    /// Claude and kcap ids of the shell that launched it; under Grok, Grok's id is the requester, working
+    /// in Grok's own directory.</summary>
+    [Test]
+    public async Task Under_grok_the_grok_session_and_directory_win_over_inherited_claude_and_kcap_ones() {
+        var resolved = ResolveUnder("grok", new() {
+            ["GROK_SESSION_ID"]        = GrokSession,
+            ["CLAUDE_CODE_SESSION_ID"] = RunningDriverSession,
+            ["CLAUDE_PROJECT_DIR"]     = "/repos/claude-checkout",
+            ["KCAP_SESSION_ID"]        = InheritedParentSession,
+        }, grokCwd: "/repos/grok-checkout");
+
+        await Assert.That(resolved.SessionId).IsEqualTo("01a1378da97a742088e065e6248fe6d2");
+        await Assert.That(resolved.ProjectDir).IsEqualTo("/repos/grok-checkout");
+    }
+
+    /// <summary>A Claude Code session started from Grok's shell inherits Grok's id; its own wins.</summary>
+    [Test]
+    public async Task Under_claude_an_inherited_grok_session_is_ignored() {
+        var resolved = ResolveUnder("claude", new() {
+            ["GROK_SESSION_ID"]        = GrokSession,
+            ["CLAUDE_CODE_SESSION_ID"] = RunningDriverSession,
+        });
+
+        await Assert.That(resolved.SessionId).IsEqualTo("11111111111111111111111111111111");
+    }
+
+    [Test]
+    public async Task Under_another_harness_an_inherited_grok_session_is_ignored() {
+        var resolved = ResolveUnder("codex", new() {
+            ["GROK_SESSION_ID"] = GrokSession,
+            ["KCAP_SESSION_ID"] = InheritedParentSession,
+        });
+
+        await Assert.That(resolved.SessionId).IsEqualTo(InheritedParentSession);
+    }
+
+    /// <summary>With a Grok id present and no readable agent above, whose the inherited ids are cannot be
+    /// told, so none is claimed rather than one being attributed to the wrong session.</summary>
+    [Test]
+    public async Task An_unreadable_ancestry_claims_no_session() {
+        var resolved = ResolveUnder(null, new() {
+            ["GROK_SESSION_ID"]        = GrokSession,
+            ["CLAUDE_CODE_SESSION_ID"] = RunningDriverSession,
+            ["KCAP_SESSION_ID"]        = InheritedParentSession,
+        });
+
+        await Assert.That(resolved.SessionId).IsNull();
+        await Assert.That(resolved.ProjectDir).IsNull();
+    }
+
+    [Test]
+    public async Task The_process_tree_is_not_walked_without_a_grok_session() {
+        var walks = 0;
+        HarnessRequesterContext.Resolve(
+            Env(new() { ["CLAUDE_CODE_SESSION_ID"] = RunningDriverSession }),
+            directoryExists: _ => true,
+            nearestAgent: () => { walks++; return new CodingAgentAncestor("grok", 1); },
+            processCwd: _ => null,
+            hostedAgentSession: _ => null);
+
+        await Assert.That(walks).IsEqualTo(0);
+    }
+
+    const string HostedAgentId = "agent-7";
+    const string BoundSession  = "ses_01JC7QY3VZ8K";
+
+    /// <summary>What the hosting daemon answers for <see cref="HostedAgentId"/>: null is an agent it has
+    /// not bound yet, or a daemon that cannot be asked.</summary>
+    static Func<string, string?> Daemon(string? bound) => agentId => agentId == HostedAgentId ? bound : null;
+
+    public static IEnumerable<Func<(string Row, string? Nearest, Dictionary<string, string?> Env, string? Bound, string? Expected)>> HostedAgentRows() {
+        yield return () => ("a bound agent resolves to its session", "opencode",
+            new() { ["KCAP_DAEMON_AGENT_ID"] = HostedAgentId }, BoundSession, BoundSession);
+        yield return () => ("the agent id hooks read is not the lookup's", "opencode",
+            new() { ["KCAP_AGENT_ID"] = HostedAgentId }, BoundSession, null);
+        yield return () => ("an unbound agent or an unreachable daemon resolves to nothing", "opencode",
+            new() { ["KCAP_DAEMON_AGENT_ID"] = HostedAgentId }, null, null);
+        yield return () => ("the agent's session wins over an inherited KCAP_SESSION_ID", "opencode",
+            new() { ["KCAP_DAEMON_AGENT_ID"] = HostedAgentId, ["KCAP_SESSION_ID"] = InheritedParentSession }, BoundSession, BoundSession);
+        yield return () => ("an unbound agent keeps the inherited KCAP_SESSION_ID", "opencode",
+            new() { ["KCAP_DAEMON_AGENT_ID"] = HostedAgentId, ["KCAP_SESSION_ID"] = InheritedParentSession }, null, InheritedParentSession);
+        yield return () => ("Claude's own session wins over the agent's", "claude",
+            new() { ["KCAP_DAEMON_AGENT_ID"] = HostedAgentId, ["CLAUDE_CODE_SESSION_ID"] = RunningDriverSession }, BoundSession,
+            "11111111111111111111111111111111");
+        yield return () => ("Codex's own session wins over the agent's", "codex",
+            new() { ["KCAP_DAEMON_AGENT_ID"] = HostedAgentId, ["CODEX_THREAD_ID"] = "thread-1" }, BoundSession, "thread-1");
+        yield return () => ("Grok's own session wins over the agent's", "grok",
+            new() { ["KCAP_DAEMON_AGENT_ID"] = HostedAgentId, ["GROK_SESSION_ID"] = GrokSession }, BoundSession,
+            "01a1378da97a742088e065e6248fe6d2");
+    }
+
+    /// <summary>A daemon-hosted agent whose harness exports no session of its own is asked about by its
+    /// agent id, below every harness's own evidence and above the ambient <c>KCAP_SESSION_ID</c>.</summary>
+    [Test]
+    [MethodDataSource(nameof(HostedAgentRows))]
+    public async Task A_hosted_agent_resolves_through_its_daemon(
+            string row, string? nearest, Dictionary<string, string?> env, string? bound, string? expected) {
+        var resolved = ResolveUnder(nearest, env, grokCwd: "/repos/grok-checkout", daemon: Daemon(bound));
+
+        await Assert.That(resolved.SessionId).IsEqualTo(expected).Because(row);
+    }
+
+    /// <summary>An agent's MCP server starts before the agent is bound, so an empty answer must not stick;
+    /// once bound, the session is kept and the daemon is not asked again.</summary>
+    [Test]
+    public async Task An_unbound_answer_is_asked_again_and_a_bound_one_is_kept() {
+        var answers  = new Queue<string?>([null, BoundSession, "ses_never_asked"]);
+        var asks     = 0;
+        var sessions = new HostedAgentSessions(_ => { asks++; return answers.Dequeue(); });
+        var env      = new Dictionary<string, string?> { ["KCAP_DAEMON_AGENT_ID"] = HostedAgentId };
+
+        string? Call() => ResolveUnder("opencode", env, daemon: sessions.For).SessionId;
+
+        await Assert.That(Call()).IsNull();
+        await Assert.That(Call()).IsEqualTo(BoundSession);
+        await Assert.That(Call()).IsEqualTo(BoundSession);
+        await Assert.That(asks).IsEqualTo(2);
+    }
 }

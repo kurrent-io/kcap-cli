@@ -359,9 +359,8 @@ public class GeminiSubagentDiscoveryTests {
         var root   = chats.PathTo("session-root.jsonl");
         File.WriteAllText(root, $$"""{"sessionId":"{{rootId}}","kind":"main"}""" + "\n");
 
-        // Depth 1..8 chain (in-cap), then a below-cap depth-9 fan-out FAR larger than
-        // MaxCountingNodes under the depth-8 node's own dir — 5x the cap, to make an
-        // unbounded read unmistakably distinguishable from a bounded one.
+        // Depth 1..8 chain, then enough depth-9 files to exceed both the cap and
+        // its sentinel. An unbounded read still fails maxTouched below.
         var prevId = rootId;
         for (var depth = 1; depth <= 8; depth++) {
             var id  = $"00000000-0000-4000-8000-{depth:D12}";
@@ -369,7 +368,7 @@ public class GeminiSubagentDiscoveryTests {
             prevId = id;
         }
 
-        var hugeChildCount = GeminiSubagentDiscovery.MaxCountingNodes * 5;
+        var hugeChildCount = GeminiSubagentDiscovery.MaxCountingNodes + 2;
         var depth8Dir      = chats.CreateDir(prevId); // prevId is now the depth-8 node's own id
         for (var i = 0; i < hugeChildCount; i++) {
             var id = $"22222222-{i / 100000000:D4}-4000-8000-{i:D12}";
@@ -386,7 +385,7 @@ public class GeminiSubagentDiscoveryTests {
 
         // The crux of the fix: no single below-cap directory read ever pulled more than
         // (MaxCountingNodes + 1) raw entries from the OS enumeration — proving the read is
-        // capped by Take() rather than listing/sorting the true 50,000-file directory before
+        // capped by Take() rather than listing/sorting the entire directory before
         // truncating.
         await Assert.That(maxTouched).IsLessThanOrEqualTo(GeminiSubagentDiscovery.MaxCountingNodes + 1);
     }

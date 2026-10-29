@@ -1,0 +1,43 @@
+{"timestamp":"2026-09-04T09:00:01.000Z","type":"session_meta","payload":{"id":"0199a000-0000-7000-8000-000000000001","cwd":"/work/repo","originator":"codex_cli_rs","cli_version":"0.150.0","source":"cli","model_provider":"openai","git":{"commit_hash":"abc123","branch":"main","repository_url":"https://example.invalid/repo.git"}}}
+{"timestamp":"2026-09-04T09:00:02.000Z","type":"turn_context","payload":{"cwd":"/work/repo","model":"gpt-5-codex","approval_policy":"on-request"}}
+{"timestamp":"2026-09-04T09:00:03.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\n  <cwd>/work/repo</cwd>\n</environment_context>"}]}}
+{"timestamp":"2026-09-04T09:00:04.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Fix the failing build"}]}}
+{"timestamp":"2026-09-04T09:00:05.000Z","type":"response_item","payload":{"type":"reasoning","summary":[],"content":null,"encrypted_content":"gAAAA-opaque-1"}}
+{"timestamp":"2026-09-04T09:00:06.000Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Looking at the build first."}]}}
+{"timestamp":"2026-09-04T09:00:07.000Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"call_a","arguments":"{\"cmd\":\"rg TODO src\"}"}}
+{"timestamp":"2026-09-04T09:00:08.000Z","type":"event_msg","payload":{"type":"exec_command_end","call_id":"call_a","exit_code":0,"duration":{"secs":1,"nanos":500000000},"stdout":"src/a.rs:1: TODO\n","stderr":"","parsed_cmd":[{"type":"search","cmd":"rg TODO src","query":"TODO","path":"src"}],"source":"unified_exec_startup"}}
+{"timestamp":"2026-09-04T09:00:09.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_a","output":"src/a.rs:1: TODO\n"}}
+{"timestamp":"2026-09-04T09:00:10.000Z","type":"response_item","payload":{"type":"custom_tool_call","name":"apply_patch","call_id":"call_b","input":"*** Begin Patch\n*** Update File: src/a.rs\n@@\n-// TODO\n+// done\n*** End Patch\n"}}
+{"timestamp":"2026-09-04T09:00:11.000Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_b","output":"Success. Updated the following files:\nM src/a.rs\n"}}
+{"timestamp":"2026-09-04T09:00:12.000Z","type":"event_msg","payload":{"type":"patch_apply_end","call_id":"call_b","success":true,"changes":{"/work/repo/src/a.rs":{"type":"update","unified_diff":"@@ -1 +1 @@\n-// TODO\n+// done\n","move_path":null}}}}
+{"timestamp":"2026-09-04T09:00:13.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":16177,"cached_input_tokens":6528,"output_tokens":288,"reasoning_output_tokens":215,"total_tokens":16465},"last_token_usage":{"input_tokens":16177,"cached_input_tokens":6528,"output_tokens":288,"reasoning_output_tokens":215,"total_tokens":16465},"model_context_window":258400}}}
+{"timestamp":"2026-09-04T09:00:14.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0,"total_tokens":0},"last_token_usage":{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0,"total_tokens":0},"model_context_window":258400}}}
+{"timestamp":"2026-09-04T09:00:15.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","duration_ms":4200,"time_to_first_token_ms":350}}
+#batch
+{"timestamp":"2026-09-04T09:00:16.000Z","type":"turn_context","payload":{"cwd":"/work/repo","model":"gpt-5.1-codex"}}
+{"timestamp":"2026-09-04T09:00:17.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Now look up the issue"}]}}
+{"timestamp":"2026-09-04T09:00:18.000Z","type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"**Finding the issue**"}],"encrypted_content":"gAAAA-opaque-2"}}
+{"timestamp":"2026-09-04T09:00:19.000Z","type":"response_item","payload":{"type":"function_call","name":"get_issue","namespace":"mcp__linear__","call_id":"call_c","arguments":"{\"id\":\"ENG-1\"}"}}
+#batch
+{"timestamp":"2026-09-04T09:00:20.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_c","output":"{\"title\":\"Build\"}"}}
+{"timestamp":"2026-09-04T09:00:21.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_d","output":"late"}}
+{"timestamp":"2026-09-04T09:00:22.000Z","type":"event_msg","payload":{"type":"exec_command_end","call_id":"call_e","exit_code":1,"stdout":"","stderr":"boom"}}
+{"timestamp":"2026-09-04T09:00:23.000Z","type":"event_msg","payload":{"type":"token_count","info":null}}
+{"timestamp":"2026-09-04T09:00:24.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1200,"cached_input_tokens":1000,"output_tokens":40,"reasoning_output_tokens":0,"total_tokens":1240},"last_token_usage":{"input_tokens":1200,"cached_input_tokens":1000,"output_tokens":40,"reasoning_output_tokens":0,"total_tokens":1240},"model_context_window":258400}}}
+{"timestamp":"2026-09-04T09:00:25.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"t2","duration_ms":900,"time_to_first_token_ms":120}}
+{"timestamp":"2026-09-04T09:00:26.000Z","type":"event_msg","payload":{"type":"web_search_end","call_id":"ws_1","query":"codex rollout","action":{"type":"search","query":"codex rollout"}}}
+#batch
+{"timestamp":"2026-09-04T09:00:27.000Z","type":"event_msg","payload":{"type":"exec_command_end","call_id":"call_d","exit_code":0,"duration":{"secs":0,"nanos":0},"stdout":"late\n"}}
+{"timestamp":"2026-09-04T09:00:28.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_e","output":"boom"}}
+{"timestamp":"2026-09-04T09:00:29.000Z","type":"response_item","payload":{"type":"reasoning","summary":[],"encrypted_content":"gAAAA-opaque-3"}}
+{"timestamp":"2026-09-04T09:00:30.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":500,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":20,"total_tokens":520},"last_token_usage":{"input_tokens":500,"cached_input_tokens":0,"output_tokens":20,"reasoning_output_tokens":20,"total_tokens":520}}}}
+{"timestamp":"2026-09-04T09:00:31.000Z","type":"response_item","payload":{"type":"web_search_call","status":"completed","action":{"type":"search","query":"codex rollout"}}}
+{"timestamp":"2026-09-04T09:00:32.000Z","type":"event_msg","payload":{"type":"web_search_end","call_id":"ws_1","query":"codex rollout","action":{"type":"search","query":"codex rollout"}}}
+{"timestamp":"2026-09-04T09:00:33.000Z","type":"response_item","payload":{"type":"web_search_call","status":"completed","action":{"type":"open_page","url":"https://example.invalid/doc"}}}
+{"type":"response_item","payload":{"type":"agent_message","author":"/root/reviewer","recipient":"/root","content":[{"type":"input_text","text":"Review done: no findings."}]}}
+{"timestamp":"2026-09-04T09:00:34.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":900,"cached_input_tokens":100,"output_tokens":60,"reasoning_output_tokens":10,"total_tokens":960},"last_token_usage":{"input_tokens":900,"cached_input_tokens":100,"output_tokens":60,"reasoning_output_tokens":10,"total_tokens":960},"model_context_window":258400}}}
+{"timestamp":"2026-09-04T09:00:35.000Z","type":"compacted","payload":{"message":"","replacement_history":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Fix the failing build"}]},{"type":"compaction","encrypted_content":"gAAAA-summary"}]}}
+{"timestamp":"2026-09-04T09:00:36.000Z","type":"response_item","payload":{"type":"tool_search_call","call_id":"call_f","status":"completed","arguments":{"query":"linear","limit":5}}}
+{"timestamp":"2026-09-04T09:00:37.000Z","type":"response_item","payload":{"type":"tool_search_output","call_id":"call_f","status":"completed","tools":[{"type":"function","name":"get_issue"}]}}
+{"timestamp":"2026-09-04T09:00:38.000Z","type":"world_state","payload":{"agents":[]}}
+not json at all
