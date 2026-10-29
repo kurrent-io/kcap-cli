@@ -43,7 +43,7 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
     /// <param name="builtinOffer">The built-in model set the installed stack offers, or null; asked again on every reconnect,
     /// which follows an upgrade.</param>
     /// <param name="openSettings">What opens Settings on its Search tab, null while no Settings window can open.</param>
-    /// <param name="builtinModelReady">Validates installed model files on the initial setting read, off the UI thread.</param>
+    /// <param name="builtinModelReady">Validates installed model files whenever a built-in setting is read, off the UI thread.</param>
     public LocalSearchViewModel(
             Func<LocalEmbeddingSetting?> readSetting, Func<CancellationToken, Task<LocalEmbeddingModelManifest?>> builtinOffer,
             IObservable<ServerLaneStatus> status, LocalSearchController search,
@@ -171,17 +171,16 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
     }
 
     void ReadSetting() {
-        var initial = !_loaded;
         _read.Disposable = Observable.Start(() => {
                 var setting = _readSetting();
-                var builtinNeedsRetry = initial && setting is { Provider: LocalEmbeddingProvider.Builtin }
-                    && _builtinModelReady?.Invoke() == false;
+                var builtinNeedsRetry = setting is { Provider: LocalEmbeddingProvider.Builtin }
+                    ? !_builtinModelReady?.Invoke() : false;
                 return (setting, builtinNeedsRetry);
             }, _readScheduler)
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(snapshot => {
                 var (setting, builtinNeedsRetry) = snapshot;
-                if (!_loaded) _builtinNeedsRetry |= builtinNeedsRetry;
+                if (builtinNeedsRetry is { } needsRetry) _builtinNeedsRetry = needsRetry;
                 // An unchanged setting leaves a choice the user is still making alone.
                 if (!_loaded || setting != _current) Choice.Prefill(setting);
                 _current = setting;

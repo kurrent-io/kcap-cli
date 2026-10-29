@@ -1,5 +1,6 @@
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
 using System.Security.Cryptography;
 using System.Text;
@@ -34,11 +35,11 @@ public class LocalSearchStartupTests {
 
     void WriteModel(string content) => Tmp.CreateFile(["local", "models", CurrentSet, "model.onnx"], content);
 
-    LocalSearchViewModel CreateViewModel(FakeKcapCli cli, out LocalSearchController search) {
+    LocalSearchViewModel CreateViewModel(FakeKcapCli cli, out LocalSearchController search, IObservable<ServerLaneStatus>? status = null) {
         search = new LocalSearchController(() => cli, action => action());
         var upgrade = new LocalUpgradeController(() => cli, action => action());
         return new LocalSearchViewModel(() => LocalEmbeddingFile.Read(Root),
-            _ => Task.FromResult<LocalEmbeddingModelManifest?>(null), Observable.Return(new ServerLaneStatus(ServerLaneState.Connected)),
+            _ => Task.FromResult<LocalEmbeddingModelManifest?>(null), status ?? Observable.Return(new ServerLaneStatus(ServerLaneState.Connected)),
             search, upgrade, () => Task.CompletedTask, CancellationToken.None, ImmediateScheduler.Instance,
             builtinModelReady: () => LocalBuiltinOffer.InstalledModelReady(Root));
     }
@@ -62,6 +63,48 @@ public class LocalSearchStartupTests {
             await Assert.That(vm.CanApply).IsEqualTo(!ready);
             await Assert.That(vm.ApplyLabel).IsEqualTo(ready ? "Save" : "Try again");
             await Assert.That(cli.LocalUpgradeCallCount).IsEqualTo(0);
+        });
+    }
+
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task A_reconnect_reconciles_an_unchanged_builtin_setting_with_model_readiness(bool initiallyReady) {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            Install(initiallyReady ? "ready" : "missing model");
+            using var status = new BehaviorSubject<ServerLaneStatus>(new(ServerLaneState.Connected));
+            using var vm = CreateViewModel(new FakeKcapCli(), out _, status);
+
+            status.OnNext(new(ServerLaneState.Retrying));
+            if (initiallyReady) File.Delete(Tmp.PathTo("local", "models", CurrentSet, "model.onnx"));
+            else WriteModel(Model);
+            status.OnNext(new(ServerLaneState.Connected));
+
+            await Assert.That(vm.Choice.UseBuiltin).IsTrue();
+            await Assert.That(vm.StateText).IsEqualTo(initiallyReady ? "keyword search" : "search by meaning");
+            await Assert.That(vm.CanApply).IsEqualTo(initiallyReady);
+            await Assert.That(vm.ApplyLabel).IsEqualTo(initiallyReady ? "Try again" : "Save");
+        });
+    }
+
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task A_reconnect_checks_a_builtin_setting_configured_elsewhere(bool ready) {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            Install(ready ? "ready" : "missing model");
+            LocalEmbeddingFile.Write(Root, LocalEmbeddingSetting.Declined);
+            using var status = new BehaviorSubject<ServerLaneStatus>(new(ServerLaneState.Connected));
+            using var vm = CreateViewModel(new FakeKcapCli(), out _, status);
+
+            status.OnNext(new(ServerLaneState.Retrying));
+            LocalEmbeddingFile.Write(Root, LocalEmbeddingSetting.Builtin(CurrentSet));
+            status.OnNext(new(ServerLaneState.Connected));
+
+            await Assert.That(vm.Choice.UseBuiltin).IsTrue();
+            await Assert.That(vm.StateText).IsEqualTo(ready ? "search by meaning" : "keyword search");
+            await Assert.That(vm.CanApply).IsEqualTo(!ready);
+            await Assert.That(vm.ApplyLabel).IsEqualTo(ready ? "Save" : "Try again");
         });
     }
 
