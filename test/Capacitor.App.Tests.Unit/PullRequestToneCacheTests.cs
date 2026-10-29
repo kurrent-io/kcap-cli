@@ -208,6 +208,46 @@ public class PullRequestToneCacheTests {
         await Assert.That(source.Lists).IsEqualTo(3);
     }
 
+    /// A settled session whose forced read fails is not left unread for good: the next read goes on its cadence.
+    [Test]
+    public async Task A_failed_read_of_a_settled_session_returns_it_to_the_slow_cadence() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        source.Lifecycles[1] = "merged";
+        source.Lifecycles[2] = "merged";
+        directory.Rows.AddOrUpdate(Ended("s1"));
+        await WaitUntilAsync(() => cache.CurrentSummaries.ContainsKey("s1"), "settled read");
+
+        source.Failure = "transient";
+        cache.Refresh("s1");
+        await WaitUntilAsync(() => source.Lists == 2, "failed forced read");
+        source.Failure = null;
+        time.Advance(TimeSpan.FromMinutes(11));
+        await WaitUntilAsync(() => source.Lists == 3, "read again on the slow cadence");
+    }
+
+    /// Hiding a row keeps what it showed and when it was read, so showing it again neither blanks
+    /// its chip nor reads it ahead of its cadence.
+    [Test]
+    public async Task A_row_shown_again_keeps_its_chip_and_its_cadence() {
+        var directory = new FakeAgentDirectory();
+        var time = new FakeTimeProvider();
+        var source = new FakePullRequestSource(time) { AccessSeconds = 300 };
+        var shown = new System.Reactive.Subjects.BehaviorSubject<Func<AgentRow, bool>>(_ => true);
+        using var cache = new PullRequestToneCache(directory, source, time, shown);
+        using var _d = directory;
+        directory.Rows.AddOrUpdate(Ended("s1"));
+        await WaitUntilAsync(() => cache.CurrentSummaries.ContainsKey("s1"), "first read");
+
+        shown.OnNext(row => !row.IsEndedSession);
+        time.Advance(TimeSpan.FromMinutes(1));
+        shown.OnNext(_ => true);
+        await Task.Delay(50);
+        await Assert.That(cache.CurrentSummaries.ContainsKey("s1")).IsTrue();
+        await Assert.That(source.Lists).IsEqualTo(1);
+    }
+
     static readonly RepoIdentity Repo = new("path:/repo", "repo");
 
     static AgentRow Row(string id, string? sessionId) => AgentRow.FromLocal(

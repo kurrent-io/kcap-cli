@@ -62,6 +62,9 @@ public sealed class PullRequestToneCache : IDisposable {
     readonly ITimer _timer;
     /// The sessions read here; a listed session is never among them.
     IReadOnlySet<string> _sessions = FrozenSet<string>.Empty;
+    /// Those plus the ones the rail hides, whose entries are kept so a row shown again keeps its
+    /// chip and its cadence.
+    IReadOnlySet<string> _kept = FrozenSet<string>.Empty;
     /// Sessions marked from the PR links their listing row carried.
     IReadOnlyDictionary<string, RepoSessionPullRequests> _listed = FrozenDictionary<string, RepoSessionPullRequests>.Empty;
     /// Sessions no daemon here hosts — ended, a terminal's, a teammate's: none is this app's to poll
@@ -88,12 +91,15 @@ public sealed class PullRequestToneCache : IDisposable {
                 Listed: rows.Where(r => r is { SessionId.Length: > 0, ListedPullRequests: not null })
                     .GroupBy(r => r.SessionId!, StringComparer.Ordinal)
                     .ToFrozenDictionary(g => g.Key, g => g.First().ListedPullRequests!, StringComparer.Ordinal),
-                Polled: rows.Where(r => r.SessionId is { Length: > 0 } && Polled(r, localOnAppServer) && isShown(r)).ToList()))
+                Polled: rows.Where(r => r.SessionId is { Length: > 0 } && Polled(r, localOnAppServer)).ToList(),
+                IsShown: isShown))
             .Subscribe(next => {
-                var rows = next.Polled.Where(r => !next.Listed.ContainsKey(r.SessionId!)).ToList();
+                var kept = next.Polled.Where(r => !next.Listed.ContainsKey(r.SessionId!)).ToList();
+                var rows = kept.Where(next.IsShown).ToList();
                 lock (_lock) {
                     _listed = next.Listed;
                     MarkListed();
+                    _kept = kept.Select(r => r.SessionId!).ToFrozenSet(StringComparer.Ordinal);
                     _sessions = rows.Select(r => r.SessionId!).ToFrozenSet(StringComparer.Ordinal);
                     _slowSessions = rows.Where(r => r.Origin == AgentOrigin.Server).Select(r => r.SessionId!)
                         .Except(rows.Where(r => r.Origin != AgentOrigin.Server).Select(r => r.SessionId!))
@@ -186,7 +192,7 @@ public sealed class PullRequestToneCache : IDisposable {
             ct = _cancel.Token;
             var tonesChanged = false;
             var summariesChanged = false;
-            foreach (var session in _entries.Keys.Where(s => !_sessions.Contains(s) && !_listed.ContainsKey(s)).ToList()) {
+            foreach (var session in _entries.Keys.Where(s => !_kept.Contains(s) && !_listed.ContainsKey(s)).ToList()) {
                 var gone = _entries[session];
                 tonesChanged     |= gone.Tone is not null;
                 summariesChanged |= gone.Summary is not null;
@@ -286,6 +292,11 @@ public sealed class PullRequestToneCache : IDisposable {
 
     async Task ReadAsync(string session, long version, CancellationToken ct) {
         try {
+            // Only a read that succeeds settles the session: a failed one must not stop the timer for good.
+            lock (_lock) {
+                if (LiveEntry(session, version) is not { } entry) return;
+                entry.Settled = false;
+            }
             var capability = await _source.DiscoverAsync(false, ct).ConfigureAwait(false);
             if (capability.Kind != PullRequestCapabilityKind.Supported) {
                 // Signed out, or a server without overviews, is a verdict; an unreachable one is not.
