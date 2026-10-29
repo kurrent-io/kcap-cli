@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
+             xmlns:views="clr-namespace:Capacitor.App.Views"
              x:Class="Capacitor.App.Views.SessionTitleEditor"
              x:DataType="vm:SessionTitleEditorViewModel">
     <UserControl.Styles>
@@ -12,14 +13,6 @@
             <Setter Property="MinHeight" Value="0" />
             <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
-        <Style Selector="Button.titleAction Path">
-            <Setter Property="Width" Value="13" />
-            <Setter Property="Height" Value="13" />
-            <Setter Property="Stretch" Value="Uniform" />
-            <Setter Property="StrokeThickness" Value="1.6" />
-            <Setter Property="StrokeLineCap" Value="Round" />
-            <Setter Property="StrokeJoin" Value="Round" />
-        </Style>
     </UserControl.Styles>
 
     <Panel>
@@ -30,8 +23,7 @@
             <Button x:Name="RenameButton" Grid.Column="1" Classes="titleAction" Margin="4,0,0,0"
                     Command="{Binding BeginEditCommand}" IsVisible="{Binding ShowsPencil}"
                     AutomationProperties.Name="Rename session" ToolTip.Tip="Rename session">
-                <Path Stroke="{StaticResource KcapMutedBrush}"
-                      Data="M10.5,2.5 L13.5,5.5 L5.5,13.5 L2.5,13.5 L2.5,10.5 Z M8.5,4.5 L11.5,7.5" />
+                <views:AppIcon Kind="Pencil" Size="16" Foreground="{StaticResource KcapMutedBrush}" />
             </Button>
         </Grid>
 
@@ -41,11 +33,11 @@
                      FontWeight="SemiBold" FontSize="16" MinHeight="0" Padding="6,2" VerticalContentAlignment="Center" />
             <Button x:Name="SaveRenameButton" Grid.Column="1" Classes="titleAction" Margin="4,0,0,0"
                     Command="{Binding SaveCommand}" AutomationProperties.Name="Save name" ToolTip.Tip="Save name">
-                <Path Stroke="{StaticResource KcapSuccessBrush}" Data="M3,8.5 L6.5,12 L13,4.5" />
+                <views:AppIcon Kind="Check" Size="16" Foreground="{StaticResource KcapSuccessBrush}" />
             </Button>
             <Button x:Name="CancelRenameButton" Grid.Column="2" Classes="titleAction"
                     Command="{Binding CancelCommand}" AutomationProperties.Name="Cancel rename" ToolTip.Tip="Cancel rename">
-                <Path Stroke="{StaticResource KcapMutedBrush}" Data="M4,4 L12,12 M12,4 L4,12" />
+                <views:AppIcon Kind="X" Size="16" Foreground="{StaticResource KcapMutedBrush}" />
             </Button>
         </Grid>
     </Panel>
