@@ -8,7 +8,7 @@ public sealed record ApplicationsInstallPlan(
     ApplicationsInstallAction Action, string Target, string? SourceVersion = null,
     string? InstalledVersion = null, string? Error = null, string? ExistingPath = null, string? PayloadPath = null,
     IReadOnlyList<string>? Replaces = null) {
-    const string RestartNote = "The app will quit and its daemon will restart. Active turns stop, and agents resume unless auto-resume is off.";
+    const string RestartNote = "The app will quit and its daemon will restart. Active turns stop. Eligible agents resume when auto-resume is enabled; other sessions may need manual attention.";
 
     public IReadOnlyList<string> Replaces { get; init; } = Replaces ?? [];
 

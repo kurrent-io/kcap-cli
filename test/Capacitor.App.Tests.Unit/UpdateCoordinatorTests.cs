@@ -5,6 +5,56 @@ using Microsoft.Extensions.Time.Testing;
 namespace Capacitor.App.Tests.Unit;
 
 public class UpdateCoordinatorTests {
+    [Test]
+    public async Task A_manual_check_shows_progress_until_the_ready_prompt() {
+        var h = new Harness();
+        h.Updater.NextCheck = Beta3;
+        h.Updater.HoldCheck = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.Updater.HoldDownload = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        UpdateCheckProgress? progress = null;
+        using var subscription = h.Coordinator.CheckProgress.Subscribe(p => progress = p);
+        var checking = h.Coordinator.CheckForUpdatesAsync();
+        try {
+            await Assert.That(progress?.Message).Contains("Checking");
+            h.Updater.HoldCheck.SetResult();
+            await WaitUntilAsync(() => h.Updater.DownloadCalls == 1, "download");
+            await Assert.That(progress?.Message).Contains("Downloading");
+            h.Updater.ReportProgress!(42);
+            await Assert.That(progress?.Percent).IsEqualTo(42);
+            h.Updater.HoldDownload.SetResult();
+            await checking;
+            await Assert.That(progress).IsNull();
+            await Assert.That(h.Surface.Prompts.Single().Kind).IsEqualTo(LifecyclePrompt.KindUpdateReady);
+        } finally {
+            await h.Lifetime.CancelAsync();
+            await checking;
+        }
+    }
+
+    [Test]
+    public async Task A_manual_check_joins_a_silent_download_and_cancellation_clears_progress() {
+        var h = new Harness();
+        h.Updater.NextCheck = Beta3;
+        h.Updater.HoldDownload = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        UpdateCheckProgress? progress = null;
+        using var subscription = h.Coordinator.CheckProgress.Subscribe(p => progress = p);
+        var background = h.Coordinator.RecheckAsync();
+        try {
+            await Assert.That(h.Updater.DownloadCalls).IsEqualTo(1);
+            h.Updater.ReportProgress!(31);
+            await Assert.That(progress).IsNull();
+            var manual = h.Coordinator.CheckForUpdatesAsync();
+            await Assert.That(progress?.Percent).IsEqualTo(31);
+            await Assert.That(h.Updater.CheckCalls).IsEqualTo(1);
+            await h.Lifetime.CancelAsync();
+            await Task.WhenAll(background, manual);
+            await Assert.That(progress).IsNull();
+        } finally {
+            await h.Lifetime.CancelAsync();
+            await background;
+        }
+    }
+
     static async Task WaitUntilAsync(Func<bool> condition, string what) {
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
         while (!condition()) {
@@ -390,9 +440,9 @@ public class UpdateCoordinatorTests {
     [Test]
     public async Task Ready_disclosure_says_how_agents_are_stopped_and_resumed() {
         await Assert.That(UpdateCoordinator.ReadyDisclosure(windows: true)).Contains("interrupts running agents mid-turn");
-        await Assert.That(UpdateCoordinator.ReadyDisclosure(windows: false)).Contains("once its agents finish their current turn");
+        await Assert.That(UpdateCoordinator.ReadyDisclosure(windows: false)).Contains("then restarts after the configured wait even if a turn is still running");
         foreach (var windows in new[] { true, false }) {
-            await Assert.That(UpdateCoordinator.ReadyDisclosure(windows)).Contains("resumes them");
+            await Assert.That(UpdateCoordinator.ReadyDisclosure(windows)).Contains("Eligible agents resume when auto-resume is enabled");
             await Assert.That(UpdateCoordinator.ReadyDisclosure(windows)).DoesNotContain("keep running");
             await Assert.That(UpdateCoordinator.ReadyDisclosure(windows)).DoesNotContain("idle");
         }

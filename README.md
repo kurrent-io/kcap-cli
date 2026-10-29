@@ -80,6 +80,8 @@ Open your workspace URL (e.g. `https://acme.kcap.ai`). The session you just star
 
 kcap reports anonymous usage data by default; see [Telemetry](#telemetry) to opt out.
 
+Update with `kcap update`. It also retries an installed local server’s upgrade when the CLI is already current. Use `kcap update --check` to check without installing.
+
 ### Other ways to install
 
 - **Name the workspace up front:** pass setup options after a second `--`, e.g. `curl -fsSL https://www.kurrent.io/install | bash -s -- -- --server-url https://acme.kcap.ai` (on Windows, set `KCAP_SETUP_ARGS`). Without a terminal the installer adds `--no-prompt`, which needs a workspace (`<tenant>` or `--server-url`), or `--org` and `--slug` to create one; see [Unattended setup](#unattended-setup). `--no-setup` installs without running setup, and `--beta` installs the beta channel.
@@ -230,7 +232,7 @@ At a glance — each links to its section below:
 | [`kcap remap`](#renamed-repo-directories-kcap-remap) | Map renamed repo directories for import |
 | [`kcap ignore`](#configuration) | Exclude paths from recording |
 | [`kcap allow`](#configuration) | Restrict recording to named paths |
-| [`kcap update`](#other-commands) | Upgrade the CLI and refresh agent plugins |
+| [`kcap update`](#other-commands) | Upgrade the CLI and local server, and refresh agent plugins |
 | [`kcap refresh`](#other-commands) | Re-run the agent-integration refresh after an install or update |
 | [`kcap uninstall`](#uninstalling) | Remove kcap from this machine |
 | [`kcap status` / `whoami` / `login` / `logout`](#other-commands) | Health, identity, and auth |
@@ -2838,13 +2840,14 @@ kcap feedback --feedback                               # send feedback; prompts 
 > `kcap update` is the one-step upgrade for npm-global installs: it checks the
 > registry, runs `npm install -g @kurrent/kcap@<tag>`, then refreshes your
 > opted-in agent plugins — so it picks up new skills/hooks even when your package
-> manager blocks install scripts. It exits early if you're already up to date,
-> and tells you what to run instead for other installs (e.g. Homebrew). On the
+> manager blocks install scripts. If the CLI is already current, it still retries
+> the local-server upgrade when one is installed. It tells you what to run
+> instead for other installs (e.g. Homebrew). On the
 > stable channel it stops at your connected server's version when the server
 > trails npm, so it never installs a CLI newer than the server it talks to; a
 > [local server](#upgrading-the-local-server) does not cap it, and after the CLI
 > moves `kcap update` runs the new binary's `kcap local upgrade` to move the local
-> stack with it. Use `kcap update --check` for a machine-readable
+> stack with it. Use `kcap update --check` to check without installing either component, with a machine-readable
 > `{current, latest, newer}` probe.
 >
 > **Script installs** (`curl -fsSL https://www.kurrent.io/install | bash`, or

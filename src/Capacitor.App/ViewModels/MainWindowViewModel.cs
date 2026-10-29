@@ -93,7 +93,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     ObservableAsPropertyHelper<bool>? _showsDaemonLine;
     public bool ShowsDaemonLine => _showsDaemonLine?.Value ?? false;
 
-    internal const string RestartPendingMessage = "Daemon update pending — it restarts once its agents finish their current turn, then resumes them unless daemon.auto_resume is off.";
+    internal const string RestartPendingMessage = "Daemon update pending — it waits for agents to finish their turn, then restarts after the configured wait even mid-turn. Eligible agents resume when auto-resume is enabled; other sessions may need manual attention.";
 
     // The daemon has a restart-after-update queued (DaemonRestartPendingWatcher) and we are
     // attached to it: a passive marker only, the restart is the daemon's own.

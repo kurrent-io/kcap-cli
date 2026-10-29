@@ -51,6 +51,26 @@ public class LocalStackViewModelTests {
     static IEnumerable<string?> ShownText(LocalStackViewModel vm) => [vm.Headline, vm.Detail, vm.Guidance, vm.StateText, vm.StartMessage];
 
     [Test]
+    public async Task A_search_fallback_stays_visible_until_search_is_configured() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            await h.RunAsync(0, UpgradeScript.Planned("1.2.0", "1.3.0"),
+                """{"v":1,"event":"embeddings_skipped","code":"download_failed","message":"Model download failed"}""");
+
+            await Assert.That(h.Vm.BannerVisible).IsTrue();
+            await Assert.That(h.Vm.IsNote).IsTrue();
+            await Assert.That(h.Vm.Detail).Contains("keyword").And.Contains("Settings → Search");
+
+            h.Cli.SetupLocalBehavior = LocalSetupScript.Prints(0,
+                """{"v":1,"event":"embeddings_configured","provider":"builtin"}""", LocalSetupScript.Committed);
+            await h.Search.StartAsync(LocalEmbeddingChoice.Default, CancellationToken.None);
+            await h.Search.SettleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            await Assert.That(h.Vm.BannerVisible).IsFalse();
+        });
+    }
+
+    [Test]
     public async Task The_rail_shows_the_installed_version_and_the_servers_state() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var h = new Harness();

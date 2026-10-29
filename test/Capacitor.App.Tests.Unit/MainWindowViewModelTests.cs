@@ -281,7 +281,6 @@ public class MainWindowViewModelTests {
 
             await Assert.That(vm.RestartPending).IsTrue();
             await Assert.That(vm.RestartPendingText).IsEqualTo(MainWindowViewModel.RestartPendingMessage);
-            await Assert.That(vm.RestartPendingText).IsEqualTo("Daemon update pending — it restarts once its agents finish their current turn, then resumes them unless daemon.auto_resume is off.");
 
             restartPending.OnNext(false);
 

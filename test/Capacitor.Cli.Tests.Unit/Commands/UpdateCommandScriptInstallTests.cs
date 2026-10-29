@@ -42,6 +42,25 @@ public class UpdateCommandScriptInstallTests : IDisposable {
     }
 
     [Test]
+    [Arguments(false, LocalUpgradeCommand.Upgraded, 0)]
+    [Arguments(false, LocalUpgradeCommand.NotPublished, 0)]
+    [Arguments(false, LocalUpgradeCommand.Failed, 1)]
+    [Arguments(true, LocalUpgradeCommand.Failed, 0)]
+    public async Task A_current_cli_retries_the_local_stack_unless_only_checking(bool checkOnly, int upgradeExit, int expectedExit) {
+        Skip.When(OperatingSystem.IsWindows(), "the fixture's current is a symlink");
+        using var f = new ScriptReleaseFixture();
+        f.Publish("0.0.1");
+        var calls = new List<string>();
+        using var output = ConsoleOutput.StartFullCapture();
+
+        var exit = await Command(f, calls, upgradeExit: upgradeExit).HandleAsync(checkOnly ? ["--check"] : []);
+
+        await Assert.That(exit).IsEqualTo(expectedExit);
+        await Assert.That(calls).IsEquivalentTo(checkOnly ? [] : new[] { $"local upgrade:{f.Layout.CurrentBin("kcap")}" });
+        await Assert.That(f.CurrentTarget).IsEqualTo("versions/1.0.0");
+    }
+
+    [Test]
     public async Task A_newer_channel_release_is_installed_and_refreshed_by_the_new_binary() {
         Skip.When(OperatingSystem.IsWindows(), "the fixture's current is a symlink");
         using var f = new ScriptReleaseFixture();

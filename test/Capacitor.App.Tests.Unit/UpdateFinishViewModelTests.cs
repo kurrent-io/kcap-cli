@@ -101,31 +101,23 @@ public class UpdateFinishViewModelTests {
         await Assert.That(notPublished.Detail).IsEqualTo("1.4.1 is not available yet. Staying on 1.4.0");
         await Assert.That(failed.State).IsEqualTo(UpdateStepState.Problem);
         await Assert.That(failed.Detail).IsEqualTo("1.4.1 did not start. Open kcap and press Start");
-        await Assert.That(notSwitched.Detail).IsEqualTo("The download failed. Staying on 1.4.0");
+        await Assert.That(notSwitched.Detail).IsEqualTo("Upgrade did not finish. Staying on 1.4.0. Open kcap and press Try again");
         await Assert.That(notStarted.State).IsEqualTo(UpdateStepState.Pending);
         await Assert.That(UpdateFinishViewModel.LocalStep(new LocalStepInput(false, null, null, null, Skipped: true))).IsNull();
         await Assert.That(UpdateFinishViewModel.LocalStep(null)).IsNull();
     }
 
-    /// No step detail closes with a full stop, and none splits two clauses with a semicolon.
     [Test]
-    public async Task Step_details_are_fragments() {
-        var details = new[] {
-            UpdateFinishViewModel.DaemonStep(Connected, "1.4.0", "connected", true, "1.4.1"),
-            UpdateFinishViewModel.DaemonStep(Connected, "1.4.0", "connected", false, "1.4.1", waitedLong: true),
-            UpdateFinishViewModel.DaemonStep(Connected, "1.5.0", "connected", false, "1.4.1"),
-            UpdateFinishViewModel.DaemonStep(Restarting, null, null, true, "1.4.1"),
-            UpdateFinishViewModel.DaemonStep(Down, null, null, false, "1.4.1"),
-            UpdateFinishViewModel.DaemonStep(new AttachStatus(AttachState.Unreachable, "daemon_incompatible", null), null, null, false, "1.4.1", waitedLong: true),
-            UpdateFinishViewModel.DaemonStep(Connected, "1.4.1", "reconnecting", false, "1.4.1"),
-            UpdateFinishViewModel.DaemonStep(Connected, "1.4.1", "disconnected", false, "1.4.1", waitedLong: true),
-        }.Concat(new UpdateFinishViewModel("1.4.0", "1.4.1", new FakeTimeProvider(), stopsDaemon: true).Steps)
-            .Select(step => step.Detail!).ToList();
+    public async Task Long_failure_details_keep_the_recovery_action_concise() {
+        var message = "Could not download https://example.com/" + new string('x', 2000);
+        var step = UpdateFinishViewModel.LocalStep(new(false,
+            new LocalUpgradeOutcome.Failed("download_failed", message, false,
+                LocalInstallAffordance.For("download_failed"), "1.4.0", "1.4.1"), null, null))!;
 
-        foreach (var detail in details) {
-            await Assert.That(detail.EndsWith('.')).IsFalse();
-            await Assert.That(detail).DoesNotContain(";");
-        }
+        await Assert.That(step.Detail!.Length).IsLessThan(150);
+        await Assert.That(step.Detail).Contains("1.4.0");
+        await Assert.That(step.Detail).Contains("Try again");
+        await Assert.That(step.Hint).Contains(message);
     }
 
     [Test]
@@ -186,7 +178,7 @@ public class UpdateFinishViewModelTests {
 
     [Test]
     [Arguments(false, "Closing kcap", "The daemon and its agents keep running")]
-    [Arguments(true, "Closing kcap and the daemon", "Agents resume after the update")]
+    [Arguments(true, "Closing kcap and the daemon", "Eligible agents resume when auto-resume is enabled")]
     public async Task The_closing_window_says_what_happens_to_agents_and_offers_nothing_to_open(bool stopsDaemon, string title, string agents) {
         using var vm = new UpdateFinishViewModel("1.4.0", "1.4.1", new FakeTimeProvider(), stopsDaemon);
 

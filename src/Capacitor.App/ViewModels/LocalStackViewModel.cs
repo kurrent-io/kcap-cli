@@ -90,6 +90,11 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
             searchChange.WhenAnyValue(x => x.Running).Subscribe(_ => Refresh()).DisposeWith(_disposables);
             // An upgrade held off by the search change runs once the change is over.
             void OnSearchSettled(LocalInstallOutcome outcome) {
+                if (_shown is LocalUpgradeOutcome.Upgraded { SearchWarning: not null }
+                    && outcome is LocalInstallOutcome.Installed && searchChange.Progress.Embeddings.Configured) {
+                    _shown = null;
+                    Refresh();
+                }
                 if (Waiting) _ = _upgrade.StartAsync(_shutdown);
             }
             searchChange.Settled += OnSearchSettled;
@@ -131,14 +136,13 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
             _                          => null,
         };
 
-    /// A failed upgrade waits on the user; the rail's state then takes the warning colour.
+    /// A failed upgrade uses the rail's failure treatment.
     public bool Attention => Failed;
 
     public bool BannerVisible => Upgrading || _shown is not null;
 
-    /// A settled banner that needs nothing from the user: a bundle not published yet, or an upgrade
-    /// waiting for another kcap.
-    public bool IsNote => !Upgrading && (_shown is LocalUpgradeOutcome.NotPublished || Waiting);
+    /// A non-blocking result: publication or another local operation is pending, or search fell back to keywords.
+    public bool IsNote => !Upgrading && (_shown is LocalUpgradeOutcome.NotPublished or LocalUpgradeOutcome.Upgraded { SearchWarning: not null } || Waiting);
 
     public string? Headline => Upgrading
         ? (Progress.From, Progress.To) switch {
@@ -150,6 +154,7 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
             ? $"The upgrade to kcap local {waitingFor} is waiting"
             : "The upgrade of kcap local is waiting"
         : _shown switch {
+            LocalUpgradeOutcome.Upgraded => "The local server is upgraded; search needs attention",
             LocalUpgradeOutcome.Failed { Switched: true } f => $"kcap local {f.To ?? Version} did not start after the upgrade",
             LocalUpgradeOutcome.Failed { To: { } to }       => $"kcap local could not be upgraded to {to}",
             LocalUpgradeOutcome.Failed                      => "kcap local could not be upgraded",
@@ -165,6 +170,9 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
             LocalUpgradePhase.Downloading => DownloadFraction is { } f
                 ? $"Downloading {Progress.To}… {(int)Math.Round(f * 100)}%"
                 : $"Downloading {Progress.To}…",
+            LocalUpgradePhase.Verifying => "Verifying the local server download…",
+            LocalUpgradePhase.Extracting => "Extracting the local server…",
+            LocalUpgradePhase.DownloadingModel => Progress.Embeddings.PullText ?? "Preparing the search model…",
             LocalUpgradePhase.Stopping    => "Stopping the local server…",
             LocalUpgradePhase.Starting    => $"Starting {Progress.To}. A database migration can take a few minutes.",
             LocalUpgradePhase.Restarting  => $"Starting {Progress.From} again…",
@@ -172,6 +180,7 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
         }
         : Waiting ? BusyDetail
         : _shown switch {
+            LocalUpgradeOutcome.Upgraded => "The search model could not be updated. Search works by keyword. Open Settings → Search to retry.",
             LocalUpgradeOutcome.Failed f => TerminalAdvice.Strip(f.Message) ?? "The upgrade stopped before it finished.",
             LocalUpgradeOutcome.NotPublished when Progress.From is { } from => $"The local server stays at {from}.",
             LocalUpgradeOutcome.NotPublished => "Try again later.",
@@ -180,7 +189,7 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
 
     public string? Guidance => StartVisible ? StartGuidance : null;
 
-    public double? DownloadFraction => Upgrading && Progress.Phase == LocalUpgradePhase.Downloading ? Progress.DownloadFraction : null;
+    public double? DownloadFraction => Upgrading && Progress.Phase is LocalUpgradePhase.Downloading or LocalUpgradePhase.DownloadingModel ? Progress.DownloadFraction : null;
 
     public bool ProgressIndeterminate => Upgrading && DownloadFraction is null;
 
@@ -221,7 +230,7 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
     void OnSettled(LocalUpgradeOutcome outcome) {
         // A confirmed switch holds until the registry read lands.
         _installed = Progress.SwitchedTo ?? _installed;
-        _shown = outcome is LocalUpgradeOutcome.Failed or LocalUpgradeOutcome.NotPublished ? outcome : null;
+        _shown = outcome is LocalUpgradeOutcome.Failed or LocalUpgradeOutcome.NotPublished or LocalUpgradeOutcome.Upgraded { SearchWarning: not null } ? outcome : null;
         StartMessage = null;
         if (outcome is LocalUpgradeOutcome.Upgraded) _ = ReconnectAsync();
         ReadVersion();

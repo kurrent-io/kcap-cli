@@ -339,8 +339,8 @@ function runUpdate(binaryPath, updArgs) {
     // unknown / check failed) falls through to the upgrade rather than stranding
     // the user on a stale CLI.
     if (info && info.newer === false && info.current) {
-      console.log(`Already up to date: ${info.current}`);
-      process.exit(0);
+      console.log(`CLI already up to date: ${info.current}`);
+      process.exit(upgradeLocalStack(binaryPath));
     }
     if (info && info.newer) {
       console.log(`Updating kcap: ${info.current} → ${info.latest}`);
@@ -405,16 +405,7 @@ function runUpdate(binaryPath, updArgs) {
   require("./refresh").runRefreshes(fs.realpathSync(__filename));
   console.log("kcap updated.");
 
-  let exitCode = 0;
-  if (process.platform !== "win32" && fs.existsSync(localRegistryPath(process.env, os.homedir()))) {
-    const upgrade = spawnSync(binaryPath, localUpgradeArgs(), { stdio: "inherit" });
-    if (upgrade.status === 4) {
-      console.error("The local server stays on its version until a bundle for this kcap is published; run `kcap local upgrade` then.");
-    } else if (!localUpgradeSucceeded(upgrade.status)) {
-      console.error("The local server was not upgraded; run `kcap local upgrade` to retry.");
-      exitCode = 1;
-    }
-  }
+  const exitCode = upgradeLocalStack(binaryPath);
 
   // Tell the server about the new version now, so the "CLI out of date"
   // banner clears immediately instead of waiting for the next request.
@@ -439,13 +430,29 @@ function runUpdate(binaryPath, updArgs) {
       console.log("restarts on the new one by itself. It waits a few minutes for running");
       console.log("agents to finish their turn, then restarts even mid-turn (a running");
       console.log("eval or agent launch can hold it longer), and resumes the agents it");
-      console.log("can. A daemon started in a terminal needs a manual stop and start.");
+      console.log("can when auto-resume is enabled. Other sessions may need manual attention.");
+      console.log("A daemon started in a terminal needs a manual stop and start.");
       console.log("Check with `kcap daemon status`, or apply now with");
       console.log("`kcap daemon restart --force`.");
     }
   }
 
   process.exit(exitCode);
+}
+
+function upgradeLocalStack(binaryPath) {
+  let exitCode = 0;
+  if (process.platform !== "win32" && fs.existsSync(localRegistryPath(process.env, os.homedir()))) {
+    const upgrade = spawnSync(binaryPath, localUpgradeArgs(), { stdio: "inherit" });
+    if (upgrade.status === 4) {
+      console.error("The local server stays on its version until a bundle for this kcap is published; run `kcap local upgrade` then.");
+    } else if (!localUpgradeSucceeded(upgrade.status)) {
+      console.error("The local server was not upgraded; run `kcap local upgrade` to retry.");
+      exitCode = 1;
+    }
+  }
+
+  return exitCode;
 }
 
 module.exports = {

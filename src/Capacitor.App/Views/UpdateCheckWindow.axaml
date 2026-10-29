@@ -1,0 +1,26 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:update="clr-namespace:Capacitor.App.Services.Update"
+        x:Class="Capacitor.App.Views.UpdateCheckWindow"
+        x:DataType="update:UpdateCheckProgress"
+        Title="kcap Update" Icon="avares://kcap-desktop/Assets/kcap-icon.png"
+        Width="440" SizeToContent="Height" CanResize="False" WindowStartupLocation="CenterScreen"
+        Background="{StaticResource KcapCanvasBrush}" ExtendClientAreaToDecorationsHint="True">
+    <Panel>
+        <Border Height="32" VerticalAlignment="Top" Background="Transparent" PointerPressed="OnChromePointerPressed" />
+        <StackPanel Margin="32,44,32,28" Spacing="16">
+            <TextBlock Text="{Binding Message}" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap"
+                       Foreground="{StaticResource KcapTextBrush}" />
+            <Grid ColumnDefinitions="*,Auto">
+                <ProgressBar Height="4" Minimum="0" Maximum="100" Value="{Binding Value}"
+                             IsIndeterminate="{Binding Indeterminate}" Foreground="{StaticResource KcapPurpleBrush}"
+                             VerticalAlignment="Center" />
+                <TextBlock Grid.Column="1" Text="{Binding PercentText}" Margin="12,0,0,0" MinWidth="36"
+                           FontSize="12" TextAlignment="Right" Foreground="{StaticResource KcapMutedBrush}" />
+            </Grid>
+            <TextBlock Text="You can keep using kcap while the update downloads." TextWrapping="Wrap"
+                       FontSize="12.5" Foreground="{StaticResource KcapMutedBrush}" />
+            <Button Content="Hide" Classes="kcapChip" HorizontalAlignment="Right" IsCancel="True" Click="OnHide" />
+        </StackPanel>
+    </Panel>
+</Window>

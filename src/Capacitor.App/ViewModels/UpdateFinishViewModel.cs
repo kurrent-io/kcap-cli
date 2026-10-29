@@ -56,7 +56,7 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
         OpenCommand = ReactiveCommand.Create(() => { });
         _steps = [
             stopsDaemon
-                ? new("Closing kcap and the daemon", "Agents resume after the update", UpdateStepState.Running)
+                ? new("Closing kcap and the daemon", "Eligible agents resume when auto-resume is enabled", UpdateStepState.Running)
                 : new("Closing kcap", "The daemon and its agents keep running", UpdateStepState.Running),
             new($"Installing kcap {Display(to)}", "Reopens when it is done", UpdateStepState.Pending),
         ];
@@ -85,13 +85,13 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
     public string Heading => _closing ? $"Updating to kcap {To}…"
         : !_settled ? "Finishing the update…" : _clean ? $"kcap {To} is ready" : $"kcap {To} is installed";
 
-    public string Description => _closing ? "kcap closes, installs the update and opens again. This usually takes a few seconds."
+    public string Description => _closing ? "kcap closes, installs the update and opens again."
         : _transition.From is { } from ? $"Updated from {Display(from)}. {Tail}"
         : Tail;
 
     public bool CanOpen => !_closing;
 
-    string Tail => !_settled ? "Background services are restarting on the new version. This usually takes under a minute."
+    string Tail => !_settled ? ProgressDetail(_steps) ?? "Checking the updated components…"
         : _clean ? "Everything is running the new version."
         : _steps.Any(step => step.IsProblem) ? "Something did not come back as expected. The details are below."
         : "kcap is ready to use. Anything still pending is noted below.";
@@ -200,7 +200,7 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
             { State: AttachState.Connected } when current => new($"{title} {app}", "Connecting to the server…", UpdateStepState.Running,
                 Activity: "Reconnecting the daemon to the server…"),
             { State: AttachState.Connected } when newer => new(title, $"Running {Display(daemonVersion!)}, newer than this app", UpdateStepState.Note),
-            { State: AttachState.Connected } when restartPending => new(title, "Restarts once its agents finish their turn", UpdateStepState.Note),
+            { State: AttachState.Connected } when restartPending => new(title, "Waiting for a turn boundary; long turns may be interrupted", UpdateStepState.Note),
             { State: AttachState.Connected } when waitedLong && known => new(title,
                 $"Still on {Display(daemonVersion!)}. Moves to {app} on its next restart", UpdateStepState.Note),
             { State: AttachState.Connected } => new(title, $"Picking up {app}…", UpdateStepState.Running, Activity: "Waiting for the daemon to restart…"),
@@ -230,6 +230,10 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
                 LocalUpgradePhase.Recovering => ("Finishing an interrupted upgrade…", null, "Finishing an interrupted local server upgrade…"),
                 LocalUpgradePhase.Downloading => ("Downloading…",
                     local.DownloadFraction is { } f ? $"{(int)Math.Round(f * 100)}%" : null, "Downloading the local server…"),
+                LocalUpgradePhase.DownloadingModel => ("Downloading the search model…",
+                    local.DownloadFraction is { } m ? $"{(int)Math.Round(m * 100)}%" : null, "Downloading the search model…"),
+                LocalUpgradePhase.Verifying => ("Verifying the download…", null, "Verifying the local server download…"),
+                LocalUpgradePhase.Extracting => ("Extracting…", null, "Extracting the local server…"),
                 LocalUpgradePhase.Stopping => ("Stopping the server…", null, "Stopping the local server…"),
                 LocalUpgradePhase.Starting => ("Starting… A migration can take a few minutes", null,
                     "Starting the local server… A migration can take a few minutes"),
@@ -239,6 +243,9 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
             return new(heading, detail, UpdateStepState.Running, trailing, hint, activity);
         }
         return local.Outcome switch {
+            LocalUpgradeOutcome.Upgraded { SearchWarning: { } warning } upgraded => new(
+                upgraded.To is { } version ? $"{title} {version}" : title,
+                "Upgraded. Search works by keyword; open Settings → Search to retry", UpdateStepState.Note, Hint: warning),
             LocalUpgradeOutcome.Upgraded { To: { } to } => new($"{title} {to}", "Upgraded", UpdateStepState.Done),
             LocalUpgradeOutcome.Upgraded => new(title, "Upgraded", UpdateStepState.Done),
             LocalUpgradeOutcome.NothingToDo => new(title, "Up to date", UpdateStepState.Done),
@@ -250,11 +257,10 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
             LocalUpgradeOutcome.Failed { Switched: false, Affordance: LocalInstallAffordance.Busy } => new(title,
                 "Waiting for another local setup to finish", UpdateStepState.Note, Hint: hint),
             LocalUpgradeOutcome.Failed { Switched: true } f => new(title,
-                $"{f.To ?? "The new version"} did not start. Open kcap and press Start", UpdateStepState.Problem, Hint: hint),
+                $"{f.To ?? "The new version"} did not start. Open kcap and press Start", UpdateStepState.Problem, Hint: f.Message),
             LocalUpgradeOutcome.Failed f => new(title,
-                string.Join(". ", new[] { TerminalAdvice.Strip(f.Message) is { } m ? Fragment(m) : "The upgrade did not finish",
-                    f.From is { } stays ? $"Staying on {stays}" : null }.Where(part => part is not null)),
-                UpdateStepState.Problem, Hint: hint),
+                $"Upgrade did not finish. { (f.From is { } stays ? $"Staying on {stays}. " : "") }{(f.Affordance == LocalInstallAffordance.Permanent ? "Open kcap for details" : "Open kcap and press Try again")}",
+                UpdateStepState.Problem, Hint: f.Message),
             _ => new(title, "Not started", UpdateStepState.Pending, Activity: "Getting ready to upgrade the local server…"),
         };
     }

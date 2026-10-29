@@ -177,6 +177,10 @@ public partial class App : Application {
     // No disposal needed — its schedule loop exits on _shutdown; ApplyPendingOnExit is called
     // explicitly at shutdown rather than through Dispose.
     UpdateCoordinator? _updates;
+    IDisposable? _updateCheckSubscription;
+    UpdateCheckWindow? _updateCheckWindow;
+    bool _updateCheckHidden;
+    UpdateCheckProgress? _updateCheckProgress;
     // Assigned by StartAsync's success path only; every one is still null on a startup failure
     // (and cleared again by the catch, which disposes whatever had been built). Teardown —
     // shutdown and startup-failure alike — disposes them in reverse creation order, tray icon
@@ -500,6 +504,39 @@ public partial class App : Application {
     // The command-line tool offer waits for it, since its prompt would otherwise land in the middle of the update.
     readonly TaskCompletionSource _updateHandedOver = new(TaskCreationOptions.RunContinuationsAsynchronously);
     bool _holdingMainWindow;
+
+    void ShowUpdateCheckProgress(UpdateCheckProgress? progress) {
+        _updateCheckProgress = progress;
+        if (progress is null) {
+            _updateCheckWindow?.Close();
+            _updateCheckHidden = false;
+        } else if (!_shutdownStarted && !_updateCheckHidden) {
+            if (_updateCheckWindow is null) {
+                var window = new UpdateCheckWindow { DataContext = progress };
+                window.Closed += (_, _) => {
+                    _updateCheckWindow = null;
+                    _updateCheckHidden = true;
+                };
+                _updateCheckWindow = window;
+                window.Show();
+                window.Activate();
+            } else {
+                _updateCheckWindow.DataContext = progress;
+            }
+        }
+    }
+
+    Task CheckForAppUpdatesAsync() {
+        _updateCheckHidden = false;
+        ShowUpdateCheckProgress(_updateCheckProgress);
+        return _updates?.CheckForUpdatesAsync() ?? Task.CompletedTask;
+    }
+
+    Task RunUpdateMenuActionAsync() {
+        _updateCheckHidden = false;
+        ShowUpdateCheckProgress(_updateCheckProgress);
+        return _updates?.RunMenuActionAsync() ?? Task.CompletedTask;
+    }
 
     void ShowUpdateFinishWindow(AppUpdateTransition transition, IObservable<AttachStatus> status,
             IObservable<(string? Version, string? Connection)> daemon, IObservable<bool> restartPending, IObservable<LocalStepInput?> local) {
@@ -918,8 +955,10 @@ public partial class App : Application {
                 desktop.TryShutdown();
             }), _shutdown.Token,
             handingOver: HandOver(AppUpdateTransition.InApp), log: LifecycleLog);
+        _updateCheckSubscription = _updates.CheckProgress.Subscribe(progress =>
+            Dispatcher.UIThread.Post(() => ShowUpdateCheckProgress(progress)));
         _updates.Start();
-        if (_updater.IsAvailable) _appMenu.SetCheckForUpdatesAction(_updates.CheckForUpdatesAsync);
+        if (_updater.IsAvailable) _appMenu.SetCheckForUpdatesAction(CheckForAppUpdatesAsync);
 
         // Said once, here, because nothing else in the app would: the graph is up but deliberately degraded.
         AnnounceUnquiescedLane(lifecycleSurface, laneQuiesced);
@@ -1301,7 +1340,7 @@ public partial class App : Application {
             lifecycleAttention: lifecycleAttention, shimOfferable: shimOffer.Offerable,
             installShim: shimOffer.RunManualInstallAsync, permissions: permissions,
             remote: TrayViewModel.SummaryFrom(directory, attention.SessionsWithAttention),
-            updateMenu: _updates.MenuItem, updateAction: _updates.RunMenuActionAsync,
+            updateMenu: _updates.MenuItem, updateAction: RunUpdateMenuActionAsync,
             restartPending: restartPending.Pending, openSettings: openSettings, openLaunchApprovals: launchApprovals.Show);
         _tray = new TrayIconManager(this, _trayVm);
         LifecycleLog.Write("tray_created", ("executable", Environment.ProcessPath));
@@ -1477,7 +1516,7 @@ public partial class App : Application {
                 Search     = _localStack?.Search,
                 Experimental = new ExperimentalSettingsViewModel(new ExperimentalSettingsStore(_config), settings.ProfileName, service),
                 About = new AboutSettingsViewModel(service, SettingsCli(settings, service.DaemonName).Cli.VersionAsync, _localStack,
-                    _updates?.MenuItem, _updates is { } updates ? updates.RunMenuActionAsync : null,
+                    _updates?.MenuItem, _updates is not null ? RunUpdateMenuActionAsync : null,
                     followsBetas: () => _updater.AllowsPrerelease, setBetaUpdates: SetBetaUpdatesAsync, appLifetime: _shutdown.Token),
             };
         } catch (Exception ex) {
@@ -2786,6 +2825,8 @@ public partial class App : Application {
         // _reauthSettle synchronously, so reading it after Close observes this close's task.
         if (_signInWindow is { } reauthDialog) reauthDialog.Close();
         if (_settingsWindow is { } settingsDialog) settingsDialog.Close();
+        _updateCheckSubscription?.Dispose();
+        _updateCheckWindow?.Close();
         _launchApprovals?.Dispose();
         _menuBar?.SetLaunchApprovalsAction(null);
         if (_feedbackWindow is { } feedbackDialog) feedbackDialog.Close();
