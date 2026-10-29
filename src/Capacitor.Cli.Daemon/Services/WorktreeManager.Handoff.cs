@@ -113,7 +113,12 @@ public partial class WorktreeManager {
 
         Directory.CreateDirectory(worktreeRoot);
 
-        var created = new WorktreeInfo(worktreePath, branch, repoPath) { OwnsBranch = start.Checkout == HandoffCheckout.CreateBranch };
+        // Pinning the start under the worktree's own ref keeps a fork head out of the unsaved-work count,
+        // and removal deletes it.
+        var fetchedRef = FetchedRefFor(name);
+        var created    = new WorktreeInfo(worktreePath, branch, repoPath, FetchedRef: fetchedRef) {
+            OwnsBranch = start.Checkout == HandoffCheckout.CreateBranch,
+        };
         var noHooks = NoBranchHooks();
 
         await WithWorktreeMetadataGate(repoPath, time, async () => {
@@ -122,6 +127,8 @@ public partial class WorktreeManager {
                 if (tip != start.LocalBranchSha) throw StartChanged($"{branch} is at {tip ?? "nothing"}, not {start.LocalBranchSha ?? "nothing"}");
                 if (checkedOut) throw StartChanged($"{branch} is checked out in another worktree");
             }
+
+            await RunGit(repoPath, GitTimeout, time, "update-ref", fetchedRef, start.Sha);
 
             switch (start.Checkout) {
                 case HandoffCheckout.CreateBranch:
@@ -142,11 +149,16 @@ public partial class WorktreeManager {
             }
         });
 
+        if (!created.OwnsBranch) MarkBranchNotOwned(worktreePath);
+
         await StripOrRollBackAsync(created);
 
         try {
-            if (start.Checkout == HandoffCheckout.CreateBranch)
-                await RunGit(repoPath, GitTimeout, time, "branch", $"--set-upstream-to=origin/{branch}", branch);
+            // Written directly: --set-upstream-to refuses a branch outside a single-branch clone's refspec.
+            if (start.Checkout == HandoffCheckout.CreateBranch) {
+                await RunGit(repoPath, GitTimeout, time, "config", $"branch.{branch}.remote", "origin");
+                await RunGit(repoPath, GitTimeout, time, "config", $"branch.{branch}.merge", $"refs/heads/{branch}");
+            }
 
             var head = (await RunGitCapture(worktreePath, GitTimeout, time, true, "rev-parse", "HEAD")).Trim();
             if (head != start.Sha) throw StartChanged($"the worktree is at {head}, not {start.Sha}");

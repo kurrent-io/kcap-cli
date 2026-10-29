@@ -1764,7 +1764,8 @@ public partial class WorktreeManager(
             }
 
             LogCleaningUp(dir);
-            try { DeleteTreeNoFollow(dir); } catch (Exception ex) { LogCleanupFailed(ex, dir); }
+            await UnregisterNotOwnedAsync(dir);
+            try { if (Directory.Exists(dir)) DeleteTreeNoFollow(dir); } catch (Exception ex) { LogCleanupFailed(ex, dir); }
         }
     }
 
@@ -1801,7 +1802,32 @@ public partial class WorktreeManager(
             return null;
 
         return new WorktreeInfo(dir, branch.ExitCode == 0 ? branch.Stdout.Trim() : "", source,
-            FetchedRef: FetchedRefFor(Path.GetFileName(dir)));
+            FetchedRef: FetchedRefFor(Path.GetFileName(dir))) { OwnsBranch = !IsBranchNotOwned(dir) };
+    }
+
+    const string BranchNotOwnedFile = "kcap-branch-not-owned";
+
+    /// <summary>Records, in the worktree's own git dir, that its branch existed before it, so the orphan
+    /// sweep can tell after a restart.</summary>
+    static void MarkBranchNotOwned(string worktreePath) {
+        if (GitDirOf(worktreePath) is { } gitDir) File.WriteAllText(Path.Combine(gitDir, BranchNotOwnedFile), "");
+    }
+
+    static bool IsBranchNotOwned(string worktreePath) =>
+        GitDirOf(worktreePath) is { } gitDir && File.Exists(Path.Combine(gitDir, BranchNotOwnedFile));
+
+    /// <summary>Unregisters a left-behind worktree whose branch is not the daemon's. Deleting only the
+    /// directory would leave git holding that branch as checked out there. A removal of this one
+    /// worktree, not a prune.</summary>
+    async Task UnregisterNotOwnedAsync(string dir) {
+        try {
+            if (!IsBranchNotOwned(dir) || await LeftWorktreeAsync(dir) is not { } worktree) return;
+
+            await WithWorktreeMetadataGate(worktree.SourceRepo, time, () =>
+                RunGitBestEffort(worktree.SourceRepo, time, "worktree", "remove", "--force", dir));
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) {
+            LogCleanupFailed(ex, dir);
+        }
     }
 
     /// <summary>The ref a review launch fetched its base into, named after its worktree.</summary>

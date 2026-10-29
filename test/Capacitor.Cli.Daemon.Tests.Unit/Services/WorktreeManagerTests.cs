@@ -378,9 +378,6 @@ public class WorktreeManagerTests {
         }
     }
 
-    /// <summary>The startup sweep of left-behind worktrees keeps one holding work, as teardown does, and
-    /// still clears one that holds none: a review worktree whose head only its fetched ref has, and a
-    /// standalone snapshot, are the daemon's own.</summary>
     /// <summary>A commit on a branch the worktree does not own survives on that branch, so it is not work
     /// the removal would lose.</summary>
     [Test]
@@ -426,6 +423,9 @@ public class WorktreeManagerTests {
         await Assert.That(Directory.Exists(path)).IsTrue();
     }
 
+    /// <summary>The startup sweep of left-behind worktrees keeps one holding work, as teardown does, and
+    /// still clears one that holds none: a review worktree whose head only its fetched ref has, and a
+    /// standalone snapshot, are the daemon's own.</summary>
     [Test]
     public async Task CleanupOrphaned_keeps_a_left_behind_worktree_holding_work() {
         using var repo = MakeUpstreamWithSideRef("refs/pull/1/head", out _);

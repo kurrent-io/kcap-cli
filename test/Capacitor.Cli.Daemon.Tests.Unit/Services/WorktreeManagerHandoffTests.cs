@@ -433,4 +433,59 @@ public class WorktreeManagerHandoffTests {
         await Assert.That(work.Completeness).IsEqualTo(HandoffCompleteness.PartlyMissing);
         await Assert.That(work.MissingCommits).IsEquivalentTo(["--all"]);
     }
+
+    [Test]
+    public async Task an_untouched_fork_head_worktree_is_removed_with_its_fetched_ref() {
+        using var f = Fixture.Create();
+        f.Upstream.Do("update-ref", "refs/pull/5/head", f.CommitOnOrigin("fork-work", "fork.txt"));
+        f.Upstream.Do("branch", "-D", "fork-work");
+        var start = await ResolveAsync(f, new HandoffTarget("fork-work", 5, HeadIsFork: true));
+        var tree  = await CreateAsync(f, start);
+
+        var removal = await WorktreeManager.RemoveAsync(tree, TimeProvider.System);
+
+        await Assert.That(removal).IsEqualTo(WorktreeRemoval.Removed);
+        await Assert.That(f.Clone.Try("rev-parse", "--verify", "--quiet", tree.FetchedRef!).ExitCode).IsNotEqualTo(0);
+    }
+
+    /// <summary>A left-behind hand-off on the user's branch must leave that branch usable: deleting only
+    /// the directory would leave git believing the branch is still checked out there.</summary>
+    [Test]
+    public async Task the_orphan_sweep_frees_a_branch_the_worktree_does_not_own() {
+        using var f    = Fixture.Create();
+        using var root = new TempDir();
+        f.CommitOnOrigin("feature", "b.txt");
+        f.TrackLocally("feature");
+        var manager = new WorktreeManager(new DaemonConfig { AllowedRepoPaths = [f.Clone.Path], WorktreeRoot = root.Path },
+            NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var start = (await manager.ResolveHandoffStartAsync(f.Clone, new HandoffTarget("feature", null, false), CancellationToken.None)).Start!;
+        var tree  = await manager.CreateHandoffAsync(f.Clone, start, "left-behind");
+        var work  = GitRepo.At(tree.Path);
+        work.CreateFile("agent.txt", "agent");
+        work.CommitAll("unpushed agent work");
+        var agentCommit = work.Head;
+
+        await manager.CleanupOrphanedAsync([]);
+
+        await Assert.That(Directory.Exists(tree.Path)).IsFalse();
+        await Assert.That(f.Clone.Try("checkout", "-q", "feature").ExitCode).IsEqualTo(0);
+        await Assert.That(f.Clone.Head).IsEqualTo(agentCommit);
+    }
+
+    [Test]
+    public async Task a_created_branch_in_a_single_branch_clone_records_its_upstream() {
+        using var f = Fixture.Create();
+        f.Clone.Do("config", "remote.origin.fetch", $"+refs/heads/{f.Default}:refs/remotes/origin/{f.Default}");
+        f.CommitOnOrigin("feature", "b.txt");
+        var start = await ResolveAsync(f, new HandoffTarget("feature", null, false));
+        var tree  = await CreateAsync(f, start);
+
+        try {
+            await Assert.That(GitRepo.At(tree.Path).Head).IsEqualTo(start.Sha);
+            await Assert.That(f.Clone.Do("config", "branch.feature.remote").Text).IsEqualTo("origin");
+            await Assert.That(f.Clone.Do("config", "branch.feature.merge").Text).IsEqualTo("refs/heads/feature");
+        } finally {
+            await WorktreeManager.RemoveAsync(tree, TimeProvider.System);
+        }
+    }
 }
