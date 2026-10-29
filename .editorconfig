@@ -237,6 +237,8 @@ resharper_wrap_linq_expressions = chop_always
 ; --- ReSharper inspection severities ---
 
 resharper_arrange_local_function_body_highlighting = suggestion
+; Multiline lists go both ways in the tree, and the setting offers only always or never
+resharper_arrange_trailing_comma_in_multiline_lists_highlighting = none
 resharper_arrange_this_qualifier_highlighting = none
 resharper_built_in_type_reference_style_for_member_access_highlighting = hint
 resharper_built_in_type_reference_style_highlighting = hint
