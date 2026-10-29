@@ -43,6 +43,6 @@
 
         <!-- Outside the card, as setup's footer action is: inside, it groups with the options' own buttons. -->
         <Button x:Name="SearchApplyButton" Classes="kcapPrimary" HorizontalAlignment="Left" Margin="0,-12,0,0"
-                Content="Save" Command="{Binding ApplyCommand}" IsEnabled="{Binding CanApply}" />
+                Content="{Binding ApplyLabel}" Command="{Binding ApplyCommand}" IsEnabled="{Binding CanApply}" />
     </StackPanel>
 </UserControl>

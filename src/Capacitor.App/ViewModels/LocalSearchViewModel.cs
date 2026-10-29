@@ -18,7 +18,7 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
     public const string BusyText = "Another local setup, upgrade or uninstall is running on this Mac. Try again once it has finished.";
 
     static readonly string[] Derived = [
-        nameof(Running), nameof(StateText), nameof(CurrentText), nameof(CanApply), nameof(Embeddings),
+        nameof(Running), nameof(StateText), nameof(CurrentText), nameof(CanApply), nameof(ApplyLabel), nameof(Embeddings),
         nameof(FailureText), nameof(ShowsSettingsLink), nameof(ShowsInlineSettings),
     ];
 
@@ -35,6 +35,7 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
     LocalEmbeddingSetting? _current;
     bool _canOpenSettings;
     bool _loaded;
+    bool _builtinNeedsRetry;
 
     /// <param name="readSetting">The installation's recorded embedding setting; a disk read, run on
     /// <paramref name="readScheduler"/> (the task pool by default), never on the UI thread.</param>
@@ -70,6 +71,8 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
 
         search.Settled += OnSettled;
         Disposable.Create(() => search.Settled -= OnSettled).DisposeWith(_disposables);
+        upgrade.Settled += OnUpgradeSettled;
+        Disposable.Create(() => upgrade.Settled -= OnUpgradeSettled).DisposeWith(_disposables);
 
         // A setup run from a terminal restarts the server when it changes the model, so a reconnect rereads the setting.
         status
@@ -105,9 +108,10 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
     public string? StateText =>
         Running ? "setting up search"
         : !_loaded ? null
-        : CurrentByMeaning ? "search by meaning" : "keyword search";
+        : CurrentByMeaning && !BuiltinNeedsRetry ? "search by meaning" : "keyword search";
 
     public string? CurrentText => !_loaded ? null
+        : BuiltinNeedsRetry ? "Search works by keyword until the built-in model is ready."
         : (_current switch {
             { Model: { } model }                         => $"Searches by meaning with {model}.",
             { Provider: LocalEmbeddingProvider.Builtin } => "Searches by meaning with the built-in model.",
@@ -117,7 +121,9 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
 
     public bool CanApply =>
         _loaded && !Running && !_upgrade.Running && Choice.Valid && !Choice.AwaitingOffer
-     && (Differs(Choice.Choice) || _current is null or { Pending: true });
+     && (Differs(Choice.Choice) || _current is null or { Pending: true } || BuiltinNeedsRetry && Choice.UseBuiltin);
+
+    public string ApplyLabel => BuiltinNeedsRetry && Choice.UseBuiltin ? "Try again" : "Save";
 
     public string? FailureText => !Running && _search.Outcome is LocalInstallOutcome.Failed failed
         ? failed.Affordance == LocalInstallAffordance.Busy ? BusyText : TerminalAdvice.Strip(failed.Message) ?? "Setup did not finish."
@@ -135,6 +141,8 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
 
     bool CurrentByMeaning => _current is { Model: not null } or { Provider: LocalEmbeddingProvider.Builtin };
 
+    bool BuiltinNeedsRetry => _builtinNeedsRetry && _current is { Provider: LocalEmbeddingProvider.Builtin };
+
     bool Differs(LocalEmbeddingChoice choice) => choice.Provider switch {
         LocalEmbeddingProvider.Builtin => _current?.Provider != LocalEmbeddingProvider.Builtin,
         LocalEmbeddingProvider.Ollama  => _current?.Model != choice.Model,
@@ -144,8 +152,17 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
     Task ApplyAsync() => CanApply ? _search.StartAsync(Choice.Choice, _shutdown) : Task.CompletedTask;
 
     void OnSettled(LocalInstallOutcome outcome) {
-        if (outcome is LocalInstallOutcome.Installed) _ = ReconnectAsync();
+        if (outcome is LocalInstallOutcome.Installed) {
+            if (_search.Progress.Embeddings.Configured) _builtinNeedsRetry = false;
+            _ = ReconnectAsync();
+        }
         ReadSetting();
+        Refresh();
+    }
+
+    void OnUpgradeSettled(LocalUpgradeOutcome outcome) {
+        if (outcome is not LocalUpgradeOutcome.Upgraded upgraded) return;
+        _builtinNeedsRetry = upgraded.SearchWarning is not null;
         Refresh();
     }
 
