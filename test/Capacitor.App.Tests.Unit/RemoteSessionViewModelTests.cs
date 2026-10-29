@@ -35,9 +35,13 @@ public class RemoteSessionViewModelTests {
                 Vendor = vendor, OwnerUserId = "u1", RegisteredAt = DateTime.UtcNow,
             });
 
+        public readonly FakeRemoteAgents Remote = new();
+        public readonly RecordingNotifier Notifier = new();
+
         public RemoteSessionViewModel Build(AgentRow row) {
             Directory.Rows.AddOrUpdate(row);
-            return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), new RecordingOpener(), Time, () => new FakeTerminalSurface());
+            return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), new RecordingOpener(), Time, () => new FakeTerminalSurface(),
+                remoteAgents: Remote, notifier: Notifier);
         }
 
         /// One chat poll: the pane reads its feed on the timer this harness owns.
@@ -60,6 +64,7 @@ public class RemoteSessionViewModelTests {
             Access.Dispose();
             Permissions.Dispose();
             Directory.Dispose();
+            Remote.Dispose();
         }
     }
 
@@ -425,6 +430,78 @@ public class RemoteSessionViewModelTests {
             await Assert.That(vm.Chat.Phase).IsEqualTo(ChatTabPhase.Reading);
             await Assert.That(vm.Chat.Items.Count).IsEqualTo(2);
             await Assert.That(vm.Chat.ActivityNote).IsEqualTo("The transcript could not be read: not authorized to read this session's stream");
+            await vm.TeardownAsync();
+        });
+    }
+    [Test]
+    public async Task An_owned_row_shows_the_pencil_and_renames_through_the_server() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var calls = new List<(string, string, string)>();
+            h.Remote.Rename = (agent, session, title) => {
+                calls.Add((agent, session, title));
+                return Task.FromResult(new SessionRenameResult(true, "New name", null));
+            };
+            var vm = h.Build(Harness.Row());
+
+            await Assert.That(vm.TitleEditor.ShowsPencil).IsTrue();
+            await vm.TitleEditor.BeginEditCommand.Execute();
+            vm.TitleEditor.Draft = "New name";
+            await vm.TitleEditor.SaveCommand.Execute();
+
+            await Assert.That(calls).IsEquivalentTo(new[] { ("a1", "s1", "New name") });
+            await Assert.That(vm.TitleEditor.Title).IsEqualTo("New name");
+            await Assert.That(vm.TitleEditor.IsEditing).IsFalse();
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task Another_owners_row_shows_no_pencil() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var row = Harness.Row() with { OwnerUserId = "someone-else" };
+            var vm = h.Build(row);
+
+            await Assert.That(vm.TitleEditor.ShowsPencil).IsFalse();
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task A_row_without_a_session_shows_no_pencil() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.Row(sessionId: null));
+
+            await Assert.That(vm.TitleEditor.ShowsPencil).IsFalse();
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task An_ended_session_shows_no_pencil() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.Row());
+            await Assert.That(vm.TitleEditor.ShowsPencil).IsTrue();
+
+            h.Directory.Rows.AddOrUpdate(Harness.Row(status: "Completed"));
+            await WaitUntilAsync(() => vm.SessionEnded, what: "ended");
+            await Assert.That(vm.TitleEditor.ShowsPencil).IsFalse();
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task Signing_in_as_another_user_hides_the_pencil() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.Row());
+            await Assert.That(vm.TitleEditor.ShowsPencil).IsTrue();
+
+            h.Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: "u2", Epoch: 2));
+            await WaitUntilAsync(() => !vm.TitleEditor.ShowsPencil, what: "pencil hidden");
             await vm.TeardownAsync();
         });
     }

@@ -6,6 +6,28 @@ diff. `CLAUDE.md` holds the invariants; `docs/superpowers/specs/` holds the full
 Not release notes. Each entry is written as of the change that produced it and is not revised as the
 code moves on; where an entry disagrees with the code, the code wins.
 
+## A session is renamed from the desktop header
+
+The pencil beside a workspace's title posts the new name to the server's agent-title hook as a
+rename — the same tier `/rename` uses — so the newest rename wins whichever surface made it. A local
+session renames through its daemon, never the app: the header and rail both read the daemon's
+title, which its server-title tick would otherwise put back. A remote session is renamed by the app
+as the signed-in user. The pencil shows only where the server would accept the write: a remote row
+the user owns, or a local one whose daemon advertises rename, shares the app's server and account,
+and hosts a public agent. The request carries the app's account, so a daemon re-signed-in as
+someone else refuses it rather than renaming under the wrong owner.
+
+The server's title projection lags the write, so both sides keep showing an applied rename while
+their server reads have yet to reflect it — the daemon in its title state, the app in an overlay
+over the remote registry — for at most two minutes, after which the server's title wins. The bound
+keeps a rename the server superseded before ever showing it from being held forever.
+
+The rename ladder orders by when a rename happened, and its clocks differ: the server stamps a
+desktop rename on receipt, a harness rename carries the agent machine's clock or none. Accepted as
+is: an untimed harness rename after a desktop one never shows; an agent machine whose clock runs
+ahead makes a later desktop rename come back refused; and renaming back to an earlier harness name
+after a desktop rename is dropped as a re-send. Closing these needs a server-side ladder change.
+
 ## A code block carries its own copy, and runs itself when it is a command
 
 An agent that wants a command run asks for it in a fenced block, and a reader who cannot lift the

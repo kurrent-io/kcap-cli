@@ -43,8 +43,7 @@
     <Grid RowDefinitions="56,42,Auto,*">
         <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" Margin="20,0,16,0">
             <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center" Margin="0,0,16,0">
-                <TextBlock x:Name="RemoteTitle" Text="{Binding Title}" FontWeight="SemiBold" FontSize="14.5"
-                           Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
+                <views:SessionTitleEditor x:Name="RemoteTitle" DataContext="{Binding TitleEditor}" />
                 <StackPanel Orientation="Horizontal" Spacing="7">
                     <Ellipse Width="7" Height="7" VerticalAlignment="Center" Fill="{Binding StatusDot}" />
                     <TextBlock x:Name="RemoteStatus" Text="{Binding StatusText}" FontSize="11.5"

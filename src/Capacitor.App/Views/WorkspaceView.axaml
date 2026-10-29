@@ -46,8 +46,7 @@
         <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" Margin="20,0,16,0"
               Background="Transparent" PointerPressed="OnHeaderPointerPressed">
             <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center" Margin="0,0,16,0">
-                <TextBlock x:Name="WorkspaceTitle" Text="{Binding Title}" FontWeight="SemiBold" FontSize="14.5"
-                           Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
+                <views:SessionTitleEditor x:Name="WorkspaceTitle" DataContext="{Binding TitleEditor}" />
                 <TextBlock x:Name="WorkspaceSubtitle" Text="{Binding RepoLabelText}" FontSize="11.5"
                            Foreground="{StaticResource KcapMutedBrush}" TextTrimming="CharacterEllipsis" />
             </StackPanel>

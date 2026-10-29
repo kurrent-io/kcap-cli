@@ -14,12 +14,12 @@ static class WorkspaceFixtures {
             string id, string vendor, bool? hasTerminal, string? repoPath = null,
             string kind = "agent", string? model = null,
             string? worktreePath = null, string? workLocation = null, string? borrowedFrom = null,
-            string? sessionId = null, string? branch = null) => new(
+            string? sessionId = null, string? branch = null, bool? isPrivate = null) => new(
         id, kind, vendor, repoPath, "Running",
         FlowRunId: null, FlowRole: null, Requester: null, CreatedAt: DateTime.UtcNow, Model: model,
         RequesterDisplay: null, HasTerminal: hasTerminal,
         WorktreePath: worktreePath, WorkLocation: workLocation, BorrowedFrom: borrowedFrom,
-        SessionId: sessionId, Branch: branch);
+        SessionId: sessionId, Branch: branch, IsPrivate: isPrivate);
 
     /// An AgentActionService over the scripted/recording deps, for suites that never assert on
     /// those deps individually.

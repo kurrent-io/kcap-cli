@@ -1,0 +1,51 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
+             x:Class="Capacitor.App.Views.SessionTitleEditor"
+             x:DataType="vm:SessionTitleEditorViewModel">
+    <UserControl.Styles>
+        <Style Selector="Button.titleAction">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="4" />
+            <Setter Property="MinHeight" Value="0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="Button.titleAction Path">
+            <Setter Property="Width" Value="13" />
+            <Setter Property="Height" Value="13" />
+            <Setter Property="Stretch" Value="Uniform" />
+            <Setter Property="StrokeThickness" Value="1.6" />
+            <Setter Property="StrokeLineCap" Value="Round" />
+            <Setter Property="StrokeJoin" Value="Round" />
+        </Style>
+    </UserControl.Styles>
+
+    <Panel>
+        <Grid x:Name="TitleDisplay" ColumnDefinitions="*,Auto" HorizontalAlignment="Left" IsVisible="{Binding !IsEditing}">
+            <TextBlock x:Name="TitleText" Grid.Column="0" Text="{Binding Title}" FontWeight="SemiBold" FontSize="14.5"
+                       Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+            <Button x:Name="RenameButton" Grid.Column="1" Classes="titleAction" Margin="4,0,0,0"
+                    Command="{Binding BeginEditCommand}" IsVisible="{Binding ShowsPencil}"
+                    AutomationProperties.Name="Rename session" ToolTip.Tip="Rename session">
+                <Path Stroke="{StaticResource KcapMutedBrush}"
+                      Data="M10.5,2.5 L13.5,5.5 L5.5,13.5 L2.5,13.5 L2.5,10.5 Z M8.5,4.5 L11.5,7.5" />
+            </Button>
+        </Grid>
+
+        <Grid x:Name="TitleEditing" ColumnDefinitions="*,Auto,Auto" IsVisible="{Binding IsEditing}">
+            <TextBox x:Name="TitleInput" Grid.Column="0" Text="{Binding Draft}" MaxLength="120"
+                     IsEnabled="{Binding IsInputEnabled}" AutomationProperties.Name="Session name"
+                     FontWeight="SemiBold" FontSize="14.5" MinHeight="0" Padding="6,2" VerticalContentAlignment="Center" />
+            <Button x:Name="SaveRenameButton" Grid.Column="1" Classes="titleAction" Margin="4,0,0,0"
+                    Command="{Binding SaveCommand}" AutomationProperties.Name="Save name" ToolTip.Tip="Save name">
+                <Path Stroke="{StaticResource KcapSuccessBrush}" Data="M3,8.5 L6.5,12 L13,4.5" />
+            </Button>
+            <Button x:Name="CancelRenameButton" Grid.Column="2" Classes="titleAction"
+                    Command="{Binding CancelCommand}" AutomationProperties.Name="Cancel rename" ToolTip.Tip="Cancel rename">
+                <Path Stroke="{StaticResource KcapMutedBrush}" Data="M4,4 L12,12 M12,4 L4,12" />
+            </Button>
+        </Grid>
+    </Panel>
+</UserControl>

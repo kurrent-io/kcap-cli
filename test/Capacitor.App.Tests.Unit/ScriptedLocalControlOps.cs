@@ -188,8 +188,15 @@ sealed class ScriptedLocalControlOps : ILocalControlOps {
         return tcs.Task.WaitAsync(ct);
     }
 
-    public Task<SessionRenameAckDto> RenameSessionAsync(SessionRenameDto rename, CancellationToken ct) =>
-        throw new InvalidOperationException("ScriptedLocalControlOps: unscripted RenameSession call");
+    /// Answers RenameSession; unset, a rename call throws as any unscripted call does.
+    public Func<SessionRenameDto, Task<SessionRenameAckDto>>? Rename;
+    public readonly List<SessionRenameDto> RenamePayloads = [];
+
+    public Task<SessionRenameAckDto> RenameSessionAsync(SessionRenameDto rename, CancellationToken ct) {
+        RenamePayloads.Add(rename);
+        return Rename?.Invoke(rename)
+            ?? throw new InvalidOperationException("ScriptedLocalControlOps: unscripted RenameSession call");
+    }
 
     public Task<DaemonSettingsAckDto> PutDaemonSettingsAsync(DaemonSettingsPutDto put, CancellationToken ct) {
         Interlocked.Increment(ref PutSettingsCalls);

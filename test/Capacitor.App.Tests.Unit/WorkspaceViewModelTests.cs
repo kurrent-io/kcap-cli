@@ -460,4 +460,122 @@ public class WorkspaceViewModelTests {
             await Assert.That(source.Requested.Count).IsEqualTo(1);
         });
     }
+
+    /// One eligible local session; each case below breaks exactly one condition.
+    sealed class RenameHarness {
+        public readonly FakeDaemonClientService Daemon = new();
+        public readonly ScriptedLocalControlOps Ops = new();
+        public readonly BehaviorSubject<bool> OnAppServer = new(true);
+        public readonly BehaviorSubject<string?> AppSubject = new("u1");
+        public readonly RecordingNotifier Notifier = new();
+        public string[] Capabilities = [RenameWire.Capability];
+        public string? DaemonSubject = "u1";
+        public bool? IsPrivate = false;
+        public string? SessionId = "s1";
+
+        public WorkspaceViewModel Build() {
+            Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, Capabilities));
+            var snap = FakeDaemonClientService.Snap();
+            Daemon.SnapshotsSubject.OnNext(snap with { Daemon = snap.Daemon with { UserSubject = DaemonSubject } });
+            var vm = new WorkspaceViewModel("a1", Daemon, WorkspaceFixtures.NewActions(), new FakeTerminalAttachClientFactory().Factory,
+                () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(), new FakePermissionService(),
+                new FakeWorkContextSource(), Ops, new NoAttachmentUploader(),
+                localDaemonOnAppServer: OnAppServer, appSubject: AppSubject, notifier: Notifier);
+            Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: false, repoPath: "/repo/myproj",
+                sessionId: SessionId, isPrivate: IsPrivate) with { Title = "Old name" });
+            return vm;
+        }
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_eligible_local_session_shows_the_pencil_and_renames_through_the_daemon() {
+        await RunOnUiAsync(async () => {
+            var h = new RenameHarness();
+            h.Ops.Rename = _ => Task.FromResult(new SessionRenameAckDto(true, null, "New name"));
+            var vm = h.Build();
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+
+            await Assert.That(vm.TitleEditor.Title).IsEqualTo("Old name");
+            await Assert.That(vm.TitleEditor.ShowsPencil).IsTrue();
+
+            await vm.TitleEditor.BeginEditCommand.Execute();
+            vm.TitleEditor.Draft = "New name";
+            await vm.TitleEditor.SaveCommand.Execute();
+
+            await Assert.That(h.Ops.RenamePayloads).IsEquivalentTo(new[] { new SessionRenameDto("a1", "New name", "u1") });
+            await Assert.That(vm.TitleEditor.IsEditing).IsFalse();
+            await Assert.That(vm.TitleEditor.Title).IsEqualTo("New name");
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_refused_local_rename_reports_the_daemon_reason() {
+        await RunOnUiAsync(async () => {
+            var h = new RenameHarness();
+            h.Ops.Rename = _ => Task.FromResult(new SessionRenameAckDto(false, SessionRenameReasons.NotOwned, null));
+            var vm = h.Build();
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+
+            await vm.TitleEditor.BeginEditCommand.Execute();
+            vm.TitleEditor.Draft = "New name";
+            await vm.TitleEditor.SaveCommand.Execute();
+
+            await Assert.That(h.Notifier.Notified).IsEquivalentTo(new[] { "You can't rename a session you don't own" });
+            await Assert.That(vm.TitleEditor.IsEditing).IsTrue();
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments("older daemon")]
+    [Arguments("different user")]
+    [Arguments("daemon signed out")]
+    [Arguments("app signed out")]
+    [Arguments("other server")]
+    [Arguments("private agent")]
+    [Arguments("privacy unknown")]
+    [Arguments("no session id")]
+    public async Task The_pencil_is_hidden_for_an_ineligible_local_session(string breaks) {
+        await RunOnUiAsync(async () => {
+            var h = new RenameHarness();
+            switch (breaks) {
+                case "older daemon": h.Capabilities = []; break;
+                case "different user": h.DaemonSubject = "u2"; break;
+                case "daemon signed out": h.DaemonSubject = null; break;
+                case "app signed out": h.AppSubject.OnNext(null); break;
+                case "other server": h.OnAppServer.OnNext(false); break;
+                case "private agent": h.IsPrivate = true; break;
+                case "privacy unknown": h.IsPrivate = null; break;
+                case "no session id": h.SessionId = null; break;
+            }
+            var vm = h.Build();
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+
+            await Assert.That(vm.TitleEditor.ShowsPencil).IsFalse();
+            await Assert.That(((System.Windows.Input.ICommand)vm.TitleEditor.BeginEditCommand).CanExecute(null)).IsFalse();
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_daemon_switching_accounts_mid_edit_cancels_it() {
+        await RunOnUiAsync(async () => {
+            var h = new RenameHarness();
+            var vm = h.Build();
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await vm.TitleEditor.BeginEditCommand.Execute();
+
+            var snap = FakeDaemonClientService.Snap();
+            h.Daemon.SnapshotsSubject.OnNext(snap with { Daemon = snap.Daemon with { UserSubject = "u2" } });
+
+            await Assert.That(vm.TitleEditor.IsEditing).IsFalse();
+            await Assert.That(vm.TitleEditor.ShowsPencil).IsFalse();
+            await vm.TeardownAsync();
+        });
+    }
 }
