@@ -1427,7 +1427,7 @@ public class HomeViewModelTests {
             lane.StatusSubject.OnNext(new ServerLaneStatus(laneState));
 
             await Assert.That(vm.ConnectionNotice)
-                .IsEqualTo("This machine's daemon is running for norton.kcap.ai, not kurrent.kcap.ai, so it cannot run agents here.");
+                .IsEqualTo("This machine's daemon uses another server. It's connected to norton.kcap.ai, so it can't run agents for kurrent.kcap.ai.");
             await Assert.That(vm.SignInVisible).IsFalse();
             await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsFalse();
         });
@@ -1491,23 +1491,30 @@ public class HomeViewModelTests {
 
             const string failure = "Daemon start did not finish. Press Retry.";
             startMessage.OnNext(failure);
-            await Assert.That(vm.BannerMessage).IsEqualTo(failure);
+            await Assert.That(vm.BannerMessage).IsEqualTo(
+                afterSignIn ? HomeViewModel.FinishingSignInNotice : HomeViewModel.ConnectingNotice);
+            await Assert.That(vm.BannerDetail).IsEqualTo(failure);
             await Assert.That(vm.BannerBusy).IsFalse();
 
             await vm.SelectMachineAsync("home-pc", isLocal: false);
+            await Assert.That(vm.BannerDetail).IsNull();
             await Assert.That(vm.BannerMessage).IsEqualTo(
                 afterSignIn ? HomeViewModel.FinishingSignInNotice : HomeViewModel.ConnectingNotice);
             await Assert.That(vm.BannerBusy).IsTrue();
 
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
             await Assert.That(vm.BannerMessage).IsNull();
+            await Assert.That(vm.BannerDetail).IsNull();
             await Assert.That(vm.BannerBusy).IsFalse();
 
             await vm.SelectMachineAsync(daemon.DaemonName, isLocal: true);
-            await Assert.That(vm.BannerMessage).IsEqualTo(failure);
+            await Assert.That(vm.BannerMessage).IsEqualTo(
+                afterSignIn ? HomeViewModel.FinishingSignInNotice : HomeViewModel.ConnectingNotice);
+            await Assert.That(vm.BannerDetail).IsEqualTo(failure);
             await Assert.That(vm.BannerBusy).IsFalse();
 
             startMessage.OnNext(null);
+            await Assert.That(vm.BannerDetail).IsNull();
             await Assert.That(vm.BannerMessage).IsEqualTo(
                 afterSignIn ? HomeViewModel.FinishingSignInNotice : HomeViewModel.ConnectingNotice);
             await Assert.That(vm.BannerBusy).IsTrue();
@@ -1600,16 +1607,20 @@ public class HomeViewModelTests {
     }
 
     [Test]
-    [Arguments(null, null, null)]
-    [Arguments("daemon down", null, "daemon down")]
-    [Arguments("daemon down", "kcap too old", "kcap too old")]
-    [Arguments(null, "kcap too old", "kcap too old")]
-    [Arguments("daemon down", "", "daemon down")]
-    [Arguments(HomeViewModel.SignInExpiredNotice, "Reconnecting…", HomeViewModel.SignInExpiredNotice)]
-    [Arguments(HomeViewModel.SignInExpiredNotice, "kcap too old", HomeViewModel.SignInExpiredNotice)]
-    public async Task BannerMessage_prefers_a_start_message_except_when_sign_in_is_expired(
-            string? notice, string? startMessage, string? expected) {
-        await Assert.That(HomeViewModel.BannerMessageFor(notice, startMessage)).IsEqualTo(expected);
+    [Arguments(null, null, null, null)]
+    [Arguments("daemon down", null, "daemon down", null)]
+    [Arguments("daemon down", "kcap too old", "daemon down", "kcap too old")]
+    [Arguments(null, "kcap too old", "kcap too old", null)]
+    [Arguments("daemon down", "Wrong server. Run this: `kcap fix`", "Wrong server. Run this: `kcap fix`", null)]
+    [Arguments("daemon down", "", "daemon down", null)]
+    [Arguments("daemon down", "daemon down", "daemon down", null)]
+    [Arguments(HomeViewModel.SignInExpiredNotice, "Reconnecting…", HomeViewModel.SignInExpiredNotice, null)]
+    [Arguments(HomeViewModel.SignInExpiredNotice, "kcap too old", HomeViewModel.SignInExpiredNotice, null)]
+    public async Task BannerContent_keeps_daemon_output_below_the_explanation(
+            string? notice, string? startMessage, string? expectedMessage, string? expectedDetail) {
+        var content = HomeViewModel.BannerContentFor(notice, startMessage);
+        await Assert.That(content.Message).IsEqualTo(expectedMessage);
+        await Assert.That(content.Detail).IsEqualTo(expectedDetail);
     }
 
     [Test]
@@ -2895,8 +2906,8 @@ public class HomeViewModelTests {
         });
     }
 
-    /// The daemon lifecycle feed speaks for the LOCAL machine, so it may pre-empt the connection
-    /// notice only while local is selected: under a healthy remote pick it must yield, and it must
+    /// The daemon lifecycle detail speaks for the LOCAL machine: under a healthy remote pick
+    /// it must yield, and it must
     /// come back the moment the selection does.
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -2919,16 +2930,19 @@ public class HomeViewModelTests {
                 ReactiveCommand.Create(() => { }), ReactiveCommand.Create(() => { }),
                 Observable.Return(true), Observable.Return(false), startMessage);
 
-            await Assert.That(vm.BannerMessage).IsEqualTo(startMessageText);
+            await Assert.That(vm.BannerMessage).IsEqualTo(HomeViewModel.DaemonDownNotice);
+            await Assert.That(vm.BannerDetail).IsEqualTo(startMessageText);
 
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
             await vm.SelectMachineAsync("home-pc", isLocal: false);
 
             await Assert.That(vm.BannerMessage).IsNull();
+            await Assert.That(vm.BannerDetail).IsNull();
             await Assert.That(vm.ConnectionBannerVisible).IsFalse();
 
             await vm.SelectMachineAsync(daemon.DaemonName, isLocal: true);
-            await Assert.That(vm.BannerMessage).IsEqualTo(startMessageText);
+            await Assert.That(vm.BannerMessage).IsEqualTo(HomeViewModel.DaemonDownNotice);
+            await Assert.That(vm.BannerDetail).IsEqualTo(startMessageText);
         });
     }
 }

@@ -78,17 +78,17 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal const string FinishingSignInNotice =
         "Finishing sign-in. Reconnecting to the server…";
     internal const string DaemonDownNotice     =
-        "The daemon isn't running. The app is starting its service. Press Start daemon to try again now.";
+        "The daemon isn't running.";
     internal const string DaemonRestartingNotice =
-        "The daemon is restarting into its new version. It reconnects on its own.";
+        "The daemon is restarting to update. It reconnects on its own.";
     internal const string DaemonIncompatibleNotice =
-        "App and daemon are incompatible. Update both to matching versions, then press Reconnect.";
+        "The app and daemon versions don't match. Update both, then reconnect.";
     internal const string ServerLostNotice     = "Not connected to the server. Sign in again to reconnect.";
-    internal const string SignInExpiredNotice  = "Your sign-in has expired. Sign in again.";
+    internal const string SignInExpiredNotice  = "Your sign-in has expired.";
     /// A daemon attached by name that serves another server: signing in again cannot move it.
     internal static string DaemonOnOtherServerNotice(string daemonServer, string appServer) {
         var (daemonLabel, appLabel) = AttachedIdentity.ServerLabels(daemonServer, appServer);
-        return $"This machine's daemon is running for {daemonLabel}, not {appLabel}, so it cannot run agents here.";
+        return $"This machine's daemon uses another server. It's connected to {daemonLabel}, so it can't run agents for {appLabel}.";
     }
 
     /// The daemon's server when it is known and is not the app's; null otherwise, an unknown side included.
@@ -96,19 +96,19 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         string.IsNullOrEmpty(daemonServer) || string.IsNullOrEmpty(appServer) || ServerIdentity.SameServer(daemonServer, appServer)
             ? null : daemonServer;
 
-    internal const string DaemonSignedOutNotice = "This machine's daemon is signed out, so it cannot reach the server. Sign in to its profile and it reconnects.";
+    internal const string DaemonSignedOutNotice = "This machine's daemon is signed out. Sign in to its profile to reconnect.";
 
     /// The connection word the notice reads when the daemon reports its own sign-in as the reason its
     /// hub is down; never on the wire.
     internal const string DaemonSignedOutWord = "signed out";
-    internal const string LocalServerRefusedNotice = "The local server refused this app's connection. Restart kcap.";
-    internal const string LocalServerLostNotice    = "Lost the connection to the local server. kcap keeps trying to reconnect.";
+    internal const string LocalServerRefusedNotice = "The local server refused the connection. Restart kcap.";
+    internal const string LocalServerLostNotice    = "Lost the connection to the local server. kcap keeps retrying.";
 
     /// A service-run daemon restarts itself for a harness installed on its PATH; setup fixes a PATH that
     /// misses it, and a daemon started by hand needs a restart.
     internal static string NoHarnessesNotice(string? remoteMachine) => remoteMachine is null
-        ? "No coding agents were found on this machine. Install Claude Code, Codex or another supported agent; if it does not appear, run setup again or restart the daemon."
-        : $"No coding agents were found on {remoteMachine}. Install one there; if it does not appear, run setup there again or restart its daemon.";
+        ? "No coding agents found on this machine. Install Claude Code, Codex or another supported agent. If it doesn't show up, run setup again or restart the daemon."
+        : $"No coding agents found on {remoteMachine}. Install one there. If it doesn't show up, run setup there again or restart its daemon.";
 
     internal static string HarnessUnavailableMessage(string label) => $"{label} isn't available on this machine. Choose another agent.";
 
@@ -298,10 +298,22 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     public string? ConnectionNotice => _connectionNotice.Value;
 
     readonly ObservableAsPropertyHelper<string?> _bannerMessage;
-    /// Single banner body: a start/lifecycle message wins over the generic connection notice so
-    /// Unreachable + "kcap too old" does not stack two lines that both say press Start daemon.
-    /// Expired sign-in still wins over those start messages — reconnecting will not restore a session.
+    /// The connection explanation, or the local daemon's status when there is none.
     public string? BannerMessage => _bannerMessage.Value;
+
+    readonly ObservableAsPropertyHelper<string?> _bannerTitle;
+    public string? BannerTitle => _bannerTitle.Value;
+
+    readonly ObservableAsPropertyHelper<string?> _bannerBody;
+    public string? BannerBody => _bannerBody.Value;
+
+    readonly ObservableAsPropertyHelper<string?> _bannerDetail;
+    /// Local daemon status and system output that goes with the message, without its commands.
+    public string? BannerDetail => _bannerDetail.Value;
+
+    readonly ObservableAsPropertyHelper<string?> _bannerCommand;
+    /// A command the banner asks the user to run, lifted out of the prose so it can be copied.
+    public string? BannerCommand => _bannerCommand.Value;
 
     readonly ObservableAsPropertyHelper<bool> _connectionBannerVisible;
     /// Same connection/sign-in/daemon banner the launcher shows above the composer.
@@ -317,6 +329,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     readonly ObservableAsPropertyHelper<bool> _signInVisible;
     public bool SignInVisible => _signInVisible.Value;
 
+    readonly ObservableAsPropertyHelper<bool> _bannerActionsVisible;
+    public bool BannerActionsVisible => _bannerActionsVisible.Value;
+
     /// Lane SignedOut or a 401 launch — the same flag NoticeFor uses for SignInExpiredNotice.
     /// An observable (not WhenAnyValue) so MainWindow can fold it into the rail footer without
     /// ReactiveUI's property-change mixins, which a headless test run does not reliably prime.
@@ -330,6 +345,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     // Feeds BannerMessage before AttachDaemonRecovery runs (null) and after (lifecycle lane).
     readonly BehaviorSubject<string?> _daemonStartMessageFeed = new(null);
+    // Same lane for the action cluster: false until AttachDaemonRecovery subscribes the real predicates.
+    readonly BehaviorSubject<bool> _daemonStartVisibleFeed = new(false);
+    readonly BehaviorSubject<bool> _daemonRetryVisibleFeed = new(false);
+    readonly BehaviorSubject<bool> _daemonRepairVisibleFeed = new(false);
 
     /// Wired by AttachDaemonRecovery to MainWindow's Start/Reconnect commands.
     public ReactiveCommand<Unit, Unit>? StartDaemonCommand { get; private set; }
@@ -847,26 +866,49 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .ToProperty(this, x => x.ConnectionNotice, ConnectingNotice)
             .DisposeWith(_disposables);
         // The lifecycle feed speaks for the LOCAL daemon (start attempts, version mismatch), so it
-        // may only pre-empt the notice while the local machine is the selected one — under a remote
-        // selection its banner would outrank a healthy remote's own (absent) notice.
-        var bannerMessages = notices.CombineLatest(
+        // is shown only while the local machine is selected. Remote notices must stay independent.
+        var bannerContent = notices.CombineLatest(
             _daemonStartMessageFeed, _machineSelectionChanges,
-            (notice, startMessage, sel) => BannerMessageFor(notice, sel.Remote ? null : startMessage));
-        _bannerMessage = bannerMessages
+            (notice, startMessage, sel) => BannerContentFor(notice, sel.Remote ? null : startMessage));
+        _bannerMessage = bannerContent.Select(content => content.Message)
             .ToProperty(this, x => x.BannerMessage, ConnectingNotice)
             .DisposeWith(_disposables);
-        _connectionBannerVisible = bannerMessages
-            .Select(message => message is not null)
+        var bannerCard = bannerContent.Select(content => {
+            var message = NoticeText.Commands(content.Message);
+            var detail  = NoticeText.Commands(content.Detail);
+            var (title, body) = NoticeText.Headline(message.Prose);
+            return (Title: title, Body: body, Detail: detail.Prose, Command: detail.Command ?? message.Command);
+        });
+        _bannerTitle = bannerCard.Select(card => card.Title)
+            .ToProperty(this, x => x.BannerTitle, ConnectingNotice)
+            .DisposeWith(_disposables);
+        _bannerBody = bannerCard.Select(card => card.Body)
+            .ToProperty(this, x => x.BannerBody)
+            .DisposeWith(_disposables);
+        _bannerDetail = bannerCard.Select(card => card.Detail)
+            .ToProperty(this, x => x.BannerDetail)
+            .DisposeWith(_disposables);
+        _bannerCommand = bannerCard.Select(card => card.Command)
+            .ToProperty(this, x => x.BannerCommand)
+            .DisposeWith(_disposables);
+        _connectionBannerVisible = bannerContent
+            .Select(content => content.Message is not null)
             .ToProperty(this, x => x.ConnectionBannerVisible, initialValue: false)
             .DisposeWith(_disposables);
-        _bannerBusy = bannerMessages
-            .Select(message => BusyNotice(message) || message == DaemonRestartingNotice)
+        _bannerBusy = bannerContent
+            .Select(content => InFlight(content.Detail ?? content.Message) || content.Message == DaemonRestartingNotice)
             .ToProperty(this, x => x.BannerBusy, initialValue: true)
             .DisposeWith(_disposables);
-        _signInVisible = signInState
+        var signInVisible = signInState
             .CombineLatest(_catchUpTimedOut, _localServer, (t, timedOut, local) => !local && !t.Awaiting && (t.Expired || (timedOut && !t.Foreign) || (
-                t.Availability == LaunchAvailability.ServerDisconnected && !t.Foreign && !LaneIsCatchingUp(t.Lane))))
+                t.Availability == LaunchAvailability.ServerDisconnected && !t.Foreign && !LaneIsCatchingUp(t.Lane))));
+        _signInVisible = signInVisible
             .ToProperty(this, x => x.SignInVisible, initialValue: false)
+            .DisposeWith(_disposables);
+        _bannerActionsVisible = _daemonStartVisibleFeed
+            .CombineLatest(_daemonRetryVisibleFeed, _daemonRepairVisibleFeed, signInVisible,
+                (start, retry, repair, signIn) => start || retry || repair || signIn)
+            .ToProperty(this, x => x.BannerActionsVisible, initialValue: false)
             .DisposeWith(_disposables);
 
         // The daemon catching up ends the wait whichever server it serves.
@@ -927,6 +969,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         _daemonRetryVisible = retryVisible
             .ToProperty(this, x => x.DaemonRetryVisible, initialValue: false)
             .DisposeWith(_disposables);
+        startVisible.Subscribe(_daemonStartVisibleFeed).DisposeWith(_disposables);
+        retryVisible.Subscribe(_daemonRetryVisibleFeed).DisposeWith(_disposables);
         startMessage
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_daemonStartMessageFeed)
@@ -938,12 +982,15 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         RepairDaemonCommand = ReactiveCommand.CreateFromTask(() => repair(ct));
         this.RaisePropertyChanged(nameof(RepairDaemonCommand));
 
-        _daemonRepairVisible = offer
+        var repairVisible = offer
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .CombineLatest(this.WhenAnyValue(x => x.BannerMessage),
-                (offered, shown) => offered is not null && shown == offered)
+            .CombineLatest(this.WhenAnyValue(x => x.BannerMessage, x => x.BannerDetail, (message, detail) => (message, detail)),
+                (offered, shown) => offered is not null
+                    && (shown.message == offered || NoticeText.Commands(offered).Prose == shown.detail));
+        _daemonRepairVisible = repairVisible
             .ToProperty(this, x => x.DaemonRepairVisible, initialValue: false)
             .DisposeWith(_disposables);
+        repairVisible.Subscribe(_daemonRepairVisibleFeed).DisposeWith(_disposables);
     }
 
     /// The "local server is not running" banner, beside the daemon's own recovery.
@@ -959,11 +1006,15 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         recovery.WhenAnyValue(x => x.ServerDown).Subscribe(_localServerDown).DisposeWith(_disposables);
     }
 
-    /// Prefer the actionable start/lifecycle line when present; otherwise the connection notice.
-    /// Expired sign-in is the exception: a reconnecting/start line must not hide it.
-    internal static string? BannerMessageFor(string? connectionNotice, string? startMessage) =>
-        connectionNotice == SignInExpiredNotice ? connectionNotice
-        : !string.IsNullOrEmpty(startMessage) ? startMessage : connectionNotice;
+    /// The explanation first and daemon output below it. An expired sign-in stays the whole message:
+    /// starting or reconnecting the daemon cannot restore that session. A status that hands the user a
+    /// command to run is the whole message too, since it already says what the explanation would.
+    internal static (string? Message, string? Detail) BannerContentFor(string? connectionNotice, string? startMessage) =>
+        connectionNotice == SignInExpiredNotice || string.IsNullOrEmpty(startMessage) || startMessage == connectionNotice
+            ? (connectionNotice, null)
+        : connectionNotice is null || NoticeText.Commands(startMessage).Command is not null
+            ? (startMessage, null)
+            : (connectionNotice, startMessage);
 
     /// The re-auth dialog's success lands here (App wires it): clears the expired flag and holds a
     /// finishing notice until the daemon reports the server is connected.
@@ -1070,6 +1121,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal static bool LaneIsCatchingUp(ServerLaneState lane) =>
         lane is ServerLaneState.Connecting or ServerLaneState.Retrying or ServerLaneState.Connected;
 
+    /// A line still waiting on something, which the banner shows with a spinner. Every in-flight
+    /// connection notice and lifecycle status ends in an ellipsis; no failure does.
+    internal static bool InFlight(string? line) => line?.EndsWith('…') == true;
+
     internal static bool BusyNotice(string? notice) =>
         notice is ConnectingNotice or FinishingSignInNotice;
 
@@ -1103,6 +1158,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         _disposed = true;
         _disposables.Dispose();
         _daemonStartMessageFeed.Dispose();
+        _daemonStartVisibleFeed.Dispose();
+        _daemonRetryVisibleFeed.Dispose();
+        _daemonRepairVisibleFeed.Dispose();
         _uploadingChanges.Dispose();
         _retentionTimer.Dispose();
         _catchUpTimer.Dispose();

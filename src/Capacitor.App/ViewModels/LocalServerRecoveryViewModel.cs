@@ -3,6 +3,7 @@ using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using Capacitor.App.Services;
+using Capacitor.App.Services.LocalSetup;
 using Capacitor.Cli.Core;
 using ReactiveUI.Reactive;
 
@@ -118,7 +119,7 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
         var lines = (result.Stdout + "\n" + result.Stderr)
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .TakeLast(MessageTailLines);
-        var output = string.Join("\n", lines);
+        var output = TerminalAdvice.Strip(string.Join("\n", lines)) ?? "";
         var headline = result.TimedOut
             ? "kcap local start did not finish in time."
             : $"kcap local start failed (exit code {result.ExitCode}).";

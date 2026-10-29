@@ -631,8 +631,7 @@ public class MainWindowViewModelTests {
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_incompatible", null));
 
             await Assert.That(vm.Reason).IsNotNull();
-            await Assert.That(vm.Reason!).Contains("App and daemon are incompatible");
-            await Assert.That(vm.Reason!).Contains("Reconnect");
+            await Assert.That(vm.Reason).IsEqualTo(HomeViewModel.DaemonIncompatibleNotice);
             await Assert.That(vm.Reason!).DoesNotContain("daemon_incompatible");
             await Assert.That(home.DaemonStartVisible).IsFalse();
             await Assert.That(home.DaemonRetryVisible).IsTrue();
@@ -667,7 +666,7 @@ public class MainWindowViewModelTests {
             await Assert.That(vm.StartMessage).IsEqualTo(MainWindowViewModel.StartingMessage);
             gate.SetResult();
             await execute;
-            await Assert.That(vm.StartMessage).IsEqualTo("Daemon start requested. Waiting to connect…");
+            await Assert.That(vm.StartMessage).IsEqualTo("Starting the daemon. Waiting for it to connect…");
 
             // A transition to Connected clears it too.
             service.StartBehavior = _ => Task.FromResult(new StartDaemonResult(false, "second failure"));
