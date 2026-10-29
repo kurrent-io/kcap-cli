@@ -229,7 +229,7 @@
                                                       IsVisible="{Binding !IsCollapsible}" />
                                 <Button Classes="toolSummary" IsVisible="{Binding IsCollapsible}"
                                         Command="{Binding ToggleCommand}" Click="OnToolSummaryClick"
-                                        AutomationProperties.Name="{Binding Label}">
+                                        AutomationProperties.Name="{Binding ToggleAccessibleName}">
                                     <views:ChatKindHeader Label="{Binding Label}" IconKind="{Binding IconKind}">
                                         <views:ChatKindHeader.Status>
                                             <Panel Width="12" Height="12" VerticalAlignment="Center">

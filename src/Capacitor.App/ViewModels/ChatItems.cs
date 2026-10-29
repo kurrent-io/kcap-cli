@@ -100,8 +100,11 @@ public sealed class SystemNoteItem : ChatItemViewModel {
             if (_isExpanded == value) return;
             _isExpanded = value;
             this.RaisePropertyChanged();
+            this.RaisePropertyChanged(nameof(ToggleAccessibleName));
         }
     }
+
+    public string ToggleAccessibleName => $"{(IsExpanded ? "Collapse" : "Expand")} {Label}";
 
     public ReactiveCommand<Unit, Unit> ToggleCommand { get; }
 

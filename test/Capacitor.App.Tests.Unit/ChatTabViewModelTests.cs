@@ -1022,8 +1022,12 @@ public class ChatTabViewModelTests {
             await Assert.That(note.Label).IsEqualTo(SystemNoteItem.CompactSummaryLabel);
             await Assert.That(note.Text).IsEqualTo("This session is being continued from a previous conversation.");
             await Assert.That(note.IsExpanded).IsFalse();
+            await Assert.That(note.ToggleAccessibleName).IsEqualTo("Expand Conversation compacted");
             note.Toggle();
             await Assert.That(note.IsExpanded).IsTrue();
+            await Assert.That(note.ToggleAccessibleName).IsEqualTo("Collapse Conversation compacted");
+            note.Toggle();
+            await Assert.That(note.IsExpanded).IsFalse();
             await h.TeardownAsync();
         });
     }
