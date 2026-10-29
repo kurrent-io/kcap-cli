@@ -434,6 +434,11 @@
                                                     Click="OnAboutClick" IsVisible="{Binding ShowsAbout}"
                                                     HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
                                                     Padding="10,8" FontSize="13.5" />
+                                            <Button x:Name="RailHelpCheckForUpdatesButton" Classes="kcapGhost" Content="Check for Updates…"
+                                                    Command="{Binding CheckForUpdatesCommand}" Click="OnHelpFlyoutItemClick"
+                                                    IsVisible="{Binding ShowsCheckForUpdates}"
+                                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                    Padding="10,8" FontSize="13.5" />
                                             <Button x:Name="RailLaunchApprovalsButton" Classes="kcapGhost" Content="Launch approvals…"
                                                     Command="{Binding OpenLaunchApprovalsCommand}" Click="OnHelpFlyoutItemClick"
                                                     HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"

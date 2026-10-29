@@ -104,6 +104,7 @@ public partial class App : Application {
     readonly AppStateStore _appState;
 
     readonly UiScaleSetting _uiScale;
+    readonly BetaUpdatesSetting _betaUpdates;
 
     // Set only in a copy started to uninstall; nothing of the normal app is built in it.
     readonly UninstallMode? _uninstallMode = Program.Uninstall;
@@ -118,6 +119,7 @@ public partial class App : Application {
         _appState = new AppStateStore(_config.Path("app-state.json"));
 #pragma warning restore RS0030
         _uiScale = UiScaleSetting.LoadAsync(_appState).GetAwaiter().GetResult();
+        _betaUpdates = BetaUpdatesSetting.LoadAsync(_appState).GetAwaiter().GetResult();
     }
 
     internal static TelemetryStartup DesktopTelemetry(UninstallMode? uninstall, string signupUrl) =>
@@ -276,11 +278,11 @@ public partial class App : Application {
     // Outside a packed bundle Velopack reports not-installed and the coordinator stays inert; a
     // constructor failure degrades the same way rather than taking startup down. In a snap, snapd
     // owns updates and the install is a read-only mount, so Velopack is never consulted.
-    static IAppUpdater CreateUpdater() {
+    static IAppUpdater CreateUpdater(BetaUpdatesSetting betaUpdates) {
         if (SnapLayout.OfRunningBinary() is not null) return InertAppUpdater.Instance;
 
         try {
-            return new VelopackAppUpdater(Environment.GetEnvironmentVariable);
+            return new VelopackAppUpdater(Environment.GetEnvironmentVariable, () => betaUpdates.Choice);
         } catch (Exception ex) {
             Console.Error.WriteLine($"kcap app: updater unavailable: {ex.Message}");
             return InertAppUpdater.Instance;
@@ -353,7 +355,7 @@ public partial class App : Application {
                     ("installed_handoff", desktop.Args?.Contains("--kcap-installed", StringComparer.Ordinal) == true ? "true" : null));
                 if (RunInstallLocationGuard(desktop)) return; // the guard window owns the rest of this run
             }
-            _updater = CreateUpdater();
+            _updater = CreateUpdater(_betaUpdates);
             if (UpdateCoordinator.TryApplyPendingAtStartup(_updater, Program.Host.UpdateRelaunch,
                     HandOver(AppUpdateTransition.PendingAtStartup), LifecycleLog)) return; // the process is being replaced
             TakeUpdateTransition();
@@ -656,6 +658,7 @@ public partial class App : Application {
         if (_coordinator is not null) _coordinator.QuitInProgress = true;
         LatchNavigation();
         _appMenu.SetSettingsAction(null);
+        _appMenu.SetCheckForUpdatesAction(null);
         _appMenu.SetSetupAction(null);
         _appMenu.SetUninstallAction(null);
         _shutdown.Cancel();
@@ -916,6 +919,7 @@ public partial class App : Application {
             }), _shutdown.Token,
             handingOver: HandOver(AppUpdateTransition.InApp), log: LifecycleLog);
         _updates.Start();
+        if (_updater.IsAvailable) _appMenu.SetCheckForUpdatesAction(_updates.CheckForUpdatesAsync);
 
         // Said once, here, because nothing else in the app would: the graph is up but deliberately degraded.
         AnnounceUnquiescedLane(lifecycleSurface, laneQuiesced);
@@ -1190,7 +1194,8 @@ public partial class App : Application {
                 remoteWorkspaceFactory: BuildRemote, serverWorkspaceFactory: BuildServer,
                 sessions: sessions, railPreferences: railPreferences, profileName: profiles?.Name,
                 modelCatalog: modelCatalog.Catalog, uploader: uploader, appServerUrl: profiles?.Resolution.ServerUrl,
-                openFeedback: openFeedback, settingsAction: _appMenu.SettingsAction, uninstallAction: _appMenu.UninstallAction,
+                openFeedback: openFeedback, settingsAction: _appMenu.SettingsAction, checkForUpdatesAction: _appMenu.CheckForUpdatesAction,
+                uninstallAction: _appMenu.UninstallAction,
                 adopt: TakeAdoptableWindow(), show: !_holdingMainWindow,
                 requestSetup: () => _ = RestartForSetupAsync(desktop),
                 historyImport: _historyImport?.Run,
@@ -1300,6 +1305,11 @@ public partial class App : Application {
             restartPending: restartPending.Pending, openSettings: openSettings, openLaunchApprovals: launchApprovals.Show);
         _tray = new TrayIconManager(this, _trayVm);
         LifecycleLog.Write("tray_created", ("executable", Environment.ProcessPath));
+    }
+
+    async Task SetBetaUpdatesAsync(bool enabled) {
+        await _betaUpdates.SetAsync(enabled);
+        if (_updates is { } updates) await updates.RecheckAsync();
     }
 
     internal void ConfigureSettingsMenu(Action? openSettings) => _appMenu.SetSettingsAction(openSettings);
@@ -1467,7 +1477,8 @@ public partial class App : Application {
                 Search     = _localStack?.Search,
                 Experimental = new ExperimentalSettingsViewModel(new ExperimentalSettingsStore(_config), settings.ProfileName, service),
                 About = new AboutSettingsViewModel(service, SettingsCli(settings, service.DaemonName).Cli.VersionAsync, _localStack,
-                    _updates?.MenuItem, _updates is { } updates ? updates.RunMenuActionAsync : null, appLifetime: _shutdown.Token),
+                    _updates?.MenuItem, _updates is { } updates ? updates.RunMenuActionAsync : null,
+                    followsBetas: () => _updater.AllowsPrerelease, setBetaUpdates: SetBetaUpdatesAsync, appLifetime: _shutdown.Token),
             };
         } catch (Exception ex) {
             notifier.Notify($"Could not open settings: {ex.Message}");
@@ -2005,6 +2016,7 @@ public partial class App : Application {
             IObservable<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>? modelCatalog = null,
             IAttachmentUploader? uploader = null, string? appServerUrl = null,
             Action<FeedbackCategory>? openFeedback = null, IObservable<Action?>? settingsAction = null,
+            IObservable<Func<Task>?>? checkForUpdatesAction = null,
             IObservable<Action?>? uninstallAction = null, (MainWindow Window, AppState State)? adopt = null, bool show = true,
             Action? requestSetup = null, HistoryImportRun? historyImport = null,
             IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
@@ -2093,7 +2105,8 @@ public partial class App : Application {
             originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory, directory: resolvedDirectory,
             serverWorkspaceFactory: serverWorkspaceFactory, sessions: sessions,
             openFeedback: openFeedback, opener: new ShellUrlOpener(), requestSignIn: requestSignIn,
-            settingsAction: settingsAction, uninstallAction: uninstallAction, requestSetup: requestSetup, historyImport: historyImport,
+            settingsAction: settingsAction, checkForUpdatesAction: checkForUpdatesAction,
+            uninstallAction: uninstallAction, requestSetup: requestSetup, historyImport: historyImport,
             backgroundPriority: backgroundPriority, reloadState: reloadState, isReloading: isReloading, reloadDaemon: reloadDaemon, openLaunchApprovals: openLaunchApprovals,
             movingToWindowsService: movingToWindowsService) {
             LocalStack = localStack,

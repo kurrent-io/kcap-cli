@@ -28,6 +28,8 @@ public sealed record AppState(
     // When setup last sent the user to kcap.ai's sign-up; cleared once a sign-in commits.
     DateTimeOffset? WebSignUpOpenedAt = null,
     bool WindowsServiceDeclined = false,
+    // Null follows the installed version: a beta install takes betas, a stable one does not.
+    bool? BetaUpdates = null,
     // "host/vendor:repo" -> account id, written by AccountMemory.
     IReadOnlyDictionary<string, string>? AccountByRepo = null,
     // Vendor id -> whether kcap's tools were last installed for it from Settings. Nothing on disk
