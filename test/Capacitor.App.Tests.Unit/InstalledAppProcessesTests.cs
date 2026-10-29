@@ -51,4 +51,30 @@ public class InstalledAppProcessesTests {
         await Assert.That(result).IsFalse();
         await Assert.That(calls).IsEqualTo(0);
     }
+
+    [Test]
+    public async Task A_refused_quit_does_not_keep_the_others_from_quitting() {
+        var running = new List<int> { 123, 456 };
+        var result = await InstalledAppProcesses.QuitEarlierAsync(DateTime.UtcNow, TimeProvider.System, CancellationToken.None,
+            _ => running.ToArray(), pid => { if (pid == 123) return false; running.Remove(pid); return true; });
+        await Assert.That(result).IsEqualTo((1, true));
+    }
+
+    [Test]
+    public async Task Waiting_for_an_earlier_copy_to_exit_is_bounded() {
+        var time = new FakeTimeProvider();
+        var pending = InstalledAppProcesses.QuitEarlierAsync(DateTime.UtcNow, time, CancellationToken.None, _ => [123], _ => true);
+        await Assert.That(pending.IsCompleted).IsFalse();
+        time.Advance(TimeSpan.FromSeconds(31));
+        await Assert.That(await pending).IsEqualTo((1, false));
+    }
+
+    [Test]
+    public async Task This_process_is_never_asked_to_quit() {
+        var calls = 0;
+        var result = await InstalledAppProcesses.QuitEarlierAsync(DateTime.UtcNow, TimeProvider.System, CancellationToken.None,
+            _ => [Environment.ProcessId], _ => { calls++; return true; });
+        await Assert.That(result).IsEqualTo((0, true));
+        await Assert.That(calls).IsEqualTo(0);
+    }
 }

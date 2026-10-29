@@ -36,6 +36,9 @@ internal sealed partial class RestartCoordinator : BackgroundService {
 
     // Seams (assigned from DI in the production ctor; overridden directly in tests).
     internal Func<BinaryStat?> StatBinary = static () => null;
+    // The binary as it stood when this process started. An update that replaces it while the daemon is still
+    // booting lands before the poll begins, so a baseline taken then would already be the new binary.
+    internal BinaryStat? LaunchBinary;
     internal Func<bool>        IsBusy     = static () => false;
     // Busy for a forced restart, or a self-detected one past TurnWait: evals and launches in
     // admission, not flow participants.
@@ -79,6 +82,7 @@ internal sealed partial class RestartCoordinator : BackgroundService {
         Strategy   = strategy;
         WireGate(orchestrator, evalCache);
         StatBinary = StatProcessBinary;
+        LaunchBinary = config.LaunchBinary;
         HarnessInstalled = () => UnadvertisedNowAvailable(config.SupportedVendors, factories.Values);
     }
 
@@ -118,10 +122,10 @@ internal sealed partial class RestartCoordinator : BackgroundService {
     }
 
     internal void PrimeBaseline() {
-        lock (_gate) _baseline = StatBinary();
+        lock (_gate) _baseline = LaunchBinary ?? StatBinary();
     }
 
-    static BinaryStat? StatProcessBinary() => StatBinaryAt(Environment.ProcessPath, OperatingSystem.IsWindows(), File.Exists);
+    internal static BinaryStat? StatProcessBinary() => StatBinaryAt(Environment.ProcessPath, OperatingSystem.IsWindows(), File.Exists);
 
     /// <summary>
     /// What the poll compares: the binary reached through a script install's or a snap's <c>current</c>,

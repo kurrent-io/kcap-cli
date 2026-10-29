@@ -51,6 +51,43 @@ internal static partial class InstalledAppProcesses {
         return false;
     }
 
+    /// Kcap app processes other than this one, from any bundle, that started before <paramref name="startedBefore"/>.
+    internal static int[] FindEarlier(DateTime startedBefore) {
+        var matches = new List<int>();
+        foreach (var name in KcapBundle.ExecutableNames) {
+            foreach (var process in Process.GetProcessesByName(name)) {
+                using (process) {
+                    if (process.Id == Environment.ProcessId) continue;
+                    try {
+                        if (!process.HasExited && process.StartTime < startedBefore) matches.Add(process.Id);
+                    } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException) { }
+                }
+            }
+        }
+        return matches.ToArray();
+    }
+
+    /// <summary>
+    /// Asks every kcap app process that started before this one to quit, and waits up to 30 s for those that accepted.
+    /// After an update relaunch none of them should still run: this process holds the single-instance lock, so another
+    /// copy is a predecessor that let go of it without exiting, or one that predates the lock. An older version can
+    /// stay up that way with its main window over this one's. A process that refuses, another user's included, is
+    /// left alone.
+    /// </summary>
+    /// <returns>How many were asked, and whether every one that accepted has exited.</returns>
+    internal static async Task<(int Asked, bool Exited)> QuitEarlierAsync(DateTime startedBefore, TimeProvider time, CancellationToken ct,
+            Func<DateTime, int[]>? find = null, Func<int, bool>? quit = null) {
+        find ??= FindEarlier;
+        quit ??= RequestQuit;
+        var asked = find(startedBefore).Where(pid => pid != Environment.ProcessId && quit(pid)).ToArray();
+        var started = time.GetTimestamp();
+        while (asked.Intersect(find(startedBefore)).Any()) {
+            if (time.GetElapsedTime(started) >= TimeSpan.FromSeconds(30)) return (asked.Length, false);
+            await Task.Delay(TimeSpan.FromMilliseconds(100), time, ct);
+        }
+        return (asked.Length, true);
+    }
+
     static bool RequestQuit(int pid) {
         if (!OperatingSystem.IsMacOS() || pid <= 0 || pid == Environment.ProcessId) return false;
         var pool = Send(GetClass("NSAutoreleasePool"), Selector("new"));

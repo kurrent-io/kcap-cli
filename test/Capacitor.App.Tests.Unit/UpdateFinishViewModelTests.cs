@@ -19,13 +19,13 @@ public class UpdateFinishViewModelTests {
     [Arguments("1.4.0", true, UpdateStepState.Note)]
     [Arguments("1.4.0", false, UpdateStepState.Running)]
     public async Task A_connected_daemon_is_done_only_at_the_new_version(string version, bool restartPending, UpdateStepState expected) {
-        await Assert.That(UpdateFinishViewModel.DaemonStep(Connected, version, restartPending, "1.4.1").State).IsEqualTo(expected);
+        await Assert.That(UpdateFinishViewModel.DaemonStep(Connected, version, "connected", restartPending, "1.4.1").State).IsEqualTo(expected);
     }
 
     [Test]
     public async Task An_expected_restart_is_progress_and_an_unexpected_outage_is_a_problem() {
-        await Assert.That(UpdateFinishViewModel.DaemonStep(Restarting, null, true, "1.4.1").State).IsEqualTo(UpdateStepState.Running);
-        await Assert.That(UpdateFinishViewModel.DaemonStep(Down, null, false, "1.4.1").State).IsEqualTo(UpdateStepState.Problem);
+        await Assert.That(UpdateFinishViewModel.DaemonStep(Restarting, null, null, true, "1.4.1").State).IsEqualTo(UpdateStepState.Running);
+        await Assert.That(UpdateFinishViewModel.DaemonStep(Down, null, null, false, "1.4.1").State).IsEqualTo(UpdateStepState.Problem);
     }
 
     /// An old daemon cannot talk to the new app until it restarts into the new binary, so that is progress at first.
@@ -33,8 +33,8 @@ public class UpdateFinishViewModelTests {
     public async Task An_incompatible_daemon_is_progress_until_the_patience_runs_out() {
         var incompatible = new AttachStatus(AttachState.Unreachable, "daemon_incompatible", null);
 
-        await Assert.That(UpdateFinishViewModel.DaemonStep(incompatible, null, false, "1.4.1").State).IsEqualTo(UpdateStepState.Running);
-        await Assert.That(UpdateFinishViewModel.DaemonStep(incompatible, null, false, "1.4.1", waitedLong: true).State).IsEqualTo(UpdateStepState.Problem);
+        await Assert.That(UpdateFinishViewModel.DaemonStep(incompatible, null, null, false, "1.4.1").State).IsEqualTo(UpdateStepState.Running);
+        await Assert.That(UpdateFinishViewModel.DaemonStep(incompatible, null, null, false, "1.4.1", waitedLong: true).State).IsEqualTo(UpdateStepState.Problem);
     }
 
     [Test]
@@ -81,12 +81,14 @@ public class UpdateFinishViewModelTests {
     [Test]
     public async Task Step_details_are_fragments() {
         var details = new[] {
-            UpdateFinishViewModel.DaemonStep(Connected, "1.4.0", true, "1.4.1"),
-            UpdateFinishViewModel.DaemonStep(Connected, "1.4.0", false, "1.4.1", waitedLong: true),
-            UpdateFinishViewModel.DaemonStep(Connected, "1.5.0", false, "1.4.1"),
-            UpdateFinishViewModel.DaemonStep(Restarting, null, true, "1.4.1"),
-            UpdateFinishViewModel.DaemonStep(Down, null, false, "1.4.1"),
-            UpdateFinishViewModel.DaemonStep(new AttachStatus(AttachState.Unreachable, "daemon_incompatible", null), null, false, "1.4.1", waitedLong: true),
+            UpdateFinishViewModel.DaemonStep(Connected, "1.4.0", "connected", true, "1.4.1"),
+            UpdateFinishViewModel.DaemonStep(Connected, "1.4.0", "connected", false, "1.4.1", waitedLong: true),
+            UpdateFinishViewModel.DaemonStep(Connected, "1.5.0", "connected", false, "1.4.1"),
+            UpdateFinishViewModel.DaemonStep(Restarting, null, null, true, "1.4.1"),
+            UpdateFinishViewModel.DaemonStep(Down, null, null, false, "1.4.1"),
+            UpdateFinishViewModel.DaemonStep(new AttachStatus(AttachState.Unreachable, "daemon_incompatible", null), null, null, false, "1.4.1", waitedLong: true),
+            UpdateFinishViewModel.DaemonStep(Connected, "1.4.1", "reconnecting", false, "1.4.1"),
+            UpdateFinishViewModel.DaemonStep(Connected, "1.4.1", "disconnected", false, "1.4.1", waitedLong: true),
         }.Concat(new UpdateFinishViewModel("1.4.0", "1.4.1", new FakeTimeProvider(), stopsDaemon: true).Steps)
             .Select(step => step.Detail!).ToList();
 
@@ -98,9 +100,9 @@ public class UpdateFinishViewModelTests {
 
     [Test]
     public async Task Everything_done_settles_clean_and_a_note_settles_without_being_clean() {
-        var done = UpdateFinishViewModel.Project(Update, Connected, "1.4.1", false, new LocalStepInput(false, new LocalUpgradeOutcome.NothingToDo(null), null, null));
-        var noted = UpdateFinishViewModel.Project(Update, Connected, "1.4.0", true, null);
-        var busy = UpdateFinishViewModel.Project(Update, Restarting, null, true, null);
+        var done = UpdateFinishViewModel.Project(Update, Connected, "1.4.1", "connected", false, new LocalStepInput(false, new LocalUpgradeOutcome.NothingToDo(null), null, null));
+        var noted = UpdateFinishViewModel.Project(Update, Connected, "1.4.0", "connected", true, null);
+        var busy = UpdateFinishViewModel.Project(Update, Restarting, null, null, true, null);
 
         await Assert.That(done is { Settled: true, Clean: true }).IsTrue();
         await Assert.That(done.Steps.Select(step => step.Title).SequenceEqual(["kcap 1.4.1", "Local server", "Daemon 1.4.1"])).IsTrue();
@@ -115,20 +117,20 @@ public class UpdateFinishViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var clock = new FakeTimeProvider();
             var status = new BehaviorSubject<AttachStatus>(Restarting);
-            var version = new BehaviorSubject<string?>(null);
-            using var vm = new UpdateFinishViewModel(Update, status, version, Observable.Return(true), Observable.Return<LocalStepInput?>(null), clock);
+            var daemon = new BehaviorSubject<(string?, string?)>((null, null));
+            using var vm = new UpdateFinishViewModel(Update, status, daemon, Observable.Return(true), Observable.Return<LocalStepInput?>(null), clock);
             var completed = 0;
             vm.Completed += () => completed++;
 
             await Assert.That(vm.Heading).IsEqualTo("Finishing the update");
             await Assert.That(vm.OpenLabel).IsEqualTo("Open kcap");
             status.OnNext(Connected);
-            version.OnNext("1.4.1");
+            daemon.OnNext(("1.4.1", "connected"));
             await Assert.That(vm.Heading).IsEqualTo("kcap 1.4.1 is ready");
             clock.Advance(UpdateFinishViewModel.HandOverDelay);
             await WaitUntilAsync(() => completed == 1);
 
-            using var stuck = new UpdateFinishViewModel(Update, Observable.Return(Down), Observable.Return<string?>(null),
+            using var stuck = new UpdateFinishViewModel(Update, Observable.Return(Down), Observable.Return<(string?, string?)>((null, null)),
                 Observable.Return(false), Observable.Return<LocalStepInput?>(null), clock);
             var stuckCompleted = 0;
             stuck.Completed += () => stuckCompleted++;
@@ -144,7 +146,7 @@ public class UpdateFinishViewModelTests {
     [NotInParallel("AvaloniaSession")]
     public async Task The_steps_show_before_the_daemon_first_reports() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            using var vm = new UpdateFinishViewModel(Update, Observable.Never<AttachStatus>(), Observable.Never<string?>(),
+            using var vm = new UpdateFinishViewModel(Update, Observable.Never<AttachStatus>(), Observable.Never<(string?, string?)>(),
                 Observable.Never<bool>(), Observable.Never<LocalStepInput?>(), new FakeTimeProvider());
 
             await Assert.That(vm.Steps.Select(step => step.Title).SequenceEqual(["kcap 1.4.1", "Daemon"])).IsTrue();
@@ -165,6 +167,36 @@ public class UpdateFinishViewModelTests {
         await Assert.That(vm.Steps[0].Detail).IsEqualTo(agents);
     }
 
+    /// The main window reads a daemon off the server as an outage, so the update is not finished before it reconnects.
+    [Test]
+    public async Task A_daemon_on_the_new_version_is_done_only_once_it_is_back_on_the_server() {
+        var redialing = UpdateFinishViewModel.DaemonStep(Connected, "1.4.1", "disconnected", false, "1.4.1");
+        var gaveUp = UpdateFinishViewModel.DaemonStep(Connected, "1.4.1", "disconnected", false, "1.4.1", waitedLong: true);
+
+        await Assert.That(redialing is { Title: "Daemon 1.4.1", Detail: "Connecting to the server", State: UpdateStepState.Running }).IsTrue();
+        await Assert.That(gaveUp is { Detail: "Not connected to the server yet", State: UpdateStepState.Note }).IsTrue();
+        await Assert.That(UpdateFinishViewModel.Project(Update, Connected, "1.4.1", "reconnecting", false, null).Settled).IsFalse();
+    }
+
+    /// The daemon cannot reach a local server that is being upgraded, so its patience starts over once the upgrade settles.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_daemon_patience_starts_over_when_the_local_upgrade_settles() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var clock = new FakeTimeProvider();
+            var local = new BehaviorSubject<LocalStepInput?>(new LocalStepInput(true, null, null, null, Phase: LocalUpgradePhase.Starting));
+            using var vm = new UpdateFinishViewModel(Update, Observable.Return(Connected),
+                Observable.Return<(string?, string?)>(("1.4.1", "disconnected")), Observable.Return(false), local, clock);
+
+            clock.Advance(UpdateFinishViewModel.DaemonPatience * 2);
+            local.OnNext(new LocalStepInput(false, new LocalUpgradeOutcome.Upgraded("1.4.0", "1.4.1"), null, null));
+            await Assert.That(vm.Steps[^1].State).IsEqualTo(UpdateStepState.Running);
+
+            clock.Advance(UpdateFinishViewModel.DaemonPatience);
+            await WaitUntilAsync(() => vm.Steps[^1].State == UpdateStepState.Note);
+        });
+    }
+
     static async Task WaitUntilAsync(Func<bool> condition) {
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
         while (!condition()) {
@@ -175,13 +207,13 @@ public class UpdateFinishViewModelTests {
 
     [Test]
     public async Task A_daemon_that_does_not_move_settles_as_a_note_after_a_while_and_a_newer_one_at_once() {
-        var waiting = UpdateFinishViewModel.DaemonStep(Connected, "1.4.0", false, "1.4.1");
-        var waited = UpdateFinishViewModel.DaemonStep(Connected, "1.4.0", false, "1.4.1", waitedLong: true);
-        var newer = UpdateFinishViewModel.DaemonStep(Connected, "1.5.0", false, "1.4.1");
+        var waiting = UpdateFinishViewModel.DaemonStep(Connected, "1.4.0", "connected", false, "1.4.1");
+        var waited = UpdateFinishViewModel.DaemonStep(Connected, "1.4.0", "connected", false, "1.4.1", waitedLong: true);
+        var newer = UpdateFinishViewModel.DaemonStep(Connected, "1.5.0", "connected", false, "1.4.1");
 
         await Assert.That(waiting.State).IsEqualTo(UpdateStepState.Running);
         await Assert.That(waiting.Detail).IsEqualTo("Picking up 1.4.1");
-        await Assert.That(UpdateFinishViewModel.DaemonStep(Restarting, null, false, "1.4.1").Detail).IsEqualTo("Restarting into 1.4.1");
+        await Assert.That(UpdateFinishViewModel.DaemonStep(Restarting, null, null, false, "1.4.1").Detail).IsEqualTo("Restarting into 1.4.1");
         await Assert.That(waited.State).IsEqualTo(UpdateStepState.Note);
         await Assert.That(waited.Detail).IsEqualTo("Still on 1.4.0. Moves to 1.4.1 on its next restart");
         await Assert.That(newer.State).IsEqualTo(UpdateStepState.Note);
