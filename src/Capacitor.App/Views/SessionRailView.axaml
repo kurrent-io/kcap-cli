@@ -53,7 +53,7 @@
         <Style Selector="Button.selected TextBlock.rowTitle">
             <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
-        <!-- The rail is 330 wide: two segments share one line only at this size. -->
+        <!-- Two segments share one line only at the rail's default width or wider. -->
         <Style Selector="Button.railSegmentItem">
             <Setter Property="Padding" Value="9,3" />
             <Setter Property="FontSize" Value="12" />

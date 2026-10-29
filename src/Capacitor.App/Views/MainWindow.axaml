@@ -32,7 +32,12 @@
 
         <LayoutTransformControl x:Name="ScaleHost">
             <Panel>
-                <Grid x:Name="SessionsSurface" ColumnDefinitions="330,*">
+                <Grid x:Name="SessionsSurface">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="{x:Static svc:RailWidthMemory.DefaultWidthGridLength}"
+                                          MaxWidth="{x:Static svc:RailWidthMemory.MaxWidth}" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
                     <views:SessionRailView x:Name="SessionRail" Grid.Column="0" />
                     <Panel x:Name="ContentPane" Grid.Column="1">
                         <Grid x:Name="LauncherPane" RowDefinitions="Auto,*" Margin="24,20,24,24"
@@ -84,6 +89,10 @@
                             <views:StillImage x:Name="SwitchCoverStill" />
                         </Border>
                     </Panel>
+                    <!-- Last child so it hit-tests above the content pane it overhangs. -->
+                    <GridSplitter x:Name="RailSplitter" Grid.Column="0" HorizontalAlignment="Right" Width="6"
+                                  Margin="0,0,-3,0" Background="Transparent" ResizeDirection="Columns"
+                                  DragCompleted="OnRailSplitterDragCompleted" />
                 </Grid>
             </Panel>
         </LayoutTransformControl>

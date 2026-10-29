@@ -25,6 +25,7 @@ public sealed record AppState(
     IReadOnlyDictionary<string, ViewModels.RailPreferences>? RailPreferencesByUser = null,
     IReadOnlyDictionary<string, string>? LastUserByProfile = null,
     double? UiScale = null,
+    double? RailWidth = null,
     // When setup last sent the user to kcap.ai's sign-up; cleared once a sign-in commits.
     DateTimeOffset? WebSignUpOpenedAt = null,
     bool WindowsServiceDeclined = false,

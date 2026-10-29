@@ -38,6 +38,16 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
         }
     }
 
+    public double RailWidth {
+        get => SessionsSurface.ColumnDefinitions[0].Width.Value;
+        set => SessionsSurface.ColumnDefinitions[0].Width = new GridLength(value);
+    }
+
+    /// Raised once a drag of the rail's edge ends, not on every step of it.
+    public event EventHandler? RailResized;
+
+    void OnRailSplitterDragCompleted(object? sender, VectorEventArgs e) => RailResized?.Invoke(this, EventArgs.Empty);
+
     WindowNotificationManager? _notifications;
     IDisposable? _notifierSubscription;
     IAppNotifier? _notifier;
