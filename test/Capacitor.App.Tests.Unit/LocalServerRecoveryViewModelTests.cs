@@ -53,6 +53,23 @@ public class LocalServerRecoveryViewModelTests {
         });
     }
 
+    /// A failed start says so until the server comes back, however it comes back; a later stop is then a plain stop.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_server_that_comes_back_clears_the_last_start_failure() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var status = new BehaviorSubject<ServerLaneStatus>(new(ServerLaneState.Retrying, "Connection refused"));
+            var recorder = new Recorder { Next = _ => Task.FromResult(new ProcessResult(1, "", "start_failed: the server did not start\n", false)) };
+            using var vm = Build(status, isLocalServer: true, recorder);
+
+            await vm.StartCommand.Execute().ToTask();
+            await Assert.That(vm.Message).IsNotNull();
+
+            status.OnNext(new(ServerLaneState.Connected));
+            await Assert.That(vm.Message).IsNull();
+        });
+    }
+
     /// An upgrade stops the server on purpose, and a Start then would only meet its lock; the server
     /// still reads as down, so the generic lost-connection notice stays quiet.
     [Test]

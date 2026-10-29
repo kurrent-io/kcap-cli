@@ -56,6 +56,13 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
             .ToProperty(this, x => x.Visible, initialValue: false)
             .DisposeWith(_disposables);
 
+        // A server that came back on its own leaves no failure behind: a later stop is a stop, not that failure again.
+        if (isLocalServer)
+            status.Where(s => s.State == ServerLaneState.Connected)
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(_ => Message = null)
+                .DisposeWith(_disposables);
+
         StartCommand = ReactiveCommand.CreateFromTask(async () => { await StartAsync(); },
             this.WhenAnyValue(x => x.IsStarting).Select(starting => !starting));
     }
@@ -72,7 +79,7 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
         private set => this.RaiseAndSetIfChanged(ref _isStarting, value);
     }
 
-    /// The last start or reconnect failure; cleared when a new start begins.
+    /// The last start or reconnect failure; cleared when a new start begins or the server connects.
     public string? Message {
         get => _message;
         private set => this.RaiseAndSetIfChanged(ref _message, value);
