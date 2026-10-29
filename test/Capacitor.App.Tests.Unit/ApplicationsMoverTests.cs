@@ -198,8 +198,10 @@ public class ApplicationsMoverTests {
 
     /// The daemon and terminal command follow one copy, and an update replaces only the copy that runs, so two
     /// installed copies drift apart. Opening either asks which to keep, and keeping one replaces the other unless the
-    /// other is newer: a choice never downgrades.
+    /// other is newer: a choice never downgrades. Keeping an older copy updates it from the opened one first.
     [Test]
+    [Arguments(false, "1.0.0")]
+    [Arguments(true, "1.0.0")]
     [Arguments(false, "1.1.0")]
     [Arguments(false, "2.0.0")]
     [Arguments(true, "1.1.0")]
@@ -222,9 +224,11 @@ public class ApplicationsMoverTests {
 
         await Assert.That(directories.Order(StringComparer.Ordinal).SequenceEqual(new string[] { system, user }.Order(StringComparer.Ordinal))).IsTrue();
         await Assert.That(ApplicationsMover.InstalledInEach(directories)).IsTrue();
-        await Assert.That(keepHome.Replaces.SequenceEqual(alternateVersion == "1.1.0" ? [otherCopy] : Array.Empty<string>())).IsTrue();
+        var otherIsNewer = alternateVersion == "2.0.0";
+        await Assert.That(keepHome.Replaces.SequenceEqual(otherIsNewer ? Array.Empty<string>() : [otherCopy])).IsTrue();
         await Assert.That(keepOther.Replaces.SequenceEqual([source])).IsTrue();
-        await Assert.That(keepHome.RetiresOthersIn(directories)).IsEqualTo(alternateVersion == "1.1.0");
+        await Assert.That(keepOther.SourceVersion).IsEqualTo(otherIsNewer ? "2.0.0" : "1.1.0");
+        await Assert.That(keepHome.RetiresOthersIn(directories)).IsEqualTo(!otherIsNewer);
         await Assert.That(keepOther.RetiresOthersIn(directories)).IsTrue();
     }
 
