@@ -236,6 +236,21 @@ internal partial class AgentOrchestrator {
         if (Interlocked.Exchange(ref _userSubject, subject) != subject) _statusNotifier.Pulse();
     }
 
+    /// A resolution that proves the account changes the subject; an expired token says nothing
+    /// about which account is signed in, so it leaves the last one.
+    internal TokenResolution ObserveTokenResolution(TokenResolution resolution) {
+        switch (resolution.Status) {
+            case AuthStatus.Ok:
+                SetUserSubject(SubjectOf(resolution.Tokens?.AccessToken));
+                break;
+            case AuthStatus.NotAuthenticated or AuthStatus.WrongServer or AuthStatus.NoAuthRequired:
+                SetUserSubject(null);
+                break;
+        }
+
+        return resolution;
+    }
+
     internal static string? SubjectOf(string? accessToken) =>
         accessToken is null ? null : JwtClaims.TryGetString(accessToken, "sub");
 

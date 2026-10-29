@@ -713,6 +713,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _tokens            = tokens;
         _harnesses         = harnesses;
         _server            = server;
+        _server.OnTokenResolved = r => ObserveTokenResolution(r);
         _worktreeManager   = worktreeManager;
         _repoMatcher       = repoMatcher;
         _ptyFactory        = ptyFactory;
@@ -736,7 +737,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _pidRecordRoot = recordRoot;
         _attachmentStore = new AttachmentStore(recordRoot);
         _attachmentFetcher = new AttachmentFetcher(
-            httpClientFactory, () => _tokens.GetValidTokensForServerAsync(_config.Profiles.Name, _config.ServerUrl), logger);
+            httpClientFactory, async () => ObserveTokenResolution(await _tokens.GetValidTokensForServerAsync(_config.Profiles.Name, _config.ServerUrl)), logger);
         _pidRecords  = new AgentPidRecordStore(recordRoot, logger);
         _failedLaunchLog = new FailedLaunchLog(recordRoot, time);
         _quarantine  = new AgentKillQuarantine(logger, time);
@@ -5087,15 +5088,20 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         }
     }
 
+    TitleResolveLoop BuildTitleResolveLoop() => new(
+        SnapshotAgentsForTitles,
+        (agentId, title) => { if (_agents.TryGetValue(agentId, out var agent)) SetResolvedTitle(agent, title); },
+        _titleServer,
+        NativeTitleFor,
+        GenerateTitleForAsync,
+        _time,
+        _logger);
+
+    /// Builds and publishes the loop without starting its timer, so a test can drive its ticks.
+    internal TitleResolveLoop PublishTitleLoopForTest() => _titleLoop = BuildTitleResolveLoop();
+
     async Task RunTitleResolveLoopAsync(CancellationToken ct) {
-        var loop = new TitleResolveLoop(
-            SnapshotAgentsForTitles,
-            (agentId, title) => { if (_agents.TryGetValue(agentId, out var agent)) SetResolvedTitle(agent, title); },
-            _titleServer,
-            NativeTitleFor,
-            GenerateTitleForAsync,
-            _time,
-            _logger);
+        var loop = BuildTitleResolveLoop();
         _titleLoop = loop;
 
         while (await _titleResolve.WaitForNextTickAsync(ct)) {

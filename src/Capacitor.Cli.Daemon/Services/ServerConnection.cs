@@ -59,6 +59,10 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     // Events for incoming commands from server
     public event Func<LaunchAgentCommand, Task>?    OnLaunchAgent;
+
+    /// Sees every token this connection resolves. Invoked on the token path, so it must stay a
+    /// cheap synchronous write.
+    public Action<TokenResolution>? OnTokenResolved { get; set; }
     public event Func<string, Task>?                OnStopAgent; // agentId
     public event Func<SendInputCommand, Task>?      OnSendInput;
     public event Func<string, string, Task>?        OnSendSpecialKey; // agentId, key
@@ -210,7 +214,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                 $"{config.ServerUrl.TrimEnd('/')}/hubs/sessions",
                 options => {
                     options.AccessTokenProvider = async () => {
-                        var resolution = await tokens.GetValidTokensForServerAsync(config.Profiles.Name, config.ServerUrl);
+                        var resolution = Observe(await tokens.GetValidTokensForServerAsync(config.Profiles.Name, config.ServerUrl));
 
                         return resolution.Tokens?.AccessToken;
                     };
@@ -997,13 +1001,18 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     /// <summary>The queued run-event POST, sent directly on the caller's token. Same endpoint and
     /// payload shape as the drain, without its retry loop.</summary>
+    TokenResolution Observe(TokenResolution resolution) {
+        OnTokenResolved?.Invoke(resolution);
+        return resolution;
+    }
+
     async Task PostAgentRunEventAsync(string agentId, object evt, CancellationToken ct) {
         var data = JsonSerializer.SerializeToNode(evt, evt.GetType(), CapacitorJsonContext.Default)!.AsObject();
         var payload = new JsonObject { ["event_type"] = evt.GetType().Name, ["data"] = data }.ToJsonString();
 
         _httpClient ??= new();
 
-        var resolution = await _tokens.GetValidTokensForServerAsync(_config.Profiles.Name, _config.ServerUrl, ct);
+        var resolution = Observe(await _tokens.GetValidTokensForServerAsync(_config.Profiles.Name, _config.ServerUrl, ct));
 
         if (resolution.Tokens?.AccessToken is not null)
             _httpClient.DefaultRequestHeaders.Authorization = new("Bearer", resolution.Tokens.AccessToken);
@@ -1663,7 +1672,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                 while (!ct.IsCancellationRequested) {
                     try {
                         _httpClient ??= new();
-                        var resolution = await _tokens.GetValidTokensForServerAsync(_config.Profiles.Name, _config.ServerUrl, ct);
+                        var resolution = Observe(await _tokens.GetValidTokensForServerAsync(_config.Profiles.Name, _config.ServerUrl, ct));
 
                         if (resolution.Tokens?.AccessToken is not null) {
                             _httpClient.DefaultRequestHeaders.Authorization = new("Bearer", resolution.Tokens.AccessToken);

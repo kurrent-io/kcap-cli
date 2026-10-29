@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Pty;
@@ -14,25 +16,33 @@ public class LocalRenameIpcTests {
 
     sealed class FakeTitleServer : ITitleServerPort {
         public TitleRenameOutcome Outcome { get; set; } = new(true, null, null);
+        public Exception? RenameThrows { get; set; }
+        public string? ServerTitle { get; set; }
         public List<(string SessionId, string Title)> Renames { get; } = [];
 
-        public Task<string?> GetTitleAsync(string sessionId, CancellationToken ct) => Task.FromResult<string?>(null);
+        public Task<string?> GetTitleAsync(string sessionId, CancellationToken ct) => Task.FromResult(ServerTitle);
         public Task<bool> PushTitleAsync(string sessionId, string title, CancellationToken ct) => Task.FromResult(false);
 
         public Task<TitleRenameOutcome> RenameAsync(string sessionId, string title, CancellationToken ct) {
             Renames.Add((sessionId, title));
-            return Task.FromResult(Outcome);
+            return RenameThrows is { } ex ? Task.FromException<TitleRenameOutcome>(ex) : Task.FromResult(Outcome);
         }
     }
 
     static (AgentOrchestrator Orch, FakeTitleServer Server) Build() {
+        var (orch, server, _) = BuildWithConnection();
+        return (orch, server);
+    }
+
+    static (AgentOrchestrator Orch, FakeTitleServer Server, CaptureServerConnection Connection) BuildWithConnection() {
+        var connection = new CaptureServerConnection();
         var orch = AgentOrchestratorHarness.BuildOrchestrator(
-            new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+            connection, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         var server = new FakeTitleServer();
         orch.TitleServerForTest = server;
         orch.SetUserSubjectForTest(Subject);
 
-        return (orch, server);
+        return (orch, server, connection);
     }
 
     static async Task<SessionRenameAckDto> Rename(AgentOrchestrator orch, string payload) {
@@ -147,6 +157,39 @@ public class LocalRenameIpcTests {
         await Assert.That(StatusTitle(orch, "a1")).IsEqualTo("Asked");
     }
 
+    /// The server's title is a lagging read model: a tick that still reads the pre-rename title
+    /// must not revert what the rename applied.
+    [Test]
+    public async Task An_applied_rename_survives_a_tick_whose_server_read_lags() {
+        var (orch, server) = Build();
+        await using var _ = orch;
+        AgentOrchestratorHarness.SeedAcpAgent(orch, "a1", new FakeAcpRuntime());
+        var loop = orch.PublishTitleLoopForTest();
+        server.ServerTitle = "Old";
+
+        server.Outcome = new TitleRenameOutcome(true, "New", null);
+        await Assert.That((await Rename(orch, Payload("a1", "New"))).Ok).IsTrue();
+        await Assert.That(StatusTitle(orch, "a1")).IsEqualTo("New");
+
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(StatusTitle(orch, "a1")).IsEqualTo("New");
+    }
+
+    [Test]
+    public async Task A_failing_server_call_is_a_server_error_and_leaves_the_title() {
+        var (orch, server) = Build();
+        await using var _ = orch;
+        AgentOrchestratorHarness.SeedAcpAgent(orch, "a1", new FakeAcpRuntime());
+        var before = StatusTitle(orch, "a1");
+        server.RenameThrows = new HttpRequestException("boom");
+
+        var ack = await Rename(orch, Payload("a1", "Asked"));
+
+        await Assert.That(ack).IsEqualTo(new SessionRenameAckDto(false, SessionRenameReasons.ServerError, null));
+        await Assert.That(StatusTitle(orch, "a1")).IsEqualTo(before);
+    }
+
     [Test]
     public async Task Refused_rename_leaves_the_title() {
         var (orch, server) = Build();
@@ -195,6 +238,26 @@ public class LocalRenameIpcTests {
         await Assert.That(AgentOrchestrator.SubjectOf(null)).IsNull();
         await Assert.That(AgentOrchestrator.SubjectOf("not-a-jwt")).IsNull();
     }
+
+    /// The connection's token reads feed the cached subject, so a re-login shows on the next read.
+    [Test]
+    public async Task A_token_read_on_the_connection_updates_the_subject() {
+        var (orch, _, connection) = BuildWithConnection();
+        await using var __ = orch;
+
+        connection.OnTokenResolved!(Resolution(AuthStatus.Ok, Jwt("""{"sub":"user_new"}""")));
+        await Assert.That(orch.UserSubject).IsEqualTo("user_new");
+
+        connection.OnTokenResolved!(Resolution(AuthStatus.Expired, null));
+        await Assert.That(orch.UserSubject).IsEqualTo("user_new");
+
+        connection.OnTokenResolved!(Resolution(AuthStatus.NotAuthenticated, null));
+        await Assert.That(orch.UserSubject).IsNull();
+    }
+
+    static TokenResolution Resolution(AuthStatus status, string? accessToken) => new(
+        accessToken is null ? null : new StoredTokens { AccessToken = accessToken, ExpiresAt = DateTimeOffset.MaxValue, GitHubUsername = "u" },
+        status, null, "default");
 
     static string Jwt(string payload) {
         static string B64(string s) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(s)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
