@@ -30,6 +30,9 @@ public class TitleResolveLoopTests {
             if (PushResult) Committed = title;
             return Task.FromResult(PushResult);
         }
+
+        public Task<TitleRenameOutcome> RenameAsync(string sessionId, string title, CancellationToken ct) =>
+            Task.FromResult(new TitleRenameOutcome(true, title, null));
     }
 
     sealed class Harness {

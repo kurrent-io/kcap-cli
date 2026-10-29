@@ -11,6 +11,7 @@ internal sealed record TitleAgentView(
 internal interface ITitleServerPort {
     Task<string?> GetTitleAsync(string sessionId, CancellationToken ct);
     Task<bool> PushTitleAsync(string sessionId, string title, CancellationToken ct);
+    Task<TitleRenameOutcome> RenameAsync(string sessionId, string title, CancellationToken ct);
 }
 
 /// <summary>
