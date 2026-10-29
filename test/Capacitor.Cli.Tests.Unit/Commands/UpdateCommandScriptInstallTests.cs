@@ -181,6 +181,6 @@ public class UpdateCommandScriptInstallTests : IDisposable {
         var exit = await Command(f, [], _ => 1).HandleAsync([]);
 
         await Assert.That(exit).IsEqualTo(0);
-        await Assert.That(output.GetCapturedError()).Contains("run `kcap refresh` to retry");
+        await Assert.That(output.GetCapturedError()).Contains("Run `kcap refresh` to retry");
     }
 }

@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
@@ -16,6 +17,37 @@ namespace Capacitor.App.Tests.Unit;
 
 [NotInParallel("AvaloniaSession")]
 public class UpdateWindowTests {
+    [Test]
+    public Task Progress_refresh_keeps_running_indicators_attached() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var local = new BehaviorSubject<LocalStepInput?>(new(true, null, null, null,
+            Phase: LocalUpgradePhase.Downloading, From: "1.4.0", To: "1.4.1", DownloadFraction: 0.1));
+        using var vm = new UpdateFinishViewModel(
+            new("op", AppUpdateTransition.InApp, "1.4.0", "1.4.1", DateTimeOffset.UnixEpoch),
+            Observable.Return(new AttachStatus(AttachState.Connected, null, [])),
+            Observable.Return<(string?, string?)>(("1.4.1", "connected")), Observable.Return(false),
+            local, new FakeTimeProvider());
+        var window = new UpdateFinishWindow { DataContext = vm };
+        try {
+            window.Show();
+            Render(window);
+            var indicators = window.GetVisualDescendants().OfType<AppIcon>()
+                .Where(icon => icon.Classes.Contains("kcapSpinning")).ToArray();
+            await Assert.That(indicators.Length).IsEqualTo(2);
+            var detachments = 0;
+            foreach (var icon in indicators) icon.DetachedFromVisualTree += (_, _) => detachments++;
+
+            local.OnNext(local.Value! with { DownloadFraction = 0.42 });
+            Render(window);
+
+            await Assert.That(detachments).IsEqualTo(0);
+            await Assert.That(window.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "42%")).IsTrue();
+            local.OnNext(local.Value! with { Phase = LocalUpgradePhase.Verifying, DownloadFraction = null });
+            Render(window);
+            await Assert.That(detachments).IsEqualTo(0);
+            await Assert.That(window.GetVisualDescendants().OfType<SelectableTextBlock>().Any(t => t.Text == "Verifying the download")).IsTrue();
+        } finally { window.Close(); }
+    });
+
     [Test]
     public Task Long_failure_details_scroll_without_hiding_the_open_action() => AvaloniaSession.RunOnUiAsync(async () => {
         var error = "Download failed: https://example.test/" + new string('x', 2000);
@@ -65,8 +97,8 @@ public class UpdateWindowTests {
             await Assert.That(progress.Value).IsEqualTo(42);
             await Assert.That(window.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "42%")).IsTrue();
 
-            var hide = window.GetVisualDescendants().OfType<Button>().Single(b => Equals(b.Content, "Hide"));
-            hide.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            var dismiss = window.GetVisualDescendants().OfType<Button>().Single(b => Equals(b.Content, "Dismiss"));
+            dismiss.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             await Assert.That(window.IsVisible).IsFalse();
         } finally { window.Close(); }
     });

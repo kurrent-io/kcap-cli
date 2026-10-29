@@ -17,7 +17,7 @@ namespace Capacitor.App.ViewModels;
 /// journaled, so connectivity proves nothing.
 /// </summary>
 public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
-    internal const string BusyDetail    = "Another local setup, update or uninstall is running on this machine. The update runs again once the local server is back.";
+    internal const string BusyDetail    = "Another local operation is running. The update retries when the server is available.";
     internal const string StartGuidance = "Saved data is kept. Start the server to finish the update.";
     const int StartMessageTailLines     = 12;
     public const string NameTip         = "The local kcap server on this machine";
@@ -152,10 +152,10 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
             _                  => "Updating kcap local…",
         }
         : Waiting ? Progress.To is { } waitingFor
-            ? $"The update to kcap local {waitingFor} is waiting"
-            : "The update of kcap local is waiting"
+            ? $"kcap local {waitingFor} update is waiting"
+            : "kcap local update is waiting"
         : _shown switch {
-            LocalUpgradeOutcome.Upgraded => "The local server is updated; search needs attention",
+            LocalUpgradeOutcome.Upgraded => "Search needs attention",
             LocalUpgradeOutcome.Failed { Switched: true } f => $"kcap local {f.To ?? Version} did not start after the update",
             LocalUpgradeOutcome.Failed { To: { } to }       => $"kcap local could not be updated to {to}",
             LocalUpgradeOutcome.Failed                      => "kcap local could not be updated",
@@ -165,9 +165,9 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
             _ => null,
         };
 
-    public string? Detail => IsStarting ? "The server starts on the installed version and finishes any remaining data changes." : Upgrading
+    public string? Detail => IsStarting ? "Starting the installed version. Pending data changes finish automatically." : Upgrading
         ? Progress.Phase switch {
-            LocalUpgradePhase.Recovering  => "Finishing an earlier change that was interrupted",
+            LocalUpgradePhase.Recovering  => "Finishing an interrupted update",
             LocalUpgradePhase.Downloading => DownloadFraction is { } f
                 ? $"Downloading {Progress.To} {(int)Math.Round(f * 100)}%"
                 : $"Downloading {Progress.To}",

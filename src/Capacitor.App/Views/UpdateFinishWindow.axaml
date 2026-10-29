@@ -36,30 +36,30 @@
                             </ItemsPanelTemplate>
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="vm:UpdateStep">
+                            <DataTemplate x:DataType="vm:UpdateStepViewModel">
                                 <Grid ColumnDefinitions="Auto,*,Auto">
                                     <Panel Margin="0,2,10,0" VerticalAlignment="Top">
-                                        <views:AppIcon Kind="Circle" Size="14" Foreground="{StaticResource KcapFaintBrush}" IsVisible="{Binding IsPending}" />
+                                        <views:AppIcon Kind="Circle" Size="14" Foreground="{StaticResource KcapFaintBrush}" IsVisible="{Binding Step.IsPending}" />
                                         <views:AppIcon Kind="LoaderCircle" Size="14" Foreground="{StaticResource KcapPurpleBrush}"
-                                                       Classes.kcapSpinning="{Binding IsRunning}" IsVisible="{Binding IsRunning}" />
-                                        <views:AppIcon Kind="Check" Size="14" Foreground="{StaticResource KcapSuccessBrush}" IsVisible="{Binding IsDone}" />
-                                        <views:AppIcon Kind="Clock" Size="14" Foreground="{StaticResource KcapMutedBrush}" IsVisible="{Binding IsNote}" />
-                                        <views:AppIcon Kind="CircleX" Size="14" Foreground="{StaticResource KcapDangerBrush}" IsVisible="{Binding IsProblem}" />
+                                                       Classes.kcapSpinning="{Binding Step.IsRunning}" IsVisible="{Binding Step.IsRunning}" />
+                                        <views:AppIcon Kind="Check" Size="14" Foreground="{StaticResource KcapSuccessBrush}" IsVisible="{Binding Step.IsDone}" />
+                                        <views:AppIcon Kind="Clock" Size="14" Foreground="{StaticResource KcapMutedBrush}" IsVisible="{Binding Step.IsNote}" />
+                                        <views:AppIcon Kind="CircleX" Size="14" Foreground="{StaticResource KcapDangerBrush}" IsVisible="{Binding Step.IsProblem}" />
                                     </Panel>
                                     <StackPanel Grid.Column="1" Spacing="2">
-                                        <TextBlock Text="{Binding Title}" FontSize="13" LineHeight="19"
+                                        <TextBlock Text="{Binding Step.Title}" FontSize="13" LineHeight="19"
                                                    Foreground="{StaticResource KcapTextBrush}" />
                                         <!-- A running step's detail stays on one line, so the window keeps its height as the phases change. -->
-                                        <SelectableTextBlock Text="{Binding Detail}" IsVisible="{Binding HasDetail}"
-                                                             TextWrapping="{Binding DetailWrapping}" TextTrimming="CharacterEllipsis"
+                                        <SelectableTextBlock Text="{Binding Step.Detail}" IsVisible="{Binding Step.HasDetail}"
+                                                             TextWrapping="{Binding Step.DetailWrapping}" TextTrimming="CharacterEllipsis"
                                                              FontSize="12.5" LineHeight="18" Foreground="{StaticResource KcapMutedBrush}" />
                                         <Button Content="Details" Classes="kcapChip" HorizontalAlignment="Left" Margin="0,4,0,0"
-                                                IsVisible="{Binding HasDiagnostic}" Tag="{Binding #DiagnosticText}" Click="OnDetails" />
-                                        <SelectableTextBlock x:Name="DiagnosticText" Text="{Binding Hint}" TextWrapping="Wrap" IsVisible="False"
+                                                IsVisible="{Binding Step.HasDiagnostic}" Tag="{Binding #DiagnosticText}" Click="OnDetails" />
+                                        <SelectableTextBlock x:Name="DiagnosticText" Text="{Binding Step.Hint}" TextWrapping="Wrap" IsVisible="False"
                                                              FontSize="12" Foreground="{StaticResource KcapMutedBrush}" />
                                     </StackPanel>
                                     <!-- Kept out of the detail and fixed in width, so a changing figure never reflows the row. -->
-                                    <TextBlock Grid.Column="2" Text="{Binding Trailing}" MinWidth="40" Margin="10,0,0,0"
+                                    <TextBlock Grid.Column="2" Text="{Binding Step.Trailing}" MinWidth="40" Margin="10,0,0,0"
                                                TextAlignment="Right" VerticalAlignment="Top" FontSize="12.5" LineHeight="19"
                                                FontFamily="{StaticResource OnboardingMonoFont}" Foreground="{StaticResource KcapMutedBrush}" />
                                 </Grid>

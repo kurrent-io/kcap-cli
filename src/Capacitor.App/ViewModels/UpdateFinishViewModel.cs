@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
@@ -35,7 +36,7 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
     bool _patienceStopped;
     readonly BehaviorSubject<(bool Finishing, string? Detail)> _progress = new((true, null));
     readonly TimeProvider _time;
-    IReadOnlyList<UpdateStep> _steps = [];
+    readonly ObservableCollection<UpdateStepViewModel> _steps = [];
     bool _settled;
     bool _clean;
     bool _handedOver;
@@ -52,12 +53,12 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
         _time = time;
         _closing = true;
         OpenCommand = ReactiveCommand.Create(() => { });
-        _steps = [
+        SetSteps([
             stopsDaemon
-                ? new("Closing kcap and the daemon", "Eligible agents resume when auto-resume is enabled", UpdateStepState.Running)
+                ? new("Closing kcap and the daemon", "Eligible agents resume if auto-resume is on", UpdateStepState.Running)
                 : new("Closing kcap", "The daemon and its agents keep running", UpdateStepState.Running),
             new($"Installing kcap {Display(to)}", "Reopens when it is done", UpdateStepState.Pending),
-        ];
+        ]);
     }
 
     public UpdateFinishViewModel(
@@ -81,15 +82,12 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
         : !_settled ? "Finishing the update…" : _clean ? "kcap is ready" : "kcap is installed";
 
     public string Description => _closing
-        ? "kcap closes to install the update, then opens automatically. Background services finish updating after it reopens."
-        : "Background services update automatically and may restart. Open kcap at any time; progress stays visible in the app.";
+        ? "kcap restarts to install the update. Background services finish updating after it reopens."
+        : "Background services update automatically. Open kcap at any time. Progress stays visible in the app.";
 
     public bool CanOpen => !_closing;
 
-    public IReadOnlyList<UpdateStep> Steps {
-        get => _steps;
-        private set => this.RaiseAndSetIfChanged(ref _steps, value);
-    }
+    public IReadOnlyList<UpdateStepViewModel> Steps => _steps;
 
     public bool IsSettled => _settled;
 
@@ -109,7 +107,7 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
 
     void Apply((IReadOnlyList<UpdateStep> Steps, bool Settled, bool Clean) state) {
         if (_disposed) return;
-        Steps = state.Steps;
+        SetSteps(state.Steps);
         var cleanNow = state.Clean && !_clean;
         _settled = state.Settled;
         _clean = state.Clean;
@@ -118,6 +116,19 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
         this.RaisePropertyChanged(nameof(OpenLabel));
         _progress.OnNext((!state.Settled, ProgressDetail(state.Steps)));
         if (cleanNow) _ = CloseAfterAsync();
+    }
+
+    void SetSteps(IReadOnlyList<UpdateStep> steps) {
+        if (_steps.Count == 0) {
+            foreach (var step in steps) _steps.Add(new(step));
+            return;
+        }
+
+        // App and daemon are always present. Only the local server row can appear or disappear.
+        // Retain each row's controls so progress changes do not restart their animations.
+        if (_steps.Count < steps.Count) _steps.Insert(1, new(steps[1]));
+        else if (_steps.Count > steps.Count) _steps.RemoveAt(1);
+        for (var i = 0; i < steps.Count; i++) _steps[i].Step = steps[i];
     }
 
     void ArmPatience() {
@@ -189,7 +200,7 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
             { State: AttachState.Connected } when current => new($"{title} {app}", "Connecting to the server", UpdateStepState.Running,
                 Activity: "Reconnecting the daemon to the server"),
             { State: AttachState.Connected } when newer => new(title, $"Running {Display(daemonVersion!)}, newer than this app", UpdateStepState.Note),
-            { State: AttachState.Connected } when restartPending => new(title, "Waiting for a turn boundary; long turns may be interrupted", UpdateStepState.Note),
+            { State: AttachState.Connected } when restartPending => new(title, "Waiting for active turns. Long turns may be interrupted", UpdateStepState.Note),
             { State: AttachState.Connected } when waitedLong && known => new(title,
                 $"Still on {Display(daemonVersion!)}. Moves to {app} on its next restart", UpdateStepState.Note),
             { State: AttachState.Connected } => new(title, $"Waiting to restart into {app}", UpdateStepState.Running, Activity: "Waiting for the daemon to restart"),
@@ -234,7 +245,7 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
         return local.Outcome switch {
             LocalUpgradeOutcome.Upgraded { SearchWarning: { } warning } upgraded => new(
                 upgraded.To is { } version ? $"{title} {version}" : title,
-                "Updated. Search works by keyword; open Settings → Search to retry", UpdateStepState.Note, Hint: warning),
+                "Updated. Search uses keywords. Retry in Settings → Search", UpdateStepState.Note, Hint: warning),
             LocalUpgradeOutcome.Upgraded { To: { } to } => new($"{title} {to}", "Updated", UpdateStepState.Done),
             LocalUpgradeOutcome.Upgraded => new(title, "Updated", UpdateStepState.Done),
             LocalUpgradeOutcome.NothingToDo => new(title, "Up to date", UpdateStepState.Done),

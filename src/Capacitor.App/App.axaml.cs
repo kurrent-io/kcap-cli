@@ -557,7 +557,7 @@ public partial class App : Application {
             _holdingMainWindow = false;
             if (_coordinator is { } coordinator) coordinator.ShowInstead = null;
             LifecycleLog.Write("update_finished", ("operation", transition.Id), ("settled", vm.IsSettled ? "true" : "false"),
-                ("steps", string.Join("; ", vm.Steps.Select(step => $"{step.Title}: {step.State}"))),
+                ("steps", string.Join("; ", vm.Steps.Select(row => $"{row.Step.Title}: {row.Step.State}"))),
                 ("seconds", (_time.GetUtcNow() - _startedAt).TotalSeconds.ToString("0.0", CultureInfo.InvariantCulture)));
             if (!_shutdownStarted) _coordinator?.ShowMainWindow();
             window.Close();

@@ -184,7 +184,7 @@ public class LocalStackViewModelTests {
             await Assert.That(h.Vm.IsNote).IsTrue();
             await Assert.That(h.Vm.Attention).IsFalse();
             await Assert.That(h.Vm.StateText).IsEqualTo("running");
-            await Assert.That(h.Vm.Headline).IsEqualTo("The update to kcap local 1.3.0 is waiting");
+            await Assert.That(h.Vm.Headline).IsEqualTo("kcap local 1.3.0 update is waiting");
             await Assert.That(h.Vm.Detail).IsEqualTo(LocalStackViewModel.BusyDetail);
             await Assert.That(h.Vm.TryAgainVisible).IsTrue();
             await Assert.That(h.Vm.ActionsVisible).IsTrue();

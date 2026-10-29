@@ -31,7 +31,7 @@
                                  AutomationProperties.Name="Update download progress" />
                 </StackPanel>
             </Border>
-            <Button Content="Hide" Margin="0,22,0,0" Classes="kcapChip" HorizontalAlignment="Right" IsCancel="True" Click="OnHide" />
+            <Button Content="Dismiss" Margin="0,22,0,0" Classes="kcapChip" HorizontalAlignment="Right" IsCancel="True" Click="OnDismiss" />
         </StackPanel>
     </Panel>
 </Window>

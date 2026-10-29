@@ -215,7 +215,7 @@ public class LocalUpgradeTests {
             failure = await Failure();
 
         await Assert.That(failure.Switched).IsTrue();
-        await Assert.That(failure.Message).Contains("finishes the upgrade");
+        await Assert.That(failure.Message).Contains("Run kcap local upgrade to finish");
         await Assert.That(JournalPhase()).IsEqualTo(LocalUpgradeJournal.Starting);
     }
 

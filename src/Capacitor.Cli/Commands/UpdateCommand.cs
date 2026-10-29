@@ -11,14 +11,14 @@ public sealed class UpdateCommand(
         TimeProvider time, KcapReleaseClient? releases = null, ScriptUpdater? scriptUpdater = null, InstallKind? kind = null) {
     /// Printed by every `kcap update` invocation of a CLI that lives inside the desktop app.
     internal const string BundledMessage =
-        "This kcap is bundled with the kcap desktop app; updates arrive through the app (\"Check for Updates…\" in the menu bar).";
+        "This CLI is bundled with the kcap desktop app. Choose \"Check for Updates…\" in the app menu.";
 
     /// <summary>Printed by `kcap update` in the desktop app's snap. snapd refreshes a Store install, but never a
     /// local one (`snap install --dangerous`, revisions x1, x2, …), so that one is pointed at a new .snap file.</summary>
     internal static string SnapMessage(SnapLayout? snap) =>
         snap is { IsLocal: true }
-            ? $"This kcap is a locally installed snap (revision {snap.Revision}); snapd does not update it. Install a newer one with: sudo snap install --dangerous --classic <file>.snap"
-            : $"This kcap is part of the kcap snap; snapd keeps it up to date. To update now: sudo snap refresh{(snap is null ? "" : " " + snap.Name)}";
+            ? $"This kcap is a locally installed snap (revision {snap.Revision}). snapd does not update it. Install a newer one with: sudo snap install --dangerous --classic <file>.snap"
+            : $"This kcap is part of the kcap snap. snapd keeps it up to date. To update now: sudo snap refresh{(snap is null ? "" : " " + snap.Name)}";
 
     readonly InstallKind _kind = kind ?? InstallProvenance.Kind();
 
@@ -177,12 +177,12 @@ public sealed class UpdateCommand(
         await Console.Out.WriteLineAsync("Refreshing hooks and skills…");
         var exe = layout.CurrentBin(OperatingSystem.IsWindows() ? "kcap.exe" : "kcap");
         if (await RunRefresh(exe) != 0)
-            await Console.Error.WriteLineAsync("Some agent integrations were not refreshed; run `kcap refresh` to retry.");
+            await Console.Error.WriteLineAsync("Some agent integrations were not refreshed. Run `kcap refresh` to retry.");
 
         await Console.Out.WriteLineAsync($"kcap updated to {target}.");
         await Console.Out.WriteLineAsync(OperatingSystem.IsWindows()
             ? "Run `kcap daemon restart` if you run the daemon."
-            : "A background daemon waits for a turn boundary, then restarts after the configured wait even mid-turn. Eligible agents resume when auto-resume is enabled; other sessions may need manual attention. A daemon started in a terminal needs a manual restart.");
+            : "The daemon waits for active turns. It restarts when the configured wait ends. Long turns may be interrupted. Eligible agents resume if auto-resume is on. Other sessions may need attention. Daemons started in a terminal need a manual restart.");
 
         return await UpgradeLocalAsync(exe);
     }
@@ -202,9 +202,9 @@ public sealed class UpdateCommand(
         await process.WaitForExitAsync();
 
         if (process.ExitCode == LocalUpgradeCommand.NotPublished)
-            await Console.Error.WriteLineAsync("The local server stays on its version until a bundle for this kcap is published; run `kcap local upgrade` then.");
+            await Console.Error.WriteLineAsync("The matching local-server bundle is not published yet. The current version stays installed. Run `kcap local upgrade` when the bundle is available.");
         else if (process.ExitCode is not (LocalUpgradeCommand.Upgraded or LocalUpgradeCommand.NothingToDo))
-            await Console.Error.WriteLineAsync("The local server was not upgraded; run `kcap local upgrade` to retry.");
+            await Console.Error.WriteLineAsync("The local server was not upgraded. Run `kcap local upgrade` to retry.");
 
         return process.ExitCode;
     }

@@ -170,22 +170,22 @@ public class UpdateFinishViewModelTests {
             using var vm = new UpdateFinishViewModel(Update, Observable.Never<AttachStatus>(), Observable.Never<(string?, string?)>(),
                 Observable.Never<bool>(), Observable.Never<LocalStepInput?>(), new FakeTimeProvider());
 
-            await Assert.That(vm.Steps.Select(step => step.Title).SequenceEqual(["kcap 1.4.1", "Daemon"])).IsTrue();
-            await Assert.That(vm.Steps[1].Detail).IsEqualTo("Connecting");
+            await Assert.That(vm.Steps.Select(row => row.Step.Title).SequenceEqual(["kcap 1.4.1", "Daemon"])).IsTrue();
+            await Assert.That(vm.Steps[1].Step.Detail).IsEqualTo("Connecting");
         });
     }
 
     [Test]
     [Arguments(false, "Closing kcap", "The daemon and its agents keep running")]
-    [Arguments(true, "Closing kcap and the daemon", "Eligible agents resume when auto-resume is enabled")]
+    [Arguments(true, "Closing kcap and the daemon", "Eligible agents resume if auto-resume is on")]
     public async Task The_closing_window_says_what_happens_to_agents_and_offers_nothing_to_open(bool stopsDaemon, string title, string agents) {
         using var vm = new UpdateFinishViewModel("1.4.1", new FakeTimeProvider(), stopsDaemon);
 
         await Assert.That(vm.Heading).IsEqualTo("Updating kcap…");
         await Assert.That(vm.CanOpen).IsFalse();
-        await Assert.That(vm.Steps.Select(step => step.State).SequenceEqual([UpdateStepState.Running, UpdateStepState.Pending])).IsTrue();
-        await Assert.That(vm.Steps[0].Title).IsEqualTo(title);
-        await Assert.That(vm.Steps[0].Detail).IsEqualTo(agents);
+        await Assert.That(vm.Steps.Select(row => row.Step.State).SequenceEqual([UpdateStepState.Running, UpdateStepState.Pending])).IsTrue();
+        await Assert.That(vm.Steps[0].Step.Title).IsEqualTo(title);
+        await Assert.That(vm.Steps[0].Step.Detail).IsEqualTo(agents);
     }
 
     /// The main window reads a daemon off the server as an outage, so the update is not finished before it reconnects.
@@ -211,10 +211,10 @@ public class UpdateFinishViewModelTests {
 
             clock.Advance(UpdateFinishViewModel.DaemonPatience * 2);
             local.OnNext(new LocalStepInput(false, new LocalUpgradeOutcome.Upgraded("1.4.0", "1.4.1"), null, null));
-            await Assert.That(vm.Steps[^1].State).IsEqualTo(UpdateStepState.Running);
+            await Assert.That(vm.Steps[^1].Step.State).IsEqualTo(UpdateStepState.Running);
 
             clock.Advance(UpdateFinishViewModel.DaemonPatience);
-            await WaitUntilAsync(() => vm.Steps[^1].State == UpdateStepState.Note);
+            await WaitUntilAsync(() => vm.Steps[^1].Step.State == UpdateStepState.Note);
         });
     }
 
