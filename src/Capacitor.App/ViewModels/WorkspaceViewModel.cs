@@ -299,7 +299,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             .DisposeWith(_disposables);
 
         // The daemon renames as its own account, so it must be the app's account on the app's
-        // server; a private agent makes no per-agent server calls at all.
+        // server; a private agent makes no per-agent server calls at all, and an ended one has no
+        // title loop left to hold the rename.
         var subject = (appSubject ?? Observable.Return<string?>(null)).DistinctUntilChanged().Replay(1).RefCount();
         subject.Subscribe(s => _appSubject = s).DisposeWith(_disposables);
         var canRename = Observable.CombineLatest(
@@ -307,7 +308,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                 localDaemonOnAppServer ?? Observable.Return(false),
                 daemon.Snapshots.Select(s => s.Daemon.UserSubject).StartWith((string?)null),
                 subject,
-                presence.Select(p => p.Dto is { IsPrivate: false, SessionId.Length: > 0 }),
+                presence.Select(p => !p.SessionEnded && p.Dto is { IsPrivate: false, SessionId.Length: > 0 }),
                 (capable, onAppServer, daemonSubject, viewer, agent) =>
                     capable && onAppServer && agent && viewer is not null && daemonSubject == viewer)
             .ObserveOn(RxSchedulers.MainThreadScheduler);

@@ -857,6 +857,7 @@ public class WorkspaceViewModelTests {
         public string? DaemonSubject = "u1";
         public bool? IsPrivate = false;
         public string? SessionId = "s1";
+        public string? Status;
 
         public WorkspaceViewModel Build() {
             Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, Capabilities));
@@ -866,8 +867,9 @@ public class WorkspaceViewModelTests {
                 () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(), new FakePermissionService(),
                 new FakeWorkContextSource(), Ops, new NoAttachmentUploader(),
                 localDaemonOnAppServer: OnAppServer, appSubject: AppSubject, notifier: Notifier);
-            Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: false, repoPath: "/repo/myproj",
-                sessionId: SessionId, isPrivate: IsPrivate) with { Title = "Old name" });
+            var dto = Agent("a1", "claude", hasTerminal: false, repoPath: "/repo/myproj",
+                sessionId: SessionId, isPrivate: IsPrivate) with { Title = "Old name" };
+            Daemon.Agents.AddOrUpdate(Status is { } status ? dto with { Status = status } : dto);
             return vm;
         }
     }
@@ -924,6 +926,8 @@ public class WorkspaceViewModelTests {
     [Arguments("private agent")]
     [Arguments("privacy unknown")]
     [Arguments("no session id")]
+    [Arguments("completed agent")]
+    [Arguments("failed agent")]
     public async Task The_pencil_is_hidden_for_an_ineligible_local_session(string breaks) {
         await RunOnUiAsync(async () => {
             var h = new RenameHarness();
@@ -936,6 +940,8 @@ public class WorkspaceViewModelTests {
                 case "private agent": h.IsPrivate = true; break;
                 case "privacy unknown": h.IsPrivate = null; break;
                 case "no session id": h.SessionId = null; break;
+                case "completed agent": h.Status = "Completed"; break;
+                case "failed agent": h.Status = "Failed"; break;
             }
             var vm = h.Build();
             await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
