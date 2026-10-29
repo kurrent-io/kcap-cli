@@ -43,9 +43,11 @@ The panel starts collapsed on each launch (my call: persisting it is cheap, but 
 
 ### Hosting and navigation
 
-The page occupies the main area beside the rail, where the launcher and the session workspace live. It is not an `ISessionWorkspace` (it has no agent id): the builder hosts it as a third state of the main area. Opening it keeps a reference to whatever was showing (launcher or workspace) without tearing that workspace down; Escape returns to it. Selecting a hit navigates to the session as a rail click does, which replaces both
+The page is a cover over the main area, not a navigation target. `MainWindowViewModel` gains a search-open state; while it is set the page is drawn over the launcher or the workspace and hides them, and `CurrentWorkspace` stays exactly what it was. The covered workspace keeps every watch it has today: if it completes, hands off to a server workspace, or closes while the page is up, those transitions run as usual and the page simply covers their result. Escape clears the state and uncovers whatever is current by then, so there is no saved return reference to go stale
 
-While the page is showing, the rail's search field shows the current query in place of the placeholder (as in the mockup), and the rail keeps its selection: the previous workspace is still alive until a hit replaces it
+Opening the page advances `NavigationGate`, so a launch's pending auto-open (`OpenSessionIfCurrent`) yields to it as it yields to any other navigation. Any navigation dismisses the page: a rail click, New session (⌘N), opening a hit, and opening a hit for the session that is already open, where `OpenSessionCore` returns early without `SwapTo` and the page must still close
+
+While the page is showing, the rail's search field shows the current query in place of the placeholder (as in the mockup), and the rail keeps its selection
 
 Each opening starts fresh: empty query, Sessions tab (my call; Linear does the same)
 
@@ -57,7 +59,7 @@ Each opening starts fresh: empty query, Sessions tab (my call; Linear does the s
 
 - `GET {server}/api/search?q={query}&mode={sessions|transcripts}&limit=20`, through the app's authenticated `ICapacitorHttpClient`, bearer token as every other read. `mode` omitted means sessions; the builder may send it explicitly
 - A request goes out 150 ms after the last keystroke, matching the web palette. A query shorter than 3 characters after trimming sends nothing and shows "Type at least 3 characters"
-- Each new request cancels the previous one, and a response for anything other than the current (query, tab) is discarded on arrival
+- Each new request cancels the previous one, and a response is discarded on arrival unless it matches the current (query, tab, identity generation): see Identity below
 - Switching tab re-runs the current query for the new tab at once (no debounce)
 - An empty query shows an empty page: no list, no recents
 - A thin progress line under the query box while a request is in flight
@@ -83,20 +85,44 @@ Empty results: "No matching sessions" / "No transcript matches". A failed reques
 
 ## Opening a hit
 
-A hit opens exactly what a rail click on that session would open. Hits name a session id; a transcript hit's agent id names a subagent inside it and is not used for navigation. The app resolves the session id through the directory, as `DaemonRowFor` matches daemon rows to sessions: a live agent hosted on this machine opens its local workspace, one on another of the user's daemons opens the remote host, and anything else opens the read-only workspace, on Overview when ended and Chat when live, as the past-sessions design defines. Calling `OpenSession(sessionId, AgentOrigin.Server)` directly is not enough, because daemon rows are keyed by agent id and an explicit lane skips that resolution
+A hit opens exactly what a rail click on that session would open, under whatever scope and state the rail is in. Hits name a session id; a transcript hit's agent id names a subagent inside it and is not used for navigation
 
-**When the rail has no row for the session**, the hit is **pinned** to the rail (owner's decision). `BuildServer` in `App.axaml.cs` today builds the read-only workspace only from an `AgentRow` already in the directory under `server:{sessionId}`, and the rail's scope decides what is there: under Mine, live server rows come from the `owner=me` read and every ended row is taken as the viewer's own. A hit can be a teammate's session, an old one past the loaded prefix, or both. Pinning means:
+### Resolution
 
-- The app reads `GET api/sessions/{id}/summary` (the listing has no session-id filter) and builds a server row from it with what `AgentRow.FromServer` needs: title, vendor, status, owner, repository, times
-- The row comes from its own source in the directory, not from the ended prefix, and carries its real owner: a teammate's pinned row shows the teammate's initials under Mine. Ownership is decided as for every other server row, by comparing the owner id with the signed-in account's ids
-- The pinned row is exempt from the scope filter, the state filter and the page cut, and shows in the group it belongs to under the current grouping
-- It stays while it is the selected row. When the user opens anything else, the pin is released and the row follows the ordinary rules: it disappears if the scope or loaded set would not show it
-- If the same session later arrives through the ordinary listing, that row and the pin are one row, not two
-- The open workspace keeps its usual lifecycle: the end-of-session hand-off and the close-on-removal watch see the pinned row as they see any server row, and releasing the pin while the workspace is open never closes it (the pin is released only by a navigation away)
+The session id resolves to the row the directory publishes for that session after its own merge: the winning row of `MergeServerLane`'s daemon/server suppression, with its session-id normalization and the local-server identity guard (`LocalDaemonOnAppServer`). That keeps the past-sessions rules without restating them: a live hosted agent on this machine opens its local workspace, one on another of the user's daemons opens the remote host, a Failed or Interrupted local row opens its local workspace with its reason (it suppresses the server row), and anything else opens the read-only workspace. `DaemonRowFor` is not the rule: it requires `IsHostedNow` and rejects Failed rows. Calling `OpenSession(sessionId, AgentOrigin.Server)` directly is not enough either, because daemon rows are keyed by agent id and an explicit lane skips resolution
 
-When the summary read refuses (deleted, no longer visible), the search page stays open and shows "This session is no longer available" in place of the list's error line
+The read-only workspace opens on the tab a rail click opens. The past-sessions design's Overview tab is not built yet; until it is, that is Chat, and when it lands search follows it with no change here
+
+### Pinning a session the rail does not show
+
+When the rail has no row for the session, the hit is **pinned** (owner's decision). A hit can be a teammate's session under Mine, an ended session past the loaded prefix, or both. Today `BuildServer` builds the read-only workspace only from a `server:{sessionId}` row already in the directory; under Mine, `MergeServerLane` also drops teammates' daemon rows, and every ended row is taken as the viewer's own
+
+- **The pin is an exemption inside the merge, not a row added after it.** The pinned session id is an input to `AgentDirectory`'s merge: its daemon rows are kept through the Mine scope filter, the state filter and the page cut, and the ordinary daemon/server suppression then chooses its winner. So the same hit opens the same workspace, with one rail row, under Mine and under Team, and the filter itself does not change
+- **A server row for a session no listing supplies** comes from a pin source of its own, never from the ended prefix, and carries its real owner: ownership is decided as for any server row, by comparing the owner id with the signed-in account's ids, so a teammate's pinned row shows the teammate's initials under Mine
+- **Building that row.** The listing has no session-id filter, so the row is built from two sources, both already in hand or one read away:
+  - from the search hit: session id, slug, title, owner user id, username, display name and avatar, repository owner and name, started and ended times
+  - from `GET api/sessions/{id}/summary` (`ActivitySession`): status, vendor, branch, cwd, `LastEventAt` as last activity, the primary repository hash from `Repositories`, ended time (which overrides the hit's)
+  - `access_level` is not on the summary and is left null: the read-only workspace then acquires its lease, and the server's verdict decides (a session below full access lands Denied with the generic note). `stale` is false
+- **Freshness.** While a pin is held and no listing supplies its session, the pin re-reads the summary on `ActiveSessionAdded`, `ActiveSessionChanged`, `ActiveSessionRemoved` or `SessionTitleChanged` for that session id, on every lane reconnect, and on the sessions service's reconciliation cadence, so a teammate's live session that ends shows ended without its push. `SessionDeleted` for it, or a summary read answering 403/404, drops the pin, and the workspace closes as it does for any deleted session. These reads run in `ServerSessionsService` (or beside it) and publish into the directory as a source; none runs inside the directory's recompute
+- **One row, not two.** When a listing row for the pinned session arrives it wins and the pin's own server row is withdrawn; when the listing row leaves again while the pin is still held, the pin re-reads before republishing, so an older snapshot never reappears
+- **Release.** The pin is held while the session is the selected row. A navigation away releases it, and the row follows the ordinary rules. Releasing never closes a workspace by itself: the release happens only as part of a navigation that has already replaced it
+
+### The open operation
+
+Choosing a hit is an open intent, captured with the `NavigationGate` generation and the identity generation at the moment of choice. When the rail already has the row, it opens at once. Otherwise the summary read runs first, and its completion publishes the pin and opens the workspace only if both generations are unchanged and the page that issued it is still the open one. A later Escape, rail click, New session or hit invalidates it, and a superseded completion publishes nothing. While the read runs, the row shows a spinner and the page stays open. Failures leave the page open, with nothing pinned, and show one line in place of the list:
+
+- 401: the sign-in prompt
+- 403 or 404: "This session is no longer available"
+- anything else: "Couldn't open this session · try again"
 
 Opening a hit selects it in the rail and expands its group, as `NotifySessionOpened` does today
+
+## Identity
+
+Search results, pins and pending opens belong to one signed-in account. They carry the identity generation the sessions service already keeps (`RunAsync`, `ClearForNewAccount`): it advances on a lane reconnect and on the subject changing to another account
+
+- **A different account** clears the page's results and highlight, cancels the in-flight search and any pending open, and drops every pin before any read for the new account is issued. A late response from the old generation is dropped on arrival, and a failed replacement read leaves an empty surface, never the previous account's hits or rows
+- **The same account signing in again after a lapse** keeps the query, the tab and the selected pin. The search is re-run once the lane is back, and the pin re-reads its summary
 
 ## Scope and visibility
 
@@ -104,9 +130,16 @@ The search covers every session the signed-in user can see on the server, regard
 
 ## What is left to the builder
 
-- How the main area hosts the third state (a sibling panel or a template in `WorkspaceHost`) and how `MainWindowViewModel` tracks the page and what was showing before it
+- How the cover is drawn over the main area (a sibling panel above the launcher and `WorkspaceHost` is the obvious fit)
 - The DTOs for `/api/search` in `Capacitor.Remote.Models`, and a client in the app beside the existing server reads (`ServerSessionHttp` / `AuthenticatedServerReads` patterns: no throws but cancellation, 401 mapped to the sign-in state)
 - The debounce mechanism (System.Reactive `Throttle` is already in use)
-- The shape of the pinned-row source in `AgentDirectory`
-- Tests: view-model tests for debounce, cancellation and stale-response dropping, highlight movement and tab switching; marker parsing; opening a hit outside the loaded set; the filter dot against the defaults. A headless view test for the rail's top row in the style of the existing rail tests
+- The shape of the pin input and pin source in `AgentDirectory` and where the pin's summary reads live
+- Tests, at least:
+  - view-model tests for debounce, cancellation and stale-response dropping, highlight movement and tab switching, and marker parsing
+  - resolution parity: the same hit under Mine and Team for a hosted local, a hosted remote, a Failed local, an Interrupted local and a session-only session opens the same workspace with one rail row
+  - the pin: a teammate's live session ends and the pin shows it ended; a title change; listing arrival and removal without an older snapshot returning; a deletion
+  - the open operation: a delayed summary after Escape, after a rail click, and after a later hit completed first
+  - the cover: the covered workspace completes or hands off while the page is up, and Escape uncovers the result; opening search invalidates a pending launch auto-open; opening the already-open session dismisses the page
+  - identity: B's replacement reads fail while A's search and summary complete late, and no hit, pin or navigation of A's survives
+  - the filter dot against the defaults, and a headless view test for the rail's top row in the style of the existing rail tests
 - `README.md` needs no change (no CLI surface). The docs' desktop figures harness may need the new rail top
