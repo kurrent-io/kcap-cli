@@ -1,5 +1,4 @@
 using System.Reactive.Subjects;
-using System.Reactive.Threading.Tasks;
 using Capacitor.App.ViewModels;
 using static Capacitor.App.ViewModels.LauncherNotices.Kind;
 
@@ -21,27 +20,25 @@ public class LauncherNoticesTests {
             Notices.TrackConnection(Connection);
         }
 
-        public (bool Stack, bool Server, bool Connection, int Hidden, string? Label) Shown =>
-            (Notices.ShowStack, Notices.ShowServer, Notices.ShowConnection, Notices.HiddenCount, Notices.ToggleLabel);
+        public (bool Stack, bool Server, bool Connection) Shown =>
+            (Notices.ShowStack, Notices.ShowServer, Notices.ShowConnection);
 
         public void Dispose() => Notices.Dispose();
     }
 
-    /// One card shows; the rest wait behind a count the toggle opens and closes.
+    /// Only one card shows, and the next takes its place once it clears.
     [Test]
-    public async Task One_card_shows_until_the_rest_are_asked_for() {
+    public async Task One_card_shows_and_the_next_follows_when_it_clears() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var rig = new Rig();
+            await Assert.That(rig.Shown).IsEqualTo((false, false, false));
+
             rig.Server.OnNext((true, Problem));
             rig.Connection.OnNext((true, Problem));
+            await Assert.That(rig.Shown).IsEqualTo((false, true, false));
 
-            await Assert.That(rig.Shown).IsEqualTo((false, true, false, 1, "1 more issue"));
-
-            await rig.Notices.ToggleCommand.Execute().ToTask();
-            await Assert.That(rig.Shown).IsEqualTo((false, true, true, 0, "Show fewer"));
-
-            await rig.Notices.ToggleCommand.Execute().ToTask();
-            await Assert.That(rig.Shown).IsEqualTo((false, true, false, 1, "1 more issue"));
+            rig.Server.OnNext(Off);
+            await Assert.That(rig.Shown).IsEqualTo((false, false, true));
         });
     }
 
@@ -59,43 +56,23 @@ public class LauncherNoticesTests {
             rig.Stack.OnNext((true, stack));
             rig.Connection.OnNext((true, connection));
 
-            await Assert.That(rig.Shown).IsEqualTo((stackShown, false, connectionShown, 1, "1 more issue"));
+            await Assert.That(rig.Shown).IsEqualTo((stackShown, false, connectionShown));
         });
     }
 
-    /// A local stack card that is not a note already covers the server, so the server card folds into
-    /// it; behind a note, the server card is a problem of its own and outranks it.
+    /// A local stack card that is not a note already covers the server, so the server card folds into it;
+    /// behind a note, the server card is a problem of its own and outranks it.
     [Test]
-    [Arguments(Problem, false, 0)]
-    [Arguments(Progress, false, 0)]
-    [Arguments(Note, true, 1)]
-    public async Task A_stack_card_absorbs_the_local_server_card(LauncherNotices.Kind stack, bool serverShown, int hidden) {
+    [Arguments(Problem, false)]
+    [Arguments(Progress, false)]
+    [Arguments(Note, true)]
+    public async Task A_stack_card_absorbs_the_local_server_card(LauncherNotices.Kind stack, bool serverShown) {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var rig = new Rig();
             rig.Stack.OnNext((true, stack));
             rig.Server.OnNext((true, Problem));
 
-            await Assert.That(rig.Notices.ShowServer).IsEqualTo(serverShown);
-            await Assert.That(rig.Notices.ShowStack).IsEqualTo(!serverShown);
-            await Assert.That(rig.Notices.HiddenCount).IsEqualTo(hidden);
-        });
-    }
-
-    /// Clearing down to one card folds the stack again, so the next pile starts with one card.
-    [Test]
-    public async Task Clearing_down_to_one_card_folds_the_stack_again() {
-        await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            using var rig = new Rig();
-            rig.Server.OnNext((true, Problem));
-            rig.Connection.OnNext((true, Problem));
-            await rig.Notices.ToggleCommand.Execute().ToTask();
-
-            rig.Server.OnNext(Off);
-            await Assert.That(rig.Shown).IsEqualTo((false, false, true, 0, (string?)null));
-            await Assert.That(rig.Notices.Expanded).IsFalse();
-
-            rig.Server.OnNext((true, Problem));
-            await Assert.That(rig.Shown).IsEqualTo((false, true, false, 1, "1 more issue"));
+            await Assert.That(rig.Shown).IsEqualTo((!serverShown, serverShown, false));
         });
     }
 }

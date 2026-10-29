@@ -158,19 +158,6 @@
                 </Grid>
             </Border>
 
-            <Button x:Name="MoreNoticesButton" Classes="kcapGhost" HorizontalAlignment="Left" Margin="30,-2,0,0"
-                    Padding="10,4" FontSize="12.5" Command="{Binding Notices.ToggleCommand}"
-                    IsVisible="{Binding Notices.ToggleLabel, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                    <TextBlock Text="{Binding Notices.ToggleLabel}" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
-                    <Panel VerticalAlignment="Center">
-                        <views:AppIcon Kind="ChevronDown" Size="14" Foreground="{StaticResource KcapMutedBrush}"
-                                       IsVisible="{Binding !Notices.Expanded}" />
-                        <views:AppIcon Kind="ChevronUp" Size="14" Foreground="{StaticResource KcapMutedBrush}"
-                                       IsVisible="{Binding Notices.Expanded}" />
-                    </Panel>
-                </StackPanel>
-            </Button>
         </StackPanel>
 
             <StackPanel VerticalAlignment="Center" HorizontalAlignment="Stretch" MaxWidth="680"
