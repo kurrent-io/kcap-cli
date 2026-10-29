@@ -975,7 +975,9 @@ public partial class App : Application {
             serverLane, sessionAccess, permissions, readDetail, directory.VendorOfSession, _time);
         var attention = new SessionAttentionTracker(serverLane, readDetail, _time);
         _sessionAccess = sessionAccess;
-        var pullRequestTones = new PullRequestToneCache(directory, readers, TimeProvider.System);
+        // Sessions the rail hides are not read: nothing would show their PRs.
+        var railShown = new ReplaySubject<Func<AgentRow, bool>>(1);
+        var pullRequestTones = new PullRequestToneCache(directory, readers, TimeProvider.System, railShown);
         _pullRequestTones = pullRequestTones;
         _permissionFeed = permissionFeed;
         _attention = attention;
@@ -1128,7 +1130,7 @@ public partial class App : Application {
                 agentsAwaitingAnswer: permissions.AgentsAwaitingAnswer, agentsRunningCommands: commands.Running,
                 requestSignIn: requestSignIn,
                 lifecycleAttention: lifecycleAttention, identityReport: lifecycle.IdentityReport,
-                pullRequestSummaries: pullRequestTones.Summaries,
+                pullRequestSummaries: pullRequestTones.Summaries, railShown: railShown,
                 directory: directory, remoteAgents: remoteAgents, lane: serverLane, localAccounts: accounts.Snapshot, readings: readings,
                 viewerId: viewerId, localMachineId: machineId, restartPending: restartPending.Pending,
                 // A row present on both lanes is the local one: the local socket is the richer
@@ -1933,6 +1935,7 @@ public partial class App : Application {
             IObservable<string?>? lifecycleAttention = null, IObservable<string?>? identityReport = null,
             IObservable<IReadOnlyDictionary<string, int>>? agentsRunningCommands = null,
             IObservable<IReadOnlyDictionary<string, RailPullRequestSummary>>? pullRequestSummaries = null,
+            IObserver<Func<AgentRow, bool>>? railShown = null,
             IAgentDirectory? directory = null, IRemoteAgentsService? remoteAgents = null,
             IServerLane? lane = null, IObservable<AccountsSnapshotDto?>? localAccounts = null,
             Func<CancellationToken, Task<string?>>? viewerId = null,
@@ -2021,7 +2024,7 @@ public partial class App : Application {
             pullRequests: pullRequestSummaries, openPullRequest: (agentId, origin, subject) => vm?.OpenSessionPullRequest(agentId, origin, subject),
             openServerSession: sessionId => vm?.OpenSession(sessionId, AgentOrigin.Server),
             sessions: sessions, preferences: initialRail, persistPreferences: persistRail,
-            scopeLocked: localServer?.IsLocalServer == true, bindUserPreferences: bindRailUser);
+            scopeLocked: localServer?.IsLocalServer == true, shownRows: railShown, bindUserPreferences: bindRailUser);
         vm = new MainWindowViewModel(
             service, shutdownToken, activity, time, startAction, lifecycleStatus, home: home,
             navigation: navigation, trackWorkspaceTeardown: trackWorkspaceTeardown, workspaceFactory: workspaceFactory,
