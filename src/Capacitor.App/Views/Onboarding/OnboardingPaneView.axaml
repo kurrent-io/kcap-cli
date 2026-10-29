@@ -61,7 +61,7 @@
                     </Grid>
                 </Button>
 
-                <TextBlock Classes="onboardingNote" Margin="0,6,0,0" Text="You can reopen setup anytime from Help and support in kcap." />
+                <TextBlock Classes="onboardingNote" Margin="0,6,0,0" Text="{x:Static vm:SetupLocation.ReopenAnytimeNote}" />
             </StackPanel>
         </DataTemplate>
 
@@ -147,7 +147,7 @@
                     <app:ProductWordmark HorizontalAlignment="Left" />
                     <Button Grid.Column="1" Classes="onboardingQuiet" Content="Finish later"
                             Command="{Binding FinishLaterCommand}" IsVisible="{Binding FinishLaterVisible}"
-                            ToolTip.Tip="Continue setup from Help and support in kcap" />
+                            ToolTip.Tip="{x:Static vm:SetupLocation.FinishLaterTip}" />
                 </Grid>
 
                 <StackPanel Spacing="14">
