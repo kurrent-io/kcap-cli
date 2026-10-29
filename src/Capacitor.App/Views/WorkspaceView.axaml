@@ -16,9 +16,7 @@
                 Padding="20,16,16,16" Background="Transparent" PointerPressed="OnHeaderPointerPressed">
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
                 <StackPanel Spacing="6" VerticalAlignment="Center" Margin="0,0,8,0">
-                    <TextBlock x:Name="WorkspaceTitle" Text="{Binding Title}" FontWeight="SemiBold" FontSize="16"
-                               Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis"
-                               ToolTip.Tip="{Binding Title}" />
+                    <views:SessionTitleEditor x:Name="WorkspaceTitle" DataContext="{Binding TitleEditor}" />
                     <!-- Auto so the mark keeps the width of its word. A star beside it would
                          measure the mark with the leftover and clip "Working". -->
                     <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">

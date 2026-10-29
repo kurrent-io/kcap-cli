@@ -1,5 +1,11 @@
+using System.Net;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.WorkItems;
 
 namespace Capacitor.Cli.Daemon.Services;
@@ -14,7 +20,7 @@ namespace Capacitor.Cli.Daemon.Services;
 /// </summary>
 // Qodana's usage search misses the construction in AgentOrchestrator
 [UsedImplicitly]
-internal sealed class TitleServerPort(ICapacitorHttpClient http, string baseUrl) : ITitleServerPort {
+internal sealed partial class TitleServerPort(ICapacitorHttpClient http, string baseUrl) : ITitleServerPort {
     readonly string _baseUrl = baseUrl.TrimEnd('/');
 
     public async Task<string?> GetTitleAsync(string sessionId, CancellationToken ct) {
@@ -57,4 +63,53 @@ internal sealed class TitleServerPort(ICapacitorHttpClient http, string baseUrl)
             return await HarnessTitleClient.PostOrFallBackAsync(client, TimeProvider.System, _baseUrl, canonical, post, ct);
         }
     }
+
+    public async Task<TitleRenameOutcome> RenameAsync(string sessionId, string title, CancellationToken ct) {
+        if (WorkContextIds.CanonicalSessionId(sessionId) is not { } canonical) {
+            return new TitleRenameOutcome(false, null, SessionRenameReasons.NotFound);
+        }
+
+        try {
+            var (client, status) = await http.ForHookAsync(ct);
+
+            using (client) {
+                if (status is AuthStatus.Expired or AuthStatus.NotAuthenticated or AuthStatus.WrongServer) {
+                    return new TitleRenameOutcome(false, null, SessionRenameReasons.Unauthenticated);
+                }
+
+                var payload = new JsonObject {
+                    ["session_id"] = canonical,
+                    ["title"]      = title,
+                    ["rename"]     = true,
+                };
+
+                using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+                using var resp    = await client.PostAsync(new Uri($"{_baseUrl}/hooks/agent-title"), content, ct);
+
+                switch (resp.StatusCode) {
+                    case HttpStatusCode.Forbidden: return new TitleRenameOutcome(false, null, SessionRenameReasons.NotOwned);
+                    case HttpStatusCode.NotFound:  return new TitleRenameOutcome(false, null, SessionRenameReasons.NotFound);
+                }
+
+                if (!resp.IsSuccessStatusCode) return new TitleRenameOutcome(false, null, SessionRenameReasons.ServerError);
+
+                var reply = JsonSerializer.Deserialize(
+                    await resp.Content.ReadAsStringAsync(ct),
+                    AgentTitleReplyJsonContext.Default.AgentTitleReplyDto
+                );
+
+                if (reply is null) return new TitleRenameOutcome(false, null, SessionRenameReasons.ServerError);
+
+                return reply.Applied
+                    ? new TitleRenameOutcome(true, reply.Title, null)
+                    : new TitleRenameOutcome(false, reply.Title, SessionRenameReasons.Refused);
+            }
+        } catch (Exception e) when (e is HttpRequestException or JsonException or IOException or TaskCanceledException && !ct.IsCancellationRequested) {
+            return new TitleRenameOutcome(false, null, SessionRenameReasons.ServerError);
+        }
+    }
+
+    [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
+    [JsonSerializable(typeof(AgentTitleReplyDto))]
+    partial class AgentTitleReplyJsonContext : JsonSerializerContext;
 }
