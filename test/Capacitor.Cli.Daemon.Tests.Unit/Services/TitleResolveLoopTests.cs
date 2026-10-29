@@ -1,6 +1,7 @@
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
+using TUnit.Assertions.Enums;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
@@ -64,9 +65,11 @@ public class TitleResolveLoopTests {
             (_, _) => Task.FromResult<string?>(null);
         public int GenerateCalls;
         public FakeTimeProvider Time { get; } = new(T0);
+        /// Runs right after the tick takes its agent snapshot.
+        public Action? AfterSnapshot { get; set; }
 
         public TitleResolveLoop Build() => new(
-            () => Agents,
+            () => { var snapshot = Agents.ToList(); AfterSnapshot?.Invoke(); return snapshot; },
             (id, title) => { lock (_applied) _applied.Add((id, title)); },
             Server,
             a => Native(a),
@@ -489,7 +492,7 @@ public class TitleResolveLoopTests {
         gate.Release();
         await tick;
 
-        await Assert.That(h.Applied.Select(a => a.Title)).IsEquivalentTo(["New"]);
+        await Assert.That(h.Applied.Select(a => a.Title)).IsEquivalentTo(["New"], CollectionOrdering.Matching);
     }
 
     [Test]
@@ -509,8 +512,8 @@ public class TitleResolveLoopTests {
         // The paused push committed after the rename; reading it back must not displace the rename.
         await loop.TickAsync(CancellationToken.None);
 
-        await Assert.That(h.Applied.Select(a => a.Title)).IsEquivalentTo(["Native title", "New"]);
-        await Assert.That(h.Server.Pushed.Select(p => p.Title)).IsEquivalentTo(["Native title"]);
+        await Assert.That(h.Applied.Select(a => a.Title)).IsEquivalentTo(["Native title", "New"], CollectionOrdering.Matching);
+        await Assert.That(h.Server.Pushed.Select(p => p.Title)).IsEquivalentTo(["Native title"], CollectionOrdering.Matching);
     }
 
     [Test]
@@ -526,7 +529,7 @@ public class TitleResolveLoopTests {
         await loop.TickAsync(CancellationToken.None);
         await loop.TickAsync(CancellationToken.None);
 
-        await Assert.That(h.Applied.Select(a => a.Title)).IsEquivalentTo(["Fix the bug"]);
+        await Assert.That(h.Applied.Select(a => a.Title)).IsEquivalentTo(["Fix the bug"], CollectionOrdering.Matching);
         await Assert.That(h.GenerateCalls).IsEqualTo(0);
     }
 
@@ -544,7 +547,7 @@ public class TitleResolveLoopTests {
         await loop.TickAsync(CancellationToken.None);
 
         await Assert.That(h.Applied.Last().Title).IsEqualTo("Native A");
-        await Assert.That(h.Server.Pushed.Select(p => p.Title)).IsEquivalentTo(["Native A"]);
+        await Assert.That(h.Server.Pushed.Select(p => p.Title)).IsEquivalentTo(["Native A"], CollectionOrdering.Matching);
     }
 
     [Test]
@@ -558,7 +561,7 @@ public class TitleResolveLoopTests {
         loop.ApplyRename("a1", "New");
         await loop.TickAsync(CancellationToken.None);
 
-        await Assert.That(h.Applied.Select(a => a.Title)).IsEquivalentTo(["New"]);
+        await Assert.That(h.Applied.Select(a => a.Title)).IsEquivalentTo(["New"], CollectionOrdering.Matching);
         await Assert.That(h.Server.Pushed).IsEmpty();
     }
 
@@ -574,6 +577,45 @@ public class TitleResolveLoopTests {
         h.Server.Get = _ => "Newer";
         await loop.TickAsync(CancellationToken.None);
 
-        await Assert.That(h.Applied.Select(a => a.Title)).IsEquivalentTo(["New", "Newer"]);
+        await Assert.That(h.Applied.Select(a => a.Title)).IsEquivalentTo(["New", "Newer"], CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task A_lagging_server_read_never_reverts_a_rename() {
+        var h = new Harness();
+        h.Agents.Add(Agent());
+        h.Native = _ => "Native title";
+        h.Server.Get = _ => "Old";
+        var loop = h.Build();
+
+        await loop.TickAsync(CancellationToken.None);
+        var before = h.Applied.Count;
+        loop.ApplyRename("a1", "New");
+        await loop.TickAsync(CancellationToken.None); // the read model has not projected the rename yet
+        await loop.TickAsync(CancellationToken.None);
+        h.Server.Get = _ => "New";
+        await loop.TickAsync(CancellationToken.None);
+        h.Server.Get = _ => "Newer";
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(h.Applied.Skip(before).Select(a => a.Title))
+            .IsEquivalentTo(["New", "Newer"], CollectionOrdering.Matching);
+        await Assert.That(h.Server.Pushed).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_rename_landing_after_the_snapshot_survives_the_removal_pass() {
+        var h = new Harness();
+        h.Agents.Add(Agent());
+        var loop = h.Build();
+        h.AfterSnapshot = () => { h.AfterSnapshot = null; loop.ApplyRename("a2", "New"); };
+
+        await loop.TickAsync(CancellationToken.None); // a2 is not in this tick's snapshot
+        h.Agents.Add(Agent(id: "a2", sessionId: "sid-2"));
+        h.Server.Get = sid => sid == "sid-2" ? "Old" : null; // a2's rename not yet projected
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(h.Applied.Where(a => a.AgentId == "a2").Select(a => a.Title))
+            .IsEquivalentTo(["New"], CollectionOrdering.Matching);
     }
 }

@@ -60,6 +60,12 @@ internal sealed class TitleResolveLoop {
         /// A rename the daemon applied. Authority until the server shows a different real title,
         /// even when it matches the prompt or one of our push attempts.
         public string? Renamed;
+        /// Whether a server read has returned <see cref="Renamed"/>. The server's title is a
+        /// projected read model, so until it shows the rename any other title is a lagging read.
+        public bool RenameSeen;
+        /// The tick epoch the state was created in; a removal pass spares a state created after
+        /// its snapshot, whose agent the snapshot could not have seen.
+        public long Born;
     }
 
     /// <summary>
@@ -94,6 +100,7 @@ internal sealed class TitleResolveLoop {
     /// Never held across an await.
     readonly Lock _gate = new();
     readonly Dictionary<string, AgentTitleState> _states = [];
+    long _epoch;
 
     public TitleResolveLoop(
             Func<IReadOnlyList<TitleAgentView>> agents,
@@ -120,6 +127,7 @@ internal sealed class TitleResolveLoop {
         lock (_gate) {
             var state = StateFor(agentId);
             state.Renamed     = renamed;
+            state.RenameSeen  = false;
             state.ServerTitle = renamed;
             state.Applied     = renamed;
             state.Revision++;
@@ -128,11 +136,15 @@ internal sealed class TitleResolveLoop {
     }
 
     public async Task TickAsync(CancellationToken ct) {
+        long epoch;
+        lock (_gate) epoch = ++_epoch;
+
         var agents = _agents();
 
         var live = new HashSet<string>(agents.Select(a => a.Id), StringComparer.Ordinal);
         lock (_gate) {
-            foreach (var gone in _states.Keys.Where(id => !live.Contains(id)).ToList()) _states.Remove(gone);
+            foreach (var gone in _states.Where(kv => !live.Contains(kv.Key) && kv.Value.Born < epoch).Select(kv => kv.Key).ToList())
+                _states.Remove(gone);
         }
 
         foreach (var agent in agents) {
@@ -152,7 +164,7 @@ internal sealed class TitleResolveLoop {
     }
 
     AgentTitleState StateFor(string agentId) {
-        if (!_states.TryGetValue(agentId, out var state)) _states[agentId] = state = new AgentTitleState();
+        if (!_states.TryGetValue(agentId, out var state)) _states[agentId] = state = new AgentTitleState { Born = _epoch };
         return state;
     }
 
@@ -256,11 +268,15 @@ internal sealed class TitleResolveLoop {
             // whatever it happens to match.
             string? serverReal = null;
             if (serverTitle is not null && serverTitle == state.Renamed) {
-                serverReal = serverTitle;
+                serverReal       = serverTitle;
+                state.RenameSeen = true;
+            } else if (state.Renamed is not null && !state.RenameSeen) {
+                serverReal = state.Renamed;
             } else if (serverTitle is not null && !state.PushAttempts.Contains(serverTitle)
                     && !IsPromptEcho(serverTitle, agent.Prompt)) {
-                serverReal    = serverTitle;
-                state.Renamed = null;
+                serverReal       = serverTitle;
+                state.Renamed    = null;
+                state.RenameSeen = false;
             }
 
             state.ServerTitle = serverReal;
