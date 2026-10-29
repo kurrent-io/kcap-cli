@@ -72,8 +72,8 @@ public sealed class MarkdownView : ContentControl {
         // The viewer's template owns a ScrollViewer; the list around it is what scrolls.
         ScrollViewer.SetVerticalScrollBarVisibility(_viewer, ScrollBarVisibility.Disabled);
         ScrollViewer.SetHorizontalScrollBarVisibility(_viewer, ScrollBarVisibility.Disabled);
-        // MarkView opens a link on any button's release; a right-click belongs to the context menu,
-        // and launching the browser under the menu that click opens froze the app on macOS.
+        // MarkView opens a link on any button's release, so a non-left release is suppressed here:
+        // a right-click belongs to the context menu, and launching the browser under it hangs macOS.
         AddHandler(PointerReleasedEvent, (_, e) => _nonLeftRelease = e.InitialPressMouseButton != MouseButton.Left,
             RoutingStrategies.Tunnel, handledEventsToo: true);
         AddHandler(PointerReleasedEvent, (_, _) => _nonLeftRelease = false, RoutingStrategies.Bubble, handledEventsToo: true);

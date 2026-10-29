@@ -69,8 +69,7 @@ public class TextContextMenuTests {
         });
     }
 
-    /// Pins the right button to the menu: launching the browser under the menu it opens hangs the
-    /// app on macOS, and the menu is where the link is offered for copying instead.
+    /// Pins the right button to the menu: it never opens the link, and the menu offers to copy it.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Right_clicking_a_link_offers_to_copy_it_without_opening_it() {
