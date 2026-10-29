@@ -154,6 +154,7 @@ public class LifecyclePromptViewModelTests {
             await Assert.That(vm.Title).IsEqualTo("Software update");
             await Assert.That(vm.AcceptButtonText).IsEqualTo("Dismiss");
             await Assert.That(vm.ShowDeclineButton).IsFalse();
+            await Assert.That(vm.InstalledVersion).IsEqualTo("0.12.0-beta.2");
         });
     }
 

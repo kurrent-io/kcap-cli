@@ -19,11 +19,7 @@
         <Grid Margin="36,44,36,28" RowDefinitions="*,Auto">
             <ScrollViewer Grid.Row="0" HorizontalScrollBarVisibility="Disabled">
             <StackPanel>
-                <Panel Width="64" Height="64" HorizontalAlignment="Left">
-                    <Image Source="avares://kcap-desktop/Assets/kcap-icon.png"
-                           RenderOptions.BitmapInterpolationMode="HighQuality" />
-                    <Border CornerRadius="12" BorderThickness="1" BorderBrush="{StaticResource KcapBorderBrush}" />
-                </Panel>
+                <views:UpdateIcon HorizontalAlignment="Left" />
 
                 <TextBlock x:Name="HeadingText" Margin="0,20,0,0" Text="{Binding Heading}"
                            FontSize="19" FontWeight="SemiBold" LineHeight="26" LetterSpacing="-0.2"
@@ -41,7 +37,7 @@
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:UpdateStep">
-                                <Grid ColumnDefinitions="Auto,*,Auto" Background="Transparent" ToolTip.Tip="{Binding Hint}">
+                                <Grid ColumnDefinitions="Auto,*,Auto">
                                     <Panel Margin="0,2,10,0" VerticalAlignment="Top">
                                         <views:AppIcon Kind="Circle" Size="14" Foreground="{StaticResource KcapFaintBrush}" IsVisible="{Binding IsPending}" />
                                         <views:AppIcon Kind="LoaderCircle" Size="14" Foreground="{StaticResource KcapPurpleBrush}"

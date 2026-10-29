@@ -598,7 +598,7 @@ public partial class App : Application {
     /// From the moment an update is accepted until this process exits, which quiescing can stretch.
     void ShowUpdateClosingWindow() {
         if (_updates?.ReadyVersion is not { } to) return;
-        var window = new UpdateFinishWindow { DataContext = UpdateFinishViewModel.Closing(_updater.InstalledVersion, to, _time) };
+        var window = new UpdateFinishWindow { DataContext = UpdateFinishViewModel.Closing(to, _time) };
         foreach (var other in (ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Windows.ToArray() ?? []) other.Hide();
         window.Show();
         window.Activate();
@@ -2491,8 +2491,8 @@ public partial class App : Application {
                 var declined = declinedTakeoverPairs ?? [];
                 var pairKey = (envelope.Request, named);
                 if (declined.Contains(pairKey)) {
-                    // A pair already declined this run downgrades to a one-line attention presentation — still exactly-once, just never a re-dialog for the SAME pair.
-                    surface.Attention($"kcap needs to replace the daemon service to continue ({named}).");
+                    Console.Error.WriteLine($"kcap: daemon replacement still needed ({named}); already declined this run");
+                    surface.Attention("Daemon service replacement is still needed. Restart kcap to review it again.");
                     markPresented?.Invoke();
                     break;
                 }
@@ -2507,8 +2507,9 @@ public partial class App : Application {
                     // No app-side evidence revalidation on accept: a stale Accept only fails coded (28/29, under the CLI's transaction lock) and re-arrives as a fresh outcome.
                     _ = await runMutation(envelope.Request with { Verb = MutationVerb.Replace }, ct).ConfigureAwait(false);
                 } else {
-                    declined.Add(pairKey); // Accept never records here — an accepting user wants the retry loop
-                    surface.Status($"kcap needs to replace the daemon service to continue ({named}) — declined.");
+                    declined.Add(pairKey);
+                    Console.Error.WriteLine($"kcap: daemon replacement declined ({named})");
+                    surface.Status("Daemon service replacement was skipped. Restart kcap to review it again.");
                 }
                 break;
             }

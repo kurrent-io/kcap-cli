@@ -17,8 +17,8 @@ namespace Capacitor.App.ViewModels;
 /// journaled, so connectivity proves nothing.
 /// </summary>
 public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
-    internal const string BusyDetail    = "Another local setup, upgrade or uninstall is running on this Mac. The upgrade runs again once the local server is back.";
-    internal const string StartGuidance = "Its data is kept. Start it to finish the upgrade.";
+    internal const string BusyDetail    = "Another local setup, update or uninstall is running on this machine. The update runs again once the local server is back.";
+    internal const string StartGuidance = "Saved data is kept. Start the server to finish the update.";
     const int StartMessageTailLines     = 12;
     public const string NameTip         = "The local kcap server on this machine";
     public const string VersionTip      = "Version of kcap local on this machine";
@@ -106,6 +106,7 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
         _isStarting = StartCommand.IsExecuting
             .ToProperty(this, x => x.IsStarting, initialValue: false)
             .DisposeWith(_disposables);
+        StartCommand.IsExecuting.Subscribe(_ => Refresh()).DisposeWith(_disposables);
         DismissCommand  = ReactiveCommand.Create(() => {
             if (!DismissVisible) return;
             _shown = null;
@@ -127,8 +128,8 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
     public string? Version => (Upgrading ? Progress.SwitchedTo : null) ?? _installed;
 
     public string? StateText =>
-        Upgrading ? "upgrading"
-        : Failed ? "upgrade failed"
+        Upgrading || IsStarting ? null
+        : Failed ? "update failed"
         : _lane switch {
             ServerLaneState.Connected  => "running",
             ServerLaneState.Retrying   => "not running",
@@ -144,50 +145,50 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
     /// A non-blocking result: publication or another local operation is pending, or search fell back to keywords.
     public bool IsNote => !Upgrading && (_shown is LocalUpgradeOutcome.NotPublished or LocalUpgradeOutcome.Upgraded { SearchWarning: not null } || Waiting);
 
-    public string? Headline => Upgrading
+    public string? Headline => IsStarting ? "Starting the local server…" : Upgrading
         ? (Progress.From, Progress.To) switch {
-            ({ } from, { } to) => $"Upgrading kcap local {from} to {to}",
-            (_, { } to)        => $"Upgrading kcap local to {to}",
-            _                  => "Upgrading kcap local",
+            ({ } from, { } to) => $"Updating kcap local {from} → {to}…",
+            (_, { } to)        => $"Updating kcap local to {to}…",
+            _                  => "Updating kcap local…",
         }
         : Waiting ? Progress.To is { } waitingFor
-            ? $"The upgrade to kcap local {waitingFor} is waiting"
-            : "The upgrade of kcap local is waiting"
+            ? $"The update to kcap local {waitingFor} is waiting"
+            : "The update of kcap local is waiting"
         : _shown switch {
-            LocalUpgradeOutcome.Upgraded => "The local server is upgraded; search needs attention",
-            LocalUpgradeOutcome.Failed { Switched: true } f => $"kcap local {f.To ?? Version} did not start after the upgrade",
-            LocalUpgradeOutcome.Failed { To: { } to }       => $"kcap local could not be upgraded to {to}",
-            LocalUpgradeOutcome.Failed                      => "kcap local could not be upgraded",
+            LocalUpgradeOutcome.Upgraded => "The local server is updated; search needs attention",
+            LocalUpgradeOutcome.Failed { Switched: true } f => $"kcap local {f.To ?? Version} did not start after the update",
+            LocalUpgradeOutcome.Failed { To: { } to }       => $"kcap local could not be updated to {to}",
+            LocalUpgradeOutcome.Failed                      => "kcap local could not be updated",
             LocalUpgradeOutcome.NotPublished                => Progress.To is { } to
                 ? $"kcap local {to} is not available yet"
                 : "This version of kcap local is not available yet",
             _ => null,
         };
 
-    public string? Detail => Upgrading
+    public string? Detail => IsStarting ? "The server starts on the installed version and finishes any remaining data changes." : Upgrading
         ? Progress.Phase switch {
-            LocalUpgradePhase.Recovering  => "Finishing an earlier change that was interrupted…",
+            LocalUpgradePhase.Recovering  => "Finishing an earlier change that was interrupted",
             LocalUpgradePhase.Downloading => DownloadFraction is { } f
-                ? $"Downloading {Progress.To}… {(int)Math.Round(f * 100)}%"
-                : $"Downloading {Progress.To}…",
-            LocalUpgradePhase.Verifying => "Verifying the local server download…",
-            LocalUpgradePhase.Extracting => "Extracting the local server…",
-            LocalUpgradePhase.DownloadingModel => Progress.Embeddings.PullText ?? "Preparing the search model…",
-            LocalUpgradePhase.Stopping    => "Stopping the local server…",
+                ? $"Downloading {Progress.To} {(int)Math.Round(f * 100)}%"
+                : $"Downloading {Progress.To}",
+            LocalUpgradePhase.Verifying => "Verifying the local server download",
+            LocalUpgradePhase.Extracting => "Extracting the local server",
+            LocalUpgradePhase.DownloadingModel => Progress.Embeddings.PullText?.Replace("…", "", StringComparison.Ordinal) ?? "Preparing the search model",
+            LocalUpgradePhase.Stopping    => "Stopping the local server",
             LocalUpgradePhase.Starting    => $"Starting {Progress.To}. A database migration can take a few minutes.",
-            LocalUpgradePhase.Restarting  => $"Starting {Progress.From} again…",
-            _                             => "Checking the local installation…",
+            LocalUpgradePhase.Restarting  => $"Starting {Progress.From} again",
+            _                             => "Checking the local installation",
         }
         : Waiting ? BusyDetail
         : _shown switch {
             LocalUpgradeOutcome.Upgraded => "The search model could not be updated. Search works by keyword. Open Settings → Search to retry.",
-            LocalUpgradeOutcome.Failed f => TerminalAdvice.Strip(f.Message) ?? "The upgrade stopped before it finished.",
+            LocalUpgradeOutcome.Failed f => TerminalAdvice.Strip(f.Message) ?? "The update stopped before it finished.",
             LocalUpgradeOutcome.NotPublished when Progress.From is { } from => $"The local server stays at {from}.",
             LocalUpgradeOutcome.NotPublished => "Try again later.",
             _ => null,
         };
 
-    public string? Guidance => StartVisible ? StartGuidance : null;
+    public string? Guidance => StartVisible && !IsStarting ? StartGuidance : null;
 
     public double? DownloadFraction => Upgrading && Progress.Phase is LocalUpgradePhase.Downloading or LocalUpgradePhase.DownloadingModel ? Progress.DownloadFraction : null;
 

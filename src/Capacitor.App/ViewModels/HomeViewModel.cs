@@ -72,7 +72,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     internal const string SignInToAttach = "sign in to attach files";
 
-    internal const string ConnectingNotice     = "Connecting to the server. This usually takes a few seconds.";
+    internal const string ConnectingNotice     = "Connecting to the server. Session activity appears when the connection is ready.";
     /// Longer than the daemon's 30s connect backoff so one redial still reads as connecting.
     internal static readonly TimeSpan CatchUpLimit = TimeSpan.FromSeconds(60);
     internal const string FinishingSignInNotice =
@@ -871,19 +871,25 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         rawNotices.Subscribe(ArmOrResetCatchUp).DisposeWith(_disposables);
         // A stopped local server's Start banner is the whole story, so the no-harness fallback stays
         // out of it whether or not the daemon has noticed the server is gone.
-        var notices = rawNotices.CombineLatest(_catchUpTimedOut, NoticeAfterCatchUp)
-            .CombineLatest(noHarnesses.ObserveOn(RxSchedulers.MainThreadScheduler), _localServer, _localServerDown, _machineSelectionChanges,
-                (notice, none, local, down, sel) => NoticeForLocalServer(
-                    notice ?? (none && !(local && down && !sel.Remote) ? NoHarnessesNotice(sel.Remote ? sel.Name : null) : null),
-                    local, down, sel.Remote ? sel.Name : null));
+        var connectionNotices = rawNotices.CombineLatest(_catchUpTimedOut, NoticeAfterCatchUp)
+            .CombineLatest(_localServer, _localServerDown, _machineSelectionChanges,
+                (notice, local, down, sel) => NoticeForLocalServer(notice, local, down, sel.Remote ? sel.Name : null));
+        var harnessNotice = noHarnesses.ObserveOn(RxSchedulers.MainThreadScheduler)
+            .CombineLatest(_localServer, _localServerDown, _machineSelectionChanges,
+                (none, local, down, sel) => none && !(local && down && !sel.Remote)
+                    ? NoHarnessesNotice(sel.Remote ? sel.Name : null) : null);
+        var notices = connectionNotices.CombineLatest(harnessNotice, (connection, harness) => connection ?? harness);
         _connectionNotice = notices
             .ToProperty(this, x => x.ConnectionNotice, ConnectingNotice)
             .DisposeWith(_disposables);
         // The lifecycle feed speaks for the LOCAL daemon (start attempts, version mismatch), so it
         // is shown only while the local machine is selected. Remote notices must stay independent.
-        var bannerContent = notices.CombineLatest(
-            _daemonStartMessageFeed, _machineSelectionChanges,
-            (notice, startMessage, sel) => BannerContentFor(notice, sel.Remote ? null : startMessage));
+        var bannerContent = connectionNotices.CombineLatest(
+            _daemonStartMessageFeed, _machineSelectionChanges, harnessNotice,
+            (notice, startMessage, sel, harness) => {
+                var content = BannerContentFor(notice, sel.Remote ? null : startMessage);
+                return content.Message is null ? (Message: harness, Detail: (string?)null) : content;
+            });
         _bannerMessage = bannerContent.Select(content => content.Message)
             .ToProperty(this, x => x.BannerMessage, ConnectingNotice)
             .DisposeWith(_disposables);
@@ -892,6 +898,11 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             var detail  = NoticeText.Commands(content.Detail);
             var (title, body) = NoticeText.Headline(message.Prose);
             if (body is null && detail.Prose is null && title is not null) (title, body) = (DaemonStatusTitle, message.Prose);
+            if (BannerInFlight(content)) {
+                title = title?.TrimEnd('…') + "…";
+                body = body?.Replace("…", "", StringComparison.Ordinal);
+                detail.Prose = detail.Prose?.Replace("…", "", StringComparison.Ordinal);
+            }
             return (Title: title, Body: body, Detail: detail.Prose, Command: detail.Command ?? message.Command);
         });
         _bannerTitle = bannerCard.Select(card => card.Title)
@@ -1050,7 +1061,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// for the others and launches wait, until every step has settled.
     public void AttachUpdateProgress(IObservable<(bool Finishing, string? Detail)> progress) {
         progress.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(p => {
-            UpdateDetail = p.Detail;
+            UpdateDetail = p.Detail?.TrimEnd('…');
             _updateFinishing.OnNext(p.Finishing);
         }).DisposeWith(_disposables);
         // A remote machine's own notices still show: the update is changing only this one.

@@ -62,6 +62,7 @@ public class LauncherPaneViewSmokeTests {
                 try {
                     await Assert.That(failed.IsEffectivelyVisible).IsFalse();
                     await Assert.That(busy.IsEffectivelyVisible).IsTrue();
+                    await Assert.That(Find<TextBlock>(window, "LocalUpgradeHeadline")!.Text).IsEqualTo("Starting the local server…");
                 } finally {
                     start.TrySetResult(new ProcessResult(1, "", "still unavailable", false));
                     await run;
@@ -217,7 +218,7 @@ public class LauncherPaneViewSmokeTests {
             }
         });
 
-        await Assert.That(text).IsEqualTo(NoticeText.Headline(HomeViewModel.FinishingSignInNotice).Title);
+        await Assert.That(text).IsEqualTo("Finishing sign-in…");
         await Assert.That(signIn).IsFalse();
         await Assert.That(busy).IsTrue();
     }

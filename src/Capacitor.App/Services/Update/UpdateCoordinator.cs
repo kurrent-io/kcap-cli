@@ -227,7 +227,7 @@ public sealed class UpdateCoordinator {
             if (candidate is null) {
                 SetProgress(null);
                 if (manual) _log?.Write("update_check", ("result", "up_to_date"), ("manual", "true"));
-                if (ConsumeManual(manual)) await ReportAsync($"You're up to date ({_updater.InstalledVersion}).").ConfigureAwait(false);
+                if (ConsumeManual(manual)) await ReportAsync("kcap is up to date").ConfigureAwait(false);
                 return;
             }
 

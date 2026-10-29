@@ -103,10 +103,10 @@ public class LocalStackViewModelTests {
             await Assert.That(h.Vm.Upgrading).IsTrue();
             await Assert.That(h.Vm.BannerVisible).IsTrue();
             await Assert.That(h.Vm.ActionsVisible).IsFalse();
-            await Assert.That(h.Vm.Headline).IsEqualTo("Upgrading kcap local 1.2.0 to 1.3.0");
-            await Assert.That(h.Vm.Detail).IsEqualTo("Downloading 1.3.0… 25%");
+            await Assert.That(h.Vm.Headline).IsEqualTo("Updating kcap local 1.2.0 → 1.3.0…");
+            await Assert.That(h.Vm.Detail).IsEqualTo("Downloading 1.3.0 25%");
             await Assert.That(h.Vm.DownloadFraction).IsEqualTo(0.25);
-            await Assert.That(h.Vm.StateText).IsEqualTo("upgrading");
+            await Assert.That(h.Vm.StateText).IsNull();
 
             exit.SetResult(new StreamingResult(0, false, []));
             await h.Upgrade.SettleAsync().WaitAsync(TimeSpan.FromSeconds(5));
@@ -152,10 +152,10 @@ public class LocalStackViewModelTests {
 
             await Assert.That(h.Vm.BannerVisible).IsTrue();
             await Assert.That(h.Vm.Attention).IsTrue();
-            await Assert.That(h.Vm.Headline).IsEqualTo("kcap local could not be upgraded to 1.3.0");
+            await Assert.That(h.Vm.Headline).IsEqualTo("kcap local could not be updated to 1.3.0");
             await Assert.That(h.Vm.Detail).IsEqualTo("The download was interrupted. kcap local 1.2.0 was left as it was.");
             await Assert.That(h.Vm.TryAgainVisible).IsTrue();
-            await Assert.That(h.Vm.StateText).IsEqualTo("upgrade failed");
+            await Assert.That(h.Vm.StateText).IsEqualTo("update failed");
             await Assert.That(h.Vm.Version).IsEqualTo("1.2.0");
             foreach (var text in ShownText(h.Vm)) await Assert.That(text ?? "").DoesNotContain("kcap local upgrade");
 
@@ -184,7 +184,7 @@ public class LocalStackViewModelTests {
             await Assert.That(h.Vm.IsNote).IsTrue();
             await Assert.That(h.Vm.Attention).IsFalse();
             await Assert.That(h.Vm.StateText).IsEqualTo("running");
-            await Assert.That(h.Vm.Headline).IsEqualTo("The upgrade to kcap local 1.3.0 is waiting");
+            await Assert.That(h.Vm.Headline).IsEqualTo("The update to kcap local 1.3.0 is waiting");
             await Assert.That(h.Vm.Detail).IsEqualTo(LocalStackViewModel.BusyDetail);
             await Assert.That(h.Vm.TryAgainVisible).IsTrue();
             await Assert.That(h.Vm.ActionsVisible).IsTrue();
@@ -312,7 +312,7 @@ public class LocalStackViewModelTests {
             h.Status.OnNext(new(ServerLaneState.Retrying, "Connection refused"));
 
             await Assert.That(h.Vm.Version).IsEqualTo("1.3.0");
-            await Assert.That(h.Vm.Headline).IsEqualTo("kcap local 1.3.0 did not start after the upgrade");
+            await Assert.That(h.Vm.Headline).IsEqualTo("kcap local 1.3.0 did not start after the update");
             await Assert.That(h.Vm.Guidance).IsEqualTo(LocalStackViewModel.StartGuidance);
             await Assert.That(h.Vm.TryAgainVisible).IsFalse();
             await Assert.That(h.Vm.StartVisible).IsTrue();

@@ -7,7 +7,7 @@ public enum UpdateStepState { Pending, Running, Done, Note, Problem }
 
 /// One line of the update window: an app part and where it stands.
 /// <param name="Trailing">A short figure kept apart from the detail, such as a download percentage, so the detail does not reflow as it changes.</param>
-/// <param name="Hint">Full progress or diagnostic text; settled notes and problems also expose it through Details.</param>
+/// <param name="Hint">Diagnostic text exposed through Details on settled notes and problems.</param>
 /// <param name="Activity">What a running step is doing now, in plain words, for the launcher while the update finishes.</param>
 public sealed record UpdateStep(string Title, string? Detail, UpdateStepState State, string? Trailing = null, string? Hint = null,
         string? Activity = null) {

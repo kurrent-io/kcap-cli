@@ -31,7 +31,6 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     /// Shown the moment Reconnect is pressed. Cleared on Connected; replaced if attach stays unreachable.
     internal const string ReconnectingMessage = "Reconnecting…";
-    internal const string UpdatingDisplay = "Updating…";
 
     internal const string ReconnectFailedMessage =
         "Couldn't reconnect. If the daemon isn't running, press Start daemon.";
@@ -42,7 +41,6 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     static readonly IBrush ConnectedBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Connected));
     static readonly IBrush InProgressBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.InProgress));
-    static readonly IBrush UpdatingBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Updating));
     static readonly IBrush PendingBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Pending));
     static readonly IBrush DisruptedBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Disrupted));
     static readonly IBrush UnavailableBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Unavailable));
@@ -50,7 +48,6 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     static IBrush Paint(string hex) => hex switch {
         StatusColors.Connected => ConnectedBrush,
         StatusColors.InProgress => InProgressBrush,
-        StatusColors.Updating => UpdatingBrush,
         StatusColors.Pending => PendingBrush,
         StatusColors.Disrupted => DisruptedBrush,
         _ => UnavailableBrush,
@@ -80,6 +77,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     // and the text come from parallel switches over one bucketing.
     ObservableAsPropertyHelper<IBrush>? _statusBrush;
     public IBrush StatusBrush => _statusBrush?.Value ?? Paint(StatusColors.Unavailable);
+
+    ObservableAsPropertyHelper<bool>? _showsUpdateContext;
+    public bool ShowsUpdateContext => _showsUpdateContext?.Value ?? false;
+    public string UpdateContextName => LocalStack is not null ? "kcap local" : TenantName.Length > 0 ? TenantName : "kcap";
 
     // "n of m agents" only while Connected — active_agents is a display count, never capacity.
     // Empty otherwise, which is what hides it: the service still retains the last snapshot
@@ -145,7 +146,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     ObservableAsPropertyHelper<bool>? _connectionHasDetail;
     public bool ConnectionHasDetail => _connectionHasDetail?.Value ?? false;
 
-    public const string AttachStatusTip = "Attach status to the daemon on this machine";
+    public const string ConnectionStatusTip = "Connection to the daemon and server";
     public const string DaemonNameTip = "Name of the daemon on this machine";
 
     /// Caption under the URL in the org label's hover — the org is what you point at, the
@@ -332,7 +333,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// </param>
     /// <param name="laneStatus">
     /// The app's own server lane (IServerLane.Status), for the footer's ServerLaneTip diagnostic
-    /// and the connection row's hover. Null means the hover stays on AttachStatusTip.
+    /// and the connection row's hover. Null means the hover stays on ConnectionStatusTip.
     /// </param>
     /// <param name="restartPending">
     /// DaemonRestartPendingWatcher.Pending. Null means the indicator never shows.
@@ -535,9 +536,16 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .ToProperty(this, x => x.SignInVisible, false)
                 .DisposeWith(disposables);
 
-            // The daemon restarting and redialing is what an update still finishing does, not an outage.
-            var updating = (Home?.UpdateFinishing ?? Observable.Return(false)).StartWith(false).DistinctUntilChanged();
-            _connectionDisplay = status.CombineLatest(daemonConnection, signedOut, updating, ConnectionDisplayFor)
+            // The banner owns update progress; the rail keeps identity while services restart.
+            var localUpgrade = Home?.LocalStack is { } stack
+                ? stack.WhenAnyValue(x => x.Upgrading, x => x.IsStarting, (upgrading, starting) => upgrading || starting)
+                : Observable.Return(false);
+            var updating = (Home?.UpdateFinishing ?? Observable.Return(false))
+                .CombineLatest(localUpgrade, (app, local) => app || local).DistinctUntilChanged();
+            _showsUpdateContext = updating.CombineLatest(signedOut, (active, expired) => active && !expired)
+                .ToProperty(this, x => x.ShowsUpdateContext, false)
+                .DisposeWith(disposables);
+            _connectionDisplay = status.CombineLatest(daemonConnection, signedOut, ConnectionDisplayFor)
                 .ToProperty(this, x => x.ConnectionDisplay, "")
                 .DisposeWith(disposables);
 
@@ -550,7 +558,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                     Home is { } home ? home.WhenAnyValue(x => x.BannerFailed) : Observable.Return(false),
                     (local, banner) => local || banner)
                 .DistinctUntilChanged();
-            _statusBrush = status.CombineLatest(daemonConnection, signedOut, updating, failed, StatusBrushFor)
+            _statusBrush = status.CombineLatest(daemonConnection, signedOut, failed, StatusBrushFor)
                 .ToProperty(this, x => x.StatusBrush, Paint(StatusColors.Unavailable))
                 .DisposeWith(disposables);
 
@@ -1026,9 +1034,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     // daemonConnection seam comment above); an Unreachable/Connecting attach state always wins
     // regardless of whatever Connection word a stale retained snapshot might carry.
     internal static string ConnectionDisplayFor(
-            AttachStatus status, string daemonConnection, bool signInExpired = false, bool updating = false) {
+            AttachStatus status, string daemonConnection, bool signInExpired = false) {
         if (signInExpired) return SignedOutDisplay;
-        if (updating) return UpdatingDisplay;
         if (status.State == AttachState.Connecting) return "Connecting…";
         if (status.State == AttachState.Unreachable)
             return status.Reason switch {
@@ -1042,14 +1049,13 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     }
 
     /// The launcher's tones: red when something broke, amber when it needs the user, the spinner's grey while
-    /// work is in progress, and purple while an update finishes. Kept as its own switch, not derived from the text,
+    /// work is in progress. Kept as its own switch, not derived from the text,
     /// so a wording change there cannot retune it.
     /// <param name="failed">The launcher's card reports a failure: versions that cannot work together, a local
     /// server that refused the app, or a daemon still down after a start that did not work.</param>
     internal static IBrush StatusBrushFor(
-            AttachStatus status, string daemonConnection, bool signInExpired = false, bool updating = false, bool failed = false) {
+            AttachStatus status, string daemonConnection, bool signInExpired = false, bool failed = false) {
         if (signInExpired) return Paint(failed ? StatusColors.Disrupted : StatusColors.InProgress);
-        if (updating) return Paint(StatusColors.Updating);
         if (status.State == AttachState.Connecting) return Paint(StatusColors.Pending);
         if (status.State == AttachState.Unreachable)
             return status.Reason switch {

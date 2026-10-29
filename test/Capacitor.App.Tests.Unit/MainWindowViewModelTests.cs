@@ -347,22 +347,6 @@ public class MainWindowViewModelTests {
             .IsEqualTo(MainWindowViewModel.SignedOutDisplay);
     }
 
-    /// A daemon restarting or redialing while an update finishes is the update, not an outage; an expired sign-in still wins.
-    [Test]
-    [Arguments(AttachState.Unreachable, ExpectedDaemonRestart.Reason, "connected")]
-    [Arguments(AttachState.Connected, null, "reconnecting")]
-    [Arguments(AttachState.Connected, null, "disconnected")]
-    public async Task An_update_still_finishing_reads_as_updating_in_the_rail(AttachState state, string? reason, string daemonConnection) {
-        var status = new AttachStatus(state, reason, null);
-
-        await Assert.That(MainWindowViewModel.ConnectionDisplayFor(status, daemonConnection, updating: true))
-            .IsEqualTo(MainWindowViewModel.UpdatingDisplay);
-        await Assert.That(((Avalonia.Media.ISolidColorBrush)MainWindowViewModel.StatusBrushFor(status, daemonConnection, updating: true)).Color)
-            .IsEqualTo(Avalonia.Media.Color.Parse(StatusColors.Updating));
-        await Assert.That(MainWindowViewModel.ConnectionDisplayFor(status, daemonConnection, signInExpired: true, updating: true))
-            .IsEqualTo(MainWindowViewModel.SignedOutDisplay);
-    }
-
     [Test]
     [Arguments(null, "")]
     [Arguments("", "")]

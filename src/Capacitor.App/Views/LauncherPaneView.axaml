@@ -59,7 +59,7 @@
         <StackPanel x:Name="LauncherNotices" VerticalAlignment="Top" HorizontalAlignment="Stretch" MaxWidth="680" Spacing="8">
             <Border x:Name="UpdateBanner" Classes="notice" IsVisible="{Binding Notices.ShowUpdate}">
                 <Grid ColumnDefinitions="16,*" ColumnSpacing="10">
-                    <!-- Purple like the update window's running steps and the rail's "Updating…". -->
+                    <!-- Matches the update window's running steps. -->
                     <views:AppIcon x:Name="UpdateBusyIcon" Classes="noticeIcon kcapSpinning" Size="16" Kind="LoaderCircle"
                                    Foreground="{StaticResource KcapPurpleBrush}" VerticalAlignment="Top" />
                     <StackPanel Grid.Column="1" Spacing="4">
@@ -102,8 +102,6 @@
                                      IsVisible="{Binding LocalStack.Upgrading, FallbackValue=False}" />
                         <TextBlock x:Name="LocalUpgradeGuidance" Classes="noticeBody" Text="{Binding LocalStack.Guidance}"
                                    IsVisible="{Binding LocalStack.Guidance, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                        <TextBlock x:Name="LocalUpgradeStarting" Classes="noticeBody" Text="Starting the local server…"
-                                   IsVisible="{Binding LocalStack.IsStarting, FallbackValue=False}" />
                         <SelectableTextBlock x:Name="LocalUpgradeStartMessage" Classes="noticeBody" Text="{Binding LocalStack.StartMessage}"
                                              IsVisible="{Binding LocalStack.StartMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                         <StackPanel x:Name="LocalUpgradeActions" Classes="noticeActions"
