@@ -41,8 +41,8 @@ public sealed class StaleClientRepair(
             if (relinked.Contains(stale.Path)) return new ClientRepairOutcome.Failed(stale.Path, "it still reports an older version after it was replaced.");
 
             // Found again either way: npm may have left anything at that entry, updated or not.
-            if (NpmOwned(stale.Path) && npmTried.Add(stale.Path)) {
-                if (await UpdateThroughNpmAsync(path, ct).ConfigureAwait(false)) repaired = stale.Path;
+            if (NpmPrefix(stale.Path) is { } prefix && npmTried.Add(stale.Path)) {
+                if (await UpdateThroughNpmAsync(prefix, path, ct).ConfigureAwait(false)) repaired = stale.Path;
                 continue;
             }
 
@@ -91,14 +91,23 @@ public sealed class StaleClientRepair(
         }
     }
 
-    static bool NpmOwned(string path) =>
-        CanonicalPath.Resolve(path).Contains($"/node_modules/{NpmPackage}/", StringComparison.Ordinal);
+    /// The global prefix of the npm install <paramref name="entry"/> runs, read from where its package lives; null when
+    /// npm does not own it.
+    static string? NpmPrefix(string entry) {
+        var package = CanonicalPath.Resolve(entry);
+        var at      = package.IndexOf($"/lib/node_modules/{NpmPackage}/", StringComparison.Ordinal);
 
-    async Task<bool> UpdateThroughNpmAsync(string? searchPath, CancellationToken ct) {
-        if (BinaryProbe.Searching(searchPath).Resolve("npm") is not { } npm) return false;
+        return at > 0 ? package[..at] : null;
+    }
 
-        // npm is a node script, so node has to resolve on the same PATH.
-        var env = searchPath is null ? null : new Dictionary<string, string> { ["PATH"] = searchPath };
+    /// Runs the npm of the prefix that owns the entry: another npm earlier on PATH would update a different install
+    /// and leave this one older.
+    async Task<bool> UpdateThroughNpmAsync(string prefix, string? searchPath, CancellationToken ct) {
+        var bin = Path.Combine(prefix, "bin");
+        if (BinaryProbe.Searching(bin).Resolve("npm") is not { } npm) return false;
+
+        // npm is a node script, and its own prefix is where a node install keeps node.
+        var env = new Dictionary<string, string> { ["PATH"] = string.IsNullOrEmpty(searchPath) ? bin : $"{bin}{Path.PathSeparator}{searchPath}" };
         try {
             var result = await runner.RunAsync(npm, ["install", "--global", $"{NpmPackage}@latest"], new RunOptions(env, NpmTimeout), ct)
                 .ConfigureAwait(false);
@@ -108,12 +117,17 @@ public sealed class StaleClientRepair(
         }
     }
 
+    /// Whether this app's kcap is one the installer admits: linking PATH to anything else, a missing file included,
+    /// would trade one refused copy for another.
+    async Task<bool> TargetAdmittedAsync(CancellationToken ct) =>
+        appCli is not null && await Task.Run(() => LocalClientFloor.Admits(LocalClientCopies.VersionOf(runner, appCli)), ct).ConfigureAwait(false);
+
     /// Replaces <paramref name="link"/> only while it is still the entry <paramref name="found"/> describes: anything
     /// that took its place in the meantime is someone else's and is looked at again. Neither rename nor ln can compare
     /// as it replaces, so an entry landing between the last check and the swap still loses, to this app's kcap.
     async Task<Relink> RelinkAsync(string link, string found, CancellationToken ct) {
-        if (appCli is null || !OneLine(appCli) || !OneLine(link) || !OneLine(found))
-            return new Relink.Refused(new ClientRepairOutcome.Failed(link, "this app has no kcap of its own to put there."));
+        if (appCli is null || !OneLine(appCli) || !OneLine(link) || !OneLine(found) || !await TargetAdmittedAsync(ct).ConfigureAwait(false))
+            return new Relink.Refused(new ClientRepairOutcome.Failed(link, "this app has no up-to-date kcap of its own to put there."));
 
         switch (await TryReplaceAsync(link, appCli, found, ct).ConfigureAwait(false)) {
             case true:  return new Relink.Done();
@@ -122,7 +136,7 @@ public sealed class StaleClientRepair(
 
         ProcessResult result;
         try {
-            result = await runner.RunAsync(OsascriptPath, OsascriptArgs(appCli, link, found), new RunOptions(), ct).ConfigureAwait(false);
+            result = await runner.RunAsync(OsascriptPath, OsascriptArgs(appCli, link, found), new RunOptions(CancelMode: CancelMode.KillTree), ct).ConfigureAwait(false);
         } catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or IOException) {
             return new Relink.Refused(new ClientRepairOutcome.Failed(link, ex.Message));
         }

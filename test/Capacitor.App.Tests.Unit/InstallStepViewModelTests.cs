@@ -620,7 +620,7 @@ public class InstallStepViewModelTests {
         await Assert.That(outcome).IsTypeOf<LocalInstallOutcome.Installed>();
         await Assert.That(choice).IsFalse();
         await Assert.That(cli.SetupLocalCallCount).IsEqualTo(2);
-        await Assert.That(repair.Calls).IsEqualTo(2);
+        await Assert.That(repair.Calls).IsEqualTo(3);
     }
 
     [Test]
@@ -640,7 +640,7 @@ public class InstallStepViewModelTests {
         });
 
         await Assert.That(outcome).IsTypeOf<LocalInstallOutcome.Installed>();
-        await Assert.That(repair.Calls).IsEqualTo(2);
+        await Assert.That(repair.Calls).IsEqualTo(3);
         await Assert.That(cli.SetupLocalCallCount).IsEqualTo(2);
     }
 
@@ -651,5 +651,25 @@ public class InstallStepViewModelTests {
         var runs      = 0;
 
         return (onLine, interrupt, ct) => (runs++ == 0 ? refused : committed)(onLine, interrupt, ct);
+    }
+
+    /// The choice can stay up across Back and a return to the page, so Install checks again before it starts anything.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Install_from_the_choice_checks_for_an_older_kcap_again() {
+        var repair = new ScriptedRepair(new ClientRepairOutcome.Clear(), new ClientRepairOutcome.Cancelled("/usr/local/bin/kcap"));
+        var cli    = new FakeKcapCli { SetupLocalBehavior = LocalSetupScript.Prints(0, LocalSetupScript.Committed) };
+
+        var (problem, choice) = await AvaloniaSession.DispatchAsync(async () => {
+            var install = Step(Controller(cli, LocalSetupScript.NoSetup(Config), Probe()), repair.RunAsync);
+            await EnterAndInstallAsync(install);
+
+            return (install.ClientProblemVisible, install.ChoiceVisible);
+        });
+
+        await Assert.That(problem).IsTrue();
+        await Assert.That(choice).IsFalse();
+        await Assert.That(repair.Calls).IsEqualTo(2);
+        await Assert.That(cli.SetupLocalCallCount).IsEqualTo(0);
     }
 }

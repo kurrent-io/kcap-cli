@@ -22,7 +22,7 @@ public sealed class LocalClientCopies(IProcessRunner runner, string? searchPath,
 
     public static string AppCli(string applications) => Path.Combine(applications, "kcap.app", "Contents", "MacOS", "kcap");
 
-    public IReadOnlyList<ClientCopy> Find() => _found ??= Locate().Select(c => c with { Version = VersionOf(c.Path) }).ToList();
+    public IReadOnlyList<ClientCopy> Find() => _found ??= Locate().Select(c => c with { Version = VersionOf(runner, c.Path) }).ToList();
 
     IEnumerable<ClientCopy> Locate() {
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -36,8 +36,9 @@ public sealed class LocalClientCopies(IProcessRunner runner, string? searchPath,
             yield return new(ClientCopyKind.OnPath, onPath, null);
     }
 
-    /// <summary>Without <c>--no-update-check</c> the copy would run its npm update check on the way out.</summary>
-    string? VersionOf(string path) {
+    /// <summary>The version the kcap at <paramref name="path"/> reports, or null when it reports none. Without
+    /// <c>--no-update-check</c> the copy would run its npm update check on the way out.</summary>
+    public static string? VersionOf(IProcessRunner runner, string path) {
         ProcessResult result;
 
         try {

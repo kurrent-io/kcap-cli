@@ -214,20 +214,7 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     /// Brings the other kcap copies up to date, then asks about search, or starts straight away when the answer is
     /// already known.
     async Task PrepareAsync(CancellationToken ct) {
-        ClientProblem = null;
-        Repairing     = true;
-        ClientRepairOutcome repair;
-        try {
-            repair = await _repairClients(ct);
-        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
-            return;
-        } finally {
-            Repairing = false;
-        }
-        if (!repair.Ready) {
-            ClientProblem = ProblemText(repair);
-            return;
-        }
+        if (!await RepairAsync(ct)) return;
 
         LocalEmbeddingSetting? recorded;
         try {
@@ -254,6 +241,23 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
         }
         Search.OfferBuiltin(offered);
         ChoiceVisible = true;
+    }
+
+    /// False, with the reason shown, when another kcap the installer would refuse is still there.
+    async Task<bool> RepairAsync(CancellationToken ct) {
+        ClientProblem = null;
+        Repairing     = true;
+        ClientRepairOutcome repair;
+        try {
+            repair = await _repairClients(ct);
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            return false;
+        } finally {
+            Repairing = false;
+        }
+        if (!repair.Ready) ClientProblem = ProblemText(repair);
+
+        return repair.Ready;
     }
 
     static string ProblemText(ClientRepairOutcome outcome) => outcome switch {
@@ -307,11 +311,14 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
         _                     => NotStartedText,
     };
 
-    Task InstallAsync() {
-        if (!ChoiceVisible || !CanContinue) return Task.CompletedTask;
+    async Task InstallAsync() {
+        if (!ChoiceVisible || !CanContinue) return;
 
         ChoiceVisible = false;
-        return _controller.StartAsync(Search.Choice, _lifetime);
+        // The choice can stay up across Back and a return to this page, long enough for an older kcap to turn up.
+        if (!await RepairAsync(_lifetime)) return;
+
+        await _controller.StartAsync(Search.Choice, _lifetime);
     }
 
     Task TryAgainAsync() {

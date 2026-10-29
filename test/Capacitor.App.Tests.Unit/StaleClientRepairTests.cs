@@ -10,18 +10,17 @@ namespace Capacitor.App.Tests.Unit;
 public class StaleClientRepairTests {
     [TempDir] public required TempDir Tmp { get; init; }
 
-    /// Answers <c>stat</c> with <paramref name="identity"/> and everything else with <paramref name="answer"/>; only the
-    /// latter is recorded in <see cref="Ran"/>.
-    sealed class Runner(Func<string, string[], ProcessResult> answer, Func<string>? identity = null) : IProcessRunner {
-        public List<(string File, string[] Args)> Ran { get; } = [];
-        public int Stats { get; private set; }
+    /// Answers <c>stat</c> with <paramref name="identity"/>, a version probe with <paramref name="appVersion"/>, and
+    /// everything else with <paramref name="answer"/>; only the last is recorded in <see cref="Ran"/>.
+    sealed class Runner(Func<string, string[], ProcessResult> answer, Func<string>? identity = null, string appVersion = "1.4.0")
+        : IProcessRunner {
+        public List<(string File, string[] Args, RunOptions Options)> Ran { get; } = [];
 
         public Task<ProcessResult> RunAsync(string fileName, string[] args, RunOptions options, CancellationToken ct) {
-            if (fileName == "/usr/bin/stat") {
-                Stats++;
-                return Task.FromResult(new ProcessResult(0, (identity?.Invoke() ?? "1:2:3:4") + "\n", "", false));
-            }
-            Ran.Add((fileName, args));
+            if (fileName == "/usr/bin/stat") return Task.FromResult(new ProcessResult(0, (identity?.Invoke() ?? "1:2:3:4") + "\n", "", false));
+            if (args is ["--version", ..]) return Task.FromResult(new ProcessResult(0, $"kcap {appVersion}\n", "", false));
+
+            Ran.Add((fileName, args, options));
             return Task.FromResult(answer(fileName, args));
         }
 
@@ -89,6 +88,9 @@ public class StaleClientRepairTests {
             await Assert.That(outcome).IsNotEqualTo(new ClientRepairOutcome.Clear());
             await Assert.That(runner.Ran.Single().File).IsEqualTo("/usr/bin/osascript");
             await Assert.That(runner.Ran.Single().Args[^4..]).IsEquivalentTo(["--", app, stale, "1:2:3:4"]);
+            await Assert.That(runner.Ran.Single().Args[3]).Contains("/usr/bin/stat -f %d:%i:%m:%c");
+            await Assert.That(runner.Ran.Single().Args[3]).Contains("|| { echo kcap-entry-changed >&2; exit 3; }; /bin/ln -sfh");
+            await Assert.That(runner.Ran.Single().Options.CancelMode).IsEqualTo(CancelMode.KillTree);
         } finally {
             File.SetUnixFileMode(Tmp.PathTo("locked"), UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }
@@ -109,7 +111,7 @@ public class StaleClientRepairTests {
         var npm      = Tmp.CreateExecutable("bin/npm", "#!/bin/sh\nexit 0\n");
         var updated  = false;
         var runner   = new Runner((file, _) => {
-            updated |= file == npm;
+            updated |= CanonicalPath.Resolve(file) == CanonicalPath.Resolve(npm);
             return Ok;
         });
 
@@ -212,5 +214,39 @@ public class StaleClientRepairTests {
         } finally {
             File.SetUnixFileMode(Tmp.PathTo("locked"), UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }
+    }
+
+    /// Linking PATH to a kcap the installer would also refuse, or to one that is gone, trades one refused copy for another.
+    [Test]
+    [Arguments("1.3.0", false)]
+    [Arguments("1.4.0", true)]
+    public async Task An_app_kcap_the_installer_would_refuse_is_never_linked(string appVersion, bool appMissing) {
+        var app    = appMissing ? Tmp.PathTo("gone/kcap") : AppCli();
+        var stale  = Tmp.CreateExecutable("bin/kcap", "#!/bin/sh\nexit 0\n");
+        var runner = new Runner((_, _) => Ok, appVersion: appMissing ? "" : appVersion);
+
+        var outcome = await Repair(runner, app, new Copies(stale, app)).RunAsync(CancellationToken.None);
+
+        await Assert.That(outcome).IsTypeOf<ClientRepairOutcome.Failed>();
+        await Assert.That(new FileInfo(stale).LinkTarget).IsNull();
+    }
+
+    /// Another npm earlier on PATH belongs to a different install; updating through it would leave this one older.
+    [Test]
+    public async Task An_npm_install_is_updated_by_the_npm_of_its_own_prefix() {
+        var app     = AppCli();
+        var package = Tmp.CreateExecutable("lib/node_modules/@kurrent/kcap/bin/kcap", "#!/bin/sh\nexit 0\n");
+        Tmp.CreateDir("bin");
+        File.CreateSymbolicLink(Tmp.PathTo("bin", "kcap"), package);
+        var own     = Tmp.CreateExecutable("bin/npm", "#!/bin/sh\nexit 0\n");
+        Tmp.CreateExecutable("other/bin/npm", "#!/bin/sh\nexit 0\n");
+        var runner  = new Runner((_, _) => Ok);
+        var path    = $"{Tmp.PathTo("other", "bin")}{Path.PathSeparator}{Tmp.PathTo("bin")}";
+
+        await Repair(runner, app, new Copies(Tmp.PathTo("bin", "kcap"), app, () => runner.Ran.Count > 0), path).RunAsync(CancellationToken.None);
+
+        await Assert.That(CanonicalPath.Resolve(runner.Ran.Single().File)).IsEqualTo(CanonicalPath.Resolve(own));
+        await Assert.That(CanonicalPath.Resolve(runner.Ran.Single().Options.EnvOverlay!["PATH"].Split(Path.PathSeparator)[0]))
+            .IsEqualTo(CanonicalPath.Resolve(Tmp.PathTo("bin")));
     }
 }
