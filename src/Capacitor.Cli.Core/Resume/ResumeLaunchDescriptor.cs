@@ -32,5 +32,7 @@ public sealed record ResumeLaunchDescriptor(
     int? InactivityBoundSeconds = null,
     string? AccountDirectory = null,
     string? AccountId = null,
+    // Null for an entry written before the field, which owned its branch.
+    bool? WorktreeOwnsBranch = null,
     string? AccountLabel = null
 );

@@ -29,9 +29,13 @@ public record WorktreeInfo(
     /// </summary>
     public string? GitRelativeCwd { get; init; }
 
+    /// <summary>False for a branch that existed before the worktree, or none at all: removal keeps it,
+    /// so commits on it are not work the removal would lose.</summary>
+    public bool OwnsBranch { get; init; } = true;
+
     /// <summary>A borrowed cwd (local in-place launch) the daemon does NOT own. Cleanup
     /// never removes it — the <see cref="AgentInstance.Work"/> guard enforces that.</summary>
-    public static WorktreeInfo Borrowed(string cwd) => new(cwd, "", cwd, IsStandalone: false);
+    public static WorktreeInfo Borrowed(string cwd) => new(cwd, "", cwd, IsStandalone: false) { OwnsBranch = false };
 }
 
 public partial class WorktreeManager(
@@ -748,7 +752,7 @@ public partial class WorktreeManager(
         await WithWorktreeMetadataGate(worktree.SourceRepo, time, async () => {
             await RunGit(worktree.SourceRepo, GitTimeout, time, "worktree", "remove", worktree.Path, "--force");
 
-            if (deleteBranch && !string.IsNullOrEmpty(worktree.Branch)) {
+            if (deleteBranch && worktree.OwnsBranch && !string.IsNullOrEmpty(worktree.Branch)) {
                 await RunGitBestEffort(worktree.SourceRepo, time, "branch", "-D", worktree.Branch);
             }
         });
@@ -861,11 +865,12 @@ public partial class WorktreeManager(
         var changes  = ParsePorcelainZ(status.Stdout).Count(entry => !IsDaemonEdit(worktree, baseline, entry));
         if (changes > 0) return $"{changes} uncommitted {(changes == 1 ? "change" : "changes")}";
 
-        // The worktree's own branch is deleted with it, so its commits count even with HEAD moved elsewhere.
-        var ownBranch = $"refs/heads/{worktree.Branch}";
-        var hasBranch = !string.IsNullOrEmpty(worktree.Branch) && await RefExistsAsync(worktree.Path, ownBranch, time);
+        // An owned branch is deleted with the worktree, so its commits count even with HEAD moved elsewhere.
+        var dyingBranch = worktree.OwnsBranch && !string.IsNullOrEmpty(worktree.Branch);
+        var ownBranch   = $"refs/heads/{worktree.Branch}";
+        var hasBranch   = dyingBranch && await RefExistsAsync(worktree.Path, ownBranch, time);
         string[] uniqueCommits = ["rev-list", "--count", "HEAD", .. hasBranch ? [ownBranch] : Array.Empty<string>(), "--not"];
-        if (!string.IsNullOrEmpty(worktree.Branch)) uniqueCommits = [.. uniqueCommits, $"--exclude={worktree.Branch}"];
+        if (dyingBranch) uniqueCommits = [.. uniqueCommits, $"--exclude={worktree.Branch}"];
         uniqueCommits = [.. uniqueCommits, "--branches", "--remotes", "--tags"];
         if (!string.IsNullOrEmpty(worktree.FetchedRef) && await RefExistsAsync(worktree.Path, worktree.FetchedRef, time))
             uniqueCommits = [.. uniqueCommits, worktree.FetchedRef];

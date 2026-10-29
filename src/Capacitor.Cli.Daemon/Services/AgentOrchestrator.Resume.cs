@@ -385,6 +385,7 @@ internal partial class AgentOrchestrator {
             InactivityBoundSeconds: agent.InactivityBoundSeconds,
             AccountDirectory:       agent.Account?.Directory,
             AccountId:              agent.Account?.AccountId,
+            WorktreeOwnsBranch:     agent.Worktree.OwnsBranch,
             AccountLabel:           agent.Account?.Label);
 
         return NewRunningEntry(agent.Id, agent.Vendor, agent.RuntimeTransport, agent.SessionId, agent.VendorSession, launch, prior) with {
@@ -455,6 +456,7 @@ internal partial class AgentOrchestrator {
             InactivityBoundSeconds: cmd.InactivityBoundSeconds,
             AccountDirectory:       account?.Directory,
             AccountId:              account?.AccountId,
+            WorktreeOwnsBranch:     worktree.OwnsBranch,
             AccountLabel:           account?.Label);
 
         return NewRunningEntry(cmd.AgentId, cmd.Vendor, PreStartTransport, null, pinnedSessionId ?? cmd.ResumeSessionId, launch, prior: null);
@@ -1567,7 +1569,8 @@ internal partial class AgentOrchestrator {
             launch.WorktreeSourceRepo ?? launch.RepoPath,
             IsStandalone: launch.WorktreeIsStandalone ?? Directory.Exists(Path.Combine(path, ".git")),
             FetchedRef: WorktreeManager.FetchedRefFor(Path.GetFileName(path))) {
-            GitRelativeCwd = launch.GitRelativeCwd
+            GitRelativeCwd = launch.GitRelativeCwd,
+            OwnsBranch     = launch.WorktreeOwnsBranch ?? true,
         };
     }
 
