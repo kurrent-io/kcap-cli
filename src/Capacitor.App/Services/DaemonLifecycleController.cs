@@ -52,7 +52,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
     /// Every unit rewrite the app offers carries this disclosure.
     internal const string TakeoverDisclosure =
-        "This replaces the existing daemon service and re-captures its settings; a failed replacement leaves it uninstalled rather than restored.";
+        "kcap sets up the daemon service again from scratch, so custom settings such as an agent limit reset. If that fails, the service stays uninstalled.";
 
     /// Status when Start finds a live service and only kicks reattach. MainWindow replaces this
     /// (and its own Retry reconnect copy) if attach lands Unreachable again.
@@ -114,8 +114,8 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     readonly Lock _lock = new();
 
     internal const string StandardPriorityStatus = "Daemon runs at standard priority.";
-    internal const string PromptStaleStatus      = "The daemon changed while the prompt was open — canceled, nothing changed.";
-    internal const string PromptBusyStatus       = "Agents started on the daemon while the prompt was open — canceled, nothing changed.";
+    internal const string PromptStaleStatus      = "The daemon changed while the prompt was open. Nothing was changed.";
+    internal const string PromptBusyStatus       = "Agents started while the prompt was open. Nothing was changed.";
 
     readonly BehaviorSubject<bool>         _backgroundPriority = new(false);
     readonly BehaviorSubject<ReloadState?> _reloadState        = new(null);
@@ -448,7 +448,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         if (outcome == QueryOutcome.Stale) (snap, outcome) = await QueryStatusAsync(ct).ConfigureAwait(false);
 
         if (outcome != QueryOutcome.Ok) {
-            _surface.Status("Could not read the daemon service status — skipping automatic action this run.");
+            _surface.Status("Couldn't read the daemon service status, so kcap left it as it is.");
             Console.Error.WriteLine("kcap: daemon service status query failed, was unparseable, or never settled");
             return null;
         }
@@ -470,7 +470,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             snap = await ReadStatusAsync(ct).ConfigureAwait(false); // one re-evaluation against fresh state
 
         if (snap is null) {
-            _surface.Status("Could not read the daemon service status — skipping automatic action this run.");
+            _surface.Status("Couldn't read the daemon service status, so kcap left it as it is.");
             Console.Error.WriteLine("kcap: daemon service status query failed or was unparseable during startup");
         }
 
@@ -544,7 +544,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     async Task RunStartupBranchAsync((AttachState State, string? Reason) triggering) {
         try {
             if (_cli.CliPath is null) {
-                _surface.Status("kcap CLI not found — daemon lifecycle management is off for this run.");
+                _surface.Status("The kcap command-line tool wasn't found, so the app can't manage the daemon.");
                 return;
             }
 
@@ -590,7 +590,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     async Task RunStartupMatrixAsync(ServiceSnapshot snap, CancellationToken ct) {
         var state = ServiceStateClassifier.Parse(snap.State);
         if (state == ServiceState.Unknown) {
-            _surface.Status("Daemon service reported an unrecognized state — skipping automatic action this run.");
+            _surface.Status("The daemon service is in an unknown state, so kcap left it as it is.");
             Console.Error.WriteLine($"kcap: daemon lifecycle startup matrix saw an unrecognized service state: {snap.State}");
             return;
         }
@@ -601,7 +601,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             if (!snap.UnitPresent) {
                 // A live pid could be another identity's daemon on this name, and a replace would kill it.
                 if (snap.DaemonPid is not null) {
-                    _surface.Attention("The daemon service label is loaded but its unit file is missing — needs repair.");
+                    _surface.Attention("The daemon service is loaded, but its unit file is missing. It needs a repair.");
                     return;
                 }
 
@@ -644,22 +644,22 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
     void AttentionCoexistence(int daemonPid) =>
         _surface.Attention(
-            $"A daemon is already running (PID {daemonPid}) alongside the installed service — not starting a second one.");
+            $"A daemon (PID {daemonPid}) is already running beside the installed service, so kcap won't start a second one.");
 
     /// Install-only preconditions — start performs no viability check, so this
     /// is never called on a start row. Returns the honest line to surface on failure, or null
     /// once every precondition passes.
     async Task<string?> FailingPreconditionAsync(ServiceSnapshot snap, CancellationToken ct) {
         if (snap.InstallBinaryPath is null)
-            return "kcap can't resolve its own daemon binary — skipping automatic install.";
+            return "kcap can't find its own daemon binary, so it skipped the automatic install.";
 
         var profile = await _resolveProfileName().ConfigureAwait(false);
         if (profile is null)
-            return "No profile with a valid server URL is configured — skipping automatic install.";
+            return "No profile has a valid server URL, so kcap skipped the automatic install.";
 
         var terminalPath = await _probe.TerminalPathAsync(ct).ConfigureAwait(false);
         if (terminalPath is null)
-            return "Terminal PATH could not be determined — skipping automatic install.";
+            return "kcap couldn't read your terminal PATH, so it skipped the automatic install.";
 
         return null;
     }
@@ -705,7 +705,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         if (!accepted || RequireAppRestart()) return;
 
         if (CurrentGeneration() != gen0) {
-            _surface.Status("The daemon changed while the prompt was open — canceled, nothing changed.");
+            _surface.Status("The daemon changed while the prompt was open. Nothing was changed.");
             return;
         }
 
@@ -859,11 +859,11 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     /// unresolvable profile would make the rewrite a guaranteed coded viability failure.
     async Task<string?> FailingRepairPreconditionAsync(ServiceSnapshot snap) {
         if (snap.InstallBinaryPath is null)
-            return "kcap can't resolve its own daemon binary — the daemon service was left as it is.";
+            return "kcap can't find its own daemon binary, so the daemon service was left as it is.";
 
         var profile = await _resolveProfileName().ConfigureAwait(false);
         if (profile is null)
-            return "No profile with a valid server URL is configured — the daemon service was left as it is.";
+            return "No profile has a valid server URL, so the daemon service was left as it is.";
 
         return null;
     }
@@ -888,7 +888,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
         if (attached && snap.UnitPresent && state == ServiceState.NotInstalled && snap.DaemonPid is not null)
             _surface.Attention(
-                $"A daemon is running outside the installed service — the service is stopped while a manual daemon (PID {snap.DaemonPid}) owns the name.");
+                $"A daemon (PID {snap.DaemonPid}) is running outside the installed service, which is stopped.");
     }
 
     // The inline, AWAITED building block: used by RunStartupBranchAsync, which already holds the
@@ -942,7 +942,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             var lct = linked.Token;
 
             if (_cli.CliPath is null) {
-                _surface.Status("kcap CLI not found. Can't start the daemon service.");
+                _surface.Status("The kcap command-line tool wasn't found, so the daemon can't start.");
                 return;
             }
 
@@ -960,7 +960,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
                 var state = ServiceStateClassifier.Parse(snap.State);
                 if (state == ServiceState.Unknown) {
-                    _surface.Status("Daemon service reported an unrecognized state. Skipping this action.");
+                    _surface.Status("The daemon service is in an unknown state, so kcap didn't start it.");
                     Console.Error.WriteLine($"kcap: daemon lifecycle start action saw an unrecognized service state: {snap.State}");
                     return;
                 }
@@ -1009,8 +1009,8 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         var ok = await RunLaneMutationAsync(verb, ct).ConfigureAwait(false);
         if (RequireAppRestart()) return;
         _surface.Status(ok
-            ? "Daemon start requested. Waiting to connect…"
-            : "Daemon start did not finish. Press Retry.");
+            ? "Starting the daemon. Waiting for it to connect…"
+            : "The daemon didn't start. Press Start daemon to try again.");
     }
 
     async Task ReportUnitRewriteAsync(ServiceSnapshot snap, MutationVerb verb, CancellationToken ct) {

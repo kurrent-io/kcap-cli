@@ -33,7 +33,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     internal const string ReconnectingMessage = "Reconnecting…";
 
     internal const string ReconnectFailedMessage =
-        "Could not reconnect. If the daemon isn't running, press Start daemon.";
+        "Couldn't reconnect. If the daemon isn't running, press Start daemon.";
 
     internal static bool IsInFlightReconnectMessage(string? message) =>
         message == ReconnectingMessage
@@ -1044,7 +1044,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         try {
             var result = await _service.StartDaemonAsync(ct);
             if (!result.Ok) StartMessage = result.Message;
-            else StartMessage = "Daemon start requested. Waiting to connect…";
+            else StartMessage = "Starting the daemon. Waiting for it to connect…";
         } catch (OperationCanceledException) {
             // App is quitting: OnShutdownRequested cancelled `ct` while this start was still in
             // flight, and StartDaemonAsync deliberately rethrows OCE for exactly that case —

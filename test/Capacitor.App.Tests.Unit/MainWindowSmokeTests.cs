@@ -255,7 +255,7 @@ public class MainWindowSmokeTests {
                 service.StartBehavior = _ => Task.FromResult(new StartDaemonResult(false, "boom: could not bind socket"));
                 await vm.StartDaemonCommand.Execute().ToTask();
                 Dispatcher.UIThread.RunJobs();
-                var textAfter = Banner().Text;
+                var textAfter = window.GetVisualDescendants().OfType<SelectableTextBlock>().First(t => t.Name == "BannerDetailText").Text;
 
                 window.Close();
                 Dispatcher.UIThread.RunJobs();
@@ -265,7 +265,7 @@ public class MainWindowSmokeTests {
             });
 
         await Assert.That(bannerInitially).IsTrue(); // Connecting… still has a notice
-        await Assert.That(bannerTextUnreachable).IsEqualTo(HomeViewModel.DaemonDownNotice);
+        await Assert.That(bannerTextUnreachable).IsEqualTo(NoticeText.Headline(HomeViewModel.DaemonDownNotice).Title);
         await Assert.That(bannerTextAfterFailure).IsEqualTo("boom: could not bind socket");
     }
 

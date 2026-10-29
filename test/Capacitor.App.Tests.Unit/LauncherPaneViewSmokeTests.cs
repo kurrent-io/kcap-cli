@@ -1,6 +1,7 @@
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
+using ReactiveUI.Reactive;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -109,7 +110,7 @@ public class LauncherPaneViewSmokeTests {
 
             var notice = Find<TextBlock>(window, "BannerMessageText")!;
             var signIn = Find<Button>(window, "HomeSignInButton")!;
-            var busy = Find<ProgressBar>(window, "BannerBusyBar")!;
+            var busy = Find<AppIcon>(window, "BannerBusyIcon")!;
             // The banner Border owns visibility; the text/button stay in the tree.
             var banner = notice.FindAncestorOfType<Border>()!;
             var before = (banner.IsVisible, signIn.IsVisible);
@@ -127,7 +128,7 @@ public class LauncherPaneViewSmokeTests {
         await Assert.That(noticeBefore).IsFalse();
         await Assert.That(signInBefore).IsFalse();
         await Assert.That(noticeAfter).IsTrue();
-        await Assert.That(noticeText).IsEqualTo(HomeViewModel.ServerLostNotice);
+        await Assert.That(noticeText).IsEqualTo(NoticeText.Headline(HomeViewModel.ServerLostNotice).Title);
         await Assert.That(signInAfter).IsTrue();
         await Assert.That(busyAfter).IsFalse();
     }
@@ -157,50 +158,134 @@ public class LauncherPaneViewSmokeTests {
 
                 var notice = Find<TextBlock>(window, "BannerMessageText")!;
                 var signInBtn = Find<Button>(window, "HomeSignInButton")!;
-                var bar = Find<ProgressBar>(window, "BannerBusyBar")!;
-                return (notice.Text, signInBtn.IsVisible, bar.IsVisible);
+                var busyIcon = Find<AppIcon>(window, "BannerBusyIcon")!;
+                return (notice.Text, signInBtn.IsVisible, busyIcon.IsVisible);
             } finally {
                 window.Close();
                 Dispatcher.UIThread.RunJobs();
             }
         });
 
-        await Assert.That(text).IsEqualTo(HomeViewModel.FinishingSignInNotice);
+        await Assert.That(text).IsEqualTo(NoticeText.Headline(HomeViewModel.FinishingSignInNotice).Title);
         await Assert.That(signIn).IsFalse();
         await Assert.That(busy).IsTrue();
     }
 
+    /// The action row stays out of the layout until it has something to show, and a busy banner trades
+    /// its warning glyph for a spinner. Actions sit below the message with a clear gap, even in a wide card.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Connection_banner_overlays_without_shifting_the_composer() {
-        var (yBefore, yAfter, bannerVisible, bannerAbove) = await AvaloniaSession.DispatchAsync(() => {
+    public async Task Connection_banner_stacks_primary_actions_and_drops_idle_chrome() {
+        var (idle, busy) = await AvaloniaSession.DispatchAsync(() => {
             var (vm, service, _, tmp) = Build();
             using var _tmp = tmp;
+            var start = new BehaviorSubject<bool>(true);
+            var retry = new BehaviorSubject<bool>(false);
+            vm.AttachDaemonRecovery(
+                ReactiveCommand.Create(() => { }),
+                ReactiveCommand.Create(() => { }),
+                start, retry, Observable.Return<string?>(null));
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
             var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 900, Height = 600 };
             window.Show();
             Dispatcher.UIThread.RunJobs();
-
-            var headline = Find<TextBlock>(window, "LauncherHeadline")!;
-            double Y(Visual c) => c.TranslatePoint(new Point(0, 0), window)!.Value.Y;
-            var before = Y(headline);
-
-            service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "disconnected"));
-            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
 
             var banner = Find<Border>(window, "ConnectionBanner")!;
-            var after = Y(headline);
-            var bannerAbove = Y(banner) < after;
-            var visible = banner.IsVisible;
+            var text = Find<TextBlock>(window, "BannerMessageText")!;
+            var button = Find<Button>(window, "StartDaemonButton")!;
+            var spinner = Find<AppIcon>(window, "BannerBusyIcon")!;
+            var warning = Find<AppIcon>(window, "BannerIcon")!;
+            var actions = Find<StackPanel>(window, "BannerActions")!;
+
+            static double Top(Control c, Visual rel) => c.TranslatePoint(new Point(0, 0), rel)!.Value.Y;
+            static double Left(Control c, Visual rel) => c.TranslatePoint(new Point(0, 0), rel)!.Value.X;
+            static double Bottom(Control c, Visual rel) => Top(c, rel) + c.Bounds.Height;
+
+            var gap = Top(button, banner) - Bottom(Find<TextBlock>(window, "BannerBodyText")!, banner);
+            var idleShot = (
+                BarVisible: spinner.IsVisible,
+                WarningVisible: warning.IsEffectivelyVisible,
+                TextTop: Top(text, banner),
+                AlignedLeft: Math.Abs(Left(button, banner) - Left(text, banner)) < 1,
+                Primary: button.Classes.Contains("kcapPrimary"),
+                Gap: gap);
+
+            start.OnNext(false);
+            service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "connecting"));
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+
+            var busyShot = (
+                BarVisible: spinner.IsVisible,
+                WarningVisible: warning.IsEffectivelyVisible,
+                ActionsVisible: actions.IsEffectivelyVisible,
+                Compact: banner.Bounds.Height <= text.Bounds.Height + Find<TextBlock>(window, "BannerBodyText")!.Bounds.Height + 32);
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
             vm.Dispose();
-            return (before, after, visible, bannerAbove);
+            return (idleShot, busyShot);
         });
 
-        await Assert.That(bannerVisible).IsTrue();
-        await Assert.That(yAfter).IsEqualTo(yBefore);
-        await Assert.That(bannerAbove).IsTrue();
+        await Assert.That(idle.BarVisible).IsFalse();
+        await Assert.That(idle.WarningVisible).IsTrue();
+        await Assert.That(idle.TextTop).IsLessThan(22);
+        await Assert.That(idle.AlignedLeft).IsTrue();
+        await Assert.That(idle.Primary).IsTrue();
+        await Assert.That(idle.Gap).IsGreaterThanOrEqualTo(13);
+        await Assert.That(idle.Gap).IsLessThanOrEqualTo(15);
+        await Assert.That(busy.BarVisible).IsTrue();
+        await Assert.That(busy.WarningVisible).IsFalse();
+        await Assert.That(busy.ActionsVisible).IsFalse();
+        await Assert.That(busy.Compact).IsTrue();
+    }
+
+    [Test]
+    [Arguments("launchctl bootstrap failed (exit code 5).")]
+    [Arguments("launchctl bootstrap failed (exit code 5).\nInput/output error")]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Connection_banner_keeps_system_details_below_its_copy(string error) {
+        var (headline, detailText, belowCopy, aboveActions, cleared) = await AvaloniaSession.DispatchAsync(() => {
+            var (vm, service, _, tmp) = Build();
+            using var _tmp = tmp;
+            using var message = new BehaviorSubject<string?>(error);
+            vm.AttachDaemonRecovery(
+                ReactiveCommand.Create(() => { }), ReactiveCommand.Create(() => { }),
+                Observable.Return(true), Observable.Return(false), message);
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+            var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 480, Height = 400 };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+
+            var copy = Find<TextBlock>(window, "BannerMessageText")!;
+            var detail = Find<SelectableTextBlock>(window, "BannerDetailText");
+            var button = Find<Button>(window, "StartDaemonButton")!;
+            static double Top(Control c, Visual rel) => c.TranslatePoint(new Point(0, 0), rel)!.Value.Y;
+            var headline = copy.Text;
+            var detailText = detail?.Text;
+            var below = detail is not null && Top(detail, window) >= Top(copy, window) + copy.Bounds.Height + 3;
+            var above = detail is not null && Top(button, window) >= Top(detail, window) + detail.Bounds.Height + 13;
+
+            message.OnNext(null);
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            var body = Find<TextBlock>(window, "BannerBodyText")!;
+            var cleared = detail is not null && !detail.IsVisible
+                && Math.Abs(Top(button, window) - Top(body, window) - body.Bounds.Height - 14) < 1;
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            vm.Dispose();
+            return (headline, detailText, below, above, cleared);
+        });
+        await Assert.That(headline).IsEqualTo(NoticeText.Headline(HomeViewModel.DaemonDownNotice).Title);
+        await Assert.That(detailText).IsEqualTo(error);
+        await Assert.That(belowCopy).IsTrue();
+        await Assert.That(aboveActions).IsTrue();
+        await Assert.That(cleared).IsTrue();
     }
 
     [Test]
