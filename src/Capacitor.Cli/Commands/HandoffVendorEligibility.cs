@@ -14,7 +14,7 @@ internal static class HandoffVendorEligibility {
             HarnessRegistry harnesses, CodingAgentsStep.Paths paths, Func<HarnessId, bool>? installing = null) => [
         .. HarnessRegistry.Identities
             .Where(i => harnesses.Detected(i.Id) && (HasSkill(i.Id, paths) || installing?.Invoke(i.Id) == true))
-            .Select(i => new HandoffVendor(i.Id, i.Label, harnesses.ResolveExecutable(i.Id)))
+            .Select(i => new HandoffVendor(i.Id, i.Label, harnesses.ResolveLaunchable(i.Id)))
     ];
 
     public static int Detected(HarnessRegistry harnesses) => HarnessRegistry.Identities.Count(i => harnesses.Detected(i.Id));

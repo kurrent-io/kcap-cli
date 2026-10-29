@@ -1693,7 +1693,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         var committed  = _config.CodexResolution;
         string? problem = null;
         var resolved   = CodexTransportResolution.Read(
-            committed.Generation + 1, _config.ReadExperimentalSettings, () => DaemonRunner.ProbeCliVersion(_config.CodexPath),
+            committed.Generation + 1, _config.ReadExperimentalSettings, () => DaemonRunner.ProbeCliVersion(_harnesses.LaunchCommand(HarnessId.Codex, _config.CodexPath)),
             unreadable => { problem = unreadable; return committed; });
 
         if (problem is not null && problem != _config.ExperimentalSettingsProblem) LogUnreadableSettings(_logger, problem);
@@ -2650,7 +2650,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         if (isReviewFlow && cmd.ReviewerCertification is { } certification) {
             var version = string.Equals(cmd.Vendor, "claude", StringComparison.Ordinal)
-                ? DaemonRunner.ProbeCliVersionForLaunch(_config.ClaudePath)
+                ? DaemonRunner.ProbeCliVersionForLaunch(_harnesses.LaunchCommand(HarnessId.Claude, _config.ClaudePath))
                 : null;
             var certificationCheck = EvaluateReviewerCertification(
                 cmd.Vendor, version, _server.CurrentConnectionId, certification);

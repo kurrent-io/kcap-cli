@@ -43,6 +43,10 @@ public sealed class DesktopAppProbe {
     }
 #pragma warning restore RS0030
 
+    /// <summary>Every root's <paramref name="entry"/> that exists as a directory, in root order.</summary>
+    public IEnumerable<string> Directories(string entry) =>
+        _roots.Select(root => Path.Combine(root, entry)).Where(Directory.Exists);
+
     /// <summary>Whether any of <paramref name="entries"/> exists, as a file or a directory, under any root.</summary>
     public bool Finds(params string[] entries) =>
         _roots.Any(root => entries.Any(entry => {

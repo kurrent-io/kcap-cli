@@ -22,7 +22,7 @@ internal sealed partial class CodexLauncher(
         account is null ? Paths : AccountLayouts.Codex(config.Home, account.Directory);
 
     public string Vendor  => "codex";
-    public string CliPath => config.CodexPath;
+    public string CliPath => harnesses.LaunchCommand(HarnessId.Codex, config.CodexPath);
     public bool   SupportsUnattended => true;
     public bool   SupportsPrReview   => true;
     public bool   SupportsResume     => true;
@@ -70,7 +70,7 @@ internal sealed partial class CodexLauncher(
     /// rather than proceeding with an incomplete view of what the reviewer inherits.
     /// </summary>
     internal Func<IReadOnlyList<InheritedMcpServer>> ReadInheritedMcpServers { get; init; } =
-        () => CodexMcpInventory.ListInheritedServers(config.CodexPath);
+        () => CodexMcpInventory.ListInheritedServers(harnesses.LaunchCommand(HarnessId.Codex, config.CodexPath));
 
     /// <summary>Inert <c>command</c> stamped on a disabled TRANSPORT-LESS server's override. Codex
     /// requires a transport to be present to accept an <c>mcp_servers.&lt;name&gt;</c> override — a

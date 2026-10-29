@@ -20,7 +20,7 @@ internal sealed partial class ClaudeLauncher(
     ) : IHostedAgentLauncher {
 
     public string Vendor  => "claude";
-    public string CliPath => config.ClaudePath;
+    public string CliPath => harnesses.LaunchCommand(HarnessId.Claude, config.ClaudePath);
     public bool   SupportsUnattended => true;
     public bool   SupportsPrReview   => true;
 
