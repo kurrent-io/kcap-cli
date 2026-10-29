@@ -161,8 +161,8 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
     }
 
     void OnUpgradeSettled(LocalUpgradeOutcome outcome) {
-        if (outcome is not LocalUpgradeOutcome.Upgraded upgraded) return;
-        _builtinNeedsRetry = upgraded.SearchWarning is not null;
+        if (outcome is not (LocalUpgradeOutcome.Upgraded or LocalUpgradeOutcome.Failed { Switched: true })) return;
+        _builtinNeedsRetry = _upgrade.Progress.Embeddings.Skipped;
         Refresh();
     }
 

@@ -41,6 +41,7 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
     string? _installed;
     ServerLaneState? _lane;
     LocalUpgradeOutcome? _shown;
+    string? _searchWarning;
     string? _startMessage;
     int _starting;
     readonly ObservableAsPropertyHelper<bool> _isStarting;
@@ -90,9 +91,9 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
             searchChange.WhenAnyValue(x => x.Running).Subscribe(_ => Refresh()).DisposeWith(_disposables);
             // An upgrade held off by the search change runs once the change is over.
             void OnSearchSettled(LocalInstallOutcome outcome) {
-                if (_shown is LocalUpgradeOutcome.Upgraded { SearchWarning: not null }
-                    && outcome is LocalInstallOutcome.Installed && searchChange.Progress.Embeddings.Configured) {
-                    _shown = null;
+                if (outcome is LocalInstallOutcome.Installed && searchChange.Progress.Embeddings.Configured) {
+                    _searchWarning = null;
+                    if (_shown is LocalUpgradeOutcome.Upgraded { SearchWarning: not null }) _shown = null;
                     Refresh();
                 }
                 if (Waiting) _ = _upgrade.StartAsync(_shutdown);
@@ -231,6 +232,11 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
     void OnSettled(LocalUpgradeOutcome outcome) {
         // A confirmed switch holds until the registry read lands.
         _installed = Progress.SwitchedTo ?? _installed;
+        _searchWarning = outcome switch {
+            LocalUpgradeOutcome.Upgraded upgraded => upgraded.SearchWarning,
+            LocalUpgradeOutcome.Failed { Switched: true } when Progress.Embeddings.Skipped => Progress.Embeddings.Summary,
+            _ => null,
+        };
         _shown = outcome is LocalUpgradeOutcome.Failed or LocalUpgradeOutcome.NotPublished or LocalUpgradeOutcome.Upgraded { SearchWarning: not null } ? outcome : null;
         StartMessage = null;
         if (outcome is LocalUpgradeOutcome.Upgraded) _ = ReconnectAsync();
@@ -242,6 +248,7 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
         // ReactiveCommand's executing gate only disables a bound button; ICommand.Execute still runs.
         if (Interlocked.Exchange(ref _starting, 1) == 1) return;
         try {
+            var recovering = _shown;
             StartMessage = null;
             ProcessResult result;
             try {
@@ -254,7 +261,11 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
             }
 
             if (result is { ExitCode: 0, TimedOut: false }) {
-                _shown = null;
+                if (!Upgrading && ReferenceEquals(_shown, recovering)) {
+                    _shown = recovering is LocalUpgradeOutcome.Failed { Switched: true } failed && _searchWarning is { } warning
+                        ? new LocalUpgradeOutcome.Upgraded(failed.From, failed.To, warning)
+                        : null;
+                }
                 ReadVersion();
                 Refresh();
                 await ReconnectAsync();

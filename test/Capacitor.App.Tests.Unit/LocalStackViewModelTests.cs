@@ -5,6 +5,7 @@ using Capacitor.App.Services;
 using Capacitor.App.Services.LocalSetup;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -19,7 +20,7 @@ public class LocalStackViewModelTests {
         public int Reconnects;
         public int Reads;
         public int Starts;
-        public Func<ProcessResult> StartResult = () => new ProcessResult(0, "Local server is running.\n", "", false);
+        public Func<Task<ProcessResult>> StartResult = () => Task.FromResult(new ProcessResult(0, "Local server is running.\n", "", false));
         /// What the registry names; the view model reads it, never the run's target.
         public string? Registry;
 
@@ -32,7 +33,7 @@ public class LocalStackViewModelTests {
                 return Registry;
             }, Status, Upgrade, _ => {
                 Starts++;
-                return Task.FromResult(StartResult());
+                return StartResult();
             }, () => {
                 Reconnects++;
                 return Task.CompletedTask;
@@ -264,6 +265,71 @@ public class LocalStackViewModelTests {
         });
     }
 
+    [Test]
+    [Arguments(false, false)]
+    [Arguments(true, false)]
+    [Arguments(false, true)]
+    public async Task A_successful_start_keeps_only_an_unresolved_search_warning(bool configureBeforeStart, bool configureDuringStart) {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness("1.3.0");
+            using var settings = new LocalSearchViewModel(() => LocalEmbeddingSetting.Builtin(new string('a', 64)),
+                _ => Task.FromResult<LocalEmbeddingModelManifest?>(null), h.Status, h.Search, h.Upgrade,
+                () => Task.CompletedTask, CancellationToken.None, ImmediateScheduler.Instance);
+            var exit = new TaskCompletionSource<ProcessResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+            h.StartResult = () => exit.Task;
+            h.Cli.SetupLocalBehavior = LocalSetupScript.Prints(0,
+                """{"v":1,"event":"embeddings_configured","provider":"builtin"}""", LocalSetupScript.Committed);
+            await h.RunAsync(2, UpgradeScript.Planned("1.2.0", "1.3.0"),
+                """{"v":1,"event":"embeddings_skipped","code":"model_download_failed","message":"Model download failed"}""",
+                UpgradeScript.Switched("1.3.0"), UpgradeScript.Failed("start_failed", "Server did not start.", true));
+
+            if (configureBeforeStart) await ConfigureSearchAsync();
+            var start = h.Vm.StartCommand.Execute().ToTask();
+            if (configureDuringStart) await ConfigureSearchAsync();
+            exit.SetResult(new ProcessResult(0, "Local server is running.", "", false));
+            await start.WaitAsync(TimeSpan.FromSeconds(5));
+
+            var warning = !configureBeforeStart && !configureDuringStart;
+            await Assert.That(h.Vm.BannerVisible).IsEqualTo(warning);
+            await Assert.That(h.Vm.IsNote).IsEqualTo(warning);
+            await Assert.That(h.Vm.StartVisible).IsFalse();
+            await Assert.That(h.Vm.Attention).IsFalse();
+            await Assert.That(settings.CanApply).IsEqualTo(warning);
+            if (warning) {
+                await Assert.That(h.Vm.Headline).IsEqualTo("Search needs attention");
+                await Assert.That(h.Vm.Detail).Contains("keyword").And.Contains("Settings → Search");
+                await settings.ApplyCommand.Execute().ToTask();
+                await h.Search.SettleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                await Assert.That(h.Vm.BannerVisible).IsFalse();
+                await Assert.That(settings.CanApply).IsFalse();
+            }
+
+            async Task ConfigureSearchAsync() {
+                await h.Search.StartAsync(LocalEmbeddingChoice.Builtin, CancellationToken.None);
+                await h.Search.SettleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        });
+    }
+
+    [Test]
+    public async Task A_successful_start_does_not_replace_a_newer_upgrade_outcome() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness("1.3.0");
+            var exit = new TaskCompletionSource<ProcessResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+            h.StartResult = () => exit.Task;
+            await h.RunAsync(2, UpgradeScript.Planned("1.2.0", "1.3.0"), UpgradeScript.Switched("1.3.0"),
+                UpgradeScript.Failed("start_failed", "Server did not start.", true));
+
+            var start = h.Vm.StartCommand.Execute().ToTask();
+            await h.RunAsync(4, UpgradeScript.Planned("1.3.0", "1.4.0"));
+            exit.SetResult(new ProcessResult(0, "Local server is running.", "", false));
+            await start.WaitAsync(TimeSpan.FromSeconds(5));
+
+            await Assert.That(h.Vm.BannerVisible).IsTrue();
+            await Assert.That(h.Vm.Headline).IsEqualTo("kcap local 1.4.0 is not available yet");
+        });
+    }
+
     /// Dismissing would take away the only Start while the upgrade is still journaled.
     [Test]
     public async Task A_failure_after_the_switch_cannot_be_dismissed() {
@@ -286,7 +352,7 @@ public class LocalStackViewModelTests {
     public async Task A_failed_start_after_the_switch_keeps_the_failure_and_says_why_without_terminal_advice() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var h = new Harness();
-            h.StartResult = () => new ProcessResult(1, "", "kcap local 1.3.0 did not become ready. kcap local logs shows why.\n", false);
+            h.StartResult = () => Task.FromResult(new ProcessResult(1, "", "kcap local 1.3.0 did not become ready. kcap local logs shows why.\n", false));
 
             await h.RunAsync(2, UpgradeScript.Planned("1.2.0", "1.3.0"), UpgradeScript.Switched("1.3.0"),
                 UpgradeScript.Failed("start_failed", "kcap local 1.3.0 did not start.", true));
