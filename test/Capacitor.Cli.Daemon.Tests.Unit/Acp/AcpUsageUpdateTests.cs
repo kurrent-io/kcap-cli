@@ -6,10 +6,8 @@ using Capacitor.Cli.Daemon.Tests.Unit.Services;
 namespace Capacitor.Cli.Daemon.Tests.Unit.Acp;
 
 /// <summary>
-/// The ACP spec's Session Usage RFD (<c>usage_update</c>, carrying <c>used</c>/<c>size</c>).
-/// No vendor implements it yet — probed 2026-07-25, neither cursor-agent 2026.07.23 nor
-/// Copilot CLI 1.0.75 emits it — so this path is dormant. It exists so the server's context
-/// chip lights up for every ACP-hosted vendor the moment any of them ships it.
+/// The ACP spec's Session Usage RFD (<c>usage_update</c>, carrying <c>used</c>/<c>size</c>),
+/// which drives the server's context chip for an ACP-hosted vendor that sends it.
 ///
 /// Translator-level tests; the <c>Reduce()</c> validation they depend on is exercised through
 /// the runtime harness in <see cref="AcpHostedAgentRuntimeTests"/>.
