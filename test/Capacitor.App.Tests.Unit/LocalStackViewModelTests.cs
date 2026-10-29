@@ -72,6 +72,52 @@ public class LocalStackViewModelTests {
     }
 
     [Test]
+    [Arguments(false, "declined", true)]
+    [Arguments(true, "declined", true)]
+    [Arguments(false, "declined", false)]
+    [Arguments(true, "declined", false)]
+    [Arguments(false, "write_failed", true)]
+    public async Task A_keyword_choice_clears_the_search_warning_only_when_applied(bool needsStart, string skipCode, bool setupSucceeds) {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness("1.3.0");
+            var setting = LocalEmbeddingSetting.Builtin(new string('a', 64));
+            using var settings = new LocalSearchViewModel(() => setting,
+                _ => Task.FromResult<LocalEmbeddingModelManifest?>(null), h.Status, h.Search, h.Upgrade,
+                () => Task.CompletedTask, CancellationToken.None, ImmediateScheduler.Instance);
+            await h.RunAsync(needsStart ? 2 : 0, UpgradeScript.Planned("1.2.0", "1.3.0"),
+                """{"v":1,"event":"embeddings_skipped","code":"model_download_failed","message":"Model download failed"}""",
+                UpgradeScript.Switched("1.3.0"), needsStart
+                    ? UpgradeScript.Failed("start_failed", "Server did not start.", true)
+                    : UpgradeScript.Upgraded("1.2.0", "1.3.0"));
+
+            settings.Choice.UseKeyword = true;
+            var applied = setupSucceeds && skipCode == "declined";
+            h.Cli.SetupLocalBehavior = (onLine, interrupt, ct) => {
+                if (applied) setting = LocalEmbeddingSetting.Declined;
+                return LocalSetupScript.Prints(setupSucceeds ? 0 : 1,
+                    $$"""{"v":1,"event":"embeddings_skipped","code":"{{skipCode}}"}""",
+                    setupSucceeds ? LocalSetupScript.Committed : LocalSetupScript.Failed("start_failed"))(onLine, interrupt, ct);
+            };
+            await settings.ApplyCommand.Execute().ToTask();
+            await h.Search.SettleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            if (needsStart) await h.Vm.StartCommand.Execute().ToTask();
+
+            await Assert.That(h.Cli.SetupLocalEmbeddings.Single()).IsEqualTo(LocalEmbeddingChoice.KeywordOnly);
+            await Assert.That(h.Vm.BannerVisible).IsEqualTo(!applied);
+            await Assert.That(h.Vm.IsNote).IsEqualTo(!applied);
+            await Assert.That(settings.CanApply).IsEqualTo(!applied);
+
+            if (applied) {
+                setting = LocalEmbeddingSetting.Builtin(new string('a', 64));
+                h.Status.OnNext(new(ServerLaneState.Retrying));
+                h.Status.OnNext(new(ServerLaneState.Connected));
+                await Assert.That(settings.StateText).IsEqualTo("search by meaning");
+                await Assert.That(settings.CanApply).IsFalse();
+            }
+        });
+    }
+
+    [Test]
     public async Task The_rail_shows_the_installed_version_and_the_servers_state() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var h = new Harness();

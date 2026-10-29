@@ -91,7 +91,8 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
             searchChange.WhenAnyValue(x => x.Running).Subscribe(_ => Refresh()).DisposeWith(_disposables);
             // An upgrade held off by the search change runs once the change is over.
             void OnSearchSettled(LocalInstallOutcome outcome) {
-                if (outcome is LocalInstallOutcome.Installed && searchChange.Progress.Embeddings.Configured) {
+                if (outcome is LocalInstallOutcome.Installed
+                    && searchChange.Progress.Embeddings is { Configured: true } or { SkipCode: "declined" }) {
                     _searchWarning = null;
                     if (_shown is LocalUpgradeOutcome.Upgraded { SearchWarning: not null }) _shown = null;
                     Refresh();

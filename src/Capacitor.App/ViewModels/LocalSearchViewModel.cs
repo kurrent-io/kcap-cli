@@ -156,7 +156,7 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
 
     void OnSettled(LocalInstallOutcome outcome) {
         if (outcome is LocalInstallOutcome.Installed) {
-            if (_search.Progress.Embeddings.Configured) _builtinNeedsRetry = false;
+            if (_search.Progress.Embeddings is { Configured: true } or { SkipCode: "declined" }) _builtinNeedsRetry = false;
             _ = ReconnectAsync();
         }
         ReadSetting();
