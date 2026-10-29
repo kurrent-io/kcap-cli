@@ -257,7 +257,9 @@ partial class McpFlowsServer(
 
                 // wait:false returns the run id with the round still running, for a caller whose tool
                 // calls are cut short long before a round ends.
-                TimeSpan? roundPollCap = ParseRoundWaitArg(arguments) ? null : TimeSpan.Zero;
+                var roundWait = ParseRoundWaitArg(arguments);
+                TimeSpan? roundPollCap = roundWait ? null : TimeSpan.Zero;
+                TimeSpan? sendBudget   = roundWait ? null : ShortCallSendBudget;
 
                 var startPatch = toolName is "start_review_flow" or "start_flow"
                     ? await ReadPatchAsync(arguments, CancellationToken.None)
@@ -265,15 +267,15 @@ partial class McpFlowsServer(
 
                 var sendResult = toolName switch {
                     "start_review_flow"   => wasModelStart
-                        ? await SendOnceWithDeadlineAsync(client, (c, ct) => StartFlowAsync(c, apiRoot, arguments, hostCwd, hostRoot, hostInfo, kindArgName: "kind", requestingSessionId: requestingSessionId, ct: ct, patch: startPatch), clock)
-                        : await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, hostCwd, hostRoot, hostInfo, kindArgName: "kind", requestingSessionId: requestingSessionId, ct: ct, patch: startPatch), clock, backoff),
+                        ? await SendOnceWithDeadlineAsync(client, (c, ct) => StartFlowAsync(c, apiRoot, arguments, hostCwd, hostRoot, hostInfo, kindArgName: "kind", requestingSessionId: requestingSessionId, ct: ct, patch: startPatch), clock, sendBudget)
+                        : await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, hostCwd, hostRoot, hostInfo, kindArgName: "kind", requestingSessionId: requestingSessionId, ct: ct, patch: startPatch), clock, backoff, absoluteBudget: sendBudget),
                     "start_flow"          => wasModelStart
-                        ? await SendOnceWithDeadlineAsync(client, (c, ct) => StartFlowAsync(c, apiRoot, arguments, hostCwd, hostRoot, hostInfo, kindArgName: "definition_id", requestingSessionId: requestingSessionId, ct: ct, patch: startPatch), clock)
-                        : await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, hostCwd, hostRoot, hostInfo, kindArgName: "definition_id", requestingSessionId: requestingSessionId, ct: ct, patch: startPatch), clock, backoff),
+                        ? await SendOnceWithDeadlineAsync(client, (c, ct) => StartFlowAsync(c, apiRoot, arguments, hostCwd, hostRoot, hostInfo, kindArgName: "definition_id", requestingSessionId: requestingSessionId, ct: ct, patch: startPatch), clock, sendBudget)
+                        : await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, hostCwd, hostRoot, hostInfo, kindArgName: "definition_id", requestingSessionId: requestingSessionId, ct: ct, patch: startPatch), clock, backoff, absoluteBudget: sendBudget),
                     // Round submission also retries the coded participant_unreachable 409 (see
                     // ParticipantUnreachableCode) — never a start, which can't return it.
-                    "submit_review_round" => await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "context", participant: null, async: true, ct: ct), clock, backoff, extraRetryableCode: ParticipantUnreachableCode),
-                    _                     => await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "message", participant: GetRequiredArg(arguments, "participant"), async: ParseAsyncArg(arguments), ct: ct), clock, backoff, extraRetryableCode: ParticipantUnreachableCode)
+                    "submit_review_round" => await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "context", participant: null, async: true, ct: ct), clock, backoff, extraRetryableCode: ParticipantUnreachableCode, absoluteBudget: sendBudget),
+                    _                     => await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "message", participant: GetRequiredArg(arguments, "participant"), async: ParseAsyncArg(arguments), ct: ct), clock, backoff, extraRetryableCode: ParticipantUnreachableCode, absoluteBudget: sendBudget)
                 };
 
                 // Settlement-admission design (§3.2 G): the elapsed deadline is mapped HERE, at the
@@ -373,7 +375,7 @@ partial class McpFlowsServer(
                             c, apiRoot, arguments, hostCwd, hostRoot, hostInfo,
                             kindArgName: toolName == "start_review_flow" ? "kind" : "definition_id",
                             requestingSessionId: requestingSessionId, ct: ct, patch: startPatch),
-                        clock, backoff, budgetStartedAt: settlementStartedAt);
+                        clock, backoff, budgetStartedAt: settlementStartedAt, absoluteBudget: sendBudget);
 
                     if (retryResult is SettlementSendResult.DeadlineExhausted retryExhausted)
                         return BuildToolResult(id, FormatSettlementDeadlineError(retryExhausted), isError: true);
@@ -669,6 +671,11 @@ partial class McpFlowsServer(
     /// the last moment still has time to return its flow_run_id.</summary>
     internal static readonly TimeSpan SettlementAbsoluteDeadline = TimeSpan.FromSeconds(210);
 
+    /// <summary>The whole send budget of a <c>wait: false</c> call, so it answers inside the 60 s a
+    /// short-call client (Muse's helper) allows, process start included. An exhausted budget started
+    /// nothing, so the caller can retry the call.</summary>
+    internal static readonly TimeSpan ShortCallSendBudget = TimeSpan.FromSeconds(40);
+
     /// <summary>The one end-to-end budget for a tool call that sends and then polls, anchored at its
     /// first POST attempt. The settlement lane and the round-poll lane run sequentially, so bounding
     /// them separately bounds the call at their sum; sharing this budget means whatever settlement
@@ -755,11 +762,12 @@ partial class McpFlowsServer(
     static async Task<SettlementSendResult> SendOnceWithDeadlineAsync(
             HttpClient                                                    client,
             Func<HttpClient, CancellationToken, Task<HttpResponseMessage>> send,
-            FlowRetryClock                                                clock
+            FlowRetryClock                                                clock,
+            TimeSpan?                                                     budget = null
         ) {
         var startedAt = clock.UtcNow;
 
-        using var scope = clock.CreateDeadline(SettlementElapsedDeadline, CancellationToken.None);
+        using var scope = clock.CreateDeadline(budget ?? SettlementElapsedDeadline, CancellationToken.None);
 
         try {
             return new SettlementSendResult.Response(await send(client, scope.Token));
@@ -833,10 +841,11 @@ partial class McpFlowsServer(
             // A single additional coded 409 this call treats as retryable, alongside the two
             // settlement codes — see the class remarks above and ParticipantUnreachableCode's own
             // doc. Null (every caller except round-submit) preserves today's behavior exactly.
-            string?                                                       extraRetryableCode = null
+            string?                                                       extraRetryableCode = null,
+            TimeSpan?                                                     absoluteBudget = null
         ) {
         var startedAt         = budgetStartedAt ?? clock.UtcNow;
-        var absoluteDeadline  = startedAt + SettlementAbsoluteDeadline;
+        var absoluteDeadline  = startedAt + (absoluteBudget ?? SettlementAbsoluteDeadline);
         // The rolling no-progress deadline. Starts as the flat window from startedAt — identical to
         // today's behavior — and is pushed out (never past absoluteDeadline; see EffectiveDeadline)
         // only when a 409 carries a last_processed_seq STRICTLY greater than the one before it.
@@ -2034,7 +2043,7 @@ partial class McpFlowsServer(
 
         while (clock.UtcNow < deadline) {
             // Clipped to the deadline, so timeout_s bounds the whole call rather than the last GET's start.
-            using var getCts = clock.CreateTimeoutSource(Min(PerGetTimeout, deadline - clock.UtcNow));
+            using var getCts = clock.CreateTimeoutSource(Min(PerGetTimeout, Remaining(deadline, clock)));
             HttpResponseMessage resp;
             try {
                 resp = await client.GetAsync(url, getCts.Token);
@@ -2043,7 +2052,7 @@ partial class McpFlowsServer(
                 lastTransientError = ex.Message;
                 if (consecutiveTransient > MaxTransientRetries)
                     return new($"Error: poll failed after {MaxTransientRetries} consecutive network errors: {lastTransientError}", true);
-                await clock.DelayAsync(PollInterval); continue;
+                await clock.DelayAsync(Min(PollInterval, Remaining(deadline, clock))); continue;
             }
 
             using (resp) {
@@ -2074,7 +2083,7 @@ partial class McpFlowsServer(
                     lastTransientError = $"HTTP {statusCode}";
                     if (consecutiveTransient > MaxTransientRetries)
                         return new($"Error: poll failed after {MaxTransientRetries} consecutive server errors: {lastTransientError}", true);
-                    await clock.DelayAsync(PollInterval); continue;
+                    await clock.DelayAsync(Min(PollInterval, Remaining(deadline, clock))); continue;
                 }
 
                 consecutiveTransient  = 0;
@@ -2091,11 +2100,11 @@ partial class McpFlowsServer(
 
                 if (runTerminal || roundTerminal) {
                     var formatted = FormatStatusResponse(body, out var pendingIds);
-                    await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, clock);
+                    await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, clock, deadline);
                     return new(formatted, false);
                 }
             }
-            await clock.DelayAsync(PollInterval);
+            await clock.DelayAsync(Min(PollInterval, Remaining(deadline, clock)));
         }
 
         // PollCap reached: the same benign text the round-submission poll lane returns, minus the round
@@ -2496,7 +2505,10 @@ partial class McpFlowsServer(
             string                apiRoot,
             string                flowRunId,
             IReadOnlyList<string> messageIds,
-            FlowRetryClock        clock
+            FlowRetryClock        clock,
+            // A caller with its own deadline (a status wait under timeout_s) stops acknowledging at it;
+            // an unacknowledged message is redelivered on the next call.
+            DateTimeOffset?       deadline = null
         ) {
         if (messageIds.Count == 0) return;
 
@@ -2510,7 +2522,8 @@ partial class McpFlowsServer(
                 // round endpoints), so an unbounded ack POST could hang the tool response the
                 // driver is waiting on. A timeout surfaces as OperationCanceledException, which
                 // falls into the existing swallow-and-retry-once path below.
-                using var postCts = clock.CreateTimeoutSource(PerAckPostTimeout);
+                using var postCts = clock.CreateTimeoutSource(
+                    deadline is { } end ? Min(PerAckPostTimeout, Remaining(end, clock)) : PerAckPostTimeout);
                 using var response = await client.PostAsync(
                     url, JsonContent.Create(body, McpJsonContext.Default.AckFlowMessagesDto), postCts.Token);
                 return response.IsSuccessStatusCode;
@@ -2521,9 +2534,11 @@ partial class McpFlowsServer(
 
         if (await TryPostAsync()) return;
 
-        await clock.DelayAsync(TimeSpan.FromSeconds(2));
-
-        if (await TryPostAsync()) return;
+        var retryGap = TimeSpan.FromSeconds(2);
+        if (deadline is null || Remaining(deadline.Value, clock) > retryGap) {
+            await clock.DelayAsync(retryGap);
+            if (await TryPostAsync()) return;
+        }
 
         await Console.Error.WriteLineAsync(
             $"kcap mcp flows: failed to ack {messageIds.Count} rendered message(s) for flow_run_id {flowRunId}; will redeliver on next call.");
@@ -2585,6 +2600,9 @@ partial class McpFlowsServer(
         };
 
     static TimeSpan Min(TimeSpan a, TimeSpan b) => a < b ? a : b;
+
+    static TimeSpan Remaining(DateTimeOffset deadline, FlowRetryClock clock) =>
+        deadline - clock.UtcNow is var left && left > TimeSpan.Zero ? left : TimeSpan.Zero;
 
     static string BuildInitializeResponse(JsonNode id, JsonObject request) =>
         ToResponse<McpInitResult>(

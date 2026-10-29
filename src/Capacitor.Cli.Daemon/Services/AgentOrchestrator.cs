@@ -351,6 +351,9 @@ internal record AgentInstance(
     /// (the user's own checkout — never removed).</summary>
     public WorkLocation Work { get; init; } = WorkLocation.OwnedWorktree;
 
+    /// <summary>Runs in an empty scratch workspace: its path is no repository, and teardown deletes it.</summary>
+    public bool ScratchWorkspace { get; init; }
+
     /// <summary>Authorized live checkout mirrored into this owned worktree for a runtime that
     /// cannot safely execute in-place. Refreshed before each later review round.</summary>
     public string? BorrowedSnapshotSource { get; init; }
@@ -3190,6 +3193,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 CurrentCols         = HostedPtyCols,
                 CurrentRows         = HostedPtyRows,
                 Work                = work,
+                ScratchWorkspace    = cmd.ScratchWorkspace,
                 SandboxPolicy       = appliedPosture?.Sandbox,
                 ApprovalPolicy      = appliedPosture?.Approval,
                 // Echoed on AgentRegistered for the dashboard chip; carried verbatim from the command
@@ -5344,8 +5348,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             new AgentRunStarted(agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.Worktree.Path, agent.Vendor)
         );
 
-        // Persist repo path and notify server so the launch dialog updates.
-        _ = Task.Run(async () => {
+        // Persist repo path and notify server so the launch dialog updates. A scratch workspace is
+        // deleted at teardown, so recording it would advertise a repository that no longer exists.
+        if (!agent.ScratchWorkspace) _ = Task.Run(async () => {
                 try {
                     await new RepoPathStore(_configRoot, _time).AddAsync(agent.RepoPath);
                     await _server.UpdateRepoPathsAsync();

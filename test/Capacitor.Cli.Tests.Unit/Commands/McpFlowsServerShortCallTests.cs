@@ -125,6 +125,27 @@ public class McpFlowsServerShortCallTests {
         await Assert.That(Gets(server)).IsEqualTo(0);
     }
 
+    /// <summary>A server busy past the short-call budget must not hold the call beyond what the caller
+    /// allows; the busy start minted nothing, so the error is the caller's cue to call again.</summary>
+    [Test]
+    public async Task A_start_with_wait_false_stops_retrying_a_busy_server_within_the_short_budget() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath(new WildcardMatcher("/api/flows/review/start*")).UsingPost())
+              .RespondWith(Response.Create().WithStatusCode(409).WithBody(
+                  """{"error":"flow_settlement_busy","message":"A concurrent settlement operation is racing this flow run."}"""));
+        using var client = new HttpClient();
+        var clock = new VirtualFlowRetryClock();
+
+        var response = await Server().HandleToolCallAsync(
+            JsonNode.Parse("1")!, ToolCallRequest("start_flow", StartArguments(false)),
+            client, server.Url!, cwd: "/tmp/cwd", repoRoot: null, repoInfo: null, clock: clock);
+
+        var (text, isError) = Unwrap(response);
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).Contains("flow_settlement_busy");
+        await Assert.That(clock.Elapsed).IsLessThanOrEqualTo(McpFlowsServer.ShortCallSendBudget);
+    }
+
     [Test]
     public async Task A_status_wait_ends_within_timeout_s() {
         using var server = StartServer();

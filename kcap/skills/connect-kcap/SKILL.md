@@ -217,7 +217,7 @@ List tools with
 | kcap-plans | declared plan documents and tasks |
 | kcap-knowledge | curated facts and skills |
 | kcap-pages | `publish_page`, `list_my_pages`, `set_page_visibility`; for a page that collects answers, `get_page_results`, `await_page_responses`, `close_page_responses` |
-| kcap-flows | a document review by a separate hosted reviewer: `start_flow` with `definition_id` `doc-review`, `get_flow_status`, `send_to_participant`, `close_flow` |
+| kcap-flows | a document review by a separate hosted reviewer: `get_flow_definition` (`doc-review`) first, then `start_flow`, `get_flow_status`, `send_to_participant`, `close_flow` |
 
 This VM is not a git checkout: pass `"repo": "all"` to `search_sessions` and
 `list_repo_sessions`, or they search nothing. A call is cut off after 60
@@ -315,17 +315,28 @@ contents in a shell command. Read `CONNECTOR.md` there for the servers and tools
    the user can open it in kcap.
 11. **Document review:** only when the user asks for a review by another
    agent. Ask which reviewer (`claude`, `codex`, …) unless they named one.
-   `start_flow` with `definition_id: "doc-review"`, `vendor`, `"wait": false`,
-   and a `context` holding the whole document plus its type, audience and what
-   to scrutinise. Keep the returned `flow_run_id`. Poll `get_flow_status`
-   (`"wait": true`, `"timeout_s": 45`) until the round ends; tell the user
-   it is still running between polls rather than blocking a whole turn on
-   it. On findings, revise, then `send_to_participant` (`participant:
-   "reviewer"`, `"wait": false`) with the revised document or changed
-   sections and a note per finding; on clean, `close_flow`. The reviewer runs
-   on one of the user's own kcap daemons elsewhere — never start one here. A
-   `no_scratch_daemon` error means none is online: tell the user to run
-   `kcap daemon start -d` on a machine of theirs with an up-to-date kcap.
+   - Call `get_flow_definition` with `definition_id: "doc-review"` first and
+     follow its guide where it says more than this rule.
+   - `start_flow` with `definition_id: "doc-review"`, `vendor`, `"wait": false`,
+     `target_kind` (`"spec"` or `"document"`), `target_ref` (a short slug for
+     the document), `target_title`, `session_title` (a short phrase naming this
+     review) and `context`: the whole document plus its type, audience and what
+     to scrutinise. Keep the returned `flow_run_id`.
+   - Poll `get_flow_status` (`"wait": true`, `"timeout_s": 45`) until the
+     round ends; tell the user it is still running between polls rather than
+     blocking a whole turn on it.
+   - **findings:** revise, then `send_to_participant` (`participant:
+     "reviewer"`, `"wait": false`) with the revised document or the changed
+     sections and a note per finding.
+   - **`participant_died` or `participant_stopped`:** send the whole document
+     again the same way — a fresh reviewer remembers no earlier round.
+     `participant_parked` resumes where it was, so a normal revision will do.
+   - **clean:** `close_flow`.
+   - The reviewer runs on one of the user's own kcap daemons elsewhere — never
+     start one here. A `no_scratch_daemon` error means none is online: tell the
+     user to run `kcap daemon start -d` on a machine of theirs with an
+     up-to-date kcap. A send that answers with a settlement deadline started
+     nothing: call it again.
 ```
 
 ### B6. Keep the sign-in warm: an hourly `kcap status` cron
