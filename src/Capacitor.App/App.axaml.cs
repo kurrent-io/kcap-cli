@@ -547,7 +547,7 @@ public partial class App : Application {
                     _ => ("unknown", null),
                 };
                 LifecycleLog.Write("local_upgrade_settled", ("version", version), ("result", result), ("detail", detail));
-                if (outcome is LocalUpgradeOutcome.Failed) return;
+                if (!AppComponentStamp.SettledBy(outcome)) return;
                 try { AppComponentStamp.Write(_config, version); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
                     Console.Error.WriteLine($"kcap: could not record the settled components: {ex.Message}");
