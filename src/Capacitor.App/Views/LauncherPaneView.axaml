@@ -53,8 +53,9 @@
         </Style>
     </UserControl.Styles>
 
-    <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
-    <views:LauncherLayoutPanel Margin="24,16,24,24" Gap="20">
+    <!-- The top gap sits outside the scroller, so scrolled notices clip short of the toolbar above. -->
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto" Margin="0,16,0,0">
+    <views:LauncherLayoutPanel Margin="24,0,24,24" Gap="20">
         <StackPanel x:Name="LauncherNotices" VerticalAlignment="Top" HorizontalAlignment="Stretch" MaxWidth="680" Spacing="8">
             <Border x:Name="LocalUpgradeBanner" Classes="notice"
                     IsVisible="{Binding LocalStack.BannerVisible, FallbackValue=False}">
