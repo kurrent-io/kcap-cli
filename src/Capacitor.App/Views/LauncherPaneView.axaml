@@ -73,7 +73,7 @@
                     <Panel x:Name="LocalUpgradeIcon" VerticalAlignment="Top">
                         <views:AppIcon Classes="noticeIcon kcapSpinning" Size="16" Kind="LoaderCircle" Foreground="{StaticResource KcapMutedBrush}"
                                        IsVisible="{Binding LocalStack.Upgrading, FallbackValue=False}" />
-                        <views:AppIcon Classes="noticeIcon" Size="16" Kind="CircleAlert" Foreground="{StaticResource KcapWarningBrush}"
+                        <views:AppIcon x:Name="LocalUpgradeFailedIcon" Classes="noticeIcon" Size="16" Kind="CircleX" Foreground="{StaticResource KcapDangerBrush}"
                                        IsVisible="{Binding LocalStack.Attention, FallbackValue=False}" />
                         <views:AppIcon Classes="noticeIcon" Size="16" Kind="Clock" Foreground="{StaticResource KcapMutedBrush}"
                                        IsVisible="{Binding LocalStack.IsNote, FallbackValue=False}" />
@@ -114,8 +114,23 @@
                     <Panel VerticalAlignment="Top">
                         <views:AppIcon Classes="noticeIcon kcapSpinning" Size="16" Kind="LoaderCircle" Foreground="{StaticResource KcapMutedBrush}"
                                        IsVisible="{Binding LocalServer.IsStarting, FallbackValue=False}" />
-                        <views:AppIcon x:Name="LocalServerIcon" Classes="noticeIcon" Size="16" Kind="ServerOff" Foreground="{StaticResource KcapWarningBrush}"
-                                       IsVisible="{Binding !LocalServer.IsStarting, FallbackValue=True}" />
+                        <!-- Red only once a start has failed; a server that is merely stopped needs the user, nothing broke. -->
+                        <views:AppIcon x:Name="LocalServerIcon" Classes="noticeIcon" Size="16" Kind="ServerOff" Foreground="{StaticResource KcapWarningBrush}">
+                            <views:AppIcon.IsVisible>
+                                <MultiBinding Converter="{x:Static BoolConverters.And}" FallbackValue="True">
+                                    <Binding Path="LocalServer.IsStarting" Converter="{x:Static BoolConverters.Not}" FallbackValue="True" />
+                                    <Binding Path="LocalServer.Message" Converter="{x:Static StringConverters.IsNullOrEmpty}" />
+                                </MultiBinding>
+                            </views:AppIcon.IsVisible>
+                        </views:AppIcon>
+                        <views:AppIcon x:Name="LocalServerFailedIcon" Classes="noticeIcon" Size="16" Kind="CircleX" Foreground="{StaticResource KcapDangerBrush}">
+                            <views:AppIcon.IsVisible>
+                                <MultiBinding Converter="{x:Static BoolConverters.And}" FallbackValue="False">
+                                    <Binding Path="LocalServer.IsStarting" Converter="{x:Static BoolConverters.Not}" FallbackValue="True" />
+                                    <Binding Path="LocalServer.Message" Converter="{x:Static StringConverters.IsNotNullOrEmpty}" />
+                                </MultiBinding>
+                            </views:AppIcon.IsVisible>
+                        </views:AppIcon>
                     </Panel>
                     <StackPanel Grid.Column="1" Spacing="4">
                         <TextBlock x:Name="LocalServerHeadline" Classes="noticeTitle" Text="The local server isn't running" />
@@ -144,8 +159,22 @@
                     <Panel VerticalAlignment="Top">
                         <views:AppIcon x:Name="BannerBusyIcon" Classes="noticeIcon kcapSpinning" Size="16" Kind="LoaderCircle" Foreground="{StaticResource KcapMutedBrush}"
                                        IsVisible="{Binding BannerBusy}" />
-                        <views:AppIcon x:Name="BannerIcon" Classes="noticeIcon" Size="16" Kind="CircleAlert" Foreground="{StaticResource KcapWarningBrush}"
-                                       IsVisible="{Binding !BannerBusy}" />
+                        <views:AppIcon x:Name="BannerIcon" Classes="noticeIcon" Size="16" Kind="CircleAlert" Foreground="{StaticResource KcapWarningBrush}">
+                            <views:AppIcon.IsVisible>
+                                <MultiBinding Converter="{x:Static BoolConverters.And}">
+                                    <Binding Path="!BannerBusy" />
+                                    <Binding Path="!BannerFailed" />
+                                </MultiBinding>
+                            </views:AppIcon.IsVisible>
+                        </views:AppIcon>
+                        <views:AppIcon x:Name="BannerFailedIcon" Classes="noticeIcon" Size="16" Kind="CircleX" Foreground="{StaticResource KcapDangerBrush}">
+                            <views:AppIcon.IsVisible>
+                                <MultiBinding Converter="{x:Static BoolConverters.And}">
+                                    <Binding Path="!BannerBusy" />
+                                    <Binding Path="BannerFailed" />
+                                </MultiBinding>
+                            </views:AppIcon.IsVisible>
+                        </views:AppIcon>
                     </Panel>
                     <StackPanel Grid.Column="1" Spacing="4">
                         <TextBlock x:Name="BannerMessageText" Classes="noticeTitle" Text="{Binding BannerTitle}" />

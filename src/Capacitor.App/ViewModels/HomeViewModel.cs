@@ -332,6 +332,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// True while the banner is an in-flight connect/finish line — a loader, not Sign in.
     public bool BannerBusy => _bannerBusy.Value;
 
+    readonly ObservableAsPropertyHelper<bool> _bannerFailed;
+    /// True when the banner reports a failure rather than something that needs the user.
+    public bool BannerFailed => _bannerFailed.Value;
+
     readonly ObservableAsPropertyHelper<bool> _signInVisible;
     public bool SignInVisible => _signInVisible.Value;
 
@@ -912,6 +916,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .Select(BannerInFlight)
             .ToProperty(this, x => x.BannerBusy, initialValue: true)
             .DisposeWith(_disposables);
+        _bannerFailed = bannerContent
+            .Select(BannerFailedFor)
+            .ToProperty(this, x => x.BannerFailed, initialValue: false)
+            .DisposeWith(_disposables);
         var signInVisible = signInState
             .CombineLatest(_catchUpTimedOut, _localServer, (t, timedOut, local) => !local && !t.Awaiting && (t.Expired || (timedOut && !t.Foreign) || (
                 t.Availability == LaunchAvailability.ServerDisconnected && !t.Foreign && !LaneIsCatchingUp(t.Lane))));
@@ -1173,6 +1181,13 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     internal static bool LaneIsCatchingUp(ServerLaneState lane) =>
         lane is ServerLaneState.Connecting or ServerLaneState.Retrying or ServerLaneState.Connected;
+
+    /// A failure is something that broke: versions that cannot work together, a server that refused
+    /// the app, or a daemon still down after the lifecycle settled on a report, which only follows a
+    /// start or setup that did not work.
+    internal static bool BannerFailedFor((string? Message, string? Detail) content) =>
+        content.Message is DaemonIncompatibleNotice or LocalServerRefusedNotice
+        || (content.Message == DaemonDownNotice && content.Detail is { } detail && !InFlight(detail));
 
     static bool BannerInFlight((string? Message, string? Detail) content) =>
         content.Detail is { } detail ? InFlight(detail)

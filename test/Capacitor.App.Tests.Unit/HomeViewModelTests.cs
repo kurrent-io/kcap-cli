@@ -1669,6 +1669,19 @@ public class HomeViewModelTests {
         await Assert.That(content.Detail).IsEqualTo(expectedDetail);
     }
 
+    /// Red is for something that broke. A daemon that is merely down, or a start still in flight,
+    /// needs the user without anything having failed.
+    [Test]
+    [Arguments(HomeViewModel.DaemonDownNotice, null, false)]
+    [Arguments(HomeViewModel.DaemonDownNotice, "Starting the daemon…", false)]
+    [Arguments(HomeViewModel.DaemonDownNotice, "The daemon didn't start. Press Start daemon to try again.", true)]
+    [Arguments(HomeViewModel.DaemonIncompatibleNotice, null, true)]
+    [Arguments(HomeViewModel.LocalServerRefusedNotice, null, true)]
+    [Arguments(HomeViewModel.ServerLostNotice, null, false)]
+    [Arguments(HomeViewModel.SignInExpiredNotice, null, false)]
+    public async Task Only_a_failure_turns_the_banner_red(string message, string? detail, bool failed) =>
+        await Assert.That(HomeViewModel.BannerFailedFor((message, detail))).IsEqualTo(failed);
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task An_unauthorized_start_asks_for_sign_in_instead_of_the_raw_error() {
