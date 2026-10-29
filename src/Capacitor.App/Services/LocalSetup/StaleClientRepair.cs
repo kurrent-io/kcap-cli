@@ -17,8 +17,12 @@ public sealed class StaleClientRepair(
 
     static readonly TimeSpan NpmTimeout = TimeSpan.FromMinutes(5);
 
-    /// Each repair fixes the copy PATH finds first, which can uncover another behind it.
-    const int MaxRepairs = 4;
+    /// Each repair fixes the copy PATH finds first, which can uncover another behind it, and an entry that changed
+    /// before it could be replaced is looked at again.
+    const int MaxAttempts = 6;
+
+    /// Printed by the administrator script when the entry is no longer the one that was found.
+    const string EntryChanged = "kcap-entry-changed";
 
     public static StaleClientRepair ForApp(IProcessRunner runner, ILoginShellProbe probe, string? appCli, UserHome home) =>
         new(runner, probe, appCli, path => new LocalClientCopies(runner, path, appCli, LocalClientCopies.AppClis(home)));
@@ -29,7 +33,7 @@ public sealed class StaleClientRepair(
         var relinked = new HashSet<string>(StringComparer.Ordinal);
         string? repaired = null;
 
-        for (var attempt = 0; attempt < MaxRepairs; attempt++) {
+        for (var attempt = 0; attempt < MaxAttempts; attempt++) {
             var stale = await Task.Run(() => copies(path).Find().FirstOrDefault(c => !LocalClientFloor.Admits(c.Version)), ct)
                 .ConfigureAwait(false);
 
@@ -37,18 +41,44 @@ public sealed class StaleClientRepair(
             if (stale.Kind == ClientCopyKind.DesktopApp) return new ClientRepairOutcome.OldApp(stale.Path);
             if (relinked.Contains(stale.Path)) return new ClientRepairOutcome.Failed(stale.Path, "it still reports an older version after it was replaced.");
 
-            if (NpmOwned(stale.Path) && npmTried.Add(stale.Path) && await UpdateThroughNpmAsync(path, ct).ConfigureAwait(false)) {
-                repaired = stale.Path;
+            // Found again either way: npm may have left anything at that entry, updated or not.
+            if (NpmOwned(stale.Path) && npmTried.Add(stale.Path)) {
+                if (await UpdateThroughNpmAsync(path, ct).ConfigureAwait(false)) repaired = stale.Path;
                 continue;
             }
 
-            if (await RelinkAsync(stale.Path, ct).ConfigureAwait(false) is { } refused) return refused;
+            if (await IdentityAsync(stale.Path, ct).ConfigureAwait(false) is not { } found) continue;
+
+            switch (await RelinkAsync(stale.Path, found, ct).ConfigureAwait(false)) {
+                case Relink.Changed:
+                    continue;
+                case Relink.Refused(var refused):
+                    return refused;
+            }
 
             relinked.Add(stale.Path);
             repaired = stale.Path;
         }
 
         return new ClientRepairOutcome.Failed(repaired ?? "", "more older copies of kcap turned up than setup can replace.");
+    }
+
+    abstract record Relink {
+        public sealed record Done : Relink;
+        public sealed record Changed : Relink;
+        public sealed record Refused(ClientRepairOutcome Outcome) : Relink;
+    }
+
+    /// The entry itself, not what it points at: device, inode, and modification and change times. Null when it
+    /// cannot be read, which includes an entry that is gone.
+    async Task<string?> IdentityAsync(string entry, CancellationToken ct) {
+        try {
+            var result = await runner.RunAsync(StatPath, [.. StatArgs, entry], new RunOptions(Timeout: TimeSpan.FromSeconds(5)), ct)
+                .ConfigureAwait(false);
+            return result is { ExitCode: 0, TimedOut: false } ? result.Stdout.Trim() : null;
+        } catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or IOException) {
+            return null;
+        }
     }
 
     static bool NpmOwned(string path) =>
@@ -68,48 +98,68 @@ public sealed class StaleClientRepair(
         }
     }
 
-    /// Null once <paramref name="link"/> runs this app's kcap.
-    async Task<ClientRepairOutcome?> RelinkAsync(string link, CancellationToken ct) {
-        if (appCli is null || !OneLine(appCli) || !OneLine(link))
-            return new ClientRepairOutcome.Failed(link, "this app has no kcap of its own to put there.");
+    /// Replaces <paramref name="link"/> only while it is still the entry <paramref name="found"/> describes: anything
+    /// that took its place in the meantime is someone else's and is looked at again.
+    async Task<Relink> RelinkAsync(string link, string found, CancellationToken ct) {
+        if (appCli is null || !OneLine(appCli) || !OneLine(link) || !OneLine(found))
+            return new Relink.Refused(new ClientRepairOutcome.Failed(link, "this app has no kcap of its own to put there."));
 
-        if (TryReplace(link, appCli)) return null;
+        switch (await TryReplaceAsync(link, appCli, found, ct).ConfigureAwait(false)) {
+            case true:  return new Relink.Done();
+            case false: return new Relink.Changed();
+        }
 
         ProcessResult result;
         try {
-            result = await runner.RunAsync(OsascriptPath, OsascriptArgs(appCli, link), new RunOptions(), ct).ConfigureAwait(false);
+            result = await runner.RunAsync(OsascriptPath, OsascriptArgs(appCli, link, found), new RunOptions(), ct).ConfigureAwait(false);
         } catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or IOException) {
-            return new ClientRepairOutcome.Failed(link, ex.Message);
+            return new Relink.Refused(new ClientRepairOutcome.Failed(link, ex.Message));
         }
 
-        if (result.ExitCode == 0) return null;
-        if (result.Stderr.Contains("(-128)", StringComparison.Ordinal)) return new ClientRepairOutcome.Cancelled(link);
+        if (result.ExitCode == 0) return new Relink.Done();
+        if (result.Stderr.Contains(EntryChanged, StringComparison.Ordinal)) return new Relink.Changed();
+        if (result.Stderr.Contains("(-128)", StringComparison.Ordinal)) return new Relink.Refused(new ClientRepairOutcome.Cancelled(link));
 
-        return new ClientRepairOutcome.Failed(link, string.IsNullOrWhiteSpace(result.Stderr) ? "osascript failed." : result.Stderr.Trim());
+        return new Relink.Refused(new ClientRepairOutcome.Failed(
+            link, string.IsNullOrWhiteSpace(result.Stderr) ? "osascript failed." : result.Stderr.Trim()));
     }
 
     /// A line break would desynchronise osascript's argv from the script reading it.
     static bool OneLine(string path) => !path.Contains('\n') && !path.Contains('\r');
 
     /// Without an administrator prompt, where the folder is this user's to write: a link made beside the old copy is
-    /// renamed over it, so PATH never goes without a kcap.
-    static bool TryReplace(string link, string target) {
+    /// renamed over it, so PATH never goes without a kcap. True when replaced, false when the entry changed, null
+    /// when the folder needs an administrator.
+    async Task<bool?> TryReplaceAsync(string link, string target, string found, CancellationToken ct) {
         var temp = Path.Combine(Path.GetDirectoryName(link)!, $".kcap-{Guid.NewGuid():N}");
         try {
             File.CreateSymbolicLink(temp, target);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            return null;
+        }
+
+        try {
+            if (await IdentityAsync(link, ct).ConfigureAwait(false) != found) return false;
             File.Move(temp, link, overwrite: true);
             return true;
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
-            try { File.Delete(temp); } catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException) { }
-            return false;
+            return null;
+        } finally {
+            try { File.Delete(temp); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }
     }
 
-    /// Both paths travel as argv and are read back through <c>quoted form</c>, never spliced into the script.
-    internal static string[] OsascriptArgs(string target, string link) => [
+    const string StatPath = "/usr/bin/stat";
+
+    /// BSD stat reads the entry with lstat unless told to follow it.
+    static readonly string[] StatArgs = ["-f", "%d:%i:%m:%c"];
+
+    /// The paths and the expected identity travel as argv and are read back through <c>quoted form</c>, never spliced
+    /// into the script. The identity is compared in the same privileged shell that replaces the entry.
+    internal static string[] OsascriptArgs(string target, string link, string found) => [
         "-e", "on run argv",
-        "-e", "do shell script \"ln -sfh \" & quoted form of item 1 of argv & \" \" & quoted form of item 2 of argv with administrator privileges",
+        "-e", "do shell script \"[ \\\"$(" + StatPath + " -f " + StatArgs[1] + " \" & quoted form of item 2 of argv & \")\\\" = \" & quoted form of item 3 of argv & \" ] || { echo " + EntryChanged + " >&2; exit 3; }; /bin/ln -sfh \" & quoted form of item 1 of argv & \" \" & quoted form of item 2 of argv with administrator privileges",
         "-e", "end run",
-        "--", target, link,
+        "--", target, link, found,
     ];
 }

@@ -10,10 +10,17 @@ namespace Capacitor.App.Tests.Unit;
 public class StaleClientRepairTests {
     [TempDir] public required TempDir Tmp { get; init; }
 
-    sealed class Runner(Func<string, string[], ProcessResult> answer) : IProcessRunner {
+    /// Answers <c>stat</c> with <paramref name="identity"/> and everything else with <paramref name="answer"/>; only the
+    /// latter is recorded in <see cref="Ran"/>.
+    sealed class Runner(Func<string, string[], ProcessResult> answer, Func<string>? identity = null) : IProcessRunner {
         public List<(string File, string[] Args)> Ran { get; } = [];
+        public int Stats { get; private set; }
 
         public Task<ProcessResult> RunAsync(string fileName, string[] args, RunOptions options, CancellationToken ct) {
+            if (fileName == "/usr/bin/stat") {
+                Stats++;
+                return Task.FromResult(new ProcessResult(0, (identity?.Invoke() ?? "1:2:3:4") + "\n", "", false));
+            }
             Ran.Add((fileName, args));
             return Task.FromResult(answer(fileName, args));
         }
@@ -81,7 +88,7 @@ public class StaleClientRepairTests {
             await Assert.That(outcome.GetType()).IsEqualTo(expected);
             await Assert.That(outcome).IsNotEqualTo(new ClientRepairOutcome.Clear());
             await Assert.That(runner.Ran.Single().File).IsEqualTo("/usr/bin/osascript");
-            await Assert.That(runner.Ran.Single().Args[^3..]).IsEquivalentTo(["--", app, stale]);
+            await Assert.That(runner.Ran.Single().Args[^4..]).IsEquivalentTo(["--", app, stale, "1:2:3:4"]);
         } finally {
             File.SetUnixFileMode(Tmp.PathTo("locked"), UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }
@@ -155,5 +162,39 @@ public class StaleClientRepairTests {
 
         await Assert.That(outcome).IsTypeOf<ClientRepairOutcome.Failed>();
         await Assert.That(((ClientRepairOutcome.Failed)outcome).Path).IsEqualTo(stale);
+    }
+
+    /// Whatever took the old copy's place while it was being probed is someone else's, so it is found again rather
+    /// than overwritten.
+    [Test]
+    public async Task An_entry_that_changed_before_it_could_be_replaced_is_left_alone() {
+        var app      = AppCli();
+        var stale    = Tmp.CreateExecutable("bin/kcap", "#!/bin/sh\nexit 0\n");
+        var stats    = 0;
+        var runner   = new Runner((_, _) => Ok, () => ++stats == 1 ? "1:2:3:4" : "1:9:9:9");
+        var copies   = new Copies(stale, app, () => stats >= 2);
+
+        var outcome = await Repair(runner, app, copies).RunAsync(CancellationToken.None);
+
+        await Assert.That(outcome).IsEqualTo(new ClientRepairOutcome.Clear());
+        await Assert.That(new FileInfo(stale).LinkTarget).IsNull();
+        await Assert.That(Directory.GetFiles(Tmp.PathTo("bin"))).IsEquivalentTo([stale]);
+    }
+
+    [Test]
+    public async Task An_entry_the_administrator_script_finds_changed_is_looked_at_again() {
+        var app    = AppCli();
+        var stale  = Tmp.CreateExecutable("locked/kcap", "#!/bin/sh\nexit 0\n");
+        var runner = new Runner((_, _) => new ProcessResult(1, "", "execution error: kcap-entry-changed (3)", false));
+        var copies = new Copies(stale, app, () => runner.Ran.Count > 0);
+        File.SetUnixFileMode(Tmp.PathTo("locked"), UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        try {
+            var outcome = await Repair(runner, app, copies).RunAsync(CancellationToken.None);
+
+            await Assert.That(outcome).IsEqualTo(new ClientRepairOutcome.Clear());
+            await Assert.That(runner.Ran.Count).IsEqualTo(1);
+        } finally {
+            File.SetUnixFileMode(Tmp.PathTo("locked"), UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
     }
 }
