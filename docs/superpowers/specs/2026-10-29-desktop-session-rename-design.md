@@ -156,15 +156,17 @@ remote header within seconds.
 
 The client's live path already exists: the hub's `AgentInstancesChanged` is a payload-free
 notification, and `RemoteAgentsService` throttles it and refetches `GET /api/agent-instances`.
-"Live" therefore means notification plus refetch, not a title-bearing hub event. That needs a
-`kcap-server` change:
+"Live" therefore means notification plus refetch, not a title-bearing hub event. The server
+already provides both halves, so no server change is needed:
 
-- `GET /api/agent-instances` carries each instance's current session title (a new nullable field on
-  `AgentInstanceDto`; older servers omit it and the client falls back to the prompt cut).
-- A session-title change on a session with a registered agent instance raises
-  `AgentInstancesChanged` for the clients that see that instance.
+- `GET /api/agent-instances` already returns a `title` per instance. The server's session projector
+  applies `SessionTitleLadder` and, when the shown title changes on a live event, syncs the agent
+  card (`AgentInstanceRegistry.UpdatePromptAsync`), so the field follows the session's current title.
+- That sync announces `AgentSignal.InstancesChanged`, which the hub sends to UI clients as
+  `AgentInstancesChanged`.
 
-The server change ships before the client depends on it.
+The client change is reading it: `AgentInstanceDto` gains a nullable `title` member, and
+`AgentRow.FromRemote` prefers it over the prompt cut. A server that omits it leaves the prompt cut.
 
 ## Who sees the pencil
 
@@ -173,8 +175,11 @@ Every session the user may rename:
 - Local daemon rows: shown only when all hold —
   - the daemon advertises the rename capability,
   - the daemon reports the app's own server (`IAgentDirectory.LocalDaemonOnAppServer`),
-  - the daemon is signed in as the app's signed-in user (the daemon reports its authenticated user
-    id alongside the capability; the app compares it with its own subject), and
+  - the daemon is signed in as the app's signed-in user: `DaemonInfoDto` gains a trailing nullable
+    `UserSubject` (the `sub` claim of the daemon's access token; null = older daemon or signed out,
+    both ineligible), compared with the app's own `sub`. The rename request also carries the app's
+    subject as `ExpectedUserSubject`, and the daemon refuses with `identity_mismatch` when its own
+    differs, so a re-login between snapshot and click cannot rename under another account, and
   - the agent is not private. A private agent's contract is "no per-agent server calls"
     (`SnapshotAgentsForTitles` drops its session id), so it cannot be renamed. The app cannot see
     privacy today, so `AgentStatusDto` gains a trailing nullable `IsPrivate`; `null` (an older
