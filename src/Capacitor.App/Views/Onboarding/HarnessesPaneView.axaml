@@ -62,7 +62,7 @@
 
                 <TextBlock Classes="onboardingBody" IsVisible="{Binding NoneFound}">
                     <Run Text="No harnesses were found on " /><Run Text="{Binding MachineName}" FontFamily="{StaticResource OnboardingMonoFont}"
-                        Foreground="{StaticResource OnboardingTextBrush}" /><Run Text=". Install a harness, then reopen setup from Help and support." />
+                        Foreground="{StaticResource OnboardingTextBrush}" /><Run Text="{x:Static vm:SetupLocation.NoneFoundTail}" />
                 </TextBlock>
 
                 <!-- The table: one row per detected harness, record and tools in fixed cells. -->
@@ -158,7 +158,7 @@
         </Border>
 
         <TextBlock Classes="onboardingNote" IsVisible="{Binding DeclineVisible}"
-                   Text="No new connections selected. Reopen setup from Help and support whenever you're ready." />
+                   Text="{x:Static vm:SetupLocation.NothingSelectedNote}" />
         <TextBlock Classes="onboardingNote" IsVisible="{Binding ConnectionsSaved}"
                    Text="{Binding SavedNote}" />
         <TextBlock Classes="onboardingNote" IsVisible="{Binding !DeclineVisible}">
