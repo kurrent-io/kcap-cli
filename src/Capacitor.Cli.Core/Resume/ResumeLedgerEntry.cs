@@ -29,6 +29,16 @@ public sealed record ResumeLedgerEntry(
     // runtime's own answers, null in an entry written before the runtime started or by an older daemon.
     bool? HasTerminal = null,
     string? TranscriptFormat = null,
+    // A flow participant's resume shape; null for an interactive agent.
+    ParticipantResume? Participant = null,
+    // The daemon epochs this agent was launched under and now runs under: an end from a process of an
+    // earlier run is not this run's end.
+    string? RunEpoch = null,
+    string? LaunchEpoch = null,
+    // Set by whatever committed this run's session end; a stamped run is never resumed.
+    DateTimeOffset? EndCommittedAt = null,
+    string? EndCommittedEpoch = null,
+    string? EndCommittedSession = null,
     // When the runtime now recorded started; each launch and each resume stamps its own, so a client can
     // tell the runtime it attached to from a successor. Null before the runtime starts.
     DateTimeOffset? StartedAt = null,
@@ -41,4 +51,5 @@ public sealed record ResumeLedgerEntry(
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower, UseStringEnumConverter = true)]
 [JsonSerializable(typeof(ResumeLedgerEntry))]
+[JsonSerializable(typeof(ParticipantResume))]
 public partial class ResumeLedgerJsonContext : JsonSerializerContext;

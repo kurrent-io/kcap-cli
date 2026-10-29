@@ -888,7 +888,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _attachmentFetcher = new AttachmentFetcher(
             httpClientFactory, _server.Credentials, logger);
         _pidRecords  = new AgentPidRecordStore(recordRoot, logger);
-        ResumeLedger = ResumeLedgerStore.For(config.Store, config.Name, time);
+        ResumeLedger      = ResumeLedgerStore.For(config.Store, config.Name, time);
+        ParticipantLedger = ResumeLedgerStore.ParticipantsFor(config.Store, config.Name, time);
         _failedLaunchLog = new FailedLaunchLog(recordRoot, time);
         _quarantine  = new AgentKillQuarantine(logger, time);
         _daemonId    = ComputeDaemonId(config.Name);
@@ -905,7 +906,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // a co-existing durable record's TRUSTED flow is routed through onRecordResolved by EmitAndClear.
         _markerCandidates = new MarkerCandidateStore(recordRoot, logger);
         _orphanReaper = new OrphanReaper(_pidRecords, _daemonId, _daemonEpoch, logger, time,
-            onRecordResolved: (a, e, fr, role) => _resolvedLedger?.Upsert(a, e, fr, role),
+            onRecordResolved: (a, e, fr, role) => {
+                // The server clears the flow role this evidence names, and a participant resumed under its own
+                // id still holds that role.
+                var resuming = ParticipantResumes(a);
+                _resolvedLedger?.Upsert(a, e, resuming ? null : fr, resuming ? null : role);
+            },
             markerStore: _markerCandidates,
             onMarkerResolved: (a, e) => _resolvedLedger?.Upsert(a, e, null, null));
 
@@ -973,11 +979,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // can't diverge from it even if config.DaemonEpoch were left unpinned (tests).
         _server.GetDaemonEpoch         =  () => _daemonEpoch;
 
-        _server.GetLiveAgentIds = () => [
-            .. _agents
-                .Where(kvp => (kvp.Value.Status is "Starting" or "Running") && !kvp.Value.IsServerSilent)
-                .Select(kvp => kvp.Key)
-        ];
+        _server.GetLiveAgentIds = LiveAgentIds;
+        _server.GetRecoverySnapshot = TakeRecoverySnapshot;
 
         // Phase B (D2): richer live-agent metadata (kind + flow identity) alongside the ids.
         _server.GetLiveAgents = () => [.. BuildLiveAgents()];
@@ -1041,7 +1044,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
      && (_agents.ContainsKey(agentId)
       || (_pidRecords?.Exists(agentId) ?? false)
       || _resumeCandidates.ContainsKey(agentId)
-      || (ResumeLedger is { } ledger && File.Exists(ledger.EntryPath(agentId))));
+      || (StoreFor(agentId) is { } ledger && File.Exists(ledger.EntryPath(agentId))));
 
     /// <summary>§3.3: snapshot the processor and, when it is still null, RESERVE the inline slot in the SAME
     /// critical section publication uses. Returns null to mean "run inline, then call
@@ -1466,8 +1469,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// kill-quarantine). Pure; the send loop + tests share it.</summary>
     internal DaemonStatusReport BuildStatusReport(string? echoNonce = null) {
         var (activeCount, activeCountVersion) = ActiveCountSnapshot();
+        var recovery = TakeRecoverySnapshot();
 
-        return new(activeCount, [.. BuildLiveAgents()], [.. QuarantineSnapshot()],
+        return new(activeCount, recovery.LiveAgents, [.. QuarantineSnapshot()],
             // Phase B2-b (sequenced-settlement design §4.2.4): re-advertise the durable resolved-
             // candidates ledger on every self-report until the server prunes it per-entry via
             // AckResolvedCandidates. Epoch is the shipped per-boot _daemonEpoch.
@@ -1482,7 +1486,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // blocked known-id set so a completion-false report carries its reason; StartupDiscovery
             // surfaces the recordless-survivor marker-scan state (Pending/Complete/Failed on Linux,
             // NotApplicable off it). Additive/inert until the paired server PR consumes them.
-            StartupReapComplete: ComputeStartupReapComplete(),
+            StartupReapComplete: recovery.StartupReapComplete,
             ResolvedStartupCandidates: [.. _resolvedLedger?.Snapshot() ?? []],
             UnresolvedStartupCandidates: [.. _orphanReaper?.BlockedCandidates() ?? []],
             StartupDiscovery: _orphanReaper?.CurrentDiscovery,
@@ -1494,7 +1498,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             HarnessInventory: CurrentHarnessInventory(),
             EchoNonce: echoNonce,
             ActiveCountVersion: activeCountVersion,
-            ResumingAgents: ResumingClaims());
+            ResumingAgents: recovery.Claims);
+    }
+
+    string[] LiveAgentIds() => [
+        .. _agents
+            .Where(kvp => (kvp.Value.Status is "Starting" or "Running") && !kvp.Value.IsServerSilent)
+            .Select(kvp => kvp.Key)
+    ];
+
+    /// <summary>Under the ledger lock a resume publishes and its candidate settles under.</summary>
+    internal RecoverySnapshot TakeRecoverySnapshot() {
+        lock (_ledgerLock) return new([.. LiveAgentIds()], [.. BuildLiveAgents()], ResumingClaims(), ComputeStartupReapComplete());
     }
 
     /// <summary>Phase B2-b (sequenced-settlement design): the per-platform startup-reap-complete
@@ -1512,6 +1527,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// signal).</item>
     /// </list></summary>
     internal bool ComputeStartupReapComplete() {
+        if (ParticipantRecoveryPending()) return false;
+
         var blocked = _orphanReaper?.BlockedCandidates().Count ?? 0;
         if (blocked > 0) return false;
         if (OperatingSystem.IsLinux())
@@ -1847,6 +1864,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <summary>Test seams (this daemon's PID-record store) so a unit test can seed/inspect records
     /// without a real launch. Never used in production.</summary>
     internal void WritePidRecordForTest(AgentPidRecord record)     => _pidRecords?.Write(record);
+    internal void DeletePidRecordForTest(string agentId)           => DeletePidRecord(agentId);
     internal IReadOnlyList<AgentPidRecord> PidRecordsForTest()      => _pidRecords?.ReadAll() ?? [];
 
     /// <summary>Test-only: the per-daemon record root, so a test can build the store a NEXT BOOT would
@@ -2262,8 +2280,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <see cref="SendStatusReportNowAsync"/>. EVERY launch path must route through here — a path that
     /// builds its own clock silently loses the stage-report wiring. Shared with
     /// <see cref="SeedAgentForTest"/> so tests exercise the same wiring, never a test-only hookup.</summary>
-    AgentActivityClock CreateActivityClock() =>
-        new(_time) {
+    AgentActivityClock CreateActivityClock(ulong initialSeq = 1, ulong priorAgeMs = 0) =>
+        new(_time, initialSeq, priorAgeMs) {
             OnLaunchStageChanged   = () => { _statusNotifier.Pulse(); _ = SendStatusReportNowAsync(); },
             OnTurnEnded            = () => _ = SendStatusReportNowAsync(),
             // The flag rides the local status payload; the clock already holds the new value when
@@ -2687,7 +2705,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // Created here, ahead of the reviewer-token mint and the AgentInstance that will own it, so the
         // SAME instance reaches the permission-bridge grant, the ACP runtime and the AgentInstance —
         // one clock per launch, never three.
-        var activityClock = CreateActivityClock();
+        var activityClock = resume?.Entry.Participant is { } participant
+            ? CreateActivityClock(participant.ActivitySeq + 1, participant.AgeMs)
+            : CreateActivityClock();
 
         CapacityReservation? capacity = null;
 
@@ -4724,6 +4744,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     }
 
     async Task HandleSendInput(SendInputCommand cmd) {
+        switch (TryHoldForResume(cmd)) {
+            case true:
+                return;
+            case false:
+                await ReportInputDroppedAsync(cmd, SendInputDropReason.QueueFull);
+                return;
+        }
+
+        await DeliverSendInputAsync(cmd);
+    }
+
+    async Task DeliverSendInputAsync(SendInputCommand cmd) {
         var (agentId, text, attachmentIds, dispatchId) = cmd;
 
         if (!_agents.TryGetValue(agentId, out var agent)) {
@@ -4945,6 +4977,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // output/ACP envelopes/turn transitions); a refused or failed write above skips it.
                 agent.ActivityClock.Advance();
                 agent.ActivityClock.ClearAwaitingInputSince(waitGeneration);
+                RecordRoundInput(agent, message);
 
                 // One report per successfully handled invocation (SendInputCommand carries no round
                 // identity, so a duplicate is tolerated and content-honest); fire-and-forget, contained,
@@ -6042,6 +6075,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // touches a current-incarnation live agent), env-marker scan reaps a prior incarnation's
             // recordless survivors. Fire-and-forget; single-flight; swallows its own faults.
             _ = ReapOrphansOnceAsync(ct);
+            _ = SweepParticipantTombstonesAsync();
 
             // Selection is a snapshot; the DECISION is the claim each of these makes under the agent's
             // own fence (TryClaimReapAsync), which re-validates incarnation and — for the idle/wedge

@@ -592,4 +592,18 @@ public class LocalPermissionBridgeActivityWiringTests {
             await bridge.DisposeAsync();
         }
     }
+
+    /// <summary>A resumed participant's clock continues its predecessor's: the server latches an agent
+    /// whose sequence goes backwards, and the lifetime backstop counts the whole run.</summary>
+    [Test]
+    public async Task A_seeded_clock_starts_above_the_sequence_and_carries_the_prior_age() {
+        var time  = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var clock = new AgentActivityClock(time, initialSeq: 42, priorAgeMs: 90_000);
+
+        time.Advance(TimeSpan.FromSeconds(1));
+
+        await Assert.That(clock.ActivitySeq).IsEqualTo(42UL);
+        await Assert.That(clock.AgeMs).IsEqualTo(91_000UL);
+        await Assert.That(clock.Snapshot().AgeMs).IsEqualTo(91_000UL);
+    }
 }

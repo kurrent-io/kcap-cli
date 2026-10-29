@@ -56,6 +56,10 @@ internal interface IHostedAgentLauncher {
     /// <summary>Whether <see cref="BuildArgs"/> resumes the vendor session a restart resume names.</summary>
     bool SupportsResume => false;
 
+    /// <summary>Whether a reviewer launched by this launcher in an owned worktree reopens its session
+    /// across a daemon restart. Declared only once a live probe of the reviewer shape has passed.</summary>
+    bool SupportsReviewerResume => false;
+
     string? BorrowedReviewContainment => null;
 
     /// <summary>

@@ -215,6 +215,24 @@ public class AgentOrchestratorResumeOnBootTests {
         await Assert.That(f.Orch.ResumingClaims()).IsEmpty();
     }
 
+    /// <summary>A resumed run is a new run: its epoch replaces the predecessor's, and no end committed for
+    /// the predecessor's run carries over.</summary>
+    [Test]
+    public async Task A_resumed_entry_records_its_own_epoch_and_no_committed_end() {
+        var f = Build();
+        await using var _ = f.Orch;
+        var entry = Entry(f, "resume-epoch");
+        f.Orch.ResumeLedger!.Write(entry with { RunEpoch = "epoch-old", LaunchEpoch = "epoch-old" });
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        var after = f.Orch.ResumeLedger!.TryRead("resume-epoch")!;
+        await Assert.That(after.RunEpoch).IsEqualTo(f.Orch.DaemonEpochForTest);
+        await Assert.That(after.LaunchEpoch).IsEqualTo("epoch-old");
+        await Assert.That(after.EndCommittedAt).IsNull();
+    }
+
     /// <summary>A start title cut from the prompt stays a placeholder on resume: re-registered as the caller's,
     /// it would outrank the title the session has since been given.</summary>
     [Test]

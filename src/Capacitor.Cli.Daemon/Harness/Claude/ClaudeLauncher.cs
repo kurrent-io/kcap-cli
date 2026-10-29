@@ -107,6 +107,8 @@ internal sealed partial class ClaudeLauncher(
 
     public bool SupportsResume => true;
 
+    public bool SupportsReviewerResume => true;
+
     public LaunchArgs BuildArgs(LauncherContext ctx) {
         var args = new List<string>();
         string? mcpConfigPath = null;

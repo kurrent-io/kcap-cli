@@ -288,7 +288,8 @@ public static partial class DaemonRunner {
             return LockRefusalExit(IsSupervised(config.Name));
         }
 
-        config.InstanceId = daemonLock.InstanceId;
+        config.InstanceId      = daemonLock.InstanceId;
+        config.PriorInstanceId = daemonLock.PriorInstanceId;
         StartupPhase(time, "lock acquired");
 
         // File when detached, console when foreground. After the lock: Windows opens the log file

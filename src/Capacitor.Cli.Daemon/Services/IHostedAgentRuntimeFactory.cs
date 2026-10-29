@@ -123,6 +123,11 @@ internal interface IHostedAgentRuntimeFactory {
     /// probe has passed for the vendor and transport.</summary>
     bool SupportsRestartResume(string? runtimeTransport) => false;
 
+    /// <summary>Whether a flow-participant launch of this shape reopens its session across a daemon
+    /// restart: the reviewer shape (its MCP config, HOME, snapshot) is not the interactive one. Declared
+    /// only once a live probe of that exact shape has passed.</summary>
+    bool SupportsReviewerRestartResume(string? runtimeTransport, WorkLocation work) => false;
+
     /// <summary>Whether a restart resume of an agent that was waiting for input can start with no prompt at all.
     /// Only a runtime that judges the resume by its process, not by a first turn, may say so.</summary>
     bool ResumesIdleWithoutPrompt(string? runtimeTransport) => false;
