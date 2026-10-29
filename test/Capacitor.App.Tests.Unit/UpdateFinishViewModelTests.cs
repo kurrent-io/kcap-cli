@@ -66,7 +66,7 @@ public class UpdateFinishViewModelTests {
             null, null))!;
         var notStarted = UpdateFinishViewModel.LocalStep(new LocalStepInput(false, null, null, null))!;
 
-        await Assert.That(upgraded is { Title: "Local server 1.4.1", Detail: null, State: UpdateStepState.Done }).IsTrue();
+        await Assert.That(upgraded is { Title: "Local server 1.4.1", Detail: "Upgraded", State: UpdateStepState.Done }).IsTrue();
         await Assert.That(notPublished.State).IsEqualTo(UpdateStepState.Note);
         await Assert.That(notPublished.Detail).IsEqualTo("1.4.1 is not available yet. Staying on 1.4.0");
         await Assert.That(failed.State).IsEqualTo(UpdateStepState.Problem);
@@ -106,7 +106,7 @@ public class UpdateFinishViewModelTests {
 
         await Assert.That(done is { Settled: true, Clean: true }).IsTrue();
         await Assert.That(done.Steps.Select(step => step.Title).SequenceEqual(["kcap 1.4.1", "Local server", "Daemon 1.4.1"])).IsTrue();
-        await Assert.That(done.Steps.All(step => step.Detail is null)).IsTrue();
+        await Assert.That(done.Steps.Select(step => step.Detail).SequenceEqual(["Installed", "Up to date", "Running"])).IsTrue();
         await Assert.That(noted is { Settled: true, Clean: false }).IsTrue();
         await Assert.That(busy.Settled).IsFalse();
     }

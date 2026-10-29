@@ -164,7 +164,7 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
     internal static (IReadOnlyList<UpdateStep> Steps, bool Settled, bool Clean) Project(
             AppUpdateTransition transition, AttachStatus status, string? daemonVersion, string? connection, bool restartPending,
             LocalStepInput? local, bool waitedLong = false) {
-        var steps = new List<UpdateStep> { new($"kcap {Display(transition.To)}", null, UpdateStepState.Done) };
+        var steps = new List<UpdateStep> { new($"kcap {Display(transition.To)}", "Installed", UpdateStepState.Done) };
         if (LocalStep(local) is { } localStep) steps.Add(localStep);
         steps.Add(DaemonStep(status, daemonVersion, connection, restartPending, transition.To, waitedLong));
         var settled = steps.All(step => step.State is not (UpdateStepState.Running or UpdateStepState.Pending));
@@ -181,7 +181,7 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
         var current = known && SameVersion(daemonVersion!, appVersion);
         var newer = known && PrereleaseSemver.IsNewer(Display(daemonVersion!), app);
         return status switch {
-            { State: AttachState.Connected } when current && connection == ServerConnected => new($"{title} {app}", null, UpdateStepState.Done),
+            { State: AttachState.Connected } when current && connection == ServerConnected => new($"{title} {app}", "Running", UpdateStepState.Done),
             { State: AttachState.Connected } when current && waitedLong => new($"{title} {app}", "Not connected to the server yet", UpdateStepState.Note),
             { State: AttachState.Connected } when current => new($"{title} {app}", "Connecting to the server", UpdateStepState.Running),
             { State: AttachState.Connected } when newer => new(title, $"Running {Display(daemonVersion!)}, newer than this app", UpdateStepState.Note),
@@ -221,8 +221,9 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
             return new(heading, detail, UpdateStepState.Running, trailing, hint);
         }
         return local.Outcome switch {
-            LocalUpgradeOutcome.Upgraded { To: { } to } => new($"{title} {to}", null, UpdateStepState.Done),
-            LocalUpgradeOutcome.Upgraded or LocalUpgradeOutcome.NothingToDo => new(title, null, UpdateStepState.Done),
+            LocalUpgradeOutcome.Upgraded { To: { } to } => new($"{title} {to}", "Upgraded", UpdateStepState.Done),
+            LocalUpgradeOutcome.Upgraded => new(title, "Upgraded", UpdateStepState.Done),
+            LocalUpgradeOutcome.NothingToDo => new(title, "Up to date", UpdateStepState.Done),
             LocalUpgradeOutcome.NotPublished => new(title, (local.To, local.From) switch {
                 ({ } to, { } from) => $"{to} is not available yet. Staying on {from}",
                 ({ } to, _) => $"{to} is not available yet",
