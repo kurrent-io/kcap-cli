@@ -188,6 +188,9 @@ sealed class ScriptedLocalControlOps : ILocalControlOps {
         return tcs.Task.WaitAsync(ct);
     }
 
+    public Task<SessionRenameAckDto> RenameSessionAsync(SessionRenameDto rename, CancellationToken ct) =>
+        throw new InvalidOperationException("ScriptedLocalControlOps: unscripted RenameSession call");
+
     public Task<DaemonSettingsAckDto> PutDaemonSettingsAsync(DaemonSettingsPutDto put, CancellationToken ct) {
         Interlocked.Increment(ref PutSettingsCalls);
         PutSettingsPayloads.Add(put);

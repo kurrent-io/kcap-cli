@@ -27,6 +27,8 @@ public interface ILocalControlOps {
     Task<SendTextResult>   SendTextAsync(string agentId, string text, CancellationToken ct);
     Task<SendTextResult>   SendTextWithAttachmentsAsync(string agentId, string text, IReadOnlyList<string> attachmentIds, CancellationToken ct);
     Task<DaemonSettingsAckDto> PutDaemonSettingsAsync(DaemonSettingsPutDto put, CancellationToken ct);
+    /// Transport failure is returned as Ok=false with SessionRenameReasons.Transport, never thrown.
+    Task<SessionRenameAckDto> RenameSessionAsync(SessionRenameDto rename, CancellationToken ct);
 }
 
 /// One-shot Core IPC operations behind a fresh socket per call — no Hello negotiation (callers
@@ -183,6 +185,24 @@ public sealed class LocalControlOps(DaemonStore store, string daemonName, TimePr
                 throw new LocalControlOpsException(DaemonRejected, reply.Text);
             default:
                 throw new LocalControlOpsException(UnexpectedReply, $"unexpected daemon response to daemon settings put ({reply.Type})");
+        }
+    }
+
+    public async Task<SessionRenameAckDto> RenameSessionAsync(SessionRenameDto rename, CancellationToken ct) {
+        var json = JsonSerializer.Serialize(rename, RenameIpcJsonContext.Default.SessionRenameDto);
+        LocalFrame reply;
+        try {
+            reply = await ExchangeAsync(LocalFrame.RenameJson(FrameType.SessionRename, json), ReplyTimeout, ct);
+        } catch (LocalControlOpsException) {
+            return new SessionRenameAckDto(false, SessionRenameReasons.Transport, null);
+        }
+        if (reply.Type != FrameType.SessionRenameAck)
+            return new SessionRenameAckDto(false, SessionRenameReasons.Transport, null);
+        try {
+            return JsonSerializer.Deserialize(reply.Text, RenameIpcJsonContext.Default.SessionRenameAckDto)
+                ?? new SessionRenameAckDto(false, SessionRenameReasons.Transport, null);
+        } catch (JsonException) {
+            return new SessionRenameAckDto(false, SessionRenameReasons.Transport, null);
         }
     }
 

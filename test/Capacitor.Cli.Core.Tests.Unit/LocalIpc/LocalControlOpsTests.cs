@@ -79,6 +79,13 @@ public class LocalControlOpsTests {
             await FrameCodec.WriteAsync(s, LocalFrame.SettingsJson(FrameType.DaemonSettingsAck, json), ct);
         }
     };
+    static ConnScript RenameAckThen(string json, Action<string>? capture = null) => async (_, s, ct) => {
+        var f = await FrameCodec.ReadAsync(s, ct);
+        if (f?.Type == FrameType.SessionRename) {
+            capture?.Invoke(f.Text);
+            await FrameCodec.WriteAsync(s, LocalFrame.RenameJson(FrameType.SessionRenameAck, json), ct);
+        }
+    };
     static ConnScript ConsentResolveV2Ack(string json) => async (_, s, ct) => {
         var f = await FrameCodec.ReadAsync(s, ct);                       // expect ConsentResolveV2
         if (f?.Type == FrameType.ConsentResolveV2)
@@ -408,6 +415,31 @@ public class LocalControlOpsTests {
             var ex = await Assert.ThrowsAsync<LocalControlOpsException>(
                 async () => await ops.PutDaemonSettingsAsync(new DaemonSettingsPutDto(3), CancellationToken.None));
             await Assert.That(ex!.Reason).IsEqualTo("daemon_rejected");
+        });
+    }
+
+    // ---- RenameSessionAsync ----
+
+    [Test]
+    public async Task RenameSessionAsync_returns_the_daemon_ack() {
+        if (OperatingSystem.IsWindows()) return;
+
+        string? sent = null;
+        await WithOpsAsync([RenameAckThen("""{"ok":false,"reason":"not_owned","title":"Server title"}""", t => sent = t)], async ops => {
+            var ack = await ops.RenameSessionAsync(new SessionRenameDto("a", "T", "u"), CancellationToken.None);
+            await Assert.That(ack).IsEqualTo(new SessionRenameAckDto(false, SessionRenameReasons.NotOwned, "Server title"));
+        });
+        await Assert.That(sent).IsEqualTo("""{"agent_id":"a","title":"T","expected_user_subject":"u"}""");
+    }
+
+    [Test]
+    public async Task RenameSessionAsync_maps_a_dropped_socket_to_transport() {
+        if (OperatingSystem.IsWindows()) return;
+
+        await WithOpsAsync([async (_, s, ct) => { await FrameCodec.ReadAsync(s, ct); }], async ops => {
+            var ack = await ops.RenameSessionAsync(new SessionRenameDto("a", "T", null), CancellationToken.None);
+            await Assert.That(ack.Ok).IsFalse();
+            await Assert.That(ack.Reason).IsEqualTo(SessionRenameReasons.Transport);
         });
     }
 

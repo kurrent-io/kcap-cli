@@ -27,7 +27,10 @@ public sealed record DaemonInfoDto(
     // Vendor tokens this daemon can host, from the runtime factories' own availability probe —
     // the same set advertised to the server on DaemonConnect. Trailing/additive: null from a
     // daemon that predates it, which a client must read as UNKNOWN, never as "hosts nothing".
-    string[]? SupportedVendors = null);
+    string[]? SupportedVendors = null,
+    // The signed-in account's stable subject, echoed back in a rename so the daemon can refuse
+    // when the client was looking at another account. Null = older daemon or signed out.
+    string? UserSubject = null);
 
 /// <summary>
 /// <see cref="Status"/> is the daemon's internal status string VERBATIM (PascalCase, open
@@ -82,7 +85,9 @@ public sealed record AgentStatusDto(
     // Which reader a client uses for TranscriptPath: TranscriptFormats.Vendor for a PTY runtime's own
     // file, TranscriptFormats.Envelopes for the daemon-written envelope journal. Always emitted by a
     // current daemon, so null means an older daemon and nothing else.
-    string? TranscriptFormat = null);
+    string? TranscriptFormat = null,
+    // The session is hidden from everyone but its owner. Null = older daemon, unknown.
+    bool? IsPrivate = null);
 
 /// Wire tokens for <see cref="AgentStatusDto.WorkLocation"/>, compared literally by every
 /// client, so they never change.

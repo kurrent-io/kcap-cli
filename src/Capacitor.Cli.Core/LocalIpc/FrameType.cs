@@ -34,6 +34,8 @@ public enum FrameType : byte {
     DaemonSettingsPut = 23, // Text = DaemonSettingsPutDto JSON
     // Composer input with attachments — one-shot; acked on SendTextAck when the delivery settles.
     SendTextWithAttachments = 24, // Text = SendTextWithAttachmentsDto JSON
+    // Session rename — one-shot; acked on SessionRenameAck.
+    SessionRename = 25, // Text = SessionRenameDto JSON
     // daemon → client
     Attached  = 64,
     Stdout    = 65,
@@ -54,4 +56,5 @@ public enum FrameType : byte {
     PermissionAck      = 79, // Text = PermissionAckDto JSON, reply to PermissionResolve
     SendTextAck = 80, // Text = SendTextAckDto JSON, reply to SendText
     DaemonSettingsAck = 81, // Text = DaemonSettingsAckDto JSON, reply to DaemonSettingsPut
+    SessionRenameAck = 82, // Text = SessionRenameAckDto JSON, reply to SessionRename
 }
