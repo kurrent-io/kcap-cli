@@ -21,23 +21,43 @@ public class TitleResolveLoopTests {
         public string? Committed { get; private set; }
         public List<(string SessionId, string Title)> Pushed { get; } = [];
         public bool PushResult { get; set; } = true;
+        /// One-shot pause points: the next read (or push) signals the gate and waits for its release.
+        public Gate? GetGate { get; set; }
+        public Gate? PushGate { get; set; }
 
-        public Task<string?> GetTitleAsync(string sessionId, CancellationToken ct) =>
-            Task.FromResult(Get is not null ? Get(sessionId) : Committed);
+        public async Task<string?> GetTitleAsync(string sessionId, CancellationToken ct) {
+            if (GetGate is { } gate) { GetGate = null; await gate.PassAsync(); }
+            return Get is not null ? Get(sessionId) : Committed;
+        }
 
-        public Task<bool> PushTitleAsync(string sessionId, string title, CancellationToken ct) {
+        public async Task<bool> PushTitleAsync(string sessionId, string title, CancellationToken ct) {
+            if (PushGate is { } gate) { PushGate = null; await gate.PassAsync(); }
             Pushed.Add((sessionId, title));
             if (PushResult) Committed = title;
-            return Task.FromResult(PushResult);
+            return PushResult;
         }
 
         public Task<TitleRenameOutcome> RenameAsync(string sessionId, string title, CancellationToken ct) =>
             Task.FromResult(new TitleRenameOutcome(true, title, null));
     }
 
+    sealed class Gate {
+        readonly TaskCompletionSource _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        readonly TaskCompletionSource _released = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Entered => _entered.Task;
+        public void Release() => _released.TrySetResult();
+
+        public Task PassAsync() {
+            _entered.TrySetResult();
+            return _released.Task;
+        }
+    }
+
     sealed class Harness {
         public List<TitleAgentView> Agents { get; } = [];
-        public List<(string AgentId, string Title)> Applied { get; } = [];
+        readonly List<(string AgentId, string Title)> _applied = [];
+        public List<(string AgentId, string Title)> Applied { get { lock (_applied) return [.. _applied]; } }
         public FakeServerPort Server { get; } = new();
         public Func<TitleAgentView, string?> Native { get; set; } = _ => null;
         public Func<TitleAgentView, CancellationToken, Task<string?>> Generate { get; set; } =
@@ -47,7 +67,7 @@ public class TitleResolveLoopTests {
 
         public TitleResolveLoop Build() => new(
             () => Agents,
-            (id, title) => Applied.Add((id, title)),
+            (id, title) => { lock (_applied) _applied.Add((id, title)); },
             Server,
             a => Native(a),
             (a, ct) => { Interlocked.Increment(ref GenerateCalls); return Generate(a, ct); },
@@ -452,5 +472,108 @@ public class TitleResolveLoopTests {
 
         // Fresh state after re-appearance: the title is applied (and pushed) again.
         await Assert.That(h.Applied.Count).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task Rename_during_a_paused_server_read_is_not_reverted() {
+        var h = new Harness();
+        h.Agents.Add(Agent());
+        h.Server.Get = _ => "Old";
+        var gate = new Gate();
+        h.Server.GetGate = gate;
+        var loop = h.Build();
+
+        var tick = loop.TickAsync(CancellationToken.None);
+        await gate.Entered;
+        loop.ApplyRename("a1", "New");
+        gate.Release();
+        await tick;
+
+        await Assert.That(h.Applied.Select(a => a.Title)).IsEquivalentTo(["New"]);
+    }
+
+    [Test]
+    public async Task Rename_during_a_paused_push_is_not_reverted() {
+        var h = new Harness();
+        h.Agents.Add(Agent());
+        h.Native = _ => "Native title";
+        var gate = new Gate();
+        h.Server.PushGate = gate;
+        var loop = h.Build();
+
+        var tick = loop.TickAsync(CancellationToken.None);
+        await gate.Entered;
+        loop.ApplyRename("a1", "New");
+        gate.Release();
+        await tick;
+        // The paused push committed after the rename; reading it back must not displace the rename.
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(h.Applied.Select(a => a.Title)).IsEquivalentTo(["Native title", "New"]);
+        await Assert.That(h.Server.Pushed.Select(p => p.Title)).IsEquivalentTo(["Native title"]);
+    }
+
+    [Test]
+    public async Task Rename_matching_the_prompt_first_line_sticks() {
+        var h = new Harness();
+        h.Agents.Add(Agent(prompt: "Fix the bug"));
+        h.Server.Get = _ => "Fix the bug";
+        h.Generate = (_, _) => Task.FromResult<string?>("Generated title");
+        h.Time.Advance(TimeSpan.FromMinutes(30));
+        var loop = h.Build();
+
+        loop.ApplyRename("a1", "Fix the bug");
+        await loop.TickAsync(CancellationToken.None);
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(h.Applied.Select(a => a.Title)).IsEquivalentTo(["Fix the bug"]);
+        await Assert.That(h.GenerateCalls).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Rename_matching_an_earlier_push_sticks() {
+        var h = new Harness();
+        h.Agents.Add(Agent());
+        var native = "Native A";
+        h.Native = _ => native;
+        var loop = h.Build();
+
+        await loop.TickAsync(CancellationToken.None);
+        loop.ApplyRename("a1", "Native A");
+        native = "Native B";
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(h.Applied.Last().Title).IsEqualTo("Native A");
+        await Assert.That(h.Server.Pushed.Select(p => p.Title)).IsEquivalentTo(["Native A"]);
+    }
+
+    [Test]
+    public async Task A_rename_is_never_displaced_by_a_local_title_while_the_server_is_silent() {
+        var h = new Harness();
+        h.Agents.Add(Agent());
+        h.Native = _ => "Native title";
+        h.Server.Get = _ => null;
+        var loop = h.Build();
+
+        loop.ApplyRename("a1", "New");
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(h.Applied.Select(a => a.Title)).IsEquivalentTo(["New"]);
+        await Assert.That(h.Server.Pushed).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_newer_server_title_replaces_a_rename() {
+        var h = new Harness();
+        h.Agents.Add(Agent());
+        h.Server.Get = _ => "New";
+        var loop = h.Build();
+
+        loop.ApplyRename("a1", "New");
+        await loop.TickAsync(CancellationToken.None);
+        h.Server.Get = _ => "Newer";
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(h.Applied.Select(a => a.Title)).IsEquivalentTo(["New", "Newer"]);
     }
 }
