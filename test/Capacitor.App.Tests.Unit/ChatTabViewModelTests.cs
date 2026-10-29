@@ -1006,7 +1006,8 @@ public class ChatTabViewModelTests {
         });
     }
 
-    /// Claude Code stores its compaction summary as a user record; the row must not read as the user's.
+    /// Claude Code stores its compaction summary as a user record; the row must not read as the user's,
+    /// and it starts folded because it restates the conversation above it.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_compaction_summary_renders_as_a_conversation_compacted_note() {
@@ -1020,6 +1021,13 @@ public class ChatTabViewModelTests {
             var note = (SystemNoteItem)h.Chat.Items.Single();
             await Assert.That(note.Label).IsEqualTo(SystemNoteItem.CompactSummaryLabel);
             await Assert.That(note.Text).IsEqualTo("This session is being continued from a previous conversation.");
+            await Assert.That(note.IsExpanded).IsFalse();
+            await Assert.That(note.ToggleAccessibleName).IsEqualTo("Expand Conversation compacted");
+            note.Toggle();
+            await Assert.That(note.IsExpanded).IsTrue();
+            await Assert.That(note.ToggleAccessibleName).IsEqualTo("Collapse Conversation compacted");
+            note.Toggle();
+            await Assert.That(note.IsExpanded).IsFalse();
             await h.TeardownAsync();
         });
     }
@@ -1039,6 +1047,9 @@ public class ChatTabViewModelTests {
             await Assert.That(note.Label).IsEqualTo(SystemNoteItem.AgentReportLabel);
             await Assert.That(note.IconKind).IsEqualTo(Lucide.Avalonia.LucideIconKind.BotMessageSquare);
             await Assert.That(note.Text).IsEqualTo("**Done.**");
+            await Assert.That(note.IsExpanded).IsTrue();
+            note.Toggle();
+            await Assert.That(note.IsExpanded).IsTrue();
             await h.TeardownAsync();
         });
     }

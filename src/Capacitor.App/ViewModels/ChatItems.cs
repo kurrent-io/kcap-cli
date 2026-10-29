@@ -72,15 +72,45 @@ public sealed class AssistantThinkingItem : ChatItemViewModel {
 
 /// System-attributed text — a finished background task, a reconnect note, another agent's message
 /// — never the user's speech.
-public sealed class SystemNoteItem(string text, string label = SystemNoteItem.NoteLabel) : ChatItemViewModel {
+public sealed class SystemNoteItem : ChatItemViewModel {
     public const string NoteLabel = "Note";
     public const string AgentReportLabel = "Subagent report";
     public const string AgentMessageLabel = "Agent message";
     public const string CompactSummaryLabel = "Conversation compacted";
 
-    public string Text { get; } = text;
-    public string Label { get; } = label;
+    bool _isExpanded;
+
+    public SystemNoteItem(string text, string label = NoteLabel) {
+        Text = text;
+        Label = label;
+        // A compaction summary restates the whole conversation above it, so it starts folded.
+        IsCollapsible = label == CompactSummaryLabel;
+        _isExpanded = !IsCollapsible;
+        ToggleCommand = ReactiveCommand.Create(Toggle);
+    }
+
+    public string Text { get; }
+    public string Label { get; }
     public LucideIconKind IconKind => ToolCategoryIcons.ForFixedLabel(Label) ?? ToolCategoryIcons.NoteIcon;
+    public bool IsCollapsible { get; }
+
+    public bool IsExpanded {
+        get => _isExpanded;
+        private set {
+            if (_isExpanded == value) return;
+            _isExpanded = value;
+            this.RaisePropertyChanged();
+            this.RaisePropertyChanged(nameof(ToggleAccessibleName));
+        }
+    }
+
+    public string ToggleAccessibleName => $"{(IsExpanded ? "Collapse" : "Expand")} {Label}";
+
+    public ReactiveCommand<Unit, Unit> ToggleCommand { get; }
+
+    public void Toggle() {
+        if (IsCollapsible) IsExpanded = !IsExpanded;
+    }
 }
 
 /// A bang command the user ran, and the output record that follows it. The output arrives later,
