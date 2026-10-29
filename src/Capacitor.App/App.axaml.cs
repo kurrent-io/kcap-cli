@@ -1317,7 +1317,7 @@ public partial class App : Application {
         var shimInstaller = CliPathInstallers.Create(runner, probe, _userHome);
         var shimTarget = ShimTargetFor(cli.CliPath, Program.Host.CliOutlivesApp);
         return new HarnessesSettingsViewModel(settings, cli,
-            HarnessesStepViewModel.BuildDetectionFeed(probe, _userHome), _shutdown.Token,
+            HarnessesStepViewModel.BuildDetectionFeed(probe, harnesses), _shutdown.Token,
             id => harnesses[id].Signals.IsWired,
             toolsMemory: _appState,
             ensureTerminalCommand: shimInstaller is null ? null : async ct => {
@@ -1597,7 +1597,7 @@ public partial class App : Application {
             ShimInstaller: shimInstaller,
             UrlOpener: new ShellUrlOpener(),
             Probe: probe,
-            DetectionFeed: probe => HarnessesStepViewModel.BuildDetectionFeed(probe, _userHome),
+            DetectionFeed: probe => HarnessesStepViewModel.BuildDetectionFeed(probe, HarnessRegistry.FromEnvironment(_userHome)),
             BuiltinOffer: ct => LocalBuiltinOffer.LookupAsync(_localRoot, ct),
             CliPath: cliPath,
             ShimApplicable: shimApplicable,
