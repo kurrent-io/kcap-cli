@@ -224,6 +224,8 @@ public class ApplicationsMoverTests {
         await Assert.That(ApplicationsMover.InstalledInEach(directories)).IsTrue();
         await Assert.That(keepHome.Replaces.SequenceEqual(alternateVersion == "1.1.0" ? [otherCopy] : Array.Empty<string>())).IsTrue();
         await Assert.That(keepOther.Replaces.SequenceEqual([source])).IsTrue();
+        await Assert.That(keepHome.RetiresOthersIn(directories)).IsEqualTo(alternateVersion == "1.1.0");
+        await Assert.That(keepOther.RetiresOthersIn(directories)).IsTrue();
     }
 
     [Test]

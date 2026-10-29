@@ -20,6 +20,14 @@ public sealed record ApplicationsInstallPlan(
     bool KeepsOne => Action == ApplicationsInstallAction.OpenInstalled && Replaces.Count > 0 && !Migrates
         && Replaces.All(root => Path.GetFileName(root) == KcapBundle.BundleName);
 
+    /// Keeping <see cref="Target"/> removes the kcap.app in every other one of <paramref name="directories"/>; it
+    /// cannot when another copy is newer, because keeping one copy never downgrades the other.
+    public bool RetiresOthersIn(IEnumerable<string> directories) =>
+        Action != ApplicationsInstallAction.Blocked
+        && directories.Select(directory => Path.GetFullPath(Path.Combine(directory, KcapBundle.BundleName)))
+            .Where(root => root != Path.GetFullPath(Target))
+            .All(root => Replaces.Any(replaced => Path.GetFullPath(replaced) == root));
+
     public string Title => Action switch {
         ApplicationsInstallAction.Blocked => "Cannot install kcap",
         _ when KeepsOne => "kcap is installed twice",

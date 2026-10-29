@@ -15,8 +15,11 @@ public partial class InstallLocationWindow : Window {
     internal InstallLocationWindow(string where, Func<Task<MoveOutcome>> move, Action quit,
             ApplicationsInstallPlan? plan = null, IReadOnlyList<string>? destinations = null,
             Func<string, ApplicationsInstallPlan>? selectDestination = null,
-            string? userApplicationsDirectory = null, string? quitLabel = null, bool keepOne = false) : this() {
+            string? userApplicationsDirectory = null, string? quitLabel = null,
+            IReadOnlyCollection<string>? keepable = null) : this() {
         if (quitLabel is not null) QuitButton.Content = quitLabel;
+        if (keepable is { Count: 0 }) keepable = null;
+        var keepOne = keepable is not null;
         var selectedDirectory = Path.GetDirectoryName(plan?.Target);
         var shown = plan;
         void ShowPlan(ApplicationsInstallPlan? selected) {
@@ -39,10 +42,14 @@ public partial class InstallLocationWindow : Window {
         ShowPlan(plan);
         if (destinations is { Count: > 1 }) {
             DestinationPanel.IsVisible = true;
+            // A copy whose plan cannot remove the others stays listed but disabled, so the choice never leaves two.
             DestinationPicker.ItemsSource = destinations.Select(directory => new ComboBoxItem {
-                Content = keepOne ? $"Keep the copy in {directory}"
-                    : directory == userApplicationsDirectory ? "Install for me only"
-                    : directory == "/Applications" ? "Install for all users" : directory,
+                Content = keepable is null
+                    ? directory == userApplicationsDirectory ? "Install for me only"
+                        : directory == "/Applications" ? "Install for all users" : directory
+                    : keepable.Contains(directory) ? $"Keep the copy in {directory}"
+                    : $"Keep the copy in {directory} (the other copy is newer)",
+                IsEnabled = keepable?.Contains(directory) != false,
                 Tag = directory,
             }).ToArray();
             Heading.Text = keepOne ? "kcap is installed twice" : "Choose an install location";
@@ -81,7 +88,7 @@ public partial class InstallLocationWindow : Window {
                 var outcome = await move();
                 if (outcome.Moved) return;
                 if (outcome.PermissionDenied && userApplicationsDirectory is not null && selectDestination is not null
-                        && selectedDirectory != userApplicationsDirectory)
+                        && selectedDirectory != userApplicationsDirectory && keepable?.Contains(userApplicationsDirectory) != false)
                     OfferUserInstall(userApplicationsDirectory);
                 else
                     ShowError(outcome.Error);

@@ -692,7 +692,9 @@ public partial class App : Application {
             quit: installed ? NotNow : Quit, plan: plan,
             destinations: directories.Count > 1 ? directories : null,
             userApplicationsDirectory: userApps, quitLabel: installed ? "Not now" : null,
-            keepOne: directories.Count > 1 && ApplicationsMover.InstalledInEach(directories),
+            keepable: directories.Count > 1 && ApplicationsMover.InstalledInEach(directories)
+                ? directories.Where(directory => Mover(directory).Inspect(root!).RetiresOthersIn(directories)).ToArray()
+                : null,
             selectDestination: directory => {
                 mover = Mover(directory);
                 plan = mover.Inspect(root!);
@@ -747,7 +749,7 @@ public partial class App : Application {
     internal static InstallLocationWindow BuildInstallLocationWindow(InstallLocationKind kind, Func<Task<MoveOutcome>> move, Action quit,
             ApplicationsInstallPlan? plan = null, IReadOnlyList<string>? destinations = null,
             Func<string, ApplicationsInstallPlan>? selectDestination = null,
-            string? userApplicationsDirectory = null, string? quitLabel = null, bool keepOne = false) {
+            string? userApplicationsDirectory = null, string? quitLabel = null, IReadOnlyCollection<string>? keepable = null) {
         var where = kind switch {
             InstallLocationKind.DmgVolume   => "kcap is running from the disk image.",
             InstallLocationKind.Translocated => "kcap is running from a temporary location.",
@@ -756,7 +758,7 @@ public partial class App : Application {
             _                                => "kcap is not in your Applications folder.",
         };
         return new InstallLocationWindow(where, move, quit, plan, destinations, selectDestination,
-            userApplicationsDirectory, quitLabel, keepOne);
+            userApplicationsDirectory, quitLabel, keepable);
     }
 
     // The ONE resolve+evaluate composition (OnboardingGate.EvaluateAsync), wrapped in the
