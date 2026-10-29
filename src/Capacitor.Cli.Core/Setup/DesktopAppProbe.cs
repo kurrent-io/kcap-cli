@@ -25,12 +25,23 @@ public sealed class DesktopAppProbe {
             Path.Combine(home.Path, "Applications"),
             Path.Combine(home.Path, "Library", "Application Support"),
         ])
-        : OperatingSystem.IsWindows() ? new([
-            Path.Combine(home.Path, "AppData", "Local"),
-            Path.Combine(home.Path, "AppData", "Local", "Programs"),
-            Path.Combine(home.Path, "AppData", "Roaming"),
-        ])
+        : OperatingSystem.IsWindows() ? new(WindowsRoots())
         : None;
+
+    // Roaming and Local AppData can be redirected apart from the home, so no UserHome derives them.
+#pragma warning disable RS0030
+    static List<string> WindowsRoots() {
+        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        string[] roots = [
+            local,
+            local.Length > 0 ? Path.Combine(local, "Programs") : "",
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+        ];
+
+        return [.. roots.Where(root => root.Length > 0)];
+    }
+#pragma warning restore RS0030
 
     /// <summary>Whether any of <paramref name="entries"/> exists, as a file or a directory, under any root.</summary>
     public bool Finds(params string[] entries) =>
