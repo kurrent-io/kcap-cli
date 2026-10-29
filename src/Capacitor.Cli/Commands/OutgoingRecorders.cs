@@ -57,7 +57,16 @@ sealed class OutgoingRecorders(
             // Linux without systemd: a unit installed while it ran stays on disk, and would start a deleted binary
             // once systemd runs here again.
             if (OperatingSystem.IsLinux()) {
-                foreach (var id in new SystemdServiceManager(home).ListInstalled()) {
+                IReadOnlyList<string> units;
+                try {
+                    units = new SystemdServiceManager(home).ListInstalled();
+                } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                    await console.Error.WriteLineAsync($"  • Could not list daemon services: {ex.Message}");
+                    stopped = false;
+                    units = [];
+                }
+
+                foreach (var id in units) {
                     await console.Error.WriteLineAsync(
                         $"  • Could not remove daemon service '{id}': systemd is not running. Delete {SystemdUnit.UnitPath(home, id)} to finish.");
                     stopped = false;

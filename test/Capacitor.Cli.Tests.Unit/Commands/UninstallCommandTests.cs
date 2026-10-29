@@ -798,6 +798,25 @@ public class UninstallCommandTests {
         await Assert.That(Directory.Exists(fixture.ConfigDir)).IsTrue();
     }
 
+    [Test]
+    [RunOn(OS.Linux), SupportedOSPlatform("linux")]
+    public async Task Uninstall_without_systemd_keeps_the_config_when_the_unit_directory_is_unreadable() {
+        await using var fixture = await Fixture.CreateAsync();
+        var dir = Path.GetDirectoryName(SystemdUnit.UnitPath(fixture.UserHome, "laptop"))!;
+        Directory.CreateDirectory(dir);
+        File.SetUnixFileMode(dir, UnixFileMode.None);
+
+        try {
+            var exit = await NewCommand(fixture, systemdRunning: () => false).HandleAsync(["uninstall", "--yes"]);
+
+            await Assert.That(exit).IsEqualTo(1);
+            await Assert.That(fixture.Err.ToString()).Contains("Could not list daemon services");
+            await Assert.That(Directory.Exists(fixture.ConfigDir)).IsTrue();
+        } finally {
+            File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
     UninstallCommand NewCommand(Fixture f, DaemonStore? store = null, string? workdir = null, UserHome? home = null, IOutgoingRecorders? recorders = null, ILocalStackFactory? stacks = null, KcapLinkRemover? links = null, Func<bool>? systemdRunning = null, string stdin = "") {
         var userHome = home ?? f.UserHome;
         var profiles = Resolutions.None(f.Root);
