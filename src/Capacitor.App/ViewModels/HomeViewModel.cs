@@ -1438,7 +1438,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             return;
         }
 
+        var selected = SelectedRepoPath;
         var saved = await _state.LoadAsync();
+        // A machine switch or another pick made while the store loaded owns the vendor now.
+        if (RemoteMachineSelected || !string.Equals(SelectedRepoPath, selected, StringComparison.Ordinal)) return;
         SetVendor(Lookup(saved.HarnessByRepo, SelectedRepoPath) ?? DefaultVendor);
         RevalidateVendor(Harnesses);
     }
