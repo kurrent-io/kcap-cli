@@ -2409,7 +2409,7 @@ public class HomeViewModelTests {
     [NotInParallel("AvaloniaSession")]
     public async Task SwitchingBackToLocalRestoresTheLocalRepoAndRevalidatesTheVendor() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var store = new HeldAppStateStore(new AppState());
             var daemon = new FakeDaemonClientService();
             daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(supportedVendors: ["kiro"]));
             var remote = new FakeRemoteAgents();
@@ -2420,10 +2420,11 @@ public class HomeViewModelTests {
                 },
             ]);
             using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known("/repo/local"), TimeProvider.System,
+                daemon, store, new RecordingLaunchClient(), Known("/repo/local"), TimeProvider.System,
                 daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"));
 
             await vm.SelectMachineAsync("home-pc", isLocal: false);
+            store.Release();
             await Assert.That(vm.SelectedRepoPath).IsEqualTo("/w/repo");
             await Assert.That(vm.SelectedVendor).IsEqualTo("codex");
 
@@ -2439,6 +2440,50 @@ public class HomeViewModelTests {
             // whatever the remote machine last set it to.
             await Assert.That(vm.SelectedVendor).IsEqualTo("kiro");
         });
+    }
+
+    /// The remote machine hosts DefaultVendor as well as the vendor the pick kept, so revalidation
+    /// alone would accept the late local adoption's reset to DefaultVendor.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task ADefaultRepositoryLoadThatLandsAfterARemotePickLeavesItsVendor() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var store = new HeldAppStateStore(new AppState());
+            var daemon = new FakeDaemonClientService();
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(supportedVendors: ["codex"]));
+            var remote = new FakeRemoteAgents();
+            remote.DaemonsSubject.OnNext([
+                new DaemonInfo {
+                    Name = "home-pc", OwnerUserId = "u1", Connected = true,
+                    RepoPaths = ["/w/repo"], SupportedVendors = ["claude", "codex"],
+                },
+            ]);
+            using var vm = new HomeViewModel(
+                daemon, store, new RecordingLaunchClient(), Known("/repo/local"), TimeProvider.System,
+                daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"));
+
+            await vm.SelectMachineAsync("home-pc", isLocal: false);
+            await Assert.That(vm.SelectedVendor).IsEqualTo("codex");
+
+            store.Release();
+
+            await Assert.That(vm.SelectedRepoPath).IsEqualTo("/w/repo");
+            await Assert.That(vm.SelectedVendor).IsEqualTo("codex");
+        });
+    }
+
+    /// Holds the first LoadAsync, the constructor's default-repository adoption, until Release. The
+    /// source completes without RunContinuationsAsynchronously, so the adoption finishes inside
+    /// Release on the test's own thread rather than racing it from the pool.
+    sealed class HeldAppStateStore(AppState state) : IAppStateStore {
+        readonly TaskCompletionSource<AppState> _first = new();
+        int _loads;
+
+        public Task<AppState> LoadAsync() => Interlocked.Increment(ref _loads) == 1 ? _first.Task : Task.FromResult(state);
+
+        public Task<bool> UpdateAsync(Func<AppState, AppState> mutate) => Task.FromResult(true);
+
+        public void Release() => _first.SetResult(state);
     }
 
     // Launch-outcome correlation: the accepted id is request-accepted, not success.
