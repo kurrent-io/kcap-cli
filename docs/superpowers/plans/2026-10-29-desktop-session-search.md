@@ -380,7 +380,7 @@ Behaviour (spec, "The open operation"):
   - `ReactiveCommand<Unit, Unit> NewSessionCommand`
   - `IObservable<Unit> SearchFocusRequests`
   - `Task<SearchOpenOutcome> OpenSearchHitAsync(string sessionId, PinPresentation presentation, CancellationToken ct)`
-  - a constructor parameter `Func<IObservable<SessionIdentity>, SessionSearchViewModel>? searchFactory = null`, inserted before `sessions`
+  - a constructor parameter `Func<Func<string, PinPresentation, CancellationToken, Task<SearchOpenOutcome>>, SessionSearchViewModel>? searchFactory = null`, inserted before `sessions`. The window passes its own `OpenSearchHitAsync` in; the composition root supplies the search function, `sessions.Identity`, `lane.SessionAccessChanged`, the time provider and the main-thread scheduler
 - Changes to existing code:
   - The `Meta+N`/`Ctrl+N` bindings and the New session button bind to `NewSessionCommand` (Task 9 rebinds the XAML). `CloseWorkspaceCommand` stays for the coordinator
 
@@ -464,7 +464,7 @@ Layout (spec, "The rail top" and "The search page"; mockup https://kurrent.kcap.
   - A 52px query row with `AppIcon Search`, a `TextBox` with the `kcapEmbedded` class bound to `Search.Query`, and an "esc" chip
   - The tab chips Sessions and Transcripts, styled `kcapChip` with `Classes.active`
   - A progress line bound to `IsLoading`
-  - The hit list (`ItemsControl` of `SearchHitViewModel`: avatar, title runs, `#N` chip, caption, when; transcript rows put the snippet runs below)
+  - The hit list (`ItemsControl` of `SearchHitViewModel`: avatar, title runs, `#N` chip, caption, when; transcript rows put the snippet runs below). While `IsOpening` is set, a row shows a spinner in place of the when text, and `IsHighlighted` uses the `KcapSurfaceRaisedBrush` background
   - A `ListMessage` line, and the footer copy
   - Code-behind:
     - Focus the `TextBox` when the cover is shown and on `SearchFocusRequests`, and select its text on the latter
