@@ -1,4 +1,5 @@
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
@@ -49,7 +50,7 @@ public class UpdateCommandScriptInstallTests : IDisposable {
     public async Task A_current_cli_retries_the_local_stack_unless_only_checking(bool checkOnly, int upgradeExit, int expectedExit) {
         Skip.When(OperatingSystem.IsWindows(), "the fixture's current is a symlink");
         using var f = new ScriptReleaseFixture();
-        f.Publish("0.0.1");
+        f.Publish(CapacitorVersion.CurrentDisplay());
         var calls = new List<string>();
         using var output = ConsoleOutput.StartFullCapture();
 
