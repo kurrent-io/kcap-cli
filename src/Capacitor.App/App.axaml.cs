@@ -526,6 +526,7 @@ public partial class App : Application {
         }
         var earlierInstances = OperatingSystem.IsMacOS() ? QuitEarlierInstancesAsync(BringForward) : Task.CompletedTask;
         vm.Completed += () => _ = CompleteUpdateAsync(earlierInstances, () => Dispatcher.UIThread.Post(Open));
+        vm.OpenRequested += Open;
         window.Closed += (_, _) => Open();
         _closeUpdateFinishWindow = Open;
         if (_coordinator is { } holder) holder.ShowInstead = BringForward;

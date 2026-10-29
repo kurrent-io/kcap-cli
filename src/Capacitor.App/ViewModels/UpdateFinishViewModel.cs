@@ -65,7 +65,7 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
             IObservable<bool> restartPending, IObservable<LocalStepInput?> local, TimeProvider time) {
         _transition = transition;
         _time = time;
-        OpenCommand = ReactiveCommand.Create(Close);
+        OpenCommand = ReactiveCommand.Create(RequestOpen);
         ArmPatience();
         local.Select(l => l?.Running == true).DistinctUntilChanged().Skip(1).Where(running => !running)
             .Subscribe(_ => ArmPatience())
@@ -108,6 +108,9 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
     /// Raised once, when the user goes on or every step is done.
     public event Action? Completed;
 
+    /// Explicit handover, including while automatic completion is waiting for an earlier app to quit.
+    public event Action? OpenRequested;
+
     void Apply((IReadOnlyList<UpdateStep> Steps, bool Settled, bool Clean) state) {
         if (_closed) return;
         Steps = state.Steps;
@@ -141,6 +144,11 @@ public sealed class UpdateFinishViewModel : ReactiveObject, IDisposable {
             return;
         }
         RxSchedulers.MainThreadScheduler.Schedule(() => { if (_clean) Close(); });
+    }
+
+    void RequestOpen() {
+        OpenRequested?.Invoke();
+        Close();
     }
 
     void Close() {
