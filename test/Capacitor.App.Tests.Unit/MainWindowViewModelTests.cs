@@ -375,29 +375,32 @@ public class MainWindowViewModelTests {
         await Assert.That(MainWindowViewModel.ProfileLabelForRail(profile)).IsEqualTo(expected);
     }
 
+    /// The rail takes the launcher card's tone: grey while in progress, amber when it needs the user, red once broken.
     [Test]
-    [Arguments(AttachState.Connecting, null, "connected", StatusColors.InProgress)]
-    [Arguments(AttachState.Unreachable, "daemon_unreachable", "connected", StatusColors.Unavailable)]
-    [Arguments(AttachState.Unreachable, "daemon_incompatible", "connected", StatusColors.Disrupted)]
-    [Arguments(AttachState.Connected, null, "connected", StatusColors.Connected)]
-    [Arguments(AttachState.Connected, null, "connecting", StatusColors.InProgress)]
-    [Arguments(AttachState.Connected, null, "reconnecting", StatusColors.InProgress)]
-    [Arguments(AttachState.Connected, null, "disconnected", StatusColors.Disrupted)]
-    public async Task StatusBrushFor_maps_to_the_matching_bucket_color(
-            AttachState state, string? reason, string daemonConnection, string expectedHex) {
+    [Arguments(AttachState.Connecting, null, "connected", false, StatusColors.Pending)]
+    [Arguments(AttachState.Unreachable, "daemon_restarting", "connected", false, StatusColors.Pending)]
+    [Arguments(AttachState.Unreachable, "daemon_unreachable", "connected", false, StatusColors.InProgress)]
+    [Arguments(AttachState.Unreachable, "daemon_unreachable", "connected", true, StatusColors.Disrupted)]
+    [Arguments(AttachState.Unreachable, "daemon_incompatible", "connected", false, StatusColors.Disrupted)]
+    [Arguments(AttachState.Connected, null, "connected", false, StatusColors.Connected)]
+    [Arguments(AttachState.Connected, null, "connecting", false, StatusColors.Pending)]
+    [Arguments(AttachState.Connected, null, "reconnecting", false, StatusColors.Pending)]
+    [Arguments(AttachState.Connected, null, "disconnected", false, StatusColors.InProgress)]
+    public async Task StatusBrushFor_matches_the_launcher_card_tone(
+            AttachState state, string? reason, string daemonConnection, bool failed, string expectedHex) {
         var status = new AttachStatus(state, reason, null);
-        var brush = (ISolidColorBrush)MainWindowViewModel.StatusBrushFor(status, daemonConnection);
+        var brush = (ISolidColorBrush)MainWindowViewModel.StatusBrushFor(status, daemonConnection, failed: failed);
         await Assert.That(brush.Color).IsEqualTo(Color.Parse(expectedHex));
     }
 
+    /// An expired sign-in needs the user; only a local server that refused the app, which the card reports as a failure, is red.
     [Test]
-    [Arguments(AttachState.Connected, null, "reconnecting")]
-    [Arguments(AttachState.Connecting, null, "connected")]
-    public async Task StatusBrushFor_signed_out_uses_the_disrupted_color(
-            AttachState state, string? reason, string daemonConnection) {
-        var status = new AttachStatus(state, reason, null);
-        var brush = (ISolidColorBrush)MainWindowViewModel.StatusBrushFor(status, daemonConnection, signInExpired: true);
-        await Assert.That(brush.Color).IsEqualTo(Color.Parse(StatusColors.Disrupted));
+    [Arguments(false, StatusColors.InProgress)]
+    [Arguments(true, StatusColors.Disrupted)]
+    public async Task StatusBrushFor_signed_out_follows_the_card(bool failed, string expectedHex) {
+        var status = new AttachStatus(AttachState.Connected, null, null);
+        var brush = (ISolidColorBrush)MainWindowViewModel.StatusBrushFor(status, "reconnecting", signInExpired: true, failed: failed);
+        await Assert.That(brush.Color).IsEqualTo(Color.Parse(expectedHex));
     }
 
     [Test]
@@ -422,8 +425,9 @@ public class MainWindowViewModelTests {
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.SignedOut));
             await Assert.That(home.ConnectionNotice).IsEqualTo(HomeViewModel.SignInExpiredNotice);
             await Assert.That(vm.ConnectionDisplay).IsEqualTo(MainWindowViewModel.SignedOutDisplay);
+            // An expired sign-in needs the user, which is how the launcher's card shows it too.
             var brush = (ISolidColorBrush)vm.StatusBrush;
-            await Assert.That(brush.Color).IsEqualTo(Color.Parse(StatusColors.Disrupted));
+            await Assert.That(brush.Color).IsEqualTo(Color.Parse(StatusColors.InProgress));
         });
     }
 

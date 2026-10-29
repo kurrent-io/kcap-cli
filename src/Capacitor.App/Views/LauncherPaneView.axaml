@@ -59,8 +59,9 @@
         <StackPanel x:Name="LauncherNotices" VerticalAlignment="Top" HorizontalAlignment="Stretch" MaxWidth="680" Spacing="8">
             <Border x:Name="UpdateBanner" Classes="notice" IsVisible="{Binding Notices.ShowUpdate}">
                 <Grid ColumnDefinitions="16,*" ColumnSpacing="10">
+                    <!-- Purple like the update window's running steps and the rail's "Updating…". -->
                     <views:AppIcon x:Name="UpdateBusyIcon" Classes="noticeIcon kcapSpinning" Size="16" Kind="LoaderCircle"
-                                   Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Top" />
+                                   Foreground="{StaticResource KcapPurpleBrush}" VerticalAlignment="Top" />
                     <StackPanel Grid.Column="1" Spacing="4">
                         <TextBlock x:Name="UpdateTitle" Classes="noticeTitle" Text="Finishing the update…" />
                         <TextBlock x:Name="UpdateDetailText" Classes="noticeBody" Text="{Binding UpdateDetail}"
