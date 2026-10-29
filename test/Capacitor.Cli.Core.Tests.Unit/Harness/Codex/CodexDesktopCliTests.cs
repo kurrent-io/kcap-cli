@@ -65,6 +65,14 @@ public class CodexDesktopCliTests {
     }
 
     [Test]
+    public async Task An_entrypoint_the_os_cannot_hold_is_unusable_not_a_crash() {
+        Stage(Path.Combine("bin", "codex"));
+        Manifest("""{"entrypoint":"bin/co\u0000dex"}""");
+
+        await Assert.That(CodexDesktopCli.Find(Probe)).IsNull();
+    }
+
+    [Test]
     public async Task Finds_nothing_when_the_entrypoint_is_missing() {
         Manifest("""{"entrypoint":"bin/codex"}""");
 

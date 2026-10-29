@@ -24,8 +24,15 @@ public static class CodexDesktopCli {
         var relative = ReadEntrypoint(Path.Combine(package, Manifest)) ?? DefaultEntrypoint;
         if (Path.IsPathRooted(relative)) return null;
 
-        var root = Path.GetFullPath(package) + Path.DirectorySeparatorChar;
-        var full = Path.GetFullPath(Path.Combine(package, relative));
+        string root, full;
+
+        // A path the OS cannot hold (a NUL, say) is an unusable entrypoint, not a daemon failure.
+        try {
+            root = Path.GetFullPath(package) + Path.DirectorySeparatorChar;
+            full = Path.GetFullPath(Path.Combine(package, relative));
+        } catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) {
+            return null;
+        }
 
         // The manifest is the app's, but what it names is what the daemon spawns: stay inside the bundle,
         // through no link on the way, since GetFullPath folds ".." but follows no symlink.
