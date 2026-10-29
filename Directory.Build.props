@@ -18,7 +18,10 @@
 
         <MinVerTagPrefix>v</MinVerTagPrefix>
     </PropertyGroup>
+    <!-- The annotations are [Conditional], so they compile to nothing and nothing downstream needs the package. -->
     <ItemGroup>
+        <PackageReference Include="JetBrains.Annotations" PrivateAssets="All" />
+        <Using Include="JetBrains.Annotations" />
         <PackageReference Include="MinVer" PrivateAssets="All" />
         <PackageReference Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" PrivateAssets="All" />
         <AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.txt" Visible="false" />

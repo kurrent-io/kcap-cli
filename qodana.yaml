@@ -17,10 +17,11 @@ profile:
 include:
   - name: CheckDependencyLicenses
 exclude:
-  # .editorconfig already settles these: no XML docs are published, IDE0055 stays silent to keep the
-  # aligned layout, and var-or-type is a hint
+  # .editorconfig already settles these: no XML docs are published, unnamed enum values in a switch are a
+  # suggestion, IDE0055 stays silent to keep the aligned layout, and var-or-type is a hint
   - name: CSharpWarnings__CS1591
   - name: CSharpWarnings__CS1573
+  - name: CSharpWarnings__CS8524
   - name: BadChildStatementIndent
   - name: SuggestVarOrType_BuiltInTypes
   - name: SuggestVarOrType_Elsewhere
@@ -45,3 +46,14 @@ exclude:
   - name: UnusedMemberInSuper.Global
   - name: UnusedMethodReturnValue.Global
   - name: VirtualMemberNeverOverridden.Global
+  # The build already fails on nullable warnings and unused usings; where ReSharper's own reading
+  # disagrees (null-conditional chains, TUnit's generic assertions, ReactiveUI extensions) it is wrong
+  - name: CSharpWarnings__CS8602
+  - name: CSharpWarnings__CS8620
+  - name: RedundantUsingDirective
+  # Flags every dotnet_diagnostic severity and the keys Rider itself writes
+  - name: EditorConfigKeyCorrectness
+  # Avalonia XAML read as WPF: Window members unresolved, a DataContext binding resolved against the
+  # element's own x:DataType, and a null in a binding path is Avalonia's unset value, not an error
+  - name: XAMLErrors
+  - name: Xaml.PossibleNullReferenceException
