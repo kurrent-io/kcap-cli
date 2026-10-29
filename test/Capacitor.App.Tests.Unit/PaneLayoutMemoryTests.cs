@@ -22,6 +22,12 @@ public class PaneLayoutMemoryTests {
     }
 
     [Test]
+    public async Task A_pane_rounded_just_below_its_minimum_does_not_hide() {
+        await Assert.That(PaneLayout.HidesAt(329.6, 330)).IsFalse();
+        await Assert.That(PaneLayout.HidesAt(300, 330)).IsTrue();
+    }
+
+    [Test]
     public async Task Every_change_is_persisted_and_restored() {
         using var tmp = TempDir.WithPathTo("app-state.json", out var path);
         var store = new AppStateStore(path);

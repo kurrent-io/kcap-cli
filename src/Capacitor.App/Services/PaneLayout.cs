@@ -12,7 +12,11 @@ public sealed class PaneLayout {
     // How a pane dragged below its minimum looks until it is released and hides.
     public const double HidingOpacity = 0.4;
 
-    public static bool HidesAt(double width, double min) => width < min;
+    // Layout rounding can lay a pane at its minimum out a fraction below it; a click on its splitter
+    // must not hide it.
+    const double HideTolerance = 1;
+
+    public static bool HidesAt(double width, double min) => width < min - HideTolerance;
 
     double _railWidth = RailMinWidth;
     bool _railCollapsed;
