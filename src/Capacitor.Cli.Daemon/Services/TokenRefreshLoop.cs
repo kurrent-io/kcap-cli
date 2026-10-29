@@ -21,6 +21,8 @@ internal interface IProactiveTokenRefreshPort {
 /// cross-process-locked <see cref="TokenStore"/> when it is within <paramref name="window"/>
 /// of expiry.
 /// </summary>
+// Qodana's usage search misses the construction in AgentOrchestrator
+[UsedImplicitly]
 internal sealed class TokenStoreRefreshPort(TokenStore store, string profile, TimeSpan window) : IProactiveTokenRefreshPort {
     public Task<ProactiveRefreshOutcome> RefreshIfExpiringAsync() => store.RefreshIfExpiringAsync(profile, window);
 }
