@@ -895,6 +895,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         _bannerCommand = bannerCard.Select(card => card.Command)
             .ToProperty(this, x => x.BannerCommand)
             .DisposeWith(_disposables);
+        Notices.TrackConnection(bannerContent.Select(content => content.Message is not null));
         _connectionBannerVisible = bannerContent
             .Select(content => content.Message is not null)
             .ToProperty(this, x => x.ConnectionBannerVisible, initialValue: false)
@@ -1002,13 +1003,25 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     public LocalServerRecoveryViewModel? LocalServer { get; private set; }
 
     /// The local stack's upgrade banner; null unless the server is this machine's local installation.
-    public LocalStackViewModel? LocalStack { get; init; }
+    public LocalStackViewModel? LocalStack {
+        get => _localStack;
+        init {
+            _localStack = value;
+            if (value is not null)
+                Notices.Track(value.WhenAnyValue(x => x.BannerVisible, x => x.IsNote, (visible, note) => (visible, note)));
+        }
+    }
+    readonly LocalStackViewModel? _localStack;
+
+    /// Which of the launcher's problem notices show.
+    public LauncherNotices Notices { get; } = new();
 
     public void AttachLocalServerRecovery(LocalServerRecoveryViewModel recovery) {
         LocalServer = recovery;
         this.RaisePropertyChanged(nameof(LocalServer));
         _localServer.OnNext(recovery.IsLocalServer);
         recovery.WhenAnyValue(x => x.ServerDown).Subscribe(_localServerDown).DisposeWith(_disposables);
+        Notices.TrackServer(recovery.WhenAnyValue(x => x.Visible));
     }
 
     /// The explanation first and daemon output below it. An expired sign-in stays the whole message:
@@ -1162,6 +1175,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     public void Dispose() {
         _disposed = true;
         _disposables.Dispose();
+        Notices.Dispose();
         _daemonStartMessageFeed.Dispose();
         _daemonStartVisibleFeed.Dispose();
         _daemonRetryVisibleFeed.Dispose();
