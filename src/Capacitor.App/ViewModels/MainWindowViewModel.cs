@@ -31,6 +31,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     /// Shown the moment Reconnect is pressed. Cleared on Connected; replaced if attach stays unreachable.
     internal const string ReconnectingMessage = "Reconnecting…";
+    internal const string UpdatingDisplay = "Updating…";
 
     internal const string ReconnectFailedMessage =
         "Couldn't reconnect. If the daemon isn't running, press Start daemon.";
@@ -41,12 +42,14 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     static readonly IBrush ConnectedBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Connected));
     static readonly IBrush InProgressBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.InProgress));
+    static readonly IBrush UpdatingBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Updating));
     static readonly IBrush DisruptedBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Disrupted));
     static readonly IBrush UnavailableBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Unavailable));
 
     static IBrush Paint(string hex) => hex switch {
         StatusColors.Connected => ConnectedBrush,
         StatusColors.InProgress => InProgressBrush,
+        StatusColors.Updating => UpdatingBrush,
         StatusColors.Disrupted => DisruptedBrush,
         _ => UnavailableBrush,
     };
@@ -515,11 +518,13 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .ToProperty(this, x => x.SignInVisible, false)
                 .DisposeWith(disposables);
 
-            _connectionDisplay = status.CombineLatest(daemonConnection, signedOut, ConnectionDisplayFor)
+            // The daemon restarting and redialing is what an update still finishing does, not an outage.
+            var updating = (Home?.UpdateFinishing ?? Observable.Return(false)).StartWith(false).DistinctUntilChanged();
+            _connectionDisplay = status.CombineLatest(daemonConnection, signedOut, updating, ConnectionDisplayFor)
                 .ToProperty(this, x => x.ConnectionDisplay, "")
                 .DisposeWith(disposables);
 
-            _statusBrush = status.CombineLatest(daemonConnection, signedOut, StatusBrushFor)
+            _statusBrush = status.CombineLatest(daemonConnection, signedOut, updating, StatusBrushFor)
                 .ToProperty(this, x => x.StatusBrush, Paint(StatusColors.Unavailable))
                 .DisposeWith(disposables);
 
@@ -995,8 +1000,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     // daemonConnection seam comment above); an Unreachable/Connecting attach state always wins
     // regardless of whatever Connection word a stale retained snapshot might carry.
     internal static string ConnectionDisplayFor(
-            AttachStatus status, string daemonConnection, bool signInExpired = false) {
+            AttachStatus status, string daemonConnection, bool signInExpired = false, bool updating = false) {
         if (signInExpired) return SignedOutDisplay;
+        if (updating) return UpdatingDisplay;
         if (status.State == AttachState.Connecting) return "Connecting…";
         if (status.State == AttachState.Unreachable)
             return status.Reason switch {
@@ -1012,8 +1018,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     // Same bucketing as ConnectionDisplayFor, kept as a parallel switch (not derived from the text)
     // so a future wording tweak there can never silently detune the color.
     internal static IBrush StatusBrushFor(
-            AttachStatus status, string daemonConnection, bool signInExpired = false) {
+            AttachStatus status, string daemonConnection, bool signInExpired = false, bool updating = false) {
         if (signInExpired) return Paint(StatusColors.Disrupted);
+        if (updating) return Paint(StatusColors.Updating);
         if (status.State == AttachState.Connecting) return Paint(StatusColors.InProgress);
         if (status.State == AttachState.Unreachable)
             return status.Reason switch {

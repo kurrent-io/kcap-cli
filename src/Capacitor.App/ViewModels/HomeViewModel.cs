@@ -1029,6 +1029,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// Which of the launcher's problem notices show.
     public LauncherNotices Notices { get; } = new();
 
+    /// True while an update the user went on from early is still finishing on this machine.
+    public IObservable<bool> UpdateFinishing => _updateFinishing.DistinctUntilChanged();
+
     /// The update's remaining step, while one still runs after the main window opened early.
     public string? UpdateDetail {
         get => _updateDetail;
