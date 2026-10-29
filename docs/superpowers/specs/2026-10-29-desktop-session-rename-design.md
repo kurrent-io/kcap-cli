@@ -118,9 +118,26 @@ tick. So a local rename goes through the daemon:
   or one of its own push attempts. A rename the daemon applied must never be discarded that way, or
   renaming to such text reverts on the next tick. Builder's call: the loop records an applied rename
   as authority that only a different server title replaces.
+- `TitleResolveLoop.TickAsync` holds per-agent state across awaits (server read, generation, push)
+  and applies its result afterwards. A tick that read the old title before the rename must not
+  apply it after the rename: each agent's title state carries a revision that an applied rename
+  bumps, a tick captures the revision when it starts, and it discards its apply and its push when
+  the revision moved. Required test: pause a tick's server read (and separately its push) across an
+  applied rename, release it, and assert the header title never returns to the old value.
 
-Remote sessions: the app writes the rename to the server directly as the signed-in user and, on
-`applied`, updates the remote directory row's title in place so header and rail change together.
+Remote sessions: the app writes the rename to the server directly as the signed-in user. Remote rows
+are rebuilt from `RemoteAgentsService`'s cache on every `AgentDirectory.Recompute`, and that cache is
+replaced by each `/api/agent-instances` fetch, so an ad hoc row edit would not survive. Instead
+`RemoteAgentsService` owns a title overlay:
+
+- On `applied`, it records `session id → shown title` stamped with its fetch sequence number at
+  that moment, and republishes the affected instance so the directory recomputes with the new
+  title.
+- A fetch that started before the rename never clears the overlay.
+- A fetch that started after it clears the overlay entry once the payload carries a title for that
+  session; the server's title then wins, whether it is the rename or a newer one.
+- Against an older server whose payload has no title field, the overlay entry lasts for the app's
+  lifetime, so a refresh cannot restore the prompt cut.
 
 ## Remote rail titles
 
@@ -130,24 +147,36 @@ while the server has none.
 
 The owner chose **live**: a title change made anywhere (a rename on another machine, that machine's
 daemon pushing a native or generated title, server generation) reaches remote rail rows and the
-remote header within seconds, without a refetch. That needs a `kcap-server` change:
+remote header within seconds.
 
-- The agent-instance registry payload carries the session's current title (a new nullable field on
+The client's live path already exists: the hub's `AgentInstancesChanged` is a payload-free
+notification, and `RemoteAgentsService` throttles it and refetches `GET /api/agent-instances`.
+"Live" therefore means notification plus refetch, not a title-bearing hub event. That needs a
+`kcap-server` change:
+
+- `GET /api/agent-instances` carries each instance's current session title (a new nullable field on
   `AgentInstanceDto`; older servers omit it and the client falls back to the prompt cut).
-- A title change on a session with a registered agent instance pushes an updated instance over the
-  existing hub channel.
+- A session-title change on a session with a registered agent instance raises
+  `AgentInstancesChanged` for the clients that see that instance.
 
-The server change ships before the client depends on it. The client's in-place update after a
-desktop rename and the hub's next push must agree: the hub push carries the server's title, which
-after an applied rename is the new one, so the later push simply wins.
+The server change ships before the client depends on it.
 
 ## Who sees the pencil
 
 Every session the user may rename:
 
-- Local daemon rows: the daemon's own sessions are the signed-in user's.
+- Local daemon rows: shown only when all hold —
+  - the daemon advertises the rename capability,
+  - the daemon reports the app's own server (`IAgentDirectory.LocalDaemonOnAppServer`),
+  - the daemon is signed in as the app's signed-in user (the daemon reports its authenticated user
+    id alongside the capability; the app compares it with its own subject), and
+  - the agent is not private. A private agent's contract is "no per-agent server calls"
+    (`SnapshotAgentsForTitles` drops its session id), so it cannot be renamed.
 - Remote rows: shown when `AgentInstanceDto.OwnerUserId` matches the signed-in user.
 - Hidden for read-only participants and sessions without a session id.
+
+Required acceptance cases: daemon signed in as a different user, daemon pointed at a different
+server, a private agent, and an older daemon — each shows no pencil.
 
 The server re-checks ownership on every write; the client-side gate only avoids offering a rename
 that would 403.
@@ -164,5 +193,4 @@ that would 403.
 
 - Icon assets and exact layout/spacing of the pencil and ✓ / ✗ in both headers.
 - The IPC frame's shape and the daemon-side plumbing.
-- How remote rows obtain the server title.
 - Error copy for each failure (not owned, not connected, ladder refused, server error).
