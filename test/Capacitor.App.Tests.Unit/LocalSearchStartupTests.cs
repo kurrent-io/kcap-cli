@@ -132,4 +132,49 @@ public class LocalSearchStartupTests {
             await Assert.That(restarted.ApplyLabel).IsEqualTo("Save");
         });
     }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Downloaded_files_do_not_settle_a_failed_search_change(bool pending) {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            Install("missing model");
+            var cli = new FakeKcapCli();
+            using var status = new BehaviorSubject<ServerLaneStatus>(new(ServerLaneState.Connected));
+            using var vm = CreateViewModel(cli, out var search, status);
+            cli.SetupLocalBehavior = (onLine, interrupt, ct) => {
+                WriteModel(Model);
+                LocalEmbeddingFile.Write(Root, LocalEmbeddingSetting.Builtin(OldSet) with { Pending = pending });
+                return LocalSetupScript.Prints(1,
+                    """{"v":1,"event":"embeddings_configured","provider":"builtin"}""", LocalSetupScript.Failed("not_our_server"))(onLine, interrupt, ct);
+            };
+
+            await vm.ApplyCommand.Execute().ToTask();
+            await search.SettleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            await Assert.That(vm.CanApply).IsTrue();
+            await Assert.That(vm.ApplyLabel).IsEqualTo("Try again");
+            await Assert.That(vm.StateText).IsEqualTo(pending ? "search setup pending" : "keyword search");
+
+            if (pending) {
+                status.OnNext(new(ServerLaneState.Retrying));
+                status.OnNext(new(ServerLaneState.Connected));
+                await Assert.That(vm.StateText).IsEqualTo("search setup pending");
+                await Assert.That(vm.ApplyLabel).IsEqualTo("Try again");
+
+                using var restarted = CreateViewModel(new FakeKcapCli(), out _);
+                await Assert.That(restarted.StateText).IsEqualTo("search setup pending");
+                await Assert.That(restarted.CanApply).IsTrue();
+                await Assert.That(restarted.ApplyLabel).IsEqualTo("Try again");
+            }
+
+            status.OnNext(new(ServerLaneState.Retrying));
+            LocalEmbeddingFile.Write(Root, LocalEmbeddingSetting.Builtin(CurrentSet));
+            status.OnNext(new(ServerLaneState.Connected));
+
+            await Assert.That(vm.StateText).IsEqualTo("search by meaning");
+            await Assert.That(vm.CanApply).IsFalse();
+            await Assert.That(vm.ApplyLabel).IsEqualTo("Save");
+        });
+    }
 }

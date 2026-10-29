@@ -154,7 +154,7 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
         if (LocalEmbeddingFile.Read(stack.Root) is { Provider: LocalEmbeddingProvider.Builtin } recorded) {
             recordedSet = recorded.ModelSetId;
 
-            if (recordedSet != modelSet.ModelSet && LocalModelSets.IsPresent(stack.Root, modelSet)) {
+            if ((recorded.Pending || recordedSet != modelSet.ModelSet) && LocalModelSets.IsPresent(stack.Root, modelSet)) {
                 try {
                     if (LocalEmbeddingFile.Write(stack.Root, LocalEmbeddingSetting.Builtin(modelSet.ModelSet))) recordedSet = modelSet.ModelSet;
                 } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {

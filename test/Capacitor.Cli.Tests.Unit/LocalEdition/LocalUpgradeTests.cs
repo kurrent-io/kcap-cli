@@ -515,6 +515,28 @@ public class LocalUpgradeTests {
         await Assert.That(wire.ContainsKey("pending")).IsFalse();
     }
 
+    [Test]
+    [Arguments(false, true)]
+    [Arguments(true, true)]
+    [Arguments(false, false)]
+    [Arguments(true, false)]
+    public async Task A_pending_builtin_repair_settles_only_after_starting_with_its_model(bool resume, bool served) {
+        Installed();
+        var bundle = PublishModelSetInArchive(served);
+        Recorded(LocalEmbeddingSetting.Builtin(bundle.ModelSet) with { Pending = true });
+
+        if (resume) {
+            using (CrashAt("upgrade:starting")) await Assert.ThrowsAsync<SimulatedCrash>(() => Upgrade());
+            await Assert.That(LocalEmbeddingFile.Read(Root)!.Pending).IsTrue();
+            await new LocalStackControl(Stack(), _ => null).StartAsync(_events, _ => { }, CancellationToken.None);
+        } else {
+            await Upgrade();
+        }
+
+        await Assert.That(JournalAbsent()).IsTrue();
+        await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Builtin(bundle.ModelSet) with { Pending = !served });
+    }
+
     /// <summary>The record still names the old set, so its files stay: the next setup can serve it again.</summary>
     [Test]
     public async Task A_failed_model_download_leaves_the_recorded_model_set() {

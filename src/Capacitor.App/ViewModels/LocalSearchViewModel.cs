@@ -19,7 +19,7 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
 
     static readonly string[] Derived = [
         nameof(Running), nameof(StateText), nameof(CurrentText), nameof(CanApply), nameof(ApplyLabel), nameof(Embeddings),
-        nameof(FailureText), nameof(ShowsSettingsLink), nameof(ShowsInlineSettings),
+        nameof(FailureText), nameof(ShowsSettingsLink), nameof(ShowsInlineSettings), nameof(SettingApplied),
     ];
 
     readonly LocalSearchController _search;
@@ -43,7 +43,7 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
     /// <param name="builtinOffer">The built-in model set the installed stack offers, or null; asked again on every reconnect,
     /// which follows an upgrade.</param>
     /// <param name="openSettings">What opens Settings on its Search tab, null while no Settings window can open.</param>
-    /// <param name="builtinModelReady">Validates installed model files whenever a built-in setting is read, off the UI thread.</param>
+    /// <param name="builtinModelReady">Validates installed model files off the UI thread. Pending or failed setup still needs a retry.</param>
     public LocalSearchViewModel(
             Func<LocalEmbeddingSetting?> readSetting, Func<CancellationToken, Task<LocalEmbeddingModelManifest?>> builtinOffer,
             IObservable<ServerLaneStatus> status, LocalSearchController search,
@@ -111,22 +111,26 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
     public string? StateText =>
         Running ? "setting up search"
         : !_loaded ? null
+        : _current is { Pending: true } ? "search setup pending"
         : CurrentByMeaning && !BuiltinNeedsRetry ? "search by meaning" : "keyword search";
 
     public string? CurrentText => !_loaded ? null
+        : _current is { Pending: true } ? "Search changes have not been applied yet."
         : BuiltinNeedsRetry ? "Search works by keyword until the built-in model is ready."
-        : (_current switch {
+        : _current switch {
             { Model: { } model }                         => $"Searches by meaning with {model}.",
             { Provider: LocalEmbeddingProvider.Builtin } => "Searches by meaning with the built-in model.",
             _                                            => "Searches by keyword unless the server's own settings choose a model.",
-        })
-        + (_current is { Pending: true } ? " The change is not applied yet." : "");
+        };
 
     public bool CanApply =>
         _loaded && !Running && !_upgrade.Running && Choice.Valid && !Choice.AwaitingOffer
      && (Differs(Choice.Choice) || _current is null or { Pending: true } || BuiltinNeedsRetry && Choice.UseBuiltin);
 
     public string ApplyLabel => BuiltinNeedsRetry && Choice.UseBuiltin ? "Try again" : "Save";
+
+    internal bool SettingApplied => _loaded && !Running && !_upgrade.Running && !BuiltinNeedsRetry
+        && _current is { Pending: false, Provider: LocalEmbeddingProvider.None or LocalEmbeddingProvider.Ollama or LocalEmbeddingProvider.Builtin };
 
     public string? FailureText => !Running && _search.Outcome is LocalInstallOutcome.Failed failed
         ? failed.Affordance == LocalInstallAffordance.Busy ? BusyText : TerminalAdvice.Strip(failed.Message) ?? "Setup did not finish."
@@ -144,7 +148,7 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
 
     bool CurrentByMeaning => _current is { Model: not null } or { Provider: LocalEmbeddingProvider.Builtin };
 
-    bool BuiltinNeedsRetry => _builtinNeedsRetry && _current is { Provider: LocalEmbeddingProvider.Builtin };
+    bool BuiltinNeedsRetry => _current is { Provider: LocalEmbeddingProvider.Builtin } && (_builtinNeedsRetry || _current.Pending);
 
     bool Differs(LocalEmbeddingChoice choice) => choice.Provider switch {
         LocalEmbeddingProvider.Builtin => _current?.Provider != LocalEmbeddingProvider.Builtin,
@@ -159,7 +163,7 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
             if (_search.Progress.Embeddings is { Configured: true } or { SkipCode: "declined" }) _builtinNeedsRetry = false;
             _ = ReconnectAsync();
         }
-        ReadSetting();
+        ReadSetting(checkBuiltinModelReady: outcome is LocalInstallOutcome.Installed);
         Refresh();
     }
 
@@ -170,21 +174,26 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
         Refresh();
     }
 
-    void ReadSetting() {
+    void ReadSetting(bool checkBuiltinModelReady = true) {
         _read.Disposable = Observable.Start(() => {
                 var setting = _readSetting();
-                var builtinNeedsRetry = setting is { Provider: LocalEmbeddingProvider.Builtin }
-                    ? !_builtinModelReady?.Invoke() : false;
+                bool? builtinNeedsRetry = setting switch {
+                    { Provider: LocalEmbeddingProvider.Builtin, Pending: true } => true,
+                    { Provider: LocalEmbeddingProvider.Builtin } when checkBuiltinModelReady => !_builtinModelReady?.Invoke(),
+                    { Provider: LocalEmbeddingProvider.Builtin } => null,
+                    _ => false,
+                };
                 return (setting, builtinNeedsRetry);
             }, _readScheduler)
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(snapshot => {
                 var (setting, builtinNeedsRetry) = snapshot;
+                var prefill = !_loaded || setting != _current;
                 if (builtinNeedsRetry is { } needsRetry) _builtinNeedsRetry = needsRetry;
-                // An unchanged setting leaves a choice the user is still making alone.
-                if (!_loaded || setting != _current) Choice.Prefill(setting);
                 _current = setting;
                 _loaded  = true;
+                // An unchanged setting leaves a choice the user is still making alone.
+                if (prefill) Choice.Prefill(setting);
                 Refresh();
             }, ex => Console.Error.WriteLine($"kcap app: reading the local search setting failed: {ex.Message}"));
     }

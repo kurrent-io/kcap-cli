@@ -20,11 +20,13 @@ public class LocalStackViewModelTests {
         public int Reconnects;
         public int Reads;
         public int Starts;
+        public LocalEmbeddingSetting Setting = LocalEmbeddingSetting.Builtin(new string('a', 64));
+        public bool ModelReady;
         public Func<Task<ProcessResult>> StartResult = () => Task.FromResult(new ProcessResult(0, "Local server is running.\n", "", false));
         /// What the registry names; the view model reads it, never the run's target.
         public string? Registry;
 
-        public Harness(string? installed = "1.2.0") {
+        public Harness(string? installed = "1.2.0", bool searchSettings = false) {
             Registry = installed;
             Upgrade = new LocalUpgradeController(() => Cli, action => action(), held: () => Search.Running);
             Search  = new LocalSearchController(() => Cli, action => action(), held: () => Upgrade.Running);
@@ -37,7 +39,12 @@ public class LocalStackViewModelTests {
             }, () => {
                 Reconnects++;
                 return Task.CompletedTask;
-            }, CancellationToken.None, ImmediateScheduler.Instance, Search);
+            }, CancellationToken.None, ImmediateScheduler.Instance, Search) {
+                Search = searchSettings ? new LocalSearchViewModel(() => Setting,
+                    _ => Task.FromResult<LocalEmbeddingModelManifest?>(null), Status, Search, Upgrade,
+                    () => Task.CompletedTask, CancellationToken.None, ImmediateScheduler.Instance,
+                    builtinModelReady: () => ModelReady) : null,
+            };
         }
 
         public async Task RunAsync(int exitCode, params string[] lines) {
@@ -46,10 +53,48 @@ public class LocalStackViewModelTests {
             await Upgrade.SettleAsync().WaitAsync(TimeSpan.FromSeconds(5));
         }
 
-        public void Dispose() => Vm.Dispose();
+        public void Dispose() {
+            Vm.Search?.Dispose();
+            Vm.Dispose();
+            Status.Dispose();
+        }
     }
 
     static IEnumerable<string?> ShownText(LocalStackViewModel vm) => [vm.Headline, vm.Detail, vm.Guidance, vm.StateText, vm.StartMessage];
+
+    [Test]
+    [Arguments(false, false)]
+    [Arguments(true, false)]
+    [Arguments(false, true)]
+    [Arguments(true, true)]
+    public async Task Search_configured_elsewhere_clears_the_warning_only_after_it_is_applied(bool needsStart, bool keyword) {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness("1.3.0", searchSettings: true);
+            await h.RunAsync(needsStart ? 2 : 0, UpgradeScript.Planned("1.2.0", "1.3.0"),
+                """{"v":1,"event":"embeddings_skipped","code":"model_download_failed","message":"Model download failed"}""",
+                UpgradeScript.Switched("1.3.0"), needsStart
+                    ? UpgradeScript.Failed("start_failed", "Server did not start.", true)
+                    : UpgradeScript.Upgraded("1.2.0", "1.3.0"));
+
+            h.Status.OnNext(new(ServerLaneState.Retrying));
+            h.ModelReady = true;
+            h.Setting = (keyword ? LocalEmbeddingSetting.Declined : h.Setting) with { Pending = true };
+            h.Status.OnNext(new(ServerLaneState.Connected));
+            await Assert.That(h.Vm.BannerVisible).IsTrue();
+            await Assert.That(h.Vm.Search!.StateText).IsEqualTo("search setup pending");
+
+            h.Status.OnNext(new(ServerLaneState.Retrying));
+            h.Setting = h.Setting with { Pending = false };
+            h.Status.OnNext(new(ServerLaneState.Connected));
+            if (needsStart) {
+                await Assert.That(h.Vm.StartVisible).IsTrue();
+                await h.Vm.StartCommand.Execute().ToTask();
+            }
+
+            await Assert.That(h.Vm.Search.StateText).IsEqualTo(keyword ? "keyword search" : "search by meaning");
+            await Assert.That(h.Vm.BannerVisible).IsFalse();
+        });
+    }
 
     [Test]
     public async Task A_search_fallback_stays_visible_until_search_is_configured() {

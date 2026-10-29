@@ -2153,6 +2153,7 @@ public class DaemonLifecycleControllerTests {
 
         await WaitUntilAsync(() => h.Surface.Prompts.Count == 1, what: "the Windows service offer");
         await Assert.That(h.Surface.Prompts[0].Disclosure).IsEqualTo(DaemonLifecycleController.WindowsServiceDisclosure(2, resumes: true));
+        await Assert.That(h.Surface.Prompts[0].Disclosure).Contains("2 running agents resume if auto-resume is on");
     }
 
     /// One that cannot resume them waits for idle, without spending the run's offer

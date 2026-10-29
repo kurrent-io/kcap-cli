@@ -92,11 +92,7 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
             // An upgrade held off by the search change runs once the change is over.
             void OnSearchSettled(LocalInstallOutcome outcome) {
                 if (outcome is LocalInstallOutcome.Installed
-                    && searchChange.Progress.Embeddings is { Configured: true } or { SkipCode: "declined" }) {
-                    _searchWarning = null;
-                    if (_shown is LocalUpgradeOutcome.Upgraded { SearchWarning: not null }) _shown = null;
-                    Refresh();
-                }
+                    && searchChange.Progress.Embeddings is { Configured: true } or { SkipCode: "declined" }) ClearSearchWarning();
                 if (Waiting) _ = _upgrade.StartAsync(_shutdown);
             }
             searchChange.Settled += OnSearchSettled;
@@ -116,7 +112,17 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
         });
     }
 
-    public LocalSearchViewModel? Search { get; init; }
+    public LocalSearchViewModel? Search {
+        get;
+        init {
+            field = value;
+            if (value is null) return;
+            value.WhenAnyValue(x => x.SettingApplied)
+                .Where(applied => applied)
+                .Subscribe(_ => ClearSearchWarning())
+                .DisposeWith(_disposables);
+        }
+    }
 
     LocalUpgradeProgress Progress => _upgrade.Progress;
 
@@ -229,6 +235,12 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
     public ReactiveCommand<Unit, Unit> TryAgainCommand { get; }
 
     public ReactiveCommand<Unit, Unit> DismissCommand { get; }
+
+    void ClearSearchWarning() {
+        _searchWarning = null;
+        if (_shown is LocalUpgradeOutcome.Upgraded { SearchWarning: not null }) _shown = null;
+        Refresh();
+    }
 
     void OnSettled(LocalUpgradeOutcome outcome) {
         // A confirmed switch holds until the registry read lands.
