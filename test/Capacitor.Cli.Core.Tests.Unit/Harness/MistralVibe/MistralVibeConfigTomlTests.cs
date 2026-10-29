@@ -67,9 +67,17 @@ public class MistralVibeConfigTomlTests {
             alias = "codestral"
             """);
         Tmp.CreateFile("undefined.toml", """active_model = "mistral-medium-latest" """);
+        Tmp.CreateFile("blank.toml", """
+            active_model = "codestral"
+
+            [[models]]
+            name = ""
+            alias = "codestral"
+            """);
 
         await Assert.That(MistralVibeConfigToml.ConfiguredModel(Tmp.PathTo("model.toml"))).IsEqualTo("codestral-latest");
         await Assert.That(MistralVibeConfigToml.ConfiguredModel(Tmp.PathTo("default.toml"))).IsNull();
         await Assert.That(MistralVibeConfigToml.ConfiguredModel(Tmp.PathTo("undefined.toml"))).IsNull();
+        await Assert.That(MistralVibeConfigToml.ConfiguredModel(Tmp.PathTo("blank.toml"))).IsNull();
     }
 }
