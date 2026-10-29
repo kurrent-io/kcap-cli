@@ -25,6 +25,14 @@ public class RenameWireContractsTests {
         await Assert.That(RenameWire.NormalizeTitle(new string('a', 130))!.Length).IsEqualTo(120);
     }
 
+    /// The cap counts UTF-16 units; a cut through a surrogate pair would leave a lone high surrogate.
+    [Test]
+    public async Task NormalizeTitle_never_splits_a_surrogate_pair() {
+        await Assert.That(RenameWire.NormalizeTitle(new string('a', 119) + "😀")).IsEqualTo(new string('a', 119));
+        await Assert.That(RenameWire.NormalizeTitle(new string('a', 118) + "😀")).IsEqualTo(new string('a', 118) + "😀");
+        await Assert.That(RenameWire.NormalizeTitle(new string('a', 118) + "😀b")).IsEqualTo(new string('a', 118) + "😀");
+    }
+
     [Test]
     public async Task Capability_string_is_rename_1() =>
         await Assert.That(RenameWire.Capability).IsEqualTo("rename/1");

@@ -31,11 +31,14 @@ public static class RenameWire {
 
     public const int MaxTitleLength = 120;
 
-    /// Trims and caps the title; null when nothing is left to set.
+    /// Trims and caps the title at <see cref="MaxTitleLength"/> UTF-16 units, never inside a
+    /// surrogate pair; null when nothing is left to set.
     public static string? NormalizeTitle(string? title) {
         var trimmed = title?.Trim();
         if (string.IsNullOrEmpty(trimmed)) return null;
-        return trimmed.Length <= MaxTitleLength ? trimmed : trimmed[..MaxTitleLength];
+        if (trimmed.Length <= MaxTitleLength) return trimmed;
+        var cut = char.IsHighSurrogate(trimmed[MaxTitleLength - 1]) ? MaxTitleLength - 1 : MaxTitleLength;
+        return trimmed[..cut];
     }
 }
 
