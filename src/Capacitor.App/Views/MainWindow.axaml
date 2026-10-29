@@ -33,8 +33,9 @@
         <LayoutTransformControl x:Name="ScaleHost">
             <Panel>
                 <Grid x:Name="SessionsSurface">
+                    <!-- The rail column is sized from Panes in code-behind. -->
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="{x:Static svc:RailWidthMemory.DefaultWidthGridLength}" />
+                        <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
                     <views:SessionRailView x:Name="SessionRail" Grid.Column="0" />
@@ -88,6 +89,13 @@
                             <views:StillImage x:Name="SwitchCoverStill" />
                         </Border>
                     </Panel>
+                    <!-- Sits in the band the content pane leaves at the top while the rail is collapsed. -->
+                    <Button x:Name="RailExpandButton" Grid.Column="1" Classes="kcapGhost kcapIcon"
+                            HorizontalAlignment="Left" VerticalAlignment="Top" IsVisible="False"
+                            ToolTip.Tip="Show sidebar" AutomationProperties.Name="Show sidebar"
+                            Click="OnRailExpandClick">
+                        <views:AppIcon Kind="PanelLeftOpen" Size="16" Foreground="{StaticResource KcapMutedBrush}" />
+                    </Button>
                     <!-- Last child so it hit-tests above the content pane it overhangs. -->
                     <GridSplitter x:Name="RailSplitter" Grid.Column="0" HorizontalAlignment="Right" Width="6"
                                   Margin="0,0,-3,0" Background="Transparent" ResizeDirection="Columns"

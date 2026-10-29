@@ -38,15 +38,24 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
         }
     }
 
-    public double RailWidth {
-        get => SessionsSurface.ColumnDefinitions[0].Width.Value;
-        set => SessionsSurface.ColumnDefinitions[0].Width = new GridLength(value);
+    public PaneLayout Panes { get; } = new();
+
+    ColumnDefinition RailColumn => SessionsSurface.ColumnDefinitions[0];
+
+    // A drag resizes the column live; Panes takes the width once, when it ends.
+    void OnRailSplitterDragCompleted(object? sender, VectorEventArgs e) => Panes.RailWidth = RailColumn.ActualWidth;
+
+    void OnRailExpandClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => Panes.RailCollapsed = false;
+
+    void ApplyRail() {
+        var collapsed = Panes.RailCollapsed;
+        RailColumn.MinWidth = collapsed ? 0 : PaneLayout.RailMinWidth;
+        RailColumn.Width = new GridLength(collapsed ? 0 : Panes.RailWidth);
+        SessionRail.IsVisible = !collapsed;
+        RailSplitter.IsVisible = !collapsed;
+        RailExpandButton.IsVisible = collapsed;
+        ApplyCaptionInset();
     }
-
-    /// Raised once a drag of the rail's edge ends, not on every step of it.
-    public event EventHandler? RailResized;
-
-    void OnRailSplitterDragCompleted(object? sender, VectorEventArgs e) => RailResized?.Invoke(this, EventArgs.Empty);
 
     WindowNotificationManager? _notifications;
     IDisposable? _notifierSubscription;
@@ -108,13 +117,23 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
         MinHeight = UiScale.Minimum(onboarding ? WindowSizeMemory.OnboardingMinHeight : WindowSizeMemory.MinHeight, _scale, available?.Height);
     }
 
+    // Tall enough for the expand button, which sits in the band clear of the macOS window buttons.
+    const double CollapsedRailBand = 36;
+
     // The inset is in window units and the pane sits inside the scale, so it is divided back out.
-    void ApplyCaptionInset() => ContentPane.Margin = new Thickness(0, _captionTop / _scale, 0, 0);
+    void ApplyCaptionInset() {
+        var top = _captionTop / _scale;
+        if (Panes.RailCollapsed) top = Math.Max(top, CollapsedRailBand);
+        ContentPane.Margin = new Thickness(0, top, 0, 0);
+    }
 
     public MainWindow() {
         InitializeComponent();
-        SessionsSurface.SizeChanged += (_, e) =>
-            SessionsSurface.ColumnDefinitions[0].MaxWidth = e.NewSize.Width * RailWidthMemory.MaxShare;
+        SessionsSurface.SizeChanged += (_, e) => RailColumn.MaxWidth = e.NewSize.Width * PaneLayout.MaxShare;
+        RailExpandButton.Margin = new Thickness(OperatingSystem.IsMacOS() ? 78 : 8, 6, 0, 0);
+        SessionRail.CollapseRequested += (_, _) => Panes.RailCollapsed = true;
+        Panes.Changed += (_, _) => ApplyRail();
+        ApplyRail();
         KeyBindings.AddRange(ZoomShortcut.For(this));
         // A move, a display scaling change and a resized work area each change what the screen offers.
         PositionChanged += (_, _) => RefreshMinimumSize();

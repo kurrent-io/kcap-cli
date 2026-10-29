@@ -145,7 +145,13 @@
                 <!-- 44px chrome row: the macOS traffic lights overlay its left end (the window
                      extends the client area into the title bar). Empty space here drags the
                      window — wired in code-behind. -->
-                <Grid Height="44" Background="Transparent" PointerPressed="OnChromePointerPressed" />
+                <Grid Height="44" Background="Transparent" PointerPressed="OnChromePointerPressed">
+                    <Button x:Name="CollapseButton" Classes="kcapGhost kcapIcon" HorizontalAlignment="Right"
+                            VerticalAlignment="Center" Margin="0,0,10,0" Click="OnCollapseClick"
+                            ToolTip.Tip="Hide sidebar" AutomationProperties.Name="Hide sidebar">
+                        <views:AppIcon Kind="PanelLeftClose" Size="16" Foreground="{StaticResource KcapMutedBrush}" />
+                    </Button>
+                </Grid>
 
                 <!-- Deselects the workspace: the pane's empty state IS the launcher. -->
                 <Button x:Name="RailNewSessionButton" Classes="kcapChip" HorizontalAlignment="Stretch" Margin="10,0,10,10"

@@ -2040,8 +2040,8 @@ public partial class App : Application {
         var savedState = adopt?.State ?? appState.LoadAsync().GetAwaiter().GetResult();
         WindowSizeMemory.Apply(window, savedState);
         WindowSizeMemory.Attach(window, appState);
-        RailWidthMemory.Apply(window, savedState);
-        RailWidthMemory.Attach(window, appState);
+        PaneLayoutMemory.Apply(window.Panes, savedState);
+        PaneLayoutMemory.Attach(window.Panes, appState);
         if (show) window.Show();
         return window;
     }

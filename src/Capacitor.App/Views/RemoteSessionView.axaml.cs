@@ -17,6 +17,8 @@ public partial class RemoteSessionView : UserControl {
 
     public RemoteSessionView() {
         InitializeComponent();
+        ContextPaneSizing.Attach(this, SplitGrid.ColumnDefinitions[1], ContextColumn, ContextSplitter,
+            ContextToggleButton, ContextToggleIcon);
         TerminalClipboard.Attach(this, TerminalHost);
         TerminalHost.ViewportChanged += (cols, rows) => {
             if (DataContext is RemoteSessionViewModel model) model.Terminal?.SetViewport(cols, rows);
