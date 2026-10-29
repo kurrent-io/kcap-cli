@@ -1559,6 +1559,17 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <para><c>Transient</c> marks the arms a retry resolves (a reconnect, a failed probe, a
     /// re-advertisement) so the caller codes them retryable; the arms a retry cannot fix (vendor,
     /// policy version, CLI out of range) stay terminal and demand an operator action.</para></summary>
+    /// <summary>A scratch reviewer sees nothing but its prompt, so a scratch launch that also names a
+    /// repository, a borrowed checkout, a base ref or attachments is refused rather than half-honoured.</summary>
+    internal static string? ScratchLaunchRejection(LaunchAgentCommand cmd) {
+        if (!cmd.ScratchWorkspace) return null;
+        if (cmd.Kind != LaunchKind.ReviewFlow) return "A scratch workspace is only for a review-flow reviewer.";
+        if (!string.IsNullOrEmpty(cmd.RepoPath) || cmd.Borrowed || cmd.BorrowCwd is not null
+         || cmd.BaseRef is not null || cmd.AttachmentIds is { Length: > 0 })
+            return "A scratch-workspace launch must name no repository, borrowed checkout, base ref or attachments.";
+        return null;
+    }
+
     internal static (bool Ok, string Reason, bool Transient) EvaluateReviewerCertification(
             string vendor, string? probedVersion, string? currentConnectionId,
             ReviewerCertificationRequirement certification) {
@@ -2631,6 +2642,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
         }
 
+        if (ScratchLaunchRejection(cmd) is { } scratchRejection) {
+            await LaunchFailedUnlessPrivateAsync(isPrivate, cmd.AgentId, scratchRejection);
+
+            return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
+        }
+
         // A caller-selected Codex posture is validated here — before the repo checks and the worktree
         // creation below, so a rejection leaves nothing to clean up. Selection is only ever valid for
         // an interactive daemon-owned-worktree launch: a posture on a borrowed, review-flow or
@@ -2719,14 +2736,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.DaemonCapacity);
             }
 
-            // A local spawn was never held to the allowed-repo list, so neither is its resume.
-            if (resume is not { Origin: "local" } && !_config.IsRepoAllowed(repoPath)) {
+            // A local spawn was never held to the allowed-repo list, so neither is its resume. A scratch
+            // launch names no repository to allow, find or report on.
+            if (!cmd.ScratchWorkspace && resume is not { Origin: "local" } && !_config.IsRepoAllowed(repoPath)) {
                 await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, $"Repo path not allowed: {repoPath}");
 
                 return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
             }
 
-            if (!Directory.Exists(repoPath)) {
+            if (!cmd.ScratchWorkspace && !Directory.Exists(repoPath)) {
                 await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, $"Repo path does not exist: {repoPath}");
 
                 return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
@@ -2736,7 +2754,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // review-specific check and of the worktree, so a refused launch never inspects a
             // repository it may not report on. A BORROWED launch is judged further down instead,
             // on the canonical path its authorization resolves.
-            if ((isReview || isReviewFlow) && !cmd.Borrowed
+            if ((isReview || isReviewFlow) && !cmd.Borrowed && !cmd.ScratchWorkspace
              && await RefuseOutOfCaptureScopeAsync(agentId, repoPath) is { } scopeRefusal) {
                 return scopeRefusal;
             }
@@ -2839,9 +2857,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     // Direct borrowed runtimes have their own certified read-only boundary.
                     worktree = WorktreeInfo.Borrowed(auth.CanonicalCwd!);
                 }
+            } else if (cmd.ScratchWorkspace) {
+                worktree = await _worktreeManager.CreateScratchAsync($"scratch-{agentId}", _shutdownCts.Token);
             } else {
                 worktree = await _worktreeManager.CreateAsync(repoPath, baseRef: baseRef);
             }
+
+            if (cmd.ScratchWorkspace) repoPath = worktree.Path;
 
             // The checkout the agent runs in is what the session's repo policy file means — the same
             // trust boundary the local seams read. Bound once here so the whole run is judged against
