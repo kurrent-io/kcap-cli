@@ -924,4 +924,65 @@ public class TitleResolveLoopTests {
 
         await Assert.That(h.Applied.Select(a => a.Title)).IsEquivalentTo(["New", "Harness rename"], CollectionOrdering.Matching);
     }
+
+    /// A push in flight across the rename can surface after the server has shown the rename; that
+    /// echo, like a prompt echo, is the loop's own stale title and must not retire the rename.
+    [Test]
+    public async Task A_late_echo_of_a_pre_rename_push_never_retires_a_rename_the_server_has_shown() {
+        var h = new Harness();
+        h.Agents.Add(Agent());
+        h.Native = _ => "Native A";
+        h.Server.Get = _ => null;
+        var gate = new Gate();
+        h.Server.PushGate = gate;
+        var loop = h.Build();
+
+        var tick = loop.TickAsync(CancellationToken.None);
+        await gate.Entered;
+        loop.ApplyRename("a1", "New");
+        gate.Release();
+        await tick;
+
+        h.Server.Get = _ => "New";
+        await loop.TickAsync(CancellationToken.None);
+        h.Server.Get = _ => "Native A";
+        await loop.TickAsync(CancellationToken.None);
+        h.Server.Get = _ => "Fix the login bug in the auth flow";
+        await loop.TickAsync(CancellationToken.None);
+        await Assert.That(h.Applied.Last().Title).IsEqualTo("New");
+
+        h.Server.Get = _ => "Harness rename";
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(h.Applied.Select(a => a.Title))
+            .IsEquivalentTo(["Native A", "New", "Harness rename"], CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task A_late_echo_of_a_pre_rename_push_never_retires_a_rename_after_the_hold() {
+        var h = new Harness();
+        h.Agents.Add(Agent());
+        h.Native = _ => "Native A";
+        h.Server.Get = _ => null;
+        var gate = new Gate();
+        h.Server.PushGate = gate;
+        var loop = h.Build();
+
+        var tick = loop.TickAsync(CancellationToken.None);
+        await gate.Entered;
+        loop.ApplyRename("a1", "New");
+        gate.Release();
+        await tick;
+
+        h.Server.Get = _ => "Native A";
+        h.Time.Advance(TimeSpan.FromMinutes(3));
+        await loop.TickAsync(CancellationToken.None);
+        await Assert.That(h.Applied.Last().Title).IsEqualTo("New");
+
+        h.Server.Get = _ => "Harness rename";
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(h.Applied.Select(a => a.Title))
+            .IsEquivalentTo(["Native A", "New", "Harness rename"], CollectionOrdering.Matching);
+    }
 }

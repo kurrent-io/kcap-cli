@@ -96,6 +96,9 @@ internal sealed class TitleResolveLoop {
         /// projected read model, so until it shows the rename any other title is a lagging read.
         public bool RenameSeen;
         public DateTimeOffset RenamedAt;
+        /// The push attempts made before <see cref="Renamed"/>: a late echo of one is a stale read,
+        /// never a newer title, so it cannot retire the rename.
+        public HashSet<string> PreRenameAttempts = new(StringComparer.Ordinal);
         /// The tick epoch the state was created in; a removal pass spares a state created after
         /// its snapshot, whose agent the snapshot could not have seen.
         public long Born;
@@ -113,6 +116,8 @@ internal sealed class TitleResolveLoop {
         readonly HashSet<string> _set = new(StringComparer.Ordinal);
 
         public bool Contains(string title) => _set.Contains(title);
+
+        public HashSet<string> Snapshot() => new(_set, StringComparer.Ordinal);
 
         public void Add(string title) {
             if (!_set.Add(title)) return;
@@ -165,6 +170,7 @@ internal sealed class TitleResolveLoop {
             state.Renamed              = renamed;
             state.RenameSeen           = false;
             state.RenamedAt            = _time.GetUtcNow();
+            state.PreRenameAttempts    = state.PushAttempts.Snapshot();
             state.ServerTitle          = renamed;
             state.Applied              = renamed;
             state.StartTitleSuperseded = true;
@@ -262,7 +268,9 @@ internal sealed class TitleResolveLoop {
             // current title — it is authoritative for what the harness itself calls the session.
             if (native is not null && !native.Equals(state.PushedNative) && agent.SessionId is { } sid) {
                 // A server read comes back display-capped, so the capped form is what an echo of this push looks like.
-                state.PushAttempts.Add(Normalize(native.Title)!);
+                var attempted = Normalize(native.Title)!;
+                state.PushAttempts.Add(attempted);
+                state.PreRenameAttempts.Remove(attempted);
                 nativePush = native;
                 nativeSid  = sid;
             }
@@ -334,14 +342,17 @@ internal sealed class TitleResolveLoop {
         lock (_gate) {
             if (state.Revision != revision) return (true, null, false);
 
-            // Once the server has shown the rename, or the lag hold has run out, any other title it
-            // shows replaces it — our own later native push included, which is a newer rename.
+            // Once the server has shown the rename, or the lag hold has run out, a newer title
+            // replaces it — a later native push included. A late echo of a push made before the
+            // rename, or of the prompt, is a stale read and never does.
             if (state.Renamed is { } held && serverTitle is not null) {
                 if (serverTitle == held) {
                     state.RenameSeen = true;
-                } else if (state.RenameSeen || _time.GetUtcNow() - state.RenamedAt >= RenameLagHold) {
+                } else if ((state.RenameSeen || _time.GetUtcNow() - state.RenamedAt >= RenameLagHold)
+                        && !state.PreRenameAttempts.Contains(serverTitle) && !IsPromptEcho(serverTitle, agent.Prompt)) {
                     state.Renamed    = null;
                     state.RenameSeen = false;
+                    state.PreRenameAttempts.Clear();
                 }
             }
 
