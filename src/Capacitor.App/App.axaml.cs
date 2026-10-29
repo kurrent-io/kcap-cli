@@ -1199,8 +1199,11 @@ public partial class App : Application {
         _postUpdate ??= InferUpdate(isLocalServer && localUpgrade is not null && componentsOwed);
         // A launch that finishes an update opens on its progress; the main window follows once that settles.
         _holdingMainWindow = _postUpdate is not null && !_shutdownStarted;
-        if (_holdingMainWindow) _coordinator.Prepare();
-        else {
+        if (_holdingMainWindow) {
+            _coordinator.Prepare();
+            // A setup window adopted as the main window is already on screen; it waits for the hand-over too.
+            _coordinator.Window?.Hide();
+        } else {
             _coordinator.ShowMainWindow();
             _updateHandedOver.TrySetResult();
         }
