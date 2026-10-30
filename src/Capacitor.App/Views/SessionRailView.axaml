@@ -162,7 +162,7 @@
                     </Button>
                 </Grid>
 
-                <!-- Deselects the workspace: the pane's empty state IS the launcher. -->
+                <!-- Deselects the workspace (the pane's empty state IS the launcher), or nudges the launcher already showing. -->
                 <Button x:Name="RailNewSessionButton" Classes="kcapChip" HorizontalAlignment="Stretch" Margin="10,0,10,10"
                         Command="{Binding NewSessionCommand}"
                         Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
