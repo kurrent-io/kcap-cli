@@ -240,7 +240,10 @@ kcap-server#2849)
     - The due check runs inside the same `MutateWithRevision` that bumps `ProbeSeq`. Both `RunAsync` and
       `RunIfDueAsync` stamp `ProbeStartedAt = now` there.
   - `AccountRefresher.Interval = TimeSpan.FromMinutes(10)` and `AccountRefresher.Tick = TimeSpan.FromMinutes(2)`.
-  - Test seam: `internal bool Periodic { get; init; } = true;` on `AccountRefresher`.
+  - Test seams on `AccountRefresher`:
+    - `internal bool Periodic { get; init; } = true;`
+    - `internal Func<string, CancellationToken, Task>? BeforePeriodicCheck { get; set; }`. The consumer
+      awaits it after it marks a periodic check running, and before `RunIfDueAsync`.
 
 - [ ] **Step 1: Write the failing Core tests in `AccountRefreshTests`.**
   - `RunIfDue_skips_a_home_refreshed_within_the_interval`: the result is null, and `ProbeSeq` and the probe
@@ -268,21 +271,27 @@ kcap-server#2849)
       probed once.
     - `A_removed_account_is_not_probed_by_the_tick`.
     - `Dispose_stops_the_tick`.
-    - `A_request_for_a_tick_queued_home_inside_its_cooldown_still_waits`:
-      - Work finished at minute 0, and Spare's probe is held by `Gate`.
-      - Advance 2 minutes, so the tick queues Work behind Spare.
-      - `Request(Work)`, then release the gate. The periodic Work check finds it not due and does not
-        probe.
-      - Work is probed only once minute 10 is reached.
-    - `A_request_for_a_tick_queued_home_past_its_cooldown_runs_unconditionally`: same rig, with Work's last
-      finish 11 minutes ago but `RefreshedAt` fresh, as if another daemon had refreshed it. Work is probed
-      as soon as the gate releases.
-    - `A_spent_soon_budget_is_not_bypassed_by_a_tick_queued_home`: spend Work's soon budget, let the tick
-      queue Work, then `RequestSoon(Work)` → Work waits for its cooldown.
+    - `A_tick_stands_down_for_a_home_with_a_deferred_request`:
+      - Work finished at minute 0, and `Request(Work)` at minute 1 is deferred to minute 10.
+      - Advance to minute 12.
+      - Work is probed exactly once (at 10), and the ticks queued no check of Work while the request was
+        deferred.
+    - `A_deferred_request_expiring_behind_a_periodic_check_still_probes`:
+      - `BeforePeriodicCheck` holds the consumer on a periodic check of Spare.
+      - Work's deferred request reaches its deadline meanwhile and is queued as a request.
+      - The shared row's `RefreshedAt` for Work is set fresh, as if another daemon had refreshed it.
+      - Release the hold. Work is probed: a request never goes through the due check.
+    - `A_skipped_check_spends_no_soon_budget`:
+      - `RequestSoon(Work)` probes at minute 0, and a second `RequestSoon(Work)` at minute 2 is deferred to
+        minute 10.
+      - Advance to 10: Work probes.
+      - `RequestSoon(Work)` at minute 12 waits for minute 20 (the budget was stamped at 10).
     - `A_request_racing_a_not_due_check_waits_from_the_last_real_refresh`:
-      - Work last finished at minute 0.
-      - A periodic check of Work starts at minute 4 and is held by `Gate`.
-      - `Request(Work)` arrives during it, then the gate releases (not due).
+      - Work's last real probe was at minute 0, so a check at minute 4 is not due.
+      - Hold the tick's check of Work at minute 4 with a `BeforePeriodicCheck` that blocks only for Work at
+        or after minute 4.
+      - `Request(Work)` arrives during the hold (`_running == Work`). Release the hold: the check is not
+        due and probes nothing.
       - Work is probed at minute 10, not at minute 14.
 - [ ] **Step 3: Run them.** They fail.
   `dotnet run --project test/Capacitor.Cli.Daemon.Tests.Unit/Capacitor.Cli.Daemon.Tests.Unit.csproj -- --treenode-filter "/*/*/AccountRefresherTests/*"`
@@ -292,20 +301,23 @@ kcap-server#2849)
   - After the startup requests, when `Periodic` is set, start
     `time.CreateTimer(_ => OnTick(store), null, Tick, Tick)`. Keep it in a field that `Dispose` disposes
     under `_lock`.
-  - `OnTick` loads the registry, catching what the startup load catches. For each account id not already
-    queued, running or deferred, it adds the id to a `_periodic` set and calls `EnqueueHeld`. It never
-    throws.
-  - In `Request` and `RequestSoon`, an id queued only as periodic (`_queued` ∩ `_periodic`) is not an early
-    return. Evaluate it exactly as if it were not queued:
-    - where the existing code would `EnqueueHeld` it now, remove it from `_periodic` instead (promotion);
-    - where it would `Defer`, leave it periodic and defer as usual.
-  - Make the `_queued` early return check `!_periodic.Contains(id)`.
-  - The consumer calls `RunIfDueAsync(…, Interval, …)` when it removes the id from `_periodic`, and
-    `RunAsync` otherwise.
-  - A periodic run that returns null (not due) leaves `_lastFinished` untouched and does not increment
-    `Finished`. In its `finally`, a null `_deferred` entry is removed and replaced by a fresh
-    `Request(id)` evaluation against the real `_lastFinished`.
-  - A periodic run that probed finishes exactly like a requested one.
+  - The work channel carries `(string Id, bool Periodic)`. `Request`, `RequestSoon` and the deferral
+    timers are unchanged; `EnqueueHeld` writes `(id, false)`. `_queued` holds only request ids.
+  - `OnTick` loads the registry, catching what the startup load catches. For each id that is not in
+    `_queued`, `_deferred` or `_periodicQueued` and is not `_running`, it adds the id to
+    `_periodicQueued` and writes `(id, true)`. It never throws.
+  - The consumer, for `(id, true)`:
+    - removes the id from `_periodicQueued`;
+    - skips it if the id is now in `_queued` or `_deferred`;
+    - otherwise marks it `_running`, awaits `BeforePeriodicCheck`, and calls
+      `RunIfDueAsync(…, Interval, …)`.
+    - It never touches `_soonPending` or `_lastSoon`.
+  - When the check probed, the `finally` is today's: `_lastFinished`, a null deferral deferred by
+    `Cooldown`, and `Finished`.
+  - When the check returned null (not due), the `finally` leaves `_lastFinished` and `Finished` alone.
+    It removes a null `_deferred` entry and calls `Request(id)` after leaving the lock, judging that
+    request against the real `_lastFinished`.
+  - For `(id, false)`, the consumer is today's code.
   - Update the class summary: start, then whenever due, then on request.
 - [ ] **Step 6: Run both test classes.** Expected: PASS.
 - [ ] **Step 7: Commit.** `Re-probe every account home once it is ten minutes stale (#2176)`

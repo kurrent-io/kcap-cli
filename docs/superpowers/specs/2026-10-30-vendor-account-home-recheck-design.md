@@ -64,11 +64,13 @@ account id stays the handle the app looks things up by. The checks run against t
     so probes land 10 to 12 minutes apart however many daemons run.
 - Explicit, limit-hit and wiring requests keep today's path and per-refresher cooldown. They do not go
   through the due check.
-  - A request for a home the timer already queued is judged exactly as if nothing were queued. If it
-    would run now, the queued entry becomes a real request. If it would wait for a cooldown, the queued
-    entry stays a periodic check and the request is deferred as usual.
-  - A periodic check that finds the home not due counts as no refresh at all: no cooldown starts from
-    it. A request that arrived while it ran is judged afresh against the last real refresh.
+  - Periodic checks never enter the request bookkeeping. They are separate entries for the same single
+    consumer.
+  - A check stands down when a request for that home is queued, deferred or running, because the request
+    will refresh it anyway.
+  - A check that finds the home not due counts as no refresh at all: no cooldown starts from it, and it
+    spends no soon budget. A request that arrived while it ran is judged afresh against the last real
+    refresh.
 - The probe is the existing one, run against the account's `Directory`:
   - Claude: `ClaudeIdentityProbe` (`claude auth status --json`).
   - Codex: `CodexAccountProbe`, which also refreshes limits for idle accounts, the same as at daemon start.
