@@ -47,8 +47,20 @@ public class PolicyDecisionEmitterTests : IDisposable {
         // The upload marker is what makes the second emit skip the snapshot, and its name is the
         // sanitized session key the session-end eviction matches by prefix.
         await Assert.That(SpooledPolicyEvents.Snapshots(Config.Root, "s1").Count).IsEqualTo(1);
+        var partition = Path.GetFileName(new HookSpool(Config.Root, TimeProvider.System, server: null).DirectoryPath);
         await Assert.That(Directory.EnumerateFiles(Config.Root.Path("policy", "uploaded"))
-            .Select(f => Path.GetFileName(f)!)).IsEquivalentTo(new[] { $"s1-{Snapshot.Id}" });
+            .Select(f => Path.GetFileName(f)!)).IsEquivalentTo(new[] { $"s1-{partition}-{Snapshot.Id}" });
+    }
+
+    /// <summary>A session that moves to another server mid-run spools there separately, and that
+    /// server cannot resolve a decision without its own copy of the snapshot.</summary>
+    [Test]
+    public async Task Each_server_gets_its_own_copy_of_the_snapshot() {
+        foreach (var server in new[] { "https://a.example", "https://b.example" })
+            await new PolicyDecisionEmitter(Config.Root, new HookSpool(Config.Root, TimeProvider.System, server)).EmitAsync(Event("s5"), Snapshot);
+
+        await Assert.That(SpooledPolicyEvents.Snapshots(Config.Root, "s5", "https://a.example").Count).IsEqualTo(1);
+        await Assert.That(SpooledPolicyEvents.Snapshots(Config.Root, "s5", "https://b.example").Count).IsEqualTo(1);
     }
 
     /// <summary>The marker is named by the same sanitized key the snapshot and journal files carry,

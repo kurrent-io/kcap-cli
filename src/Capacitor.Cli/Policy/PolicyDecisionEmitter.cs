@@ -28,9 +28,10 @@ internal sealed class PolicyDecisionEmitter(ConfigRoot config, HookSpool spool) 
 
     void EnsureSnapshotSpooled(string sessionId, PolicySnapshot snapshot) {
         // Sanitized like the snapshot and journal keys: a raw id carrying a path separator would
-        // put the marker in a nested directory the session-end eviction never looks in.
+        // put the marker in a nested directory the session-end eviction never looks in. Keyed by the
+        // spool's server too: one server's copy must not stop another's from being spooled.
         var marker = config.Path("policy", "uploaded",
-            $"{PolicySnapshotStore.Sanitize(sessionId)}-{snapshot.Id[..Math.Min(16, snapshot.Id.Length)]}");
+            $"{PolicySnapshotStore.Sanitize(sessionId)}-{Path.GetFileName(spool.DirectoryPath)}-{snapshot.Id[..Math.Min(16, snapshot.Id.Length)]}");
         if (File.Exists(marker)) return;
         var body = JsonSerializer.Serialize(PolicyWire.ToUpload(sessionId, snapshot),
             CapacitorJsonContext.Default.PolicySnapshotUploadV1);
