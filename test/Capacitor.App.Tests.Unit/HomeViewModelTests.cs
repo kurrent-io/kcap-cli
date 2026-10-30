@@ -1,5 +1,6 @@
 using TUnit.Assertions.Enums;
 using System.Collections.Frozen;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Runtime.CompilerServices;
@@ -2136,7 +2137,7 @@ public class HomeViewModelTests {
     /// Like the window's own, an open under a stale generation is refused and one that lands bumps it.
     static HomeViewModel RemoteLauncher(
             string path, FakeAgentDirectory directory, List<(string AgentId, AgentOrigin Origin, int Generation)> opened,
-            RecordingLaunchClient? launch = null, StrongBox<int>? navigationBox = null) {
+            RecordingLaunchClient? launch = null, StrongBox<int>? navigationBox = null, Action<string>? afterOpen = null) {
         var navigation = navigationBox ?? new StrongBox<int>(7);
         var remote = new FakeRemoteAgents();
         remote.DaemonsSubject.OnNext([
@@ -2151,6 +2152,7 @@ public class HomeViewModelTests {
                 if (generation != navigation.Value) return;
                 opened.Add((id, origin, generation));
                 navigation.Value++;
+                afterOpen?.Invoke(id);
             },
             daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"), laneStatus: lane.Status,
             directory: directory);
@@ -2214,6 +2216,47 @@ public class HomeViewModelTests {
             directory.Rows.AddOrUpdate(RemoteRow(LaunchedId));
 
             await Assert.That(opened).IsEmpty();
+        });
+    }
+
+    /// Holds what is scheduled on it until drained, as the UI thread holds a posted open until the
+    /// work it is doing returns.
+    sealed class QueuedScheduler : IScheduler {
+        readonly Queue<Action> _queue = new();
+        public DateTimeOffset Now => DateTimeOffset.UtcNow;
+        public IDisposable Schedule<TState>(TState state, Func<IScheduler, TState, IDisposable> action) {
+            _queue.Enqueue(() => action(this, state));
+            return System.Reactive.Disposables.Disposable.Empty;
+        }
+        public IDisposable Schedule<TState>(TState state, TimeSpan dueTime, Func<IScheduler, TState, IDisposable> action) => Schedule(state, action);
+        public IDisposable Schedule<TState>(TState state, DateTimeOffset dueTime, Func<IScheduler, TState, IDisposable> action) => Schedule(state, action);
+        public void Drain() { while (_queue.TryDequeue(out var next)) next(); }
+    }
+
+    /// The registry's differently spelled row can be confirmed off the UI thread while the placeholder
+    /// is still opening; its open runs after that, and must carry the generation the open left.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task ARegistryRowConfirmedWhileThePlaceholderOpensStillTakesOver() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            using var directory = new FakeAgentDirectory();
+            var opened = new List<(string AgentId, AgentOrigin Origin, int Generation)>();
+            var dashed = Guid.ParseExact(LaunchedId, "N").ToString("D");
+            var ui = new QueuedScheduler();
+            using var vm = RemoteLauncher(path, directory, opened, new RecordingLaunchClient { Next = new LaunchOutcome(true, dashed, null) },
+                afterOpen: id => {
+                    if (id != dashed) return;
+                    var prior = RxSchedulers.MainThreadScheduler;
+                    RxSchedulers.MainThreadScheduler = ui;
+                    try { directory.Rows.AddOrUpdate(RemoteRow(LaunchedId)); } finally { RxSchedulers.MainThreadScheduler = prior; }
+                });
+
+            await vm.SelectMachineAsync("home-pc", isLocal: false);
+            await vm.StartCommand.Execute();
+            ui.Drain();
+
+            await Assert.That(opened).IsEquivalentTo([(dashed, AgentOrigin.Remote, 7), (LaunchedId, AgentOrigin.Remote, 8)]);
         });
     }
 
