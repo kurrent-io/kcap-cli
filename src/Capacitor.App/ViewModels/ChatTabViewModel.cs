@@ -483,8 +483,12 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     string _modelLabel = "default";
     public string ModelLabel { get => _modelLabel; private set => this.RaiseAndSetIfChanged(ref _modelLabel, value); }
 
-    string? _accountLabel;
-    public string? AccountLabel { get => _accountLabel; private set => this.RaiseAndSetIfChanged(ref _accountLabel, value); }
+    /// The label and the bars come from one snapshot row, so they are swapped as one value.
+    sealed record AccountStripState(string? Label, AccountUsageView? Usage);
+
+    AccountStripState _accountStrip = new(null, null);
+
+    public string? AccountLabel => _accountStrip.Label;
 
     string? _accountDirectory;
     public string? AccountDirectory { get => _accountDirectory; private set => this.RaiseAndSetIfChanged(ref _accountDirectory, value); }
@@ -495,32 +499,36 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     bool _showsAccountStrip;
     public bool ShowsAccountStrip { get => _showsAccountStrip; private set => this.RaiseAndSetIfChanged(ref _showsAccountStrip, value); }
 
-    readonly BehaviorSubject<string?> _accountIds = new(null);
+    readonly bool _tracksAccountReadings;
 
-    AccountUsageView? _accountStripUsage;
+    /// The session's account id and its launch-time label, which stands in for the row's label
+    /// until the snapshot has the row.
+    readonly BehaviorSubject<(string? Id, string? Fallback)> _accountSources = new((null, null));
+
     /// The session's account reading on its host, or null when the host is not drawable or the
     /// account has no registry id there.
-    public AccountUsageView? AccountStripUsage {
-        get => _accountStripUsage;
-        private set {
-            if (Equals(_accountStripUsage, value)) return;
-            this.RaiseAndSetIfChanged(ref _accountStripUsage, value);
-            this.RaisePropertyChanged(nameof(ShowsAccountUsage));
-            this.RaisePropertyChanged(nameof(ShowsAccountDirectory));
-            this.RaisePropertyChanged(nameof(AccountReadingNote));
-        }
+    public AccountUsageView? AccountStripUsage => _accountStrip.Usage;
+
+    void SetAccountStrip(AccountStripState next) {
+        if (Equals(_accountStrip, next)) return;
+        _accountStrip = next;
+        this.RaisePropertyChanged(nameof(AccountLabel));
+        this.RaisePropertyChanged(nameof(AccountStripUsage));
+        this.RaisePropertyChanged(nameof(ShowsAccountUsage));
+        this.RaisePropertyChanged(nameof(ShowsAccountDirectory));
+        this.RaisePropertyChanged(nameof(AccountReadingNote));
     }
 
-    public bool ShowsAccountUsage => _accountStripUsage is { } usage && usage.LineText != AccountUsage.NoReading;
+    public bool ShowsAccountUsage => _accountStrip.Usage is { } usage && usage.LineText != AccountUsage.NoReading;
 
     public bool ShowsAccountDirectory => !ShowsAccountUsage;
 
-    public string? AccountReadingNote => _accountStripUsage?.LineText == AccountUsage.NoReading ? "· " + AccountUsage.NoReading : null;
+    public string? AccountReadingNote => _accountStrip.Usage?.LineText == AccountUsage.NoReading ? "· " + AccountUsage.NoReading : null;
 
-    static AccountUsageView? StripUsage(string? accountId, AccountsSnapshotDto? snapshot, DateTimeOffset now) =>
-        accountId is not null && snapshot?.Accounts?.FirstOrDefault(a => a.Id == accountId) is { } account
-            ? AccountUsage.Project(account, now, TimeZoneInfo.Local)
-            : null;
+    static AccountStripState StripState((string? Id, string? Fallback) source, AccountsSnapshotDto? snapshot, DateTimeOffset now) =>
+        source.Id is not null && snapshot?.Accounts?.FirstOrDefault(a => a.Id == source.Id) is { } account
+            ? new(string.IsNullOrWhiteSpace(account.Label) ? source.Fallback : account.Label, AccountUsage.Project(account, now, TimeZoneInfo.Local))
+            : new(source.Fallback, null);
 
     string _statusText = "";
     public string StatusText { get => _statusText; private set => this.RaiseAndSetIfChanged(ref _statusText, value); }
@@ -727,6 +735,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null, IMessageSenderSource? senders = null,
             IObservable<AccountsSnapshotDto?>? accountReadings = null, IObservable<DateTimeOffset>? usageClock = null,
             IObservable<Unit>? signInCompleted = null) {
+        _tracksAccountReadings = accountReadings is not null;
         _drafts = drafts;
         _origin = origin;
         _agentId = agentId;
@@ -810,11 +819,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             .DisposeWith(_disposables);
 
         if (accountReadings is not null)
-            _accountIds.DistinctUntilChanged()
-                .CombineLatest(accountReadings, usageClock ?? Observable.Return(time.GetUtcNow()), StripUsage)
+            _accountSources.DistinctUntilChanged()
+                .CombineLatest(accountReadings, usageClock ?? Observable.Return(time.GetUtcNow()), StripState)
                 .DistinctUntilChanged()
                 .ObserveOn(RxSchedulers.MainThreadScheduler)
-                .Subscribe(usage => AccountStripUsage = usage)
+                .Subscribe(SetAccountStrip)
                 .DisposeWith(_disposables);
 
         _timer = time.CreateTimer(_ => OnTick(), null, PollInterval, PollInterval);
@@ -1126,11 +1135,12 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         var directory = info.AccountDirectory;
         AccountVendor = info.Vendor;
         AccountDirectory = directory;
-        AccountLabel = string.IsNullOrWhiteSpace(info.AccountLabel) && directory is not null ? AccountRows.LastSegment(directory) : info.AccountLabel;
+        var fallback = string.IsNullOrWhiteSpace(info.AccountLabel) && directory is not null ? AccountRows.LastSegment(directory) : info.AccountLabel;
         ShowsAccountStrip = directory is not null
             && (string.Equals(info.Vendor, HarnessId.Claude.VendorId, StringComparison.OrdinalIgnoreCase)
              || string.Equals(info.Vendor, HarnessId.Codex.VendorId, StringComparison.OrdinalIgnoreCase));
-        _accountIds.OnNext(info.AccountId);
+        if (_tracksAccountReadings) _accountSources.OnNext((info.AccountId, fallback));
+        else SetAccountStrip(new(fallback, null));
     }
 
     /// A panel command such as /status writes nothing to the transcript, so the panel opening
