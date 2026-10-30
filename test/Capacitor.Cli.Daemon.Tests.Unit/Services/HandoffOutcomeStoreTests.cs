@@ -84,4 +84,17 @@ public class HandoffOutcomeStoreTests {
         await Assert.That(File.GetUnixFileMode(FilePath)).IsEqualTo(UnixFileMode.UserRead | UnixFileMode.UserWrite);
         await Assert.That(Directory.GetFiles(Tmp.Path)).IsEquivalentTo([FilePath]);
     }
+
+    /// <summary>A state directory removed under a running daemon comes back as owner-only as daemon start makes it.</summary>
+    [Test]
+    public async Task A_recreated_state_directory_is_owner_only() {
+        var state = Tmp.PathTo("state");
+        var store = new HandoffOutcomeStore(state, _time);
+
+        store.Put(Session(1), Done(1));
+
+        await Assert.That(new HandoffOutcomeStore(state, _time).Get(Session(1))!.State).IsEqualTo("done");
+        if (!OperatingSystem.IsWindows())
+            await Assert.That(File.GetUnixFileMode(state)).IsEqualTo(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+    }
 }

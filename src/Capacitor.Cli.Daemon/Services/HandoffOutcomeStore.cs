@@ -59,10 +59,7 @@ internal sealed partial class HandoffOutcomeStore(string stateDirectory, TimePro
     }
 
     void Save(List<Entry> entries) {
-        if (!Directory.Exists(stateDirectory)) {
-            if (OperatingSystem.IsWindows()) Directory.CreateDirectory(stateDirectory);
-            else Directory.CreateDirectory(stateDirectory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-        }
+        if (!Directory.Exists(stateDirectory)) OwnerOnlyDirectory.Ensure(stateDirectory);
 
         var temp = _path + ".tmp-" + Guid.NewGuid().ToString("N")[..8];
         try {
