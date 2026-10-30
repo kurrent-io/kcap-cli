@@ -167,11 +167,11 @@ internal partial class AgentOrchestrator {
                 TerminalDialog: a.Status == "Running" ? a.TerminalDialog : null,
                 WorkingSince: a.Status == "Running" && a.ActivityClock.WorkingFor is { } working
                     ? (_time.GetUtcNow() - working).UtcDateTime : null,
-                AccountDirectory: a.Account?.Directory, AccountId: a.Account?.AccountId, AccountLabel: a.Account?.Label,
+                AccountDirectory: a.Account?.Directory, AccountId: a.Account?.AccountId, AccountLabel: CurrentAccountLabel(a.Account?.AccountId, a.Account?.Label),
                 TurnAttested: a.Status == "Running" && a.ActivityClock.TurnAttested))];
 
     /// The checkout is resolved as the live agent's is, so a row keeps its rail group across the handoff.
-    static AgentStatusDto LedgerStatusRow(ResumeLedgerEntry entry, string status) {
+    AgentStatusDto LedgerStatusRow(ResumeLedgerEntry entry, string status) {
         var worktree = ResumedWorktree(entry);
         var checkout = AgentCheckout.Resolve(worktree, entry.Launch.Work, borrowedSnapshotSource: null);
 
@@ -186,7 +186,7 @@ internal partial class AgentOrchestrator {
             Branch: string.IsNullOrWhiteSpace(worktree.Branch) ? null : worktree.Branch,
             TranscriptFormat: entry.TranscriptFormat,
             Interruption: entry.State == ResumeState.Interrupted ? entry.LastError : null,
-            AccountDirectory: entry.Launch.AccountDirectory, AccountId: entry.Launch.AccountId, AccountLabel: entry.Launch.AccountLabel);
+            AccountDirectory: entry.Launch.AccountDirectory, AccountId: entry.Launch.AccountId, AccountLabel: CurrentAccountLabel(entry.Launch.AccountId, entry.Launch.AccountLabel));
     }
 
     /// <summary>

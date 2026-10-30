@@ -324,6 +324,60 @@ public class AgentOrchestratorAccountTests {
         await Assert.That(row.AccountLabel).IsEqualTo("Work");
     }
 
+    static AccountsSnapshotDto SnapshotLabelling(string accountId, string label) => new(
+        "host", 1,
+        [new AccountViewDto(accountId, "claude", "/unused", "unused", label, "installed")],
+        []);
+
+    [Test]
+    public async Task Heartbeat_reports_the_current_account_label() {
+        Register(WorkId, HarnessId.Claude, Tmp.CreateDir(".claude-work"), "old@x");
+        using var repo = GitRepo.CreateWithCommit();
+        await using var orch = Build(new CaptureServerConnection(), LivePty(), Spy(), repo);
+        await orch.HandleLaunchAgentForTest(Launch("acct-heartbeat", repo, WorkId));
+
+        orch.AccountsSnapshot = () => SnapshotLabelling(WorkId, "new@x");
+
+        await Assert.That(orch.BuildLiveAgents().Single(a => a.Id == "acct-heartbeat").AccountLabel).IsEqualTo("new@x");
+    }
+
+    [Test]
+    public async Task Status_reports_the_current_account_label() {
+        Register(WorkId, HarnessId.Claude, Tmp.CreateDir(".claude-work"), "old@x");
+        using var repo = GitRepo.CreateWithCommit();
+        await using var orch = Build(new CaptureServerConnection(), LivePty(), Spy(), repo);
+        await orch.HandleLaunchAgentForTest(Launch("acct-status-now", repo, WorkId));
+
+        orch.AccountsSnapshot = () => SnapshotLabelling(WorkId, "new@x");
+
+        await Assert.That(orch.SnapshotAgentsForStatus().Single(a => a.Id == "acct-status-now").AccountLabel).IsEqualTo("new@x");
+    }
+
+    [Test]
+    public async Task Ledger_status_row_reports_the_current_account_label() {
+        var work = Register(WorkId, HarnessId.Claude, Tmp.CreateDir(".claude-work"), "old@x");
+        await using var orch = Build(new CaptureServerConnection(), LivePty(), Spy());
+        var entry = ResumeLedgerEntries.For("acct-ledger-now", ResumeState.Interrupted);
+        orch.ResumeLedger!.Write(entry with { Launch = entry.Launch with { AccountDirectory = work, AccountId = WorkId, AccountLabel = "old@x" } });
+
+        orch.AccountsSnapshot = () => SnapshotLabelling(WorkId, "new@x");
+
+        await Assert.That(orch.SnapshotAgentsForStatus().Single(a => a.Id == "acct-ledger-now").AccountLabel).IsEqualTo("new@x");
+    }
+
+    [Test]
+    public async Task Unknown_account_id_keeps_the_launch_label() {
+        Register(WorkId, HarnessId.Claude, Tmp.CreateDir(".claude-work"), "old@x");
+        using var repo = GitRepo.CreateWithCommit();
+        await using var orch = Build(new CaptureServerConnection(), LivePty(), Spy(), repo);
+        await orch.HandleLaunchAgentForTest(Launch("acct-keeps", repo, WorkId));
+
+        orch.AccountsSnapshot = () => SnapshotLabelling("another-account", "new@x");
+
+        await Assert.That(orch.BuildLiveAgents().Single(a => a.Id == "acct-keeps").AccountLabel).IsEqualTo("old@x");
+        await Assert.That(orch.SnapshotAgentsForStatus().Single(a => a.Id == "acct-keeps").AccountLabel).IsEqualTo("old@x");
+    }
+
     [Test]
     public async Task Malformed_registry_refuses_an_explicit_id_and_defaults_a_null_one() {
         Register(WorkId, HarnessId.Claude, Tmp.CreateDir(".claude-work"), "Work");
