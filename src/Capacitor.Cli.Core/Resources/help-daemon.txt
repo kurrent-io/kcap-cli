@@ -158,10 +158,10 @@ Subcommands for shim (the command-line tool — kcap on your terminal PATH):
   ensure [--json]         Probe a new terminal's PATH. If kcap already
                           resolves, report already_on_path and exit 0. If it
                           is absent, link kcap to this CLI in the first PATH
-                          folder you can write to, else in /usr/local/bin
-                          (macOS; that prompts once for your admin password)
-                          or ~/.local/bin (Linux), or add its folder to your
-                          user PATH (Windows), then
+                          folder you can write to, else in ~/.local/bin
+                          (macOS also adds that folder to PATH in your shell
+                          profile), or add its folder to your user PATH
+                          (Windows). No admin password is ever asked for. Then
                           re-probe so success is never reported on the change
                           alone. Every ambiguous row fails closed with a coded
                           reason: an unknown probe (probe_unknown), a

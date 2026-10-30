@@ -53,7 +53,7 @@ internal static class MistralVibeUsageStamp {
         using (var writer = new Utf8JsonWriter(buffer)) {
             writer.WriteStartObject();
             delta.WriteTo(writer);
-            if (model is not null) writer.WriteString("model", model);
+            if (model is { Length: > 0 }) writer.WriteString("model", model);
             writer.WriteStartObject("cumulative");
             total.WriteTo(writer);
             writer.WriteEndObject();

@@ -486,6 +486,28 @@ public class SessionRailViewModelTests {
         });
     }
 
+    /// The PR tone cache reads only what this filter admits, so it must follow the state filter and
+    /// the selected row the rail shows whatever the filter says.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_rail_publishes_the_rows_it_shows() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var directory = new FakeAgentDirectory();
+            var shown = new System.Reactive.Subjects.ReplaySubject<Func<AgentRow, bool>>(1);
+            using var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System, shownRows: shown);
+            var ended = Server("ended");
+            Func<AgentRow, bool>? current = null;
+            using var _s = shown.Subscribe(filter => current = filter);
+            await Assert.That(current!(ended)).IsTrue();
+
+            rail.State = RailState.Live;
+            await Assert.That(current!(ended)).IsFalse();
+
+            rail.SelectedSessionKey = ended.Key;
+            await Assert.That(current!(ended)).IsTrue();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Selecting_a_server_row_keeps_its_session_in_the_listing() {
@@ -639,6 +661,17 @@ public class SessionRailViewModelTests {
                 await Assert.That(Labels(rail)).IsEquivalentTo(["Waiting on you", "Running", "Ended"], CollectionOrdering.Matching);
             }
         });
+    }
+
+    /// The chip reads Working for a parent waiting on input with a subagent still running, so the
+    /// group must say Running too.
+    [Test]
+    public async Task Status_grouping_puts_a_waiting_parent_with_a_live_subagent_under_running() {
+        var row = Local("parent", awaiting: true) with { LiveSubagents = 1 };
+
+        await Assert.That(SessionStatusDots.Label(row)).IsEqualTo("Working");
+        await Assert.That(SessionRailViewModel.GroupKey(row, RailGrouping.Status, DateOnly.FromDateTime(Noon), TimeZoneInfo.Utc))
+            .IsEqualTo("status:1");
     }
 
     [Test]

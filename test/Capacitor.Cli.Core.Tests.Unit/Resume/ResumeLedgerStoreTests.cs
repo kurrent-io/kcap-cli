@@ -18,7 +18,7 @@ public class ResumeLedgerStoreTests {
             "preset", "/mcp.json", "title", true, "server", "user-1", "User One", "owner", "2026-10-17T08:00:00Z",
             "flow-1", "reviewer", WorktreeBranch: "capacitor/wt", WorktreeIsStandalone: false, WorktreeSourceRepo: "/repo",
             PermissionMode: "plan", InactivityBoundSeconds: 600,
-            AccountDirectory: "/home/u/.claude-work", AccountId: "a1b2", AccountLabel: "Work"),
+            AccountDirectory: "/home/u/.claude-work", AccountId: "a1b2", WorktreeOwnsBranch: false, AccountLabel: "Work"),
         ResumeState.Running, 2, "err", "pred-1", T0.AddMinutes(1), DaemonInstanceId: "instance-1", AwaitingInput: true);
 
     [Test]
@@ -50,7 +50,7 @@ public class ResumeLedgerStoreTests {
         var path = store.EntryPath("agent-1");
         var json = System.Text.RegularExpressions.Regex.Replace(
             File.ReadAllText(path),
-            ",\"(daemon_instance_id|worktree_branch|worktree_is_standalone|worktree_source_repo|permission_mode|inactivity_bound_seconds|awaiting_input|account_directory|account_id|account_label)\":(\"[^\"]*\"|true|false|[0-9]+)", "");
+            ",\"(daemon_instance_id|worktree_branch|worktree_is_standalone|worktree_source_repo|permission_mode|inactivity_bound_seconds|awaiting_input|account_directory|account_id|worktree_owns_branch|account_label)\":(\"[^\"]*\"|true|false|[0-9]+)", "");
         await Assert.That(json).DoesNotContain("worktree_branch");
         await Assert.That(json).DoesNotContain("permission_mode");
         await Assert.That(json).DoesNotContain("inactivity_bound_seconds");
@@ -69,6 +69,7 @@ public class ResumeLedgerStoreTests {
         await Assert.That(read.AwaitingInput).IsNull();
         await Assert.That(read.Launch.AccountDirectory).IsNull();
         await Assert.That(read.Launch.AccountId).IsNull();
+        await Assert.That(read.Launch.WorktreeOwnsBranch).IsNull();
         await Assert.That(read.Launch.AccountLabel).IsNull();
     }
 

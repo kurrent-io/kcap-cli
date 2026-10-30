@@ -6,6 +6,7 @@ using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Harness.Gemini;
 using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Harness.Pi;
+using Capacitor.Cli.Core.Setup;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Harness;
 
@@ -175,6 +176,84 @@ public class HarnessRegistryTests {
         await Assert.That(harnesses.ResolveExecutable(HarnessId.Claude)).IsNull();
         await Assert.That(harnesses.Searching(login).ResolveExecutable(HarnessId.Claude))
             .IsEqualTo(login.Resolve("claude"));
+    }
+
+    static TestHarness Bundling(string bundled) =>
+        new(HarnessId.Claude, "Claude Code", new HarnessSignals { BundledCli = _ => bundled }) { CliBinary = "claude" };
+
+    const string Bundled = "/Applications/Claude.app/claude";
+
+    [Test]
+    public async Task Launchable_prefers_the_cli_on_the_search_path() {
+        using var bin   = new TempDir();
+        var       probe = TestBinaries.Searching(bin, "claude");
+
+        var harnesses = HarnessRegistry.Over(probe, Bundling(Bundled));
+
+        await Assert.That(harnesses.ResolveLaunchable(HarnessId.Claude)).IsEqualTo(probe.Resolve("claude"));
+    }
+
+    /// <summary>The bundled CLI stands in for launching, while the PATH-only answer stays null: a caller
+    /// comparing search paths must not see the app's copy as a hit on either.</summary>
+    [Test]
+    public async Task Launchable_falls_back_to_the_bundled_cli_but_executable_does_not() {
+        var harnesses = HarnessRegistry.Over(TestBinaries.None, Bundling(Bundled));
+
+        await Assert.That(harnesses.ResolveLaunchable(HarnessId.Claude)).IsEqualTo(Bundled);
+        await Assert.That(harnesses.ResolveExecutable(HarnessId.Claude)).IsNull();
+    }
+
+    [Test]
+    public async Task Launch_command_swaps_in_the_bundled_cli_only_for_the_bare_default_off_path() {
+        var harnesses = HarnessRegistry.Over(TestBinaries.None, Bundling(Bundled));
+
+        await Assert.That(harnesses.LaunchCommand(HarnessId.Claude, "claude")).IsEqualTo(Bundled);
+    }
+
+    [Test]
+    public async Task Launch_command_keeps_the_bare_default_when_it_is_on_the_search_path() {
+        using var bin   = new TempDir();
+        var       probe = TestBinaries.Searching(bin, "claude");
+
+        var harnesses = HarnessRegistry.Over(probe, Bundling(Bundled));
+
+        await Assert.That(harnesses.LaunchCommand(HarnessId.Claude, "claude")).IsEqualTo("claude");
+    }
+
+    /// <summary>A configured path is the operator's: even one that does not resolve is not replaced.</summary>
+    [Test]
+    public async Task Launch_command_never_replaces_a_configured_path() {
+        var harnesses = HarnessRegistry.Over(TestBinaries.None, Bundling(Bundled));
+
+        await Assert.That(harnesses.LaunchCommand(HarnessId.Claude, "/opt/claude/bin/claude")).IsEqualTo("/opt/claude/bin/claude");
+    }
+
+    [Test]
+    public async Task Launch_command_keeps_the_command_when_no_app_bundles_one() {
+        var harnesses = HarnessRegistry.Over(TestBinaries.None, TestHarnesses.Spawning(HarnessId.Claude, "claude"));
+
+        await Assert.That(harnesses.LaunchCommand(HarnessId.Claude, "claude")).IsEqualTo("claude");
+        await Assert.That(harnesses.LaunchCommand(HarnessId.Codex, "codex")).IsEqualTo("codex");
+    }
+
+    /// <summary>The real vendors find their bundled CLI through the registry's own desktop-app roots.</summary>
+    [Test]
+    public async Task Claude_and_codex_resolve_their_bundled_cli_under_the_app_roots() {
+        Skip.When(OperatingSystem.IsWindows(), "macOS bundle layout");
+
+        using var apps = new TempDir();
+        var claude = apps.CreateExecutable(
+            Path.Combine("Claude", "claude-code", "2.1.309", "abc", "claude.app", "Contents", "MacOS", "claude"), "#!/bin/sh\n");
+        apps.CreateFile(Path.Combine("Claude", "claude-code", "2.1.309", "abc", ".verified"));
+        var codex = apps.CreateExecutable(
+            Path.Combine("ChatGPT.app", "Contents", "Resources", "codex-cli", "bin", "codex"), "#!/bin/sh\n");
+
+        var harnesses = HarnessRegistry.Over(
+            TestBinaries.None, DesktopAppProbe.Searching(apps.Path),
+            ClaudeHarness.Over(new ClaudePaths(Nowhere, null)), CodexHarness.Over(new CodexPaths(Nowhere, null)));
+
+        await Assert.That(harnesses.ResolveLaunchable(HarnessId.Claude)).IsEqualTo(claude);
+        await Assert.That(harnesses.ResolveLaunchable(HarnessId.Codex)).IsEqualTo(codex);
     }
 
     /// <summary>An entry under the right id but of another type is named, not cast blindly.</summary>

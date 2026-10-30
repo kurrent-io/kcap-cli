@@ -1007,7 +1007,8 @@ public class ChatTabViewModelTests {
         });
     }
 
-    /// Claude Code stores its compaction summary as a user record; the row must not read as the user's.
+    /// Claude Code stores its compaction summary as a user record; the row must not read as the user's,
+    /// and it starts folded because it restates the conversation above it.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_compaction_summary_renders_as_a_conversation_compacted_note() {
@@ -1021,6 +1022,13 @@ public class ChatTabViewModelTests {
             var note = (SystemNoteItem)h.Chat.Items.Single();
             await Assert.That(note.Label).IsEqualTo(SystemNoteItem.CompactSummaryLabel);
             await Assert.That(note.Text).IsEqualTo("This session is being continued from a previous conversation.");
+            await Assert.That(note.IsExpanded).IsFalse();
+            await Assert.That(note.ToggleAccessibleName).IsEqualTo("Expand Conversation compacted");
+            note.Toggle();
+            await Assert.That(note.IsExpanded).IsTrue();
+            await Assert.That(note.ToggleAccessibleName).IsEqualTo("Collapse Conversation compacted");
+            note.Toggle();
+            await Assert.That(note.IsExpanded).IsFalse();
             await h.TeardownAsync();
         });
     }
@@ -1040,6 +1048,9 @@ public class ChatTabViewModelTests {
             await Assert.That(note.Label).IsEqualTo(SystemNoteItem.AgentReportLabel);
             await Assert.That(note.IconKind).IsEqualTo(Lucide.Avalonia.LucideIconKind.BotMessageSquare);
             await Assert.That(note.Text).IsEqualTo("**Done.**");
+            await Assert.That(note.IsExpanded).IsTrue();
+            note.Toggle();
+            await Assert.That(note.IsExpanded).IsTrue();
             await h.TeardownAsync();
         });
     }
@@ -3799,7 +3810,7 @@ public class ChatTabViewModelTests {
                 var usage = rig.Chat.AccountStripUsage!;
                 await Assert.That(usage.Bars.Select(b => (b.Label, b.PercentText, b.Tone)))
                     .IsEquivalentTo(new[] { ("5h", "42%", UsageTone.Neutral), ("Week", "81%", UsageTone.Warning) }, CollectionOrdering.Matching);
-                await Assert.That(usage.NextResetText).IsEqualTo("resets in 2h 14m");
+                await Assert.That(usage.NextResetText).IsEqualTo("5h resets in 2h 14m");
                 await Assert.That(rig.Chat.ShowsAccountDirectory).IsFalse();
                 await Assert.That(rig.Chat.AccountReadingNote).IsNull();
             } finally { await rig.H.TeardownAsync(); }
@@ -3904,7 +3915,7 @@ public class ChatTabViewModelTests {
             try {
                 await rig.PushAsync();
                 rig.Readings.OnNext(StripReadings.Snapshot(StripReadings.Account("acc1", StripReadings.Reading(StripReadings.Window(300, 42, TimeSpan.FromMinutes(134).Add(TimeSpan.FromSeconds(30)))))));
-                await WaitUntilAsync(() => rig.Chat.AccountStripUsage?.NextResetText == "resets in 2h 14m", what: "the first reset");
+                await WaitUntilAsync(() => rig.Chat.AccountStripUsage?.NextResetText == "5h resets in 2h 14m", what: "the first reset");
                 var first = rig.Chat.AccountStripUsage;
 
                 var changes = 0;
@@ -3915,7 +3926,7 @@ public class ChatTabViewModelTests {
                 await Assert.That(rig.Chat.AccountStripUsage).IsSameReferenceAs(first);
 
                 rig.Clock.OnNext(StripReadings.Now.AddMinutes(30));
-                await WaitUntilAsync(() => rig.Chat.AccountStripUsage?.NextResetText == "resets in 1h 44m", what: "the clock's reset");
+                await WaitUntilAsync(() => rig.Chat.AccountStripUsage?.NextResetText == "5h resets in 1h 44m", what: "the clock's reset");
             } finally { await rig.H.TeardownAsync(); }
         });
     }

@@ -150,4 +150,6 @@ internal sealed record LauncherContext(
 }
 
 /// <param name="SessionId">The vendor session a local launch runs under, when its args pin or name one.</param>
-internal readonly record struct LaunchArgs(string[] Args, string? McpConfigPath, string? SessionId = null);
+/// <param name="PermissionMode">The permission mode a local launch's args select, recorded so a recovery
+/// relaunch passes it again. Last because callers pass <paramref name="SessionId"/> positionally.</param>
+internal readonly record struct LaunchArgs(string[] Args, string? McpConfigPath, string? SessionId = null, string? PermissionMode = null);

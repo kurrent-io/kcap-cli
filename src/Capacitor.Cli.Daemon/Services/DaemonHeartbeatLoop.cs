@@ -133,7 +133,7 @@ internal sealed class DaemonHeartbeatLoop(
     async Task SafeReRegisterAsync() {
         try {
             await port.ReRegisterAsync();
-        } catch (HubException ex) when (ex.Message.StartsWith(ServerConnection.NameInUseErrorCode, StringComparison.Ordinal)) {
+        } catch (HubException ex) when (ServerConnection.IsNameInUse(ex)) {
             // the server explicitly told us our (owner, name) slot
             // is held by another live daemon. Force-reconnecting would just
             // re-trigger the same rejection. ServerConnection already fired

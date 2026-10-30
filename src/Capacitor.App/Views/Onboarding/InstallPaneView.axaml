@@ -100,6 +100,9 @@
                                Text="{x:Static vmr:SearchChoiceViewModel.KeywordDetail}" />
                 </StackPanel>
 
+                <TextBlock x:Name="RetryStatusText" Classes="onboardingDetail" TextWrapping="Wrap" Text="{Binding RetryStatus}"
+                           IsVisible="{Binding AutoRetrying}" />
+
                 <Button x:Name="CancelInstallButton" Classes="onboardingLink" Content="Cancel" HorizontalAlignment="Left"
                         AutomationProperties.Name="Cancel the install"
                         Command="{Binding CancelCommand}" IsVisible="{Binding CancelVisible}" />
@@ -124,6 +127,10 @@
                     </StackPanel>
                     <Button x:Name="TryAgainButton" Classes="onboardingPrimary" Content="Try again" HorizontalAlignment="Left"
                             Command="{Binding TryAgainCommand}" IsVisible="{Binding TryAgainVisible}" />
+                    <Button x:Name="EmailSupportButton" Classes="onboardingPrimary" Content="Email logs to support" HorizontalAlignment="Left"
+                            Command="{Binding EmailSupportCommand}" IsVisible="{Binding EmailSupportVisible}" />
+                    <TextBlock x:Name="SupportNoteText" Classes="onboardingDetail" TextWrapping="Wrap" Text="{Binding SupportNote}"
+                               IsVisible="{Binding SupportNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 </StackPanel>
             </Grid>
         </Border>

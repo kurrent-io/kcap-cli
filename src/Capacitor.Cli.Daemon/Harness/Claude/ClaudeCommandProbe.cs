@@ -32,7 +32,7 @@ static class ClaudeCommandProbe {
             CancellationToken ct) {
         // Resolve rather than spawn "claude" verbatim, for the same reason ClaudeCliRunner does: on
         // Windows the npm shim is claude.cmd, which a bare FileName would never find.
-        var exePath = harnesses.ResolveExecutable(HarnessId.Claude);
+        var exePath = harnesses.ResolveLaunchable(HarnessId.Claude);
         if (exePath is null) return [];
 
         using var process = CliProcess.TryStart(BuildStartInfo(exePath, workingDir, account, home), log);

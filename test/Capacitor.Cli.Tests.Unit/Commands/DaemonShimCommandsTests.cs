@@ -9,7 +9,7 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 /// The <c>kcap daemon shim ensure</c> ladder: a fresh login-shell probe decides already-on-path /
 /// install / fail-closed refusal (pure classifier rows), and the verb's JSON contract carries the
 /// outcome + coded reason the flow keys off. The installer's own mechanics
-/// (preflight taxonomy, osascript, post-install re-probe) are covered in Core.Tests — here the
+/// (preflight taxonomy, folder choice, post-install re-probe) are covered in Core.Tests — here the
 /// install arm is driven through the injected seams so the verb's wire contract is testable without
 /// a real admin prompt.
 /// </summary>
@@ -191,7 +191,7 @@ public class DaemonShimCommandsTests {
     [Test]
     public async Task Ensure_installed_exits_zero_with_installed_outcome() {
         var (exit, json, _) = await Run(["--json"], onPath: false, installable: true,
-            install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Installed, null, null)));
+            install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Installed, null)));
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(json).IsNotNull();
@@ -203,7 +203,7 @@ public class DaemonShimCommandsTests {
     [Test]
     public async Task Ensure_installed_but_not_on_path_exits_nonzero_with_detail() {
         var (exit, json, _) = await Run(["--json"], onPath: false, installable: true,
-            install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.InstalledButNotOnPath, "Add the line", null)));
+            install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.InstalledButNotOnPath, "Add the line")));
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(json).IsNotNull();
@@ -213,45 +213,22 @@ public class DaemonShimCommandsTests {
     }
 
     [Test]
-    public async Task Ensure_cancelled_reports_cancelled() {
+    public async Task Ensure_failed_carries_the_detail_and_exits_nonzero() {
         var (exit, json, _) = await Run(["--json"], onPath: false, installable: true,
-            install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Cancelled, null, null)));
-
-        await Assert.That(exit).IsEqualTo(1);
-        await Assert.That(json).IsNotNull();
-        await Assert.That(json!.Outcome).IsEqualTo("cancelled");
-    }
-
-    [Test]
-    public async Task Ensure_failed_carries_detail_and_sudo_fallback() {
-        var (exit, json, _) = await Run(["--json"], onPath: false, installable: true,
-            install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Failed, "osascript failed", "sudo ln -s ...")));
-
-        await Assert.That(exit).IsEqualTo(1);
-        await Assert.That(json).IsNotNull();
-        await Assert.That(json!.Outcome).IsEqualTo("failed");
-        await Assert.That(json.Detail).IsEqualTo("osascript failed");
-        await Assert.That(json.SudoFallback).IsEqualTo("sudo ln -s ...");
-    }
-
-    [Test]
-    public async Task Ensure_failed_without_sudo_fallback_still_exits_nonzero() {
-        var (exit, json, _) = await Run(["--json"], onPath: false, installable: true,
-            install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Failed, "could not re-verify", null)));
+            install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Failed, "could not re-verify")));
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(json).IsNotNull();
         await Assert.That(json!.Outcome).IsEqualTo("failed");
         await Assert.That(json.Detail).IsEqualTo("could not re-verify");
-        await Assert.That(json.SudoFallback).IsNull();
         // A null re-probe means the PATH was never positively re-read — OnPath must not claim false.
         await Assert.That(json.OnPath).IsNull();
     }
 
     [Test]
-    public async Task Ensure_a_conflict_at_usr_local_bin_does_not_stop_a_path_folder_install() {
+    public async Task Ensure_a_conflict_at_the_fallback_link_does_not_stop_a_path_folder_install() {
         var (exit, json, _) = await Run(["--json"], onPath: false, installable: true,
-            install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Installed, null, null)),
+            install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Installed, null)),
             preflight: _ => ShimPreflight.Conflict);
 
         await Assert.That(exit).IsEqualTo(0);
@@ -263,21 +240,21 @@ public class DaemonShimCommandsTests {
     [Test]
     public async Task Ensure_failed_install_with_conflict_now_is_still_the_coded_conflict_row() {
         var (exit, json, _) = await Run(["--json"], onPath: false, installable: true,
-            install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Failed, "ln: /usr/local/bin/kcap: File exists", null)),
+            install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Failed, "/Users/a/.local/bin/kcap already exists (a regular file) and was left untouched.")),
             preflight: _ => ShimPreflight.Conflict);
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(json).IsNotNull();
         await Assert.That(json!.Outcome).IsEqualTo("refused");
         await Assert.That(json.Reason).IsEqualTo("conflict");
-        await Assert.That(json.Detail).Contains("left untouched");
+        await Assert.That(json.Detail).Contains("/Users/a/.local/bin/kcap");
     }
 
     // A failed install with NO foreign entry at the destination stays a plain failure.
     [Test]
     public async Task Ensure_failed_install_with_installable_preflight_stays_failed() {
         var (exit, json, _) = await Run(["--json"], onPath: false, installable: true,
-            install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Failed, "osascript failed", null)),
+            install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Failed, "Permission denied")),
             preflight: _ => ShimPreflight.Installable);
 
         await Assert.That(exit).IsEqualTo(1);
@@ -313,7 +290,7 @@ public class DaemonShimCommandsTests {
     [Test]
     public async Task Ensure_human_installed_does_not_claim_a_fresh_link() {
         var (exit, _, text) = await Run([], onPath: false, installable: true,
-            install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Installed, null, null)));
+            install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Installed, null)));
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(text).Contains("kcap is now on your terminal PATH");
         await Assert.That(text).DoesNotContain("Linked");
@@ -322,7 +299,7 @@ public class DaemonShimCommandsTests {
     [Test]
     public async Task Ensure_human_installed_not_on_path_prints_the_actionable_detail() {
         var (exit, _, text) = await Run([], onPath: false, installable: true,
-            install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.InstalledButNotOnPath, "Add: export PATH=\"/usr/local/bin:$PATH\"", null)));
+            install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.InstalledButNotOnPath, "Add: export PATH=\"/Users/a/.local/bin:$PATH\"")));
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(text).Contains("export PATH");
     }
@@ -331,7 +308,7 @@ public class DaemonShimCommandsTests {
     [Test]
     public async Task Ensure_human_install_prints_the_disclosure_before_installing() {
         var (_, _, text) = await Run([], onPath: false, installable: true,
-            install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Installed, null, null)));
+            install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Installed, null)));
 
         await Assert.That(text!.IndexOf("works from any", StringComparison.Ordinal)).IsBetween(0, text.IndexOf("now on your terminal PATH", StringComparison.Ordinal));
     }
@@ -341,7 +318,7 @@ public class DaemonShimCommandsTests {
     public async Task Ensure_json_install_keeps_the_disclosure_off_stdout() {
         using var capture = ConsoleOutput.StartFullCapture();
         await DaemonShimCommands.Ensure(["--json"], TimeProvider.System, resolveTarget: () => "/usr/local/lib/kcap",
-            probe: new FakeProbe(false), install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Installed, null, null)),
+            probe: new FakeProbe(false), install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Installed, null)),
             preflight: _ => ShimPreflight.Installable, installable: true);
 
         await Assert.That(capture.GetCapturedError()).Contains("works from any");
@@ -350,20 +327,11 @@ public class DaemonShimCommandsTests {
     }
 
     [Test]
-    public async Task Ensure_human_cancelled_prints_the_cancel_line() {
+    public async Task Ensure_human_failed_prints_the_detail() {
         var (exit, _, text) = await Run([], onPath: false, installable: true,
-            install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Cancelled, null, null)));
+            install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Failed, "Permission denied")));
         await Assert.That(exit).IsEqualTo(1);
-        await Assert.That(text).Contains("canceled");
-    }
-
-    [Test]
-    public async Task Ensure_human_failed_prints_detail_and_sudo_fallback() {
-        var (exit, _, text) = await Run([], onPath: false, installable: true,
-            install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Failed, "osascript failed", "sudo ln -s ...")));
-        await Assert.That(exit).IsEqualTo(1);
-        await Assert.That(text).Contains("osascript failed");
-        await Assert.That(text).Contains("sudo ln -s ...");
+        await Assert.That(text).Contains("Permission denied");
     }
 
     [Test]

@@ -352,8 +352,9 @@ internal partial class AgentOrchestrator {
         }
     }
 
+    /// <param name="permissionMode">A local launch's mode, which has no <paramref name="cmd"/> to carry it.</param>
     internal ResumeLedgerEntry BuildLedgerEntry(
-            AgentInstance agent, LaunchAgentCommand? cmd, string origin, LaunchConsentOutcome? consent) {
+            AgentInstance agent, LaunchAgentCommand? cmd, string origin, LaunchConsentOutcome? consent, string? permissionMode = null) {
         var prior = TryReadLedger(agent.Id);
         var launch = new ResumeLaunchDescriptor(
             Prompt:           agent.Prompt,
@@ -381,10 +382,12 @@ internal partial class AgentOrchestrator {
             WorktreeBranch:       agent.Worktree.Branch,
             WorktreeIsStandalone: agent.Worktree.IsStandalone,
             WorktreeSourceRepo:   agent.Worktree.SourceRepo,
-            PermissionMode:         cmd?.PermissionMode ?? prior?.Launch.PermissionMode,
+            PermissionMode:         cmd?.PermissionMode ?? permissionMode ?? prior?.Launch.PermissionMode,
             InactivityBoundSeconds: agent.InactivityBoundSeconds,
             AccountDirectory:       agent.Account?.Directory,
             AccountId:              agent.Account?.AccountId,
+            ScratchWorkspace:       cmd is { ScratchWorkspace: true } ? true : prior?.Launch.ScratchWorkspace,
+            WorktreeOwnsBranch:     agent.Worktree.OwnsBranch,
             AccountLabel:           agent.Account?.Label);
 
         return NewRunningEntry(agent.Id, agent.Vendor, agent.RuntimeTransport, agent.SessionId, agent.VendorSession, launch, prior) with {
@@ -455,6 +458,8 @@ internal partial class AgentOrchestrator {
             InactivityBoundSeconds: cmd.InactivityBoundSeconds,
             AccountDirectory:       account?.Directory,
             AccountId:              account?.AccountId,
+            ScratchWorkspace:       cmd.ScratchWorkspace ? true : null,
+            WorktreeOwnsBranch:     worktree.OwnsBranch,
             AccountLabel:           account?.Label);
 
         return NewRunningEntry(cmd.AgentId, cmd.Vendor, PreStartTransport, null, pinnedSessionId ?? cmd.ResumeSessionId, launch, prior: null);
@@ -493,13 +498,14 @@ internal partial class AgentOrchestrator {
             ? Guid.NewGuid().ToString()
             : null;
 
-    internal void WriteLedger(AgentInstance agent, LaunchAgentCommand? cmd, string origin, LaunchConsentOutcome? consent) {
+    internal void WriteLedger(
+            AgentInstance agent, LaunchAgentCommand? cmd, string origin, LaunchConsentOutcome? consent, string? permissionMode = null) {
         if (ResumeLedger is null || !IsLedgered(agent)) return;
 
         lock (_ledgerLock) {
             if (agent.IsCleanupStarted) return;
             if (!IsInteractive(agent)) _participantEntries[agent.Id] = 0;
-            TryWriteLedger(agent.Id, () => BuildLedgerEntry(agent, cmd, origin, consent));
+            TryWriteLedger(agent.Id, () => BuildLedgerEntry(agent, cmd, origin, consent, permissionMode));
         }
     }
 
@@ -1534,7 +1540,8 @@ internal partial class AgentOrchestrator {
             Prompt:              ResumeNudge.Build(interruptedAt, launch.Prompt),
             Model:               launch.Model ?? "",
             Effort:              launch.Effort,
-            RepoPath:            launch.RepoPath,
+            // A scratch launch names no repository; the resumed worktree is its workspace.
+            RepoPath:            launch.ScratchWorkspace == true ? "" : launch.RepoPath,
             Tools:               null,
             AttachmentIds:       null,
             Vendor:              entry.Vendor,
@@ -1550,7 +1557,8 @@ internal partial class AgentOrchestrator {
             Title:               launch.Title,
             // A prompt cut re-sent as the caller's title would outrank the one the session has since been given.
             TitleDerived:        launch.TitleDerived ?? true,
-            AccountId:           launch.AccountId);
+            AccountId:           launch.AccountId,
+            ScratchWorkspace:    launch.ScratchWorkspace == true);
     }
 
     /// <summary>The ledger's worktree as the launch path names it.</summary>
@@ -1567,7 +1575,8 @@ internal partial class AgentOrchestrator {
             launch.WorktreeSourceRepo ?? launch.RepoPath,
             IsStandalone: launch.WorktreeIsStandalone ?? Directory.Exists(Path.Combine(path, ".git")),
             FetchedRef: WorktreeManager.FetchedRefFor(Path.GetFileName(path))) {
-            GitRelativeCwd = launch.GitRelativeCwd
+            GitRelativeCwd = launch.GitRelativeCwd,
+            OwnsBranch     = launch.WorktreeOwnsBranch ?? true,
         };
     }
 

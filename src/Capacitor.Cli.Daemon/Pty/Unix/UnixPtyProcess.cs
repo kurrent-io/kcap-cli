@@ -272,6 +272,15 @@ public sealed class UnixPtyProcess : IPtyProcess {
         }
     }
 
+    public bool IsInputCooked {
+        get {
+            var cooked = false;
+            _master.TryUse(fd => cooked = UnixPtyInterop.IsCooked(fd));
+
+            return cooked;
+        }
+    }
+
     public void Resize(ushort cols, ushort rows) {
         _master.TryUse(fd => UnixPtyInterop.SetWinSize(fd, rows, cols));
     }

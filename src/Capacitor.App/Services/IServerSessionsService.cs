@@ -37,4 +37,14 @@ public interface IServerSessionsService {
     /// The session whose row is open in the rail: it stays in the snapshot's Ended set when a read
     /// no longer lists it, until another (or none) is kept.
     void Keep(string? sessionId);
+    /// The account and connection the caches and the pin answer for; replays the latest.
+    IObservable<SessionIdentity> Identity { get; }
+    string? PinnedSessionId { get; }
+    /// Holds a session in the snapshot whether or not a listing supplies it: a listed session pins
+    /// at once, any other only once its summary reads back. Nothing is pinned on a failure.
+    Task<PinOutcome> PinAsync(string sessionId, PinPresentation presentation, CancellationToken ct);
+    void Unpin();
+    /// Shows a rename the server applied at once, in every set that lists the session, and holds it
+    /// over reads that still carry a title it replaced.
+    void ApplyRename(string sessionId, string title);
 }

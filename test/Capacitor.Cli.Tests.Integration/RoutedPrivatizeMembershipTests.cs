@@ -84,16 +84,16 @@ public class RoutedPrivatizeMembershipTests : IDisposable {
             Task.FromResult(new ImportSessionResult(ImportOutcome.Skipped, SentChildContent: true));
     }
 
-    static async Task<string> CaptureStdoutAsync(Func<Task> action) {
-        using var capture = ConsoleOutput.StartCapture();
-        await action();
-        return capture.GetCapturedOutput();
+    static async Task<string> CaptureStdoutAsync(Func<ImportConsole, Task> action) {
+        var stdout = new StringWriter();
+        await action(TestImportConsole.Over(stdout));
+        return stdout.ToString();
     }
 
     static bool LineMatches(string text, string label, int value) =>
         Regex.IsMatch(text, $@"(?m)^\s*{Regex.Escape(label)}\s+{value}\s*$");
 
-    [Test, NotInParallel]
+    [Test]
     public async Task a_routed_replay_is_not_imported_when_it_could_not_be_made_private_first() {
         // The routed half of the fail-closed preflight. The probe is an existing session, so it is
         // narrowed before any content moves; when that write is lost it must be dropped from the run
@@ -101,8 +101,8 @@ public class RoutedPrivatizeMembershipTests : IDisposable {
         _server.Given(Request.Create().WithPath("/api/sessions/*/visibility").UsingPut())
             .RespondWith(Response.Create().WithStatusCode(500));
 
-        var stdout = await CaptureStdoutAsync(async () => {
-            await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
+        var stdout = await CaptureStdoutAsync(async console => {
+            await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: console).HandleImport(
                 filterCwd: null,
                 minLines: 0,
                 sources: [new ChildContentOutsidePrivateScopeSource()],
@@ -116,14 +116,14 @@ public class RoutedPrivatizeMembershipTests : IDisposable {
                     .Because("its import must not run at all once the floor could not be established");
     }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task a_skipped_replay_outside_the_child_content_scope_is_still_privatized() {
         _server.Given(Request.Create().WithPath("/api/sessions/*/visibility").UsingPut())
             .RespondWith(Response.Create().WithStatusCode(200));
 
         var exitCode = 0;
-        var stdout = await CaptureStdoutAsync(async () => {
-            exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
+        var stdout = await CaptureStdoutAsync(async console => {
+            exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: console).HandleImport(
                 filterCwd: null,
                 minLines: 0,
                 sources: [new ChildContentOutsidePrivateScopeSource()],

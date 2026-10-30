@@ -49,6 +49,8 @@ public enum FrameType : byte {
     // AgentSessionIpc.Capability.
     AgentSession = 31, // Text = agent id
     AccountsSubscribe = 32, // long-lived: push an AccountsSnapshot (immediate + on change)
+    // Session rename — one-shot; acked on SessionRenameAck.
+    SessionRename = 33, // Text = SessionRenameDto JSON
     // daemon → client
     Attached  = 64,
     Stdout    = 65,
@@ -76,4 +78,5 @@ public enum FrameType : byte {
     RuntimeStarted = 85, // BE64 UTC ticks: the attached runtime's start, as the resume ledger's started_at
     AgentSessionReply = 86, // Text = the agent's session id; empty when the daemon hosts no such agent or it has none yet
     AccountsSnapshot = 87, // Text = AccountsSnapshotDto JSON, pushed on AccountsSubscribe
+    SessionRenameAck = 88, // Text = SessionRenameAckDto JSON, reply to SessionRename
 }

@@ -17,8 +17,8 @@
                      Background="{StaticResource KcapCanvasBrush}"
                      ExtendClientAreaToDecorationsHint="True">
     <Window.KeyBindings>
-        <KeyBinding Gesture="Meta+N" Command="{Binding CloseWorkspaceCommand}" />
-        <KeyBinding Gesture="Ctrl+N" Command="{Binding CloseWorkspaceCommand}" />
+        <KeyBinding Gesture="Meta+N" Command="{Binding NewSessionCommand}" />
+        <KeyBinding Gesture="Ctrl+N" Command="{Binding NewSessionCommand}" />
     </Window.KeyBindings>
     <!-- Rail | launcher-or-workspace. The right pane's empty state IS the launcher.
          Workspace content is a template so the terminal is only built once a session opens.
@@ -32,11 +32,22 @@
 
         <LayoutTransformControl x:Name="ScaleHost">
             <Panel>
-                <Grid x:Name="SessionsSurface" ColumnDefinitions="330,*">
+                <Grid x:Name="SessionsSurface">
+                    <!-- The rail column is sized from Panes in code-behind. -->
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
                     <views:SessionRailView x:Name="SessionRail" Grid.Column="0" />
                     <Panel x:Name="ContentPane" Grid.Column="1">
-                        <Grid x:Name="LauncherPane" RowDefinitions="Auto,*" Margin="24,20,24,24"
-                              IsVisible="{Binding CurrentWorkspace, Converter={x:Static ObjectConverters.IsNull}}">
+                        <!-- Hidden, never removed, under the search cover: the workspace and its watches carry on. -->
+                        <Grid x:Name="LauncherPane" RowDefinitions="Auto,*" Margin="24,20,24,24">
+                            <Grid.IsVisible>
+                                <MultiBinding Converter="{x:Static BoolConverters.And}">
+                                    <Binding Path="CurrentWorkspace" Converter="{x:Static ObjectConverters.IsNull}" />
+                                    <Binding Path="!IsSearchOpen" />
+                                </MultiBinding>
+                            </Grid.IsVisible>
                             <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Background="Transparent"
                                   PointerPressed="OnChromePointerPressed">
                                 <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" ColumnSpacing="6" RowSpacing="5"
@@ -68,8 +79,13 @@
                             <views:LauncherPaneView x:Name="LauncherView" Grid.Row="1" DataContext="{Binding Home}" />
                         </Grid>
 
-                        <ContentControl x:Name="WorkspaceHost" Content="{Binding CurrentWorkspace}"
-                                        IsVisible="{Binding CurrentWorkspace, Converter={x:Static ObjectConverters.IsNotNull}}">
+                        <ContentControl x:Name="WorkspaceHost" Content="{Binding CurrentWorkspace}">
+                            <ContentControl.IsVisible>
+                                <MultiBinding Converter="{x:Static BoolConverters.And}">
+                                    <Binding Path="CurrentWorkspace" Converter="{x:Static ObjectConverters.IsNotNull}" />
+                                    <Binding Path="!IsSearchOpen" />
+                                </MultiBinding>
+                            </ContentControl.IsVisible>
                             <ContentControl.DataTemplates>
                                 <views:RetainedViewTemplate x:DataType="vm:WorkspaceViewModel">
                                     <views:WorkspaceView />
@@ -80,10 +96,29 @@
                             </ContentControl.DataTemplates>
                         </ContentControl>
 
+                        <views:SessionSearchView x:Name="SearchCover" IsVisible="{Binding IsSearchOpen}" />
+
                         <Border x:Name="SwitchCover" Background="{StaticResource KcapCanvasBrush}" IsVisible="False">
                             <views:StillImage x:Name="SwitchCoverStill" />
                         </Border>
                     </Panel>
+                    <!-- What the rail leaves when collapsed. Its button sits below the title bar, so
+                         neither the window title nor the macOS window buttons cover it. -->
+                    <Border x:Name="RailStrip" Grid.Column="0" IsVisible="False"
+                            Background="{StaticResource KcapSurfaceBrush}"
+                            BorderThickness="0,0,1,0" BorderBrush="{StaticResource KcapBorderBrush}"
+                            PointerPressed="OnChromePointerPressed">
+                        <Button x:Name="RailExpandButton" Classes="kcapGhost kcapIcon" Margin="0,48,0,0"
+                                HorizontalAlignment="Center" VerticalAlignment="Top"
+                                ToolTip.Tip="Show sidebar" AutomationProperties.Name="Show sidebar"
+                                Click="OnRailExpandClick">
+                            <views:AppIcon Kind="PanelLeftOpen" Size="16" Foreground="{StaticResource KcapMutedBrush}" />
+                        </Button>
+                    </Border>
+                    <!-- Last child so it hit-tests above the content pane it overhangs. -->
+                    <GridSplitter x:Name="RailSplitter" Grid.Column="0" HorizontalAlignment="Right" Width="6"
+                                  Margin="0,0,-3,0" Background="Transparent" ResizeDirection="Columns"
+                                  DragDelta="OnRailSplitterDragDelta" DragCompleted="OnRailSplitterDragCompleted" />
                 </Grid>
             </Panel>
         </LayoutTransformControl>

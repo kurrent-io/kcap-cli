@@ -33,6 +33,56 @@ namespace Capacitor.App.Tests.Unit;
 /// Headless rendering of MainWindow against a fake Connected snapshot: the rail footer shows
 /// connection and tenant on one line, then the daemon's name, version and agent count.
 public class MainWindowSmokeTests {
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Update_footer_keeps_identity_without_connection_churn_and_restores_live_status() => AvaloniaSession.DispatchAsync(async () => {
+        using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+        var service = new FakeDaemonClientService();
+        service.SnapshotsSubject.OnNext(Snap(daemon: "daemon-a", connection: "connected", active: 1, max: 5));
+        service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+        using var home = new HomeViewModel(service, new AppStateStore(path), new NeverLaunchClient(),
+            () => Task.FromResult(Array.Empty<string>()), TimeProvider.System);
+        using var progress = new BehaviorSubject<(bool, string?)>((false, null));
+        home.AttachUpdateProgress(progress);
+        var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+            tenantName: "kurrent", home: home);
+        var window = new MainWindow { DataContext = vm };
+        try {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            var rail = window.FindDescendantOfType<SessionRailView>()!;
+            var status = rail.FindControl<StackPanel>("RailConnectionStatus")!;
+            await Assert.That(status.IsEffectivelyVisible).IsTrue();
+
+            progress.OnNext((true, "Restarting the daemon"));
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, ExpectedDaemonRestart.Reason, null));
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            await Assert.That(status.IsEffectivelyVisible).IsFalse();
+            var footerText = rail.FindControl<StackPanel>("RailFooterPanel")!.GetVisualDescendants().OfType<TextBlock>()
+                .Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToArray();
+            await Assert.That(footerText).Contains("kurrent");
+            await Assert.That(footerText).Contains("daemon-a");
+            var help = rail.FindControl<Button>("RailHelpButton")!;
+            await Assert.That(help.IsEffectivelyVisible && help.IsEffectivelyEnabled).IsTrue();
+
+            var longName = "engineering-workstation-" + new string('a', 100);
+            service.SnapshotsSubject.OnNext(Snap(daemon: longName, connection: "connected", active: 1, max: 5));
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            var context = rail.FindControl<StackPanel>("RailUpdateContext")!;
+            var nameText = context.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Text == longName);
+            await Assert.That(nameText.Bounds.Width).IsLessThan(context.Bounds.Width);
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            progress.OnNext((false, null));
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(status.IsEffectivelyVisible).IsTrue();
+            await Assert.That(vm.ConnectionDisplay).IsEqualTo("Connected");
+        } finally { window.Close(); }
+        return true;
+    });
+
     sealed class NeverLaunchClient : ILaunchClient {
         public Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct) =>
             Task.FromResult(new LaunchOutcome(false, null, "unexpected launch"));
@@ -255,7 +305,7 @@ public class MainWindowSmokeTests {
                 service.StartBehavior = _ => Task.FromResult(new StartDaemonResult(false, "boom: could not bind socket"));
                 await vm.StartDaemonCommand.Execute().ToTask();
                 Dispatcher.UIThread.RunJobs();
-                var textAfter = Banner().Text;
+                var textAfter = window.GetVisualDescendants().OfType<SelectableTextBlock>().First(t => t.Name == "BannerDetailText").Text;
 
                 window.Close();
                 Dispatcher.UIThread.RunJobs();
@@ -265,7 +315,7 @@ public class MainWindowSmokeTests {
             });
 
         await Assert.That(bannerInitially).IsTrue(); // Connecting… still has a notice
-        await Assert.That(bannerTextUnreachable).IsEqualTo(HomeViewModel.DaemonDownNotice);
+        await Assert.That(bannerTextUnreachable).IsEqualTo(NoticeText.Headline(HomeViewModel.DaemonDownNotice).Title);
         await Assert.That(bannerTextAfterFailure).IsEqualTo("boom: could not bind socket");
     }
 
@@ -1229,13 +1279,14 @@ public class MainWindowSmokeTests {
         });
     }
 
-    /// Cmd+N / Ctrl+N: the window binds the advertised New session shortcut to CloseWorkspaceCommand,
-    /// which drops an open workspace back to the launcher (the new-session empty state).
+    /// Cmd+N / Ctrl+N: the window binds the advertised New session shortcut, which drops an open
+    /// workspace back to the launcher (the new-session empty state) and, pressed again there,
+    /// focuses the goal and rings its card.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task New_session_shortcut_is_bound_and_returns_to_the_launcher() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            var (hadWorkspace, hasMeta, hasCtrl, afterInvoke) = await AvaloniaSession.DispatchAsync(() => {
+            var (hadWorkspace, hasMeta, hasCtrl, afterInvoke, nudged, goalFocused) = await AvaloniaSession.DispatchAsync(() => {
                 var service = new FakeDaemonClientService();
                 var (actions, _) = NewActions(service);
                 var vm = new MainWindowViewModel(
@@ -1254,19 +1305,29 @@ public class MainWindowSmokeTests {
                 var meta = Bound(KeyModifiers.Meta);
                 var ctrl = Bound(KeyModifiers.Control);
 
-                window.KeyBindings.First(k => k.Gesture is { Key: Key.N } g && g.KeyModifiers.HasFlag(KeyModifiers.Meta))
-                    .Command!.Execute(null);
+                var newSession = window.KeyBindings
+                    .First(k => k.Gesture is { Key: Key.N } g && g.KeyModifiers.HasFlag(KeyModifiers.Meta)).Command!;
+                newSession.Execute(null);
                 Dispatcher.UIThread.RunJobs();
                 var after = vm.CurrentWorkspace;
+                var nudgedOnClose = window.LauncherView.IsNudgingForTesting;
+
+                window.Focus();
+                newSession.Execute(null);
+                Dispatcher.UIThread.RunJobs();
+                var ringed = !nudgedOnClose && window.LauncherView.IsNudgingForTesting;
+                var focused = window.LauncherView.GoalInput.IsFocused;
 
                 window.Close();
                 Dispatcher.UIThread.RunJobs();
-                return (had, meta, ctrl, after);
+                return (had, meta, ctrl, after, ringed, focused);
             });
             await Assert.That(hadWorkspace).IsTrue();
             await Assert.That(hasMeta).IsTrue();
             await Assert.That(hasCtrl).IsTrue();
             await Assert.That(afterInvoke).IsNull();
+            await Assert.That(nudged).IsTrue();
+            await Assert.That(goalFocused).IsTrue();
         });
     }
 
@@ -1300,7 +1361,7 @@ public class MainWindowSmokeTests {
                 var bindings = window.KeyBindings.Where(k => k.Gesture is { Key: Key.R }).ToArray();
                 bool Bound(KeyModifiers mod) => bindings.Any(k => k.Gesture!.KeyModifiers == mod);
                 bool Can() => bindings.Single(k => k.Gesture!.KeyModifiers == KeyModifiers.Meta).Command!.CanExecute(null);
-                var yield = new RefreshUnlessTerminalFocused(window);
+                var yield = new UnlessTerminalFocused(window, m => m.RefreshWorkCommand);
 
                 await Assert.That(Bound(KeyModifiers.Meta)).IsTrue();
                 await Assert.That(Bound(KeyModifiers.Control)).IsEqualTo(RefreshShortcut.UsesControl);
@@ -1742,9 +1803,9 @@ public class MainWindowSmokeTests {
         });
 
         await Assert.That(tips.ConnectionLines).IsEquivalentTo(
-            new[] { MainWindowViewModel.AttachStatusTip }, CollectionOrdering.Matching);
+            new[] { MainWindowViewModel.ConnectionStatusTip }, CollectionOrdering.Matching);
         await Assert.That(tips.ConnectionDetailLines).IsEquivalentTo(
-            new[] { "diagnostic-marker", MainWindowViewModel.AttachStatusTip }, CollectionOrdering.Matching);
+            new[] { "diagnostic-marker", MainWindowViewModel.ConnectionStatusTip }, CollectionOrdering.Matching);
         await Assert.That(tips.TenantLines).IsEquivalentTo(
             new[] { "http://localhost:9999", MainWindowViewModel.ServerUrlTip }, CollectionOrdering.Matching);
         await Assert.That(tips.TenantText).IsEqualTo("kurrent");
@@ -2026,4 +2087,189 @@ public class MainWindowSmokeTests {
         await Assert.That(shown.whileReloading.Button).IsFalse();
         await Assert.That(shown.cleared).IsFalse();
     }
+
+    static Point CentreOf(Control control, Window window) =>
+        control.TranslatePoint(new Point(control.Bounds.Width / 2, control.Bounds.Height / 2), window)!.Value;
+
+    static void Click(SearchWindowHost host, Control control) {
+        var at = CentreOf(control, host.Window);
+        host.Window.MouseMove(at);
+        host.Window.MouseDown(at, MouseButton.Left);
+        host.Window.MouseUp(at, MouseButton.Left);
+        host.Settle();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Rail_shows_search_field_and_hides_filters_until_toggled() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var host = new SearchWindowHost();
+        var field = host.Named<Button>("RailSearchButton");
+        var filter = host.Named<Button>("RailFilterButton");
+        var controls = host.Named<StackPanel>("RailControls");
+        var placeholder = host.Named<TextBlock>("RailSearchText").Text;
+        var shortcut = host.Named<TextBlock>("RailSearchShortcut");
+        var collapsed = controls.IsVisible;
+
+        Click(host, filter);
+        var expanded = controls.IsVisible;
+        var active = filter.Classes.Contains("active");
+        Click(host, filter);
+
+        await Assert.That(field.IsEffectivelyVisible).IsTrue();
+        await Assert.That(AutomationProperties.GetName(field)).IsEqualTo("Search sessions");
+        await Assert.That(placeholder).IsEqualTo("Search…");
+        await Assert.That(shortcut.Text).IsEqualTo(ShortcutLabels.Search);
+        await Assert.That(shortcut.IsVisible).IsTrue();
+        await Assert.That(collapsed).IsFalse();
+        await Assert.That(expanded).IsTrue();
+        await Assert.That(active).IsTrue();
+        await Assert.That(controls.IsVisible).IsFalse();
+        await Assert.That(filter.Classes.Contains("active")).IsFalse();
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Filter_dot_follows_filters_differ() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var host = new SearchWindowHost();
+        var dot = host.Named<Ellipse>("RailFilterDot");
+        var atDefaults = dot.IsVisible;
+
+        host.Rail.Scope = RailScope.Team;
+        host.Settle();
+        var narrowed = dot.IsVisible;
+        host.Rail.Scope = RailScope.Mine;
+        host.Settle();
+
+        await Assert.That(atDefaults).IsFalse();
+        await Assert.That(narrowed).IsTrue();
+        await Assert.That(dot.IsVisible).IsFalse();
+        await Assert.That(dot.Fill).IsSameReferenceAs(Application.Current!.FindResource("KcapInfoBrush"));
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Meta_k_opens_the_cover_and_focuses_the_query() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var host = new SearchWindowHost();
+        var cover = host.Named<SessionSearchView>("SearchCover");
+        var hiddenBefore = !cover.IsVisible;
+
+        host.Window.KeyPressQwerty(PhysicalKey.K, RawInputModifiers.Meta);
+        host.Settle();
+
+        await Assert.That(hiddenBefore).IsTrue();
+        await Assert.That(host.Vm.IsSearchOpen).IsTrue();
+        await Assert.That(cover.IsEffectivelyVisible).IsTrue();
+        await Assert.That(host.Named<Grid>("LauncherPane").IsVisible).IsFalse();
+        await Assert.That(host.Focused).IsSameReferenceAs(host.Named<TextBox>("SearchQueryBox"));
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Escape_in_the_query_hides_the_cover_and_keeps_the_workspace_view() => AvaloniaSession.RunOnUiAsync(async () => {
+        WorkspaceViewModel? built = null;
+        FakeDaemonClientService? service = null;
+        using var host = new SearchWindowHost(workspaceFactory: id => built = NewWorkspace(service!, NewActions(service!).Actions, id));
+        service = host.Service;
+        host.Vm.OpenSession("0123456789abcdef0123456789abcdef");
+        host.Settle();
+        var workspaceHost = host.Named<ContentControl>("WorkspaceHost");
+        var view = workspaceHost.GetVisualDescendants().OfType<WorkspaceView>().Single();
+
+        host.Vm.OpenSearchCommand.Execute().Subscribe();
+        host.Settle();
+        var coveredHidden = !workspaceHost.IsVisible;
+        var stillInTree = view.IsAttachedToVisualTree();
+        host.Window.KeyPressQwerty(PhysicalKey.Escape, RawInputModifiers.None);
+        host.Settle();
+
+        await Assert.That(coveredHidden).IsTrue();
+        await Assert.That(stillInTree).IsTrue();
+        await Assert.That(host.Vm.IsSearchOpen).IsFalse();
+        await Assert.That(host.Named<SessionSearchView>("SearchCover").IsVisible).IsFalse();
+        await Assert.That(workspaceHost.IsVisible).IsTrue();
+        await Assert.That(host.Vm.CurrentWorkspace).IsSameReferenceAs(built);
+        await Assert.That(workspaceHost.GetVisualDescendants().OfType<WorkspaceView>().Single()).IsSameReferenceAs(view);
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Rail_field_click_while_open_selects_the_query_text() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var host = new SearchWindowHost();
+        var field = host.Named<Button>("RailSearchButton");
+        Click(host, field);
+        host.Window.KeyTextInput("auth");
+        host.Settle();
+        var label = host.Named<TextBlock>("RailSearchText").Text;
+        var query = host.Named<TextBox>("SearchQueryBox");
+        query.SelectionStart = query.SelectionEnd = query.Text!.Length;
+
+        Click(host, field);
+
+        await Assert.That(label).IsEqualTo("auth");
+        await Assert.That(host.Vm.Search!.Query).IsEqualTo("auth");
+        await Assert.That(host.Focused).IsSameReferenceAs(query);
+        await Assert.That(query.SelectedText).IsEqualTo("auth");
+    });
+
+    /// ⌘K is bound everywhere. Off macOS Ctrl+K is too, and it yields while the terminal has focus,
+    /// as Ctrl+R does; the command it wraps is the page's.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Ctrl_k_yields_to_a_focused_terminal_off_mac() => AvaloniaSession.RunOnUiAsync(async () => {
+        FakeDaemonClientService? service = null;
+        using var host = new SearchWindowHost(workspaceFactory: id => NewWorkspace(service!, NewActions(service!).Actions, id));
+        service = host.Service;
+        var bindings = host.Window.KeyBindings.Where(k => k.Gesture is { Key: Key.K }).ToArray();
+        var yield = new UnlessTerminalFocused(host.Window, m => m.OpenSearchCommand);
+
+        await Assert.That(bindings.Single(k => k.Gesture!.KeyModifiers == KeyModifiers.Meta).Command).IsSameReferenceAs(host.Vm.OpenSearchCommand);
+        await Assert.That(bindings.Any(k => k.Gesture!.KeyModifiers == KeyModifiers.Control)).IsEqualTo(!ShortcutLabels.UsesCommandKey);
+        if (!ShortcutLabels.UsesCommandKey) {
+            await Assert.That(bindings.Single(k => k.Gesture!.KeyModifiers == KeyModifiers.Control).Command).IsNotSameReferenceAs(host.Vm.OpenSearchCommand);
+        }
+
+        const string id = "0123456789abcdef0123456789abcdef";
+        host.Vm.OpenSession(id);
+        service.Agents.AddOrUpdate(WorkspaceFixtures.Agent(id, "claude", true, "/repo/myproj", sessionId: id));
+        host.Settle();
+        var workspace = (WorkspaceViewModel)host.Vm.CurrentWorkspace!;
+        await Assert.That(yield.CanExecute(null)).IsTrue();
+        workspace.ShowTerminalCommand.Execute().Subscribe();
+        host.Settle();
+        var terminal = host.Window.GetVisualDescendants().OfType<TerminalControl>().Single();
+        await Assert.That(terminal.Focus()).IsTrue();
+
+        var passedThrough = new KeyEventArgs { Key = Key.K, KeyModifiers = KeyModifiers.Control };
+        new KeyBinding { Gesture = new KeyGesture(Key.K, KeyModifiers.Control), Command = yield }.TryHandle(passedThrough);
+
+        await Assert.That(yield.CanExecute(null)).IsFalse();
+        await Assert.That(passedThrough.Handled).IsFalse();
+        await Assert.That(host.Vm.IsSearchOpen).IsFalse();
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Search_menu_item_runs_the_open_search_command() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var host = new SearchWindowHost();
+        var windowMenu = new AppMenuBar(new RecordingOpener(), () => [], () => null).Build(host.Window)
+            .Items.OfType<NativeMenuItem>().Single(i => i.Header == "Window").Menu!;
+        var items = windowMenu.Items.OfType<NativeMenuItem>().ToList();
+        var search = items.Single(i => i.Header == "Search Sessions");
+
+        await Assert.That(search.Command).IsSameReferenceAs(host.Vm.OpenSearchCommand);
+        await Assert.That(search.Gesture).IsEqualTo(new KeyGesture(Key.K, KeyModifiers.Meta));
+        await Assert.That(items.IndexOf(search)).IsEqualTo(items.FindIndex(i => i.Header == "Refresh") + 1);
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task New_session_button_and_shortcut_run_new_session() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var host = new SearchWindowHost();
+        var button = host.Named<Button>("RailNewSessionButton");
+        var shortcuts = host.Window.KeyBindings.Where(k => k.Gesture is { Key: Key.N }).ToArray();
+
+        await Assert.That(button.Command).IsSameReferenceAs(host.Vm.NewSessionCommand);
+        await Assert.That(shortcuts.Length).IsEqualTo(2);
+        await Assert.That(shortcuts.All(k => ReferenceEquals(k.Command, host.Vm.NewSessionCommand))).IsTrue();
+    });
 }

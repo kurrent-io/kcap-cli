@@ -91,8 +91,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
     public string SkipLabel => "Not now";
 
     public string Lede =>
-        "Sessions record themselves from now on, and each harness gets tools to search your past work — " +
-        "so what you already fixed is there to find.";
+        "Sessions are stored from now on, and each harness gets tools to search your past work";
 
     public string MachineName { get; }
 
@@ -419,15 +418,12 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
         this.RaisePropertyChanged(nameof(DeclineVisible));
     }
 
-    /// The login-shell PATH when the probe resolves one, in place of the process's own: a GUI
-    /// launch inherits only launchd's PATH, and the app spawns kcap with the terminal's — so
-    /// detecting through the wider process PATH would report agents its own installs cannot reach.
+    /// Searches the login-shell PATH when the probe resolves one, in place of <paramref name="harnesses"/>'
+    /// own: a GUI launch inherits only launchd's PATH, and the app spawns kcap with the terminal's — so
+    /// detecting through the process PATH would report agents its own installs cannot reach.
     public static Func<CancellationToken, Task<IReadOnlyDictionary<HarnessId, DetectedAgent>>> BuildDetectionFeed(
-            ILoginShellProbe probe, UserHome home) {
-        // Resolved once, outside the closure: every step that asks shares one feed.
-        var harnesses = HarnessRegistry.FromEnvironment(home);
-
-        return async ct => {
+            ILoginShellProbe probe, HarnessRegistry harnesses) =>
+        async ct => {
             var terminalPath = await probe.TerminalPathAsync(ct).ConfigureAwait(false);
             var searched = terminalPath is null ? harnesses : harnesses.Searching(BinaryProbe.Searching(terminalPath));
 
@@ -437,5 +433,4 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
                 .Where(x => x.Detected.Detected)
                 .ToDictionary(x => x.Id, x => x.Detected);
         };
-    }
 }

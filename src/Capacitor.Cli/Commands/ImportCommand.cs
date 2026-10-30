@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Frozen;
+using System.Net;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -23,7 +25,7 @@ namespace Capacitor.Cli.Commands;
 
 class ImportCommand(
         ConfigRoot config, ProfileContext profiles, UserHome home, HarnessRegistry harnesses,
-        ICapacitorHttpClient http, GitProviderRouter router, TimeProvider time, AccountStore? accounts = null) {
+        ICapacitorHttpClient http, GitProviderRouter router, TimeProvider time, ImportConsole console, AccountStore? accounts = null) {
     static readonly TimeSpan ProgressPollGap = TimeSpan.FromMilliseconds(250);
 
     // Read from parallel workers; keyed by the normalized home so two spellings of one directory share an index.
@@ -53,6 +55,8 @@ class ImportCommand(
     const int ImportWorkerCount = 4;
 
     internal readonly struct ImportDisplay {
+        public required ImportConsole Terminal { get; init; }
+
         public bool Tty { get; init; }
 
         /// <summary>
@@ -83,8 +87,8 @@ class ImportCommand(
         public void Line(string plain, string? markup = null) {
             if (Quiet) return;
 
-            if (Tty) AnsiConsole.MarkupLine(Indented + (markup ?? Markup.Escape(plain)));
-            else Console.WriteLine(Indented + plain);
+            if (Tty) Terminal.Ansi.MarkupLine(Indented + (markup ?? Markup.Escape(plain)));
+            else Terminal.Out.WriteLine(Indented + plain);
         }
 
         /// <summary>
@@ -98,11 +102,11 @@ class ImportCommand(
         /// </summary>
         void Heading(string title, string colour) {
             if (Tty) {
-                if (Nested) AnsiConsole.MarkupLine($"  [dim]{Markup.Escape(title)}[/]");
-                else AnsiConsole.Write(new Rule($"[{colour}]{Markup.Escape(title)}[/]").LeftJustified());
+                if (Nested) Terminal.Ansi.MarkupLine($"  [dim]{Markup.Escape(title)}[/]");
+                else Terminal.Ansi.Write(new Rule($"[{colour}]{Markup.Escape(title)}[/]").LeftJustified());
             } else {
-                Console.WriteLine();
-                Console.WriteLine(Nested ? $"  -- {title} --" : $"== {title} ==");
+                Terminal.Out.WriteLine();
+                Terminal.Out.WriteLine(Nested ? $"  -- {title} --" : $"== {title} ==");
             }
         }
 
@@ -153,7 +157,7 @@ class ImportCommand(
                         );
                     }
 
-                    AnsiConsole.Write(new Padder(sub).Padding(Detail, 0, 0, 0));
+                    Terminal.Ansi.Write(new Padder(sub).Padding(Detail, 0, 0, 0));
                 }
 
                 var grid = new Grid().AddColumn().AddColumn();
@@ -163,31 +167,31 @@ class ImportCommand(
                 grid.AddRow("[bold]Too short[/]", c.TooShort.ToString());
                 grid.AddRow("[bold]Excluded[/]", c.Excluded.ToString());
                 if (c.ProbeError > 0) grid.AddRow("[bold]Probe errors[/]", $"[red]{c.ProbeError}[/]");
-                AnsiConsole.Write(new Padder(grid).Padding(Detail, 0, 0, 0));
+                Terminal.Ansi.Write(new Padder(grid).Padding(Detail, 0, 0, 0));
             } else {
                 if (bySource is { Count: > 1 }) {
                     Heading("By source", "yellow");
 
                     foreach (var kv in bySource.OrderBy(x => x.Key, StringComparer.Ordinal)) {
                         var sc = kv.Value;
-                        Console.WriteLine($"{Indented}[{kv.Key}]");
-                        Console.WriteLine($"{Indented}  New               {sc.New}");
-                        Console.WriteLine($"{Indented}  Resumable         {sc.Partial}");
-                        Console.WriteLine($"{Indented}  Already loaded    {sc.AlreadyLoaded}");
-                        Console.WriteLine($"{Indented}  Too short         {sc.TooShort}");
-                        Console.WriteLine($"{Indented}  Excluded          {sc.Excluded}");
-                        if (sc.ProbeError > 0) Console.WriteLine($"{Indented}  Probe errors      {sc.ProbeError}");
+                        Terminal.Out.WriteLine($"{Indented}[{kv.Key}]");
+                        Terminal.Out.WriteLine($"{Indented}  New               {sc.New}");
+                        Terminal.Out.WriteLine($"{Indented}  Resumable         {sc.Partial}");
+                        Terminal.Out.WriteLine($"{Indented}  Already loaded    {sc.AlreadyLoaded}");
+                        Terminal.Out.WriteLine($"{Indented}  Too short         {sc.TooShort}");
+                        Terminal.Out.WriteLine($"{Indented}  Excluded          {sc.Excluded}");
+                        if (sc.ProbeError > 0) Terminal.Out.WriteLine($"{Indented}  Probe errors      {sc.ProbeError}");
                     }
 
-                    Console.WriteLine();
+                    Terminal.Out.WriteLine();
                 }
 
-                Console.WriteLine($"{Indented}New               {c.New}");
-                Console.WriteLine($"{Indented}Resumable         {c.Partial}");
-                Console.WriteLine($"{Indented}Already loaded    {c.AlreadyLoaded}");
-                Console.WriteLine($"{Indented}Too short         {c.TooShort}");
-                Console.WriteLine($"{Indented}Excluded          {c.Excluded}");
-                if (c.ProbeError > 0) Console.WriteLine($"{Indented}Probe errors      {c.ProbeError}");
+                Terminal.Out.WriteLine($"{Indented}New               {c.New}");
+                Terminal.Out.WriteLine($"{Indented}Resumable         {c.Partial}");
+                Terminal.Out.WriteLine($"{Indented}Already loaded    {c.AlreadyLoaded}");
+                Terminal.Out.WriteLine($"{Indented}Too short         {c.TooShort}");
+                Terminal.Out.WriteLine($"{Indented}Excluded          {c.Excluded}");
+                if (c.ProbeError > 0) Terminal.Out.WriteLine($"{Indented}Probe errors      {c.ProbeError}");
             }
         }
 
@@ -203,7 +207,7 @@ class ImportCommand(
                 Heading("Done", "green");
 
                 // Three buckets, not one: import knows the difference and a single number would hide it.
-                AnsiConsole.MarkupLine(
+                Terminal.Ansi.MarkupLine(
                     Indented
                   + $"[green]{f.Imported}[/] imported · {f.Skipped} skipped · "
                   + (f.Failed > 0 ? $"[red]{f.Failed}[/] failed" : "0 failed"));
@@ -247,7 +251,7 @@ class ImportCommand(
                         );
                     }
 
-                    AnsiConsole.Write(new Padder(sub).Padding(Detail, 0, 0, 0));
+                    Terminal.Ansi.Write(new Padder(sub).Padding(Detail, 0, 0, 0));
                 }
 
                 var grid = new Grid().AddColumn().AddColumn();
@@ -270,53 +274,53 @@ class ImportCommand(
                         grid.AddRow("[bold]Summaries[/]", $"{f.SummariesGenerated} generated, {f.SummariesFailed} failed");
                 }
 
-                AnsiConsole.Write(new Padder(grid).Padding(Detail, 0, 0, 0));
+                Terminal.Ansi.Write(new Padder(grid).Padding(Detail, 0, 0, 0));
 
-                if (f.Failed > 0) AnsiConsole.MarkupLine($"{Indented}[dim]{failureNote}[/]");
+                if (f.Failed > 0) Terminal.Ansi.MarkupLine($"{Indented}[dim]{failureNote}[/]");
             } else {
                 Heading("Done", "green");
-                Console.WriteLine($"{Indented}{f.Imported} imported · {f.Skipped} skipped · {f.Failed} failed");
+                Terminal.Out.WriteLine($"{Indented}{f.Imported} imported · {f.Skipped} skipped · {f.Failed} failed");
 
                 if (bySource is { Count: > 1 }) {
                     Heading("By source", "green");
 
                     foreach (var kv in bySource.OrderBy(x => x.Key, StringComparer.Ordinal)) {
                         var sf = kv.Value;
-                        Console.WriteLine($"{Indented}[{kv.Key}]");
-                        Console.WriteLine($"{Indented}  Loaded              {sf.Loaded}");
-                        Console.WriteLine($"{Indented}  Resumed             {sf.Resumed}");
-                        Console.WriteLine($"{Indented}  Already loaded      {sf.AlreadyLoaded}");
-                        if (sf.TooShort   > 0) Console.WriteLine($"{Indented}  Too short           {sf.TooShort}");
-                        if (sf.Excluded   > 0) Console.WriteLine($"{Indented}  Excluded            {sf.Excluded}");
-                        if (sf.ProbeError > 0) Console.WriteLine($"{Indented}  Probe errors        {sf.ProbeError}");
-                        if (sf.Errored    > 0) Console.WriteLine($"{Indented}  Errored             {sf.Errored}");
+                        Terminal.Out.WriteLine($"{Indented}[{kv.Key}]");
+                        Terminal.Out.WriteLine($"{Indented}  Loaded              {sf.Loaded}");
+                        Terminal.Out.WriteLine($"{Indented}  Resumed             {sf.Resumed}");
+                        Terminal.Out.WriteLine($"{Indented}  Already loaded      {sf.AlreadyLoaded}");
+                        if (sf.TooShort   > 0) Terminal.Out.WriteLine($"{Indented}  Too short           {sf.TooShort}");
+                        if (sf.Excluded   > 0) Terminal.Out.WriteLine($"{Indented}  Excluded            {sf.Excluded}");
+                        if (sf.ProbeError > 0) Terminal.Out.WriteLine($"{Indented}  Probe errors        {sf.ProbeError}");
+                        if (sf.Errored    > 0) Terminal.Out.WriteLine($"{Indented}  Errored             {sf.Errored}");
                     }
 
-                    Console.WriteLine();
+                    Terminal.Out.WriteLine();
                 }
 
-                Console.WriteLine($"{Indented}Loaded              {f.Loaded}");
-                Console.WriteLine($"{Indented}Resumed             {f.Resumed}");
-                Console.WriteLine($"{Indented}Already loaded      {f.AlreadyLoaded}");
-                if (f.TooShort   > 0) Console.WriteLine($"{Indented}Too short           {f.TooShort}");
-                if (f.Excluded   > 0) Console.WriteLine($"{Indented}Excluded            {f.Excluded}");
-                if (f.ProbeError > 0) Console.WriteLine($"{Indented}Probe errors        {f.ProbeError}");
-                if (f.Errored    > 0) Console.WriteLine($"{Indented}Errored             {f.Errored}");
+                Terminal.Out.WriteLine($"{Indented}Loaded              {f.Loaded}");
+                Terminal.Out.WriteLine($"{Indented}Resumed             {f.Resumed}");
+                Terminal.Out.WriteLine($"{Indented}Already loaded      {f.AlreadyLoaded}");
+                if (f.TooShort   > 0) Terminal.Out.WriteLine($"{Indented}Too short           {f.TooShort}");
+                if (f.Excluded   > 0) Terminal.Out.WriteLine($"{Indented}Excluded            {f.Excluded}");
+                if (f.ProbeError > 0) Terminal.Out.WriteLine($"{Indented}Probe errors        {f.ProbeError}");
+                if (f.Errored    > 0) Terminal.Out.WriteLine($"{Indented}Errored             {f.Errored}");
 
                 if (f.RanBackground) {
                     if (f.RequestedTitles)
-                        Console.WriteLine($"{Indented}Titles              {f.TitlesGenerated} generated, {f.TitlesSkipped} skipped, {f.TitlesFailed} failed");
+                        Terminal.Out.WriteLine($"{Indented}Titles              {f.TitlesGenerated} generated, {f.TitlesSkipped} skipped, {f.TitlesFailed} failed");
 
                     if (f.RequestedSummaries)
-                        Console.WriteLine($"{Indented}Summaries           {f.SummariesGenerated} generated, {f.SummariesFailed} failed");
+                        Terminal.Out.WriteLine($"{Indented}Summaries           {f.SummariesGenerated} generated, {f.SummariesFailed} failed");
                 }
 
-                if (f.Failed > 0) Console.WriteLine($"{Indented}{failureNote}");
+                if (f.Failed > 0) Terminal.Out.WriteLine($"{Indented}{failureNote}");
             }
         }
 
-        public static ImportDisplay Create(bool quiet = false, bool nested = false) =>
-            new() { Tty = !quiet && !Console.IsOutputRedirected, Quiet = quiet, Nested = nested };
+        public static ImportDisplay Create(ImportConsole terminal, bool quiet = false, bool nested = false) =>
+            new() { Terminal = terminal, Tty = !quiet && !terminal.OutputRedirected, Quiet = quiet, Nested = nested };
     }
 
     internal enum ClassificationStatus {
@@ -590,14 +594,14 @@ class ImportCommand(
     /// <remarks>
     /// Routed-phase vendors (Cursor today) get exact attribution: <c>routedOutcomes.Skipped</c>
     /// folds into Excluded (server said "already current"), <c>routedOutcomes.Failed</c> into Errored.
-    /// Chain-phase vendors (Claude/Codex) still use the best-effort approximation:
-    /// imported sessions → Loaded; (New+Partial)−imported → Errored — because the chain worker
-    /// doesn't record per-session outcome by vendor yet.
+    /// Chain-phase vendors (Claude/Codex) split their imported sessions into Loaded and
+    /// <paramref name="resumed"/> the way the totals do, and count (New+Partial)−imported as Errored.
     /// </remarks>
     internal static FinalCounts ComputePerSourceFinalCounts(
             IReadOnlyList<SessionClassification>   classifications,
             int                                    imported,
-            (int Loaded, int Skipped, int Failed)? routedOutcomes
+            (int Loaded, int Skipped, int Failed)? routedOutcomes,
+            int                                    resumed = 0
         ) {
         var counts = ComputeCounts(classifications);
 
@@ -621,11 +625,9 @@ class ImportCommand(
             );
         }
 
-        // Chain-phase vendor: best-effort approximation because the chain worker
-        // doesn't record per-session outcome by vendor yet.
         return new FinalCounts(
-            Loaded: imported,
-            Resumed: 0,
+            Loaded: imported - resumed,
+            Resumed: resumed,
             AlreadyLoaded: counts.AlreadyLoaded,
             TooShort: counts.TooShort,
             Excluded: counts.Excluded,
@@ -668,14 +670,6 @@ class ImportCommand(
         internal int Failed => ProbeError + Errored;
     }
 
-    /// <summary>
-    /// How a run ended, for a caller that has to say so.
-    /// </summary>
-    /// <remarks>
-    /// <b>The exit code cannot answer this.</b> <c>HandleImport</c> returns 0 for a run whose sessions
-    /// failed — import is best-effort and the Done grid is where that is reported — so a caller
-    /// deriving success from the exit code calls a partial or total failure a success.
-    /// </remarks>
     /// <summary>Reports a run that deliberately moved nothing: it reached a decision, and the decision
     /// was that there was nothing to do.</summary>
     static void ReportNothing(Action<ImportRunOutcome>? onFinished, Action<ImportRunSelection>? onSelected, bool capped) {
@@ -688,9 +682,22 @@ class ImportCommand(
             Partition: capped ? ImportRunPartition.Empty : null));
     }
 
+    /// <summary>
+    /// How a run ended, for a caller that has to say so.
+    /// </summary>
+    /// <remarks>
+    /// <c>HandleImport</c> returns 0 for a run whose sessions failed, because its embedded callers report
+    /// the failure themselves; only <c>kcap import</c> itself turns this into its exit code.
+    /// </remarks>
     internal sealed record ImportRunOutcome(FinalCounts Counts, int VisibilityFailures, ImportRunPartition? Partition = null) {
         /// <summary>Anything the user asked for that did not happen.</summary>
         internal bool AnythingFailed => Counts.Failed > 0 || VisibilityFailures > 0;
+
+        /// <summary>
+        /// <c>kcap import</c>'s exit status: 1 when anything failed, whether some sessions or all of them,
+        /// since either leaves work a re-run has to finish. Skipped and excluded sessions are not failures.
+        /// </summary>
+        internal int ExitCode => AnythingFailed ? 1 : 0;
     }
 
     /// <summary>
@@ -725,8 +732,8 @@ class ImportCommand(
         return [.. HarnessRegistry.Identities.Select(h => h.Id).Where(walked.Contains)];
     }
 
-    static void WriteDiscoveryReport(ImportDiscoverySummary summary, bool asJson) =>
-        Console.WriteLine(asJson
+    static void WriteDiscoveryReport(TextWriter output, ImportDiscoverySummary summary, bool asJson) =>
+        output.WriteLine(asJson
             ? ImportDiscoveryRender.ToJson(summary)
             : ImportDiscoveryRender.ToText(summary));
 
@@ -792,7 +799,7 @@ class ImportCommand(
         ) {
         // A caller that wants the figures rather than the rendering says so by handing one over; the
         // console is the default consumer, not the only one.
-        var discoverySink = onDiscovered ?? (result => WriteDiscoveryReport(result.Summary, discoverJson));
+        var discoverySink = onDiscovered ?? (result => WriteDiscoveryReport(console.Out, result.Summary, discoverJson));
         // Discovery never calls the server and is reached with none configured.
         var baseUrl = profiles.Resolution.ServerUrl ?? "";
 
@@ -801,7 +808,7 @@ class ImportCommand(
         using var httpClient = discoverOnly
             ? http.Anonymous()
             : await http.ForCommandAsync();
-        var       display    = ImportDisplay.Create(quiet: discoverJson, nested: nested);
+        var       display    = ImportDisplay.Create(console, quiet: discoverJson, nested: nested);
 
         // --- Sources ---
         // A caller that names none means Claude only.
@@ -815,7 +822,7 @@ class ImportCommand(
             if (explicitVendorSelection) {
                 var flagList = string.Join(", ", missing.Select(v => v.Flag));
 
-                await Console.Error.WriteLineAsync(
+                await console.Error.WriteLineAsync(
                     $"{flagList} specified but no matching installation detected on this machine."
                 );
 
@@ -835,7 +842,7 @@ class ImportCommand(
 
         if (explicitVendorSelection) {
             foreach (var v in missing) {
-                await Console.Error.WriteLineAsync($"Skipping {v.VendorId} (not detected on this machine).");
+                await console.Error.WriteLineAsync($"Skipping {v.VendorId} (not detected on this machine).");
             }
         }
 
@@ -852,7 +859,7 @@ class ImportCommand(
             // every row to the same total and make the "everything" row untrue.
             Since: discoverOnly ? null : since,
             MinLines: minLines
-        );
+        ) { Stderr = console.Error };
 
         var discoveriesPerSource = FirstDiscoveryWins(await Task.WhenAll(
             sources.Select(s => s.DiscoverAsync(filters, CancellationToken.None))
@@ -873,7 +880,7 @@ class ImportCommand(
             if (filterSession is not null) {
                 if (discoverOnly) return WriteEmptyDiscoveryReport(discoverySink, ScannedVendors(sources), windowsAsOf, time);
 
-                await Console.Error.WriteLineAsync($"Session not found: {NormalizeGuid(filterSession)}");
+                await console.Error.WriteLineAsync($"Session not found: {NormalizeGuid(filterSession)}");
 
                 return 1;
             }
@@ -1018,16 +1025,16 @@ class ImportCommand(
             if (needOrgPick) {
                 // Bare `--org` with no value/remembered org: pick the GitHub org to
                 // scope on from the owners seen across discovered sessions.
-                var owner = ImportScopePrompt.RunOrgPicker(distinct);
+                var owner = ImportScopePrompt.RunOrgPicker(console.Ansi, distinct);
                 scope = owner is null ? null : new ImportScope.Org(owner);
             } else {
-                scope = ImportScopePrompt.RunPicker(currentRepo, distinct);
+                scope = ImportScopePrompt.RunPicker(console.Ansi, currentRepo, distinct);
             }
 
             if (scope is null) {
                 // The picker has already printed the specific reason (e.g. "No
                 // git-remote owners detected" or "No repositories detected in
-                // discovered sessions") via AnsiConsole. Don't tack on a
+                // discovered sessions") on the run's terminal. Don't tack on a
                 // misleading "cancelled" message.
                 return 1;
             }
@@ -1116,6 +1123,8 @@ class ImportCommand(
             : $"{profile?.DefaultVisibility ?? "org_public"} (from profile)";
 
         if (!ImportScopePrompt.PromptConfirm(
+                console.Ansi,
+                console.Error,
                 scope,
                 totalAfterScope,
                 sampleRepos,
@@ -1123,7 +1132,7 @@ class ImportCommand(
                 skipConfirmation,
                 display.Indented
             )) {
-            await Console.Error.WriteLineAsync("Import cancelled.");
+            await console.Error.WriteLineAsync("Import cancelled.");
 
             return 0;
         }
@@ -1140,14 +1149,14 @@ class ImportCommand(
             MinLines: minLines,
             Home: home,
             Reimport: reimport
-        );
+        ) { Stderr = console.Error };
 
         IReadOnlyList<SessionClassification>[] classificationsPerSource;
 
         if (display.Tty) {
             classificationsPerSource = new IReadOnlyList<SessionClassification>[sources.Count];
 
-            await AnsiConsole.Progress()
+            await console.Ansi.Progress()
                 .AutoClear(true)
                 .Columns(new TaskDescriptionColumn(), new ProgressBarColumn(), new PercentageColumn())
                 .StartAsync(async ctx => {
@@ -1250,33 +1259,34 @@ class ImportCommand(
         // the same one, and answering it per-list would not change what it means.
         var outsideAllowlist = actionable.Where(c => c.OutsideAllowlist).ToList();
 
+        var includedRepoKeys        = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var includedPathKeys        = new HashSet<string>(StringComparer.Ordinal);
+        var includeOutsideAllowlist = false;
+
         if (excludedByRepo.Count > 0 || excludedByPath.Count > 0 || outsideAllowlist.Count > 0) {
-            var includedRepoKeys        = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var includedPathKeys        = new HashSet<string>(StringComparer.Ordinal);
-            var includeOutsideAllowlist = false;
             // Only prompt when both stdin and stdout are interactive. Writing prompts to stderr
             // keeps them visible even when stdout is redirected, but we still can't ReadLine
             // meaningfully without a TTY on stdin. autoSkipExclusions forces the non-interactive
             // path regardless of TTY state (e.g. the embedded `kcap setup` import call, which must
             // never block on stdin).
-            var canPrompt = display.Tty && !Console.IsInputRedirected && !autoSkipExclusions;
+            var canPrompt = display.Tty && !console.InputRedirected && !autoSkipExclusions;
 
             if (canPrompt) {
                 foreach (var (key, sessions) in excludedByRepo) {
-                    await Console.Error.WriteAsync($"Repository {key} is excluded. Include {sessions.Count} session{(sessions.Count == 1 ? "" : "s")} from it? (y/N) ");
-                    var answer = Console.ReadLine()?.Trim();
+                    await console.Error.WriteAsync($"Repository {key} is excluded. Include {sessions.Count} session{(sessions.Count == 1 ? "" : "s")} from it? (y/N) ");
+                    var answer = console.In.ReadLine()?.Trim();
                     if (string.Equals(answer, "y", StringComparison.OrdinalIgnoreCase)) includedRepoKeys.Add(key);
                 }
 
                 foreach (var (key, sessions) in excludedByPath) {
-                    await Console.Error.WriteAsync($"Path {key} is excluded. Include {sessions.Count} session{(sessions.Count == 1 ? "" : "s")} under it? (y/N) ");
-                    var answer = Console.ReadLine()?.Trim();
+                    await console.Error.WriteAsync($"Path {key} is excluded. Include {sessions.Count} session{(sessions.Count == 1 ? "" : "s")} under it? (y/N) ");
+                    var answer = console.In.ReadLine()?.Trim();
                     if (string.Equals(answer, "y", StringComparison.OrdinalIgnoreCase)) includedPathKeys.Add(key);
                 }
 
                 if (outsideAllowlist.Count > 0) {
-                    await Console.Error.WriteAsync($"{outsideAllowlist.Count} session{(outsideAllowlist.Count == 1 ? " falls" : "s fall")} outside the configured allow list. Include {(outsideAllowlist.Count == 1 ? "it" : "them")}? (y/N) ");
-                    var answer = Console.ReadLine()?.Trim();
+                    await console.Error.WriteAsync($"{outsideAllowlist.Count} session{(outsideAllowlist.Count == 1 ? " falls" : "s fall")} outside the configured allow list. Include {(outsideAllowlist.Count == 1 ? "it" : "them")}? (y/N) ");
+                    var answer = console.In.ReadLine()?.Trim();
                     if (string.Equals(answer, "y", StringComparison.OrdinalIgnoreCase)) includeOutsideAllowlist = true;
                 }
             } else {
@@ -1287,16 +1297,18 @@ class ImportCommand(
                     .Distinct()
                     .Count();
                 var totalGroups = excludedByRepo.Count + excludedByPath.Count + (outsideAllowlist.Count > 0 ? 1 : 0);
-                await Console.Error.WriteLineAsync(
+                await console.Error.WriteLineAsync(
                     $"{display.Indented}Auto-skipping {distinctSessions} session(s) from {totalGroups} excluded source(s) (non-interactive).");
             }
+        }
 
-            for (var i = 0; i < classifications.Count; i++) {
-                var c = classifications[i];
+        // Outside the prompt block: a session whose probe failed is never asked about, and must still
+        // land in Excluded when nothing opted its exclusion in.
+        for (var i = 0; i < classifications.Count; i++) {
+            var c = classifications[i];
 
-                if (ShouldExclude(c, includedRepoKeys, includedPathKeys, includeOutsideAllowlist)) {
-                    classifications[i] = c with { Status = ClassificationStatus.Excluded };
-                }
+            if (ShouldExclude(c, includedRepoKeys, includedPathKeys, includeOutsideAllowlist)) {
+                classifications[i] = c with { Status = ClassificationStatus.Excluded };
             }
         }
 
@@ -1318,6 +1330,13 @@ class ImportCommand(
 
         display.BeginPhase("Plan");
         display.WritePlanGrid(planCounts, planBySource);
+
+        // A probe error alone cannot tell a down server from a bad session, and the Done grid's "re-run
+        // to retry" reads as a transient blip unless the cause is named.
+        if (planCounts.ProbeError > 0 && await ServerReachability.UnreachableReasonAsync(httpClient, baseUrl, time) is { } unreachable)
+            await console.Error.WriteLineAsync(
+                $"{display.Indented}Could not reach the kcap server at {UnusableUrlDiagnostic.Sanitize(baseUrl)} "
+              + $"({HttpClientExtensions.StripControlCharacters(unreachable)}). Nothing can be imported until it is back.");
 
         // --- Build chains + set continuation predecessors ---
         // Chain workers operate on file-based classifications (Claude/Codex);
@@ -1390,6 +1409,7 @@ class ImportCommand(
         var       titleFailures      = new ConcurrentBag<(string SessionId, string Reason)>();
         var       summaryFailures    = new ConcurrentBag<(string SessionId, string Reason)>();
         var       importedSessionIds = new ConcurrentBag<string>();
+        var       resumedSessionIds  = new ConcurrentBag<string>();
         var       partitionSucceeded = new ConcurrentBag<string>();
         var       partitionSkipped   = new ConcurrentBag<string>();
         var       partitionFailed    = new ConcurrentBag<string>();
@@ -1415,6 +1435,7 @@ class ImportCommand(
             OnSessionWarning = (_, sid, message) => WarnSession(sid, message),
             OnSessionEnded = (_, c, outcome, lines) => {
                 importedSessionIds.Add(c.SessionId);
+                if (outcome == SessionImportOutcome.Resumed) resumedSessionIds.Add(c.SessionId);
                 if (selectedIds?.Contains(c.SessionId) == true) partitionSucceeded.Add(c.SessionId);
 
                 var verb = outcome == SessionImportOutcome.Resumed
@@ -1585,7 +1606,7 @@ class ImportCommand(
             if (existing.Count > 0) {
                 display.BeginPhase("Making existing sessions private");
 
-                var unprivatized = await SetVisibilityNoneForAll(httpClient, baseUrl, existing, time, display.Indented);
+                var unprivatized = await SetVisibilityNoneForAll(httpClient, baseUrl, existing, time, display);
 
                 if (unprivatized.Count > 0) {
                     var blocked = unprivatized.ToHashSet(StringComparer.Ordinal);
@@ -1602,7 +1623,7 @@ class ImportCommand(
                     routed = [.. routed.Where(c => !blocked.Contains(c.SessionId))];
 
                     foreach (var sessionId in blocked) {
-                        await Console.Error.WriteLineAsync(
+                        await console.Error.WriteLineAsync(
                             $"{display.Indented}! skipping {sessionId}: could not make it private first, and importing "
                           + "into it would publish new content to the audience it already has");
                     }
@@ -1637,7 +1658,7 @@ class ImportCommand(
             if (display.Tty) {
                 var r = default(ImportChainsResult);
 
-                await AnsiConsole.Progress()
+                await console.Ansi.Progress()
                     .AutoClear(true)
                     .HideCompleted(false)
                     .Columns(new TaskDescriptionColumn(), new ProgressBarColumn(), new PercentageColumn())
@@ -1709,8 +1730,9 @@ class ImportCommand(
                                         slots[slot].Description     = LoadingDesc(slot, currentSid[slot], currentVerb[slot]);
                                     }
                                 },
-                                OnSessionEnded = (slot, c, _, _) => {
+                                OnSessionEnded = (slot, c, outcome, _) => {
                                     importedSessionIds.Add(c.SessionId);
+                                    if (outcome == SessionImportOutcome.Resumed) resumedSessionIds.Add(c.SessionId);
                                     // Partition accounting must happen on BOTH the TTY and non-TTY
                                     // paths (the base handler records it too); it drives the
                                     // foreground outcome and the background-spawn decision.
@@ -1731,7 +1753,7 @@ class ImportCommand(
                                     IdleSlot(slot);
                                     // Errors print to scrollback above the live region —
                                     // Spectre.Console.Progress flushes prior writes.
-                                    AnsiConsole.MarkupLine(display.Indented + FormatSkippedReasonMarkup(sid, reason));
+                                    console.Ansi.MarkupLine(display.Indented + FormatSkippedReasonMarkup(sid, reason));
                                 },
                             };
 
@@ -1794,7 +1816,7 @@ class ImportCommand(
                 Progress: new CallbackProgress(ev => {
                     if (ev is ImportWarning w) WarnSession(w.SessionId, w.Message);
                 })
-            );
+            ) { Stderr = console.Error };
 
             async Task<ImportSessionResult> ImportOne(SessionClassification c) {
                 if (!sourceBySession.TryGetValue((c.Vendor, c.SessionId), out var src)) {
@@ -1877,7 +1899,7 @@ class ImportCommand(
             }
 
             if (display.Tty) {
-                await AnsiConsole.Progress()
+                await console.Ansi.Progress()
                     .AutoClear(false)
                     .HideCompleted(false)
                     .Columns(new TaskDescriptionColumn(), new ProgressBarColumn(), new PercentageColumn())
@@ -1893,19 +1915,19 @@ class ImportCommand(
                                     switch (resolved) {
                                         case ImportOutcome.Loaded:
                                         case ImportOutcome.Resumed:
-                                            AnsiConsole.MarkupLine(
+                                            console.Ansi.MarkupLine(
                                                 $"{display.Indented}[green]✓[/] Loading [cyan]{Markup.Escape(c.SessionId)}[/] ({c.Vendor.VendorId})"
                                             );
 
                                             break;
                                         case ImportOutcome.Skipped:
-                                            AnsiConsole.MarkupLine(
+                                            console.Ansi.MarkupLine(
                                                 $"{display.Indented}[yellow]~[/] Skipping [cyan]{Markup.Escape(c.SessionId)}[/] (already current)"
                                             );
 
                                             break;
                                         case ImportOutcome.Failed:
-                                            AnsiConsole.MarkupLine(
+                                            console.Ansi.MarkupLine(
                                                 $"{display.Indented}[red]✗[/] Failed [cyan]{Markup.Escape(c.SessionId)}[/]"
                                             );
 
@@ -1915,13 +1937,13 @@ class ImportCommand(
                                             // be a Cursor nested child, an Antigravity/OpenCode
                                             // lifecycle-only repair, etc.), not always "nested
                                             // under parent".
-                                            AnsiConsole.MarkupLine(
+                                            console.Ansi.MarkupLine(
                                                 $"{display.Indented}[grey]·[/] Already loaded [cyan]{Markup.Escape(c.SessionId)}[/] (no new content)"
                                             );
 
                                             break;
                                         case null:
-                                            AnsiConsole.MarkupLine(
+                                            console.Ansi.MarkupLine(
                                                 $"{display.Indented}[grey]·[/] Refreshed [cyan]{Markup.Escape(c.SessionId)}[/] (repository backfill, already loaded)"
                                             );
 
@@ -1998,7 +2020,7 @@ class ImportCommand(
                     : "Sharing imported sessions with your workspace");
 
                 var lost = await SetVisibilityForAll(
-                    httpClient, baseUrl, [.. touched], explicitVisibility, time, display.Indented);
+                    httpClient, baseUrl, [.. touched], explicitVisibility, time, display);
 
                 visibilityFailures += lost.Count;
 
@@ -2017,7 +2039,7 @@ class ImportCommand(
             display.BeginPhase("Titles & summaries");
 
             if (display.Tty) {
-                await AnsiConsole.Progress()
+                await console.Ansi.Progress()
                     .AutoClear(false)
                     .HideCompleted(false)
                     .Columns(new TaskDescriptionColumn(), new ProgressBarColumn(), new PercentageColumn())
@@ -2035,14 +2057,14 @@ class ImportCommand(
 
                                 for (var i = seenT; i < tList.Count; i++) {
                                     var (sid, reason) = tList[i];
-                                    AnsiConsole.MarkupLine($"{display.Indented}[red]✗[/] title failed for [cyan]{Markup.Escape(sid)}[/]: {Markup.Escape(reason)}");
+                                    console.Ansi.MarkupLine($"{display.Indented}[red]✗[/] title failed for [cyan]{Markup.Escape(sid)}[/]: {Markup.Escape(reason)}");
                                 }
 
                                 seenT = tList.Count;
 
                                 for (var i = seenS; i < sList.Count; i++) {
                                     var (sid, reason) = sList[i];
-                                    AnsiConsole.MarkupLine($"{display.Indented}[red]✗[/] summary failed for [cyan]{Markup.Escape(sid)}[/]: {Markup.Escape(reason)}");
+                                    console.Ansi.MarkupLine($"{display.Indented}[red]✗[/] summary failed for [cyan]{Markup.Escape(sid)}[/]: {Markup.Escape(reason)}");
                                 }
 
                                 seenS = sList.Count;
@@ -2102,6 +2124,7 @@ class ImportCommand(
 
         if (sources.Count > 1) {
             var importedSet = importedSessionIds.ToHashSet(StringComparer.Ordinal);
+            var resumedSet  = resumedSessionIds.ToHashSet(StringComparer.Ordinal);
 
             doneBySource = classifications
                 .GroupBy(c => c.Vendor)
@@ -2116,7 +2139,8 @@ class ImportCommand(
                         return ComputePerSourceFinalCounts(
                             slice,
                             imported,
-                            hasRouted ? routed : null
+                            hasRouted ? routed : null,
+                            slice.Count(c => resumedSet.Contains(c.SessionId))
                         );
                     },
                     StringComparer.Ordinal
@@ -2602,22 +2626,6 @@ class ImportCommand(
     }
 
     /// <summary>
-    /// Build a SessionId → repo lookup for every discovered transcript. Repo
-    /// detection (git + `gh pr view`) is the slow part of the discovery phase
-    /// and previously ran sequentially per-session, making `kcap import`
-    /// look frozen on large histories. This version deduplicates by cwd
-    /// (transcripts in the same project share a repo) and runs detection in
-    /// parallel, surfacing progress via a Spectre status spinner on a TTY and
-    /// a plain status line otherwise.
-    /// </summary>
-    /// <summary>
-    /// Print a one-shot summary of transcript cwds that don't exist on disk.
-    /// Most users with a long history accumulate references to deleted
-    /// worktrees and renamed repo directories, and those sessions silently
-    /// fail to match an --org/--repo scope. This output lets them spot the
-    /// gap before the import proceeds.
-    /// </summary>
-    /// <summary>
     /// Surface how many sessions were transparently attributed to their parent
     /// project via the worktree-path fallback (cwd lived under
     /// <c>&lt;dir&gt;/.&lt;X&gt;/worktrees/&lt;slug&gt;</c> but the worktree
@@ -2655,6 +2663,11 @@ class ImportCommand(
         }
     }
 
+    /// <summary>
+    /// Print a one-shot summary of transcript cwds that don't exist on disk. A long history accumulates
+    /// references to deleted worktrees and renamed repo directories, and those sessions silently fail to
+    /// match an --org/--repo scope; this lets the user spot the gap before the import proceeds.
+    /// </summary>
     internal static void ReportMissingCwds(
             IReadOnlyDictionary<string, string> sessionCwds,
             IReadOnlyList<CwdRemap>?            cwdRemap,
@@ -2902,6 +2915,11 @@ class ImportCommand(
         return final;
     }
 
+    /// <summary>
+    /// Build a SessionId → repo lookup for every discovered transcript. Repo detection (git + `gh pr view`) is
+    /// the slow part of discovery, so it runs once per distinct cwd (transcripts in one project share a repo), in
+    /// parallel, with a status spinner on a TTY and a plain status line otherwise.
+    /// </summary>
     internal async Task<Dictionary<string, (string Owner, string Name)?>> ResolveTranscriptReposAsync(
             IReadOnlyList<(string SessionId, string FilePath, string EncodedCwd)> transcripts,
             bool                                                                  codex,
@@ -2973,7 +2991,7 @@ class ImportCommand(
             if (display.Tty) {
                 var statusLock = new Lock();
 
-                await AnsiConsole.Status()
+                await console.Ansi.Status()
                     .Spinner(Spinner.Known.Dots)
                     .StartAsync(
                         $"Scanning repositories (0/{total})…",
@@ -3176,16 +3194,14 @@ class ImportCommand(
         /// <summary>
         /// Fired when a session's session-end hook returned, signalling that the
         /// background phase may enqueue title / what's-done work for it.
-        /// Renamed from the previous `OnSessionEnded` to disambiguate from the
-        /// slot-aware lifecycle event above.
         /// </summary>
         public required Action<(string SessionId, bool GenerateWhatsDone, HarnessId Vendor)> OnBackgroundWorkReady { get; init; }
     }
 
     /// <summary>
-    /// Dispatch chains across 4 parallel workers; sessions within a chain run
-    /// serially. Thread-safe: counters use Interlocked, callbacks must be
-    /// thread-safe (production wiring uses AnsiConsole + ConcurrentBag).
+    /// Dispatch chains across 4 parallel workers; sessions within a chain run serially. Counters use
+    /// Interlocked. Several workers call each callback at once, so every callback must be thread-safe;
+    /// the run's own wiring writes through the injected terminal's Spectre console and a ConcurrentBag.
     /// </summary>
     internal async Task<ImportChainsResult> ImportChainsAsync(
             HttpClient                        httpClient,
@@ -3199,6 +3215,7 @@ class ImportCommand(
         var loaded  = 0;
         var resumed = 0;
         var errored = 0;
+        var ledger  = TranscriptImportLedger.ForRecording(config);
 
         var queue = Channel.CreateUnbounded<List<SessionClassification>>(
             new() {
@@ -3228,7 +3245,7 @@ class ImportCommand(
                                 var linesSent = 0;
 
                                 try {
-                                    (r, linesSent) = await ImportSingleSessionAsync(httpClient, baseUrl, session, slot, events, ct, sessionCwds, defaultVisibility);
+                                    (r, linesSent) = await ImportSingleSessionAsync(httpClient, baseUrl, session, slot, events, ledger, ct, sessionCwds, defaultVisibility);
                                 } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
                                     throw;
                                 } catch (Exception ex) {
@@ -3253,7 +3270,11 @@ class ImportCommand(
             );
         }
 
-        await Task.WhenAll(workers);
+        try {
+            await Task.WhenAll(workers);
+        } finally {
+            ledger.Save();
+        }
 
         return new(loaded, resumed, errored);
     }
@@ -3275,12 +3296,13 @@ class ImportCommand(
             : session.Meta.Cwd ?? SessionImporter.DecodeCwdFromDirName(session.EncodedCwd);
 
     async Task<(SessionImportOutcome Outcome, int LinesSent)> ImportSingleSessionAsync(
-            HttpClient            httpClient,
-            string                baseUrl,
-            SessionClassification session,
-            int                   slot,
-            ChainWorkerEvents     events,
-            CancellationToken     ct,
+            HttpClient             httpClient,
+            string                 baseUrl,
+            SessionClassification  session,
+            int                    slot,
+            ChainWorkerEvents      events,
+            TranscriptImportLedger ledger,
+            CancellationToken      ct,
             IReadOnlyDictionary<string, string>? sessionCwds       = null,
             string?                              defaultVisibility = null
         ) {
@@ -3296,8 +3318,11 @@ class ImportCommand(
             )
             : 0;
 
+        var transcriptDropped = false;
+
         IProgress<ImportProgress> perSessionProgress = new CallbackProgress(ev => {
                 switch (ev) {
+                    case BatchDropped { AgentId: null }: transcriptDropped = true; break;
                     // Only parent-transcript batches (AgentId == null) advance the
                     // slot bar; subagent batches are surfaced via the subagent events.
                     case BatchFlushed { AgentId: null } bf: events.OnSessionProgress(slot, bf.LinesAdded, sendableTotal); break;
@@ -3312,6 +3337,7 @@ class ImportCommand(
             try {
                 // Fail-closed tail: a rejected/half-applied resume must NOT be finalized
                 // (posting session-end after a gap would mark the session ended with a hole).
+                var completeLines = new StrongBox<int>();
                 var linesSent = await SessionImporter.SendTranscriptBatches(
                     httpClient,
                     baseUrl,
@@ -3321,7 +3347,8 @@ class ImportCommand(
                     startLine: session.ResumeFromLine, time: time,
                     progress: perSessionProgress,
                     vendor: session.Vendor,
-                    failOnError: true
+                    failOnError: true,
+                    completeLines: completeLines
                 );
 
                 var (_, resumeTitleCancelled) = await TryPostCodexHarnessTitleAsync(httpClient, baseUrl, session, perSessionProgress, ct);
@@ -3357,6 +3384,8 @@ class ImportCommand(
 
                     return (SessionImportOutcome.Errored, linesSent);
                 }
+
+                if (!transcriptDropped) await RecordImportMarkAsync(httpClient, baseUrl, session.SessionId, completeLines.Value, ledger, ct);
 
                 return (SessionImportOutcome.Resumed, linesSent);
             } catch (HttpRequestException ex) {
@@ -3535,10 +3564,35 @@ class ImportCommand(
 
         if (titleCancelled) ct.ThrowIfCancellationRequested();
 
+        if (!transcriptDropped) await RecordImportMarkAsync(httpClient, baseUrl, session.SessionId, importResult.CompleteLines, ledger, ct);
+
         if (!harnessTitled) events.OnTitleTaskReady((session.SessionId, session.FilePath, session.PreviousSessionId, session.Vendor));
         events.OnBackgroundWorkReady((session.SessionId, generateWhatsDone, session.Vendor));
 
         return (SessionImportOutcome.Loaded, importResult.LinesSent);
+    }
+
+    /// <summary>
+    /// Asks the server where its watermark settled once the transcript landed, and records it beside the lines
+    /// that were sent, so the next import can tell lines the server ignored from lines it never got.
+    /// </summary>
+    static async Task RecordImportMarkAsync(
+            HttpClient             httpClient,
+            string                 baseUrl,
+            string                 sessionId,
+            int                    completeLines,
+            TranscriptImportLedger ledger,
+            CancellationToken      ct
+        ) {
+        try {
+            using var resp = await httpClient.GetAsync($"{baseUrl}/api/sessions/{sessionId}/last-line", ct);
+            if (resp.StatusCode != HttpStatusCode.OK) return;
+
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+            if (doc.RootElement.Num("last_line_number") is { } watermark && completeLines > watermark)
+                ledger.Record(baseUrl, sessionId, new TranscriptImportMark(completeLines, (int)watermark));
+        } catch (Exception e) when (e is HttpRequestException or JsonException or InvalidOperationException
+                                     || e is OperationCanceledException && !ct.IsCancellationRequested) { }
     }
 
     // A cancellation during the title post is held until session-end has been sent, which then runs uncancelled and is
@@ -3592,11 +3646,6 @@ class ImportCommand(
     }
 
     /// <summary>
-    /// Probe each transcript against the server's last-line API and classify
-    /// what the import phase should do with it. Probes run concurrently via
-    /// SemaphoreSlim(8) — idempotent GETs, safe to parallelize.
-    /// </summary>
-    /// <summary>
     /// Decides whether a classified session should be force-flipped to Excluded
     /// after the prompt loop. Repo and path exclusions are independent gates:
     /// the session is excluded if ANY applicable exclusion key was not opted-in.
@@ -3642,8 +3691,8 @@ class ImportCommand(
             string                baseUrl,
             IReadOnlyList<string> sessionIds,
             TimeProvider          time,
-            string                indent = ""
-        ) => SetVisibilityForAll(httpClient, baseUrl, sessionIds, "none", time, indent);
+            ImportDisplay         display
+        ) => SetVisibilityForAll(httpClient, baseUrl, sessionIds, "none", time, display);
 
     /// <summary>
     /// Failures are logged inline (one line per session) but never throw — the import already
@@ -3658,7 +3707,7 @@ class ImportCommand(
             IReadOnlyList<string> sessionIds,
             string                visibility,
             TimeProvider          time,
-            string                indent = ""
+            ImportDisplay         display
         ) {
         var lost = new List<string>();
 
@@ -3676,15 +3725,15 @@ class ImportCommand(
                 if (!resp.IsSuccessStatusCode) {
                     lost.Add(sessionId);
 
-                    await Console.Error.WriteLineAsync(
-                        $"{indent}! visibility={visibility} failed for {sessionId}: HTTP {(int)resp.StatusCode}"
+                    await display.Terminal.Error.WriteLineAsync(
+                        $"{display.Indented}! visibility={visibility} failed for {sessionId}: HTTP {(int)resp.StatusCode}"
                     );
                 }
             } catch (Exception ex) {
                 lost.Add(sessionId);
 
-                await Console.Error.WriteLineAsync(
-                    $"{indent}! visibility={visibility} failed for {sessionId}: {ex.Message}"
+                await display.Terminal.Error.WriteLineAsync(
+                    $"{display.Indented}! visibility={visibility} failed for {sessionId}: {ex.Message}"
                 );
             }
         }

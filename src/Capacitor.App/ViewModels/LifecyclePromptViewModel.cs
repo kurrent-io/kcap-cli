@@ -39,12 +39,13 @@ public sealed class LifecyclePromptViewModel : ReactiveObject {
     /// pattern for its countdown/phase lines).
     public string? DegradedPathText => PathDegraded ? DegradedPathSentence : null;
 
-    /// Set only for an update-ready prompt, whose DaemonVersion carries the candidate and
-    /// CliVersion the installed build; other kinds use the two fields for daemon and CLI.
+    /// Update prompts use CliVersion for the installed app and DaemonVersion for the candidate.
     public string? InstalledVersion { get; }
     public string? UpdateVersion { get; }
     public bool ShowVersionChange => UpdateVersion is not null;
     public bool ShowInstalledVersion => InstalledVersion is not null;
+    public bool ShowCurrentVersion => ShowInstalledVersion && !ShowVersionChange;
+    public bool IsUpdate { get; }
 
     /// Fires once, on Accept or Decline — the window closes itself on this; the ViewModel owns no
     /// window.
@@ -58,11 +59,9 @@ public sealed class LifecyclePromptViewModel : ReactiveObject {
         Disclosure        = prompt.Disclosure;
         PathDegraded      = prompt.PathDegraded;
         Warning           = prompt.Warning;
-        // The body text does not repeat the candidate, so it shows even without an installed version.
-        if (prompt is { Kind: LifecyclePrompt.KindUpdateReady, DaemonVersion: { } next }) {
-            UpdateVersion    = next;
-            InstalledVersion = prompt.CliVersion;
-        }
+        IsUpdate          = prompt.Kind is LifecyclePrompt.KindUpdateReady or LifecyclePrompt.KindUpdateInfo;
+        if (IsUpdate) InstalledVersion = prompt.CliVersion?.Split('+', 2)[0];
+        if (prompt.Kind == LifecyclePrompt.KindUpdateReady) UpdateVersion = prompt.DaemonVersion?.Split('+', 2)[0];
         ShowDeclineButton = prompt.Kind is not (LifecyclePrompt.KindQuarantine or LifecyclePrompt.KindUpdateInfo);
         AcceptButtonText  = prompt.Kind switch {
             LifecyclePrompt.KindQuarantine     => "Acknowledge",

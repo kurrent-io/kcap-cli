@@ -51,6 +51,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     /// had one shows its chat before a session.
     bool _hadSession;
     AgentRow _row;
+    readonly BehaviorSubject<AgentRow> _rows;
+    readonly BehaviorSubject<string> _titles;
     string? _viewerSubject;
 
     public string AgentId { get; }
@@ -116,6 +118,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
 
     string _title = "";
     public string Title { get => _title; private set => this.RaiseAndSetIfChanged(ref _title, value); }
+
+    public SessionTitleEditorViewModel TitleEditor { get; }
 
     string _repoLabelText = "";
     public string RepoLabelText { get => _repoLabelText; private set => this.RaiseAndSetIfChanged(ref _repoLabelText, value); }
@@ -257,6 +261,9 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         _ => "",
     };
 
+    /// Still on the launch's stand-in row: the registry has not listed the agent yet.
+    public bool IsPlaceholder => _row.IsPlaceholder;
+
     public RemoteSessionViewModel(
             AgentRow row, IAgentDirectory directory, SessionAccessService access, IPermissionService permissions,
             AgentActionService actions, IServerLane lane, SessionDetailReader readDetail, IUrlOpener opener, TimeProvider time, IWorkContextSource workContext,
@@ -265,12 +272,16 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             Action? requestSignIn = null, Action? linkGitHub = null, IObservable<Unit>? signInCompleted = null, IPlanSource? plans = null,
             ComposerDrafts? drafts = null, Func<string, Action>? inputSending = null,
             LastReads<PullRequestSnapshot>? pullRequestSnapshots = null, Action<string>? pullRequestLinksChanged = null,
-            SubagentEventsReader? readSubagent = null, AccountReadings? readings = null, IMessageSenderSource? senders = null) {
+            SubagentEventsReader? readSubagent = null, AccountReadings? readings = null, IMessageSenderSource? senders = null,
+            IRemoteAgentsService? remoteAgents = null, IAppNotifier? notifier = null, IObservable<string?>? appSubject = null,
+            IServerSessionsService? serverSessions = null) {
         _drafts = drafts;
         _time = time;
         _permissions = permissions;
         _readSubagent = readSubagent;
         _row = row;
+        _rows = new BehaviorSubject<AgentRow>(row);
+        _titles = new BehaviorSubject<string>(row.Title ?? row.Vendor);
         _opener = opener;
         _access = access;
         AgentId = row.Id;
@@ -344,6 +355,26 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             : null;
         if (Terminal is not null) Chat.ShowTerminal = () => ActiveTab = RemoteTab.Terminal;
         Apply(row);
+
+        // The server re-checks ownership on every write; this only avoids offering a rename that
+        // would be refused. A listed session is the server's own record, so it stays renamable
+        // after it ends; the listing folds the owner through the account's aliases.
+        var canRename = remoteAgents is null
+            ? Observable.Return(false)
+            : _rows.CombineLatest(_sessionEndedChanges, _originChangedChanges, appSubject ?? SignedInSubject.From(lane.Status),
+                (r, ended, movedLocal, viewer) => (!ended || r.Origin == AgentOrigin.Server) && !movedLocal
+                    && r.SessionId is { Length: > 0 } && viewer is not null
+                    && (r.OwnerUserId == viewer || (r.Origin == AgentOrigin.Server && r.OwnerIsViewer == true)))
+                .ObserveOn(RxSchedulers.MainThreadScheduler);
+        TitleEditor = new SessionTitleEditorViewModel(_titles, canRename, async (title, ct) => {
+                if (remoteAgents is null || _row.SessionId is not { Length: > 0 } sessionId)
+                    return new SessionRenameResult(false, null, SessionRenameReasons.NotFound);
+                var result = await remoteAgents.RenameAsync(row.Id, sessionId, title, ct);
+                if (result.Applied) serverSessions?.ApplyRename(sessionId, result.Title is { Length: > 0 } shown ? shown : title);
+                return result;
+            },
+            notifier ?? new AppNotifier());
+        _disposables.Add(TitleEditor);
 
         directory.Rows.Connect()
             .Filter(r => r.Key == row.Key)
@@ -424,6 +455,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         }
         if (_sessionIds.Value != sessionId) _sessionIds.OnNext(sessionId);
         Title = row.Title ?? row.Vendor;
+        _titles.OnNext(Title);
+        _rows.OnNext(row);
         RepoLabelText = row.Origin == AgentOrigin.Server
             ? row.OwnerName is { Length: > 0 } owner ? $"{row.RepoGroupLabel} · {owner}" : row.RepoGroupLabel
             : $"{row.RepoGroupLabel} · on {row.MachineBadge}";

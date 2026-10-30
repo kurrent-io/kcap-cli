@@ -37,6 +37,9 @@ public sealed class LateBoundLocalControlOps(Func<ILocalControlOps> bind) : ILoc
 
     public Task<DaemonSettingsAckDto> PutDaemonSettingsAsync(DaemonSettingsPutDto put, CancellationToken ct) =>
         bind().PutDaemonSettingsAsync(put, ct);
+
+    public Task<SessionRenameAckDto> RenameSessionAsync(SessionRenameDto rename, CancellationToken ct) =>
+        bind().RenameSessionAsync(rename, ct);
 }
 
 /// <summary>

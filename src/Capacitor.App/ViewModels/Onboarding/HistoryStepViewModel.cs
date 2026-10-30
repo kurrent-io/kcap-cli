@@ -54,9 +54,9 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     public string       SkipLabel  => "Not now";
 
     public string Lede => _onLocalPath()
-        ? "kcap imports the transcripts your harnesses have already written, so your past work is searchable " +
+        ? "kcap imports the sessions your harnesses have already written, so your past work is searchable " +
           "from day one. Everything stays on this machine."
-        : "kcap uploads the transcripts your harnesses have already written, so your past work is searchable " +
+        : "kcap uploads the sessions your harnesses have already written, so your past work is searchable " +
           "from day one. Nothing leaves this machine until you choose.";
 
     public string MachineName { get; }
@@ -90,7 +90,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         HistoryState.NoHarness =>
             "No harnesses were connected in this setup. Go back to connect one, or run kcap import later.",
         HistoryState.NoHistory =>
-            $"No history on {MachineName} to import. New sessions will record as they happen.",
+            $"No history on {MachineName} to import. New sessions will be stored as they happen.",
         HistoryState.OnlyUnmatched =>
             $"Found {SessionCount(_unmatched)} on {MachineName}, but none matched a repository. Run kcap remap, then kcap import.",
         HistoryState.Unreadable =>
@@ -102,7 +102,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         HistoryState.NoHarness =>
             $"No harnesses were connected in this setup. Go back to connect one, or import later from {SetupLocation.Path}.",
         HistoryState.NoHistory =>
-            $"No history on {MachineName} to import. New sessions will record as they happen.",
+            $"No history on {MachineName} to import. New sessions will be stored as they happen.",
         HistoryState.OnlyUnmatched =>
             $"Found {SessionCount(_unmatched)} on {MachineName}, but none matched a repository. Those sessions stay on this Mac.",
         HistoryState.Unreadable =>

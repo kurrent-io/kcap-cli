@@ -407,7 +407,7 @@ public class HarnessesStepViewModelTests {
     [NotInParallel("AvaloniaSession")]
     public async Task Next_installs_the_terminal_command_then_turns_harnesses_on() {
         var (left, installed, label, calls) = await AvaloniaSession.DispatchAsync(async () => {
-            var (h, fix) = await HarnessWithPathFix(new ProcessResult(0, "", "", false));
+            var (h, fix) = await HarnessWithPathFix(failing: false);
 
             var leave = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
 
@@ -422,9 +422,10 @@ public class HarnessesStepViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_cancelled_terminal_install_stays_and_turns_nothing_on() {
+    public async Task A_failed_terminal_install_stays_and_turns_nothing_on() {
+        Skip.When(OperatingSystem.IsWindows(), "macOS lstat semantics");
         var (left, message, calls) = await AvaloniaSession.DispatchAsync(async () => {
-            var (h, _) = await HarnessWithPathFix(new ProcessResult(1, "", "User canceled. (-128)", false));
+            var (h, _) = await HarnessWithPathFix(failing: true);
 
             var leave = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
 
@@ -432,18 +433,24 @@ public class HarnessesStepViewModelTests {
         });
 
         await Assert.That(left).IsFalse();
-        await Assert.That(message).IsEqualTo("Cancelled. Nothing changed.");
+        await Assert.That(message).StartsWith("Could not finish installing the terminal command.");
         await Assert.That(calls).IsEqualTo(0);
     }
 
-    async Task<(Harness, PathFixViewModel)> HarnessWithPathFix(ProcessResult installResult) {
+    // A failing install meets someone else's kcap where it would link.
+    async Task<(Harness, PathFixViewModel)> HarnessWithPathFix(bool failing) {
         var dir = Path.GetDirectoryName(ConfigPath)!;
+        var link = Path.Combine(dir, ".local", "bin", "kcap");
+        if (failing) {
+            Directory.CreateDirectory(Path.GetDirectoryName(link)!);
+            File.WriteAllText(link, "someone else's");
+        }
         var probe = new FakeLoginShellProbe {
             KcapOnPathBehavior = _ => Task.FromResult<bool?>(true),
-            KcapPathBehavior = _ => Task.FromResult<string?>(Path.Combine(dir, "shim-kcap")),
+            KcapPathBehavior = _ => Task.FromResult<string?>(link),
         };
         var fix = new PathFixViewModel(
-            new PathShimInstaller(new ScriptedProcessRunner(installResult), probe, Path.Combine(dir, "shim-kcap")),
+            new PathShimInstaller(probe, new UserHome(dir)),
             new WizardFixtures.NoopAppStateStore(), Path.Combine(dir, "bundled-kcap"));
         var h = new Harness(Config.Root, pathFix: fix);
         await h.Vm.OnEnterAsync(CancellationToken.None);
@@ -456,7 +463,7 @@ public class HarnessesStepViewModelTests {
     public async Task Not_now_still_leaves_while_the_terminal_cannot_run_kcap() {
         var (left, calls) = await AvaloniaSession.DispatchAsync(async () => {
             var fix = new PathFixViewModel(
-                new PathShimInstaller(new WizardFixtures.NoopProcessRunner(), new FakeLoginShellProbe()),
+                new PathShimInstaller(new FakeLoginShellProbe(), new UserHome(Path.GetDirectoryName(ConfigPath)!)),
                 new WizardFixtures.NoopAppStateStore(), "/opt/kcap/kcap");
             var h = new Harness(Config.Root, pathFix: fix);
             await h.Vm.OnEnterAsync(CancellationToken.None);
@@ -467,15 +474,6 @@ public class HarnessesStepViewModelTests {
 
         await Assert.That(left).IsTrue();
         await Assert.That(calls).IsEqualTo(0);
-    }
-
-    sealed class ScriptedProcessRunner(ProcessResult result) : IProcessRunner {
-        public Task<ProcessResult> RunAsync(string fileName, string[] args, RunOptions options, CancellationToken ct) =>
-            Task.FromResult(result);
-
-        public Task<StreamingResult> RunStreamingAsync(
-                string fileName, string[] args, RunOptions options, Action<StreamedLine> onLine, CancellationToken ct) =>
-            throw new NotSupportedException();
     }
 
     [Test]

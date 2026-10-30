@@ -25,6 +25,7 @@ public sealed class ClaudeHarness : IHarness<ClaudeHarness> {
         LaunchSignal   = probe => probe.Finds(CliBinary),
         UserDataSignal = Paths.HasUserData,
         AppSignal      = apps => apps.Finds("Claude.app", Path.Combine("Claude", "claude-code"), "AnthropicClaude"),
+        BundledCli     = ClaudeDesktopCli.Find,
         Wired          = () => ClaudePluginInstaller.IsPluginEnabled(Paths.UserSettings),
     };
 }

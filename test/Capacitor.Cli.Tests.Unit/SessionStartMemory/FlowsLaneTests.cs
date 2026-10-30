@@ -30,6 +30,108 @@ public class FlowsLaneTests {
         ]}
         """;
 
+    /// <summary>Answers the catalogue and the wake-up probe separately, and records which paths were asked.</summary>
+    sealed class Routes(HttpStatusCode catalog, string catalogBody, HttpStatusCode? wakeUps, bool stallWakeUps = false) : HttpMessageHandler {
+        public List<string> Asked { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+            var path = request.RequestUri!.AbsolutePath;
+            Asked.Add(path);
+            if (path == "/api/wakeups") {
+                if (stallWakeUps) await Task.Delay(Timeout.Infinite, ct);
+                if (wakeUps is not { } status) throw new HttpRequestException("unreachable");
+                return new HttpResponseMessage(status) { Content = new StringContent("{}") };
+            }
+
+            return new HttpResponseMessage(catalog) { Content = new StringContent(catalogBody) };
+        }
+    }
+
+    SessionStartFlowsLane Lane(Routes routes) => new(Lazy(new HttpClient(routes)), TimeProvider.System, Cache);
+
+    static SessionStartMemoryContextRequest Hosted() => Req() with { WakeUpsWanted = true };
+
+    [Test]
+    public async Task A_hosted_agent_on_a_server_that_takes_wake_ups_is_told_how_to_wait() {
+        var result = await Lane(new Routes(HttpStatusCode.OK, Catalog, HttpStatusCode.BadRequest)).FetchAsync(Hosted(), CancellationToken.None);
+
+        await Assert.That(result.Disposition).IsEqualTo(SessionStartMemoryDisposition.Ready);
+        await Assert.That(result.Fragment).IsEqualTo(
+            SessionStartFlowsLane.BuildFragment(JsonNode.Parse(Catalog)) + "\n\n" + SessionStartFlowsLane.WakeUpNudge);
+    }
+
+    [Test]
+    public async Task With_no_flow_to_offer_the_wake_up_nudge_still_goes_out() {
+        var result = await Lane(new Routes(HttpStatusCode.OK, """{"definitions":[]}""", HttpStatusCode.BadRequest))
+            .FetchAsync(Hosted(), CancellationToken.None);
+
+        await Assert.That(result.Disposition).IsEqualTo(SessionStartMemoryDisposition.Ready);
+        await Assert.That(result.Fragment).IsEqualTo(SessionStartFlowsLane.WakeUpNudge);
+    }
+
+    /// <summary>The server registers the routes only with its wake-up feature on, so a 404 means off, and a probe
+    /// that gets no answer cannot say on.</summary>
+    [Test]
+    [Arguments(HttpStatusCode.NotFound)]
+    [Arguments(HttpStatusCode.Unauthorized)]
+    [Arguments(HttpStatusCode.ServiceUnavailable)]
+    [Arguments(null)]
+    public async Task A_server_that_does_not_take_wake_ups_gets_no_nudge(HttpStatusCode? probe) {
+        var result = await Lane(new Routes(HttpStatusCode.OK, Catalog, probe)).FetchAsync(Hosted(), CancellationToken.None);
+
+        await Assert.That(result.Fragment).IsEqualTo(SessionStartFlowsLane.BuildFragment(JsonNode.Parse(Catalog)));
+    }
+
+    /// <summary>The probe has its own short deadline: a stalled one leaves the catalogue as it was rather than holding
+    /// it for the whole lane's budget.</summary>
+    [Test]
+    public async Task A_stalled_probe_gives_up_and_leaves_the_catalogue() {
+        var started = Stopwatch.StartNew();
+
+        var result = await Lane(new Routes(HttpStatusCode.OK, Catalog, HttpStatusCode.BadRequest, stallWakeUps: true))
+            .FetchAsync(Hosted() with { Budget = TimeSpan.FromSeconds(30) }, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+
+        await Assert.That(result.Fragment).IsEqualTo(SessionStartFlowsLane.BuildFragment(JsonNode.Parse(Catalog)));
+        await Assert.That(started.Elapsed).IsLessThan(TimeSpan.FromSeconds(10));
+    }
+
+    /// <summary>A catalogue that needs a retry must not take the confirmed nudge down with it.</summary>
+    [Test]
+    public async Task A_catalogue_retry_still_carries_the_wake_up_nudge() {
+        var result = await Lane(new Routes(HttpStatusCode.ServiceUnavailable, "", HttpStatusCode.BadRequest)).FetchAsync(Hosted(), CancellationToken.None);
+
+        await Assert.That(result.Disposition).IsEqualTo(SessionStartMemoryDisposition.RetryableFailure);
+        await Assert.That(result.Fragment).IsEqualTo(SessionStartFlowsLane.WakeUpNudge);
+    }
+
+    /// <summary>The composite delivers a flows retry's own fragment, alongside a committed memory fragment or with the retry.</summary>
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task The_composite_delivers_the_nudge_from_a_flows_retry(bool memory) {
+        var time = new FakeTimeProvider();
+        var composite = new SessionStartCompositeContextProvider(new FixedScope("repo", "machine"),
+            new SessionStartMemoryContextProvider(new FixedScope("repo", "machine"), Lazy(new HttpClient(new Handler(HttpStatusCode.OK, MemoryBody, null))), time),
+            new SessionStartGuidelinesLane(Lazy(new HttpClient(new Handler(HttpStatusCode.NoContent, "", null))), time),
+            new SessionStartFlowsLane(Lazy(new HttpClient(new Routes(HttpStatusCode.ServiceUnavailable, "", HttpStatusCode.BadRequest))), time, Cache),
+            time);
+
+        var result = await composite.GetAsync(Req(memory: memory) with { WakeUpsWanted = true });
+
+        await Assert.That(result.Disposition).IsEqualTo(memory ? SessionStartMemoryDisposition.Ready : SessionStartMemoryDisposition.RetryableFailure);
+        await Assert.That(result.Fragment!).Contains(SessionStartFlowsLane.WakeUpNudge);
+    }
+
+    [Test]
+    public async Task A_terminal_session_is_neither_probed_nor_nudged() {
+        var routes = new Routes(HttpStatusCode.OK, Catalog, HttpStatusCode.BadRequest);
+
+        var result = await Lane(routes).FetchAsync(Req(), CancellationToken.None);
+
+        await Assert.That(result.Fragment).IsEqualTo(SessionStartFlowsLane.BuildFragment(JsonNode.Parse(Catalog)));
+        await Assert.That(routes.Asked).DoesNotContain("/api/wakeups");
+    }
+
     [Test]
     public async Task The_lane_is_off_for_a_harness_without_kcap_flows() {
         using var home = new TempDir();

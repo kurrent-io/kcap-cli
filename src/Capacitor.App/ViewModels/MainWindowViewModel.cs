@@ -33,7 +33,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     internal const string ReconnectingMessage = "Reconnecting…";
 
     internal const string ReconnectFailedMessage =
-        "Could not reconnect. If the daemon isn't running, press Start daemon.";
+        "Couldn't reconnect. If the daemon isn't running, press Start daemon.";
 
     internal static bool IsInFlightReconnectMessage(string? message) =>
         message == ReconnectingMessage
@@ -41,12 +41,14 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     static readonly IBrush ConnectedBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Connected));
     static readonly IBrush InProgressBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.InProgress));
+    static readonly IBrush PendingBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Pending));
     static readonly IBrush DisruptedBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Disrupted));
     static readonly IBrush UnavailableBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Unavailable));
 
     static IBrush Paint(string hex) => hex switch {
         StatusColors.Connected => ConnectedBrush,
         StatusColors.InProgress => InProgressBrush,
+        StatusColors.Pending => PendingBrush,
         StatusColors.Disrupted => DisruptedBrush,
         _ => UnavailableBrush,
     };
@@ -76,6 +78,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     ObservableAsPropertyHelper<IBrush>? _statusBrush;
     public IBrush StatusBrush => _statusBrush?.Value ?? Paint(StatusColors.Unavailable);
 
+    ObservableAsPropertyHelper<bool>? _showsUpdateContext;
+    public bool ShowsUpdateContext => _showsUpdateContext?.Value ?? false;
+    public string UpdateContextName => LocalStack is not null ? "kcap local" : TenantName.Length > 0 ? TenantName : "kcap";
+
     // "n of m agents" only while Connected — active_agents is a display count, never capacity.
     // Empty otherwise, which is what hides it: the service still retains the last snapshot
     // across disconnects, so a count would go on reading as live.
@@ -88,7 +94,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     ObservableAsPropertyHelper<bool>? _showsDaemonLine;
     public bool ShowsDaemonLine => _showsDaemonLine?.Value ?? false;
 
-    internal const string RestartPendingMessage = "Daemon update pending — it restarts once its agents finish their current turn, then resumes them unless daemon.auto_resume is off.";
+    internal const string RestartPendingMessage = "The daemon is waiting for active turns. It restarts when the configured wait ends. Long turns may be interrupted. Eligible agents resume if auto-resume is on. Other sessions may need attention.";
 
     // The daemon has a restart-after-update queued (DaemonRestartPendingWatcher) and we are
     // attached to it: a passive marker only, the restart is the daemon's own.
@@ -140,7 +146,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     ObservableAsPropertyHelper<bool>? _connectionHasDetail;
     public bool ConnectionHasDetail => _connectionHasDetail?.Value ?? false;
 
-    public const string AttachStatusTip = "Attach status to the daemon on this machine";
+    public const string ConnectionStatusTip = "Connection to the daemon and server";
     public const string DaemonNameTip = "Name of the daemon on this machine";
 
     /// Caption under the URL in the org label's hover — the org is what you point at, the
@@ -150,6 +156,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public const string AgentCountTip = "Agents running on this daemon";
 
     readonly BehaviorSubject<string?> _startMessageChanges = new(null);
+    readonly Subject<Unit> _launcherNudges = new();
 
     /// Constructed once at the composition root; the prompt window's onConcluded callback nudges
     /// the same instance.
@@ -171,6 +178,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     readonly Func<string, RemoteSessionViewModel?>? _serverFactory;
     readonly IAgentDirectory? _directory;
     readonly IServerSessionsService? _sessions;
+    /// The session of the last pin search asked for; it may still be reading while nothing is held.
+    string? _searchPin;
+    PinPresentation _searchPinPresentation = new(null, null, null);
     readonly IDisposable _onAppServer;
     /// A session id names a session only within one server: a hand-off to the server's row is
     /// sound only while the local daemon reports the app's server.
@@ -206,6 +216,29 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// the coordinator's close paths route through.
     public ReactiveCommand<Unit, Unit> CloseWorkspaceCommand { get; }
 
+    /// Back to the launcher as the user's own navigation: it also dismisses search and releases the pin.
+    /// Pressed over the launcher already showing, it nudges the launcher so the press visibly lands.
+    public ReactiveCommand<Unit, Unit> NewSessionCommand { get; }
+
+    /// Fires when New session is pressed while the launcher is already showing.
+    public IObservable<Unit> LauncherNudges => _launcherNudges.AsObservable();
+
+    /// Null without a server sessions service.
+    public SessionSearchViewModel? Search { get; }
+
+    /// The search page covers the main area; CurrentWorkspace and its watches carry on beneath it.
+    public bool IsSearchOpen {
+        get;
+        private set => this.RaiseAndSetIfChanged(ref field, value);
+    }
+
+    public ReactiveCommand<Unit, Unit> OpenSearchCommand { get; }
+    public ReactiveCommand<Unit, Unit> DismissSearchCommand { get; }
+
+    readonly Subject<Unit> _searchFocusRequests = new();
+    /// The shortcut or the rail field while the page is already open: focus the query, keep its state.
+    public IObservable<Unit> SearchFocusRequests => _searchFocusRequests;
+
     /// The header refresh on the open workspace. Disabled with no workspace, no session
     /// id, or a refresh the user already asked for still running — the same intervals the button is.
     public ReactiveCommand<Unit, Unit> RefreshWorkCommand { get; }
@@ -222,6 +255,14 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     volatile Action? _openSettings;
 
     /// Off macOS, the in-window menu's way to the uninstall; shown only where the app can remove itself.
+    public ReactiveCommand<Unit, Unit> CheckForUpdatesCommand { get; }
+    volatile Func<Task>? _checkForUpdates;
+
+    public bool ShowsCheckForUpdates {
+        get;
+        private set => this.RaiseAndSetIfChanged(ref field, value);
+    }
+
     public ReactiveCommand<Unit, Unit> UninstallCommand { get; }
     volatile Action? _uninstall;
 
@@ -266,6 +307,14 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// offers it then; the launcher's Sign in is on the other pane and hidden once a workspace
     /// is open.
     public bool SignInVisible => _signInVisible?.Value ?? false;
+
+    /// No server to ask, or the window reads signed out: the page takes no query.
+    public bool SearchSignedOut => Search is null || _searchSignedOut;
+
+    /// The page shows the sign-in prompt in place of the list: signed out, or the server answered
+    /// 401 to the page, where the query stays editable and the next edit asks again.
+    public bool SearchShowsSignIn => SearchSignedOut || Search?.ListState == SearchListState.SignInRequired;
+    bool _searchSignedOut;
 
     string? _startMessage;
     // Cleared on every new start attempt and on Connected; set when a start attempt fails.
@@ -319,7 +368,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// </param>
     /// <param name="laneStatus">
     /// The app's own server lane (IServerLane.Status), for the footer's ServerLaneTip diagnostic
-    /// and the connection row's hover. Null means the hover stays on AttachStatusTip.
+    /// and the connection row's hover. Null means the hover stays on ConnectionStatusTip.
     /// </param>
     /// <param name="restartPending">
     /// DaemonRestartPendingWatcher.Pending. Null means the indicator never shows.
@@ -357,12 +406,15 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             IAgentDirectory? directory = null,
             Action<FeedbackCategory>? openFeedback = null, IUrlOpener? opener = null,
             Action? requestSignIn = null, IObservable<Action?>? settingsAction = null,
+            IObservable<Func<Task>?>? checkForUpdatesAction = null,
             IObservable<Action?>? uninstallAction = null, bool? appMenuInWindow = null, Action? requestSetup = null,
             HistoryImportRun? historyImport = null,
             IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
             IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null, Action? openLaunchApprovals = null,
             IObservable<bool>? movingToWindowsService = null,
-            Func<string, RemoteSessionViewModel?>? serverWorkspaceFactory = null, IServerSessionsService? sessions = null) {
+            Func<string, RemoteSessionViewModel?>? serverWorkspaceFactory = null,
+            Func<Func<string, PinPresentation, CancellationToken, Task<SearchOpenOutcome>>, SessionSearchViewModel>? searchFactory = null,
+            IServerSessionsService? sessions = null) {
         _service = service;
         _serverFactory = serverWorkspaceFactory;
         Time = time;
@@ -381,6 +433,12 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         Rail = rail;
         TenantName = ProfileLabelForRail(tenantName);
         CloseWorkspaceCommand = ReactiveCommand.Create(CloseWorkspace);
+        NewSessionCommand = ReactiveCommand.Create(NewSession);
+        Search = sessions is null ? null : searchFactory?.Invoke(OpenSearchHitAsync);
+        Search?.Closed.Subscribe(_ => IsSearchOpen = false);
+        if (Search is { } page) page.WhenAnyValue(x => x.ListState).Subscribe(_ => this.RaisePropertyChanged(nameof(SearchShowsSignIn)));
+        OpenSearchCommand = ReactiveCommand.Create(OpenSearch);
+        DismissSearchCommand = ReactiveCommand.Create(CloseSearch);
         var canRefreshWork = Observable.Switch(this.WhenAnyValue(x => x.CurrentWorkspace)
             .Select(CanRefreshOpenWork))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
@@ -395,6 +453,12 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         OpenSettingsCommand = ReactiveCommand.Create(
             () => _openSettings?.Invoke(),
             settings.Select(open => open is not null).ObserveOn(RxSchedulers.MainThreadScheduler));
+        var checkForUpdates = (checkForUpdatesAction ?? Observable.Return<Func<Task>?>(null)).ObserveOn(RxSchedulers.MainThreadScheduler);
+        checkForUpdates.Subscribe(check => {
+            _checkForUpdates     = check;
+            ShowsCheckForUpdates = check is not null;
+        });
+        CheckForUpdatesCommand = ReactiveCommand.Create(() => { _ = _checkForUpdates?.Invoke(); }, checkForUpdates.Select(check => check is not null));
         var uninstall       = (uninstallAction ?? Observable.Return<Action?>(null)).ObserveOn(RxSchedulers.MainThreadScheduler);
         uninstall.Subscribe(run => {
             _uninstall     = run;
@@ -510,16 +574,43 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             var signedOut = signInExpired.CombineLatest(daemonSignIn, (app, daemon) => app || daemon.SignedOut)
                 .DistinctUntilChanged();
 
-            _signInVisible = signInExpired
-                .CombineLatest(daemonSignIn, (app, daemon) => (app || daemon is { SignedOut: true, OursToRepair: true }) && offersSignIn)
+            var signInVisible = signInExpired
+                .CombineLatest(daemonSignIn, (app, daemon) => (app || daemon is { SignedOut: true, OursToRepair: true }) && offersSignIn);
+            _signInVisible = signInVisible
                 .ToProperty(this, x => x.SignInVisible, false)
                 .DisposeWith(disposables);
+            // Its own copy: an OAPH notifies before its new value is readable.
+            signInVisible.Subscribe(visible => {
+                var signedBackIn = _searchSignedOut && !visible;
+                _searchSignedOut = visible;
+                this.RaisePropertyChanged(nameof(SearchSignedOut));
+                this.RaisePropertyChanged(nameof(SearchShowsSignIn));
+                if (signedBackIn) Search?.RetrySignIn();
+            }).DisposeWith(disposables);
 
+            // The banner owns update progress; the rail keeps identity while services restart.
+            var localUpgrade = Home?.LocalStack is { } stack
+                ? stack.WhenAnyValue(x => x.Upgrading, x => x.IsStarting, (upgrading, starting) => upgrading || starting)
+                : Observable.Return(false);
+            var updating = (Home?.UpdateFinishing ?? Observable.Return(false))
+                .CombineLatest(localUpgrade, (app, local) => app || local).DistinctUntilChanged();
+            _showsUpdateContext = updating.CombineLatest(signedOut, (active, expired) => active && !expired)
+                .ToProperty(this, x => x.ShowsUpdateContext, false)
+                .DisposeWith(disposables);
             _connectionDisplay = status.CombineLatest(daemonConnection, signedOut, ConnectionDisplayFor)
                 .ToProperty(this, x => x.ConnectionDisplay, "")
                 .DisposeWith(disposables);
 
-            _statusBrush = status.CombineLatest(daemonConnection, signedOut, StatusBrushFor)
+            // The rail describes the local daemon even while the launcher targets a remote machine.
+            // Keep its lifecycle failure independent of the selected machine's banner.
+            var localFailed = status.CombineLatest(_startMessageChanges,
+                (st, message) => st.State == AttachState.Unreachable
+                    && HomeViewModel.BannerFailedFor((HomeViewModel.DaemonDownNotice, message)));
+            var failed = localFailed.CombineLatest(
+                    Home is { } home ? home.WhenAnyValue(x => x.BannerFailed) : Observable.Return(false),
+                    (local, banner) => local || banner)
+                .DistinctUntilChanged();
+            _statusBrush = status.CombineLatest(daemonConnection, signedOut, failed, StatusBrushFor)
                 .ToProperty(this, x => x.StatusBrush, Paint(StatusColors.Unavailable))
                 .DisposeWith(disposables);
 
@@ -664,7 +755,111 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// so; without an origin the id is resolved, and a same-id pair on both lanes resolves local.
     /// Refused once shutdown has latched — a new workspace is a new attach, and quiesce is already
     /// running. True when the session is the open workspace afterwards.
-    public bool OpenSession(string agentId, AgentOrigin? origin = null) => OpenSessionCore(agentId, origin, revealInRail: true);
+    public bool OpenSession(string agentId, AgentOrigin? origin = null) => Navigate(agentId, origin, sessionId: null);
+
+    /// `sessionId` is the session the caller asked for; without one it is read off what opened.
+    bool Navigate(string agentId, AgentOrigin? origin, string? sessionId) {
+        if (!OpenSessionCore(agentId, origin, revealInRail: true)) return false;
+        CloseSearch();
+        ReleasePinUnless(sessionId ?? SessionOfOpen());
+        return true;
+    }
+
+    // Closes even over the launcher: the swap bumps the navigation generation, which keeps an
+    // in-flight launch from opening its workspace over the next draft.
+    void NewSession() {
+        var onLauncher = CurrentWorkspace is null && !IsSearchOpen;
+        CloseSearch();
+        CloseWorkspace();
+        if (onLauncher) _launcherNudges.OnNext(Unit.Default);
+    }
+
+    void OpenSearch() {
+        if (IsSearchOpen) {
+            _searchFocusRequests.OnNext(Unit.Default);
+            return;
+        }
+        Search?.Reset();
+        IsSearchOpen = true;
+        _navigation.Bump();
+    }
+
+    /// A closed page keeps no query, so a reconnect or an access change has nothing to ask again.
+    void CloseSearch() {
+        IsSearchOpen = false;
+        Search?.Reset();
+        if (CurrentWorkspace is null) ReleasePinUnless(null);
+    }
+
+    /// Unpin also supersedes a pin still reading, so it runs when only the request is outstanding.
+    void ReleasePinUnless(string? sessionId) {
+        if (_sessions is null || (_sessions.PinnedSessionId ?? _searchPin) is not { } pinned) return;
+        if (sessionId is not null && SessionIds.SameSession(pinned, sessionId)) return;
+        _searchPin = null;
+        _sessions.Unpin();
+    }
+
+    string? SessionOfOpen() {
+        var open = CurrentWorkspace;
+        if (KeyOf(open) is { } key && _directory?.Rows.Lookup(key) is { HasValue: true, Value.SessionId: { Length: > 0 } listed })
+            return listed;
+        return open switch {
+            RemoteSessionViewModel { IsSessionOnly: true } session => session.AgentId,
+            RemoteSessionViewModel remote => SessionOf(remote),
+            WorkspaceViewModel { SessionId: { Length: > 0 } id } => id,
+            _ => null,
+        };
+    }
+
+    /// Opens what a rail click on the hit's session would, and pins the session. A listed session
+    /// opens at once and pins beside it; one the directory has no row for is pinned first, and opens
+    /// only if the page is still up and the intent still current when the pin lands.
+    public async Task<SearchOpenOutcome> OpenSearchHitAsync(string sessionId, PinPresentation presentation, CancellationToken ct) {
+        if (_directory is null) return SearchOpenOutcome.Failed;
+        if (_directory.RowForSession(sessionId) is { } listed) {
+            // Set after Navigate, whose release of an earlier pin would otherwise clear it.
+            if (!Navigate(listed.Id, listed.Origin, sessionId)) return SearchOpenOutcome.Failed;
+            _searchPin = sessionId;
+            _searchPinPresentation = presentation;
+            // A failed pin only costs the session its exemption from the rail's filters later.
+            _ = _sessions?.PinAsync(sessionId, presentation, CancellationToken.None);
+            return SearchOpenOutcome.Opened;
+        }
+        if (_sessions is null) return SearchOpenOutcome.Failed;
+        // A pin that lands replaces the selected session's; abandoning the open puts that one back.
+        (string Id, PinPresentation Presentation)? restore =
+            _sessions.PinnedSessionId is { } held ? (held, _searchPinPresentation) : null;
+        _searchPin = sessionId;
+        var pinned = await _sessions.PinAsync(sessionId, presentation, ct);
+        switch (pinned) {
+            case PinOutcome.Unauthorized: return SearchOpenOutcome.SignInRequired;
+            case PinOutcome.Unavailable: return SearchOpenOutcome.Unavailable;
+            case PinOutcome.Failed: return SearchOpenOutcome.Failed;
+            case PinOutcome.Superseded: return SearchOpenOutcome.Superseded;
+        }
+        _searchPinPresentation = presentation;
+        var current = !ct.IsCancellationRequested && IsSearchOpen;
+        if (!current || _directory.RowForSession(sessionId) is not { } found) {
+            ReleaseUnopenedPin(sessionId, restore);
+            return current ? SearchOpenOutcome.Failed : SearchOpenOutcome.Superseded;
+        }
+        if (Navigate(found.Id, found.Origin, sessionId)) return SearchOpenOutcome.Opened;
+        ReleaseUnopenedPin(sessionId, restore);
+        return SearchOpenOutcome.Failed;
+    }
+
+    /// A pin that landed for a session nothing opened would keep a rail row for it.
+    void ReleaseUnopenedPin(string sessionId, (string Id, PinPresentation Presentation)? restore) {
+        if (_sessions?.PinnedSessionId is not { } pinned || !SessionIds.SameSession(pinned, sessionId)) return;
+        var open = SessionOfOpen();
+        if (open is not null && SessionIds.SameSession(pinned, open)) return;
+        _searchPin = null;
+        _sessions.Unpin();
+        if (restore is not { } previous || open is null || !SessionIds.SameSession(previous.Id, open)) return;
+        _searchPin = previous.Id;
+        _searchPinPresentation = previous.Presentation;
+        _ = _sessions.PinAsync(previous.Id, previous.Presentation, CancellationToken.None);
+    }
 
     bool OpenSessionCore(string agentId, AgentOrigin? origin, bool revealInRail) {
         if (_navigation.ShutdownLatched) return false;
@@ -717,8 +912,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// The launcher words a launch failure, and an open workspace covers the launcher. Only a
     /// workspace the daemon never filled is closed: a failure report can trail the agent it names.
     public void CloseFailedLaunch(string agentId) {
-        if (CurrentWorkspace is WorkspaceViewModel { HasAgent: false } open
-            && AgentIds.Normalize(open.AgentId) == AgentIds.Normalize(agentId))
+        if (CurrentWorkspace is WorkspaceViewModel { HasAgent: false } or RemoteSessionViewModel { IsPlaceholder: true }
+            && AgentIds.Normalize(CurrentWorkspace.AgentId) == AgentIds.Normalize(agentId))
             CloseWorkspace();
     }
 
@@ -728,6 +923,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public void CloseWorkspace() {
         if (_shutdownLatched || _navigation.ShutdownLatched) return;
         SwapTo(null);
+        // Nothing is selected, so nothing keeps a pin; an open page may still be pinning its hit.
+        if (!IsSearchOpen) ReleasePinUnless(null);
     }
 
     static IObservable<bool> CanRefreshOpenWork(ISessionWorkspace? workspace) =>
@@ -762,12 +959,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     void SwapTo(ISessionWorkspace? next) {
         var outgoing = CurrentWorkspace;
         CurrentWorkspace = next;
-        if (Rail is not null) Rail.SelectedSessionKey = next switch {
-            RemoteSessionViewModel { IsSessionOnly: true } session => $"server:{session.AgentId}",
-            RemoteSessionViewModel remote => $"remote:{remote.AgentId}",
-            null => null,
-            _ => $"local:{next.AgentId}",
-        };
+        if (Rail is not null) Rail.SelectedSessionKey = KeyOf(next);
         _navigation.Bump();
         if (outgoing is not null) _trackTeardown(outgoing.TeardownAsync);
         _handoff.Disposable = Disposable.Empty;
@@ -775,6 +967,13 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         // caused overwritten by the arming that is still returning.
         WatchOpen(next);
     }
+
+    static string? KeyOf(ISessionWorkspace? workspace) => workspace switch {
+        RemoteSessionViewModel { IsSessionOnly: true } session => $"server:{session.AgentId}",
+        RemoteSessionViewModel remote => $"remote:{remote.AgentId}",
+        null => null,
+        _ => $"local:{workspace.AgentId}",
+    };
 
     /// An open workspace follows its row across lanes, both directions, carrying the tab in use.
     /// Once its session ends it hands off to the server's row for that session, which opens the
@@ -1009,23 +1208,26 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         return daemonConnection is "connecting" or "reconnecting" ? word + "…" : word;
     }
 
-    // Same bucketing as ConnectionDisplayFor, kept as a parallel switch (not derived from the text)
-    // so a future wording tweak there can never silently detune the color.
+    /// The launcher's tones: red when something broke, amber when it needs the user, the spinner's grey while
+    /// work is in progress. Kept as its own switch, not derived from the text,
+    /// so a wording change there cannot retune it.
+    /// <param name="failed">The launcher's card reports a failure: versions that cannot work together, a local
+    /// server that refused the app, or a daemon still down after a start that did not work.</param>
     internal static IBrush StatusBrushFor(
-            AttachStatus status, string daemonConnection, bool signInExpired = false) {
-        if (signInExpired) return Paint(StatusColors.Disrupted);
-        if (status.State == AttachState.Connecting) return Paint(StatusColors.InProgress);
+            AttachStatus status, string daemonConnection, bool signInExpired = false, bool failed = false) {
+        if (signInExpired) return Paint(failed ? StatusColors.Disrupted : StatusColors.InProgress);
+        if (status.State == AttachState.Connecting) return Paint(StatusColors.Pending);
         if (status.State == AttachState.Unreachable)
             return status.Reason switch {
                 IncompatibleReason => Paint(StatusColors.Disrupted),
-                ExpectedDaemonRestart.Reason => Paint(StatusColors.InProgress),
-                _ => Paint(StatusColors.Unavailable),
+                ExpectedDaemonRestart.Reason => Paint(StatusColors.Pending),
+                _ => Paint(failed ? StatusColors.Disrupted : StatusColors.InProgress),
             };
 
         return daemonConnection switch {
             "connected" => Paint(StatusColors.Connected),
-            "connecting" or "reconnecting" => Paint(StatusColors.InProgress),
-            "disconnected" => Paint(StatusColors.Disrupted),
+            "connecting" or "reconnecting" => Paint(StatusColors.Pending),
+            "disconnected" => Paint(StatusColors.InProgress),
             _ => Paint(StatusColors.Unavailable),
         };
     }
@@ -1044,7 +1246,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         try {
             var result = await _service.StartDaemonAsync(ct);
             if (!result.Ok) StartMessage = result.Message;
-            else StartMessage = "Daemon start requested. Waiting to connect…";
+            else StartMessage = "Starting the daemon. Waiting for it to connect…";
         } catch (OperationCanceledException) {
             // App is quitting: OnShutdownRequested cancelled `ct` while this start was still in
             // flight, and StartDaemonAsync deliberately rethrows OCE for exactly that case —

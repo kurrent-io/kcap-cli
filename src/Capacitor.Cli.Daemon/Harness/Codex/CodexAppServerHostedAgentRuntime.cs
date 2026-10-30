@@ -444,7 +444,9 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
         var result = await RequestAsync(method, startParams, ct).ConfigureAwait(false);
 
         _threadId      = result.Obj("thread")?.Str("id"); // same read for both start and resume
-        _resolvedModel = result.Str("model");
+        // Codex can answer with an empty model; usage attributed to "" can never be priced.
+        _resolvedModel = result.Str("model") is { Length: > 0 } model ? model
+                       : CodexLauncher.IsConcreteModel(_launch.Model) ? _launch.Model : null;
         _clock?.SetLaunchStage(isResume ? "thread_resumed" : "thread_started");
 
         // A started thread has every approval it will raise pass through this runtime; a resumed one may not.
@@ -559,7 +561,7 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
             case "model/rerouted":
                 // The resolved model changed mid-thread; the mapper attributes each subsequent token
                 // delta to the model-at-instant, so per-interval attribution across a reroute is correct.
-                if (n.Params?.Str("toModel") is { } rerouted) _resolvedModel = rerouted;
+                if (n.Params?.Str("toModel") is { } rerouted) _resolvedModel = rerouted.Length > 0 ? rerouted : null;
                 _clock?.Advance();
                 break;
             default:

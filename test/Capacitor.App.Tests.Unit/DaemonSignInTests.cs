@@ -47,7 +47,8 @@ public class DaemonSignInTests {
             service.StatusSubject.OnNext(Attached);
 
             await Assert.That(vm.ConnectionDisplay).IsEqualTo(MainWindowViewModel.SignedOutDisplay);
-            await Assert.That(((ISolidColorBrush)vm.StatusBrush).Color).IsEqualTo(Color.Parse(StatusColors.Disrupted));
+            // A signed-out daemon needs the user, as the launcher's card shows it too.
+            await Assert.That(((ISolidColorBrush)vm.StatusBrush).Color).IsEqualTo(Color.Parse(StatusColors.InProgress));
             await Assert.That(vm.SignInVisible).IsTrue();
 
             service.SnapshotsSubject.OnNext(Snap(connection: "reconnecting", credential: "signed_out", profile: "old"));

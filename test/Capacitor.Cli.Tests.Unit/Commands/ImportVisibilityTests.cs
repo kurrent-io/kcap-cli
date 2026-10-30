@@ -52,7 +52,7 @@ public class ImportVisibilityTests : IDisposable {
 
     // These tests exercise chaining and repo resolution, not profile selection.
     ImportCommand Import() =>
-        new(Config.Root, Resolutions.None(Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System);
+        new(Config.Root, Resolutions.None(Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: new TestImportTerminal().Console);
     readonly WireMockServer _server = WireMockServer.Start();
     readonly TempDir        _tmp    = new();
     readonly string         _tempDir;
@@ -202,7 +202,7 @@ public class ImportVisibilityTests : IDisposable {
         var projectsDir = Path.Combine(_tempDir, "claude-projects-pos");
         WriteClaudeSession(projectsDir, "vis-chain-handle-pos");
 
-        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
+        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: new TestImportTerminal().Console).HandleImport(
             filterCwd: null,
             minLines: 1,
             sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
@@ -236,7 +236,7 @@ public class ImportVisibilityTests : IDisposable {
         var projectsDir = Path.Combine(_tempDir, "claude-projects-neg");
         WriteClaudeSession(projectsDir, "vis-chain-handle-neg");
 
-        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
+        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: new TestImportTerminal().Console).HandleImport(
             filterCwd: null,
             minLines: 1,
             sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
@@ -272,7 +272,7 @@ public class ImportVisibilityTests : IDisposable {
         var projectsDir = Path.Combine(_tempDir, "claude-projects-resume");
         WriteClaudeSession(projectsDir, "vis-chain-resume-fail");
 
-        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
+        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: new TestImportTerminal().Console).HandleImport(
             filterCwd: null,
             minLines: 1,
             sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
@@ -308,7 +308,7 @@ public class ImportVisibilityTests : IDisposable {
         var projectsDir = Path.Combine(_tempDir, "claude-projects-short-private");
         WriteClaudeSession(projectsDir, "vis-private-too-short", lines: 3);
 
-        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
+        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: new TestImportTerminal().Console).HandleImport(
             filterCwd: null,
             minLines: 500,
             sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
@@ -334,7 +334,7 @@ public class ImportVisibilityTests : IDisposable {
         var projectsDir = Path.Combine(_tempDir, "claude-projects-window");
         WriteClaudeSession(projectsDir, "vis-window");
 
-        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
+        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: new TestImportTerminal().Console).HandleImport(
             filterCwd: null,
             minLines: 1,
             sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
@@ -371,7 +371,7 @@ public class ImportVisibilityTests : IDisposable {
         var projectsDir = Path.Combine(_tempDir, "claude-projects-newonly");
         WriteClaudeSession(projectsDir, "vis-new-only");
 
-        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
+        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: new TestImportTerminal().Console).HandleImport(
             filterCwd: null,
             minLines: 1,
             sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
@@ -403,7 +403,7 @@ public class ImportVisibilityTests : IDisposable {
         var projectsDir = Path.Combine(_tempDir, "claude-projects-shared");
         WriteClaudeSession(projectsDir, "vis-chain-shared");
 
-        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
+        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: new TestImportTerminal().Console).HandleImport(
             filterCwd: null,
             minLines: 1,
             sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
@@ -435,7 +435,7 @@ public class ImportVisibilityTests : IDisposable {
         var projectsDir = Path.Combine(_tempDir, "claude-projects-plain");
         WriteClaudeSession(projectsDir, "vis-chain-plain");
 
-        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
+        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: new TestImportTerminal().Console).HandleImport(
             filterCwd: null,
             minLines: 1,
             sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
@@ -460,7 +460,7 @@ public class ImportVisibilityTests : IDisposable {
         var projectsDir = Path.Combine(_tempDir, "claude-projects-already");
         WriteClaudeSession(projectsDir, "vis-already-shared");
 
-        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
+        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: new TestImportTerminal().Console).HandleImport(
             filterCwd: null,
             minLines: 1,
             sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
@@ -494,7 +494,7 @@ public class ImportVisibilityTests : IDisposable {
         var projectsDir = Path.Combine(_tempDir, "claude-projects-short");
         WriteClaudeSession(projectsDir, "vis-too-short", lines: 3);
 
-        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
+        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: new TestImportTerminal().Console).HandleImport(
             filterCwd: null,
             minLines: 500,
             sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
@@ -521,7 +521,7 @@ public class ImportVisibilityTests : IDisposable {
 
         ImportCommand.ImportRunOutcome? outcome = null;
 
-        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
+        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: new TestImportTerminal().Console).HandleImport(
             filterCwd: null,
             minLines: 1,
             sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
@@ -551,7 +551,7 @@ public class ImportVisibilityTests : IDisposable {
 
         ImportCommand.ImportRunOutcome? outcome = null;
 
-        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
+        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: new TestImportTerminal().Console).HandleImport(
             filterCwd: null,
             minLines: 1,
             sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
@@ -581,7 +581,7 @@ public class ImportVisibilityTests : IDisposable {
 
         ImportCommand.ImportRunOutcome? outcome = null;
 
-        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
+        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: new TestImportTerminal().Console).HandleImport(
             filterCwd: null,
             minLines: 1,
             sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
@@ -623,7 +623,7 @@ public class ImportVisibilityTests : IDisposable {
 
         ImportCommand.ImportRunOutcome? outcome = null;
 
-        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
+        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: new TestImportTerminal().Console).HandleImport(
             filterCwd: null,
             minLines: 1,
             sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
@@ -668,7 +668,7 @@ public class ImportVisibilityTests : IDisposable {
         File.WriteAllText(Path.Combine(codex.Home, "session_index.jsonl"),
             $$"""{"id":"{{CodexSessionId}}","thread_name":"Named in Codex","updated_at":"2026-05-01T10:20:30Z"}""" + "\n");
 
-        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, harnesses, new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
+        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, harnesses, new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: new TestImportTerminal().Console).HandleImport(
             filterCwd: null,
             minLines: 1,
             sources: [new CodexImportSource(Config.Root, codex.Sessions, router: new GitProviderRouter(), time: TimeProvider.System)],
@@ -697,8 +697,7 @@ public class ImportVisibilityTests : IDisposable {
                     .Because("the session is still public and the user was told it was skipped");
     }
 
-    // Bare, not keyed: the error capture is process-global, so a concurrent writer would land in it.
-    [Test, NotInParallel]
+    [Test]
     public async Task HandleImport_forcePrivate_reports_a_session_it_had_to_skip() {
         // Silently dropping it would read as a smaller history rather than as a refusal.
         _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
@@ -710,9 +709,9 @@ public class ImportVisibilityTests : IDisposable {
         var projectsDir = Path.Combine(_tempDir, "claude-projects-floorsay");
         WriteClaudeSession(projectsDir, "vis-floor-said");
 
-        using var errors = ConsoleOutput.StartErrorCapture();
+        var terminal = new TestImportTerminal();
 
-        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
+        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: terminal.Console).HandleImport(
             filterCwd: null,
             minLines: 1,
             sources: [new ClaudeImportSource(Config.Root, projectsDir, router: new GitProviderRouter(), time: TimeProvider.System)],
@@ -721,7 +720,7 @@ public class ImportVisibilityTests : IDisposable {
             forcePrivate: true
         );
 
-        await Assert.That(errors.GetCapturedError()).Contains("skipping vis-floor-said");
+        await Assert.That(terminal.Error.ToString()).Contains("skipping vis-floor-said");
     }
 
     // =====================================================================
@@ -1192,7 +1191,7 @@ public class ImportVisibilityTests : IDisposable {
 
         var source = new CursorImportSource(Config.Root, projectsDir, Path.Combine(_tempDir, "cursor-workspace-storage-rt"), router: new GitProviderRouter(), time: TimeProvider.System);
 
-        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
+        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: new TestImportTerminal().Console).HandleImport(
             filterCwd: null,
             minLines: 0,
             sources: [source],
@@ -1448,13 +1447,7 @@ public class ImportVisibilityTests : IDisposable {
     // Section D — autoSkipExclusions never blocks on stdin.
     // =====================================================================
 
-    // Globally sequential (NO group key), like every other Console-redirecting test in this suite.
-    // This test captures stderr by swapping the process-global Console.Error. A group key is not
-    // enough: another capturing test in a DIFFERENT group runs concurrently, saves our writer as its
-    // "original", and restores it when it finishes — after which our own "Auto-skipping" line is
-    // written to that test's writer instead of ours, and our buffer holds only whatever some other
-    // test wrote to stderr in the meantime (an unrelated login-flow error was the observed symptom).
-    [Test, NotInParallel]
+    [Test]
     [Arguments(false, "  Auto-skipping")]
     [Arguments(true, "    Auto-skipping")]
     public async Task HandleImport_autoSkipExclusions_completes_without_prompting_and_logs_auto_skip(
@@ -1480,7 +1473,7 @@ public class ImportVisibilityTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(404));
         StubAllHookEndpoints();
 
-        using var capture = ConsoleOutput.StartErrorCapture();
+        var terminal = new TestImportTerminal();
 
         int exitCode;
 
@@ -1488,7 +1481,7 @@ public class ImportVisibilityTests : IDisposable {
         // happened to look like an interactive TTY, this call could block forever on
         // Console.ReadLine(). It must not, regardless of ambient TTY state.
         var import = new ImportCommand(Config.Root,
-            Resolutions.Of(new Profile { ExcludedPaths = [excludedDir] }, "autoskip-test", _server.Url!), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System);
+            Resolutions.Of(new Profile { ExcludedPaths = [excludedDir] }, "autoskip-test", _server.Url!), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: terminal.Console);
 
         var task = import.HandleImport(
             filterCwd: null,
@@ -1507,19 +1500,17 @@ public class ImportVisibilityTests : IDisposable {
         exitCode = await task;
 
         await Assert.That(exitCode).IsEqualTo(0);
-        var notice = capture.GetCapturedError()
+        var notice = terminal.Error.ToString()
                             .Split('\n')
                             .First(l => l.Contains("Auto-skipping", StringComparison.Ordinal));
 
         await Assert.That(notice).StartsWith(expected);
 
         // Never actually asked the user to include the excluded path.
-        await Assert.That(capture.GetCapturedError()).DoesNotContain("Include");
+        await Assert.That(terminal.Error.ToString()).DoesNotContain("Include");
     }
 
-    // Globally sequential for the same reason as the test above: it swaps process-global
-    // Console.Error.
-    [Test, NotInParallel]
+    [Test]
     public async Task HandleImport_skips_a_session_outside_allowed_paths() {
         // The allow-list arm of the same gate. The cwd is real and readable; it is simply not under
         // the one root the profile admits, which is the case no per-source test ever covered.
@@ -1542,11 +1533,11 @@ public class ImportVisibilityTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(404));
         StubAllHookEndpoints();
 
-        using var capture = ConsoleOutput.StartErrorCapture();
+        var terminal = new TestImportTerminal();
 
         var import = new ImportCommand(Config.Root,
             Resolutions.Of(new Profile { AllowedPaths = [allowedDir] }, "allowlist-test", _server.Url!), Home,
-            TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), new GitProviderRouter(), TimeProvider.System);
+            TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), new GitProviderRouter(), TimeProvider.System, console: terminal.Console);
 
         var exitCode = await import.HandleImport(
             filterCwd: null,
@@ -1558,7 +1549,7 @@ public class ImportVisibilityTests : IDisposable {
         );
 
         await Assert.That(exitCode).IsEqualTo(0);
-        await Assert.That(capture.GetCapturedError()).Contains("Auto-skipping");
+        await Assert.That(terminal.Error.ToString()).Contains("Auto-skipping");
 
         // The notice alone proves only that a bucket was non-empty. What has to hold is that
         // nothing was sent: assert on the requests the server actually received.
@@ -1566,8 +1557,7 @@ public class ImportVisibilityTests : IDisposable {
                     .IsEmpty();
     }
 
-    // Globally sequential: swaps process-global Console.Error.
-    [Test, NotInParallel]
+    [Test]
     public async Task HandleImport_excludes_an_ignored_session_with_no_new_work_beside_it() {
         // An already-loaded session is still sent — the routed path re-asserts its lifecycle hooks
         // — so the scope verdict has to be acted on even when no New or Partial session is out of
@@ -1592,11 +1582,11 @@ public class ImportVisibilityTests : IDisposable {
                 .WithBody("{\"last_line_number\":20}"));
         StubAllHookEndpoints();
 
-        using var capture = ConsoleOutput.StartErrorCapture();
+        var terminal = new TestImportTerminal();
 
         var import = new ImportCommand(Config.Root,
             Resolutions.Of(new Profile { ExcludedPaths = [excludedDir] }, "settled-test", _server.Url!), Home,
-            TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), new GitProviderRouter(), TimeProvider.System);
+            TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), new GitProviderRouter(), TimeProvider.System, console: terminal.Console);
 
         var exitCode = await import.HandleImport(
             filterCwd: null,
@@ -1608,7 +1598,7 @@ public class ImportVisibilityTests : IDisposable {
         );
 
         await Assert.That(exitCode).IsEqualTo(0);
-        await Assert.That(capture.GetCapturedError()).Contains("Auto-skipping");
+        await Assert.That(terminal.Error.ToString()).Contains("Auto-skipping");
         await Assert.That(_server.LogEntries.Where(e => e.RequestMessage.Path.StartsWith("/hooks/", StringComparison.Ordinal)))
                     .IsEmpty();
     }

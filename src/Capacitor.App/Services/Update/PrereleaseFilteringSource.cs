@@ -4,8 +4,7 @@ using Velopack.Sources;
 
 namespace Capacitor.App.Services.Update;
 
-/// One feed serves stable and beta installs: a stable install never sees a prerelease entry, a
-/// prerelease install sees everything. Evaluated per feed read so the installed version decides.
+/// Filters prereleases using the current channel preference on each feed read.
 public sealed class PrereleaseFilteringSource(IUpdateSource inner, Func<bool> allowPrerelease) : IUpdateSource {
     public async Task<VelopackAssetFeed> GetReleaseFeed(
             IVelopackLogger logger, string? appId, string channel, Guid? stagingId = null, VelopackAsset? latestLocalRelease = null) {

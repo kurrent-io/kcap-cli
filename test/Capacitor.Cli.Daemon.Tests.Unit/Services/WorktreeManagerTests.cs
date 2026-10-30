@@ -378,6 +378,51 @@ public class WorktreeManagerTests {
         }
     }
 
+    /// <summary>A commit on a branch the worktree does not own survives on that branch, so it is not work
+    /// the removal would lose.</summary>
+    [Test]
+    public async Task RemoveAsync_keeps_a_branch_the_worktree_does_not_own() {
+        using var repo = GitRepo.Create("not-owned");
+        repo.CreateFile("a.txt", "a");
+        repo.CommitAll("first");
+        var main = repo.CurrentBranch;
+        repo.Checkout("feature", create: true);
+        repo.Checkout(main);
+
+        var path = Path.Combine(repo.Path, ".capacitor", "worktrees", "handoff");
+        repo.Do("worktree", "add", path, "feature");
+        var tree = GitRepo.At(path);
+        tree.CreateFile("b.txt", "b");
+        tree.CommitAll("agent work");
+        var agentCommit = tree.Head;
+
+        var removal = await WorktreeManager.RemoveAsync(
+            new WorktreeInfo(path, "feature", repo.Path) { OwnsBranch = false }, TimeProvider.System);
+
+        await Assert.That(removal).IsEqualTo(WorktreeRemoval.Removed);
+        await Assert.That(Directory.Exists(path)).IsFalse();
+        await Assert.That(repo.Do("rev-parse", "refs/heads/feature").Text).IsEqualTo(agentCommit);
+    }
+
+    [Test]
+    public async Task RemoveAsync_keeps_a_detached_worktree_holding_a_new_commit() {
+        using var repo = GitRepo.Create("detached");
+        repo.CreateFile("a.txt", "a");
+        repo.CommitAll("first");
+
+        var path = Path.Combine(repo.Path, ".capacitor", "worktrees", "detached");
+        repo.Do("worktree", "add", "--detach", path, "HEAD");
+        var tree = GitRepo.At(path);
+        tree.CreateFile("b.txt", "b");
+        tree.CommitAll("agent work");
+
+        var removal = await WorktreeManager.RemoveAsync(
+            new WorktreeInfo(path, "", repo.Path) { OwnsBranch = false }, TimeProvider.System);
+
+        await Assert.That(removal.KeptBecause).IsNotNull();
+        await Assert.That(Directory.Exists(path)).IsTrue();
+    }
+
     /// <summary>The startup sweep of left-behind worktrees keeps one holding work, as teardown does, and
     /// still clears one that holds none: a review worktree whose head only its fetched ref has, and a
     /// standalone snapshot, are the daemon's own.</summary>
@@ -852,6 +897,42 @@ public class WorktreeManagerTests {
         } finally {
             if (snapshot is not null) await WorktreeManager.RemoveAsync(snapshot, TimeProvider.System);
         }
+    }
+
+    /// <summary>A scratch workspace holds nothing but an empty repository — Codex refuses to run outside
+    /// one — and is the daemon's own, so removal deletes it outright.</summary>
+    [Test]
+    public async Task CreateScratchAsync_makes_an_empty_repository_that_removal_deletes() {
+        using var tmp = new TempDir();
+        var manager = new WorktreeManager(
+            new DaemonConfig { WorktreeRoot = tmp.PathTo("root") }, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+
+        var scratch = await manager.CreateScratchAsync("scratch-agent", CancellationToken.None);
+
+        await Assert.That(scratch.Path).IsEqualTo(Path.Combine(tmp.PathTo("root"), WorktreeManager.ScratchDirectoryName, "scratch-agent"));
+        await Assert.That(scratch.IsStandalone).IsTrue();
+        await Assert.That(Directory.Exists(Path.Combine(scratch.Path, ".git"))).IsTrue();
+        await Assert.That(Directory.EnumerateFileSystemEntries(scratch.Path).Select(e => Path.GetFileName(e)!)).IsEquivalentTo([".git"]);
+
+        await WorktreeManager.RemoveAsync(scratch, TimeProvider.System);
+
+        await Assert.That(Directory.Exists(scratch.Path)).IsFalse();
+    }
+
+    [Test]
+    public async Task CleanupOrphaned_removes_orphan_scratch_workspaces_and_keeps_active_ones() {
+        using var tmp = new TempDir();
+        var root = tmp.PathTo("root");
+        var manager = new WorktreeManager(
+            new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var active = await manager.CreateScratchAsync("active", CancellationToken.None);
+        var orphan = await manager.CreateScratchAsync("orphan", CancellationToken.None);
+        File.WriteAllText(Path.Combine(orphan.Path, "notes.md"), "left behind");
+
+        await manager.CleanupOrphanedAsync([active.Path]);
+
+        await Assert.That(Directory.Exists(active.Path)).IsTrue();
+        await Assert.That(Directory.Exists(orphan.Path)).IsFalse();
     }
 
     [Test]
