@@ -86,7 +86,7 @@ public class ClaudeHookCommandTests {
 
         await Assert.That(fx.RouteOrder).IsEmpty();
         await Assert.That(fx.ServerRequestCount).IsEqualTo(0);
-        await Assert.That(new HookSpool(Config.Root, time: TimeProvider.System).HasBacklog(sid.Replace("-", ""))).IsFalse();
+        await Assert.That(fx.Spool.HasBacklog(sid)).IsFalse();
     }
 
     /// <summary>Pins the seam's position: <c>PreToolUse</c> is decided before a client is ever built,
