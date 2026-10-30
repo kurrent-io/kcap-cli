@@ -474,7 +474,8 @@ sealed class UninstallCommand(
 
     /// <summary>
     /// Deletes every <c>kcap-*</c> directory directly under <paramref name="root"/>, catching skills the
-    /// installer's current name list does not know. False when any deletion or the enumeration failed.
+    /// installer's current name list does not know, except a bundled skill the user edited. False when
+    /// any deletion or the enumeration failed.
     /// </summary>
     bool SweepCapacitorPrefixedDirs(string root) {
         if (!Directory.Exists(root)) return true;
@@ -489,6 +490,8 @@ sealed class UninstallCommand(
 
         var ok = true;
         foreach (var dir in dirs) {
+            if (AgentsSkillsInstaller.IsUserEdited(root, Path.GetFileName(dir))) continue;
+
             try {
                 Directory.Delete(dir, recursive: true);
             } catch (Exception ex) {

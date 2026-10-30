@@ -14,6 +14,10 @@ any legacy ~/.codex/skills/kcap-* folders), removes the kcap git hook from
 
 Non-kcap entries in shared files (settings.json, hooks.json) are preserved.
 
+Codex sandbox network keys kcap set in ~/.codex/config.toml go back to the
+values they replaced, but only while they still hold kcap's value; any it
+keeps are listed with the reason.
+
 Also removes Mistral Vibe hooks/MCP, kcap caches, legacy Cursor pending
 recordings and retired vendor-specific skills.
 
