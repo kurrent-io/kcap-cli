@@ -9,7 +9,8 @@ public class ClaudePermissionModeArgsTests {
     [Arguments(new[] { "--permission-mode", "manual" }, "manual")]
     [Arguments(new[] { "--permission-mode=acceptEdits" }, "acceptEdits")]
     [Arguments(new[] { "--model", "opus", "--permission-mode", "auto", "fix it" }, "auto")]
-    [Arguments(new[] { "--permission-mode", "auto", "--permission-mode", "manual" }, "manual")]
+    [Arguments(new[] { "--model=opus", "--permission-mode", "auto" }, "auto")]
+    [Arguments(new[] { "--permission-mode", "auto", "fix it", "--permission-mode", "manual" }, "manual")]
     [Arguments(new[] { "--permission-mode", "plan" }, "plan")]
     [Arguments(new[] { "--permission-mode" }, null)]
     [Arguments(new[] { "--", "--permission-mode", "auto" }, null)]
@@ -21,5 +22,16 @@ public class ClaudePermissionModeArgsTests {
     [Test]
     public async Task The_legacy_default_spelling_reads_as_manual() {
         await Assert.That(ClaudePermissionModeArgs.Selected(["--permission-mode", "default"])).IsEqualTo("manual");
+    }
+
+    /// A mode flag right after a bare option may be that option's value, as with --system-prompt below,
+    /// so it reads as Manual: recording the apparent mode could recover a Manual session as auto.
+    [Test]
+    [Arguments(new[] { "--permission-mode", "manual", "--system-prompt", "--permission-mode=auto", "fix it" }, "manual")]
+    [Arguments(new[] { "--system-prompt", "--permission-mode", "auto" }, "manual")]
+    [Arguments(new[] { "--verbose", "--permission-mode", "bypassPermissions" }, "manual")]
+    [Arguments(new[] { "-n", "--permission-mode=auto" }, "manual")]
+    public async Task A_mode_that_may_be_another_options_value_reads_as_manual(string[] args, string expected) {
+        await Assert.That(ClaudePermissionModeArgs.Selected(args)).IsEqualTo(expected);
     }
 }
