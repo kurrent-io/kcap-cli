@@ -114,7 +114,8 @@ internal sealed partial class PtyHostedAgentRuntime(
     /// or <see cref="LaunchPromptMaxWait"/> has passed. A text follow-up sent meanwhile lands after
     /// it; raw and special keys do not wait, so a viewer can answer a startup dialog themselves.
     /// A dialog on screen is not a settled startup and has no time limit: its default option would
-    /// take the submit Enter and leave the prompt unsent in the composer.
+    /// take the submit Enter and leave the prompt unsent in the composer. Neither is a terminal still
+    /// in canonical mode, which would turn the submit Enter into a newline.
     /// </summary>
     internal void DeliverLaunchPrompt(string prompt) {
         if (LaunchPromptDelivery is not null) throw new InvalidOperationException("The launch prompt is already queued.");
@@ -177,6 +178,15 @@ internal sealed partial class PtyHostedAgentRuntime(
         while (!pty.HasExited && !_stopRequested) {
             if (DialogGone is not null) {
                 await WaitWhileDialogShowsAsync(ct);
+                started = time.GetTimestamp();
+
+                continue;
+            }
+
+            // Before the TUI turns raw input on, the kernel queues the paste and rewrites the submit
+            // CR as LF, which the composer takes as a newline: the prompt sits there unsent.
+            if (pty.IsInputLineEdited) {
+                await Task.Delay(LaunchPromptExitPoll, time, ct);
                 started = time.GetTimestamp();
 
                 continue;

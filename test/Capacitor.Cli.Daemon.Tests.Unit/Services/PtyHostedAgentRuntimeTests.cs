@@ -279,6 +279,31 @@ public class PtyHostedAgentRuntimeTests {
         pty.Exit();
     }
 
+    /// <summary>A TUI that has not turned raw input on yet would receive the submit CR as LF, so the
+    /// prompt waits for raw mode however long startup takes, then for the quiet window after it.</summary>
+    [Test]
+    public async Task Launch_prompt_waits_for_the_terminal_to_leave_canonical_mode() {
+        var time    = new FakeTimeProvider();
+        var pty     = new RecordingScriptedPtyProcess { IsInputLineEdited = true };
+        var runtime = new PtyHostedAgentRuntime("claude", pty, time, approvalsDisabled: false);
+
+        runtime.DeliverLaunchPrompt("build it");
+        _ = PumpAsync(runtime);
+        pty.Emit("banner");
+        await Task.Delay(100);
+
+        await AdvanceAsync(time, PtyHostedAgentRuntime.LaunchPromptMaxWait * 2);
+        await Assert.That(pty.Writes).IsEmpty();
+
+        pty.IsInputLineEdited = false;
+        await StepAsync(time, PtyHostedAgentRuntime.LaunchPromptQuietWindow + PtyHostedAgentRuntime.SingleSubmitDelay,
+            () => runtime.LaunchPromptDelivery!.IsCompleted);
+
+        await Assert.That(await runtime.LaunchPromptDelivery!).IsEqualTo(LaunchPromptOutcome.Delivered);
+        await Assert.That(string.Join("|", pty.Writes)).IsEqualTo("\x1b[200~build it\x1b[201~|\r");
+        pty.Exit();
+    }
+
     /// <summary>A startup dialog goes quiet while it waits for an answer. Pasting then would let the
     /// submit Enter pick its default option, so the prompt waits for the dialog however long it
     /// stays, then for the redraw after it to settle.</summary>

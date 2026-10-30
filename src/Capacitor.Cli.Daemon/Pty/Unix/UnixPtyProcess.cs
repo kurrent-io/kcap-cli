@@ -272,6 +272,15 @@ public sealed class UnixPtyProcess : IPtyProcess {
         }
     }
 
+    public bool IsInputLineEdited {
+        get {
+            var canonical = false;
+            _master.TryUse(fd => canonical = UnixPtyInterop.IsCanonical(fd));
+
+            return canonical;
+        }
+    }
+
     public void Resize(ushort cols, ushort rows) {
         _master.TryUse(fd => UnixPtyInterop.SetWinSize(fd, rows, cols));
     }

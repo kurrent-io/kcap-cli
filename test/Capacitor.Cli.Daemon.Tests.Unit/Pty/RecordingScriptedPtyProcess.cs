@@ -19,6 +19,8 @@ sealed class RecordingScriptedPtyProcess : IPtyProcess {
     public bool HasExited => _exited.Task.IsCompleted;
     public int? ExitCode  => HasExited ? 0 : null;
 
+    public bool IsInputLineEdited { get; set; }
+
     public void Emit(string text) => _output.Writer.TryWrite(Encoding.UTF8.GetBytes(text));
 
     public void Exit() {

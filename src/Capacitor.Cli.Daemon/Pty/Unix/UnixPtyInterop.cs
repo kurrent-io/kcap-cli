@@ -49,6 +49,22 @@ internal static partial class UnixPtyInterop {
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial void _exit(int status);
 
+    [LibraryImport("libc", SetLastError = true)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    private static unsafe partial int tcgetattr(int fd, byte* termios);
+
+    /// <summary>Whether the terminal on <paramref name="fd"/> is in canonical (line-edited) mode. On a
+    /// master fd this reads the child's side. <c>struct termios</c> differs per OS: <c>c_lflag</c> is
+    /// a 4-byte field at offset 12 on Linux and an 8-byte one at offset 24 on macOS.</summary>
+    public static unsafe bool IsCanonical(int fd) {
+        var termios = stackalloc byte[256];
+        if (tcgetattr(fd, termios) != 0) return false;
+
+        return IsMacOS
+            ? (*(ulong*)(termios + 24) & 0x100) != 0
+            : (*(uint*)(termios + 12) & 0x2) != 0;
+    }
+
     // On macOS ARM64, ioctl is variadic and P/Invoke doesn't work correctly.
     // Use the native shim if available.
     [LibraryImport("libpty_shim", EntryPoint = "pty_set_winsize", SetLastError = true)]
