@@ -2,6 +2,7 @@ using TUnit.Assertions.Enums;
 using System.Collections.Frozen;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Runtime.CompilerServices;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core;
@@ -29,9 +30,12 @@ public class HomeViewModelTests {
     sealed class RecordingLaunchClient : ILaunchClient {
         public LaunchRequest? Last;
         public LaunchOutcome Next = new(true, LaunchedId, null);
+        /// Runs while the call is in flight, before its outcome returns.
+        public Action? During;
 
         public Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct) {
             Last = request;
+            During?.Invoke();
             return Task.FromResult(Next);
         }
     }
@@ -2129,11 +2133,11 @@ public class HomeViewModelTests {
         Vendor = "claude", RepoOwner = "o", RepoName = "r",
     });
 
-    /// Each open bumps the generation, as the window's swap does.
+    /// Like the window's own, an open under a stale generation is refused and one that lands bumps it.
     static HomeViewModel RemoteLauncher(
             string path, FakeAgentDirectory directory, List<(string AgentId, AgentOrigin Origin, int Generation)> opened,
-            RecordingLaunchClient? launch = null) {
-        var navigation = 7;
+            RecordingLaunchClient? launch = null, StrongBox<int>? navigationBox = null) {
+        var navigation = navigationBox ?? new StrongBox<int>(7);
         var remote = new FakeRemoteAgents();
         remote.DaemonsSubject.OnNext([
             new DaemonInfo { Name = "home-pc", OwnerUserId = "u1", Connected = true, RepoPaths = ["/w/repo"] },
@@ -2142,10 +2146,11 @@ public class HomeViewModelTests {
         lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
         return new HomeViewModel(
             new FakeDaemonClientService(), new AppStateStore(path), launch ?? new RecordingLaunchClient(), Known(), TimeProvider.System,
-            navigationGeneration: () => navigation,
+            navigationGeneration: () => navigation.Value,
             openSessionIfCurrent: (id, origin, generation) => {
+                if (generation != navigation.Value) return;
                 opened.Add((id, origin, generation));
-                if (generation == navigation) navigation++;
+                navigation.Value++;
             },
             daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"), laneStatus: lane.Status,
             directory: directory);
@@ -2188,6 +2193,27 @@ public class HomeViewModelTests {
             directory.Rows.AddOrUpdate(RemoteRow(LaunchedId));
 
             await Assert.That(opened).IsEquivalentTo([(LaunchedId, AgentOrigin.Remote, 7), (LaunchedId, AgentOrigin.Remote, 8)]);
+        });
+    }
+
+    /// A navigation while the launch was in flight refuses the placeholder's open, and the registry
+    /// row arriving later must not open over what the user moved to either.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task ARemoteLaunchTheUserNavigatedAwayFromNeverOpens() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            using var directory = new FakeAgentDirectory();
+            var opened = new List<(string AgentId, AgentOrigin Origin, int Generation)>();
+            var navigation = new StrongBox<int>(7);
+            var launch = new RecordingLaunchClient { During = () => navigation.Value++ };
+            using var vm = RemoteLauncher(path, directory, opened, launch, navigation);
+
+            await vm.SelectMachineAsync("home-pc", isLocal: false);
+            await vm.StartCommand.Execute();
+            directory.Rows.AddOrUpdate(RemoteRow(LaunchedId));
+
+            await Assert.That(opened).IsEmpty();
         });
     }
 

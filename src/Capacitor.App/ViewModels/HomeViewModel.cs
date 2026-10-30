@@ -1883,11 +1883,14 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             // Keyed by the server's own spelling, which the registry row is expected to share.
             _directory?.AddRemotePlaceholder(outcome.AgentId!, draft.Machine, _lastViewerId, draft.Vendor, draft.RepoPath,
                 AgentRow.TitleFromPrompt(draft.Goal), draft.Model);
+            // A navigation while the launch was in flight refuses the open, and the launch must stay
+            // unable to open later.
+            if ((_navigationGeneration?.Invoke() ?? 0) != generation) return;
             _openSessionIfCurrent?.Invoke(outcome.AgentId!, AgentOrigin.Remote, generation);
             // Opening moved the generation on. Should the registry spell the id differently, its
             // row lands under another key, and ConfirmPendingRows still swaps the open placeholder
             // workspace over to it unless the user has navigated since.
-            if (_navigationGeneration?.Invoke() is { } opened)
+            if (_navigationGeneration?.Invoke() is { } opened && opened != generation)
                 lock (_launchTrackingLock)
                     if (_pendingLaunches.TryGetValue(agentId, out var pending) && pending.Generation == generation)
                         _pendingLaunches[agentId] = pending with { Generation = opened };
