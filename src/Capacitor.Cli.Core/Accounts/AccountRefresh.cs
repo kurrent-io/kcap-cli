@@ -29,7 +29,7 @@ public static class AccountRefresh {
             if (r.Accounts.FirstOrDefault(a => a.Id == accountId) is not { } account) return (r, ((VendorAccount?) null, false));
 
             var now = time.GetUtcNow();
-            if (dueAfter is { } interval && Max(account.RefreshedAt, account.ProbeStartedAt) is { } last && now - last < interval)
+            if (dueAfter is { } interval && Max(account.RefreshedAt, account.ProbeStartedAt) is { } last && last <= now && now - last < interval)
                 return (r, (null, true));
 
             var probing = account with { ProbeSeq = account.ProbeSeq + 1, ProbeStartedAt = now };

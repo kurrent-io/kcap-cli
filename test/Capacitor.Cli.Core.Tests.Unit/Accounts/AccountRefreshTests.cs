@@ -281,6 +281,18 @@ public class AccountRefreshTests {
     }
 
     [Test]
+    public async Task RunIfDue_probes_a_home_whose_last_refresh_is_in_the_future() {
+        Register(Codex() with { RefreshedAt = T0.AddHours(2), ProbeStartedAt = T0.AddHours(1) });
+        var probe = FakeAccountProbe.Returning(Identity("a@example.com"));
+
+        var outcome = await RefreshIfDue(probe);
+
+        await Assert.That(outcome!.Found).IsTrue();
+        await Assert.That(probe.Started.IsCompleted).IsTrue();
+        await Assert.That(Account.ProbeStartedAt).IsEqualTo(T0);
+    }
+
+    [Test]
     public async Task Refresh_of_an_unknown_account_is_not_found() {
         Register(Codex());
 
