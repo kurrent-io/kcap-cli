@@ -26,6 +26,9 @@ public sealed record HandoffProbeReplyDto(
     string? Completeness,
     IReadOnlyList<string>? MissingCommits);
 
+/// The outcome the daemon keeps for a successor session; null when it keeps none.
+public sealed record HandoffOutcomeReplyDto(HandoffOutcomeDto? Outcome);
+
 public static class HandoffRefusals {
     public const string RepoNotAllowed = "repo_not_allowed";
     public const string RepoMismatch   = "repo_mismatch";
@@ -33,7 +36,7 @@ public static class HandoffRefusals {
 }
 
 public static class HandoffWire {
-    /// The HelloReply capability that advertises the HandoffProbe handler.
+    /// The HelloReply capability that advertises the HandoffProbe and HandoffOutcomeQuery handlers.
     public const string Capability = "handoff/1";
 }
 
@@ -41,4 +44,5 @@ public static class HandoffWire {
 [JsonSerializable(typeof(HandoffProbeRequestDto))]
 [JsonSerializable(typeof(HandoffProbeReplyDto))]
 [JsonSerializable(typeof(HandoffOutcomeDto))]
+[JsonSerializable(typeof(HandoffOutcomeReplyDto))]
 public partial class HandoffIpcJsonContext : JsonSerializerContext;

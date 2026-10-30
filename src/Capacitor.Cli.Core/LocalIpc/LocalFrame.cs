@@ -80,7 +80,7 @@ public sealed record LocalFrame(FrameType Type) {
     /// (snake_case via RenameIpcJsonContext) carried in Text — see RenameIpc.cs.
     public static LocalFrame RenameJson(FrameType type, string json) => new(type) { Text = json };
 
-    /// Constructs a HandoffProbe or HandoffProbeReply frame, whose payload is UTF-8 JSON
-    /// (snake_case via HandoffIpcJsonContext) carried in Text — see HandoffIpc.cs.
+    /// Constructs a hand-off frame: a HandoffProbe, HandoffProbeReply or HandoffOutcomeReply carries
+    /// UTF-8 JSON (snake_case via HandoffIpcJsonContext), a HandoffOutcomeQuery the session id, in Text.
     public static LocalFrame HandoffJson(FrameType type, string json) => new(type) { Text = json };
 }

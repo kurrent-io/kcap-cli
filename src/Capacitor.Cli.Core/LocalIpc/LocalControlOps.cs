@@ -1,6 +1,7 @@
 using System.Net.Sockets;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
+using Capacitor.Cli.Core.Handoff;
 
 namespace Capacitor.Cli.Core.LocalIpc;
 
@@ -31,6 +32,8 @@ public interface ILocalControlOps {
     Task<SessionRenameAckDto> RenameSessionAsync(SessionRenameDto rename, CancellationToken ct);
     /// Null when the request or the reply never crossed the socket.
     Task<HandoffProbeReplyDto?> ProbeHandoffAsync(HandoffProbeRequestDto request, CancellationToken ct);
+    /// Null when the daemon keeps no outcome for the session, or the exchange failed.
+    Task<HandoffOutcomeDto?> ReadHandoffOutcomeAsync(string sessionId, CancellationToken ct);
 }
 
 /// One-shot Core IPC operations behind a fresh socket per call — no Hello negotiation (callers
@@ -233,6 +236,21 @@ public sealed class LocalControlOps(DaemonStore store, string daemonName, TimePr
         if (reply.Type != FrameType.HandoffProbeReply) return null;
         try {
             return JsonSerializer.Deserialize(reply.Text, HandoffIpcJsonContext.Default.HandoffProbeReplyDto);
+        } catch (JsonException) {
+            return null;
+        }
+    }
+
+    public async Task<HandoffOutcomeDto?> ReadHandoffOutcomeAsync(string sessionId, CancellationToken ct) {
+        LocalFrame reply;
+        try {
+            reply = await ExchangeAsync(LocalFrame.HandoffJson(FrameType.HandoffOutcomeQuery, sessionId), ReplyTimeout, ct);
+        } catch (LocalControlOpsException) {
+            return null;
+        }
+        if (reply.Type != FrameType.HandoffOutcomeReply) return null;
+        try {
+            return JsonSerializer.Deserialize(reply.Text, HandoffIpcJsonContext.Default.HandoffOutcomeReplyDto)?.Outcome;
         } catch (JsonException) {
             return null;
         }

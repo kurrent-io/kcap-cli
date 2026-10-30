@@ -1,4 +1,5 @@
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core.Handoff;
 using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
@@ -17,6 +18,7 @@ public class ConfigCapacityLiveTests {
         public Task<SendTextResult>   SendTextWithAttachmentsAsync(string agentId, string text, IReadOnlyList<string> attachmentIds, CancellationToken ct) =>
             throw new NotSupportedException();        public Task<SessionRenameAckDto> RenameSessionAsync(SessionRenameDto rename, CancellationToken ct)          => throw new NotSupportedException();
         public Task<HandoffProbeReplyDto?> ProbeHandoffAsync(HandoffProbeRequestDto request, CancellationToken ct) => throw new NotSupportedException();
+        public Task<HandoffOutcomeDto?> ReadHandoffOutcomeAsync(string sessionId, CancellationToken ct)          => throw new NotSupportedException();
     }
 
     /// <summary>Pins that the new capacity is handed to the running daemon, and that each answer —

@@ -1,6 +1,7 @@
 using Capacitor.App.Services.LocalSetup;
 using Capacitor.App.Services.Mutation;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Handoff;
 using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.App.Services.Onboarding;
@@ -43,6 +44,9 @@ public sealed class LateBoundLocalControlOps(Func<ILocalControlOps> bind) : ILoc
 
     public Task<HandoffProbeReplyDto?> ProbeHandoffAsync(HandoffProbeRequestDto request, CancellationToken ct) =>
         bind().ProbeHandoffAsync(request, ct);
+
+    public Task<HandoffOutcomeDto?> ReadHandoffOutcomeAsync(string sessionId, CancellationToken ct) =>
+        bind().ReadHandoffOutcomeAsync(sessionId, ct);
 }
 
 /// <summary>

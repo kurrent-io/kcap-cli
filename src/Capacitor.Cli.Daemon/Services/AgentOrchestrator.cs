@@ -82,6 +82,9 @@ internal record AgentInstance(
     /// The ended session this agent was launched to hand off from.
     public HandoffSourceContext? HandoffSource { get; set; }
 
+    /// Set by the first call that starts this agent's hand-off takeover; it runs once.
+    public int HandoffTakeoverStarted;
+
     /// The agent this one continues, announced on every registration so the server can follow its wake-ups here.
     public string?              ContinuesAgentId  { get; init; }
 
@@ -589,6 +592,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     // Tail-of-PTY capture for a FAILED launch, under the same per-daemon record root as the PID
     // records ({state}/{name}/agents/failed/) — survives worktree teardown for post-mortem.
     readonly FailedLaunchLog?     _failedLaunchLog;
+    readonly HandoffOutcomeStore  _handoffOutcomes;
     readonly string               _daemonId    = "";
     readonly string               _daemonEpoch = "";
 
@@ -906,6 +910,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         ResumeLedger      = ResumeLedgerStore.For(config.Store, config.Name, time);
         ParticipantLedger = ResumeLedgerStore.ParticipantsFor(config.Store, config.Name, time);
         _failedLaunchLog = new FailedLaunchLog(recordRoot, time);
+        _handoffOutcomes = new HandoffOutcomeStore(recordRoot, time);
         _quarantine  = new AgentKillQuarantine(logger, time);
         _daemonId    = ComputeDaemonId(config.Name);
         _daemonEpoch = config.DaemonEpoch ?? Guid.NewGuid().ToString("N");
@@ -3376,6 +3381,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     Record: pid => PersistPidRecordOrThrow(agent, pid, null),
                     Clear:  () => DeletePidRecord(agent.Id));
             }
+
+            StartHandoffTakeover(agent);
 
             // Start reading output
             _ = ReadAgentOutputAsync(agent);
@@ -6076,6 +6083,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     agent.TranscriptPath = winner.Path;
                     UpdateLedgerSession(agent);
                     StartContinuationTakeover(agent);
+                    StartHandoffTakeover(agent);
                     _statusNotifier.Pulse();
                     LogSessionIdDetected(agent.Id, winner.SessionId);
 

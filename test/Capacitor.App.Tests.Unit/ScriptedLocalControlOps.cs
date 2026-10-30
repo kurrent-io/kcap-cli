@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Handoff;
 using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.App.Tests.Unit;
@@ -144,6 +145,13 @@ sealed class ScriptedLocalControlOps : ILocalControlOps {
     public Task<HandoffProbeReplyDto?> ProbeHandoffAsync(HandoffProbeRequestDto request, CancellationToken ct) =>
         ProbeHandoff?.Invoke(request)
             ?? throw new InvalidOperationException("ScriptedLocalControlOps: unscripted ProbeHandoff call");
+
+    /// Answers ReadHandoffOutcome; unset, a read throws as any unscripted call does.
+    public Func<string, Task<HandoffOutcomeDto?>>? ReadHandoffOutcome { get; set; }
+
+    public Task<HandoffOutcomeDto?> ReadHandoffOutcomeAsync(string sessionId, CancellationToken ct) =>
+        ReadHandoffOutcome?.Invoke(sessionId)
+            ?? throw new InvalidOperationException("ScriptedLocalControlOps: unscripted ReadHandoffOutcome call");
 
     public Task<DaemonSettingsAckDto> PutDaemonSettingsAsync(DaemonSettingsPutDto put, CancellationToken ct) {
         Record(_putSettingsPayloads, put, ref PutSettingsCalls);

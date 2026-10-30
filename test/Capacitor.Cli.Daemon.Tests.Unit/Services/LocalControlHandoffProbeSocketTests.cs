@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Net.Sockets;
+using Capacitor.Cli.Core.Handoff;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Services;
@@ -147,5 +148,19 @@ public class LocalControlHandoffProbeSocketTests {
             var json    = JsonSerializer.Serialize(request, HandoffIpcJsonContext.Default.HandoffProbeRequestDto);
 
             await Assert.That((await ProbeAsync(h, json, ct)).Refusal).IsEqualTo(HandoffRefusals.RepoNotAllowed);
+        });
+
+    /// <summary>The app reads a hand-off's outcome by the successor's session id through the client it uses for
+    /// every other one-shot operation.</summary>
+    [Test]
+    public async Task A_stored_outcome_is_read_over_the_socket() =>
+        await RunAsync("handoff-c", async (h, ct) => {
+            const string successor = "0f0f0f0f-2222-4222-8222-000000000002";
+            new HandoffOutcomeStore(h.Daemons.Store.StateDirectory("handoff-c"), TimeProvider.System)
+                .Put(successor, new HandoffOutcomeDto("src-1", "Wire it", "done", null, []));
+            var ops = new LocalControlOps(h.Daemons.Store, "handoff-c", TimeProvider.System);
+
+            await Assert.That((await ops.ReadHandoffOutcomeAsync(successor, ct))!.SourceTitle).IsEqualTo("Wire it");
+            await Assert.That(await ops.ReadHandoffOutcomeAsync("0f0f0f0f-2222-4222-8222-000000000003", ct)).IsNull();
         });
 }

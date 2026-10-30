@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Continuation;
 using Capacitor.Cli.Core.Handoff;
 using Capacitor.Cli.Core.LocalIpc;
 using Microsoft.Extensions.Logging;
@@ -138,4 +139,164 @@ internal partial class AgentOrchestrator {
 
         return (worktree, HandoffPrompt.Build(handoff.Source, handoff.Start, start, work, cmd.Prompt), null);
     }
+
+    internal const string SourceReservationHeader = "X-Kcap-Source-Reservation";
+
+    const string SuccessorUnknown = "successor_unknown";
+
+    internal TimeSpan HandoffLeaseRenewal    { get; set; } = TimeSpan.FromSeconds(20);
+    internal TimeSpan HandoffRenewTimeout    { get; set; } = TimeSpan.FromSeconds(10);
+    internal TimeSpan HandoffSuccessorRetry  { get; set; } = TimeSpan.FromSeconds(2);
+    internal TimeSpan HandoffSuccessorWindow { get; set; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>Replaces the takeover run, given the run's client, the source, the successor and the run's token.</summary>
+    internal Func<HttpClient, string, string, CancellationToken, Task<TakeoverResult>>? RunHandoffTakeoverForTest { get; set; }
+
+    /// <summary>Answers with the outcome kept for a successor session, or none. The store outlives the agent, so a
+    /// session that has ended is answered too.</summary>
+    public async Task HandleLocalHandoffOutcomeQueryAsync(string sessionId, Stream stream, CancellationToken ct) {
+        var reply = new HandoffOutcomeReplyDto(_handoffOutcomes.Get(sessionId));
+
+        try {
+            var json = JsonSerializer.Serialize(reply, HandoffIpcJsonContext.Default.HandoffOutcomeReplyDto);
+            await FrameCodec.WriteAsync(stream, LocalFrame.HandoffJson(FrameType.HandoffOutcomeReply, json), ct);
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            _logger.LogDebug(ex, "HandoffOutcome: the reply could not be written");
+        }
+    }
+
+    /// <summary>Starts the takeover of a hand-off's source off the caller's path, once, as soon as the agent's own
+    /// session exists; a terminal agent's pinned id names no session until its transcript is found. The agent runs
+    /// on whatever the outcome.</summary>
+    void StartHandoffTakeover(AgentInstance agent) {
+        if (agent.HandoffSource is not { } source || SessionIds.Canonical(agent.SessionId) is not { } successor) return;
+        if (agent.Runtime is not IAcpTranscriptSource && agent.TranscriptPath is null) return;
+        if (Interlocked.CompareExchange(ref agent.HandoffTakeoverStarted, 1, 0) != 0) return;
+
+        PutHandoffOutcome(successor, HandoffOutcomeDto.Running(source.SessionId, source.Title));
+        _ = HandOffAsync(agent.Id, source, successor, _shutdownCts.Token);
+    }
+
+    /// <summary>Never throws: it runs unobserved. A shutdown stores nothing, so the next start reads the
+    /// <c>running</c> it leaves as interrupted.</summary>
+    async Task HandOffAsync(string agentId, HandoffSourceContext source, string successor, CancellationToken ct) {
+        HandoffOutcomeDto outcome;
+        try {
+            outcome = await TakeOverHandoffAsync(agentId, source, successor, ct);
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            return;
+        } catch (Exception ex) {
+            LogHandoffTakeoverFailed(ex, agentId, source.SessionId);
+            outcome = new HandoffOutcomeDto(source.SessionId, source.Title, "failed", ex.Message, []);
+        }
+
+        PutHandoffOutcome(successor, outcome);
+        LogHandoffTakeover(agentId, source.SessionId, successor, outcome.State, outcome.Detail);
+    }
+
+    /// <summary>Every request of the run carries the lease token, and the lease is renewed while it runs: a renewal
+    /// that fails cancels the run at once, since the server may already have given the source to someone else.</summary>
+    async Task<HandoffOutcomeDto> TakeOverHandoffAsync(string agentId, HandoffSourceContext source, string successor, CancellationToken ct) {
+        var sourceWire = SessionIds.Canonical(source.SessionId) ?? source.SessionId;
+        var admission  = await BeginHandoffTakeoverAsync(sourceWire, successor, ct);
+        if (admission is null) return new HandoffOutcomeDto(source.SessionId, source.Title, "failed", "server_unsupported", []);
+        if (admission.Token is not { } token) return HandoffOutcomeDto.Refused(source.SessionId, source.Title, admission.Refusal ?? "refused");
+
+        using var run      = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        using var renewing = new CancellationTokenSource();
+        var renewals = RenewHandoffLeaseAsync(agentId, token, run, renewing.Token);
+
+        try {
+            using var client = await _http.ForBackgroundAsync(run.Token);
+            client.DefaultRequestHeaders.Add(SourceReservationHeader, token);
+
+            var result = await (RunHandoffTakeoverForTest?.Invoke(client, sourceWire, successor, run.Token)
+                ?? new SessionTakeover(new HostedSessionLiveness(HostsSession), _time)
+                    .RunAsync(client, ServerBase, sourceWire, successor, TakeoverAdmission.EndedOnly, run.Token));
+            ct.ThrowIfCancellationRequested();
+
+            return HandoffOutcomeDto.From(source.SessionId, source.Title, result);
+        } finally {
+            await renewing.CancelAsync();
+            await renewals;
+            await EndHandoffLeaseAsync(token);
+        }
+    }
+
+    /// <summary>The server can learn the successor's session after this daemon does, from the status that names
+    /// it, so a begin it answers <c>successor_unknown</c> is retried for <see cref="HandoffSuccessorWindow"/>.</summary>
+    async Task<HandoffTakeoverAdmission?> BeginHandoffTakeoverAsync(string source, string successor, CancellationToken ct) {
+        var deadline = _time.GetUtcNow() + HandoffSuccessorWindow;
+
+        while (true) {
+            var admission = await _server.BeginHandoffTakeoverAsync(source, successor, ct);
+            if (admission?.Refusal != SuccessorUnknown || _time.GetUtcNow() + HandoffSuccessorRetry > deadline) return admission;
+
+            await Task.Delay(HandoffSuccessorRetry, _time, ct);
+        }
+    }
+
+    /// <summary>Never throws. False, an exception or no answer within <see cref="HandoffRenewTimeout"/> is a lost lease.</summary>
+    async Task RenewHandoffLeaseAsync(string agentId, string token, CancellationTokenSource run, CancellationToken stop) {
+        try {
+            while (true) {
+                await Task.Delay(HandoffLeaseRenewal, _time, stop);
+                if (await RenewHandoffLeaseOnceAsync(token, stop)) continue;
+                if (stop.IsCancellationRequested) return;
+
+                LogHandoffLeaseLost(agentId);
+                await run.CancelAsync();
+
+                return;
+            }
+        } catch (OperationCanceledException) when (stop.IsCancellationRequested) {
+        } catch (Exception ex) {
+            LogHandoffTakeoverFailed(ex, agentId, "lease renewal");
+            try { await run.CancelAsync(); } catch (ObjectDisposedException) { }
+        }
+    }
+
+    async Task<bool> RenewHandoffLeaseOnceAsync(string token, CancellationToken stop) {
+        using var expiry = new CancellationTokenSource(HandoffRenewTimeout, _time);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(stop, expiry.Token);
+
+        try {
+            return await _server.RenewHandoffTakeoverAsync(token, linked.Token).WaitAsync(linked.Token);
+        } catch (Exception ex) {
+            _logger.LogDebug(ex, "HandoffTakeover: the lease renewal failed");
+
+            return false;
+        }
+    }
+
+    async Task EndHandoffLeaseAsync(string token) {
+        try {
+            await _server.EndHandoffTakeoverAsync(token);
+        } catch (Exception ex) {
+            _logger.LogDebug(ex, "HandoffTakeover: ending the lease failed");
+        }
+    }
+
+    void PutHandoffOutcome(string successor, HandoffOutcomeDto outcome) {
+        try {
+            _handoffOutcomes.Put(successor, outcome);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            LogHandoffOutcomeNotSaved(ex, successor);
+        }
+    }
+
+    bool HostsSession(SessionId session) =>
+        _agents.Values.Any(a => a.Status is not ("Completed" or "Failed") && SessionId.Parse(SessionIds.Canonical(a.SessionId)) == session);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Hand-off: agent {AgentId} session {Successor} took over {Source}: {State} {Detail}")]
+    partial void LogHandoffTakeover(string agentId, string source, string successor, string state, string? detail);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Hand-off: agent {AgentId} could not take over {Source}")]
+    partial void LogHandoffTakeoverFailed(Exception ex, string agentId, string source);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Hand-off: agent {AgentId} lost its takeover lease; the takeover stops")]
+    partial void LogHandoffLeaseLost(string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Hand-off: the outcome for session {Successor} could not be saved")]
+    partial void LogHandoffOutcomeNotSaved(Exception ex, string successor);
 }

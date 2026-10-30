@@ -88,7 +88,8 @@ internal sealed partial class LocalControlServer(
                 case FrameType.AccountsSubscribe: await accountsIpc.HandleSubscribeAsync(stream, ct); break;
                 case FrameType.SessionRename: await orchestrator.HandleLocalRenameAsync(first.Text, stream, ct); break;
                 case FrameType.HandoffProbe: await orchestrator.HandleLocalHandoffProbeAsync(first.Text, stream, ct); break;
-                default: await FrameCodec.WriteAsync(stream, LocalFrame.Error($"expected Spawn/Attach/AttachWithRuntime/List/Stop/StopV2/Restart/ConsentSubscribe/ConsentResolve/ConsentRulesGet/ConsentRulesPut/ConsentSubscribeV2/ConsentResolveV2/ConsentRulesPutV2/PermissionSubscribe/PermissionResolve/Hello/StatusSubscribe/SendText/SendTextWithAttachments/DaemonSettingsPut/AdmissionFenceAcquire/Shutdown/AgentResume/AgentSession/AccountsSubscribe/SessionRename/HandoffProbe, got {first.Type}"), ct); break;
+                case FrameType.HandoffOutcomeQuery: await orchestrator.HandleLocalHandoffOutcomeQueryAsync(first.Text, stream, ct); break;
+                default: await FrameCodec.WriteAsync(stream, LocalFrame.Error($"expected Spawn/Attach/AttachWithRuntime/List/Stop/StopV2/Restart/ConsentSubscribe/ConsentResolve/ConsentRulesGet/ConsentRulesPut/ConsentSubscribeV2/ConsentResolveV2/ConsentRulesPutV2/PermissionSubscribe/PermissionResolve/Hello/StatusSubscribe/SendText/SendTextWithAttachments/DaemonSettingsPut/AdmissionFenceAcquire/Shutdown/AgentResume/AgentSession/AccountsSubscribe/SessionRename/HandoffProbe/HandoffOutcomeQuery, got {first.Type}"), ct); break;
             }
         } catch (Exception ex) when (ex is not OperationCanceledException) {
             LogConnectionError(ex);

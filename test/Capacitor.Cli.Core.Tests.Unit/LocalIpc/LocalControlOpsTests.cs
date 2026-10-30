@@ -91,6 +91,40 @@ public class LocalControlOpsTests {
         }, configure: ops => ops.HandoffReplyTimeout = TimeSpan.FromMilliseconds(100));
     }
 
+    [Test]
+    public async Task ReadHandoffOutcomeAsync_sends_the_session_and_returns_the_stored_outcome() {
+        if (OperatingSystem.IsWindows()) return;
+        string? asked = null;
+        ConnScript answer = async (_, s, ct) => {
+            var f = await FrameCodec.ReadAsync(s, ct);
+            if (f?.Type != FrameType.HandoffOutcomeQuery) return;
+            asked = f.Text;
+            await FrameCodec.WriteAsync(s, LocalFrame.HandoffJson(FrameType.HandoffOutcomeReply,
+                """{"outcome":{"source_session_id":"src","source_title":"Wire it","state":"done","detail":null,"items":[{"kind":"work_item","label":"#1","result":"carried","detail":null}]}}"""), ct);
+        };
+        await WithOpsAsync([answer], async ops => {
+            var outcome = await ops.ReadHandoffOutcomeAsync("session-2", CancellationToken.None);
+            await Assert.That(asked).IsEqualTo("session-2");
+            await Assert.That(outcome!.State).IsEqualTo("done");
+            await Assert.That(outcome.Items.Single().Result).IsEqualTo("carried");
+        });
+    }
+
+    [Test]
+    public async Task ReadHandoffOutcomeAsync_returns_null_when_none_is_stored_or_the_daemon_never_answers() {
+        if (OperatingSystem.IsWindows()) return;
+        ConnScript none = async (_, s, ct) => {
+            await FrameCodec.ReadAsync(s, ct);
+            await FrameCodec.WriteAsync(s, LocalFrame.HandoffJson(FrameType.HandoffOutcomeReply, """{"outcome":null}"""), ct);
+        };
+
+        await WithOpsAsync([none], async ops =>
+            await Assert.That(await ops.ReadHandoffOutcomeAsync("session-2", CancellationToken.None)).IsNull());
+        await WithOpsAsync([Stall()], async ops =>
+            await Assert.That(await ops.ReadHandoffOutcomeAsync("session-2", CancellationToken.None)).IsNull(),
+            configure: ops => ops.ReplyTimeout = TimeSpan.FromMilliseconds(100));
+    }
+
     static ConnScript ConsentAckThen(string json) => async (_, s, ct) => {
         var f = await FrameCodec.ReadAsync(s, ct);                       // expect ConsentRulesPut
         if (f?.Type == FrameType.ConsentRulesPut)
