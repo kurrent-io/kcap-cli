@@ -820,10 +820,12 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
         if (accountReadings is not null)
             _accountSources.DistinctUntilChanged()
-                .CombineLatest(accountReadings, usageClock ?? Observable.Return(time.GetUtcNow()), StripState)
+                .CombineLatest(accountReadings, usageClock ?? Observable.Return(time.GetUtcNow()),
+                    (source, snapshot, now) => (Source: source, State: StripState(source, snapshot, now)))
                 .DistinctUntilChanged()
                 .ObserveOn(RxSchedulers.MainThreadScheduler)
-                .Subscribe(SetAccountStrip)
+                .Where(computed => computed.Source == _accountSources.Value)
+                .Subscribe(computed => SetAccountStrip(computed.State))
                 .DisposeWith(_disposables);
 
         _timer = time.CreateTimer(_ => OnTick(), null, PollInterval, PollInterval);
@@ -1135,9 +1137,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         var directory = info.AccountDirectory;
         var fallback  = string.IsNullOrWhiteSpace(info.AccountLabel) && directory is not null ? AccountRows.LastSegment(directory) : info.AccountLabel;
         var source    = (info.AccountId, fallback);
-        // The row's label arrives a dispatcher hop later; until then the launch label stands beside the new
-        // directory. An unchanged push must not reset it, or the bars would flicker on every session update.
-        if (!_tracksAccountReadings || source != _accountSources.Value) SetAccountStrip(new(fallback, null));
+        // A new account must not show the previous one's bars while its row arrives, so the launch label stands
+        // until then. The same account keeps its bars: a relabel is an ordinary pipeline change.
+        if (!_tracksAccountReadings || info.AccountId is null || info.AccountId != _accountSources.Value.Id) SetAccountStrip(new(fallback, null));
         AccountVendor = info.Vendor;
         AccountDirectory = directory;
         ShowsAccountStrip = directory is not null
