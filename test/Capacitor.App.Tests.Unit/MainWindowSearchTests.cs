@@ -209,6 +209,66 @@ public class MainWindowSearchTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task A_failed_open_keeps_the_held_pins_owner_for_a_later_restore() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            h.ListServer("P");
+            var owner = new PinPresentation("bob", "Bob", null);
+            await Assert.That(await h.Vm.OpenSearchHitAsync("P", owner, CancellationToken.None)).IsEqualTo(SearchOpenOutcome.Opened);
+            h.Sessions.PinnedIdSubject.OnNext("P");
+            await h.OpenSearch();
+            h.Sessions.PinResult = PinOutcome.Failed;
+            await Assert.That(await h.Vm.OpenSearchHitAsync("T", new("eve", "Eve", null), CancellationToken.None)).IsEqualTo(SearchOpenOutcome.Failed);
+            h.Sessions.PinResult = PinOutcome.Pinned;
+            var gate = new TaskCompletionSource<PinOutcome>();
+            h.Sessions.PinGate = gate;
+
+            var opening = h.Vm.OpenSearchHitAsync("U", NoPresentation, CancellationToken.None);
+            await h.Vm.DismissSearchCommand.Execute().ToTask();
+            h.Sessions.PinGate = null;
+            gate.SetResult(PinOutcome.Pinned);
+            await opening;
+
+            await Assert.That(h.Sessions.PinCalls[^1]).IsEqualTo(("P", owner));
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Closing_the_workspace_releases_its_pin() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            h.ListServer("P");
+            await Assert.That(await h.Vm.OpenSearchHitAsync("P", NoPresentation, CancellationToken.None)).IsEqualTo(SearchOpenOutcome.Opened);
+            h.Sessions.PinnedIdSubject.OnNext("P");
+
+            h.Vm.CloseWorkspace();
+
+            await Assert.That(h.Vm.CurrentWorkspace).IsNull();
+            await Assert.That(h.Sessions.PinnedSessionId).IsNull();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_covered_workspace_closing_keeps_a_pending_open_and_escape_then_releases_the_pin() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            h.ListServer("P");
+            await Assert.That(await h.Vm.OpenSearchHitAsync("P", NoPresentation, CancellationToken.None)).IsEqualTo(SearchOpenOutcome.Opened);
+            h.Sessions.PinnedIdSubject.OnNext("P");
+            await h.OpenSearch();
+
+            h.Vm.CloseWorkspace();
+            await Assert.That(h.Sessions.PinnedSessionId).IsEqualTo("P");
+
+            await h.Vm.DismissSearchCommand.Execute().ToTask();
+            await Assert.That(h.Sessions.PinnedSessionId).IsNull();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task A_pin_that_lands_when_the_open_cannot_navigate_is_released() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var h = new Harness();

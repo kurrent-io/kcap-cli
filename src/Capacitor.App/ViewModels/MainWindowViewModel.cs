@@ -762,7 +762,6 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     void NewSession() {
         CloseSearch();
-        ReleasePinUnless(null);
         CloseWorkspace();
     }
 
@@ -780,6 +779,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     void CloseSearch() {
         IsSearchOpen = false;
         Search?.Reset();
+        if (CurrentWorkspace is null) ReleasePinUnless(null);
     }
 
     /// Unpin also supersedes a pin still reading, so it runs when only the request is outstanding.
@@ -821,7 +821,6 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         (string Id, PinPresentation Presentation)? restore =
             _sessions.PinnedSessionId is { } held ? (held, _searchPinPresentation) : null;
         _searchPin = sessionId;
-        _searchPinPresentation = presentation;
         var pinned = await _sessions.PinAsync(sessionId, presentation, ct);
         switch (pinned) {
             case PinOutcome.Unauthorized: return SearchOpenOutcome.SignInRequired;
@@ -829,6 +828,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             case PinOutcome.Failed: return SearchOpenOutcome.Failed;
             case PinOutcome.Superseded: return SearchOpenOutcome.Superseded;
         }
+        _searchPinPresentation = presentation;
         var current = !ct.IsCancellationRequested && IsSearchOpen;
         if (!current || _directory.RowForSession(sessionId) is not { } found) {
             ReleaseUnopenedPin(sessionId, restore);
@@ -914,6 +914,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public void CloseWorkspace() {
         if (_shutdownLatched || _navigation.ShutdownLatched) return;
         SwapTo(null);
+        // Nothing is selected, so nothing keeps a pin; an open page may still be pinning its hit.
+        if (!IsSearchOpen) ReleasePinUnless(null);
     }
 
     static IObservable<bool> CanRefreshOpenWork(ISessionWorkspace? workspace) =>
