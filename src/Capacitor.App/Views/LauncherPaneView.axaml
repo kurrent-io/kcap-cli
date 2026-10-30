@@ -275,17 +275,17 @@
                                 </StackPanel>
 
                                 <Grid ColumnDefinitions="*,Auto">
-                                    <WrapPanel ItemSpacing="8" LineSpacing="8" VerticalAlignment="Center">
-                                        <Button x:Name="AttachButton" Classes="kcapGhost"
-                                                IsEnabled="{Binding CanAttach}" ToolTip.Tip="{Binding AttachHint}"
-                                                ToolTip.ShowOnDisabled="True" AutomationProperties.Name="Attach files"
-                                                Width="26" Height="26" Padding="0" FontSize="15" Cursor="Hand"
-                                                HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
-                                            <views:AppIcon Kind="Paperclip" Size="16" />
-                                        </Button>
-
-                                        <views:LaunchChipsView DataContext="{Binding}" />
-                                    </WrapPanel>
+                                    <views:LaunchChipsView x:Name="LaunchChips" DataContext="{Binding}" VerticalAlignment="Center">
+                                        <views:LaunchChipsView.Leading>
+                                            <Button x:Name="AttachButton" Classes="kcapGhost"
+                                                    IsEnabled="{Binding CanAttach}" ToolTip.Tip="{Binding AttachHint}"
+                                                    ToolTip.ShowOnDisabled="True" AutomationProperties.Name="Attach files"
+                                                    Width="26" Height="26" Padding="0" FontSize="15" Cursor="Hand"
+                                                    HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
+                                                <views:AppIcon Kind="Paperclip" Size="16" />
+                                            </Button>
+                                        </views:LaunchChipsView.Leading>
+                                    </views:LaunchChipsView>
 
                                     <Button Grid.Column="1" x:Name="StartButton" Classes="kcapPrimary" Command="{Binding StartCommand}"
                                             Background="{StaticResource KcapPrimaryBrush}" Width="36" Height="36" CornerRadius="18"

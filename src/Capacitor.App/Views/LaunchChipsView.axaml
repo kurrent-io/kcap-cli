@@ -4,7 +4,7 @@
              xmlns:views="clr-namespace:Capacitor.App.Views"
              x:Class="Capacitor.App.Views.LaunchChipsView"
              x:DataType="vm:ILaunchChoices">
-    <WrapPanel ItemSpacing="8" LineSpacing="8" VerticalAlignment="Center">
+    <WrapPanel x:Name="ChipsPanel" ItemSpacing="8" LineSpacing="8" VerticalAlignment="Center">
         <!-- Harness + model picker: built per open in code-behind, like the repo menu. -->
         <Button x:Name="AgentChip" Classes="kcapChip" Click="OnAgentChipClick"
                 Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"

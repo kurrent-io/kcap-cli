@@ -1668,10 +1668,6 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal static bool UsageEquals(IReadOnlyDictionary<string, AccountUsageView> a, IReadOnlyDictionary<string, AccountUsageView> b) =>
         a.Count == b.Count && a.All(p => b.TryGetValue(p.Key, out var other) && p.Value.Equals(other));
 
-    /// Equality over what the launcher draws: age and readiness do not change its rows.
-    internal static bool DrawnUsageEquals(IReadOnlyDictionary<string, AccountUsageView> a, IReadOnlyDictionary<string, AccountUsageView> b) =>
-        a.Count == b.Count && a.All(p => b.TryGetValue(p.Key, out var other) && p.Value.DrawnEquals(other));
-
     string AccountMachine(string name, bool remote) => remote ? name : _daemon.DaemonName;
 
     static AccountsSnapshotDto? AccountsSnapshotFor(

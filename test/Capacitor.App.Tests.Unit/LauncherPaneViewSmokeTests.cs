@@ -807,6 +807,32 @@ public class LauncherPaneViewSmokeTests {
         });
     }
 
+    /// At a width that cannot hold every chip, the attach button wraps with the chips: it shares a
+    /// row with the first chip rather than sitting alone above them.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_attach_button_shares_a_row_with_the_first_chip_at_a_narrow_width() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var (vm, _, _, tmp) = Build();
+            using var _tmp = tmp;
+            var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 360, Height = 700 };
+            window.Show();
+            Settle(window);
+
+            var attach = Find<Button>(window, "AttachButton")!;
+            var agent = Find<Button>(window, "AgentChip")!;
+            var permission = Find<Button>(window, "PermissionChip")!;
+            await Assert.That(attach.TranslatePoint(default, window)!.Value.Y + attach.Bounds.Height / 2)
+                .IsBetween(agent.TranslatePoint(default, window)!.Value.Y, agent.TranslatePoint(default, window)!.Value.Y + agent.Bounds.Height);
+            await Assert.That(permission.TranslatePoint(default, window)!.Value.Y)
+                .IsGreaterThan(agent.TranslatePoint(default, window)!.Value.Y);
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            vm.Dispose();
+        });
+    }
+
     /// Start is unusable while the files it would carry are still going up, so its tip says so
     /// rather than leaving the repository-gate wording standing.
     [Test]

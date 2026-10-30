@@ -16,8 +16,26 @@ namespace Capacitor.App.Views;
 public partial class LaunchChipsView : UserControl {
     Flyout? _openMenu;
 
+    public static readonly StyledProperty<Control?> LeadingProperty =
+        AvaloniaProperty.Register<LaunchChipsView, Control?>(nameof(Leading));
+
+    /// Placed first in the chip row, so it wraps with the chips instead of ahead of them as a block.
+    public Control? Leading {
+        get => GetValue(LeadingProperty);
+        set => SetValue(LeadingProperty, value);
+    }
+
+    static LaunchChipsView() {
+        LeadingProperty.Changed.AddClassHandler<LaunchChipsView>((view, e) => view.ReplaceLeading(e.OldValue as Control, e.NewValue as Control));
+    }
+
     public LaunchChipsView() {
         InitializeComponent();
+    }
+
+    void ReplaceLeading(Control? old, Control? next) {
+        if (old is not null) ChipsPanel.Children.Remove(old);
+        if (next is not null) ChipsPanel.Children.Insert(0, next);
     }
 
     internal Flyout? OpenMenuForTesting => _openMenu;
@@ -449,7 +467,7 @@ public partial class LaunchChipsView : UserControl {
             var next = AccountsToDraw();
             var same = drawnAccounts is { } drawn && next is { } now
                 ? drawn.Pending == now.Pending && drawn.Retry == now.Retry && drawn.Rows.SequenceEqual(now.Rows)
-                    && HomeViewModel.DrawnUsageEquals(drawnUsage, vm.AccountUsageById)
+                    && AccountUsageView.DrawnUsageEquals(drawnUsage, vm.AccountUsageById)
                 : drawnAccounts is null && next is null;
             if (!same) RebuildRows();
         }

@@ -897,9 +897,9 @@ public class HomeViewModelAccountTests {
     public async Task The_launcher_comparison_ignores_age_and_readiness() {
         var a = new AccountUsageView([], "line", null, null, null, "updated 1m ago", false);
 
-        await Assert.That(HomeViewModel.DrawnUsageEquals(new Dictionary<string, AccountUsageView> { ["a1"] = a },
+        await Assert.That(AccountUsageView.DrawnUsageEquals(new Dictionary<string, AccountUsageView> { ["a1"] = a },
             new Dictionary<string, AccountUsageView> { ["a1"] = a with { AgeText = "updated 2m ago", Ready = true } })).IsTrue();
-        await Assert.That(HomeViewModel.DrawnUsageEquals(new Dictionary<string, AccountUsageView> { ["a1"] = a },
+        await Assert.That(AccountUsageView.DrawnUsageEquals(new Dictionary<string, AccountUsageView> { ["a1"] = a },
             new Dictionary<string, AccountUsageView> { ["a1"] = a with { BlockedText = "Limit hit" } })).IsFalse();
     }
 
