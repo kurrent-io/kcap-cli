@@ -22,6 +22,8 @@ public class HomeAttachmentsTests {
     const string StaleVersion = "1.0.2";
 
     sealed class RecordingLaunchClient : ILaunchClient {
+        public Task<IReadOnlySet<string>> GetLaunchFeaturesAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlySet<string>>(System.Collections.Frozen.FrozenSet<string>.Empty);
         public LaunchRequest? Last;
         public LaunchOutcome Next = new(true, LaunchedId, null);
 
@@ -34,6 +36,8 @@ public class HomeAttachmentsTests {
     /// Pushes a LaunchFailure for the accepted id before the invoke returns, so the failure is
     /// buffered before StartAsync ever registers the launch.
     sealed class FailureBeforeReturnLaunchClient : ILaunchClient {
+        public Task<IReadOnlySet<string>> GetLaunchFeaturesAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlySet<string>>(System.Collections.Frozen.FrozenSet<string>.Empty);
         public required Subject<LaunchFailure> Failures { get; init; }
         public required string Reason { get; init; }
 
@@ -46,6 +50,8 @@ public class HomeAttachmentsTests {
     /// Adds the directory row for the accepted id before the invoke returns — the launch is
     /// already confirmed by the time StartAsync records it.
     sealed class RowBeforeReturnLaunchClient : ILaunchClient {
+        public Task<IReadOnlySet<string>> GetLaunchFeaturesAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlySet<string>>(System.Collections.Frozen.FrozenSet<string>.Empty);
         public required FakeAgentDirectory Directory { get; init; }
 
         public Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct) {

@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -388,6 +389,19 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
             return await hub.InvokeAsync<List<DaemonAccountsDto>>(HubMethods.GetDaemonAccounts, ct).ConfigureAwait(false);
         } catch (Exception) {
             return null;
+        }
+    }
+
+    public async Task<IReadOnlySet<string>> GetLaunchFeaturesAsync(CancellationToken ct) {
+        var hub = _hub;
+        if (hub is not { State: HubConnectionState.Connected }) return FrozenSet<string>.Empty;
+        try {
+            var features = await hub.InvokeAsync<string[]?>(HubMethods.GetLaunchFeatures, ct).ConfigureAwait(false);
+            return features is { Length: > 0 } ? features.ToFrozenSet(StringComparer.Ordinal) : FrozenSet<string>.Empty;
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            throw;
+        } catch (Exception) {
+            return FrozenSet<string>.Empty;
         }
     }
 

@@ -20,6 +20,8 @@ public sealed class HubTestHost : IAsyncDisposable {
 
     public static Func<List<DaemonInfo>> DaemonsHandler { get; set; } = () => [];
     public static Func<JsonElement, string> LaunchHandler { get; set; } = _ => "agent-1";
+    /// Null answers as a server without the method does.
+    public static Func<string[]>? LaunchFeaturesHandler { get; set; }
     static int _launchCalls;
     public static int LaunchCalls => _launchCalls;
 
@@ -56,6 +58,7 @@ public sealed class HubTestHost : IAsyncDisposable {
             Action<string, bool>? onRequest = null, Action<HttpRequest>? inspect = null) {
         DaemonsHandler = () => [];
         LaunchHandler = _ => "agent-1";
+        LaunchFeaturesHandler = null;
         _launchCalls = 0;
         ChatSubscribeHandler = _ => true;
         AccessWatchHandler = sid => ChatSubscribeHandler(sid);
@@ -190,6 +193,9 @@ public sealed class HubTestHost : IAsyncDisposable {
         }
 
         public List<DaemonInfo> GetConnectedDaemons() => DaemonsHandler();
+
+        public string[] GetLaunchFeatures() =>
+            LaunchFeaturesHandler?.Invoke() ?? throw new HubException("Method does not exist");
 
         public string RequestLaunchAgentV2(JsonElement payload) {
             Interlocked.Increment(ref _launchCalls);

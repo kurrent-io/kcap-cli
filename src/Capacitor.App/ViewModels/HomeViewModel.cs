@@ -1831,7 +1831,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
         var request = new LaunchRequest(
             draft.Machine, draft.RepoPath, draft.Vendor, draft.Goal, draft.Model, draft.Effort,
-            draft.PermissionMode, attachmentIds, draft.CodexPosture, draft.AccountId);
+            draft.PermissionMode, attachmentIds, draft.CodexPosture, AccountId: draft.AccountId);
         // Captured BEFORE the call, never after: the whole point is to notice a navigation that
         // changed WHILE the launch was in flight.
         var generation = _navigationGeneration?.Invoke() ?? 0;

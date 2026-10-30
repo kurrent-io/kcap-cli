@@ -24,6 +24,15 @@ public static class ServerSearchHttp {
         return new(outcome, body);
     };
 
+    /// Null for a session the caller cannot read, one that does not exist, and any failure.
+    public static Func<string, CancellationToken, Task<HandoffContextDto?>> HandoffContext(
+            ICapacitorHttpClient? http, ProfileContext? profiles) => async (sessionId, ct) => {
+        var (_, body) = await GetAsync(http, profiles,
+            ApiRoutes.SessionHandoffContext(sessionId),
+            RemoteModelsJsonContext.Default.HandoffContextDto, ct).ConfigureAwait(false);
+        return body;
+    };
+
     static async Task<(ServerReadOutcome, T?)> GetAsync<T>(
             ICapacitorHttpClient? http, ProfileContext? profiles, string route,
             System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> type, CancellationToken ct) where T : class {

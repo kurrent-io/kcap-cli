@@ -49,6 +49,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
     readonly Func<ServerSessionsQuery, CancellationToken, Task<ServerSessionsFetch>> _fetch;
     readonly Func<CancellationToken, Task<SessionOwnerOptionDto[]?>> _fetchOwners;
     readonly Func<string, CancellationToken, Task<SummaryFetch>>? _fetchSummary;
+    readonly Func<string, CancellationToken, Task<HandoffContextDto?>>? _fetchHandoffContext;
     readonly Action<int>? _onUnauthorized;
     readonly CompositeDisposable _subscriptions = new();
     readonly ITimer _cadence;
@@ -112,10 +113,12 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
             TimeProvider time,
             TimeSpan? pushDebounce = null, TimeSpan? reconcileEvery = null, Action<int>? onUnauthorized = null,
             Func<string, CancellationToken, Task<SummaryFetch>>? fetchSummary = null,
-            IScheduler? pushScheduler = null) {
+            IScheduler? pushScheduler = null,
+            Func<string, CancellationToken, Task<HandoffContextDto?>>? fetchHandoffContext = null) {
         _fetch = fetch;
         _fetchOwners = fetchOwners;
         _fetchSummary = fetchSummary;
+        _fetchHandoffContext = fetchHandoffContext;
         _time = time;
         _overlay = new(time);
         _onUnauthorized = onUnauthorized;
@@ -249,6 +252,17 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
         var pinned = _pinId is not null && !_pinListed && !_pinGone ? _pinRow : null;
         _snapshots.OnNext(new([.. _live.Items], [.. _mineLive.Items], ended, pinned, _pinId));
         if (unlisted) IssuePinRefresh();
+    }
+
+    public async Task<HandoffContextDto?> ReadHandoffContextAsync(string sessionId, CancellationToken ct) {
+        if (_fetchHandoffContext is null) return null;
+        try {
+            return await _fetchHandoffContext(sessionId, ct).ConfigureAwait(false);
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            throw;
+        } catch (Exception) {
+            return null;
+        }
     }
 
     public async Task<PinOutcome> PinAsync(string sessionId, PinPresentation presentation, CancellationToken ct) {

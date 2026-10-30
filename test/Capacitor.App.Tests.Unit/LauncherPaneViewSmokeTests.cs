@@ -91,6 +91,8 @@ public class LauncherPaneViewSmokeTests {
     const string SecondLaunchedId = "fedcba9876543210fedcba9876543210";
 
     sealed class RecordingLaunchClient : ILaunchClient {
+        public Task<IReadOnlySet<string>> GetLaunchFeaturesAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlySet<string>>(System.Collections.Frozen.FrozenSet<string>.Empty);
         public LaunchOutcome Next = new(true, LaunchedId, null);
         public int StartCount;
 

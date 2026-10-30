@@ -84,6 +84,8 @@ public class MainWindowSmokeTests {
     });
 
     sealed class NeverLaunchClient : ILaunchClient {
+        public Task<IReadOnlySet<string>> GetLaunchFeaturesAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlySet<string>>(System.Collections.Frozen.FrozenSet<string>.Empty);
         public Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct) =>
             Task.FromResult(new LaunchOutcome(false, null, "unexpected launch"));
     }

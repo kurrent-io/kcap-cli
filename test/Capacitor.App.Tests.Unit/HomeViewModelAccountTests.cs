@@ -76,6 +76,8 @@ public class HomeViewModelAccountTests {
     static string Refusal(string label) => $"{label} is not available on this machine. Use the default account or pick another.";
 
     sealed class RecordingLaunchClient : ILaunchClient {
+        public Task<IReadOnlySet<string>> GetLaunchFeaturesAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlySet<string>>(System.Collections.Frozen.FrozenSet<string>.Empty);
         public List<LaunchRequest> Requests { get; } = [];
 
         public Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct) {

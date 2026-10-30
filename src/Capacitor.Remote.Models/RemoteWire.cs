@@ -17,6 +17,7 @@ public static class HubMethods {
     public const string UnsubscribeFromChat    = "UnsubscribeFromChat";
     public const string RegisterSessionAccessWatch = "RegisterSessionAccessWatch";
     public const string GetDaemonAccounts      = "GetDaemonAccounts";
+    public const string GetLaunchFeatures      = "GetLaunchFeatures";
 }
 
 /// Server → UI-client pushes. Org-wide ones arrive with no join call; the rest follow the join or
@@ -59,6 +60,8 @@ public static class ApiRoutes {
         + (owner is null ? "" : $"&owner={Uri.EscapeDataString(owner)}");
     public static string SessionDetail(string sessionId) =>
         $"api/sessions/{Uri.EscapeDataString(sessionId)}/detail";
+    public static string SessionHandoffContext(string sessionId) =>
+        $"api/sessions/{Uri.EscapeDataString(sessionId)}/handoff-context";
     public static string Search(string query, string mode, int limit) =>
         $"api/search?q={Uri.EscapeDataString(query)}&mode={mode}&limit={limit}";
     public static string SessionSummary(string sessionId) =>

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Handoff;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -158,5 +159,30 @@ public class LaunchRequestTests {
         var keys = json.EnumerateObject().Select(p => p.Name).ToArray();
 
         await Assert.That(keys).IsEquivalentTo(TwelveKeys);
+    }
+
+    [Test]
+    public async Task The_payload_carries_the_handoff_block_snake_case() {
+        var handoff = new HandoffLaunchStart(
+            "src-1", "abc1234", "DetachedAtSha", "feature/x", "def5678", "Remote", "BranchDiverged",
+            42, true, "fork-owner", "fork-repo");
+        var json = Payload(new LaunchRequest("kcap-dev", "/repo", "claude", "go", Handoff: handoff));
+        var block = json.GetProperty("handoff");
+
+        await Assert.That(json.EnumerateObject().Select(p => p.Name).ToArray()).IsEquivalentTo([.. TwelveKeys, "handoff"]);
+        await Assert.That(block.EnumerateObject().Select(p => p.Name).ToArray()).IsEquivalentTo([
+            "source_session_id", "start_sha", "checkout", "branch", "local_branch_sha", "source",
+            "detach_reason", "pull_request_number", "head_is_fork", "head_owner", "head_repo"]);
+        await Assert.That(block.GetProperty("source_session_id").GetString()).IsEqualTo("src-1");
+        await Assert.That(block.GetProperty("checkout").GetString()).IsEqualTo("DetachedAtSha");
+        await Assert.That(block.GetProperty("pull_request_number").GetInt32()).IsEqualTo(42);
+        await Assert.That(block.GetProperty("head_is_fork").GetBoolean()).IsTrue();
+    }
+
+    [Test]
+    public async Task A_launch_without_handoff_omits_the_field() {
+        var json = Payload(new LaunchRequest("kcap-dev", "/repo", "claude", "go"));
+
+        await Assert.That(json.TryGetProperty("handoff", out _)).IsFalse();
     }
 }

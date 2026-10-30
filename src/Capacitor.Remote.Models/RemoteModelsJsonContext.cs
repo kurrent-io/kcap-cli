@@ -23,4 +23,5 @@ namespace Capacitor.Remote.Models;
 [JsonSerializable(typeof(SessionOwnerOptionDto[]))]
 [JsonSerializable(typeof(SearchResponseDto))]
 [JsonSerializable(typeof(ActivitySessionDto))]
+[JsonSerializable(typeof(HandoffContextDto))]
 public partial class RemoteModelsJsonContext : JsonSerializerContext;

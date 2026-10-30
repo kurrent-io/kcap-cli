@@ -1029,7 +1029,8 @@ public partial class App : Application {
             onUnauthorized: serverLane.ParkSignedOut);
         var sessions = new ServerSessionsService(
             serverLane, ServerSessionsService.HttpFetch(sessionHttp, profiles), ServerSessionsService.HttpOwners(sessionHttp, profiles),
-            _time, onUnauthorized: serverLane.ParkSignedOut, fetchSummary: ServerSearchHttp.Summary(sessionHttp, profiles));
+            _time, onUnauthorized: serverLane.ParkSignedOut, fetchSummary: ServerSearchHttp.Summary(sessionHttp, profiles),
+            fetchHandoffContext: ServerSearchHttp.HandoffContext(sessionHttp, profiles));
         var repoIdentity = new RepoIdentityResolver();
         var directory = new AgentDirectory(
             service, remoteAgents, serverLane, repoIdentity, GitRepository.ResolveMainRepoRoot,
