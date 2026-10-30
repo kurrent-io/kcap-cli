@@ -7,6 +7,10 @@ public partial class WorktreeManager {
     /// <summary>Reads origin and decides where a hand-off worktree starts, without creating anything but
     /// fetched refs. A branch is reported absent only when origin answers that it has no such branch.</summary>
     public async Task<HandoffResolution> ResolveHandoffStartAsync(string repoPath, HandoffTarget target, CancellationToken ct) {
+        ct.ThrowIfCancellationRequested();
+
+        if (target is { HeadIsFork: true, PullRequestNumber: null })
+            throw new InvalidOperationException("invalid_handoff_target: a fork head needs its pull request number");
         if (target.Branch is { Length: > 0 } named && !await IsValidRefNameAsync(repoPath, named))
             throw new InvalidOperationException($"invalid_base_ref: {named}");
 
@@ -25,7 +29,7 @@ public partial class WorktreeManager {
 
         if (target.Branch is { Length: > 0 } branch) {
             // ls-remote exits 2 only when origin answered and has no matching ref.
-            var listed = await RunGitCaptureResult(repoPath, FetchTimeout, time, true, [],
+            var listed = await RunGitCaptureResult(repoPath, FetchTimeout, time, false, [],
                 "ls-remote", "--exit-code", "origin", $"refs/heads/{branch}");
             if (listed.ExitCode == 0) {
                 var (sha, error) = await FetchOriginBranchAsync(repoPath, branch);
@@ -38,7 +42,7 @@ public partial class WorktreeManager {
 
         ct.ThrowIfCancellationRequested();
 
-        var symref = await RunGitCaptureResult(repoPath, FetchTimeout, time, true, [], "ls-remote", "--symref", "origin", "HEAD");
+        var symref = await RunGitCaptureResult(repoPath, FetchTimeout, time, false, [], "ls-remote", "--symref", "origin", "HEAD");
         if (symref.ExitCode != 0) return FetchFailed(symref);
 
         const string prefix = "ref: refs/heads/";
@@ -121,35 +125,38 @@ public partial class WorktreeManager {
         };
         var noHooks = NoBranchHooks();
 
-        await WithWorktreeMetadataGate(repoPath, time, async () => {
-            if (!detached) {
-                var (tip, checkedOut) = await ReadLocalBranchUngatedAsync(repoPath, branch);
-                if (tip != start.LocalBranchSha) throw StartChanged($"{branch} is at {tip ?? "nothing"}, not {start.LocalBranchSha ?? "nothing"}");
-                if (checkedOut) throw StartChanged($"{branch} is checked out in another worktree");
-            }
+        try {
+            await WithWorktreeMetadataGate(repoPath, time, async () => {
+                if (!detached) {
+                    var (tip, checkedOut) = await ReadLocalBranchUngatedAsync(repoPath, branch);
+                    if (tip != start.LocalBranchSha) throw StartChanged($"{branch} is at {tip ?? "nothing"}, not {start.LocalBranchSha ?? "nothing"}");
+                    if (checkedOut) throw StartChanged($"{branch} is checked out in another worktree");
+                }
 
-            await RunGit(repoPath, GitTimeout, time, "update-ref", fetchedRef, start.Sha);
+                await RunGit(repoPath, GitTimeout, time, "update-ref", fetchedRef, start.Sha);
 
-            switch (start.Checkout) {
-                case HandoffCheckout.CreateBranch:
-                    await RunGit(repoPath, GitTimeout, time, noHooks, "worktree", "add", "--no-checkout", "-b", branch, worktreePath, start.Sha);
-                    break;
-                case HandoffCheckout.FastForwardBranch:
-                    var moved = await RunGitCaptureResult(repoPath, GitTimeout, time, false, [],
-                        "update-ref", $"refs/heads/{branch}", start.Sha, start.LocalBranchSha!);
-                    if (moved.ExitCode != 0) throw StartChanged($"{branch} moved before it could be fast-forwarded");
-                    await RunGit(repoPath, GitTimeout, time, noHooks, "worktree", "add", "--no-checkout", worktreePath, branch);
-                    break;
-                case HandoffCheckout.CheckoutBranch:
-                    await RunGit(repoPath, GitTimeout, time, noHooks, "worktree", "add", "--no-checkout", worktreePath, branch);
-                    break;
-                default:
-                    await RunGit(repoPath, GitTimeout, time, noHooks, "worktree", "add", "--no-checkout", "--detach", worktreePath, start.Sha);
-                    break;
-            }
-        });
-
-        if (!created.OwnsBranch) MarkBranchNotOwned(worktreePath);
+                switch (start.Checkout) {
+                    case HandoffCheckout.CreateBranch:
+                        await RunGit(repoPath, GitTimeout, time, noHooks, "worktree", "add", "--no-checkout", "-b", branch, worktreePath, start.Sha);
+                        break;
+                    case HandoffCheckout.FastForwardBranch:
+                        var moved = await RunGitCaptureResult(repoPath, GitTimeout, time, false, [],
+                            "update-ref", $"refs/heads/{branch}", start.Sha, start.LocalBranchSha!);
+                        if (moved.ExitCode != 0) throw StartChanged($"{branch} moved before it could be fast-forwarded");
+                        await RunGit(repoPath, GitTimeout, time, noHooks, "worktree", "add", "--no-checkout", worktreePath, branch);
+                        break;
+                    case HandoffCheckout.CheckoutBranch:
+                        await RunGit(repoPath, GitTimeout, time, noHooks, "worktree", "add", "--no-checkout", worktreePath, branch);
+                        break;
+                    default:
+                        await RunGit(repoPath, GitTimeout, time, noHooks, "worktree", "add", "--no-checkout", "--detach", worktreePath, start.Sha);
+                        break;
+                }
+            });
+        } catch {
+            await RunGitBestEffort(repoPath, time, "update-ref", "-d", fetchedRef);
+            throw;
+        }
 
         await StripOrRollBackAsync(created);
 
@@ -172,15 +179,13 @@ public partial class WorktreeManager {
 
     /// <summary>Checks the session's commits against the starting point. <paramref name="sessionCommits"/>
     /// null means they are unknown; <paramref name="mayHaveUnpushedWork"/> means the session may have left
-    /// work that no commit list can show. A missing commit outranks either uncertainty.</summary>
+    /// work that no commit list can show. A missing or reverted commit outranks either uncertainty.</summary>
     public async Task<HandoffWork> CheckHandoffWorkAsync(
             string repoPath, string startSha, IReadOnlyList<string>? sessionCommits, bool mayHaveUnpushedWork) {
         var missing = new List<string>();
 
         foreach (var commit in sessionCommits ?? []) {
-            var reachable = IsFullSha(commit)
-                && (await RunGitCaptureResult(repoPath, GitTimeout, time, true, [], "merge-base", "--is-ancestor", commit, startSha)).ExitCode == 0;
-            if (!reachable) missing.Add(commit);
+            if (!IsFullSha(commit) || !await IsPresentAsync(commit)) missing.Add(commit);
         }
 
         var completeness = missing.Count > 0                            ? HandoffCompleteness.PartlyMissing
@@ -188,6 +193,17 @@ public partial class WorktreeManager {
                          :                                                  HandoffCompleteness.Complete;
 
         return new(completeness, missing);
+
+        // Reachable is not enough: a later `git revert` of the commit takes its change back out.
+        async Task<bool> IsPresentAsync(string commit) {
+            var ancestor = await RunGitCaptureResult(repoPath, GitTimeout, time, true, [], "merge-base", "--is-ancestor", commit, startSha);
+            if (ancestor.ExitCode != 0) return false;
+
+            var reverts = await RunGitCaptureResult(repoPath, GitTimeout, time, true, [],
+                "rev-list", "--count", "--fixed-strings", $"--grep=This reverts commit {commit}", $"{commit}..{startSha}");
+
+            return reverts.ExitCode == 0 && reverts.Stdout.Trim() == "0";
+        }
     }
 
     static bool IsFullSha(string value) => value.Length is 40 or 64 && value.All(char.IsAsciiHexDigitLower);

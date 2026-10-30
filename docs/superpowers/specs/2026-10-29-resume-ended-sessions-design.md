@@ -158,7 +158,11 @@ normal live composer.
 daemon owns the **directory**; it owns a **branch** only if it created one. A pre-existing branch is
 never deleted, by normal completion, a failed start, creation rollback or daemon recovery: branch
 ownership is recorded separately from directory ownership in the worktree record and the resume
-ledger. When there is no local checkout of the repository, Hand off is disabled with that reason.
+ledger. After a daemon restart, a left-behind worktree's ownership is decided by its branch name
+alone (only `capacitor/<worktree>` is the daemon's), so a crash mid-creation cannot leave a user's
+branch looking owned. The orphan sweep unregisters a left-behind worktree with `git worktree remove`
+before deleting its directory, and keeps the directory when git refuses for a branch the daemon does
+not own. When there is no local checkout of the repository, Hand off is disabled with that reason.
 *My call.*
 
 **Resolving the starting code (before launch).** When the strip opens, the app asks the local
@@ -192,7 +196,8 @@ so what the user saw is what launches:
      the default branch's fetched SHA, **no branch is created**: the agent creates one if the work
      needs it, so a hand-off with no code changes leaves nothing behind.
 - **Completeness**: whether the ended session's work is all in the starting code. When the server
-  knows the commits the session made, the daemon checks they are reachable from the starting SHA.
+  knows the commits the session made, the daemon checks they are reachable from the starting SHA and
+  not taken back out by a later `git revert` of them.
   The strip and the prompt say one of: the work is there; part of it is missing (named commits); or
   **it can't be confirmed** — always the case when the session may have left unpushed commits or
   uncommitted edits, including after a linked PR merged. Only the first is presented as complete.
@@ -230,7 +235,9 @@ session**. A resume launch takes it when admitted, before consent and startup, a
 session is active again or the resume ends (denied, cancelled, failed startup), when it is released.
 A takeover takes it atomically with the `Ended` check and the "continued by <new session>" record,
 and holds it while it writes. Each refuses while the other holds it, so neither ordering
-interleaves. If the source has become active, the takeover is refused and reported; the new agent
+interleaves. The reservation is a lease bound to the holder: it is released when the holding daemon's
+connection to the server drops, and expires if the holder stops renewing it, so a crashed holder
+never blocks the source for good. If the source has become active, the takeover is refused and reported; the new agent
 keeps running with the context it was given.
 
 The takeover **outcome** is recorded against the new session and shown in its view, surviving
@@ -312,6 +319,8 @@ launcher's placeholder-and-open flow (`AddPlaceholder` → `OpenSessionIfCurrent
   repository is selected.
 - Hand off where the source is resumed elsewhere after the strip opened: the takeover is refused and
   reported, the source keeps its work items.
+- A holder that crashes after taking the reservation: the reservation is released when its daemon
+  disconnects, and a later Resume or Hand off of the source is admitted.
 - The reverse order: a Resume admitted and paused at consent, then a hand-off's takeover from
   another machine: the takeover is refused. Denying the consent releases the reservation and a
   retried takeover succeeds.

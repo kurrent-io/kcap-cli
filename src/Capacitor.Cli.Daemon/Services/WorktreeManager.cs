@@ -1784,8 +1784,9 @@ public partial class WorktreeManager(
                 continue;
             }
 
+            if (!await UnregisterLeftWorktreeAsync(dir)) continue;
+
             LogCleaningUp(dir);
-            await UnregisterNotOwnedAsync(dir);
             try { if (Directory.Exists(dir)) DeleteTreeNoFollow(dir); } catch (Exception ex) { LogCleanupFailed(ex, dir); }
         }
     }
@@ -1822,32 +1823,37 @@ public partial class WorktreeManager(
         if (common.ExitCode != 0 || Path.GetDirectoryName(common.Stdout.Trim().TrimEnd('/', '\\')) is not { Length: > 0 } source)
             return null;
 
-        return new WorktreeInfo(dir, branch.ExitCode == 0 ? branch.Stdout.Trim() : "", source,
-            FetchedRef: FetchedRefFor(Path.GetFileName(dir))) { OwnsBranch = !IsBranchNotOwned(dir) };
+        // Only a branch named after its worktree is one the daemon created; deciding by name needs no
+        // record that a daemon dying mid-creation could fail to write.
+        var current = branch.ExitCode == 0 ? branch.Stdout.Trim() : "";
+
+        return new WorktreeInfo(dir, current, source, FetchedRef: FetchedRefFor(Path.GetFileName(dir))) {
+            OwnsBranch = current == $"capacitor/{Path.GetFileName(dir)}",
+        };
     }
 
-    const string BranchNotOwnedFile = "kcap-branch-not-owned";
-
-    /// <summary>Records, in the worktree's own git dir, that its branch existed before it, so the orphan
-    /// sweep can tell after a restart.</summary>
-    static void MarkBranchNotOwned(string worktreePath) {
-        if (GitDirOf(worktreePath) is { } gitDir) File.WriteAllText(Path.Combine(gitDir, BranchNotOwnedFile), "");
-    }
-
-    static bool IsBranchNotOwned(string worktreePath) =>
-        GitDirOf(worktreePath) is { } gitDir && File.Exists(Path.Combine(gitDir, BranchNotOwnedFile));
-
-    /// <summary>Unregisters a left-behind worktree whose branch is not the daemon's. Deleting only the
-    /// directory would leave git holding that branch as checked out there. A removal of this one
-    /// worktree, not a prune.</summary>
-    async Task UnregisterNotOwnedAsync(string dir) {
+    /// <summary>Unregisters a left-behind linked worktree before its directory is deleted, so git does not
+    /// keep its branch checked out there. A removal of this one worktree, not a prune. False when git
+    /// refused for a branch the daemon does not own: the directory must then stay.</summary>
+    async Task<bool> UnregisterLeftWorktreeAsync(string dir) {
         try {
-            if (!IsBranchNotOwned(dir) || await LeftWorktreeAsync(dir) is not { } worktree) return;
+            if (!File.Exists(Path.Combine(dir, ".git")) || await LeftWorktreeAsync(dir) is not { } worktree) return true;
 
-            await WithWorktreeMetadataGate(worktree.SourceRepo, time, () =>
-                RunGitBestEffort(worktree.SourceRepo, time, "worktree", "remove", "--force", dir));
-        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) {
-            LogCleanupFailed(ex, dir);
+            var removed = false;
+            await WithWorktreeMetadataGate(worktree.SourceRepo, time, async () =>
+                removed = (await RunGitCaptureResult(worktree.SourceRepo, GitTimeout, time, false, [],
+                    "worktree", "remove", "--force", dir)).ExitCode == 0);
+
+            if (removed || worktree.OwnsBranch) return true;
+
+            LogOrphanKept(dir, $"git would not unregister it, and its branch {worktree.Branch} is not the daemon's");
+
+            return false;
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException
+                                       or GitConfigTransportException or Win32Exception) {
+            LogOrphanCheckFailed(ex, dir);
+
+            return false;
         }
     }
 

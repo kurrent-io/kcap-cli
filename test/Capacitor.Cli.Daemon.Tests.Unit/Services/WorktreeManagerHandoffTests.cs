@@ -326,6 +326,7 @@ public class WorktreeManagerHandoffTests {
 
         await Assert.That(Directory.Exists(Path.Combine(f.Clone.Path, ".capacitor", "worktrees", "handoff"))).IsFalse();
         await Assert.That(f.Clone.RevParse("refs/heads/feature")).IsEqualTo(moved);
+        await Assert.That(f.Clone.Try("rev-parse", "--verify", "--quiet", WorktreeManager.FetchedRefFor("handoff")).ExitCode).IsNotEqualTo(0);
     }
 
     [Test]
@@ -487,5 +488,94 @@ public class WorktreeManagerHandoffTests {
         } finally {
             await WorktreeManager.RemoveAsync(tree, TimeProvider.System);
         }
+    }
+
+    static WorktreeManager SweepingManager(Fixture f, TempDir root) =>
+        new(new DaemonConfig { AllowedRepoPaths = [f.Clone.Path], WorktreeRoot = root.Path },
+            NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+
+    /// <summary>No marker or record of the hand-off is needed: a daemon that died right after
+    /// <c>worktree add</c> left nothing to say the branch was not its own.</summary>
+    [Test]
+    public async Task the_orphan_sweep_frees_a_user_branch_worktree_it_holds_no_record_of() {
+        using var f    = Fixture.Create();
+        using var root = new TempDir();
+        f.CommitOnOrigin("feature", "b.txt");
+        f.TrackLocally("feature");
+        var path = Path.Combine(f.Clone.Path, ".capacitor", "worktrees", "crashed");
+        f.Clone.Do("worktree", "add", "-q", path, "feature");
+
+        await SweepingManager(f, root).CleanupOrphanedAsync([]);
+
+        await Assert.That(Directory.Exists(path)).IsFalse();
+        await Assert.That(f.Clone.Try("checkout", "-q", "feature").ExitCode).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task the_orphan_sweep_keeps_a_user_branch_worktree_git_will_not_unregister() {
+        using var f    = Fixture.Create();
+        using var root = new TempDir();
+        f.CommitOnOrigin("feature", "b.txt");
+        f.TrackLocally("feature");
+        var path = Path.Combine(f.Clone.Path, ".capacitor", "worktrees", "locked");
+        f.Clone.Do("worktree", "add", "-q", path, "feature");
+        f.Clone.Do("worktree", "lock", path);
+
+        try {
+            await SweepingManager(f, root).CleanupOrphanedAsync([]);
+
+            await Assert.That(Directory.Exists(path)).IsTrue();
+        } finally {
+            f.Clone.Try("worktree", "unlock", path);
+            f.Clone.Try("worktree", "remove", "--force", path);
+        }
+    }
+
+    [Test]
+    public async Task the_orphan_sweep_unregisters_the_daemons_own_worktrees_too() {
+        using var f    = Fixture.Create();
+        using var root = new TempDir();
+        var manager = SweepingManager(f, root);
+        var owned   = await manager.CreateAsync(f.Clone, name: "owned");
+
+        await manager.CleanupOrphanedAsync([]);
+
+        await Assert.That(Directory.Exists(owned.Path)).IsFalse();
+        await Assert.That(f.Clone.Do("worktree", "list", "--porcelain").Text).DoesNotContain("owned");
+    }
+
+    [Test]
+    public async Task a_cancelled_fork_resolution_fetches_nothing() {
+        using var f = Fixture.Create();
+        f.Upstream.Do("update-ref", "refs/pull/9/head", f.CommitOnOrigin("fork-work", "fork.txt"));
+
+        await Assert.That(async () => await Manager().ResolveHandoffStartAsync(
+                f.Clone, new HandoffTarget("fork-work", 9, HeadIsFork: true), new CancellationToken(canceled: true)))
+            .Throws<OperationCanceledException>();
+        await Assert.That(f.Clone.Try("rev-parse", "--verify", "--quiet", "refs/kcap/handoff/pull-9").ExitCode).IsNotEqualTo(0);
+    }
+
+    [Test]
+    public async Task a_fork_target_without_a_pull_request_number_is_refused() {
+        using var f = Fixture.Create();
+
+        await Assert.That(async () => await Manager().ResolveHandoffStartAsync(
+                f.Clone, new HandoffTarget("fork-work", null, HeadIsFork: true), CancellationToken.None))
+            .Throws<InvalidOperationException>().WithMessageMatching("invalid_handoff_target:*");
+    }
+
+    [Test]
+    public async Task a_reverted_session_commit_is_missing_though_reachable() {
+        using var f      = Fixture.Create();
+        var       commit = f.CommitOnOrigin("feature", "b.txt");
+        f.Upstream.Checkout("feature");
+        f.Upstream.Do("revert", "--no-edit", commit);
+        f.Upstream.Checkout(f.Default);
+        var start = await ResolveAsync(f, new HandoffTarget("feature", null, false));
+
+        var work = await CheckAsync(f, start.Sha, [commit]);
+
+        await Assert.That(work.Completeness).IsEqualTo(HandoffCompleteness.PartlyMissing);
+        await Assert.That(work.MissingCommits).IsEquivalentTo([commit]);
     }
 }
