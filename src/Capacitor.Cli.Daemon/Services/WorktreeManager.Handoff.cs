@@ -140,10 +140,15 @@ public partial class WorktreeManager {
                         await RunGit(repoPath, GitTimeout, time, noHooks, "worktree", "add", "--no-checkout", "-b", branch, worktreePath, start.Sha);
                         break;
                     case HandoffCheckout.FastForwardBranch:
+                        // Registered on the branch first: git then refuses any other checkout of it, which
+                        // the gate cannot do for the user's own git, so the fast-forward moves no tree but ours.
+                        await RunGit(repoPath, GitTimeout, time, noHooks, "worktree", "add", "--no-checkout", worktreePath, branch);
                         var moved = await RunGitCaptureResult(repoPath, GitTimeout, time, false, [],
                             "update-ref", $"refs/heads/{branch}", start.Sha, start.LocalBranchSha!);
-                        if (moved.ExitCode != 0) throw StartChanged($"{branch} moved before it could be fast-forwarded");
-                        await RunGit(repoPath, GitTimeout, time, noHooks, "worktree", "add", "--no-checkout", worktreePath, branch);
+                        if (moved.ExitCode != 0) {
+                            await RunGitBestEffort(repoPath, time, "worktree", "remove", "--force", worktreePath);
+                            throw StartChanged($"{branch} moved before it could be fast-forwarded");
+                        }
                         break;
                     case HandoffCheckout.CheckoutBranch:
                         await RunGit(repoPath, GitTimeout, time, noHooks, "worktree", "add", "--no-checkout", worktreePath, branch);
