@@ -47,14 +47,20 @@ sealed class FakeServerSessionsService : IServerSessionsService, IDisposable {
     /// When set, PinAsync answers once the test completes it rather than with PinResult.
     public TaskCompletionSource<PinOutcome>? PinGate;
 
+    int _pinRequest;
+
+    /// A later PinAsync or an Unpin supersedes one still waiting on its gate, as the real service does.
     public async Task<PinOutcome> PinAsync(string sessionId, PinPresentation presentation, CancellationToken ct) {
         PinCalls.Add((sessionId, presentation));
+        var request = ++_pinRequest;
         var result = PinGate is { } gate ? await gate.Task : PinResult;
+        if (request != _pinRequest) return PinOutcome.Superseded;
         if (result == PinOutcome.Pinned) PinnedIdSubject.OnNext(sessionId);
         return result;
     }
 
     public void Unpin() {
+        _pinRequest++;
         UnpinCalls++;
         PinnedSubject.OnNext(null);
         PinnedIdSubject.OnNext(null);

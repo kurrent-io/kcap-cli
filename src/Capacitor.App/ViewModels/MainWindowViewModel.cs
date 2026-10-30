@@ -171,6 +171,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     readonly Func<string, RemoteSessionViewModel?>? _serverFactory;
     readonly IAgentDirectory? _directory;
     readonly IServerSessionsService? _sessions;
+    /// The session of the last pin search asked for; it may still be reading while nothing is held.
+    string? _searchPin;
     readonly IDisposable _onAppServer;
     /// A session id names a session only within one server: a hand-off to the server's row is
     /// sound only while the local daemon reports the app's server.
@@ -739,10 +741,12 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         Search?.CancelIntent();
     }
 
+    /// Unpin also supersedes a pin still reading, so it runs when only the request is outstanding.
     void ReleasePinUnless(string? sessionId) {
-        if (_sessions is not { PinnedSessionId: { } pinned } sessions) return;
+        if (_sessions is null || (_sessions.PinnedSessionId ?? _searchPin) is not { } pinned) return;
         if (sessionId is not null && SessionIds.SameSession(pinned, sessionId)) return;
-        sessions.Unpin();
+        _searchPin = null;
+        _sessions.Unpin();
     }
 
     string? SessionOfOpen() {
@@ -763,12 +767,14 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public async Task<SearchOpenOutcome> OpenSearchHitAsync(string sessionId, PinPresentation presentation, CancellationToken ct) {
         if (_directory is null) return SearchOpenOutcome.Failed;
         if (_directory.RowForSession(sessionId) is { } listed) {
+            _searchPin = sessionId;
             if (!Navigate(listed.Id, listed.Origin, sessionId)) return SearchOpenOutcome.Failed;
             // A failed pin only costs the session its exemption from the rail's filters later.
             _ = _sessions?.PinAsync(sessionId, presentation, CancellationToken.None);
             return SearchOpenOutcome.Opened;
         }
         if (_sessions is null) return SearchOpenOutcome.Failed;
+        _searchPin = sessionId;
         var pinned = await _sessions.PinAsync(sessionId, presentation, ct);
         switch (pinned) {
             case PinOutcome.Unauthorized: return SearchOpenOutcome.SignInRequired;
