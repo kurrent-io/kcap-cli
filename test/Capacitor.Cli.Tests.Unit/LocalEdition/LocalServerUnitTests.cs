@@ -13,7 +13,7 @@ public class LocalServerUnitTests {
 
     [Test]
     public async Task The_unit_runs_the_current_bundle_with_its_root_and_port() {
-        await Assert.That(Unit.ServerBinary).IsEqualTo(Tmp.PathTo("local", "bin", "current", "kcap-server"));
+        await Assert.That(Unit.ServerBinary).IsEqualTo(Tmp.PathTo("local", "bin", "current", OperatingSystem.IsWindows() ? "kcap-server.exe" : "kcap-server"));
         await Assert.That(Unit.Environment).Contains(new KeyValuePair<string, string>(LocalRoot.EnvVar, Tmp.PathTo("local")));
         await Assert.That(Unit.Environment).Contains(new KeyValuePair<string, string>("Local__Port", "51234"));
         await Assert.That(Unit.BaseUrl).IsEqualTo("http://localhost:51234");

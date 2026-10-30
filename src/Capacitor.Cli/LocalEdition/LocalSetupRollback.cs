@@ -74,13 +74,8 @@ static class LocalSetupRollback {
         }
     }
 
-    // Directory.Delete removes a symlink, at the top or anywhere in the tree, without following it.
     static void Delete(string path) {
-        if (new DirectoryInfo(path).LinkTarget is not null || File.Exists(path)) File.Delete(path);
-        else if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
-        else return;
-
-        FaultPoints.Hit($"unlink:{path}");
+        if (LocalTree.Remove(path)) FaultPoints.Hit($"unlink:{path}");
     }
 
     static LocalInstallFailure Stopped(string message) => new(LocalInstallFailureCode.RecoveryFailed, message);
