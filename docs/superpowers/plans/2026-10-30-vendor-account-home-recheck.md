@@ -271,6 +271,11 @@ kcap-server#2849)
       probed once.
     - `A_removed_account_is_not_probed_by_the_tick`.
     - `Dispose_stops_the_tick`.
+    - `Periodic_work_keeps_the_refresher_busy_until_drained`:
+      - With `BeforePeriodicCheck` holding a check, `IsIdle` is false, both while a second entry waits
+        queued and while the first runs.
+      - A waiter on `WaitForAsync(() => refresher.IsIdle)` wakes once the hold is released and the entries
+        drain, including one skipped because its id gained a deferred request while it waited.
     - `A_tick_stands_down_for_a_home_with_a_deferred_request`:
       - Work finished at minute 0, and `Request(Work)` at minute 1 is deferred to minute 10.
       - Advance to minute 12.
@@ -318,6 +323,11 @@ kcap-server#2849)
     It removes a null `_deferred` entry and calls `Request(id)` after leaving the lock, judging that
     request against the real `_lastFinished`.
   - For `(id, false)`, the consumer is today's code.
+  - `IsIdle` also requires `_periodicQueued.Count == 0`.
+  - These transitions call `_progress.Pulse()` so `WaitForAsync` waiters wake:
+    - a periodic entry is enqueued;
+    - a periodic entry is dequeued and skipped;
+    - a periodic check starts and finishes, whether due or not.
   - Update the class summary: start, then whenever due, then on request.
 - [ ] **Step 6: Run both test classes.** Expected: PASS.
 - [ ] **Step 7: Commit.** `Re-probe every account home once it is ten minutes stale (#2176)`
