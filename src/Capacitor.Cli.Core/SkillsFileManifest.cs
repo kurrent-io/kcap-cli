@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Capacitor.Cli.Core.Skills;
 
 namespace Capacitor.Cli.Core;
 
@@ -24,7 +25,7 @@ static class SkillsFileManifest {
                 files[Key(targetDir, file)] = JsonValue.Create(Hash(file));
         }
 
-        File.WriteAllText(Path.Combine(targetDir, FileName), new JsonObject { ["files"] = files }.ToJsonString());
+        AtomicFile.Replace(Path.Combine(targetDir, FileName), new JsonObject { ["files"] = files }.ToJsonString());
     }
 
     public static State Read(string targetDir, out IReadOnlyDictionary<string, string> files) {

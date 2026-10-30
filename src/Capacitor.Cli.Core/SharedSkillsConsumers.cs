@@ -1,6 +1,7 @@
 using System.Collections.Frozen;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Capacitor.Cli.Core.Skills;
 
 namespace Capacitor.Cli.Core;
 
@@ -55,7 +56,7 @@ public static class SharedSkillsConsumers {
 
         try {
             Directory.CreateDirectory(skillsDir);
-            File.WriteAllText(Path.Combine(skillsDir, FileName), new JsonObject { ["consumers"] = new JsonArray(entries) }.ToJsonString());
+            AtomicFile.Replace(Path.Combine(skillsDir, FileName), new JsonObject { ["consumers"] = new JsonArray(entries) }.ToJsonString());
 
             return true;
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
