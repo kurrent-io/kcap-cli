@@ -565,7 +565,7 @@ public class MuseHookCommandTests : IDisposable {
         elapsed.Stop();
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(elapsed.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
-        await Assert.That(new HookSpool(Config.Root, TimeProvider.System).HasBacklog(ParentDashless)).IsTrue();
+        await Assert.That(new HookSpool(Config.Root, TimeProvider.System, _server.Url).HasBacklog(ParentDashless)).IsTrue();
         await Assert.That(stdout.ToString().StartsWith("<!-- kcap-memory-index:v1 -->\n", StringComparison.Ordinal)).IsTrue();
     }
 

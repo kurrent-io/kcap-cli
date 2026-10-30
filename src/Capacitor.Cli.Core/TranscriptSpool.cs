@@ -8,22 +8,21 @@ namespace Capacitor.Cli.Core;
 /// outage. Unlike <see cref="HookSpool"/> (1 MB drop-oldest — acceptable for small lifecycle POSTs)
 /// this is bounded with NO SILENT DROP: on cap exhaustion it stops appending and writes a
 /// <c>needs-import</c> marker so the session is surfaced as requiring `kcap import` rather than
-/// truncated. Per-session JSONL of transcript batch JSON, one per line, arrival order.
-///
-/// <para>Moved to <c>Capacitor.Cli.Core</c> alongside <see cref="HookSpool"/> and
-/// <see cref="LifecycleSpoolDrain"/> so both the CLI and the daemon can share the ordered-drain
-/// primitives.</para>
+/// truncated. Per-session JSONL of transcript batch JSON, one per line, arrival order. Partitioned
+/// by server like <see cref="HookSpool"/>.
 /// </summary>
-public sealed partial class TranscriptSpool(string spoolDir, TimeProvider time, long capBytes = TranscriptSpool.DefaultCapBytes) {
+public sealed partial class TranscriptSpool(SpoolPartition partition, TimeProvider time, long capBytes = TranscriptSpool.DefaultCapBytes) {
     public const long DefaultCapBytes = 8_388_608; // 8 MB per session
 
     // Named here rather than on ConfigRoot, for the same reason as HookSpool's.
-    public const string DirName = "transcript-spool";
+    public const string DirectoryName = "transcript-spool";
 
-    /// <summary>The spool under a config root. The directory overload is for a spool that is not
-    /// under one — a test's own throwaway directory.</summary>
-    public TranscriptSpool(ConfigRoot config, TimeProvider time, long capBytes = DefaultCapBytes)
-        : this(config.Path(DirName), time, capBytes) { }
+    /// <summary>The spool under a config root. The directory overload is for a test's own throwaway directory.</summary>
+    public TranscriptSpool(ConfigRoot config, TimeProvider time, string? server, long capBytes = DefaultCapBytes)
+        : this(SpoolPartition.Server(config.Path(DirectoryName), server), time, capBytes) { }
+
+    public TranscriptSpool(string dir, TimeProvider time, long capBytes = DefaultCapBytes)
+        : this(SpoolPartition.Standalone(dir), time, capBytes) { }
 
     /// <summary>Outcome of an <see cref="Append"/> call.</summary>
     public enum AppendResult {
@@ -37,20 +36,20 @@ public sealed partial class TranscriptSpool(string spoolDir, TimeProvider time, 
     static int seqCounter;
 
     /// <summary>The directory where spool files are stored.</summary>
-    internal string Dir => spoolDir;
+    internal string DirectoryPath => partition.DirectoryPath;
 
     string? LivePathFor(string sessionId) =>
-        SafeSessionId.IsMatch(sessionId) ? Path.Combine(spoolDir, $"{EncodeKey(sessionId)}.transcript.jsonl") : null;
+        SafeSessionId.IsMatch(sessionId) ? Path.Combine(DirectoryPath, $"{EncodeKey(sessionId)}.transcript.jsonl") : null;
 
     string? MarkerPathFor(string sessionId) =>
-        SafeSessionId.IsMatch(sessionId) ? Path.Combine(spoolDir, $"{EncodeKey(sessionId)}.needs-import") : null;
+        SafeSessionId.IsMatch(sessionId) ? Path.Combine(DirectoryPath, $"{EncodeKey(sessionId)}.needs-import") : null;
 
     /// <summary>With <paramref name="reserving"/>, refuses the batch unless that one still fits after it.</summary>
     public AppendResult Append(string sessionId, string batchJson, string? reserving = null) {
         var path = LivePathFor(sessionId);
         if (path is null) return AppendResult.Ignored; // malformed id — nothing we can key on
         try {
-            Directory.CreateDirectory(spoolDir);
+            Directory.CreateDirectory(DirectoryPath);
             var line = batchJson.Replace("\n", "").Replace("\r", "");
             var incoming = Encoding.UTF8.GetByteCount(line) + 1 + (reserving is null ? 0 : Encoding.UTF8.GetByteCount(reserving) + 1);
             var existing = File.Exists(path) ? new FileInfo(path).Length : 0;
@@ -79,7 +78,7 @@ public sealed partial class TranscriptSpool(string spoolDir, TimeProvider time, 
         var p = MarkerPathFor(sessionId);
         if (p is null) return false;
         try {
-            Directory.CreateDirectory(spoolDir);
+            Directory.CreateDirectory(DirectoryPath);
             File.WriteAllText(p, $"{time.GetUtcNow():O} {reason}\n");
             return true;
         } catch (Exception ex) {
@@ -92,8 +91,6 @@ public sealed partial class TranscriptSpool(string spoolDir, TimeProvider time, 
         var p = MarkerPathFor(sessionId);
         return p is not null && File.Exists(p);
     }
-
-    /// <summary>True if this session still has undelivered spool entries (live .jsonl or .draining temp).</summary>
 
     // ---- filename key encoding -------------------------------------------------------------
     //
@@ -136,18 +133,30 @@ public sealed partial class TranscriptSpool(string spoolDir, TimeProvider time, 
         return sb.ToString();
     }
 
-    public bool HasBacklog(string sessionId) =>
-        SafeSessionId.IsMatch(sessionId) && Directory.Exists(spoolDir)
-        && (File.Exists(Path.Combine(spoolDir, $"{EncodeKey(sessionId)}.transcript.jsonl"))
-            || Directory.EnumerateFiles(spoolDir, $"{EncodeKey(sessionId)}.*.transcript.draining").Any());
+    /// <summary>A live file that collides becomes a draining temp, which drains before the live file.</summary>
+    internal void AdoptLegacyFiles() =>
+        partition.AdoptLegacyFiles(name => name.EndsWith(".transcript.jsonl", StringComparison.Ordinal)
+            ? NewDrainingTempName(name[..^".transcript.jsonl".Length])
+            : null);
+
+    /// <summary>True if this session still has undelivered spool entries (live .jsonl or .draining temp).</summary>
+    public bool HasBacklog(string sessionId) {
+        if (!SafeSessionId.IsMatch(sessionId)) return false;
+
+        var key             = EncodeKey(sessionId);
+        var hasLiveFile     = partition.AnyFileMatches($"{key}.transcript.jsonl");
+        var hasDrainingTemp = partition.AnyFileMatches($"{key}.*.transcript.draining");
+
+        return hasLiveFile || hasDrainingTemp;
+    }
 
     /// <summary>Every distinct session id with a live .jsonl, a recovered .draining temp, or a
     /// needs-import marker (a marker can outlive its transcript file if a prior pass ran out of
     /// budget before delivering it, so it must still surface the session to the caller).</summary>
     public IEnumerable<string> SessionIdsWithBacklog() {
-        if (!Directory.Exists(spoolDir)) return [];
+        if (!Directory.Exists(DirectoryPath)) return [];
         var ids = new List<string>();
-        foreach (var f in Directory.EnumerateFiles(spoolDir)) {
+        foreach (var f in Directory.EnumerateFiles(DirectoryPath)) {
             var sid = SessionIdOf(f);
             if (sid is not null && !ids.Contains(sid)) ids.Add(sid);
         }
@@ -164,16 +173,16 @@ public sealed partial class TranscriptSpool(string spoolDir, TimeProvider time, 
 
     public async Task DrainAsync(string sessionId, Func<string, Task<DrainOutcome>> poster, Func<bool> expired, CancellationToken ct) {
         var live = LivePathFor(sessionId);
-        if (live is null || !Directory.Exists(spoolDir)) return;
+        if (live is null || !Directory.Exists(DirectoryPath)) return;
 
-        foreach (var temp in Directory.EnumerateFiles(spoolDir, $"{EncodeKey(sessionId)}.*.transcript.draining").OrderBy(File.GetCreationTimeUtc)) {
+        foreach (var temp in Directory.EnumerateFiles(DirectoryPath, $"{EncodeKey(sessionId)}.*.transcript.draining").OrderBy(File.GetCreationTimeUtc)) {
             if (expired() || ct.IsCancellationRequested) return;
             if (await DrainFileAsync(temp, poster, expired, ct)) return; // transient → stop, keep remainder
         }
 
         if (!File.Exists(live) || expired() || ct.IsCancellationRequested) return;
 
-        var rotated = Path.Combine(spoolDir, $"{EncodeKey(sessionId)}.{Environment.ProcessId}-{Interlocked.Increment(ref seqCounter)}.transcript.draining");
+        var rotated = Path.Combine(DirectoryPath, NewDrainingTempName(EncodeKey(sessionId)));
         try { File.Move(live, rotated); }
         catch { return; } // lost the atomic-rename race (or vanished) — the winner handles it
         await DrainFileAsync(rotated, poster, expired, ct);
@@ -199,22 +208,22 @@ public sealed partial class TranscriptSpool(string spoolDir, TimeProvider time, 
         }
 
         if (i >= lines.Length) {
-            try { File.Delete(path); } catch { }
+            try {
+                File.Delete(path);
+            } catch {
+                // Ignore: a leftover temp drains again on the next pass
+            }
             return false;
         }
-        try { await File.WriteAllLinesAsync(path, lines.Skip(i), ct); } catch { }
+        try {
+            await File.WriteAllLinesAsync(path, lines.Skip(i), ct);
+        } catch {
+            // Ignore: the temp still holds the remainder
+        }
         return true;
     }
 
-    public void ReapOlderThan(TimeSpan age) {
-        try {
-            if (!Directory.Exists(spoolDir)) return;
-            var cutoff = (time.GetUtcNow() - age).UtcDateTime;
-            foreach (var file in Directory.EnumerateFiles(spoolDir)) {
-                try { if (File.GetLastWriteTimeUtc(file) < cutoff) File.Delete(file); } catch { }
-            }
-        } catch { }
-    }
+    public void DeleteExpired() => partition.DeleteExpired(time);
 
     // Filename-safe superset of the old dashless-GUID form. The filename IS the session id --
     // LifecycleSpoolDrain posts it verbatim as session_id for session-needs-import -- so the key may
@@ -222,6 +231,8 @@ public sealed partial class TranscriptSpool(string spoolDir, TimeProvider time, 
     // and '\\', preserving both the path-traversal property and the parse-before-first-dot split.
     // Vendors such as OpenCode use ids like "ses_7f3a9c21b8", which the old form silently dropped.
     /// <summary>The pre-upgrade key space: a dashless GUID, case-insensitively one id.</summary>
+    static string NewDrainingTempName(string key) => $"{key}.{Environment.ProcessId}-{Interlocked.Increment(ref seqCounter)}.transcript.draining";
+
     [GeneratedRegex("^[0-9a-fA-F]{32}$", RegexOptions.Compiled)]
     private static partial Regex LegacyGuidKeyRegex();
 

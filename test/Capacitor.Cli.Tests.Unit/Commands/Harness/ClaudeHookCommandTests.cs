@@ -91,7 +91,7 @@ public class ClaudeHookCommandTests {
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(stdout.ToString()).Contains("\"permissionDecision\":\"deny\"");
         // Spool-first: the decision is a local line, and nothing reached the network.
-        await Assert.That(new HookSpool(Config.Root, time: TimeProvider.System).HasBacklog(Sid)).IsTrue();
+        await Assert.That(new HookSpool(Config.Root, TimeProvider.System, fx.Profiles.Resolution.ServerUrl).HasBacklog(Sid)).IsTrue();
         await Assert.That(fx.ServerRequestCount).IsEqualTo(0);
         await Assert.That(fx.RouteOrder).IsEmpty();
     }

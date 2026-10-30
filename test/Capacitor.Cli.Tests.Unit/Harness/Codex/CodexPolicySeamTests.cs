@@ -37,7 +37,7 @@ public class CodexPolicySeamTests : IDisposable {
 
     static readonly TimeSpan Ample = TimeSpan.FromSeconds(30);
 
-    CodexPolicySeam Seam => new(Config.Root, TimeProvider.System, new PolicyJudgeGateway(
+    CodexPolicySeam Seam => new(Config.Root, TimeProvider.System, new HookSpool(Config.Root, TimeProvider.System, server: null), new PolicyJudgeGateway(
         () => Task.FromResult(new AuthAttempt(new HttpClient(), AuthStatus.NoAuthRequired)), _server.Url, TimeProvider.System));
 
     void WritePolicy(string yaml = Policy) => File.WriteAllText(Config.Root.Path("approvals.yaml"), yaml);

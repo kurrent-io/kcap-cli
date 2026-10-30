@@ -1,10 +1,12 @@
 using System.Text.Json.Nodes;
+using TUnit.Assertions.Enums;
 
 namespace Capacitor.Cli.Core.Tests.Unit;
 
 public class HookSpoolTests {
     const string SidA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const string SidB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const string SidC = "cccccccccccccccccccccccccccccccc";
 
     /// <summary>The one classification every live post and drain poster shares. A 401 is retryable
     /// because <c>kcap login</c> repairs it; a 4xx that rejects the payload itself is not, since a
@@ -22,6 +24,52 @@ public class HookSpoolTests {
     public async Task retryable_statuses_stop_the_drain_and_the_rest_drop(int status, bool retryable) {
         await Assert.That(HookSpool.IsRetryable(status)).IsEqualTo(retryable);
         await Assert.That(HookSpool.OutcomeOf(status)).IsEqualTo(retryable ? DrainOutcome.TransientStop : DrainOutcome.Drop);
+    }
+
+    /// <summary>Either drain sends only what was spooled for its own server, from either spool and
+    /// however that server's URL is spelled. What an older build left unpartitioned in the root goes
+    /// to whichever server drains first.</summary>
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task a_drain_sends_only_what_was_spooled_for_its_own_server(bool ordered) {
+        using var config = new TempConfigRoot();
+        const string local = "http://localhost:7248";
+        new HookSpool(config.Root, TimeProvider.System, local).Append(SidA, "session-start", """{"n":"local"}""");
+        new TranscriptSpool(config.Root, TimeProvider.System, local).Append(SidC, """{"n":"local-tail"}""");
+        new HookSpool(config.Root.Path(HookSpool.DirectoryName), TimeProvider.System).Append(SidB, "session-start", """{"n":"legacy"}""");
+
+        async Task<List<string>> DrainAs(string server) {
+            var seen = new List<string>();
+            Task<DrainOutcome> Post(string body) { seen.Add(body); return Task.FromResult(DrainOutcome.Delivered); }
+            var spool = new HookSpool(config.Root, TimeProvider.System, server);
+            if (ordered)
+                await LifecycleSpoolDrain.RunAsync(spool, new TranscriptSpool(config.Root, TimeProvider.System, server),
+                    currentSessionId: null, (_, body) => Post(body), Post, TimeSpan.FromSeconds(5), TimeProvider.System, CancellationToken.None);
+            else
+                await spool.DrainAllAsync(null, (_, body) => Post(body), TimeSpan.FromSeconds(5), CancellationToken.None);
+            return seen;
+        }
+
+        await Assert.That(await DrainAs("https://kurrent.kcap.ai")).IsEquivalentTo(["""{"n":"legacy"}"""]);
+        await Assert.That(await DrainAs("http://LOCALHOST:7248/")).Contains("""{"n":"local"}""");
+    }
+
+    /// <summary>A session spooled both before and after the upgrade has a file of the same name in the root
+    /// and in the partition. The route-agnostic drain must still deliver both, the older one first.</summary>
+    [Test]
+    public async Task a_colliding_unpartitioned_file_drains_before_the_partition_one() {
+        using var config = new TempConfigRoot();
+        const string server = "https://kurrent.kcap.ai";
+        new HookSpool(config.Root.Path(HookSpool.DirectoryName), TimeProvider.System).Append(SidA, "session-start", """{"n":"legacy"}""");
+        var spool = new HookSpool(config.Root, TimeProvider.System, server);
+        spool.Append(SidA, "user-prompt", """{"n":"partitioned"}""");
+
+        var seen = new List<string>();
+        await spool.DrainAllAsync(null, (_, body) => { seen.Add(body); return Task.FromResult(DrainOutcome.Delivered); },
+            TimeSpan.FromSeconds(5), CancellationToken.None);
+
+        await Assert.That(seen).IsEquivalentTo(["""{"n":"legacy"}""", """{"n":"partitioned"}"""], CollectionOrdering.Matching);
     }
 
     [Test]
@@ -145,6 +193,18 @@ public class HookSpoolTests {
             .IsEqualTo("{\"route\":\"session-end\",\"body\":\"withheld\"}\n");
     }
 
+    /// <summary>A session-start an older build spooled to the root is still undelivered until a drain
+    /// adopts it, so a later session-end posted directly would reach the server first.</summary>
+    [Test]
+    public async Task HasBacklog_sees_an_unpartitioned_file_no_drain_has_adopted_yet() {
+        using var config = new TempConfigRoot();
+        new HookSpool(config.Root.Path(HookSpool.DirectoryName), TimeProvider.System).Append(SidA, "session-start", "{}");
+        new TranscriptSpool(config.Root.Path(TranscriptSpool.DirectoryName), TimeProvider.System).Append(SidA, "{}");
+
+        await Assert.That(new HookSpool(config.Root, TimeProvider.System, "https://kurrent.kcap.ai").HasBacklog(SidA)).IsTrue();
+        await Assert.That(new TranscriptSpool(config.Root, TimeProvider.System, "https://kurrent.kcap.ai").HasBacklog(SidA)).IsTrue();
+    }
+
     [Test]
     public async Task HasBacklog_sees_an_ordered_drain_temp_even_though_DrainAllAsync_ignores_it() {
         using var tmp = new TempDir();
@@ -164,7 +224,7 @@ public class HookSpoolTests {
         var f = tmp.PathTo($"{SidA}.jsonl");
         await File.WriteAllTextAsync(f, "{\"route\":\"x\",\"body\":\"y\"}\n");
         File.SetLastWriteTimeUtc(f, DateTime.UtcNow.AddDays(-40));
-        new HookSpool(tmp.Path, time: TimeProvider.System).ReapOlderThan(TimeSpan.FromDays(30));
+        new HookSpool(tmp.Path, time: TimeProvider.System).DeleteExpired();
         await Assert.That(File.Exists(f)).IsFalse();
     }
 

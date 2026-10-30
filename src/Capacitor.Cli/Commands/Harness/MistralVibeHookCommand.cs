@@ -122,7 +122,7 @@ sealed class MistralVibeHookCommand(
             return;
         }
 
-        var spool   = new HookSpool(config, clock.Time);
+        var spool   = new HookSpool(config, clock.Time, Url);
         var outcome = await _poster.PostOrSpoolAsync("session-start/mistral-vibe", enriched, "mistral-vibe-hook",
             spool, sessionId, route: "session-start/mistral-vibe");
 

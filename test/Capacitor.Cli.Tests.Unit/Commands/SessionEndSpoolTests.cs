@@ -14,7 +14,7 @@ public class SessionEndSpoolTests {
 
     [Test]
     public async Task Only_a_session_recorded_against_this_server_is_queued() {
-        var spool = new HookSpool(Config.Root, TimeProvider.System);
+        var spool = new HookSpool(Config.Root, TimeProvider.System, server: null);
 
         var queued = AgentHookPoster.SpoolEnds(
             [Exited("here"), Exited("slash", server: "https://KCAP.example/"), Exited("elsewhere", server: "https://other.example"),
@@ -31,7 +31,7 @@ public class SessionEndSpoolTests {
 
     [Test]
     public async Task The_end_is_a_parent_exited_session_end_for_the_vendor() {
-        var spool = new HookSpool(Config.Root, TimeProvider.System);
+        var spool = new HookSpool(Config.Root, TimeProvider.System, server: null);
         AgentHookPoster.SpoolEnds([Exited("here", vendor: "codex")], "https://kcap.example", spool, TimeProvider.System);
 
         string? route = null, body = null;
@@ -51,7 +51,7 @@ public class SessionEndSpoolTests {
     /// next end unseen.
     [Test]
     public async Task A_resumed_sessions_earlier_end_does_not_swallow_this_one() {
-        var spool = new HookSpool(Config.Root, TimeProvider.System);
+        var spool = new HookSpool(Config.Root, TimeProvider.System, server: null);
         spool.MarkEnded("here");
 
         AgentHookPoster.SpoolEnds([Exited("here")], "https://kcap.example", spool, TimeProvider.System);
@@ -64,7 +64,7 @@ public class SessionEndSpoolTests {
     /// would have, so only the new end is delivered.
     [Test]
     public async Task A_straggler_of_the_earlier_end_is_discarded_not_delivered() {
-        var spool = new HookSpool(Config.Root, TimeProvider.System);
+        var spool = new HookSpool(Config.Root, TimeProvider.System, server: null);
         spool.MarkEnded("here");
         spool.Append("here", "subagent-stop/claude", "{}");
 
@@ -77,12 +77,12 @@ public class SessionEndSpoolTests {
 
     [Test]
     public async Task Nothing_is_queued_without_a_server_to_post_to() =>
-        await Assert.That(AgentHookPoster.SpoolEnds([Exited("here")], null, new HookSpool(Config.Root, TimeProvider.System), TimeProvider.System))
+        await Assert.That(AgentHookPoster.SpoolEnds([Exited("here")], null, new HookSpool(Config.Root, TimeProvider.System, server: null), TimeProvider.System))
             .IsEqualTo(0);
 
     [Test]
     public async Task A_session_whose_end_the_fence_holds_is_not_queued() {
-        var spool  = new HookSpool(Config.Root, TimeProvider.System);
+        var spool  = new HookSpool(Config.Root, TimeProvider.System, server: null);
         var origin = new ClaimOrigin("claude", "https://kcap.example", "/t/x.jsonl", "/repo", AgentId: "agent-1", DaemonEpoch: "epoch-1");
 
         var queued = AgentHookPoster.SpoolEnds(

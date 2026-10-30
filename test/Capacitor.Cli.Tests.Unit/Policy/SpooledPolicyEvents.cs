@@ -11,9 +11,9 @@ using Capacitor.Cli.Core;
 /// these tests use; <see cref="HookSpool"/> escapes anything else.</remarks>
 static class SpooledPolicyEvents {
     /// <summary>The parsed bodies of a session's spooled entries for one route, in arrival order.</summary>
-    public static List<JsonNode> For(ConfigRoot config, string sessionId, string route) {
+    public static List<JsonNode> For(ConfigRoot config, string? server, string sessionId, string route) {
         var bodies = new List<JsonNode>();
-        var path = Path.Combine(config.Path("spool"), $"{sessionId}.jsonl");
+        var path = Path.Combine(new HookSpool(config, TimeProvider.System, server).DirectoryPath, $"{sessionId}.jsonl");
         if (!File.Exists(path)) return bodies;
 
         foreach (var line in File.ReadAllLines(path)) {
@@ -25,9 +25,9 @@ static class SpooledPolicyEvents {
         return bodies;
     }
 
-    public static List<JsonNode> Decisions(ConfigRoot config, string sessionId) =>
-        For(config, sessionId, "policy-decision");
+    public static List<JsonNode> Decisions(ConfigRoot config, string sessionId, string? server = null) =>
+        For(config, server, sessionId, "policy-decision");
 
-    public static List<JsonNode> Snapshots(ConfigRoot config, string sessionId) =>
-        For(config, sessionId, "policy-snapshot");
+    public static List<JsonNode> Snapshots(ConfigRoot config, string sessionId, string? server = null) =>
+        For(config, server, sessionId, "policy-snapshot");
 }

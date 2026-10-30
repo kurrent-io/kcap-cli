@@ -1,5 +1,6 @@
 namespace Capacitor.Cli.Tests.Unit.Policy;
 
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.Policy;
 using WireMock.Server;
@@ -9,7 +10,7 @@ public class PolicyDecisionEmitterTests : IDisposable {
     readonly WireMockServer _server = WireMockServer.Start();
     public void Dispose() => _server.Stop();
 
-    PolicyDecisionEmitter Emitter => new(Config.Root, TimeProvider.System);
+    PolicyDecisionEmitter Emitter => new(Config.Root, new HookSpool(Config.Root, TimeProvider.System, server: null));
 
     /// <summary>Points the config's active profile at the stub server, so "no request reached it" is
     /// a live guard: any inline POST reintroduced here would resolve this URL and be logged.</summary>
@@ -46,8 +47,20 @@ public class PolicyDecisionEmitterTests : IDisposable {
         // The upload marker is what makes the second emit skip the snapshot, and its name is the
         // sanitized session key the session-end eviction matches by prefix.
         await Assert.That(SpooledPolicyEvents.Snapshots(Config.Root, "s1").Count).IsEqualTo(1);
+        var partition = Path.GetFileName(new HookSpool(Config.Root, TimeProvider.System, server: null).DirectoryPath);
         await Assert.That(Directory.EnumerateFiles(Config.Root.Path("policy", "uploaded"))
-            .Select(f => Path.GetFileName(f)!)).IsEquivalentTo(new[] { $"s1-{Snapshot.Id}" });
+            .Select(f => Path.GetFileName(f)!)).IsEquivalentTo(new[] { $"s1-{partition}-{Snapshot.Id}" });
+    }
+
+    /// <summary>A session that moves to another server mid-run spools there separately, and that
+    /// server cannot resolve a decision without its own copy of the snapshot.</summary>
+    [Test]
+    public async Task Each_server_gets_its_own_copy_of_the_snapshot() {
+        foreach (var server in new[] { "https://a.example", "https://b.example" })
+            await new PolicyDecisionEmitter(Config.Root, new HookSpool(Config.Root, TimeProvider.System, server)).EmitAsync(Event("s5"), Snapshot);
+
+        await Assert.That(SpooledPolicyEvents.Snapshots(Config.Root, "s5", "https://a.example").Count).IsEqualTo(1);
+        await Assert.That(SpooledPolicyEvents.Snapshots(Config.Root, "s5", "https://b.example").Count).IsEqualTo(1);
     }
 
     /// <summary>The marker is named by the same sanitized key the snapshot and journal files carry,
@@ -79,7 +92,7 @@ public class PolicyDecisionEmitterTests : IDisposable {
     [Test]
     public async Task Snapshot_is_spooled_ahead_of_the_decision_it_names() {
         await Emitter.EmitAsync(Event("s4"), Snapshot);
-        var routes = File.ReadAllLines(Path.Combine(Config.Root.Path("spool"), "s4.jsonl"))
+        var routes = File.ReadAllLines(Path.Combine(new HookSpool(Config.Root, TimeProvider.System, server: null).DirectoryPath, "s4.jsonl"))
             .Select(l => System.Text.Json.Nodes.JsonNode.Parse(l)!["route"]!.GetValue<string>())
             .ToList();
         await Assert.That(routes.Count).IsEqualTo(2);

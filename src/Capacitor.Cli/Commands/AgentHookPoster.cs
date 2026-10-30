@@ -259,14 +259,14 @@ internal sealed class AgentHookPoster(
     internal async Task DrainSpoolsCoreAsync(
             HookSpool lifecycle, TranscriptSpool transcript, string? sessionId,
             Func<CancellationToken, Task<AuthAttempt>> clientFactory) {
-        if (!TryClaimDrainAttempt(lifecycle.Dir)) return; // throttled — a recent attempt already ran
+        if (!TryClaimDrainAttempt(lifecycle.DirectoryPath)) return; // throttled — a recent attempt already ran
 
         // Retention runs even when delivery cannot: the reap lives here, and Program.cs skips this
         // whole call while the URL is unacceptable, so an indefinitely broken config would otherwise
         // never reap anything.
-        lifecycle.ReapOlderThan(TimeSpan.FromDays(30));
-        transcript.ReapOlderThan(TimeSpan.FromDays(30));
-        SessionCommits.ReapOlderThan(config, TimeSpan.FromDays(30), time);
+        lifecycle.DeleteExpired();
+        transcript.DeleteExpired();
+        SessionCommits.DeleteExpired(config, time);
         SpoolEnds(AgentSessions.OnThisMachine(config).ReapExited(Url), Url, lifecycle, time);
 
         // Distinct from the POST guards' diagnostic: a reader must be able to tell which guard fired,

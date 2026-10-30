@@ -65,8 +65,8 @@ public sealed class ClaudeHookCommand(
                 clock.Budget(Ceiling("session-start"))));
 
     public Task<int> Handle(TextReader stdin, TextWriter? stdout = null) {
-        var spool = new HookSpool(config, clock.Time);
-        spool.ReapOlderThan(TimeSpan.FromDays(30));
+        var spool = new HookSpool(config, clock.Time, Url);
+        spool.DeleteExpired();
 
         return HandleWithDeps(
             spool,
@@ -328,7 +328,7 @@ public sealed class ClaudeHookCommand(
 
                 var rendered = hosted.IsRendered;
 
-                return await new Cli.Harness.Claude.ClaudePolicySeam(config, clock.Time, PolicyJudgeGateway.ForHook(http, Url, clock.Time))
+                return await new Cli.Harness.Claude.ClaudePolicySeam(config, clock.Time, new HookSpool(config, clock.Time, Url), PolicyJudgeGateway.ForHook(http, Url, clock.Time))
                     .HandlePreToolUseAsync(body, sessionId, rendered, stdout ?? Console.Out, JudgeShare(budget));
             } catch { return 0; }
         }

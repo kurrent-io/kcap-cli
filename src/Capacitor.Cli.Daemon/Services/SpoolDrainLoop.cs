@@ -70,8 +70,8 @@ internal sealed class SpoolDrainLoop {
     /// </summary>
     public async Task TickAsync(CancellationToken ct) {
         try {
-            _lifecycle.ReapOlderThan(TimeSpan.FromDays(30));
-            _transcript.ReapOlderThan(TimeSpan.FromDays(30));
+            _lifecycle.DeleteExpired();
+            _transcript.DeleteExpired();
 
             // Resolved on the loop's own token, not the drain budget: a proactive refresh can take
             // the cross-process lock and a WorkOS round trip well past Budget, and cutting that off

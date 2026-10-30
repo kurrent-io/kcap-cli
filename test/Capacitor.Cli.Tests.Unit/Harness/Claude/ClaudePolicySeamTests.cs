@@ -1,6 +1,7 @@
 namespace Capacitor.Cli.Tests.Unit.Harness.Claude;
 
 using System.Text.Json.Nodes;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.Harness.Claude;
 using Capacitor.Cli.Tests.Unit.Policy;
@@ -11,7 +12,7 @@ public class ClaudePolicySeamTests {
 
     const string Sid = "9dc2775376454e4691ecc2d69973c152";
 
-    ClaudePolicySeam Seam => new(Config.Root, TimeProvider.System);
+    ClaudePolicySeam Seam => new(Config.Root, TimeProvider.System, new HookSpool(Config.Root, TimeProvider.System, server: null));
 
     string Body(string toolName, string toolInputJson, string? callId = null) {
         var repo = Tmp.PathTo("repo");
@@ -402,7 +403,7 @@ public class ClaudePolicySeamTests {
         WriteUserPolicy("version: 1\nrules:\n  - match: { kind: shell, command: \"git status *\" }\n    outcome: allow\n");
         new PolicyDecisionJournal(Config.Root).RecordAsk(Sid, null, HashOf("""{"command":"git status"}"""));
 
-        var seam = new ClaudePolicySeam(Config.Root, TimeProvider.System) {
+        var seam = new ClaudePolicySeam(Config.Root, TimeProvider.System, new HookSpool(Config.Root, TimeProvider.System, server: null)) {
             BeforeSnapshotLoadForTest = () => throw new InvalidOperationException("policy store unavailable"),
         };
         var stdout = new StringWriter();
@@ -433,7 +434,7 @@ public class ClaudePolicySeamTests {
     [Test]
     public async Task An_evaluation_error_without_a_pending_ask_records_nothing() {
         WriteUserPolicy("version: 1\nrules:\n  - match: { kind: shell, command: \"git status *\" }\n    outcome: allow\n");
-        var seam = new ClaudePolicySeam(Config.Root, TimeProvider.System) {
+        var seam = new ClaudePolicySeam(Config.Root, TimeProvider.System, new HookSpool(Config.Root, TimeProvider.System, server: null)) {
             BeforeSnapshotLoadForTest = () => throw new InvalidOperationException("policy store unavailable"),
         };
 

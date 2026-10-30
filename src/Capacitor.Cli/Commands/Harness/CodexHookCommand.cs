@@ -406,7 +406,7 @@ sealed class CodexHookCommand(
             // Remaining already reserves Safety — subtracting it again here halved the window.
             budget.Remaining);
 
-        var spool = new HookSpool(config, clock.Time);
+        var spool = new HookSpool(config, clock.Time, Url);
         var outcome = await Poster(env).PostOrSpoolAsync("session-start/codex", enriched, "codex-hook", spool,
             sessionId: sessionId ?? "", route: "session-start/codex");
 
@@ -439,7 +439,7 @@ sealed class CodexHookCommand(
     // hosted session's transcript comes from the daemon, so a rollout watcher would double-ingest it.
     Task RunPostStdoutWork(
             HookSpool spool, JsonNode? enrichedNode, string? sessionId, HookPostOutcome outcome, CodexHookEnvironment env) {
-        var transcriptSpool = new TranscriptSpool(config, clock.Time);
+        var transcriptSpool = new TranscriptSpool(config, clock.Time, Url);
 
         _ = Poster(env).DrainSpoolsAsync(spool, transcriptSpool, sessionId);
 
@@ -505,7 +505,7 @@ sealed class CodexHookCommand(
     /// daemon-hosted terminal, and the hosted app-server, where this hook also fires.</summary>
     async Task<int> HandlePreToolUse(JsonNode node, CodexHookEnvironment env) {
         if (node is JsonObject payload && TryGetString(node, "session_id") is { } sessionId)
-            await new CodexPolicySeam(config, clock.Time).HandlePreToolUseAsync(payload, sessionId, env.Stdout);
+            await new CodexPolicySeam(config, clock.Time, new HookSpool(config, clock.Time, Url)).HandlePreToolUseAsync(payload, sessionId, env.Stdout);
         return 0;
     }
 
@@ -543,7 +543,7 @@ sealed class CodexHookCommand(
     async Task<int> HandlePermissionRequestStub(JsonNode node, CodexHookEnvironment env) {
         if (node is JsonObject payload && TryGetString(node, "session_id") is { } sessionId) {
             var budget = clock.Budget(Ceiling).Remaining;
-            var seam   = new CodexPolicySeam(config, clock.Time, PolicyJudgeGateway.ForHook(http, Url, clock.Time));
+            var seam   = new CodexPolicySeam(config, clock.Time, new HookSpool(config, clock.Time, Url), PolicyJudgeGateway.ForHook(http, Url, clock.Time));
             if (await seam.HandlePermissionRequestAsync(payload, sessionId, env.Stdout,
                     budget < CodexPolicySeam.JudgeBudget ? budget : CodexPolicySeam.JudgeBudget) == SeamAnswer.Answered)
                 return 0;

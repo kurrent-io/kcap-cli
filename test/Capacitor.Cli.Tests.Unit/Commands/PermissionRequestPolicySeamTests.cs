@@ -63,7 +63,7 @@ public class PermissionRequestPolicySeamTests : IDisposable {
         await Assert.That(hso["hookEventName"]!.GetValue<string>()).IsEqualTo("PermissionRequest");
         await Assert.That(hso["decision"]!["behavior"]!.GetValue<string>()).IsEqualTo("deny");
         await Assert.That(RecordedPaths("/hooks/permission-record")).IsEmpty();
-        await Assert.That(SpooledPolicyEvents.Decisions(Config.Root, Sid).Count).IsEqualTo(1);
+        await Assert.That(SpooledPolicyEvents.Decisions(Config.Root, Sid, _server.Urls[0]).Count).IsEqualTo(1);
     }
 
     /// <summary>The control for the test above — the same payload the seam answered reaches
@@ -85,7 +85,7 @@ public class PermissionRequestPolicySeamTests : IDisposable {
         await Assert.That(stdout.ToString()).IsEmpty();
         await Assert.That(RecordedPaths("/hooks/permission-record").Count).IsEqualTo(1);
         // An excluded session's decisions cannot be recorded, so none may be made.
-        await Assert.That(SpooledPolicyEvents.Decisions(Config.Root, Sid)).IsEmpty();
+        await Assert.That(SpooledPolicyEvents.Decisions(Config.Root, Sid, _server.Urls[0])).IsEmpty();
     }
 
     [Test]
@@ -103,6 +103,6 @@ public class PermissionRequestPolicySeamTests : IDisposable {
         // The forwarded answer, not the deny the same policy would have produced here.
         await Assert.That(stdout.ToString()).IsEqualTo("""{"behavior":"allow"}""");
         await Assert.That(RecordedPaths("/hooks/permission-request").Count).IsEqualTo(1);
-        await Assert.That(SpooledPolicyEvents.Decisions(Config.Root, Sid)).IsEmpty();
+        await Assert.That(SpooledPolicyEvents.Decisions(Config.Root, Sid, _server.Urls[0])).IsEmpty();
     }
 }
