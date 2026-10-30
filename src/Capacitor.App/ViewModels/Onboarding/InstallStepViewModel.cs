@@ -342,6 +342,9 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
 
     /// Stops following the controller, which outlives this page and the wizard that showed it.
     public void Detach() {
+        _retryGap?.Cancel();
+        _retryGap?.Dispose();
+        _retryGap = null;
         _controller.PropertyChanged -= OnControllerChanged;
         _controller.Settled         -= OnSettled;
         if (_watched is not null) {
@@ -409,6 +412,7 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     async Task RetryAfterGapAsync(CancellationToken ct) {
         try {
             await Task.Delay(RetryGap, _time, ct).ConfigureAwait(true);
+            ct.ThrowIfCancellationRequested();
             await _controller.RetryAsync(ct).ConfigureAwait(true);
         } catch (OperationCanceledException) {
             AutoRetrying = false;

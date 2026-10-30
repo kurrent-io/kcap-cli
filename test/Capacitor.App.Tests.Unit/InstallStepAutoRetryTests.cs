@@ -105,6 +105,24 @@ public class InstallStepAutoRetryTests {
         await Assert.That(starts).IsEqualTo(1);
     }
 
+    /// The controller outlives the wizard, so a retry still waiting when the wizard closes must not start.
+    [Test]
+    public async Task Detaching_drops_a_retry_still_waiting() {
+        var starts = await AvaloniaSession.DispatchAsync(async () => {
+            var time = new FakeTimeProvider();
+            var runs = 0;
+            var fail = LocalSetupScript.Prints(1, LocalSetupScript.Failed("start_failed"));
+            var install = Step(new FakeKcapCli { SetupLocalBehavior = (l, a, b) => { runs++; return fail(l, a, b); } }, time);
+            await StartAsync(install);
+            install.Detach();
+            await ElapseGapAsync(time);
+
+            return runs;
+        });
+
+        await Assert.That(starts).IsEqualTo(1);
+    }
+
     [Test]
     public async Task The_support_report_carries_each_attempt_and_the_server_log_tail() {
         var root = new LocalRoot(Config.PathTo("local"));

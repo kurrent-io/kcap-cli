@@ -74,6 +74,27 @@ public class HarnessPreflightTests {
         await Assert.That(stepVisibleAfter).IsTrue();
     }
 
+    /// A step's entry can start work, such as a resumed install, so none is entered until the pre-flight passes.
+    [Test]
+    public async Task No_step_is_entered_or_left_before_the_preflight_passes() {
+        var (entersBefore, movedBefore, entersAfter) = await AvaloniaSession.DispatchAsync(async () => {
+            var gate = new TaskCompletionSource<IReadOnlyDictionary<HarnessId, DetectedAgent>>();
+            var first = new FakeWizardStep(WizardStepId.Edition);
+            var vm = new OnboardingViewModel([first, new FakeWizardStep(WizardStepId.Done)],
+                preflight: new HarnessPreflight(_ => gate.Task));
+            var moved = vm.TryGoTo(WizardStepId.Done);
+            var before = first.EnterCount;
+            gate.SetResult(new Dictionary<HarnessId, DetectedAgent> { [HarnessId.Claude] = new(true, false) });
+            await vm.PendingEnterForTesting;
+
+            return (before, moved, first.EnterCount);
+        });
+
+        await Assert.That(entersBefore).IsEqualTo(0);
+        await Assert.That(movedBefore).IsFalse();
+        await Assert.That(entersAfter).IsEqualTo(1);
+    }
+
     /// Quit leaves the app even where setup could otherwise be deferred and the window is still up.
     [Test]
     public async Task Quit_closes_setup_and_the_app() {

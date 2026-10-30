@@ -186,10 +186,17 @@ public sealed class OnboardingViewModel : ReactiveObject {
         // State other steps' PassThrough reads, changed outside the current step.
         restate?.Subscribe(_ => RestateActions());
 
-        PendingEnterForTesting = SafeEnterAsync(Current);
+        PendingEnterForTesting = preflight is null ? SafeEnterAsync(Current) : EnterOncePassedAsync(PendingPreflightForTesting);
+    }
+
+    // No step is entered, so none acts, until the pre-flight has passed.
+    async Task EnterOncePassedAsync(Task preflight) {
+        await preflight;
+        if (StepVisible && !_closed) await SafeEnterAsync(Current);
     }
 
     void OnAdvanceRequested() {
+        if (!StepVisible) return;
         if (_navigating) _advancePending = true;
         else PendingAdvanceForTesting = NavigateAsync(WizardNavigation.Next);
     }
@@ -270,7 +277,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
     /// this run (an inapplicable step was filtered out at construction).
     /// </summary>
     internal bool TryGoTo(WizardStepId id) {
-        if (_navigating || _closed) return false;
+        if (_navigating || _closed || !StepVisible) return false;
 
         var target = -1;
         for (var i = 0; i < Steps.Count && target < 0; i++) {
@@ -287,7 +294,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
     }
 
     async Task NavigateAsync(WizardNavigation direction) {
-        if (_navigating || _closed) return;
+        if (_navigating || _closed || !StepVisible) return;
         Navigating = true;
         try {
             if (direction == WizardNavigation.Back && PreviousShownIndex() < 0) return;
