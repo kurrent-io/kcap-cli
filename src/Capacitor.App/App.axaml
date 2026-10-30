@@ -657,11 +657,6 @@
         <Style Selector="Border.goalNudgeRing">
             <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
             <Setter Property="Opacity" Value="0" />
-            <Setter Property="Transitions">
-                <Transitions>
-                    <DoubleTransition Property="Opacity" Duration="0:0:0.25" Easing="CubicEaseOut" />
-                </Transitions>
-            </Setter>
         </Style>
         <Style Selector="Border.goalNudgeRing.on">
             <Setter Property="Opacity" Value="1" />

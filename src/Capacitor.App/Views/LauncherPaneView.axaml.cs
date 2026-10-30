@@ -4,6 +4,8 @@ using System.Globalization;
 using System.Reactive.Linq;
 using System.Windows.Input;
 using Avalonia;
+using Avalonia.Animation;
+using Avalonia.Animation.Easings;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Data.Converters;
@@ -27,6 +29,8 @@ public partial class LauncherPaneView : UserControl {
     IDisposable? _nudgeEnd;
 
     static readonly TimeSpan NudgeHold = TimeSpan.FromMilliseconds(450);
+    readonly Transitions _nudgeFadeIn = [new DoubleTransition { Property = OpacityProperty, Duration = TimeSpan.FromMilliseconds(250), Easing = new CubicEaseOut() }];
+    readonly Transitions _nudgeFadeOut = [new DoubleTransition { Property = OpacityProperty, Duration = TimeSpan.FromMilliseconds(750), Easing = new CubicEaseOut() }];
 
     /// A picker search term matches a model by its label or its launch id, so a Pi row is found by
     /// model name, provider, or `provider/` prefix alike.
@@ -49,8 +53,12 @@ public partial class LauncherPaneView : UserControl {
     public void Nudge() {
         FocusComposer();
         _nudgeEnd?.Dispose();
+        GoalNudgeRing.Transitions = _nudgeFadeIn;
         GoalNudgeRing.Classes.Set("on", true);
-        _nudgeEnd = DispatcherTimer.RunOnce(() => GoalNudgeRing.Classes.Set("on", false), NudgeHold);
+        _nudgeEnd = DispatcherTimer.RunOnce(() => {
+            GoalNudgeRing.Transitions = _nudgeFadeOut;
+            GoalNudgeRing.Classes.Set("on", false);
+        }, NudgeHold);
     }
 
     internal bool IsNudgingForTesting => GoalNudgeRing.Classes.Contains("on");
