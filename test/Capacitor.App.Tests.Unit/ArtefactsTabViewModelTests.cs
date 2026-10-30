@@ -673,7 +673,57 @@ public class ArtefactsTabViewModelTests {
 
             await Assert.That(h.Vm.Pages.Count).IsEqualTo(2);
             await Assert.That(h.Vm.PagesNote).IsNull();
-            await Assert.That(h.Vm.LastReadFailed).IsTrue();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Unreachable_first_pages_read_is_not_empty() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Pages.Enqueue(SessionPagesRead.Of(SessionPlansReadKind.Unreachable));
+            await h.SwitchAsync(SessionA);
+
+            await Assert.That(h.Vm.Pages).IsEmpty();
+            await Assert.That(h.Vm.PagesNote).IsEqualTo("Couldn't reach the server for pages.");
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// Pages are read every tick regardless, so their failure must not also re-read document bodies.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_unreachable_pages_read_is_not_a_failed_documents_read() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(Ready(Doc("1", "plan", "docs/p.md")));
+            h.Pages.Enqueue(SessionPagesRead.Of(SessionPlansReadKind.Unreachable));
+            await h.SwitchAsync(SessionA);
+
+            await Assert.That(h.Vm.PagesNote).IsEqualTo("Couldn't reach the server for pages.");
+            await Assert.That(h.Vm.LastReadFailed).IsFalse();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_unchanged_pages_read_keeps_the_same_rows() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var t1 = DateTimeOffset.UnixEpoch.AddHours(1);
+            h.Pages.Enqueue(PagesReady(Page("a", t1), Page("b", t1.AddHours(1))), PagesReady(Page("a", t1), Page("b", t1.AddHours(1))));
+            await h.SwitchAsync(SessionA);
+            var before = h.Vm.Pages.ToArray();
+
+            h.Vm.RefreshPages();
+            await h.SettledAsync();
+
+            await Assert.That(h.Pages.Requested.Count).IsEqualTo(2);
+            await Assert.That(h.Vm.Pages.Count).IsEqualTo(2);
+            await Assert.That(h.Vm.Pages[0]).IsSameReferenceAs(before[0]);
+            await Assert.That(h.Vm.Pages[1]).IsSameReferenceAs(before[1]);
             await h.Vm.TeardownAsync();
         });
     }

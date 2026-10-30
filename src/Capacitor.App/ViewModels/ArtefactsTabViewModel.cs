@@ -29,8 +29,6 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
     readonly Func<string, Stream?> _openWorkingCopy;
     readonly AvaloniaList<DocumentRow> _documents = [];
     readonly AvaloniaList<PageRow> _pages = [];
-    bool _documentsFailed;
-    bool _pagesFailed;
     SessionPlansReadKind? _pagesKind;
     readonly ITimer _settle;
     bool _tornDown;
@@ -38,8 +36,9 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
 
     public IAvaloniaReadOnlyList<DocumentRow> Documents => _documents;
     public IAvaloniaReadOnlyList<PageRow> Pages => _pages;
-    /// The last applied documents or pages read was unreachable, so the pane's poll retries it even with the tab hidden.
-    internal bool LastReadFailed => _documentsFailed || _pagesFailed;
+    /// The last applied documents read was unreachable, so the pane's poll retries it even with the
+    /// tab hidden. Pages stay out of it: they are read on every tick already.
+    internal bool LastReadFailed { get; private set; }
     public bool HasAny => _documents.Count > 0;
     public bool HasPages => _pages.Count > 0;
     public bool HasAnyArtefacts => HasAny || HasPages;
@@ -55,6 +54,7 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
         : _pagesKind switch {
             SessionPlansReadKind.Unavailable => "Pages unavailable on this server.",
             SessionPlansReadKind.SignedOut => "Sign in to see pages.",
+            SessionPlansReadKind.Unreachable => "Couldn't reach the server for pages.",
             _ => "No pages yet.",
         };
 
@@ -129,7 +129,7 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
         if (_tornDown) return;
         if (_source is not null) {
             _pendingPath = null;
-            _documentsFailed = false;
+            LastReadFailed = false;
             if (string.IsNullOrEmpty(sessionId)) {
                 _reads.ClearCurrent(() => {
                     RaiseLoading();
@@ -143,7 +143,6 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
             }
         }
         if (_pageSource is not null) {
-            _pagesFailed = false;
             _pagesKind = null;
             if (string.IsNullOrEmpty(sessionId)) {
                 _pageReads.ClearCurrent(() => {
@@ -247,7 +246,7 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
     /// what sign-in and the next plan write repair, and polling it would cost a body-carrying request
     /// per workspace per tick for nothing.
     void Apply(PlanArtifactsRead read) {
-        _documentsFailed = read.Kind == SessionPlansReadKind.Unreachable;
+        LastReadFailed = read.Kind == SessionPlansReadKind.Unreachable;
         switch (read.Kind) {
             case SessionPlansReadKind.Ready:
                 Show(read.Body?.Artifacts ?? []);
@@ -262,7 +261,6 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
 
     /// An unreachable read keeps the rows it has; any other non-Ready answer clears them.
     void ApplyPages(SessionPagesRead read) {
-        _pagesFailed = read.Kind == SessionPlansReadKind.Unreachable;
         _pagesKind = read.Kind;
         switch (read.Kind) {
             case SessionPlansReadKind.Ready:
@@ -277,10 +275,16 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
         this.RaisePropertyChanged(nameof(PagesNote));
     }
 
+    /// The list is polled every tick, so an unchanged read leaves the rows, and the view, alone.
     void ShowPages(IReadOnlyList<ArtefactDto> pages) {
+        var ordered = pages.OrderByDescending(p => p.UpdatedAt).ToList();
+        if (ordered.Count == _pages.Count && ordered.Zip(_pages).All(pair =>
+                pair.First.ArtefactId == pair.Second.ArtefactId && pair.First.LatestVersion == pair.Second.LatestVersion
+             && pair.First.UpdatedAt == pair.Second.UpdatedAt))
+            return;
         var now = _time.GetUtcNow();
         _pages.Clear();
-        _pages.AddRange(pages.OrderByDescending(p => p.UpdatedAt).Select(p => PageRow.From(p, now)));
+        _pages.AddRange(ordered.Select(p => PageRow.From(p, now)));
         RaisePagesShape();
     }
 
