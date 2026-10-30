@@ -18,6 +18,7 @@ static class SpoolPartition {
     /// <param name="onCollision">The name a root file takes when its own name is already taken in
     /// <paramref name="dir"/>, or null to leave it for the reap.</param>
     public static void AdoptUnpartitioned(string root, string dir, Func<string, string?> onCollision) {
+        if (!Directory.Exists(root)) return;
         try {
             foreach (var file in Directory.EnumerateFiles(root)) {
                 try {
@@ -32,6 +33,7 @@ static class SpoolPartition {
     }
 
     public static void Reap(string root, DateTime cutoff) {
+        if (!Directory.Exists(root)) return;
         try {
             foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)) {
                 try { if (File.GetLastWriteTimeUtc(file) < cutoff) File.Delete(file); } catch { }
