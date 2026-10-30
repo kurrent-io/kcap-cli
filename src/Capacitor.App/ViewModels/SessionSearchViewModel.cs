@@ -168,7 +168,7 @@ public sealed class SessionSearchViewModel : ReactiveObject, IDisposable {
                 hit.IsOpening = false;
             }
             if (cts.IsCancellationRequested || outcome == SearchOpenOutcome.Superseded) return;
-            ApplyOpen(outcome);
+            ApplyOpen(outcome, hit);
         });
     }
 
@@ -181,7 +181,7 @@ public sealed class SessionSearchViewModel : ReactiveObject, IDisposable {
         cts?.Cancel();
     }
 
-    void ApplyOpen(SearchOpenOutcome outcome) {
+    void ApplyOpen(SearchOpenOutcome outcome, SearchHitViewModel hit) {
         switch (outcome) {
             case SearchOpenOutcome.Opened:
                 _closed.OnNext(Unit.Default);
@@ -190,6 +190,11 @@ public sealed class SessionSearchViewModel : ReactiveObject, IDisposable {
                 SetState(SearchListState.SignInRequired);
                 break;
             case SearchOpenOutcome.Unavailable:
+                // Left in the list, the row would only open the same dead session again.
+                if (_hits.Remove(hit)) {
+                    _highlightIndex = -1;
+                    HighlightIndex = _hits.Count == 0 ? -1 : 0;
+                }
                 ListMessage = "This session is no longer available";
                 break;
             case SearchOpenOutcome.Failed:
