@@ -7,11 +7,15 @@ namespace Capacitor.Cli.Daemon.Harness.Claude;
 internal static class ClaudePermissionModeArgs {
     const string Flag = "--permission-mode";
 
+    /// <summary>Claude's own mode that refuses changes itself, stricter than any other the args or the
+    /// inherited settings could have chosen.</summary>
+    internal const string Strictest = "plan";
+
     /// <summary>The last mode named before <c>--</c>, as Claude itself takes it; <c>default</c> is
     /// Claude's older spelling of <see cref="ClaudePermissionModes.Manual"/>. Without Claude's option
     /// table a mode flag right after a bare option may be that option's value, and reading it as a flag
     /// could recover a session under a looser mode than it ran with, so any such flag makes the answer
-    /// <see cref="ClaudePermissionModes.Manual"/>: the most restrictive mode the product offers.</summary>
+    /// <see cref="Strictest"/>.</summary>
     internal static string? Selected(IReadOnlyList<string> args) {
         string? mode      = null;
         var     ambiguous = false;
@@ -35,7 +39,7 @@ internal static class ClaudePermissionModeArgs {
             if (arg == Flag) i++;
         }
 
-        if (ambiguous) return ClaudePermissionModes.Manual;
+        if (ambiguous) return Strictest;
 
         return mode == "default" ? ClaudePermissionModes.Manual : mode;
     }

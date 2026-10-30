@@ -24,14 +24,15 @@ public class ClaudePermissionModeArgsTests {
         await Assert.That(ClaudePermissionModeArgs.Selected(["--permission-mode", "default"])).IsEqualTo("manual");
     }
 
-    /// A mode flag right after a bare option may be that option's value, as with --system-prompt below,
-    /// so it reads as Manual: recording the apparent mode could recover a Manual session as auto.
+    /// A mode flag right after a bare option may be that option's value, as with --system-prompt below, and
+    /// the real mode may then be any other candidate or the inherited one; none of those is stricter than plan.
     [Test]
-    [Arguments(new[] { "--permission-mode", "manual", "--system-prompt", "--permission-mode=auto", "fix it" }, "manual")]
-    [Arguments(new[] { "--system-prompt", "--permission-mode", "auto" }, "manual")]
-    [Arguments(new[] { "--verbose", "--permission-mode", "bypassPermissions" }, "manual")]
-    [Arguments(new[] { "-n", "--permission-mode=auto" }, "manual")]
-    public async Task A_mode_that_may_be_another_options_value_reads_as_manual(string[] args, string expected) {
+    [Arguments(new[] { "--permission-mode", "manual", "--system-prompt", "--permission-mode=auto", "fix it" }, "plan")]
+    [Arguments(new[] { "--system-prompt", "--permission-mode", "auto" }, "plan")]
+    [Arguments(new[] { "--verbose", "--permission-mode", "bypassPermissions" }, "plan")]
+    [Arguments(new[] { "--verbose", "--permission-mode", "dontAsk" }, "plan")]
+    [Arguments(new[] { "-n", "--permission-mode=auto" }, "plan")]
+    public async Task A_mode_that_may_be_another_options_value_reads_as_plan(string[] args, string expected) {
         await Assert.That(ClaudePermissionModeArgs.Selected(args)).IsEqualTo(expected);
     }
 }
