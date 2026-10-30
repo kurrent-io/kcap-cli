@@ -69,8 +69,7 @@ public sealed class RemapCommand(ConfigRoot root) {
         }
 
         if (nTo.Contains('*')) {
-            await Console.Error.WriteLineAsync(
-                $"Invalid to path '{to}': '*' matches in the from path only; the to path is literal");
+            await Console.Error.WriteLineAsync(WildcardToError(to, nFrom, nTo));
 
             return 1;
         }
@@ -83,9 +82,9 @@ public sealed class RemapCommand(ConfigRoot root) {
             return c with { CwdRemap = next };
         });
 
-        await Console.Out.WriteLineAsync(replaced
+        await Console.Out.WriteLineAsync(StatusGlyphs.ForConsole(replaced
             ? $"Updated remap: {nFrom} → {nTo}"
-            : $"Added remap: {nFrom} → {nTo}");
+            : $"Added remap: {nFrom} → {nTo}"));
 
         return 0;
     }
@@ -128,10 +127,35 @@ public sealed class RemapCommand(ConfigRoot root) {
         await Console.Out.WriteLineAsync("Cwd remaps:");
 
         foreach (var r in rules) {
-            await Console.Out.WriteLineAsync($"  {r.From} → {r.To}");
+            await Console.Out.WriteLineAsync(StatusGlyphs.ForConsole($"  {r.From} → {r.To}"));
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// A literal <c>from</c> already carries everything under it across, so a <c>*</c> typed into the
+    /// to path to mean "and the rest" is the prefix rule spelled the long way: suggest it.
+    /// </summary>
+    internal static string WildcardToError(string to, string from, string normalizedTo) {
+        var error = $"Invalid to path '{to}': '*' matches in the from path only; the to path is literal.";
+
+        if (TrailingWildcard(normalizedTo) is not { } toPrefix) return error;
+
+        var fromPrefix = from.Contains('*') ? TrailingWildcard(from) : from;
+
+        return fromPrefix is null
+            ? error
+            : error + Environment.NewLine
+            + $"A from path already carries everything under it, so this does what you meant: kcap remap {Quote(fromPrefix)} {Quote(toPrefix)}";
+
+        static string? TrailingWildcard(string path) {
+            var trimmed = Normalize(path.TrimEnd('*'));
+
+            return path.EndsWith('*') && trimmed.Length > 0 && !trimmed.Contains('*') ? trimmed : null;
+        }
+
+        static string Quote(string path) => path.Any(char.IsWhiteSpace) ? $"'{path}'" : path;
     }
 
     /// <summary>

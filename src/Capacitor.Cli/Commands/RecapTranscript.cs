@@ -161,7 +161,7 @@ static class RecapTranscript {
                 case "tool_invocation":
                     sb.AppendLine($"## Tool: {entry.Str("tool")}");
 
-                    if (entry.Prop("arguments") is { } args && !args.IsNull) sb.AppendLine(args.ToString());
+                    if (entry.Prop("arguments") is { } args && !args.IsNull) sb.Append(Arguments(args));
 
                     if (truncated) sb.AppendLine(TruncatedNote(entry, "input"));
                     sb.AppendLine();
@@ -179,7 +179,7 @@ static class RecapTranscript {
                 default:
                     // assistant_thinking, plan, or a kind added later that carries text.
                     if (!string.IsNullOrEmpty(kind) && entry.Str("text") is { Length: > 0 } text) {
-                        sb.AppendLine($"## {kind}");
+                        sb.AppendLine($"## {Heading(kind)}");
                         sb.AppendLine(text);
                         if (truncated) sb.AppendLine(TruncatedNote(entry, "text"));
                         sb.AppendLine();
@@ -187,6 +187,46 @@ static class RecapTranscript {
 
                     break;
             }
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>A trace kind as a heading in the style of the fixed ones ("Assistant", "Tool: …").</summary>
+    internal static string Heading(string kind) =>
+        kind switch {
+            "assistant_thinking" => "Thinking",
+            _                    => char.ToUpperInvariant(kind[0]) + kind[1..].Replace('_', ' '),
+        };
+
+    /// <summary>
+    /// A call's arguments one per line, each string as its text. As JSON every backslash in a Windows
+    /// path would read doubled, and a multi-line edit would sit on one line of escapes.
+    /// </summary>
+    internal static string Arguments(JsonElement args) {
+        if (args.IsString) return (args.GetString() ?? "") + Environment.NewLine;
+        if (!args.IsObject) return args.GetRawText() + Environment.NewLine;
+
+        var sb = new StringBuilder();
+
+        foreach (var property in args.EnumerateObject()) {
+            if (!property.Value.IsString) {
+                sb.AppendLine($"{property.Name}: {property.Value.GetRawText()}");
+
+                continue;
+            }
+
+            var lines = (property.Value.GetString() ?? "").ReplaceLineEndings("\n").Split('\n');
+
+            if (lines.Length == 1) {
+                sb.AppendLine($"{property.Name}: {lines[0]}");
+
+                continue;
+            }
+
+            sb.AppendLine($"{property.Name}:");
+
+            foreach (var line in lines) sb.AppendLine($"  {line}");
         }
 
         return sb.ToString();

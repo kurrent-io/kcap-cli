@@ -128,7 +128,7 @@ class RecapCommand(
             var outline = await FetchTurnOutline(sid);
 
             if (outline.Length > 0) {
-                Console.Out.WriteLine(outline);
+                Console.Out.WriteLine(StatusGlyphs.ForConsole(outline));
                 printedAnything = true;
             }
         }
@@ -139,7 +139,7 @@ class RecapCommand(
             return 0;
         }
 
-        Console.Out.WriteLine(DrillDownPointer(sessionIds));
+        Console.Out.WriteLine(StatusGlyphs.ForConsole(DrillDownPointer(sessionIds)));
 
         return 0;
     }
@@ -267,8 +267,8 @@ class RecapCommand(
             var tokens = turn.TryGetProperty("total_tokens", out var tk) ? tk.GetInt64() : 0;
             var time   = $"{FormatTurnTime(turn, "first_event_at")}–{FormatTurnTime(turn, "last_event_at")}";
 
-            await Console.Out.WriteLineAsync($"Turn {turnIndex,3}: {prompt}");
-            await Console.Out.WriteLineAsync($"         tools={tools}  files={files}  tokens={tokens}  time={time}");
+            await Console.Out.WriteLineAsync(StatusGlyphs.ForConsole($"Turn {turnIndex,3}: {prompt}"));
+            await Console.Out.WriteLineAsync(StatusGlyphs.ForConsole($"         tools={tools}  files={files}  tokens={tokens}  time={time}"));
             await Console.Out.WriteLineAsync();
         }
 
@@ -309,7 +309,7 @@ class RecapCommand(
             return 0;
         }
 
-        await Console.Out.WriteLineAsync($"# Turn {turnIndex} — session {sessionId}");
+        await Console.Out.WriteLineAsync(StatusGlyphs.ForConsole($"# Turn {turnIndex} — session {sessionId}"));
         await Console.Out.WriteLineAsync();
         await Console.Out.WriteAsync(RecapTranscript.RenderTrace(trace));
 

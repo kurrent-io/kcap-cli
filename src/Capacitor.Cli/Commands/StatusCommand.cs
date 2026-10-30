@@ -70,7 +70,7 @@ public sealed class StatusCommand(
         foreach (var h in harnesses) {
             if (!harnesses.Detected(h.Id)) continue;
             if (h.Signals.IsWired) continue;
-            await Line($"           {h.Label} installed but kcap not configured — run `{InstallCommandFor(h.Id)}`");
+            await Line($"           {h.Label} installed but kcap not configured — run `{(baseUrl is null ? "kcap setup" : InstallCommandFor(h.Id))}`");
         }
 
         var activity = new HookActivity(config, time);
@@ -247,7 +247,7 @@ public sealed class StatusCommand(
 
             return await tokens.LoadForProfileAsync(profile) is { } stored
                 ? new AuthSnapshot(StatusAuthState.Expired, stored.GitHubUsername)
-                : new AuthSnapshot(StatusAuthState.None);
+                : new AuthSnapshot(StatusAuthState.None, NotSetUp: true);
         }
 
         // The server-aware accessor, not the profile-only one: a token bound elsewhere is withheld
@@ -275,6 +275,9 @@ public sealed class StatusCommand(
         StatusAuthState.WrongServer => $"✗ token was issued by {auth.IssuedServerUrl ?? "another server"} (run: kcap login)",
         StatusAuthState.None when auth.ServerUnanswered
                                     => "unknown — the server gave no answer, so whether it needs a sign-in cannot be checked",
+        // `kcap login` signs in to the server setup chose, so with none chosen setup is the fix.
+        StatusAuthState.None when auth.NotSetUp
+                                    => "not set up (run: kcap setup)",
         StatusAuthState.None        => "not authenticated (run: kcap login)",
         StatusAuthState.LocalUnavailable => $"✗ {auth.Problem}",
     };
@@ -317,7 +320,7 @@ public sealed class StatusCommand(
     /// expired token can be repaired by a sign-in yet.</param>
     internal sealed record AuthSnapshot(
         StatusAuthState State, string? Identity = null, DateTimeOffset? ExpiresAt = null, string? MachineLine = null,
-        string? IssuedServerUrl = null, string? Problem = null, bool ServerUnanswered = false);
+        string? IssuedServerUrl = null, string? Problem = null, bool ServerUnanswered = false, bool NotSetUp = false);
 
     async Task WriteVersionLineAsync(string[] args) {
         Console.Write("  Version: ");

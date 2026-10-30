@@ -198,6 +198,15 @@ public class StatusAuthResolutionTests {
         await Assert.That(auth.State).IsEqualTo(StatusAuthState.Valid);
     }
 
+    /// <summary>A fresh or uninstalled configuration has no server for `kcap login` to sign in to.</summary>
+    [Test]
+    public async Task With_no_server_and_no_token_the_auth_line_points_at_setup() {
+        var auth = await ResolveAsync(server: new StatusCommand.ServerReach(null, false, null));
+
+        await Assert.That(auth.State).IsEqualTo(StatusAuthState.None);
+        await Assert.That(StatusCommand.FormatAuthLine(auth, DateTimeOffset.UtcNow)).IsEqualTo("not set up (run: kcap setup)");
+    }
+
     [Test]
     public async Task The_auth_line_names_the_server_a_foreign_token_came_from() {
         var now = DateTimeOffset.UtcNow;

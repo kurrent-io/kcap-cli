@@ -17,15 +17,22 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
 
     string _version = "";
 
-    /// <summary>The first answer a run that cannot ask is missing, or null when it has both. A reuse needs no
-    /// confirmation: it installs nothing.</summary>
-    public static string? MissingAnswer(LocalSetupArgs args, LocalPlan plan, string root) =>
-        !args.SingleUser ? MissingSingleUser
-      : !args.Yes && plan.Hint != PlanHint.Reuse ? MissingYes(plan.Version, root)
-      : null;
+    /// <summary>Every answer a run that cannot ask is missing, or null when it has both, so one retry is
+    /// enough. A reuse needs no confirmation: it installs nothing.</summary>
+    public static string? MissingAnswer(LocalSetupArgs args, LocalPlan plan, string root) {
+        var needsYes = !args.Yes && plan.Hint != PlanHint.Reuse;
+
+        return !args.SingleUser && needsYes ? MissingBoth(plan.Version, root)
+             : !args.SingleUser ? MissingSingleUser
+             : needsYes ? MissingYes(plan.Version, root)
+             : null;
+    }
 
     const string MissingSingleUser =
         "Pass --single-user to confirm this machine has one user: on a shared machine, other users can open the web UI and act as its admin.";
+
+    static string MissingBoth(string version, string root) =>
+        $"Pass --single-user and --yes to install kcap local {version} in {root}. --single-user confirms this machine has one user: on a shared machine, other users can open the web UI and act as its admin.";
 
     static string MissingYes(string version, string root) => $"Pass --yes to install kcap local {version} in {root}.";
 
