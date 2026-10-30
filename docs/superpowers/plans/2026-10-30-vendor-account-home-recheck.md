@@ -43,8 +43,9 @@ kcap-server#2849)
 1. A Claude session idle since before the switch renders after the commit with an unchanged counter →
    the new reading's windows are unchanged (Task 3).
 2. A counter goes backwards after the switch (1000 → 200 → 200 → 300) → only 300 records (Task 3).
-3. A session whose baseline was evicted by the 64-session cap, or whose payload lacks
-   `total_api_duration_ms` → it does not merge after a switch (Task 3).
+3. A session whose baseline was evicted, or whose payload lacks `total_api_duration_ms` → it does not
+   merge after a switch. 65 sessions round-robin still make progress (Task 3).
+   - "After a switch" includes an older registry's nonzero generation without a timestamp.
 4. Two daemons sharing a registry tick at the same moment, or out of phase → each home is probed once per
    due period (Task 4).
 5. The account row disappears from the snapshot → the label falls back to the launch label and the bars
@@ -68,7 +69,10 @@ kcap-server#2849)
     retired-session `TryRecord` test.
 
 **Interfaces:**
-- Produces: `VendorAccount.GenerationStartedAt`, used by Tasks 2 and 3.
+- Produces, used by Tasks 2 and 3:
+  - `VendorAccount.GenerationStartedAt`
+  - `[JsonIgnore] public bool HasSwitched => Generation > 0 || GenerationStartedAt is not null;` on
+    `VendorAccount`
 
 - [ ] **Step 1: Rewrite the tests.**
   - Rename `Login_change_bumps_generation_deletes_reading_and_retires_sessions` to
@@ -90,6 +94,9 @@ kcap-server#2849)
     `Registry_with_retired_sessions_still_loads`. Write raw JSON for an entry with
     `"retired_sessions": ["a"]` and assert `Load()` returns the entry.
   - `AccountSnapshotBuilderTests:168`: drop the `RetiredSessions` argument.
+  - `HasSwitched_holds_for_a_legacy_nonzero_generation_without_timestamp`: raw JSON with
+    `"generation": 1` and no `generation_started_at` → `HasSwitched` is true. Also cover generation 0 with
+    no timestamp (false) and generation 0 with a timestamp (true).
 - [ ] **Step 2: Run them and see the failures.**
   `dotnet run --project test/Capacitor.Cli.Core.Tests.Unit/Capacitor.Cli.Core.Tests.Unit.csproj -- --treenode-filter "/*/*/Account*/*"`
 - [ ] **Step 3: Implement.**
@@ -124,8 +131,9 @@ kcap-server#2849)
 
 **Interfaces:**
 - Produces:
-  `public bool TryRecord(string accountId, Func<ReadingFile, DateTimeOffset?, ReadingFile?> update)`.
-  - The second argument is the account's `GenerationStartedAt`.
+  `public bool TryRecord(string accountId, Func<ReadingFile, VendorAccount, ReadingFile?> update)`.
+  - The second argument is the registry entry as read under the lock. Producers use its
+    `GenerationStartedAt` and `HasSwitched`.
   - The account must be registered. The file read and written is always of its current generation.
   - When `update` returns null, nothing is written and the method returns false.
   - Unchanged: it never throws for IO, lock or parse failures, and it is not re-entrant.
@@ -134,7 +142,8 @@ kcap-server#2849)
   - `ReadingStoreTests`:
     - `TryRecord_writes_into_the_current_generation`: account at generation 2 → the file's
       `Reading.Generation == 2`.
-    - `TryRecord_passes_the_generation_start`.
+    - `TryRecord_passes_the_registry_entry`: the update receives the entry, including
+      `GenerationStartedAt`.
     - `TryRecord_writes_nothing_when_update_declines`: returns false and no file exists.
     - These replace `TryRecord_skips_a_stale_generation`.
   - `AccountReadingSinkTests`:
@@ -147,13 +156,13 @@ kcap-server#2849)
     - `Batch_entirely_before_the_generation_start_writes_nothing`.
 - [ ] **Step 2: Run them.** They fail to compile or fail.
 - [ ] **Step 3: Implement.**
-  - `TryRecord`: drop the generation parameter and check, pass `account.GenerationStartedAt`, and write
-    only a non-null result.
-  - `AccountReadingSink`: the update returns null when `observation.ProducedAt < start`.
-  - `CodexRolloutReadings`: keep observations with `ProducedAt >= start` (all when start is null), and
-    return null when none remain.
+  - `TryRecord`: drop the generation parameter and check, pass the entry, and write only a non-null
+    result.
+  - `AccountReadingSink`: the update returns null when `observation.ProducedAt < GenerationStartedAt`.
+  - `CodexRolloutReadings`: keep observations with `ProducedAt >= GenerationStartedAt` (all of them when it
+    is null), and return null when none remain.
   - `ClaudeStatusLineEntry`:
-    `(held, _) => ClaudeStatusLineReading.Apply(held, payload, now)`. Task 3 uses the start. The pre-check
+    `(held, _) => ClaudeStatusLineReading.Apply(held, payload, now)`. Task 3 uses the entry. The pre-check
     against `ReadingFile.Empty(account.Generation)` stays.
 - [ ] **Step 4: Build the solution, then run the Core, Cli and Daemon suites' account and reading tests.**
   Expected: PASS.
@@ -168,11 +177,13 @@ kcap-server#2849)
   `test/Capacitor.Cli.Core.Tests.Unit/Accounts/AccountRefreshTests.cs`
 
 **Interfaces:**
-- Consumes: `TryRecord`'s generation-start argument (Task 2).
+- Consumes: `TryRecord`'s entry argument and `VendorAccount.HasSwitched` (Tasks 1–2).
 - Produces:
   `public static ReadingFile? Apply(ReadingFile held, JsonElement payload, bool afterSwitch, DateTimeOffset now)`.
-  When `afterSwitch` is true and the payload is not fresh, the baseline updates as today but no window
-  merges. When `afterSwitch` is false, behaviour is today's.
+  - When `afterSwitch` is true and the payload is not fresh, the baseline updates as today but no window
+    merges.
+  - When `afterSwitch` is false, behaviour is today's.
+  - `MaxSessions` becomes 256, still evicting the least recently seen.
 
 - [ ] **Step 1: Write the failing tests.**
   - In `ClaudeStatusLineReadingTests`, all with `afterSwitch: true`:
@@ -184,21 +195,29 @@ kcap-server#2849)
     - `After_a_switch_a_counter_reset_merges_only_once_it_advances`: run the sequence 1000 → 200 → 200 →
       300 from an empty held file. Only the 300 payload yields windows.
     - `After_a_switch_a_payload_without_counter_does_not_merge`.
-    - `After_a_switch_an_evicted_baseline_does_not_merge`: held has 64 other sessions and `S` absent,
+    - `After_a_switch_an_evicted_baseline_does_not_merge`: held has 256 other sessions and `S` absent,
       payload for `S` → no windows.
+    - `After_a_switch_many_sessions_round_robin_still_make_progress`: 65 sessions each send counter 100,
+      then each sends 100 again, then each sends 200. The first two rounds leave windows empty, and the
+      third records.
   - `Without_a_switch_a_first_payload_still_merges_unconfirmed` (`afterSwitch: false`) pins today's
     behaviour.
   - In `AccountRefreshTests`, extend `Producer_committing_just_before_the_switch_is_not_fenced` so the
     producer and the follow-ups go through `TryRecord` with
-    `(held, start) => ClaudeStatusLineReading.Apply(held, payload, start is not null, now)`:
+    `(held, account) => ClaudeStatusLineReading.Apply(held, payload, account.HasSwitched, now)`:
     - the producer records counter 1000 under generation 0;
     - after the commit, the same payload (1000, 80%) leaves the generation-1 reading with no windows;
     - a payload at 1500 with 8% records 8% into generation 1.
+  - `Legacy_switched_account_replay_does_not_merge`, in `AccountRefreshTests`:
+    - raw registry JSON with `"generation": 1`, no `generation_started_at`, and
+      `"retired_sessions": ["A"]`;
+    - an unchanged-identity refresh runs;
+    - then `A`'s replay (no baseline) goes through `TryRecord` → no windows.
 - [ ] **Step 2: Run them.** They fail.
 - [ ] **Step 3: Implement.**
   - Add the `afterSwitch` parameter. When it is true and the payload is not fresh, build the observation
-    with an empty `Windows` list.
-  - `ClaudeStatusLineEntry` passes `start is not null` in its update and `false` in its pre-check.
+    with an empty `Windows` list. Raise `MaxSessions` to 256.
+  - `ClaudeStatusLineEntry` passes `account.HasSwitched` in its update and `false` in its pre-check.
 - [ ] **Step 4: Run both test classes.** Expected: PASS.
 - [ ] **Step 5: Commit.** `Count only fresh status-line payloads after an account switch (#2176)`
 
@@ -249,6 +268,22 @@ kcap-server#2849)
       probed once.
     - `A_removed_account_is_not_probed_by_the_tick`.
     - `Dispose_stops_the_tick`.
+    - `A_request_for_a_tick_queued_home_inside_its_cooldown_still_waits`:
+      - Work finished at minute 0, and Spare's probe is held by `Gate`.
+      - Advance 2 minutes, so the tick queues Work behind Spare.
+      - `Request(Work)`, then release the gate. The periodic Work check finds it not due and does not
+        probe.
+      - Work is probed only once minute 10 is reached.
+    - `A_request_for_a_tick_queued_home_past_its_cooldown_runs_unconditionally`: same rig, with Work's last
+      finish 11 minutes ago but `RefreshedAt` fresh, as if another daemon had refreshed it. Work is probed
+      as soon as the gate releases.
+    - `A_spent_soon_budget_is_not_bypassed_by_a_tick_queued_home`: spend Work's soon budget, let the tick
+      queue Work, then `RequestSoon(Work)` → Work waits for its cooldown.
+    - `A_request_racing_a_not_due_check_waits_from_the_last_real_refresh`:
+      - Work last finished at minute 0.
+      - A periodic check of Work starts at minute 4 and is held by `Gate`.
+      - `Request(Work)` arrives during it, then the gate releases (not due).
+      - Work is probed at minute 10, not at minute 14.
 - [ ] **Step 3: Run them.** They fail.
   `dotnet run --project test/Capacitor.Cli.Daemon.Tests.Unit/Capacitor.Cli.Daemon.Tests.Unit.csproj -- --treenode-filter "/*/*/AccountRefresherTests/*"`
 - [ ] **Step 4: Implement `RunIfDueAsync`.** It shares `RunAsync`'s body through a private core that takes
@@ -260,11 +295,17 @@ kcap-server#2849)
   - `OnTick` loads the registry, catching what the startup load catches. For each account id not already
     queued, running or deferred, it adds the id to a `_periodic` set and calls `EnqueueHeld`. It never
     throws.
-  - `Request` and `RequestSoon` remove the id from `_periodic`, so a real request queued behind a tick runs
-    unconditionally.
+  - In `Request` and `RequestSoon`, an id queued only as periodic (`_queued` ∩ `_periodic`) is not an early
+    return. Evaluate it exactly as if it were not queued:
+    - where the existing code would `EnqueueHeld` it now, remove it from `_periodic` instead (promotion);
+    - where it would `Defer`, leave it periodic and defer as usual.
+  - Make the `_queued` early return check `!_periodic.Contains(id)`.
   - The consumer calls `RunIfDueAsync(…, Interval, …)` when it removes the id from `_periodic`, and
     `RunAsync` otherwise.
-  - A periodic run that was not due neither updates `_lastFinished` nor counts toward `Finished`.
+  - A periodic run that returns null (not due) leaves `_lastFinished` untouched and does not increment
+    `Finished`. In its `finally`, a null `_deferred` entry is removed and replaced by a fresh
+    `Request(id)` evaluation against the real `_lastFinished`.
+  - A periodic run that probed finishes exactly like a requested one.
   - Update the class summary: start, then whenever due, then on request.
 - [ ] **Step 6: Run both test classes.** Expected: PASS.
 - [ ] **Step 7: Commit.** `Re-probe every account home once it is ten minutes stale (#2176)`

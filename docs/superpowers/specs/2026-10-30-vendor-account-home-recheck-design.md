@@ -64,6 +64,11 @@ account id stays the handle the app looks things up by. The checks run against t
     so probes land 10 to 12 minutes apart however many daemons run.
 - Explicit, limit-hit and wiring requests keep today's path and per-refresher cooldown. They do not go
   through the due check.
+  - A request for a home the timer already queued is judged exactly as if nothing were queued. If it
+    would run now, the queued entry becomes a real request. If it would wait for a cooldown, the queued
+    entry stays a periodic check and the request is deferred as usual.
+  - A periodic check that finds the home not due counts as no refresh at all: no cooldown starts from
+    it. A request that arrived while it ran is judged afresh against the last real refresh.
 - The probe is the existing one, run against the account's `Directory`:
   - Claude: `ClaudeIdentityProbe` (`claude auth status --json`).
   - Codex: `CodexAccountProbe`, which also refreshes limits for idle accounts, the same as at daemon start.
@@ -116,9 +121,15 @@ With retirement gone, two paths can still deliver one. Both get their own guard.
   which may be hours old (`ClaudeStatusLineReading`). A session idle since before the switch still holds
   the old login's `rate_limits`, and its next render sends them. `ReadingMerge.MergeWindow` keeps whichever
   window resets later, so one such replay can stick over the new login's fresh numbers for up to a week.
-  - Guard: once a home has switched (`generation_started_at` is set), a status-line payload merges its
-    windows only when it is fresh, meaning its `total_api_duration_ms` moved past the baseline the
-    current reading holds for that session. Otherwise it only records the baseline.
+  - Guard: once a home has switched, a status-line payload merges its windows only when it is fresh,
+    meaning its `total_api_duration_ms` moved past the baseline the current reading holds for that
+    session. Otherwise it only records the baseline.
+  - "Switched" means `generation_started_at` is set or `generation` is above 0. Registries from older
+    builds carry nonzero generations without the timestamp, and their retirement fence is gone, so they
+    need the guard as well.
+  - The reading keeps up to 256 session baselines, least recently seen evicted first (today: 64). A
+    session evicted between its renders counts as unknown and is never merged. Progress therefore needs
+    fewer than 256 sessions reporting into one home, which is the guarantee this design makes.
   - That covers every case: a session with no baseline, a counter that went backwards, a missing counter,
     a baseline evicted by the 64-session cap, and a reading lost to a crash after the registry save. None
     of them counts until the session makes an API call after the switch.
