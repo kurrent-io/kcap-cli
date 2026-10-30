@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Reactive;
 using Capacitor.App.Services.LocalSetup;
+using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.LocalEdition;
 using ReactiveUI.Reactive;
 
@@ -17,6 +18,15 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     public const string ProfileMismatchCode = "profile_mismatch";
     public const string AnswerRequiredText  = "This installer needs answers this version of kcap doesn't give. Update kcap, then try again.";
     public const string NotStartedText = "kcap didn't finish starting. Try again to finish the install.";
+    public const string GaveUpText     = "kcap didn't finish starting, even after 10 tries. Email the logs to support and we'll help you get it running.";
+
+    /// A start failure is retried this many times before the page shows it.
+    public const int AutoRetries = 10;
+
+    /// Lets a port or lock the failed start still held clear before the next attempt.
+    static readonly TimeSpan RetryGap = TimeSpan.FromSeconds(3);
+
+    static readonly HashSet<string> StartFailureCodes = new(StringComparer.Ordinal) { "start_failed", "recovery_failed", "commit_failed" };
     public const string RepairingText  = "Updating an older kcap on this Mac";
     public const string OldClientText  = "An older kcap on this Mac is still in the way. Try again to update it.";
 
@@ -28,6 +38,12 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     readonly Func<CancellationToken, Task<LocalEmbeddingModelManifest?>> _builtinOffer;
     readonly Func<bool>             _resuming;
     readonly Func<CancellationToken, Task<ClientRepairOutcome>> _repairClients;
+    readonly TimeProvider           _time;
+    readonly Func<IReadOnlyList<string>, FeedbackMailOutcome>? _mailSupport;
+    readonly List<string>           _startFailures = [];
+    bool                            _autoRetrying;
+    CancellationTokenSource?        _retryGap;
+    string?                         _supportNote;
     CancellationToken               _lifetime;
     string?                         _refusal;
     string?                         _clientProblem;
@@ -40,12 +56,15 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     /// <param name="builtinOffer">The built-in model set the stack setup will run offers, or null; asked before the choice shows.</param>
     /// <param name="recorded">The installation's recorded embedding setting; a disk read, run off the UI thread.</param>
     /// <param name="repairClients">Brings any other kcap the installer would refuse up to date, before anything is asked.</param>
+    /// <param name="mailSupport">Opens a support email from what each failed start said; null offers none.</param>
     /// <param name="resuming">True while an earlier setup is unfinished: the page finishes it without asking again.</param>
     public InstallStepViewModel(
             LocalInstallController controller, Func<string?> appProfile, Func<string?> configActiveProfile,
             Func<bool> onLocalPath, Func<CancellationToken, Task<LocalEmbeddingModelManifest?>> builtinOffer,
             Func<LocalEmbeddingSetting?>? recorded = null,
             Func<CancellationToken, Task<ClientRepairOutcome>>? repairClients = null,
+            TimeProvider? time = null,
+            Func<IReadOnlyList<string>, FeedbackMailOutcome>? mailSupport = null,
             Func<bool>? resuming = null) {
         _controller          = controller;
         _appProfile          = appProfile;
@@ -54,13 +73,16 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
         _builtinOffer        = builtinOffer;
         _recorded            = recorded ?? (() => null);
         _resuming            = resuming ?? (() => false);
+        _time                = time ?? TimeProvider.System;
+        _mailSupport         = mailSupport;
         _repairClients       = repairClients ?? (_ => Task.FromResult<ClientRepairOutcome>(new ClientRepairOutcome.Clear()));
 
         Search          = new SearchChoiceViewModel();
         TryAgainCommand = ReactiveCommand.CreateFromTask(TryAgainAsync);
         RepairAgainCommand = ReactiveCommand.CreateFromTask(() =>
             !ClientProblemVisible ? Task.CompletedTask : _installPressed ? StartChosenAsync(_lifetime) : PrepareAsync(_lifetime));
-        CancelCommand   = ReactiveCommand.Create(() => { if (CancelVisible) _controller.Interrupt(); });
+        CancelCommand   = ReactiveCommand.Create(Cancel);
+        EmailSupportCommand = ReactiveCommand.Create(EmailSupport);
 
         Search.PropertyChanged += (_, e) => {
             if (e.PropertyName is nameof(SearchChoiceViewModel.Valid) or nameof(SearchChoiceViewModel.Checking))
@@ -117,10 +139,14 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
 
     LocalInstallOutcome.Failed? Failure => _controller.Outcome as LocalInstallOutcome.Failed;
 
-    public bool FailureVisible => Failure is not null && !Running && !RefusalVisible;
+    public bool FailureVisible => Failure is not null && !Running && !RefusalVisible && !AutoRetrying;
+
+    /// Every automatic retry of a start failure has failed too.
+    bool GaveUp => Failure is { Code: { } code } && StartFailureCodes.Contains(code) && _startFailures.Count > AutoRetries;
 
     public string? FailureMessage => Failure switch {
         null                                         => null,
+        _ when GaveUp                                => GaveUpText,
         { Affordance: LocalInstallAffordance.Busy }  => BusyText,
         { Affordance: LocalInstallAffordance.Retry } => RetryGuidance(Failure.Code),
         { Code: "answer_required" }                  => AnswerRequiredText,
@@ -134,9 +160,28 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     public bool FailureDetailVisible => FailureDetail is not null && !Running;
 
     public bool LockedVisible   => Failure is { LockedToLocal: true } && !Running && !RefusalVisible;
-    public bool TryAgainVisible => Failure is { Affordance: LocalInstallAffordance.Retry } && !Running;
-    public bool CancelVisible   => Running;
-    public bool BackVisible     => !Running && !Repairing && Failure is not { LockedToLocal: true };
+    public bool TryAgainVisible => Failure is { Affordance: LocalInstallAffordance.Retry } && !Running && !GaveUp;
+    public bool EmailSupportVisible => GaveUp && !Running && _mailSupport is not null;
+
+    /// Between a failed start and the next attempt; the page shows progress, not the failure.
+    public bool AutoRetrying {
+        get => _autoRetrying;
+        private set {
+            this.RaiseAndSetIfChanged(ref _autoRetrying, value);
+            this.RaisePropertyChanged(nameof(RetryStatus));
+            RestateOutcome();
+        }
+    }
+
+    public string? RetryStatus => AutoRetrying ? $"kcap didn't start, so setup is trying again ({_startFailures.Count} of {AutoRetries})" : null;
+
+    /// What became of the support email: where it went, and where the full report is if the draft was cut.
+    public string? SupportNote {
+        get => _supportNote;
+        private set => this.RaiseAndSetIfChanged(ref _supportNote, value);
+    }
+    public bool CancelVisible   => Running || AutoRetrying;
+    public bool BackVisible     => !Running && !AutoRetrying && !Repairing && Failure is not { LockedToLocal: true };
 
     public bool ProgressVisible => RefusalMessage is null && !ChoiceVisible && !Repairing && !ClientProblemVisible;
 
@@ -178,6 +223,7 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     public ReactiveCommand<Unit, Unit> TryAgainCommand { get; }
     public ReactiveCommand<Unit, Unit> CancelCommand   { get; }
     public ReactiveCommand<Unit, Unit> RepairAgainCommand { get; }
+    public ReactiveCommand<Unit, Unit> EmailSupportCommand { get; }
 
     public event Action? AdvanceRequested;
 
@@ -329,11 +375,13 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
         if (!await RepairAsync(ct)) return;
 
         _installPressed = false;
+        _startFailures.Clear();
         await _controller.StartAsync(Search.Choice, ct);
     }
 
     Task TryAgainAsync() {
         if (!TryAgainVisible) return Task.CompletedTask;
+        _startFailures.Clear();
         if (!RefusedClient(_controller.Outcome)) return _controller.RetryAsync(_lifetime);
 
         _controller.Forget();
@@ -341,9 +389,48 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     }
 
     void OnSettled(LocalInstallOutcome outcome) {
+        if (outcome is LocalInstallOutcome.Failed { Code: { } code } failed && StartFailureCodes.Contains(code)) {
+            _startFailures.Add(TerminalAdvice.Strip(failed.Message) ?? code);
+            if (_startFailures.Count <= AutoRetries) {
+                AutoRetrying = true;
+                _retryGap?.Dispose();
+                _retryGap = CancellationTokenSource.CreateLinkedTokenSource(_lifetime);
+                _ = RetryAfterGapAsync(_retryGap.Token);
+                return;
+            }
+        }
+        AutoRetrying = false;
+
         if (outcome is LocalInstallOutcome.Installed) AdvanceRequested?.Invoke();
         // Refused arguments changed nothing, so the answers can be given again.
         else if (outcome is LocalInstallOutcome.Failed { Code: "invalid_arguments" }) ChoiceVisible = true;
+    }
+
+    async Task RetryAfterGapAsync(CancellationToken ct) {
+        try {
+            await Task.Delay(RetryGap, _time, ct).ConfigureAwait(true);
+            await _controller.RetryAsync(ct).ConfigureAwait(true);
+        } catch (OperationCanceledException) {
+            AutoRetrying = false;
+        }
+    }
+
+    void Cancel() {
+        if (!CancelVisible) return;
+        if (Running) _controller.Interrupt();
+        else _retryGap?.Cancel();
+    }
+
+    void EmailSupport() {
+        if (!EmailSupportVisible) return;
+
+        var sent = _mailSupport!(_startFailures);
+        SupportNote = (sent.Opened, sent.Draft.CutShort, sent.Copied) switch {
+            (true, true, true)   => $"Opened an email to {FeedbackMail.Address}. The logs were cut to fit it; the full report is on your clipboard, so paste it over the draft's text.",
+            (true, _, _)         => $"Opened an email to {FeedbackMail.Address} in your mail app. Send it from there.",
+            (false, _, true)     => $"Couldn't open a mail app. The report is on your clipboard: paste it into an email to {FeedbackMail.Address}.",
+            (false, _, false)    => $"Couldn't open a mail app or copy the report. Email {FeedbackMail.Address} and we'll help.",
+        };
     }
 
     void OnControllerChanged(object? sender, PropertyChangedEventArgs e) {
@@ -367,6 +454,7 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
         this.RaisePropertyChanged(nameof(FailureDetailVisible));
         this.RaisePropertyChanged(nameof(LockedVisible));
         this.RaisePropertyChanged(nameof(TryAgainVisible));
+        this.RaisePropertyChanged(nameof(EmailSupportVisible));
         this.RaisePropertyChanged(nameof(CancelVisible));
         this.RaisePropertyChanged(nameof(BackVisible));
     }

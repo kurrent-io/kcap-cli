@@ -1738,6 +1738,9 @@ public partial class App : Application {
             ReportCliSetup: ReportWizardCliSetupAsync,
             ReadVisibilityOptions: ReadWizardVisibilityOptionsAsync,
             RepairClients: StaleClientRepair.ForApp(runner, probe, shimTarget, _userHome).RunAsync,
+            MailSupport: report => FeedbackMail.Send(
+                new FeedbackSubmission(FeedbackCategory.Bug, report, Guid.NewGuid(), FeedbackSource.Desktop),
+                SystemBrowser.Instance, Capacitor.Cli.Core.Auth.Clipboard.TryCopy),
             ResumeWebSignUp: WizardComposition.ResumesWebSignUp(await _appState.LoadAsync(), _time.GetUtcNow()));
         _localInstall ??= WizardComposition.NewInstallController(options);
         var graph = WizardComposition.BuildGraph(options with { Install = _localInstall });
