@@ -20,7 +20,7 @@ public sealed class HubTestHost : IAsyncDisposable {
 
     public static Func<List<DaemonInfo>> DaemonsHandler { get; set; } = () => [];
     public static Func<JsonElement, string> LaunchHandler { get; set; } = _ => "agent-1";
-    /// Null answers as a server without the method does.
+    /// Null throws a HubException from the handler, which is not a missing method.
     public static Func<string[]>? LaunchFeaturesHandler { get; set; }
     static int _launchCalls;
     public static int LaunchCalls => _launchCalls;
