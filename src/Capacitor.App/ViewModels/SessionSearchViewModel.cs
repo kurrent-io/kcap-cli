@@ -19,6 +19,8 @@ public sealed class SessionSearchViewModel : ReactiveObject, IDisposable {
     readonly TimeProvider _time;
     readonly IScheduler _scheduler;
     readonly ObservableCollection<SearchHitViewModel> _hits = [];
+    /// Sessions an open found gone; kept out of every result until the page resets.
+    readonly HashSet<string> _unavailable = new(StringComparer.Ordinal);
     readonly CompositeDisposable _disposables = new();
     readonly Subject<string> _queryChanges = new();
     readonly Subject<Unit> _closed = new();
@@ -113,6 +115,7 @@ public sealed class SessionSearchViewModel : ReactiveObject, IDisposable {
         CancelIntent();
         _query = "";
         _tab = SearchMode.Sessions;
+        _unavailable.Clear();
         this.RaisePropertyChanged(nameof(Query));
         this.RaisePropertyChanged(nameof(Tab));
         Clear();
@@ -190,8 +193,11 @@ public sealed class SessionSearchViewModel : ReactiveObject, IDisposable {
                 SetState(SearchListState.SignInRequired);
                 break;
             case SearchOpenOutcome.Unavailable:
-                // Left in the list, the row would only open the same dead session again.
-                if (_hits.Remove(hit)) {
+                // Left in the list, its rows would only open the same dead session again.
+                _unavailable.Add(hit.SessionId);
+                var gone = _hits.Where(h => h.SessionId == hit.SessionId).ToList();
+                foreach (var row in gone) _hits.Remove(row);
+                if (gone.Count > 0) {
                     _highlightIndex = -1;
                     HighlightIndex = _hits.Count == 0 ? -1 : 0;
                 }
@@ -252,7 +258,7 @@ public sealed class SessionSearchViewModel : ReactiveObject, IDisposable {
             ? (fetch.Response?.Sessions ?? []).Select(h => SearchHitViewModel.ForSession(h, now))
             : (fetch.Response?.Transcripts ?? []).Select(h => SearchHitViewModel.ForTranscript(h, now));
         _hits.Clear();
-        foreach (var row in rows) _hits.Add(row);
+        foreach (var row in rows.Where(r => !_unavailable.Contains(r.SessionId))) _hits.Add(row);
         HighlightIndex = 0;
 
         if (_hits.Count > 0) SetState(SearchListState.Results);
