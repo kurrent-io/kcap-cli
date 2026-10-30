@@ -76,6 +76,33 @@ public class SessionAccessServiceTests {
         await Assert.That(h.Lane.ChatSubscribes).DoesNotContain("s1");
     }
 
+    /// The re-ask must not lift a refusal it has not overturned: a failed attempt or a lane drop
+    /// would read as Offline, which shows the withheld transcript again.
+    [Test]
+    public async Task A_refusal_stands_through_a_failed_re_ask_and_a_lane_drop_until_access_is_established() {
+        using var h = new Harness();
+        h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
+        h.Connect();
+        using var first = h.Service.Acquire("s1");
+        await WaitUntilAsync(async () => await Harness.Current(first) == SessionAccessState.Denied, "first denied");
+        var seen = new List<SessionAccessState>();
+        using var watch = first.State.Subscribe(s => { lock (seen) seen.Add(s); });
+
+        h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Failed("transient"));
+        using var second = h.Service.Acquire("s1");
+        await WaitUntilAsync(() => h.Lane.AccessWatches.Count(s => s == "s1") == 2, what: "the re-ask");
+        await Task.Delay(50);
+        h.Drop();
+        await Task.Delay(50);
+        List<SessionAccessState> states;
+        lock (seen) states = [.. seen.Distinct()];
+        await Assert.That(states).IsEquivalentTo([SessionAccessState.Denied]);
+
+        h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Ok);
+        h.Connect(epoch: 2);
+        await WaitUntilAsync(async () => await Harness.Current(second) == SessionAccessState.Established, "established");
+    }
+
     /// An established entry is shared as is: joining it costs no hub call.
     [Test]
     public async Task A_lease_joining_an_established_entry_does_not_ask_again() {

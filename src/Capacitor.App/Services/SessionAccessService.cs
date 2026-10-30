@@ -221,6 +221,9 @@ public sealed class SessionAccessService : IDisposable {
     // Caller holds _lock.
     void Publish(Entry entry, SessionAccessState state) {
         if (entry.State.Value == state && state != SessionAccessState.Establishing) return;
+        // A refusal stands until an attempt is answered: a retry or a lane drop in between would
+        // read as Offline, which shows the transcript the refusal withheld.
+        if (entry.State.Value == SessionAccessState.Denied && state is SessionAccessState.Establishing or SessionAccessState.Unavailable) return;
         entry.State.OnNext(state);
         _transitions.OnNext((entry.SessionId, state));
     }
