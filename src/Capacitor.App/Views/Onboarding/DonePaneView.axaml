@@ -82,11 +82,11 @@
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
                 <TextBlock Classes="onboardingBody" IsVisible="{Binding NoAgentsVisible}"
-                           Text="No agents were connected in this setup" />
+                           Text="{Binding NoAgentsLine}" />
                 <TextBlock x:Name="FirstSessionText" Classes="onboardingBody" IsVisible="{Binding FirstSessionVisible}"
                            Text="{x:Static vm:DoneStepViewModel.FirstSessionLine}" />
                 <TextBlock Classes="onboardingNote" IsVisible="{Binding PathHazardVisible}">
-                    <Run Text="Nothing is stored until the login shell can find " /><Run Text="kcap" FontFamily="{StaticResource OnboardingMonoFont}" /><Run Text=". Go back to your agents to fix it" />
+                    <Run Text="Nothing is stored until your terminal can find " /><Run Text="kcap" FontFamily="{StaticResource OnboardingMonoFont}" /><Run Text=". Go back to your agents to fix it" />
                 </TextBlock>
                 <TextBlock Classes="onboardingNote" onboarding:OnboardingSpans.Spans="{Binding ImportHint}"
                            IsVisible="{Binding ImportHint, Converter={x:Static ObjectConverters.IsNotNull}}" />

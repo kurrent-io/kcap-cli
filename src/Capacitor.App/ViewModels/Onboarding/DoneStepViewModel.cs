@@ -84,11 +84,11 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
     public string Title =>
         Imported          ? "Your work so far"
         : CapturePromised ? "From now on, your agents remember"
-        :                   "No new agents connected";
+        :                   "No new coding tools connected";
 
     public string Lede =>
-        _current.Local && Import is null && !CapturePromised ? "Setup didn't connect any agents. You can add one whenever you're ready"
-        : Import is null && !CapturePromised ? "Setup didn't connect any new agents, and any you connected before are unchanged. You can add one whenever you're ready"
+        _current.Local && Import is null && !CapturePromised ? $"Setup didn't connect any coding tools. {ConnectLater}"
+        : Import is null && !CapturePromised ? $"Setup didn't connect any new coding tools, and any you connected before are unchanged. {ConnectLater}"
         : Import is null         ? $"kcap stores what your coding agents do on {_current.MachineName} and lets them search it later. Next time you hit a problem, the fix you already found is stored in kcap"
         : Import.Running         ? "What has landed is already searchable"
         : Import.Imported > 0    ? "Your agents can search all of it. Ask one what you have already tried, and it looks here first"
@@ -130,14 +130,24 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
         ? $"Your history is still on {_current.MachineName}. Go back to History to retry"
         : $"Your history is still on {_current.MachineName}. Go back to History to retry, or run kcap import later";
 
-    /// Hooks load at agent start, so an agent open since before setup stores nothing until it is launched again.
-    public string? RestartLine => CapturePromised ? "Agents already open will start storing sessions the next time you launch them" : null;
+    /// Hooks load at agent start, so an agent open since before setup stores nothing until it is launched again,
+    /// and when setup changed PATH, a terminal open since before it cannot run the hooks either.
+    public string? RestartLine => !CapturePromised ? null
+        : _current.PathAdded ? "Agents already open will start storing sessions once you launch them again from a new terminal"
+        : "Agents already open will start storing sessions the next time you launch them";
 
     public IReadOnlyList<CaptureItem> Capture => [.. _current.Recording.Select(label => new CaptureItem(label, _current.PathHazard))];
 
     public bool CaptureVisible => _current.Recording.Count > 0;
 
     public bool NoAgentsVisible => _current.Recording.Count == 0;
+
+    /// The lede already names Settings → Harnesses when nothing was imported either.
+    public string NoAgentsLine => Import is null
+        ? "No coding tools were connected in this setup"
+        : $"No coding tools were connected in this setup. {ConnectLater}";
+
+    const string ConnectLater = $"You can connect them later in {SetupLocation.HarnessesSettings}";
 
     public bool FirstSessionVisible => Import is null && CapturePromised;
 

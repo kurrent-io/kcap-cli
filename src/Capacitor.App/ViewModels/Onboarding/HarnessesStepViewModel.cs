@@ -11,8 +11,8 @@ namespace Capacitor.App.ViewModels.Onboarding;
 /// <summary>
 /// Which harnesses record and get the tools, who can read what they record, and — when the login
 /// shell cannot find kcap — the PATH fix the hooks depend on. Next writes the profile, then runs one
-/// <c>kcap plugin install</c> per selected row in registry order; a failed row stays with its own
-/// Retry and the page waits for a second Next rather than moving on as if it had worked.
+/// <c>kcap plugin install</c> per selected row in registry order. The page then stays, so each row's
+/// outcome and the terminal note are read where they happened; a second Next moves on.
 /// </summary>
 public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
     /// Every answer, narrowest first, offered when the server does not say which this tenant can honour
@@ -90,8 +90,11 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
     public bool Applicable => true;
     public string SkipLabel => "Not now";
 
+    /// Once harnesses are on, Not now has nothing left to decline.
+    public bool Skippable => !_installed;
+
     public string Lede =>
-        "Sessions record themselves from now on, and each harness gets tools to search your past work — " +
+        "Each harness you turn on records its sessions from now on and gets tools to search your past work — " +
         "so what you already fixed is there to find.";
 
     public string MachineName { get; }
@@ -100,6 +103,9 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
 
     /// "Not found: …" under the rows, or null when every harness was found.
     public string? NotFoundLine { get; private set; }
+
+    /// Why some rows start off, or null when every row was found by a command or an app.
+    public string? SettingsOnlyNote { get; private set; }
 
     public bool NoneFound => _detected && Rows.Count == 0;
     /// Detection in flight — table chrome must wait; Busy alone also covers install.
@@ -113,9 +119,15 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
 
     public bool PathResolved => PathFix is { Fixed: true };
 
+    /// Not now installs nothing, so the PATH change is offered rather than announced.
     public IReadOnlyList<DisclosureSpan> PathNote =>
-        [new("Turning harnesses on also adds "), new("kcap", Code: true), new(" to your terminal so their hooks can run it. "),
+        [new("Harness hooks run "), new("kcap", Code: true),
+         new(" from your terminal, so turning a harness on adds it there. Not now leaves your terminal as it is. "),
          .. PathFix?.Plan ?? []];
+
+    /// A terminal reads PATH when it starts, so one already open may still not find kcap.
+    public IReadOnlyList<DisclosureSpan> PathResolvedNote =>
+        [new("Terminals you open from now on can run "), new("kcap", Code: true), new(", so harnesses started from them record.")];
 
     public bool CliAvailable => _cli.CliPath is not null;
 
@@ -134,9 +146,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
 
     bool Local => _onLocalPath?.Invoke() == true;
 
-    public string SavedNote => Local
-        ? "These connection choices are saved."
-        : "These connection choices are saved. Use kcap plugin remove in your terminal to disconnect a harness.";
+    public string SavedNote => SetupLocation.DisconnectLaterNote;
 
     public string CliMissingNote => Local
         ? "The kcap command line isn't available on this machine, so there is nothing to turn on from here."
@@ -249,10 +259,12 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
 
             var missing = AgentVendors.All.Where(v => !detected.ContainsKey(v.Id)).Select(v => v.Label).ToList();
             NotFoundLine = missing.Count == 0 ? null : "Not found: " + string.Join(", ", missing);
+            SettingsOnlyNote = SettingsOnlyNoteFor([.. Rows.Where(r => r.SettingsOnly && !r.Declined).Select(r => r.Label)]);
             _detected = true;
 
             this.RaisePropertyChanged(nameof(Rows));
             this.RaisePropertyChanged(nameof(NotFoundLine));
+            this.RaisePropertyChanged(nameof(SettingsOnlyNote));
             this.RaisePropertyChanged(nameof(NoneFound));
             this.RaisePropertyChanged(nameof(IsDetecting));
             this.RaisePropertyChanged(nameof(ShowsTable));
@@ -316,9 +328,10 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
         this.RaisePropertyChanged(nameof(NextLabel));
         this.RaisePropertyChanged(nameof(ChoicesEditable));
         this.RaisePropertyChanged(nameof(ConnectionsSaved));
+        this.RaisePropertyChanged(nameof(Skippable));
 
-        // Stay only when a selected row failed, so its Retry is on screen. A clean install leaves.
-        return Rows.All(r => !r.Selected || !r.Failed);
+        // Nothing selected installed nothing, so there is no outcome to stay for.
+        return !Rows.Any(r => r.Selected);
     }
 
     async Task<bool> PersistAsync(CancellationToken ct) {
@@ -412,6 +425,13 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
             _ => null,
         };
     }
+
+    internal static string? SettingsOnlyNoteFor(IReadOnlyList<string> labels) => labels switch {
+        [] => null,
+        [var one] => $"Only {one}'s settings folder was found, so it starts off. Turn it on if you use it.",
+        _ => $"Only the settings folders of {string.Join(", ", labels.SkipLast(1))} and {labels[^1]} were found, " +
+             "so they start off. Turn on the ones you use.",
+    };
 
     void RestateSelection() {
         this.RaisePropertyChanged(nameof(SelectedCount));

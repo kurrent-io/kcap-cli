@@ -61,7 +61,7 @@
                 </StackPanel>
 
                 <TextBlock Classes="onboardingBody" IsVisible="{Binding NoneFound}">
-                    <Run Text="No harnesses were found on " /><Run Text="{Binding MachineName}" FontFamily="{StaticResource OnboardingMonoFont}"
+                    <Run Text="No coding tools were found on " /><Run Text="{Binding MachineName}" FontFamily="{StaticResource OnboardingMonoFont}"
                         Foreground="{StaticResource OnboardingTextBrush}" /><Run Text="{x:Static vm:SetupLocation.NoneFoundTail}" />
                 </TextBlock>
 
@@ -123,6 +123,8 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
+                    <TextBlock x:Name="SettingsOnlyNoteText" Classes="onboardingNote" Text="{Binding SettingsOnlyNote}" Margin="0,11,0,0"
+                               IsVisible="{Binding SettingsOnlyNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                     <TextBlock Classes="onboardingNote" Text="{Binding NotFoundLine}" Margin="0,11,0,0"
                                IsVisible="{Binding NotFoundLine, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 </StackPanel>
@@ -145,12 +147,11 @@
                 <!-- Turning a harness on also puts the bundled CLI on the login shell. -->
                 <TextBlock x:Name="PathNoteText" Classes="onboardingNote" IsVisible="{Binding PathHazard}"
                            views:OnboardingSpans.Spans="{Binding PathNote}" />
-                <StackPanel Orientation="Horizontal" Spacing="9" IsVisible="{Binding PathResolved}">
+                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9" IsVisible="{Binding PathResolved}">
                     <icons:AppIcon Kind="Check" Size="14" VerticalAlignment="Center" Foreground="{StaticResource KcapSuccessBrush}" />
-                    <TextBlock Classes="onboardingDetail" Foreground="{StaticResource OnboardingMutedBrush}">
-                        <Run Text="Your login shell on " /><Run Text="{Binding MachineName}" FontFamily="{StaticResource OnboardingMonoFont}" /><Run Text=" can now find " /><Run Text="kcap" FontFamily="{StaticResource OnboardingMonoFont}" /><Run Text=". Capture will record." />
-                    </TextBlock>
-                </StackPanel>
+                    <TextBlock Grid.Column="1" x:Name="PathResolvedText" Classes="onboardingDetail" Foreground="{StaticResource OnboardingMutedBrush}"
+                               views:OnboardingSpans.Spans="{Binding PathResolvedNote}" />
+                </Grid>
 
                 <TextBlock Classes="onboardingError" Text="{Binding Message}"
                            IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />

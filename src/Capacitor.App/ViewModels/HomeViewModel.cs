@@ -11,15 +11,15 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Harness.Claude;
+using Capacitor.Cli.Core.Http;
 using Capacitor.Remote.Models;
 using DynamicData;
 using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
 
-/// One entry of the repository chip's menu. Vendor is the remembered harness for RepoPath, or
-/// HomeViewModel.DefaultVendor when none was ever chosen there; Selected marks the entry that
-/// matches SelectedRepoPath under HomeViewModel's own path comparison.
+/// One entry of the repository chip's menu. Vendor is the harness picking RepoPath would select;
+/// Selected marks the entry that matches SelectedRepoPath under HomeViewModel's own path comparison.
 public sealed record RepositoryOption(string RepoPath, string Vendor, bool Selected);
 
 /// One entry of the launcher's machine chip: the local daemon, or one of the viewer's own remote
@@ -105,13 +105,42 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal const string FinishingUpdateNotice    = "Finishing the update…";
     internal const string LocalServerLostNotice    = "Lost the connection to the local server. kcap keeps retrying.";
 
-    /// A service-run daemon restarts itself for a harness installed on its PATH; setup fixes a PATH that
-    /// misses it, and a daemon started by hand needs a restart.
-    internal static string NoHarnessesNotice(string? remoteMachine) => remoteMachine is null
-        ? "No coding agents found on this machine. Install Claude Code, Codex or another supported agent. If it doesn't show up, run setup again or restart the daemon."
-        : $"No coding agents found on {remoteMachine}. Install one there. If it doesn't show up, run setup there again or restart its daemon.";
+    /// The app's own connection got no answer at all: the server is down or unreachable, which no sign-in repairs.
+    internal static string ServerUnreachableNotice(ConnectionFailure failure) =>
+        $"Can't reach the server ({failure.Reason}). {failure.Remedy}";
 
-    internal static string HarnessUnavailableMessage(string label) => $"{label} isn't available on this machine. Choose another agent.";
+    /// The app's own connection keeps failing past the catch-up bound on something other than a credential:
+    /// a refused credential parks the lane signed out instead.
+    internal const string ServerRetryingNotice = "Can't connect to the server. kcap keeps retrying.";
+
+    internal static bool IsServerUnreachable(string? notice) =>
+        notice == ServerRetryingNotice || notice?.StartsWith("Can't reach the server (", StringComparison.Ordinal) == true;
+
+    /// What is launchable is what the daemon advertises, never what recording found: a service-run daemon
+    /// restarts itself for a harness installed on its PATH, setup fixes a PATH that misses it, and a daemon
+    /// started by hand needs a restart. A remote machine's recovery happens on that machine.
+    internal static string NoHarnessesNotice(string? remoteMachine) => remoteMachine is null
+        ? "No coding agents are available to launch on this machine. Install Claude Code, Codex or another supported agent. " +
+          "It's offered here once the daemon finds its command. If it doesn't show up, run setup again or restart the daemon."
+        : $"No coding agents are available to launch on {remoteMachine}. Install one there. " +
+          $"It's offered here once {remoteMachine}'s daemon finds its command. If it doesn't show up, run setup there again or restart its daemon.";
+
+    /// The daemon advertises only what it can host, so a missing vendor lacks its command there or is not
+    /// hostable on that system; it does not say which.
+    internal static string HarnessUnavailableReason(string label, string? remoteMachine) => remoteMachine is null
+        ? $"{label} can't be launched on this machine. The daemon here didn't find its command, or can't host it on this system."
+        : $"{label} can't be launched on {remoteMachine}. Its daemon didn't find {label}'s command there, or can't host it on that system.";
+
+    internal static string HarnessUnavailableMessage(string label, string? remoteMachine) =>
+        $"{HarnessUnavailableReason(label, remoteMachine)} Choose another agent.";
+
+    /// The picker's hover text for a vendor the selected machine does not advertise; null for one it does.
+    public string? UnavailableHarnessTip(HarnessOption option) =>
+        option.Available ? null : HarnessUnavailableReason(option.Label, RemoteMachineSelected ? SelectedMachine : null);
+
+    /// Hover text for the button that opens Settings → Harnesses.
+    public const string HarnessesSettingsTip =
+        "Turn on recording and agent tools for the coding tools on this machine. It doesn't change which agents can be launched.";
 
     /// The title over a daemon status that arrives alone, so the card keeps a title and a body.
     internal const string DaemonStatusTitle = "Daemon status";
@@ -368,6 +397,20 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// Only while the banner shows the very line the repair answers, never beside another notice.
     public bool DaemonRepairVisible => _daemonRepairVisible?.Value ?? false;
     public ReactiveCommand<Unit, Unit>? RepairDaemonCommand { get; private set; }
+
+    // Null until AttachServerRetry.
+    readonly BehaviorSubject<Func<Task>?> _retryServer = new(null);
+    readonly ObservableAsPropertyHelper<bool> _serverRetryVisible;
+    /// Only beside a notice that the server gave no answer: a retry is what that needs, never a sign-in.
+    public bool ServerRetryVisible => _serverRetryVisible.Value;
+    public ReactiveCommand<Unit, Unit> RetryServerCommand { get; }
+
+    // Null until AttachHarnessesSettings, and whenever the app has no profile to open Settings for.
+    readonly BehaviorSubject<Action?> _openHarnessesSettings = new(null);
+    readonly ObservableAsPropertyHelper<bool> _harnessesSettingsVisible;
+    /// Only beside this machine's no-agent line: local settings cannot configure a remote machine.
+    public bool HarnessesSettingsVisible => _harnessesSettingsVisible.Value;
+    public ReactiveCommand<Unit, Unit> OpenHarnessesSettingsCommand { get; }
 
     readonly ObservableAsPropertyHelper<string> _startButtonTip;
     /// Tip when Start is disabled (no repo / connection gate). ToolTip.ShowOnDisabled is required.
@@ -783,7 +826,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             _machineSelectionChanges,
             (lane, sameServer, sel) => (
                 State: sel.Remote || sameServer ? lane.State : ServerLaneState.Dormant,
-                Applies: sel.Remote || sameServer));
+                Applies: sel.Remote || sameServer,
+                Failure: sel.Remote || sameServer ? lane.Failure : null));
+        var selectedLaneState = selectedServerLane.Select(lane => lane.State).DistinctUntilChanged()
+            .ObserveOn(RxSchedulers.MainThreadScheduler);
 
         // Uploading an attachment needs a live server credential, so the gate reads the app's own
         // lane rather than the daemon's — and the machine half is asked of the machine that would
@@ -862,16 +908,17 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
                 _awaitingServerAfterSignIn,
                 selectedServerLane,
                 foreignServer,
-                (status, connection, expired, awaiting, lane, foreign) => (status, connection, expired, awaiting: awaiting && lane.Applies, lane: lane.State, foreign));
+                (status, connection, expired, awaiting, lane, foreign) =>
+                    (status, connection, expired, awaiting: awaiting && lane.Applies, lane: lane.State, failure: lane.Failure, foreign));
         var rawNotices = localNoticeInputs
             .CombineLatest(selectedAvailability, _machineSelectionChanges,
                 (n, avail, sel) => NoticeFor(n.status, n.connection, n.expired, n.awaiting, sel.Remote, avail, n.lane,
-                    n.foreign is { } foreign ? DaemonOnOtherServerNotice(foreign, appServerUrl!) : null))
+                    n.foreign is { } foreign ? DaemonOnOtherServerNotice(foreign, appServerUrl!) : null, n.failure))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
         rawNotices.Subscribe(ArmOrResetCatchUp).DisposeWith(_disposables);
         // A stopped local server's Start banner is the whole story, so the no-harness fallback stays
         // out of it whether or not the daemon has noticed the server is gone.
-        var connectionNotices = rawNotices.CombineLatest(_catchUpTimedOut, NoticeAfterCatchUp)
+        var connectionNotices = rawNotices.CombineLatest(_catchUpTimedOut, selectedLaneState, NoticeAfterCatchUp)
             .CombineLatest(_localServer, _localServerDown, _machineSelectionChanges,
                 (notice, local, down, sel) => NoticeForLocalServer(notice, local, down, sel.Remote ? sel.Name : null));
         var harnessNotice = noHarnesses.ObserveOn(RxSchedulers.MainThreadScheduler)
@@ -932,14 +979,32 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .ToProperty(this, x => x.BannerFailed, initialValue: false)
             .DisposeWith(_disposables);
         var signInVisible = signInState
-            .CombineLatest(_catchUpTimedOut, _localServer, (t, timedOut, local) => !local && !t.Awaiting && (t.Expired || (timedOut && !t.Foreign) || (
-                t.Availability == LaunchAvailability.ServerDisconnected && !t.Foreign && !LaneIsCatchingUp(t.Lane))));
+            .CombineLatest(_catchUpTimedOut, _localServer, (t, timedOut, local) => SignInOffered(
+                local, t.Awaiting, t.Expired, timedOut, t.Foreign, t.Availability, t.Lane));
         _signInVisible = signInVisible
             .ToProperty(this, x => x.SignInVisible, initialValue: false)
             .DisposeWith(_disposables);
+        var canOpenHarnessesSettings = _openHarnessesSettings.Select(open => open is not null)
+            .ObserveOn(RxSchedulers.MainThreadScheduler);
+        OpenHarnessesSettingsCommand = ReactiveCommand.Create(() => _openHarnessesSettings.Value?.Invoke(), canOpenHarnessesSettings);
+        var harnessesSettingsVisible = bannerContent
+            .CombineLatest(canOpenHarnessesSettings, (content, canOpen) => canOpen && content.Message == NoHarnessesNotice(null))
+            .DistinctUntilChanged();
+        _harnessesSettingsVisible = harnessesSettingsVisible
+            .ToProperty(this, x => x.HarnessesSettingsVisible, initialValue: false)
+            .DisposeWith(_disposables);
+        var canRetryServer = _retryServer.Select(retry => retry is not null)
+            .ObserveOn(RxSchedulers.MainThreadScheduler);
+        RetryServerCommand = ReactiveCommand.CreateFromTask(() => _retryServer.Value?.Invoke() ?? Task.CompletedTask, canRetryServer);
+        var serverRetryVisible = bannerContent
+            .CombineLatest(canRetryServer, (content, canRetry) => canRetry && IsServerUnreachable(content.Message))
+            .DistinctUntilChanged();
+        _serverRetryVisible = serverRetryVisible
+            .ToProperty(this, x => x.ServerRetryVisible, initialValue: false)
+            .DisposeWith(_disposables);
         _bannerActionsVisible = _daemonStartVisibleFeed
-            .CombineLatest(_daemonRetryVisibleFeed, _daemonRepairVisibleFeed, signInVisible,
-                (start, retry, repair, signIn) => start || retry || repair || signIn)
+            .CombineLatest(_daemonRetryVisibleFeed, _daemonRepairVisibleFeed, signInVisible, harnessesSettingsVisible, serverRetryVisible,
+                (start, retry, repair, signIn, harnesses, serverRetry) => start || retry || repair || signIn || harnesses || serverRetry)
             .ToProperty(this, x => x.BannerActionsVisible, initialValue: false)
             .DisposeWith(_disposables);
 
@@ -1029,6 +1094,13 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .DisposeWith(_disposables);
         repairVisible.Subscribe(_daemonRepairVisibleFeed).DisposeWith(_disposables);
     }
+
+    /// Redials the app's own server connection at once rather than at the next step of its backoff.
+    public void AttachServerRetry(Func<Task> retry) => _retryServer.OnNext(retry);
+
+    /// The no-agent banner's way to Settings → Harnesses; null while there is no profile to open Settings for.
+    public void AttachHarnessesSettings(IObservable<Action?> open) =>
+        open.Subscribe(_openHarnessesSettings.OnNext).DisposeWith(_disposables);
 
     /// The "local server is not running" banner, beside the daemon's own recovery.
     public LocalServerRecoveryViewModel? LocalServer { get; private set; }
@@ -1154,7 +1226,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal static string? NoticeFor(
             AttachStatus status, string daemonConnection, bool signInExpired, bool awaitingServer,
             bool remoteSelected, LaunchAvailability selectedAvailability,
-            ServerLaneState lane = ServerLaneState.Dormant, string? foreignServerNotice = null) {
+            ServerLaneState lane = ServerLaneState.Dormant, string? foreignServerNotice = null, ConnectionFailure? laneFailure = null) {
         if (signInExpired) return SignInExpiredNotice;
 
         if (!remoteSelected && status.State == AttachState.Unreachable)
@@ -1165,6 +1237,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             };
 
         if (!remoteSelected && status.State == AttachState.Connected && foreignServerNotice is not null) return foreignServerNotice;
+
+        // The app's own attempt got no answer: neither a finishing sign-in nor a fresh one can get past that.
+        if (lane == ServerLaneState.Retrying && laneFailure is { } failure && selectedAvailability != LaunchAvailability.Ready)
+            return ServerUnreachableNotice(failure);
 
         if (awaitingServer && selectedAvailability is LaunchAvailability.ServerDisconnected or LaunchAvailability.Pending)
             return FinishingSignInNotice;
@@ -1211,9 +1287,20 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal static bool BusyNotice(string? notice) =>
         notice is ConnectingNotice or FinishingSignInNotice;
 
-    /// A Connecting/Finishing line that outlived CatchUpLimit is a lost session, not catch-up.
-    internal static string? NoticeAfterCatchUp(string? notice, bool timedOut) =>
-        timedOut && BusyNotice(notice) ? ServerLostNotice : notice;
+    /// A Connecting/Finishing line that outlived CatchUpLimit is a lost session, not catch-up. While the app's own
+    /// lane is still retrying, the server is what is failing, so the line says that rather than asking for a sign-in.
+    internal static string? NoticeAfterCatchUp(string? notice, bool timedOut, ServerLaneState lane = ServerLaneState.Dormant) =>
+        !timedOut || !BusyNotice(notice) ? notice
+        : lane == ServerLaneState.Retrying ? ServerRetryingNotice
+        : ServerLostNotice;
+
+    /// Sign in is offered only on credential evidence or a session lost with the server answering. A retrying lane
+    /// is never a credential problem: a refused credential parks it signed out instead.
+    internal static bool SignInOffered(
+            bool localServer, bool awaiting, bool expired, bool timedOut, bool foreign, LaunchAvailability availability,
+            ServerLaneState lane) =>
+        !localServer && !awaiting && (expired || (lane != ServerLaneState.Retrying && !foreign && (timedOut
+            || (availability == LaunchAvailability.ServerDisconnected && !LaneIsCatchingUp(lane)))));
 
     /// A local server takes no sign-in, so none of its notices asks for one. With this Mac selected,
     /// the Start banner is the whole story while the server is down, so the generic connecting and
@@ -1225,6 +1312,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             (ServerLostNotice, { } machine)                             => RemoteOfflineNotice(machine),
             (_, not null)                                               => notice,
             (ConnectingNotice or ServerLostNotice, _) when localServerDown => null,
+            _ when localServerDown && IsServerUnreachable(notice)       => null,
             (ServerLostNotice, _)                                       => LocalServerLostNotice,
             _                                                           => notice,
         };
@@ -1245,6 +1333,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         _daemonStartVisibleFeed.Dispose();
         _daemonRetryVisibleFeed.Dispose();
         _daemonRepairVisibleFeed.Dispose();
+        _openHarnessesSettings.Dispose();
+        _retryServer.Dispose();
         _uploadingChanges.Dispose();
         _updateFinishing.Dispose();
         _retentionTimer.Dispose();
@@ -1310,8 +1400,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// A remote machine selection swaps this entirely: that machine's advertised RepoPaths as the
     /// registry reports them now (none once it is gone, or only a local twin of the same name is
     /// left), plus a typed path not yet among them (no known-repos merge, no
-    /// scratch adoption — a remote path is never verified locally), each labelled DefaultVendor
-    /// since there is no per-repo remembered harness for a machine that is not this one.
+    /// scratch adoption — a remote path is never verified locally), each labelled with the harness
+    /// the pick keeps, since there is no per-repo remembered harness for a machine that is not this one.
     public async Task<IReadOnlyList<RepositoryOption>> ListRepositoriesAsync() {
         if (RemoteMachineSelected) {
             var remoteSelected = SelectedRepoPath;
@@ -1322,7 +1412,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             return remotePaths
                 .OrderBy(RepoLabel.Leaf, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(p => p, StringComparer.Ordinal)
-                .Select(p => new RepositoryOption(p, DefaultVendor, RemotePathComparer.Equals(p, remoteSelected)))
+                .Select(p => new RepositoryOption(p, RemoteRepoVendor(Harnesses), RemotePathComparer.Equals(p, remoteSelected)))
                 .ToList();
         }
 
@@ -1331,17 +1421,37 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         var (byRepo, paths) = await GatherLocalRepoDataAsync();
 
         var selected = SelectedRepoPath;
+        var harnesses = Harnesses;
         var options = paths
             .OrderBy(RepoLabel.Leaf, StringComparer.OrdinalIgnoreCase)
             .ThenBy(p => p, StringComparer.Ordinal)
-            .Select(p => new RepositoryOption(p, Lookup(byRepo, p) ?? DefaultVendor, PathComparer.Equals(p, selected)))
+            .Select(p => new RepositoryOption(p, RepoVendor(Lookup(byRepo, p), harnesses), PathComparer.Equals(p, selected)))
             .ToList();
 
         if (paths.Count == 0)
             options.Add(new RepositoryOption(
-                ScratchRepoPath, Lookup(byRepo, ScratchRepoPath) ?? DefaultVendor, selected.Length == 0));
+                ScratchRepoPath, RepoVendor(Lookup(byRepo, ScratchRepoPath), harnesses), selected.Length == 0));
         return options;
     }
+
+    /// The harness picking a local repository lands on, so its menu entry never names one the pick
+    /// would not use: the remembered harness while it is available, then DefaultVendor, then the
+    /// selected one, then the first available. With nothing available it is the remembered one or
+    /// DefaultVendor, and the menu shows no badge.
+    string RepoVendor(string? remembered, IReadOnlyList<HarnessOption> harnesses) {
+        if (IsAvailable(harnesses, remembered)) return remembered!;
+        if (IsAvailable(harnesses, DefaultVendor)) return DefaultVendor;
+        if (IsAvailable(harnesses, SelectedVendor)) return SelectedVendor;
+        return harnesses.FirstOrDefault(o => o.Available)?.Vendor ?? remembered ?? DefaultVendor;
+    }
+
+    /// A remote pick keeps the selected harness while the machine offers it; see RevalidateVendor.
+    string RemoteRepoVendor(IReadOnlyList<HarnessOption> harnesses) =>
+        IsAvailable(harnesses, SelectedVendor) ? SelectedVendor
+            : harnesses.FirstOrDefault(o => o.Available)?.Vendor ?? DefaultVendor;
+
+    internal static bool IsAvailable(IReadOnlyList<HarnessOption> harnesses, string? vendor) =>
+        vendor is not null && harnesses.Any(o => o.Available && string.Equals(o.Vendor, vendor, StringComparison.OrdinalIgnoreCase));
 
     /// The path-gathering half of ListRepositoriesAsync's local branch, split out so
     /// ListMachinesAsync can reuse it for the local MachineOption's RepoPaths without a second
@@ -1568,9 +1678,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     }
 
     /// Sets the repository and restores that repository's remembered harness, or DefaultVendor
-    /// when none — never the vendor a DIFFERENT repository had selected. In remote mode the local
-    /// HarnessByRepo store is never consulted. Either way the result is revalidated against the
-    /// selected machine's current harnesses.
+    /// when none — never the vendor a DIFFERENT repository had selected while DefaultVendor is
+    /// available; the selected one is kept only when it is not (RepoVendor). In remote mode the
+    /// local HarnessByRepo store is never consulted. Either way the result is revalidated against
+    /// the selected machine's current harnesses.
     public async Task SelectRepositoryAsync(string repoPath) {
         // This host's separator rules would rewrite a remote path: on Unix, Windows' C:/ trims to C:.
         SelectedRepoPath = repoPath.Length == 0 ? ScratchRepoPath
@@ -1585,7 +1696,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         var saved = await _state.LoadAsync();
         // A machine switch or another pick made while the store loaded owns the vendor now.
         if (RemoteMachineSelected || !string.Equals(SelectedRepoPath, selected, StringComparison.Ordinal)) return;
-        SetVendor(Lookup(saved.HarnessByRepo, SelectedRepoPath) ?? DefaultVendor);
+        SetVendor(RepoVendor(Lookup(saved.HarnessByRepo, SelectedRepoPath), Harnesses));
         RevalidateVendor(Harnesses);
     }
 
@@ -1615,7 +1726,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         var harness = options.FirstOrDefault(o => string.Equals(o.Vendor, draft.Vendor, StringComparison.OrdinalIgnoreCase));
         if (harness is { Available: true }) return null;
         return options.Any(o => o.Available)
-            ? HarnessUnavailableMessage(harness?.Label ?? draft.Vendor)
+            ? HarnessUnavailableMessage(harness?.Label ?? draft.Vendor, draft.Remote ? draft.Machine : null)
             : NoHarnessesNotice(draft.Remote ? draft.Machine : null);
     }
 

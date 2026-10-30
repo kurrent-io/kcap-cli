@@ -117,11 +117,12 @@ public partial class LauncherPaneView : UserControl {
         };
 
         // Pill sits on the title row only (not vertically centered on title+path), so every
-        // repo's badge lines up with "No repository"'s badge.
+        // repo's badge lines up with "No repository"'s badge. No harness available, no badge.
         var pill = new Border {
             Background = Brush("KcapMutedBrush"), CornerRadius = new CornerRadius(999),
             Padding = new Thickness(8, 3), Margin = new Thickness(12, 0, 0, 0),
             VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            IsVisible = HomeViewModel.IsAvailable(vm.Harnesses, option.Vendor),
             Child = new TextBlock {
                 Text = HostedHarnessCatalog.LabelFor(vm.Harnesses, option.Vendor),
                 FontSize = 11, FontWeight = FontWeight.SemiBold,
@@ -426,11 +427,6 @@ public partial class LauncherPaneView : UserControl {
 
     IBrush Brush(string key) => (IBrush)this.FindResource(key)!;
 
-    /// The daemon advertises only the vendors it can host, so an unavailable one is either not
-    /// installed there or not hostable on its OS; it does not say which.
-    internal static string? UnavailableHarnessTip(HarnessOption option) =>
-        option.Available ? null : $"{option.Label} — not installed or not supported on this machine";
-
     /// The vendor's mark at a given size: the brand path when VendorIcons carries one, the tinted
     /// monogram otherwise (both from HostedHarnessCatalog.TileFor). UI-thread only (constructs
     /// thread-affine Geometry/brushes).
@@ -468,10 +464,12 @@ public partial class LauncherPaneView : UserControl {
         var currentTab = vm.SelectedVendor;
 
         var searchBox = new TextBox {
+            Name = "ModelSearchBox",
             PlaceholderText = "Search models…", FontSize = 13.5,
             Background = Brushes.Transparent, BorderThickness = new Thickness(0),
             VerticalContentAlignment = Avalonia.Layout.VerticalAlignment.Center,
         };
+        AutomationProperties.SetName(searchBox, "Search models");
         var underline = new Border { Height = 1, Background = border };
         var magnifier = new AppIcon {
             Kind = LucideIconKind.Search, Size = 16, Foreground = muted,
@@ -512,7 +510,8 @@ public partial class LauncherPaneView : UserControl {
             flyout.Hide();
         }
 
-        Button Row(string vendor, string vendorLabel, string label, bool enabled, bool selected, Action pick) {
+        Button Row(string vendor, string vendorLabel, string label, string? unavailableTip, bool selected, Action pick) {
+            var enabled = unavailableTip is null;
             var sub = new StackPanel {
                 Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 6,
                 Margin = new Thickness(0, 2, 0, 0),
@@ -542,6 +541,11 @@ public partial class LauncherPaneView : UserControl {
             };
             row.Classes.Add("kcapGhost");
             AutomationProperties.SetName(row, ChoiceName($"{label}, {vendorLabel}", selected));
+            if (unavailableTip is not null) {
+                ToolTip.SetTip(row, unavailableTip);
+                ToolTip.SetShowOnDisabled(row, true);
+                AutomationProperties.SetHelpText(row, unavailableTip);
+            }
             row.Click += (_, _) => pick();
             return row;
         }
@@ -688,13 +692,14 @@ public partial class LauncherPaneView : UserControl {
         void AddVendorRows(HarnessOption option, Func<ModelChoice, bool> matches, bool includeDefault) {
             var vendor = option.Vendor;
             var isCurrentVendor = string.Equals(vm.SelectedVendor, vendor, StringComparison.OrdinalIgnoreCase);
+            var unavailableTip = vm.UnavailableHarnessTip(option);
             if (includeDefault)
                 rows.Children.Add(Row(
-                    vendor, option.Label, $"Default — {option.Label} chooses", option.Available,
+                    vendor, option.Label, $"Default — {option.Label} chooses", unavailableTip,
                     isCurrentVendor && vm.SelectedModel.Length == 0, () => Pick(vendor, "")));
             foreach (var model in vm.ModelChoicesFor(vendor).Where(matches))
                 rows.Children.Add(Row(
-                    vendor, option.Label, model.Label, option.Available,
+                    vendor, option.Label, model.Label, unavailableTip,
                     isCurrentVendor && string.Equals(vm.SelectedModel, model.Slug, StringComparison.OrdinalIgnoreCase),
                     () => Pick(vendor, model.Slug)));
         }
@@ -729,7 +734,7 @@ public partial class LauncherPaneView : UserControl {
                     o => string.Equals(o.Vendor, currentTab, StringComparison.OrdinalIgnoreCase));
                 var tabLabel = tabOption?.Label ?? currentTab;
                 rows.Children.Add(Row(
-                    currentTab, tabLabel, $"Use “{term}”", tabOption?.Available ?? true,
+                    currentTab, tabLabel, $"Use “{term}”", tabOption is null ? null : vm.UnavailableHarnessTip(tabOption),
                     selected: false, () => Pick(currentTab, term)));
             }
         }
@@ -750,7 +755,9 @@ public partial class LauncherPaneView : UserControl {
                     Opacity = option.Available ? 1 : 0.4,
                 };
                 tile.Classes.Add(active ? "kcapChip" : "kcapGhost");
-                ToolTip.SetTip(tile, UnavailableHarnessTip(option) ?? $"{option.Label} — {HostedHarnessCatalog.DescriptionFor(option)}");
+                var unavailable = vm.UnavailableHarnessTip(option);
+                ToolTip.SetTip(tile, unavailable ?? $"{option.Label} — {HostedHarnessCatalog.DescriptionFor(option)}");
+                if (unavailable is not null) AutomationProperties.SetHelpText(tile, unavailable);
                 ToolTip.SetShowOnDisabled(tile, true);
                 AutomationProperties.SetName(tile, option.Label);
                 tile.Click += (_, _) => {

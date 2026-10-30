@@ -72,7 +72,8 @@
             <Border x:Name="LocalUpgradeBanner" Classes="notice" IsVisible="{Binding Notices.ShowStack}">
                 <Grid ColumnDefinitions="16,*" ColumnSpacing="10">
                     <Panel x:Name="LocalUpgradeIcon" VerticalAlignment="Top">
-                        <views:AppIcon Classes="noticeIcon kcapSpinning" Size="16" Kind="LoaderCircle" Foreground="{StaticResource KcapMutedBrush}">
+                        <views:AppIcon Classes="noticeIcon kcapSpinning" Size="16" Kind="LoaderCircle" Foreground="{StaticResource KcapMutedBrush}"
+                                       AutomationProperties.Name="In progress">
                             <views:AppIcon.IsVisible>
                                 <MultiBinding Converter="{x:Static BoolConverters.Or}" FallbackValue="False">
                                     <Binding Path="LocalStack.Upgrading" FallbackValue="False" />
@@ -80,7 +81,8 @@
                                 </MultiBinding>
                             </views:AppIcon.IsVisible>
                         </views:AppIcon>
-                        <views:AppIcon x:Name="LocalUpgradeFailedIcon" Classes="noticeIcon" Size="16" Kind="CircleX" Foreground="{StaticResource KcapDangerBrush}">
+                        <views:AppIcon x:Name="LocalUpgradeFailedIcon" Classes="noticeIcon" Size="16" Kind="CircleX" Foreground="{StaticResource KcapDangerBrush}"
+                                       AutomationProperties.Name="Failed">
                             <views:AppIcon.IsVisible>
                                 <MultiBinding Converter="{x:Static BoolConverters.And}" FallbackValue="False">
                                     <Binding Path="LocalStack.Attention" FallbackValue="False" />
@@ -89,6 +91,7 @@
                             </views:AppIcon.IsVisible>
                         </views:AppIcon>
                         <views:AppIcon Classes="noticeIcon" Size="16" Kind="Clock" Foreground="{StaticResource KcapMutedBrush}"
+                                       AutomationProperties.Name="Note"
                                        IsVisible="{Binding LocalStack.IsNote, FallbackValue=False}" />
                     </Panel>
                     <StackPanel Grid.Column="1" Spacing="4">
@@ -144,12 +147,14 @@
                         </views:AppIcon>
                     </Panel>
                     <StackPanel Grid.Column="1" Spacing="4">
-                        <TextBlock x:Name="LocalServerHeadline" Classes="noticeTitle" Text="The local server isn't running" />
-                        <TextBlock x:Name="LocalServerBody" Classes="noticeBody" Text="Start it to launch agents and open the dashboard.">
+                        <TextBlock x:Name="LocalServerHeadline" Classes="noticeTitle"
+                                   Text="{Binding LocalServer.Headline, FallbackValue={x:Null}}" />
+                        <TextBlock x:Name="LocalServerBody" Classes="noticeBody" Text="{Binding LocalServer.Body, FallbackValue={x:Null}}">
                             <TextBlock.IsVisible>
-                                <MultiBinding Converter="{x:Static BoolConverters.And}" FallbackValue="True">
+                                <MultiBinding Converter="{x:Static BoolConverters.And}" FallbackValue="False">
                                     <Binding Path="LocalServer.IsStarting" Converter="{x:Static BoolConverters.Not}" FallbackValue="True" />
                                     <Binding Path="LocalServer.Message" Converter="{x:Static StringConverters.IsNullOrEmpty}" />
+                                    <Binding Path="LocalServer.Body" Converter="{x:Static StringConverters.IsNotNullOrEmpty}" FallbackValue="False" />
                                 </MultiBinding>
                             </TextBlock.IsVisible>
                         </TextBlock>
@@ -157,7 +162,7 @@
                                    IsVisible="{Binding LocalServer.IsStarting, FallbackValue=False}" />
                         <SelectableTextBlock x:Name="LocalServerMessage" Classes="noticeBody" Text="{Binding LocalServer.Message}"
                                              IsVisible="{Binding LocalServer.Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                        <StackPanel Classes="noticeActions" IsVisible="{Binding !LocalServer.IsStarting, FallbackValue=True}">
+                        <StackPanel Classes="noticeActions" IsVisible="{Binding LocalServer.StartOffered, FallbackValue=False}">
                             <Button x:Name="StartLocalServerButton" Classes="kcapPrimary" Content="Start"
                                     Command="{Binding LocalServer.StartCommand}" />
                         </StackPanel>
@@ -204,6 +209,12 @@
                                     Command="{Binding RetryDaemonCommand}" IsVisible="{Binding DaemonRetryVisible}" />
                             <Button x:Name="HomeSignInButton" Classes="kcapPrimary" Content="Sign in"
                                     Command="{Binding SignInCommand}" IsVisible="{Binding SignInVisible}" />
+                            <Button x:Name="RetryServerButton" Classes="kcapPrimary" Content="Retry"
+                                    AutomationProperties.Name="Retry the server connection"
+                                    Command="{Binding RetryServerCommand}" IsVisible="{Binding ServerRetryVisible}" />
+                            <Button x:Name="OpenHarnessesSettingsButton" Classes="kcapChip" Content="Open Harnesses settings"
+                                    Command="{Binding OpenHarnessesSettingsCommand}" IsVisible="{Binding HarnessesSettingsVisible}"
+                                    ToolTip.Tip="{x:Static vm:HomeViewModel.HarnessesSettingsTip}" />
                         </StackPanel>
                     </StackPanel>
                 </Grid>
@@ -243,6 +254,7 @@
                                                    IsVisible="{Binding Tray.HasAttachments}" />
 
                         <TextBox x:Name="GoalInput" Classes="kcapEmbedded" Text="{Binding Goal}"
+                                 AutomationProperties.Name="Session goal"
                                  PlaceholderText="What should we build? Type a goal or paste an issue, PR, or work-item URL…"
                                  Background="Transparent" Foreground="{StaticResource KcapTextBrush}"
                                  BorderThickness="0" MinHeight="72" MaxHeight="220" TextWrapping="Wrap"
