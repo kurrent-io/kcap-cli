@@ -42,9 +42,7 @@ public sealed class AboutSettingsViewModel : ReactiveObject, IDisposable {
             .Subscribe(t => {
                 DaemonStatus = DaemonStatusFor(t.status, t.daemon);
                 var attached = t.status.State == AttachState.Connected ? t.daemon : null;
-                ServerConnection = attached is null ? null
-                    : string.IsNullOrEmpty(attached.ServerUrl) ? attached.Connection
-                    : $"{attached.Connection} · {attached.ServerUrl}";
+                ServerConnection = DaemonStatusText.Server(t.status, t.daemon);
                 RunningAgents = attached is null ? null
                     : attached.MaxAgents == 0 ? $"{attached.ActiveAgents} running · no limit"
                     : $"{attached.ActiveAgents} running · limit {attached.MaxAgents}";
@@ -88,16 +86,7 @@ public sealed class AboutSettingsViewModel : ReactiveObject, IDisposable {
         private set => this.RaiseAndSetIfChanged(ref field, value);
     }
 
-    internal static string DaemonStatusFor(AttachStatus status, DaemonInfoDto? daemon) => status.State switch {
-        AttachState.Connected   => daemon?.Name is { Length: > 0 } name ? $"connected · {name}" : "connected",
-        AttachState.Connecting  => "connecting",
-        _ => status.Reason switch {
-            "daemon_unreachable"         => "not running",
-            "daemon_incompatible"        => "version doesn't match the app",
-            ExpectedDaemonRestart.Reason => "restarting",
-            _                            => "unreachable",
-        },
-    };
+    internal static string DaemonStatusFor(AttachStatus status, DaemonInfoDto? daemon) => DaemonStatusText.Attach(status, daemon);
 
     public string? CliVersion {
         get => _cliVersionText;

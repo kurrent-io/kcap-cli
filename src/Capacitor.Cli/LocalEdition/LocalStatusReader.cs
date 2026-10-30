@@ -15,7 +15,7 @@ sealed class LocalStatusReader(LocalStack stack, string cliVersion, Func<int, Po
         var root = stack.Root.Directory;
 
         return stack.Read() switch {
-            LocalStackState.NotInstalled => new(false, $"No local installation in {root}.", [], ["Run kcap setup --local to install one."]),
+            LocalStackState.NotInstalled => NotInstalled(root),
 
             LocalStackState.Unreadable(var path, var reason) => new(false, $"{path} cannot be read ({reason}).", [],
                 ["No kcap local command acts on the installation until that file is fixed or removed."]),
@@ -32,6 +32,14 @@ sealed class LocalStatusReader(LocalStack stack, string cliVersion, Func<int, Po
             var other => throw new InvalidOperationException($"Unexpected state {other}."),
         };
     }
+
+    /// <summary>A purge leaves the retired URL in the registry; that is the only evidence it ever existed, and nothing
+    /// about it is offered to start.</summary>
+    LocalStatusReport NotInstalled(string root) =>
+        LocalStateFiles.ReadRegistry(stack.Root) is StateRead<InstallRegistry>.Present { Value.Retired: [.., var retired] }
+            ? new(false, $"Purged: no local installation in {root}.", [new("Retired", retired.ServerUrl)],
+                [$"Its data was deleted and {retired.ServerUrl} is retired, so nothing is sent there again. kcap setup --local installs a new one on a new port."])
+            : new(false, $"No local installation in {root}.", [], ["Run kcap setup --local to install one."]);
 
     async Task<LocalStatusReport> InstalledAsync(LocalStackState.Installed state, CancellationToken ct) {
         var (installation, unit) = (state.Installation, state.Unit);
@@ -60,7 +68,16 @@ sealed class LocalStatusReader(LocalStack stack, string cliVersion, Func<int, Po
               + pending),
         };
 
-        if (state.UnitAbsent) return Down($"Not running: no {service.Describe} is installed for it.", fields, notes, StoppedAdvice(unit, "installs and starts it"), Leftovers());
+        // A start, stop, restart or uninstall in flight passes through every state below on its way.
+        var held = LifecycleLease.IsHeld(stack.Root);
+        if (held && state.UnitAbsent) return Changing(fields, notes);
+
+        if (state.UnitAbsent)
+            return Directory.Exists(Path.Combine(stack.Root.Directory, "bin"))
+                ? Down($"Not running: no {service.Describe} is installed for it.", fields, notes, StoppedAdvice(unit, "installs and starts it"), Leftovers())
+                : Down($"Uninstalled: its {service.Describe} and the server's files were removed.", fields, notes,
+                    [$"Its data in {Path.Combine(stack.Root.Directory, "data")} and its URL are kept. kcap setup --local reinstalls it on the same port; "
+                   + "kcap local start cannot run it until then."], Leftovers());
 
         switch (state.Owner) {
             case OwnerDecision.NotOurs:
@@ -78,10 +95,17 @@ sealed class LocalStatusReader(LocalStack stack, string cliVersion, Func<int, Po
                         ["Telling the two apart writes a probe file into the root, which status never does. kcap local start, stop or restart decides it under the lifecycle lock."]);
         }
 
-        switch (service.Activity(unit)) {
+        var activity = service.Activity(unit);
+        if (held && activity is not UnitActivity.Running) return Changing(fields, notes);
+
+        switch (activity) {
             case UnitActivity.Stopped:
                 fields.Add(new("Postgres", PostgresField()));
-                return Down("Stopped.", fields, notes, StoppedAdvice(unit, "starts it"), Leftovers());
+                var blocked = Taken(installation.Port, null, "Stop that process, then run kcap local start; kcap never stops a process it did not start.")
+                    .ToList();
+                return blocked.Count > 0
+                    ? Down($"Stopped, and port {installation.Port} is taken by another process.", fields, notes, blocked, Leftovers())
+                    : Down("Stopped.", fields, notes, StoppedAdvice(unit, "starts it"), Leftovers());
 
             case UnitActivity.Running(var pid):
                 fields.Add(new("Process", $"pid {pid}"));
@@ -168,13 +192,17 @@ sealed class LocalStatusReader(LocalStack stack, string cliVersion, Func<int, Po
 
     /// <summary>A listener on the port that is not the server's own process; <paramref name="ours"/> null when the
     /// server is not running, so any listener is a stranger.</summary>
-    IEnumerable<string> Taken(int port, int? ours) {
+    IEnumerable<string> Taken(int port, int? ours, string then = "Stop that process; while the service runs, the server starts on its own once the port is free.") {
         if (findHolder(port) is not { } holder || holder.Pid == ours) yield break;
 
         yield return $"Port {port} is taken by {holder.Command} (pid {holder.Pid}), so the server cannot listen on it. "
-                   + "The port is part of this installation's identity, so the stack cannot move to another; stop that process. "
-                   + "While the service runs, the server starts on its own once the port is free.";
+                   + "The port is part of this installation's identity, so the stack cannot move to another. "
+                   + then;
     }
+
+    static LocalStatusReport Changing(List<KeyValuePair<string, string>> fields, List<string> notes) =>
+        Down("Changing: another kcap command holds the installation, so the server may be starting, stopping or restarting.", fields, notes,
+            ["Wait for it to finish; kcap local status then says where it left the server. A start now would only wait behind it."]);
 
     static void AddStores(List<KeyValuePair<string, string>> fields, IReadOnlyDictionary<string, StoreHealth> stores) {
         foreach (var (key, label) in new[] { ("kurrentdb", "KurrentDB"), ("postgres", "Postgres") }) {

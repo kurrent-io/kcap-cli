@@ -273,6 +273,14 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
 
     public bool StatusShowsAgents => _status.State == AttachState.Connected && _snapshot is not null;
 
+    /// Whether the daemon runs and this app is attached to it.
+    public string DaemonState => DaemonStatusText.Attach(_status, _snapshot?.Daemon);
+    public string? DaemonStateHint => DaemonStatusText.AttachHint(_status);
+
+    /// The daemon's own connection to its server, apart from whether it runs; null while it is not attached.
+    public string? ServerState => DaemonStatusText.Server(_status, _snapshot?.Daemon);
+    public string? ServerStateHint => DaemonStatusText.ServerHint(_status, _snapshot?.Daemon);
+
     public string StatusTip => _status.State switch {
         AttachState.Connected when _snapshot is { } snap =>
             snap.Daemon.MaxAgents == 0
@@ -497,12 +505,17 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
         this.RaisePropertyChanged(nameof(StatusLabel));
         this.RaisePropertyChanged(nameof(StatusShowsAgents));
         this.RaisePropertyChanged(nameof(StatusTip));
+        this.RaisePropertyChanged(nameof(DaemonState));
+        this.RaisePropertyChanged(nameof(DaemonStateHint));
+        this.RaisePropertyChanged(nameof(ServerState));
+        this.RaisePropertyChanged(nameof(ServerStateHint));
     }
 
     public void Dispose() {
         _lifetime.Cancel();
         Capture.Dispose();
         Harnesses?.Dispose();
+        Profiles?.Dispose();
         _subscriptions.Dispose();
         Accounts?.Dispose();
         Appearance?.Dispose();

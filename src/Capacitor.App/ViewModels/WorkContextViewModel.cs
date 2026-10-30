@@ -74,6 +74,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     readonly CompositeDisposable _disposables = new();
     ITimer? _timer;
     bool _tornDown;
+    bool _serverDown;
     AgentStatusDto? _dto;
 
     string _repository = "—";
@@ -293,9 +294,11 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
             IObservable<AgentStatusDto?> presence, IWorkContextSource source, TimeProvider time, IUrlOpener opener,
             SessionRuns runs, Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null,
             Action<string>? openWorkItem = null, IPlanSource? plans = null, PlanActivity? planActivity = null,
-            ArtefactsTabViewModel? artefacts = null, bool isRemote = false, bool sessionOnly = false) {
+            ArtefactsTabViewModel? artefacts = null, bool isRemote = false, bool sessionOnly = false,
+            IObservable<ServerLaneStatus>? serverLane = null, WorkContextLayout? layout = null) {
         _isRemote = isRemote;
         _sessionOnly = sessionOnly;
+        _layout = layout ?? new WorkContextLayout();
         _source = source;
         _branchReader = new SingleFlightReader<(string? Path, string? Reported), string>(
             (state, ct) => Task.Run(() => {
@@ -349,6 +352,20 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         _disposables.Add(SignInCommand);
 
         presence.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(OnDto).DisposeWith(_disposables);
+        if (serverLane is not null) {
+            // Only an attempt nothing answered is evidence the server is down; a read in flight then ends in the
+            // unreachable state rather than loading for as long as the outage lasts.
+            serverLane.Select(s => s.State == ServerLaneState.Retrying && s.Failure is not null)
+                .DistinctUntilChanged()
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(OnServerDown)
+                .DisposeWith(_disposables);
+            serverLane.Select(s => s.State).DistinctUntilChanged().Skip(1)
+                .Where(state => state == ServerLaneState.Connected)
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(_ => Reconnected())
+                .DisposeWith(_disposables);
+        }
         signInCompleted?
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => OnSignInCompleted())
@@ -413,8 +430,16 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         IsStale = false;
         Phase = WorkContextPhase.Loading;
         _reader.Switch(id);
+        if (_serverDown && Phase == WorkContextPhase.Loading) Phase = WorkContextPhase.Unreachable;
         Plan.SwitchSession(id);
         Artefacts?.SwitchSession(id, _isRemote ? null : WorktreePath ?? RepositoryPath);
+    }
+
+    void OnServerDown(bool down) {
+        if (_tornDown) return;
+        _serverDown = down;
+        Plan.SetServerDown(down);
+        if (down && Phase == WorkContextPhase.Loading) Phase = WorkContextPhase.Unreachable;
     }
 
     void OnTick() {

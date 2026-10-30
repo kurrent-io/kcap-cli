@@ -271,7 +271,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             LastReads<PullRequestSnapshot>? pullRequestSnapshots = null, Action<string>? pullRequestLinksChanged = null,
             SubagentEventsReader? readSubagent = null, AccountReadings? readings = null, IMessageSenderSource? senders = null,
             IRemoteAgentsService? remoteAgents = null, IAppNotifier? notifier = null, IObservable<string?>? appSubject = null,
-            IServerSessionsService? serverSessions = null) {
+            IServerSessionsService? serverSessions = null, WorkContextLayout? workContextLayout = null) {
         _drafts = drafts;
         _time = time;
         _permissions = permissions;
@@ -297,7 +297,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         commands?.Track($"remote:{row.Id}", runs).DisposeWith(_disposables);
         WorkContext = new WorkContextViewModel(_presence, workContext, time, opener, runs,
             requestSignIn, signInCompleted, actions.OpenWorkItemInWeb, plans, planActivity,
-            artefacts: Artefacts, isRemote: true, sessionOnly: row.Origin == AgentOrigin.Server);
+            artefacts: Artefacts, isRemote: true, sessionOnly: row.Origin == AgentOrigin.Server, serverLane: lane.Status,
+            layout: workContextLayout);
         WorkContext.RunOpened += OpenSubagent;
         _disposables.Add(Disposable.Create(() => WorkContext.RunOpened -= OpenSubagent));
         // An open subagent belongs to the session it was opened from.
@@ -317,7 +318,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
                 }).DisposeWith(_disposables);
         lane.Status.Select(s => s.State).DistinctUntilChanged().Skip(1)
             .Where(state => state == ServerLaneState.Connected).ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(_ => { PullRequests?.Reconnected(); WorkContext.Reconnected(); }).DisposeWith(_disposables);
+            .Subscribe(_ => PullRequests?.Reconnected()).DisposeWith(_disposables);
 
         WorkContext.PullRequests = PullRequests;
         _accessStates.Where(s => s == SessionAccessState.Established)

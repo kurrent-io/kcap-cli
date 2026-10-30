@@ -247,6 +247,116 @@ public class LocalServerRecoveryViewModelTests {
         });
     }
 
+    static LocalServerRecoveryViewModel WithCondition(
+            BehaviorSubject<ServerLaneStatus> status, Func<LocalServerCondition> read, Recorder recorder, bool canStart = true) =>
+        new(status, isLocalServer: true, recorder.Start, recorder.Reconnect, CancellationToken.None,
+            readCondition: read, canStart: canStart, readScheduler: System.Reactive.Concurrency.ImmediateScheduler.Instance);
+
+    /// An uninstalled, purged or never-installed server still reads as down, but a start cannot bring it back:
+    /// the banner says what the files say and offers nothing to click, and Start invoked anyway runs nothing.
+    [Test]
+    [Arguments(LocalServerCondition.Uninstalled, "The local server was uninstalled")]
+    [Arguments(LocalServerCondition.Purged, "The local server was removed")]
+    [Arguments(LocalServerCondition.NotInstalled, "The local server was removed")]
+    [Arguments(LocalServerCondition.FilesMissing, "The local server needs attention")]
+    [Arguments(LocalServerCondition.Interrupted, "The local server needs attention")]
+    [Arguments(LocalServerCondition.Unreadable, "The local server needs attention")]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_gone_installation_is_explained_and_never_offered_start(LocalServerCondition condition, string headline) {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var status = new BehaviorSubject<ServerLaneStatus>(new(ServerLaneState.Connecting));
+            var recorder = new Recorder();
+            using var vm = WithCondition(status, () => condition, recorder);
+
+            status.OnNext(new(ServerLaneState.Retrying, "Connection refused"));
+
+            await Assert.That(vm.Visible).IsTrue();
+            await Assert.That(vm.Condition).IsEqualTo(condition);
+            await Assert.That(vm.StartOffered).IsFalse();
+            await Assert.That(vm.Headline).IsEqualTo(headline);
+            await Assert.That(vm.Body).IsEqualTo(condition.Explanation);
+            await Assert.That(((ICommand)vm.StartCommand).CanExecute(null)).IsFalse();
+            await Assert.That(await vm.StartAsync()).IsFalse();
+            await Assert.That(recorder.Starts).IsEqualTo(0);
+        });
+    }
+
+    /// Another kcap's restart passes through stopped: no Start then, and Start comes back once the files say it is
+    /// installed and nothing holds it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Start_waits_out_another_commands_change_and_returns_when_it_settles() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var status = new BehaviorSubject<ServerLaneStatus>(new(ServerLaneState.Connecting));
+            var condition = LocalServerCondition.Changing;
+            using var vm = WithCondition(status, () => condition, new Recorder());
+
+            status.OnNext(new(ServerLaneState.Retrying, "Connection refused"));
+            await Assert.That(vm.StartOffered).IsFalse();
+            await Assert.That(vm.Headline).IsEqualTo("The local server is being changed");
+
+            condition = LocalServerCondition.Installed;
+            status.OnNext(new(ServerLaneState.Retrying, "Connection refused"));
+
+            await Assert.That(vm.StartOffered).IsTrue();
+            await Assert.That(vm.Headline).IsEqualTo("The local server isn't running");
+            await Assert.That(vm.Body).IsEqualTo("Start it to launch agents and open the dashboard.");
+        });
+    }
+
+    /// Until the files have been read nothing is known, so nothing is offered.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Start_is_not_offered_before_the_installation_has_been_read() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var status = new BehaviorSubject<ServerLaneStatus>(new(ServerLaneState.Connected));
+            using var vm = WithCondition(status, () => LocalServerCondition.Installed, new Recorder());
+
+            await Assert.That(vm.Condition).IsNull();
+            await Assert.That(vm.StartOffered).IsFalse();
+            await Assert.That(await vm.StartAsync()).IsFalse();
+        });
+    }
+
+    /// Where kcap local start does not run, an installed server is explained rather than offered a Start that fails.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_platform_without_kcap_local_start_offers_no_start() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var status = new BehaviorSubject<ServerLaneStatus>(new(ServerLaneState.Connecting));
+            using var vm = WithCondition(status, () => LocalServerCondition.Installed, new Recorder(), canStart: false);
+
+            status.OnNext(new(ServerLaneState.Retrying, "Connection refused"));
+
+            await Assert.That(vm.Visible).IsTrue();
+            await Assert.That(vm.StartOffered).IsFalse();
+            await Assert.That(vm.Body!).Contains("can't start it on this computer");
+        });
+    }
+
+    /// A start that fails (an uninstall landed under it, say) reads the files again, so the banner stops offering it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_failed_start_rereads_the_installation() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var status = new BehaviorSubject<ServerLaneStatus>(new(ServerLaneState.Connecting));
+            var condition = LocalServerCondition.Installed;
+            var recorder = new Recorder {
+                Next = _ => {
+                    condition = LocalServerCondition.Uninstalled;
+                    return Task.FromResult(new ProcessResult(1, "", "files are missing\n", false));
+                },
+            };
+            using var vm = WithCondition(status, () => condition, recorder);
+            status.OnNext(new(ServerLaneState.Retrying, "Connection refused"));
+
+            await Assert.That(await vm.StartAsync()).IsFalse();
+
+            await Assert.That(vm.Condition).IsEqualTo(LocalServerCondition.Uninstalled);
+            await Assert.That(vm.StartOffered).IsFalse();
+        });
+    }
+
     [Test]
     public async Task Sign_in_is_never_requested_for_a_local_server() {
         var root = new LocalRoot(Tmp.CreateDir("local"));

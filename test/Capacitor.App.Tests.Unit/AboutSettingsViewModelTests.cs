@@ -41,7 +41,7 @@ public class AboutSettingsViewModelTests {
             connection: "reconnecting", active: 0, max: 5));
         service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
         Avalonia.Threading.Dispatcher.UIThread.RunJobs();
-        await Assert.That(vm.DaemonStatus).IsEqualTo("connected · work-mac");
+        await Assert.That(vm.DaemonStatus).IsEqualTo("running · work-mac");
         await Assert.That(vm.ServerConnection).IsEqualTo("reconnecting · https://kcap.example");
         await Assert.That(vm.RunningAgents).IsEqualTo("0 running · limit 5");
 

@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Http;
 using Eventuous.SignalR;
 
 namespace Capacitor.App.Services;
@@ -9,9 +10,11 @@ public enum ServerLaneState { Dormant, Connecting, Connected, Retrying, SignedOu
 /// identifies the connection generation that published this status: it advances on every restart
 /// and every park, so a caller that captures it off one Connected status can hand it back to
 /// re-validate a delayed decision (a park request, say) against whatever the lane is running now.
+/// Failure is set on a Retrying status only when the attempt got no answer at all: the server is down or
+/// unreachable, which no sign-in repairs. An answer of any kind, a refusal included, leaves it null.
 public sealed record ServerLaneStatus(
     ServerLaneState State, string? Detail = null, string? Diagnostic = null, string? Subject = null,
-    int Epoch = 0);
+    int Epoch = 0, ConnectionFailure? Failure = null);
 
 public sealed record LaunchFailure(string AgentId, string Reason);
 

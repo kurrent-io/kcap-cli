@@ -649,6 +649,9 @@
                 <StackPanel x:Name="PlanSection" IsVisible="{Binding Plan.ShowsPlan}" Margin="0,18,0,0">
                     <TextBlock Text="Loading plan…" FontSize="13" Foreground="{StaticResource KcapMutedBrush}"
                                Margin="0,4,0,0" IsVisible="{Binding Plan.IsLoading}" />
+                    <TextBlock x:Name="PlanUnavailableText" Text="Couldn't load the plan. It loads again once the server is reachable."
+                               FontSize="13" Foreground="{StaticResource KcapMutedBrush}" TextWrapping="Wrap"
+                               Margin="0,4,0,0" IsVisible="{Binding Plan.IsUnavailable}" />
                     <Button x:Name="PlanToggle" Command="{Binding Plan.ToggleCommand}" Classes="sectionHeader expandable"
                             IsVisible="{Binding Plan.HasPlan}" AutomationProperties.Name="Plan">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">

@@ -3,7 +3,9 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Avalonia.Controls;
 using Avalonia.Threading;
+using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
+using Capacitor.Cli.Core.Http;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
@@ -35,12 +37,13 @@ public class WorkContextViewModelTests {
         public SessionRuns Runs { get; }
         public FakePlanSource Plans { get; } = new();
         public PlanActivity PlanActivity { get; } = new();
+        public BehaviorSubject<ServerLaneStatus> Lane { get; } = new(new(ServerLaneState.Connected));
         public WorkContextViewModel Vm { get; }
 
-        public Harness(bool isRemote = false, bool sessionOnly = false) {
+        public Harness(bool isRemote = false, bool sessionOnly = false, WorkContextLayout? layout = null) {
             Runs = new SessionRuns(Time);
             Vm = new WorkContextViewModel(Presence, Source, Time, Opener, Runs, () => SignInRequests++, SignIn, OpenedWorkItems.Add, Plans, PlanActivity,
-                isRemote: isRemote, sessionOnly: sessionOnly);
+                isRemote: isRemote, sessionOnly: sessionOnly, serverLane: Lane, layout: layout);
         }
 
         public Task PlanSettledAsync() => Vm.Plan.PendingReadForTesting ?? Task.CompletedTask;
@@ -92,6 +95,83 @@ public class WorkContextViewModelTests {
             tmp.CreateFile(["checkout", ".git", "HEAD"], "ref: refs/heads/third\n");
             await h.Vm.RefreshCommand.Execute();
             await WaitUntilAsync(() => h.Vm.Branch == "third", what: "branch switch on refresh");
+        } finally { await h.Vm.TeardownAsync(); }
+    });
+
+    static readonly ServerLaneStatus Unanswered = new(ServerLaneState.Retrying, "Connection refused", Failure: ConnectionFailure.Refused);
+
+    /// A read waiting on a server that gives no answer is not loading: the pane and the plan end in their unavailable
+    /// states with Retry, and the server coming back reads both again without a click.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task An_outage_ends_loading_and_a_reconnect_reads_again() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        try {
+            var gate = h.Source.Gate();
+            var planGate = h.Plans.Gate();
+            h.Push(Dto());
+            await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.Loading);
+            await Assert.That(h.Vm.Plan.IsLoading).IsTrue();
+
+            h.Lane.OnNext(Unanswered);
+            await WaitUntilAsync(() => h.Vm.Phase == WorkContextPhase.Unreachable, what: "outage ends loading");
+
+            await Assert.That(h.Vm.ShowsRetry).IsTrue();
+            await Assert.That(h.Vm.PhaseNote).IsEqualTo(WorkContextViewModel.UnreachableNote);
+            await Assert.That(h.Vm.Plan.IsLoading).IsFalse();
+            await Assert.That(h.Vm.Plan.IsUnavailable).IsTrue();
+            await Assert.That(h.Vm.Plan.ShowsPlan).IsTrue();
+
+            gate.SetResult(WorkContextRead.Of(WorkContextReadKind.Unreachable, "refused"));
+            planGate.SetResult(SessionPlansRead.Of(SessionPlansReadKind.Unreachable));
+            await (h.Vm.PendingReadForTesting ?? Task.CompletedTask);
+            await h.PlanSettledAsync();
+            var reads = h.Source.Requested.Count;
+            var planReads = h.Plans.Requested.Count;
+
+            h.Source.Enqueue(Ready());
+            h.Lane.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
+            await WaitUntilAsync(() => h.Vm.Phase == WorkContextPhase.NoWorkItem, what: "reconnect reads again");
+
+            await Assert.That(h.Source.Requested.Count).IsEqualTo(reads + 1);
+            await WaitUntilAsync(() => h.Plans.Requested.Count > planReads, what: "reconnect rereads the plan");
+            await h.PlanSettledAsync();
+            await Assert.That(h.Vm.Plan.IsUnavailable).IsFalse();
+        } finally { await h.Vm.TeardownAsync(); }
+    });
+
+    /// What the pane already shows outlives an outage: the phase stays, and nothing gated on the server is cleared.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task An_outage_keeps_what_the_pane_already_shows() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        try {
+            h.Source.Enqueue(Ready());
+            await h.PushAsync(Dto());
+            await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.NoWorkItem);
+
+            h.Lane.OnNext(Unanswered);
+            await WaitUntilAsync(() => !h.Vm.Plan.IsLoading, what: "outage reaches the plan");
+
+            await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.NoWorkItem);
+            await Assert.That(h.Vm.ShowsRetry).IsFalse();
+        } finally { await h.Vm.TeardownAsync(); }
+    });
+
+    /// A session opened during an outage starts unavailable rather than loading.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_session_opened_during_an_outage_does_not_spin() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        try {
+            h.Lane.OnNext(Unanswered);
+            var gate = h.Source.Gate();
+            h.Plans.Gate();
+            h.Push(Dto());
+
+            await WaitUntilAsync(() => h.Vm.Phase == WorkContextPhase.Unreachable, what: "no spinner during an outage");
+            await Assert.That(h.Vm.Plan.IsLoading).IsFalse();
+            gate.SetResult(WorkContextRead.Of(WorkContextReadKind.Unreachable));
         } finally { await h.Vm.TeardownAsync(); }
     });
 
@@ -1921,6 +2001,30 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Vm.SessionExpanded).IsTrue();
             await Assert.That(h.Vm.SessionToggleText).IsEqualTo("Less");
             await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// Every session's pane shares one layout, so the session section stays as the reader left it
+    /// when they switch to another session, and a pane already open follows the change.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_session_section_stays_open_across_sessions() {
+        await RunOnUiAsync(async () => {
+            var layout = new WorkContextLayout();
+            var first = new Harness(layout: layout);
+            var raised = new List<string?>();
+            first.Vm.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+            await first.Vm.ToggleSessionCommand.Execute();
+            var second = new Harness(layout: layout);
+
+            await Assert.That(second.Vm.SessionExpanded).IsTrue();
+            await Assert.That(second.Vm.SessionToggleText).IsEqualTo("Less");
+            await second.Vm.ToggleSessionCommand.Execute();
+            await Assert.That(first.Vm.SessionExpanded).IsFalse();
+            await Assert.That(raised).Contains(nameof(WorkContextViewModel.SessionToggleText));
+            await first.Vm.TeardownAsync();
+            await second.Vm.TeardownAsync();
         });
     }
 
