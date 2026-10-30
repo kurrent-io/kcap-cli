@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 using Capacitor.Cli.Core.Handoff;
 using Capacitor.Cli.Core.WorkItems;
 
@@ -9,7 +10,7 @@ namespace Capacitor.Cli.Daemon.Services;
 /// The first message of an agent that continues an ended session. Every server-held value, branch names
 /// and SHAs included, sits inside the data block; the instructions around it name no such value.
 /// </summary>
-internal static class HandoffPrompt {
+internal static partial class HandoffPrompt {
     const int FieldCap  = 300;
     const int PromptCap = 2000;
 
@@ -63,17 +64,32 @@ internal static class HandoffPrompt {
             : $"on branch {branch}";
     }
 
+    const string AskHowToPush = "the branch name is unusual; ask the user how to push";
+
+    /// <summary>The agent is told to push the way this line says, so a branch name becomes a command only when it
+    /// cannot carry shell syntax or read as an option; it is single-quoted even then.</summary>
     static string Push(HandoffStart start, HandoffLaunchStart launch) {
         var branch = Safe(start.Branch);
+        var usable = IsPlainBranch(start.Branch);
 
         return start.Source switch {
             HandoffSource.ForkPullRequest =>
-                $"the pull request head is a fork, {Safe(launch.HeadOwner)}/{Safe(launch.HeadRepo)}, branch {branch}",
+                $"the pull request head is a fork, {Safe(launch.HeadOwner)}/{Safe(launch.HeadRepo)}, branch {branch}"
+              + (usable ? "" : $"; {AskHowToPush}"),
             HandoffSource.DefaultBranch => "no branch was created; the start is origin's default branch",
-            _ when start.Checkout == HandoffCheckout.Detached => $"git push origin HEAD:{branch}",
-            _ => $"git push origin {branch}"
+            _ when !usable => $"{AskHowToPush}: {branch}",
+            _ when start.Checkout == HandoffCheckout.Detached => $"git push origin 'HEAD:{start.Branch}'",
+            _ => $"git push origin '{start.Branch}'"
         };
     }
+
+    /// <summary>The length bound keeps the command under the line cap, which would otherwise cut it.</summary>
+    static bool IsPlainBranch(string? branch) =>
+        branch is { Length: > 0 and <= 200 } && !branch.StartsWith('-') && !branch.Contains("..", StringComparison.Ordinal)
+     && PlainBranch().IsMatch(branch);
+
+    [GeneratedRegex(@"\A[A-Za-z0-9._/-]+\z")]
+    private static partial Regex PlainBranch();
 
     static string Completeness(HandoffCompleteness completeness) => completeness switch {
         HandoffCompleteness.Complete     => "the session's work is all there",
