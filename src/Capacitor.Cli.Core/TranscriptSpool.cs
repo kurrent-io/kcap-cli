@@ -144,13 +144,11 @@ public sealed partial class TranscriptSpool(SpoolPartition partition, TimeProvid
         if (!SafeSessionId.IsMatch(sessionId)) return false;
 
         var key             = EncodeKey(sessionId);
-        var hasLiveFile     = AnyFileMatches($"{key}.transcript.jsonl");
-        var hasDrainingTemp = AnyFileMatches($"{key}.*.transcript.draining");
+        var hasLiveFile     = partition.AnyFileMatches($"{key}.transcript.jsonl");
+        var hasDrainingTemp = partition.AnyFileMatches($"{key}.*.transcript.draining");
 
         return hasLiveFile || hasDrainingTemp;
     }
-
-    bool AnyFileMatches(string pattern) => Directory.Exists(DirectoryPath) && Directory.EnumerateFiles(DirectoryPath, pattern).Any();
 
     /// <summary>Every distinct session id with a live .jsonl, a recovered .draining temp, or a
     /// needs-import marker (a marker can outlive its transcript file if a prior pass ran out of

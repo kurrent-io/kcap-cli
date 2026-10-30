@@ -193,6 +193,18 @@ public class HookSpoolTests {
             .IsEqualTo("{\"route\":\"session-end\",\"body\":\"withheld\"}\n");
     }
 
+    /// <summary>A session-start an older build spooled to the root is still undelivered until a drain
+    /// adopts it, so a later session-end posted directly would reach the server first.</summary>
+    [Test]
+    public async Task HasBacklog_sees_an_unpartitioned_file_no_drain_has_adopted_yet() {
+        using var config = new TempConfigRoot();
+        new HookSpool(config.Root.Path(HookSpool.DirectoryName), TimeProvider.System).Append(SidA, "session-start", "{}");
+        new TranscriptSpool(config.Root.Path(TranscriptSpool.DirectoryName), TimeProvider.System).Append(SidA, "{}");
+
+        await Assert.That(new HookSpool(config.Root, TimeProvider.System, "https://kurrent.kcap.ai").HasBacklog(SidA)).IsTrue();
+        await Assert.That(new TranscriptSpool(config.Root, TimeProvider.System, "https://kurrent.kcap.ai").HasBacklog(SidA)).IsTrue();
+    }
+
     [Test]
     public async Task HasBacklog_sees_an_ordered_drain_temp_even_though_DrainAllAsync_ignores_it() {
         using var tmp = new TempDir();

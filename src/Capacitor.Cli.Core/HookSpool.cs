@@ -246,14 +246,12 @@ public sealed partial class HookSpool(SpoolPartition partition, TimeProvider tim
         if (!SafeSessionId.IsMatch(sessionId)) return false;
 
         var key            = EncodeKey(sessionId);
-        var hasLiveFile    = AnyFileMatches($"{key}.jsonl");
-        var hasFifoTemp    = AnyFileMatches($"{key}.*.draining");
-        var hasOrderedTemp = AnyFileMatches($"{key}.ordered-*");
+        var hasLiveFile    = partition.AnyFileMatches($"{key}.jsonl");
+        var hasFifoTemp    = partition.AnyFileMatches($"{key}.*.draining");
+        var hasOrderedTemp = partition.AnyFileMatches($"{key}.ordered-*");
 
         return hasLiveFile || hasFifoTemp || hasOrderedTemp;
     }
-
-    bool AnyFileMatches(string pattern) => Directory.Exists(DirectoryPath) && Directory.EnumerateFiles(DirectoryPath, pattern).Any();
 
     /// <summary>Every distinct session id with a live .jsonl or recovered .draining/.ordered-* temp,
     /// in no particular order (callers that need current-session-first ordering add it themselves).</summary>

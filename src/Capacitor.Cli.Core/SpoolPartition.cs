@@ -47,6 +47,12 @@ public sealed class SpoolPartition {
         }
     }
 
+    /// <summary>Counts root files the next drain will adopt, so a backlog spooled before the partition
+    /// existed still holds back a later entry of the same session.</summary>
+    public bool AnyFileMatches(string pattern) => Matches(DirectoryPath, pattern) || (Root is not null && Matches(Root, pattern));
+
+    static bool Matches(string dir, string pattern) => Directory.Exists(dir) && Directory.EnumerateFiles(dir, pattern).Any();
+
     /// <summary>Sweeps every server's directory, so one no longer configured is reaped too.</summary>
     public void DeleteExpired(TimeProvider time) {
         var top = Root ?? DirectoryPath;
