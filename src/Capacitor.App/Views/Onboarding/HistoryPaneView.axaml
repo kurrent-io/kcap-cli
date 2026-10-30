@@ -128,10 +128,43 @@
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
 
+                    <!-- Unchecked by default, so an untouched page imports the repositories alone. -->
+                    <StackPanel IsVisible="{Binding FoldersVisible}" Margin="0,12,0,0">
+                        <Border Classes="onboardingRowRule" Padding="0,0,0,8">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                                <TextBlock Classes="onboardingMicro" VerticalAlignment="Bottom" Text="FOLDERS OUTSIDE A REPOSITORY" />
+                                <TextBlock Grid.Column="1" Classes="onboardingMicro" Text="ONLY ME" IsVisible="{Binding CloudLevels}" />
+                            </Grid>
+                        </Border>
+                        <ItemsControl x:Name="FolderRows" ItemsSource="{Binding Folders}" IsEnabled="{Binding !ImportStarted}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:HistoryFolderRow">
+                                    <Border Classes="onboardingRowRule">
+                                        <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10" Margin="2,9">
+                                            <CheckBox x:Name="FolderImportCheck" Classes="onboardingCheck" IsChecked="{Binding Included, Mode=TwoWay}"
+                                                      AutomationProperties.Name="{Binding Path, StringFormat='Import {0}'}" />
+                                            <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+                                                <TextBlock x:Name="FolderText" Classes="onboardingLabel" FontSize="13" Text="{Binding Path}"
+                                                           FontFamily="{StaticResource OnboardingMonoFont}" TextWrapping="Wrap" />
+                                                <TextBlock Classes="onboardingSignal" Text="{Binding SignalLine}" />
+                                            </StackPanel>
+                                            <CheckBox Grid.Column="2" x:Name="FolderOnlyMeCheck" Classes="onboardingCheck"
+                                                      IsChecked="{Binding OnlyMe, Mode=TwoWay}" IsEnabled="{Binding Included}"
+                                                      IsVisible="{Binding !Local}"
+                                                      AutomationProperties.Name="{Binding Path, StringFormat='Keep {0} to only me'}" />
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+
                 </StackPanel>
 
                 <TextBlock Classes="onboardingNote" IsVisible="{Binding DetailsVisible}"
                            Text="{Binding LevelsNote}" />
+                <TextBlock x:Name="SelectionNoteText" Classes="onboardingNote" TextWrapping="Wrap" IsVisible="{Binding DetailsVisible}"
+                           Text="{x:Static vm:HistoryStepViewModel.SelectionNote}" />
 
                 <StackPanel Spacing="8" IsVisible="{Binding DetailsVisible}" Margin="0,4,0,0">
                     <TextBlock Classes="onboardingMicro" Text="HOW MUCH HISTORY" />

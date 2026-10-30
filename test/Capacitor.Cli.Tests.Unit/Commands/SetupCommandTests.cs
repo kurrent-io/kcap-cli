@@ -1,3 +1,4 @@
+using TUnit.Assertions.Enums;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
@@ -1190,12 +1191,28 @@ public class SetupCommandTests {
     SetupCommand.ImportStepInputs Inputs(
             bool noPrompt = false, Func<bool>? prompt = null, FirstRunImportAnswer? browser = null,
             bool auth = true, bool skip = false, string visibility = "org_public",
-            CodingAgentsStep.Paths? paths = null, bool browserFinished = false, Func<bool>? nameSessions = null) => new(
+            CodingAgentsStep.Paths? paths = null, bool browserFinished = false, Func<bool>? nameSessions = null,
+            ImportSkip? leaveOut = null,
+            Func<IReadOnlyList<SetupImportChoice>, IReadOnlyList<SetupImportChoice>>? choose = null) => new(
         AuthSatisfied: auth, SkipImport: skip, NoPrompt: noPrompt, PromptYesNo: prompt ?? (() => true),
         Profiles: Resolutions.At("https://example.test", Config.Root), ProfileName: "work", ServerUrl: "https://example.test",
         DefaultVisibility: visibility, CurrentRepo: null, WorkingDirectory: Config.Directory,
         Paths: paths ?? PathsWithEvalWatchFor(HarnessId.Codex), BrowserImport: browser, BrowserImportFailed: false,
-        BrowserFinished: browserFinished, PromptNameSessions: nameSessions);
+        BrowserFinished: browserFinished, PromptNameSessions: nameSessions, Skip: leaveOut, ChooseProjects: choose);
+
+    /// <summary>Two repositories and one folder that matched none, plus a session with no folder recorded.</summary>
+    static ImportCommand.ImportDiscoveryResult DiscoveredProjects() {
+        var now     = DateTimeOffset.UtcNow;
+        var summary = ImportDiscoverySummary.Build(
+            [("a", now), ("b", now), ("c", now), ("d", now)],
+            new Dictionary<string, (string Owner, string Name)?> {
+                ["a"] = ("acme", "web"), ["b"] = ("acme", "secret"), ["c"] = null, ["d"] = null,
+            },
+            [],
+            folderBySession: new Dictionary<string, string> { ["a"] = "/w/web", ["b"] = "/w/secret", ["c"] = "/w/scratch" });
+
+        return new ImportCommand.ImportDiscoveryResult(summary, [.. HarnessRegistry.Identities.Select(i => i.Id)]);
+    }
 
     /// <summary>Synthetic discovery figures: <paramref name="attributed"/> sessions spread round-robin
     /// over <paramref name="repos"/> repositories, plus <paramref name="unmatched"/> sessions with no
@@ -1343,6 +1360,126 @@ public class SetupCommandTests {
 
         await Assert.That(runner.Calls).IsEqualTo(0);
         await Assert.That(Directory.GetFiles(Config.Directory, "import-handoff-*.json")).IsEmpty();
+    }
+
+    /// <summary>Every repository and every named folder is offered ticked, so confirming the list as it
+    /// stands imports everything, with nothing left out.</summary>
+    [Test]
+    public async Task Every_discovered_project_starts_ticked_and_an_untouched_list_leaves_nothing_out() {
+        var runner  = FakeImportRunner.Succeeding().Discovering(DiscoveredProjects());
+        var spawner = FakeBackgroundImportSpawner.Running();
+        IReadOnlyList<SetupImportChoice>? offered = null;
+
+        await Command(runner, spawner, FakeHandoffAgentLauncher.Ran(), Config.Directory)
+            .RunImportStepAsync(Inputs(choose: choices => offered = choices));
+
+        await Assert.That(offered!.Select(c => c.Repo is { } r ? $"{r.Owner}/{r.Name}" : c.Folder!).ToList())
+            .IsEquivalentTo(["acme/secret", "acme/web", "/w/scratch"], CollectionOrdering.Matching);
+        await Assert.That(offered!.All(c => c.Included)).IsTrue();
+        await Assert.That(runner.Captured!.Scope).IsEqualTo(new ImportScope.All());
+        await Assert.That(runner.Captured.Skip!.IsEmpty).IsTrue();
+        await Assert.That(spawner.Seen!.Skip.IsEmpty).IsTrue();
+    }
+
+    /// <summary>An unticked project is left out of the foreground pass and of the remainder the child
+    /// imports, and nothing is written that would keep it out of recording or a later import.</summary>
+    [Test]
+    public async Task An_unticked_project_is_left_out_of_this_import_only() {
+        var runner  = FakeImportRunner.Succeeding().Discovering(DiscoveredProjects());
+        var spawner = FakeBackgroundImportSpawner.Running();
+        var leftOut = new ImportSkip([("acme", "secret")], ["/w/scratch"]);
+
+        await Command(runner, spawner, FakeHandoffAgentLauncher.Ran(), Config.Directory)
+            .RunImportStepAsync(Inputs(choose: choices => [.. choices.Where(c => c.Repo == ("acme", "web"))]));
+
+        await Assert.That(runner.Captured!.Scope).IsEqualTo(new ImportScope.All());
+        await Assert.That(runner.Captured.Skip).IsEqualTo(leftOut);
+        await Assert.That(spawner.Seen!.Skip).IsEqualTo(leftOut);
+        await Assert.That(Directory.GetFiles(Config.Directory, "*", SearchOption.AllDirectories)
+            .Where(f => File.ReadAllText(f) is var text && (text.Contains("excluded_repos") || text.Contains("excluded_paths")))
+            .ToList()).IsEmpty();
+    }
+
+    [Test]
+    public async Task Unticking_every_project_imports_nothing() {
+        var runner = FakeImportRunner.Succeeding().Discovering(DiscoveredProjects());
+
+        var result = await Command(runner, FakeBackgroundImportSpawner.Running(), FakeHandoffAgentLauncher.Ran(), Config.Directory)
+            .RunImportStepAsync(Inputs(choose: _ => []));
+
+        await Assert.That(result.Ran).IsFalse();
+        await Assert.That(runner.Calls).IsEqualTo(0);
+    }
+
+    /// <summary>A project a flag left out starts unticked; ticking it again imports it, and a flag naming
+    /// something discovery did not offer still holds.</summary>
+    [Test]
+    public async Task A_flagged_project_starts_unticked_and_ticking_it_again_imports_it() {
+        var runner = FakeImportRunner.Succeeding().Discovering(DiscoveredProjects());
+        var flags  = new ImportSkip([("acme", "secret"), ("gone", "repo")], []);
+        IReadOnlyList<SetupImportChoice>? offered = null;
+
+        await Command(runner, FakeBackgroundImportSpawner.Running(), FakeHandoffAgentLauncher.Ran(), Config.Directory)
+            .RunImportStepAsync(Inputs(leaveOut: flags, choose: choices => {
+                offered = choices;
+                return [.. choices.Where(c => c.Folder is null)];
+            }));
+
+        await Assert.That(offered!.Single(c => c.Repo == ("acme", "secret")).Included).IsFalse();
+        await Assert.That(runner.Captured!.Skip).IsEqualTo(new ImportSkip([("gone", "repo")], ["/w/scratch"]));
+    }
+
+    /// <summary>A run that cannot ask imports what the flags chose, and never opens a prompt to find out:
+    /// --no-prompt does not even scan, and a run with no terminal is handed no chooser.</summary>
+    [Test]
+    public async Task A_run_that_cannot_ask_imports_what_the_flags_chose_without_asking() {
+        var flags = new ImportSkip([("acme", "secret")], ["/w/scratch"]);
+        Func<IReadOnlyList<SetupImportChoice>, IReadOnlyList<SetupImportChoice>> mustNotAsk =
+            _ => throw new InvalidOperationException("must not ask which projects");
+
+        var unattended = FakeImportRunner.Succeeding().Discovering(DiscoveredProjects());
+        await Command(unattended, FakeBackgroundImportSpawner.Running(), FakeHandoffAgentLauncher.Ran(), Config.Directory)
+            .RunImportStepAsync(Inputs(noPrompt: true, leaveOut: flags, choose: mustNotAsk));
+
+        var noTerminal = FakeImportRunner.Succeeding().Discovering(DiscoveredProjects());
+        var spawner    = FakeBackgroundImportSpawner.Running();
+        await Command(noTerminal, spawner, FakeHandoffAgentLauncher.Ran(), Config.Directory)
+            .RunImportStepAsync(Inputs(leaveOut: flags));
+
+        await Assert.That(unattended.DiscoverCalls).IsEqualTo(0);
+        await Assert.That(unattended.Captured!.Skip).IsEqualTo(flags);
+        await Assert.That(unattended.Captured.MaxSessions).IsNull();
+        await Assert.That(noTerminal.Captured!.Skip).IsEqualTo(flags);
+        await Assert.That(spawner.Seen!.Skip).IsEqualTo(flags);
+    }
+
+    /// <summary>With no flag, an unattended setup imports everything.</summary>
+    [Test]
+    public async Task An_unattended_run_without_flags_leaves_nothing_out() {
+        var runner = FakeImportRunner.Succeeding();
+
+        await Command(runner, FakeBackgroundImportSpawner.Running(), FakeHandoffAgentLauncher.Ran(), Config.Directory)
+            .RunImportStepAsync(Inputs(noPrompt: true));
+
+        await Assert.That(runner.Captured!.Scope).IsEqualTo(new ImportScope.All());
+        await Assert.That(runner.Captured.Skip!.IsEmpty).IsTrue();
+    }
+
+    [Test]
+    [Arguments(new[] { "setup", "--skip-import-repo" }, "--skip-import-repo needs a value")]
+    [Arguments(new[] { "setup", "--skip-import-repo", "not-a-repo" }, "--skip-import-repo expects owner/name")]
+    [Arguments(new[] { "setup", "--skip-import-folder", "--no-prompt" }, "--skip-import-folder needs a value")]
+    public async Task A_malformed_skip_import_flag_is_refused_before_anything_changes(string[] args, string expected) {
+        await Assert.That(SetupCommand.AnswerValueError(args)).Contains(expected);
+    }
+
+    [Test]
+    public async Task The_skip_import_flags_repeat() {
+        var (skip, error) = SetupCommand.ImportSkipArgs(
+            ["setup", "--skip-import-repo", "acme/secret", "--skip-import-folder", "/w/scratch", "--skip-import-repo", "acme/old"]);
+
+        await Assert.That(error).IsNull();
+        await Assert.That(skip).IsEqualTo(new ImportSkip([("acme", "secret"), ("acme", "old")], ["/w/scratch"]));
     }
 
     [Test]

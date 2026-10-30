@@ -42,7 +42,7 @@ sealed class BackgroundImportSpawner(ConfigRoot config, IProcessStarter starter)
     }
 
     /// <summary>A plan request runs <c>import --yes</c> under <see cref="ImportPlan.EnvVar"/>; any other
-    /// imports everything, unnamed unless the user agreed to naming.</summary>
+    /// imports everything but what the request skips, unnamed unless the user agreed to naming.</summary>
     internal static ProcessStartInfo BuildStartInfo(ConfigRoot config, BackgroundImportRequest request, string logPath) {
         var psi = new ProcessStartInfo {
             FileName               = Environment.ProcessPath ?? "kcap",
@@ -59,6 +59,7 @@ sealed class BackgroundImportSpawner(ConfigRoot config, IProcessStarter starter)
             _                       => ["import", "--all", "--yes", "--skip-title"],
         };
         foreach (var arg in argv) psi.ArgumentList.Add(arg);
+        if (request.PlanPath is null) foreach (var arg in request.Skip.ImportArgs) psi.ArgumentList.Add(arg);
 
         // A URL override outranks the profile pin and resolves to no profile, so it must not travel:
         // the child's capture lists and visibility come from the profile setup just saved.

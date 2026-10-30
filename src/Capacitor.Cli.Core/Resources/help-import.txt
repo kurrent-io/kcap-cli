@@ -48,6 +48,9 @@ Scope (one of, required for non-interactive use):
   --repo <owner/name>     Import only sessions from a specific repo. Repeatable:
                           pass it once per repo to select several
   --repo .                Import only sessions from the current cwd's repo
+  --folder <path>         Import only sessions that ran in <path>, as --discover
+                          names it under "couldn't match to a repository".
+                          Repeatable, and combines with --repo into one selection
 
 The org is the git-remote owner (GitHub org/user), independent of your profile
 name — so `--org` works the same under GitHub and WorkOS sign-in. A bare `--org`
@@ -58,13 +61,21 @@ Without a scope flag on an interactive terminal, an interactive picker is shown.
 Options:
   --discover              Report what is on disk and exit without importing:
                           sessions and last activity per repository, how many
-                          couldn't be matched to one, and totals for each --since
-                          window. Needs no scope flag — it is what you run to
+                          couldn't be matched to one and the folders they ran
+                          in, and totals for each --since window. Needs no scope flag — it is what you run to
                           decide which one to use
   --json                  With --discover: emit the report as JSON
   --yes, -y               Skip the confirmation prompt. Never includes an
                           excluded session (see Exclusions below)
   --private               Mark every imported session as Only Visible to You
+  --skip-repo <owner/name>
+                          Leave this repository out of this run, whatever the
+                          scope. Repeatable. Saves nothing: recording and later
+                          imports are unchanged (use kcap ignore or
+                          excluded_repos to keep a repository out for good)
+  --skip-folder <path>    Leave the sessions that ran in <path> out of this
+                          run, as --discover names the folder. Repeatable;
+                          saves nothing, like --skip-repo
   --since YYYY-MM-DD      Only import sessions started on or after this date
   --cwd <path>            Filter by working directory (composes with scope)
   --session <id>          Import a specific session only (composes with scope)

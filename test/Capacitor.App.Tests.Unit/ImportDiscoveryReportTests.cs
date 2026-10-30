@@ -43,4 +43,18 @@ public class ImportDiscoveryReportTests {
         await Assert.That(share.LastSessionAt).IsEqualTo(new DateTimeOffset(2026, 9, 20, 9, 0, 0, TimeSpan.Zero));
         await Assert.That(share.Windows!.Select(w => w.Sessions)).IsEquivalentTo([2, 3]);
     }
+
+    [Test]
+    public async Task The_folders_behind_the_unmatched_count_load_with_their_windows() {
+        var report = ImportDiscoveryReport.Parse("""
+            {"repos":[],"unmatched_sessions":3,"windows":[{"since":null,"sessions":3}],
+             "unmatched_folders":[{"folder":"/w/scratch","sessions":2,"windows":[{"since":null,"sessions":2}]},
+                                  {"folder":null,"sessions":1,"windows":null}]}
+            """);
+
+        await Assert.That(report!.UnmatchedFolders!.Select(f => f.Folder)).IsEquivalentTo(["/w/scratch", null]);
+        await Assert.That(report.UnmatchedFolders![0].Windows!.Single().Sessions).IsEqualTo(2);
+        await Assert.That(ImportDiscoveryReport.Parse("""{"repos":[],"unmatched_sessions":0}""")!.UnmatchedFolders).IsEmpty();
+        await Assert.That(ImportDiscoveryReport.Parse("""{"repos":[],"unmatched_sessions":1,"unmatched_folders":[{"folder":"","sessions":1}]}""")).IsNull();
+    }
 }

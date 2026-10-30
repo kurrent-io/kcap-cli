@@ -378,4 +378,58 @@ public class ImportScopeArgsTests {
         await Assert.That(r.Scope).IsNull();
         await Assert.That(r.Error!).Contains("--yes");
     }
+
+    /// <summary>A skip narrows any scope, so it rides alongside <c>--all</c> rather than replacing it.</summary>
+    [Test]
+    public async Task Skip_flags_repeat_and_compose_with_all() {
+        var r = ImportScopeArgs.Resolve(new(
+            Flags: ImportScopeArgs.ParseFlags(
+                ["import", "--all", "--yes", "--skip-repo", "acme/secret", "--skip-folder", "/w/scratch/", "--skip-repo", "acme/old"]),
+            ActiveProfile: "p", IsInteractive: false, CurrentRepo: null));
+
+        await Assert.That(r.Error).IsNull();
+        await Assert.That(r.Scope).IsEqualTo(new ImportScope.All());
+        await Assert.That(r.Skip).IsEqualTo(new ImportSkip([("acme", "secret"), ("acme", "old")], ["/w/scratch"]));
+    }
+
+    [Test]
+    public async Task No_skip_flag_leaves_nothing_out() {
+        var r = ImportScopeArgs.Resolve(new(
+            Flags: ImportScopeArgs.ParseFlags(["import", "--all", "--yes"]),
+            ActiveProfile: "p", IsInteractive: false, CurrentRepo: null));
+
+        await Assert.That(r.Skip!.IsEmpty).IsTrue();
+    }
+
+    [Test]
+    [Arguments(new[] { "import", "--all", "--yes", "--skip-repo" }, "--skip-repo needs a value")]
+    [Arguments(new[] { "import", "--all", "--yes", "--skip-repo", "secret" }, "--skip-repo expects owner/name")]
+    [Arguments(new[] { "import", "--all", "--yes", "--skip-folder", "--private" }, "--skip-folder needs a value")]
+    [Arguments(new[] { "import", "--yes", "--folder" }, "--folder needs a value")]
+    public async Task A_malformed_selection_value_is_a_usage_error(string[] args, string expected) {
+        var r = ImportScopeArgs.Resolve(new(
+            Flags: ImportScopeArgs.ParseFlags(args), ActiveProfile: "p", IsInteractive: false, CurrentRepo: null));
+
+        await Assert.That(r.Scope).IsNull();
+        await Assert.That(r.Error!).Contains(expected);
+    }
+
+    /// <summary>A folder is a scope the way a repository is: the two combine into one selection, and
+    /// either is enough on its own.</summary>
+    [Test]
+    public async Task Folders_and_repos_select_together() {
+        var both = ImportScopeArgs.Resolve(new(
+            Flags: ImportScopeArgs.ParseFlags(["import", "--repo", "acme/web", "--folder", "/w/scratch", "--yes"]),
+            ActiveProfile: "p", IsInteractive: false, CurrentRepo: null));
+        var alone = ImportScopeArgs.Resolve(new(
+            Flags: ImportScopeArgs.ParseFlags(["import", "--folder", "/w/scratch", "--yes"]),
+            ActiveProfile: "p", IsInteractive: false, CurrentRepo: null));
+        var clash = ImportScopeArgs.Resolve(new(
+            Flags: ImportScopeArgs.ParseFlags(["import", "--all", "--folder", "/w/scratch", "--yes"]),
+            ActiveProfile: "p", IsInteractive: false, CurrentRepo: null));
+
+        await Assert.That(both.Scope).IsEqualTo(new ImportScope.Repo([("acme", "web")], ["/w/scratch"]));
+        await Assert.That(alone.Scope).IsEqualTo(new ImportScope.Repo([], ["/w/scratch"]));
+        await Assert.That(clash.Error!).Contains("mutually exclusive");
+    }
 }

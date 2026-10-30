@@ -76,6 +76,20 @@ public class BackgroundImportSpawnerTests {
         await Assert.That(plan.ArgumentList.ToList()).IsEquivalentTo(["import", "--yes"], CollectionOrdering.Matching);
     }
 
+    /// <summary>The remainder leaves out what the foreground pass left out; a plan names its repositories itself.</summary>
+    [Test]
+    public async Task The_remainder_carries_the_projects_setup_left_out() {
+        var skip  = new ImportSkip([("acme", "secret")], ["/w/scratch"]);
+        var plain = BackgroundImportSpawner.BuildStartInfo(Config.Root, Request() with { Skip = skip }, "/cfg/import-x.log");
+        var plan  = BackgroundImportSpawner.BuildStartInfo(
+            Config.Root, Request() with { Skip = skip, PlanPath = "/cfg/import-plan-x.json" }, "/cfg/import-x.log");
+
+        await Assert.That(plain.ArgumentList.ToList()).IsEquivalentTo(
+            ["import", "--all", "--yes", "--skip-title", "--skip-repo", "acme/secret", "--skip-folder", "/w/scratch"],
+            CollectionOrdering.Matching);
+        await Assert.That(plan.ArgumentList.ToList()).IsEquivalentTo(["import", "--yes"], CollectionOrdering.Matching);
+    }
+
     [Test]
     public async Task Early_zero_exit_is_ExitedZero_and_early_nonzero_is_Failed() {
         if (OperatingSystem.IsWindows()) return;

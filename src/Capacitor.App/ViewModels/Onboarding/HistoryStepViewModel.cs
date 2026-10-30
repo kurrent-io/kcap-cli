@@ -80,6 +80,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
             this.RaisePropertyChanged(nameof(CloudDeclineVisible));
             this.RaisePropertyChanged(nameof(LocalDeclineVisible));
             this.RaisePropertyChanged(nameof(DetailsVisible));
+            this.RaisePropertyChanged(nameof(FoldersVisible));
             this.RaisePropertyChanged(nameof(SourcesVisible));
             Restate();
         }
@@ -131,8 +132,24 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
 
     public string? UnmatchedNote =>
         !HasRepos || _unmatched == 0 ? null
-        : _onLocalPath()             ? $"{SessionCount(_unmatched)} on disk don't match a repository. Those sessions stay on this Mac."
-        :                              $"{SessionCount(_unmatched)} on disk don't match a repository. Use kcap remap to link them.";
+        : _onLocalPath()             ? $"{SessionCount(_unmatched)} on disk don't match a repository. Those sessions stay on this Mac{FoldersOffered}."
+        :                              $"{SessionCount(_unmatched)} on disk don't match a repository. Use kcap remap to link them{FoldersOffered}.";
+
+    string FoldersOffered => Folders.Count > 0 ? ", or check their folders under Customize" : "";
+
+    /// The folders behind the unmatched sessions that can be named, each its own choice apart from the
+    /// repositories. Sessions with no folder recorded cannot be imported from here.
+    public IReadOnlyList<HistoryFolderRow> Folders { get; private set; } = [];
+
+    public bool FoldersVisible => DetailsVisible && Folders.Count > 0;
+
+    public int SelectedFolderCount => Folders.Count(f => f.Included);
+
+    /// Unchecking is a choice about this import, never a setting: recording and the exclusions already
+    /// saved go on exactly as before.
+    public const string SelectionNote =
+        "Unchecking leaves a project out of this import only, and changes nothing about what records from now on. " +
+        "A repository in excluded_repos, or a path you ignored, stays out whatever is checked.";
 
     /// Off until asked for: most people import everything found, so the per-repository choices wait behind Customize.
     public bool Customizing {
@@ -140,6 +157,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         private set {
             this.RaiseAndSetIfChanged(ref _customizing, value);
             this.RaisePropertyChanged(nameof(DetailsVisible));
+            this.RaisePropertyChanged(nameof(FoldersVisible));
             this.RaisePropertyChanged(nameof(CustomizeLabel));
         }
     }
@@ -165,11 +183,14 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         get {
             var total = Groups.Sum(g => g.Repos.Count);
             if (!HasRepos || _windows.Count == 0) return null;
-            if (SelectedCount == 0) return "Nothing is selected to import";
+            if (SelectedCount == 0 && SelectedFolderCount == 0) return "Nothing is selected to import";
 
-            var from = total == 1         ? "the one repository"
+            var repos = SelectedCount == 0 ? null
+                : total == 1             ? "the one repository"
                 : SelectedCount == total ? $"all {total.ToString("N0", CultureInfo.CurrentCulture)} repositories"
                 :                          $"{SelectedCount.ToString("N0", CultureInfo.CurrentCulture)} of {RepositoryCount(total)}";
+            var folders = SelectedFolderCount == 0 ? null : FolderCount(SelectedFolderCount);
+            var from    = repos is not null && folders is not null ? $"{repos} and {folders}" : repos ?? folders;
             var window = SelectedWindow;
             var span   = window.Since is null ? "your whole history" : $"the {window.Label.ToLowerInvariant()}";
 
@@ -182,7 +203,8 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     /// Who can read a Shared import, said outside Customize because Shared is the cloud default. Once the
     /// import starts the choices are locked, so it stops pointing at them.
     public string? SharingLine =>
-        _discoveredLocal || !Groups.SelectMany(g => g.Repos).Any(r => r.Level == ImportLevel.Shared) ? null
+        _discoveredLocal || !Groups.SelectMany(g => g.Repos).Any(r => r.Level == ImportLevel.Shared)
+            && !Folders.Any(f => f.Level == ImportLevel.Shared) ? null
         : ImportStarted ? "Shared imports follow your recording privacy setting"
         :                 "Shared imports follow your recording privacy setting. Use Customize to keep a repository to Only me";
 
@@ -211,7 +233,8 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     public string? NextLabel =>
         Looking                        ? "Looking for history…"
         : Run is { State: ImportRunState.Running or ImportRunState.Finished } ? "Continue"
-        : !HasRepos || SelectedCount == 0 ? "Continue"
+        : !HasRepos || SelectedCount + SelectedFolderCount == 0 ? "Continue"
+        : SelectedFolderCount > 0       ? (SelectedCount + SelectedFolderCount == 1 ? "Import 1 project" : $"Import {SelectedCount + SelectedFolderCount} projects")
         : SelectedCount == 1            ? "Import 1 repository"
         :                                 $"Import {SelectedCount} repositories";
 
@@ -267,10 +290,13 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         _report    = null;
         Groups     = [];
         Sources    = [];
+        Folders    = [];
         _windows.Clear();
         _unmatched = 0;
         this.RaisePropertyChanged(nameof(Groups));
         this.RaisePropertyChanged(nameof(Sources));
+        this.RaisePropertyChanged(nameof(Folders));
+        this.RaisePropertyChanged(nameof(FoldersVisible));
         this.RaisePropertyChanged(nameof(Windows));
         this.RaisePropertyChanged(nameof(UnmatchedNote));
         _discovered      = true;
@@ -330,6 +356,16 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
             };
         }
         this.RaisePropertyChanged(nameof(Sources));
+
+        Folders = [.. (report.UnmatchedFolders ?? [])
+            .Where(f => f is { Folder: not null, Sessions: > 0 })
+            .Select(f => new HistoryFolderRow(f.Folder!, f.Sessions, f.Windows, _discoveredLocal))];
+        foreach (var folder in Folders) {
+            folder.PropertyChanged += (_, e) => {
+                if (e.PropertyName == nameof(HistoryFolderRow.Level)) Restate();
+            };
+        }
+        this.RaisePropertyChanged(nameof(Folders));
 
         Regroup();
         BuildWindows(report);
@@ -417,7 +453,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     public Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) {
         if (direction == WizardNavigation.Next && Looking) return Task.FromResult(false);
         // One import at a time; one that failed or was stopped can be started again.
-        if (direction == WizardNavigation.Next && HasRepos && SelectedCount > 0
+        if (direction == WizardNavigation.Next && HasRepos && SelectedCount + SelectedFolderCount > 0
             && Run is not { State: ImportRunState.Running or ImportRunState.Finished }) StartImport();
 
         return Task.FromResult(true);
@@ -432,13 +468,14 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
 
         List<ImportRequest> passes = [];
         foreach (var level in new[] { ImportLevel.OnlyMe, ImportLevel.Shared }) {
-            var repos = selected.Where(r => r.Level == level).Select(r => r.Slug).ToList();
-            if (repos.Count == 0) continue;
+            var repos   = selected.Where(r => r.Level == level).Select(r => r.Slug).ToList();
+            var folders = Folders.Where(f => f.Level == level).Select(f => f.Path).ToList();
+            if (repos.Count == 0 && folders.Count == 0) continue;
             passes.Add(new ImportRequest(ImportScopeChoice.Repo, null, vendors, repos, window.Since,
-                Private: level == ImportLevel.OnlyMe, SkipTitle: skip));
+                Private: level == ImportLevel.OnlyMe, SkipTitle: skip, Folders: folders.Count == 0 ? null : folders));
         }
 
-        var counts   = selected.Select(r => r.SessionsSince(window.Since)).ToList();
+        var counts   = SelectedCounts(window.Since);
         var expected = counts.Any(c => c is null) ? 0 : counts.Sum(c => c!.Value);
         var caption  = window.Since is null ? "from your whole history" : $"from the {window.Label.ToLowerInvariant()}";
         var run      = new HistoryImportRun(expected, selected.Count, caption, passes.Count, _post);
@@ -456,6 +493,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     void Restate() {
         foreach (var window in Windows) window.CountLabel = CountFor(window);
         this.RaisePropertyChanged(nameof(SelectedCount));
+        this.RaisePropertyChanged(nameof(SelectedFolderCount));
         this.RaisePropertyChanged(nameof(NextLabel));
         this.RaisePropertyChanged(nameof(FoundLine));
         this.RaisePropertyChanged(nameof(ImportLine));
@@ -465,13 +503,24 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     }
 
     string? CountFor(HistoryWindowOption window) {
-        var selected = Groups.SelectMany(g => g.Repos).Where(r => r.Level != ImportLevel.Skip).ToList();
-        if (selected.Count == 0) return null;
-
-        var counts = selected.Select(r => r.SessionsSince(window.Since)).ToList();
+        var counts = SelectedCounts(window.Since);
+        if (counts.Count == 0) return null;
 
         return counts.Any(c => c is null) ? null : SessionCount(counts.Sum(c => c!.Value));
     }
+
+    /// Each checked repository's and folder's sessions in the window, null where unknown. A folder is not
+    /// split by harness, so its count is unknown while any harness is unchecked.
+    List<int?> SelectedCounts(DateOnly? since) {
+        var everyHarness = Sources.All(s => s.IsSelected);
+
+        return [
+            .. Groups.SelectMany(g => g.Repos).Where(r => r.Level != ImportLevel.Skip).Select(r => r.SessionsSince(since)),
+            .. Folders.Where(f => f.Included).Select(f => everyHarness ? f.SessionsSince(since) : null),
+        ];
+    }
+
+    static string FolderCount(int count) => count == 1 ? "1 folder" : $"{count.ToString("N0", CultureInfo.CurrentCulture)} folders";
 
     internal static string SessionCount(int count) => count == 1 ? "1 session" : $"{count.ToString("N0", CultureInfo.CurrentCulture)} sessions";
 

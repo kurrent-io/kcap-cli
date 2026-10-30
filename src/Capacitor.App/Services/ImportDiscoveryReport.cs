@@ -2,10 +2,12 @@ using System.Text.Json;
 
 namespace Capacitor.App.Services;
 
+/// <param name="UnmatchedFolders">Empty, or null when built by hand, from a CLI that does not list them.</param>
 public sealed record ImportDiscoveryReport(
     IReadOnlyList<ImportDiscoveryRepo>   Repos,
     int                                  UnmatchedSessions,
-    IReadOnlyList<ImportDiscoveryWindow> Windows) {
+    IReadOnlyList<ImportDiscoveryWindow> Windows,
+    IReadOnlyList<ImportDiscoveryFolder>? UnmatchedFolders = null) {
     /// Null for output that is not the report — an older CLI, or a crash mid-write.
     public static ImportDiscoveryReport? Parse(string json) {
         try {
@@ -15,8 +17,9 @@ public sealed record ImportDiscoveryReport(
                     string.IsNullOrWhiteSpace(r.Name) || r.Sessions < 0 ||
                     Invalid(r.Windows) ||
                     r.Vendors?.Any(v => v is null || string.IsNullOrWhiteSpace(v.Vendor) || v.Sessions < 0 || Invalid(v.Windows)) == true) ||
+                report.UnmatchedFolders?.Any(f => f is null || f.Sessions < 0 || f.Folder?.Length == 0 || Invalid(f.Windows)) == true ||
                 Invalid(report.Windows)) return null;
-            return report with { Windows = report.Windows ?? [] };
+            return report with { Windows = report.Windows ?? [], UnmatchedFolders = report.UnmatchedFolders ?? [] };
         } catch (JsonException) {
             return null;
         }

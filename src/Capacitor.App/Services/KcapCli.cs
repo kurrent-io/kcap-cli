@@ -42,9 +42,12 @@ public enum ImportScopeChoice { Everything, Org, Repo }
 /// <param name="Since">Only sessions started on or after this day.</param>
 /// <param name="Private">Mark every imported session as visible to its owner only.</param>
 /// <param name="SkipTitle">Leave titling to the server rather than this machine's own agent.</param>
+/// <param name="Folders">With <see cref="ImportScopeChoice.Repo"/>, folders that matched no repository to
+/// import beside <paramref name="Repos"/>.</param>
 public sealed record ImportRequest(
     ImportScopeChoice Scope, string? OrgOrRepo, IReadOnlyList<string> VendorFlags,
-    IReadOnlyList<string>? Repos = null, DateOnly? Since = null, bool Private = false, bool SkipTitle = false);
+    IReadOnlyList<string>? Repos = null, DateOnly? Since = null, bool Private = false, bool SkipTitle = false,
+    IReadOnlyList<string>? Folders = null);
 
 /// Typed facade over every CLI call the app shells out to — every daemon mutation goes through
 /// the CLI. Consumed by the lifecycle controller and faked in tests behind
@@ -314,20 +317,23 @@ public sealed class KcapCli : IKcapCli {
             return new StreamingResult(-1, false, [new StreamedLine(ProcessStreamKind.Stderr, "kcap CLI not found")]);
 
         List<string> args = ["import"];
-        args.Add(request.Scope switch {
-            ImportScopeChoice.Everything => "--all",
-            ImportScopeChoice.Org        => "--org",
-            ImportScopeChoice.Repo       => "--repo",
-            _                            => throw new ArgumentOutOfRangeException(nameof(request)),
-        });
-        if (request is { Scope: ImportScopeChoice.Repo, Repos: { Count: > 0 } repos }) {
-            args.Add(repos[0]);
-            foreach (var repo in repos.Skip(1)) {
+        if (request is { Scope: ImportScopeChoice.Repo } && (request.Repos is { Count: > 0 } || request.Folders is { Count: > 0 })) {
+            foreach (var repo in request.Repos ?? []) {
                 args.Add("--repo");
                 args.Add(repo);
             }
-        } else if (request.Scope != ImportScopeChoice.Everything) {
-            args.Add(request.OrgOrRepo!);
+            foreach (var folder in request.Folders ?? []) {
+                args.Add("--folder");
+                args.Add(folder);
+            }
+        } else {
+            args.Add(request.Scope switch {
+                ImportScopeChoice.Everything => "--all",
+                ImportScopeChoice.Org        => "--org",
+                ImportScopeChoice.Repo       => "--repo",
+                _                            => throw new ArgumentOutOfRangeException(nameof(request)),
+            });
+            if (request.Scope != ImportScopeChoice.Everything) args.Add(request.OrgOrRepo!);
         }
         if (request.Since is { } since) {
             args.Add("--since");

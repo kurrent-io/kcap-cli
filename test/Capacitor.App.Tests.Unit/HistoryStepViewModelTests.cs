@@ -413,6 +413,123 @@ public class HistoryStepViewModelTests {
         await Assert.That(h.Vm.Run!.Expected).IsEqualTo(0);
     }
 
+    /// The same three repositories, plus four sessions that matched none: three in a folder discovery can
+    /// name and one with no folder recorded.
+    static ImportDiscoveryReport ReportWithFolders() => Report(unmatched: 4) with {
+        UnmatchedFolders = [new("/w/scratch", 3, [new(D30, 1), new(D90, 2), new(null, 3)]), new(null, 1)],
+    };
+
+    /// Every repository starts checked, so an untouched page imports every repository and no folder
+    /// outside one, which waits unchecked under Customize.
+    [Test]
+    public async Task By_default_every_repository_imports_and_no_folder_outside_one_does() {
+        var h = new Harness(ReportWithFolders());
+        await h.EnterAsync();
+        var hiddenUntilCustomizing = h.Vm.FoldersVisible;
+
+        await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        await h.Vm.Run!.Completion;
+
+        await Assert.That(h.Vm.Groups.SelectMany(g => g.Repos).All(r => r.Included)).IsTrue();
+        await Assert.That(h.Vm.Folders.Select(f => (f.Path, f.Included))).IsEquivalentTo([("/w/scratch", false)]);
+        await Assert.That(hiddenUntilCustomizing).IsFalse();
+        await Assert.That(h.Vm.ImportLine).IsEqualTo("kcap imports 27 sessions from all 3 repositories, covering the last 90 days");
+        await Assert.That(h.Cli.ImportRequests.Single().Repos!).IsEquivalentTo(["acme/web", "acme/api", "solo/notes"], CollectionOrdering.Matching);
+        await Assert.That(h.Cli.ImportRequests.Single().Folders).IsNull();
+    }
+
+    /// Unchecking a repository leaves it out of the import and nothing else: the request simply does not
+    /// name it, and the page says the choice is about this import only.
+    [Test]
+    public async Task An_unchecked_repository_is_left_out_of_this_import_only() {
+        var h = new Harness(Report());
+        await h.EnterAsync();
+
+        h.Repo("acme/api").Included = false;
+        await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        await h.Vm.Run!.Completion;
+
+        await Assert.That(h.Cli.ImportRequests.Single().Repos!).IsEquivalentTo(["acme/web", "solo/notes"], CollectionOrdering.Matching);
+        await Assert.That(HistoryStepViewModel.SelectionNote).Contains("this import only");
+        await Assert.That(HistoryStepViewModel.SelectionNote).Contains("excluded_repos");
+    }
+
+    /// A checked folder imports beside the repositories, privately by default, and every count and label
+    /// takes it in.
+    [Test]
+    public async Task A_checked_folder_imports_privately_beside_the_repositories() {
+        var h = new Harness(ReportWithFolders());
+        await h.EnterAsync();
+        h.Vm.ToggleCustomizeCommand.Execute().Subscribe();
+
+        h.Vm.Folders.Single().Included = true;
+        var label = h.Vm.NextLabel;
+        var line  = h.Vm.ImportLine;
+        await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        await h.Vm.Run!.Completion;
+
+        var onlyMe = h.Cli.ImportRequests.Single(r => r.Private);
+        var shared = h.Cli.ImportRequests.Single(r => !r.Private);
+        await Assert.That(h.Vm.FoldersVisible).IsTrue();
+        await Assert.That(label).IsEqualTo("Import 4 projects");
+        await Assert.That(line).IsEqualTo("kcap imports 29 sessions from all 3 repositories and 1 folder, covering the last 90 days");
+        await Assert.That(onlyMe.Repos!).IsEmpty();
+        await Assert.That(onlyMe.Folders!).IsEquivalentTo(["/w/scratch"]);
+        await Assert.That(shared.Folders).IsNull();
+        await Assert.That(h.Vm.Run!.Expected).IsEqualTo(29);
+    }
+
+    /// A folder alone is enough to import, and on the cloud its Only me box can widen it like a repository's.
+    [Test]
+    public async Task A_folder_alone_imports_and_can_follow_the_privacy_setting() {
+        var h = new Harness(ReportWithFolders());
+        await h.EnterAsync();
+
+        foreach (var repo in h.Vm.Groups.SelectMany(g => g.Repos)) repo.Included = false;
+        var folder = h.Vm.Folders.Single();
+        folder.Included = true;
+        folder.OnlyMe   = false;
+        var label = h.Vm.NextLabel;
+        await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        await h.Vm.Run!.Completion;
+
+        await Assert.That(label).IsEqualTo("Import 1 project");
+        await Assert.That(h.Vm.SharingLine).IsNotNull();
+        var request = h.Cli.ImportRequests.Single();
+        await Assert.That(request.Private).IsFalse();
+        await Assert.That(request.Folders!).IsEquivalentTo(["/w/scratch"]);
+    }
+
+    /// The local edition keeps a checked folder private, as it does every repository.
+    [Test]
+    public async Task On_the_local_path_a_folder_stays_private() {
+        var h = new Harness(ReportWithFolders(), onLocalPath: true);
+        await h.EnterAsync();
+
+        var folder = h.Vm.Folders.Single();
+        folder.Included = true;
+        folder.OnlyMe   = false;
+
+        await Assert.That(folder.Level).IsEqualTo(ImportLevel.OnlyMe);
+        await Assert.That(h.Vm.UnmatchedNote!).Contains("check their folders under Customize");
+    }
+
+    /// A folder's count is not split by harness, so with a harness unchecked it is unknown rather than wrong.
+    [Test]
+    public async Task A_folder_with_a_harness_unchecked_shows_no_count_rather_than_a_guess() {
+        var h = new Harness(OlderClaudeAndCodexHistory() with {
+            UnmatchedSessions = 3, UnmatchedFolders = [new("/w/scratch", 3, [new(D30, 1), new(D90, 2), new(null, 3)])],
+        });
+        await h.EnterAsync();
+
+        h.Vm.Folders.Single().Included = true;
+        var counted = h.Vm.Windows.Select(w => w.CountLabel).ToList();
+        h.Vm.Sources.Single(s => s.Id == HarnessId.Codex).IsSelected = false;
+
+        await Assert.That(counted.All(c => c is not null)).IsTrue();
+        await Assert.That(h.Vm.Windows.All(w => w.CountLabel is null)).IsTrue();
+    }
+
     [Test]
     public async Task Not_now_imports_nothing() {
         var h = new Harness(Report());

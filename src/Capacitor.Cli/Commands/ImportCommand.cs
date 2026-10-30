@@ -860,7 +860,8 @@ class ImportCommand(
             Action<ImportDiscoveryResult>? onDiscovered           = null,
             int?                          maxSessions             = null,
             Action<ImportRunSelection>?   onSelected              = null,
-            bool                          nested                  = false
+            bool                          nested                  = false,
+            ImportSkip?                   skip                    = null
         ) {
         // A caller that wants the figures rather than the rendering says so by handing one over; the
         // console is the default consumer, not the only one.
@@ -1083,7 +1084,8 @@ class ImportCommand(
                     DiscoveryWindows(windowsAsOf ?? time.GetUtcNow()),
                     sources.SelectMany((src, i) => discoveriesPerSource[i].Select(d => (d.SessionId, src.Vendor)))
                         .DistinctBy(s => s.SessionId)
-                        .ToDictionary(s => s.SessionId, s => s.Vendor)),
+                        .ToDictionary(s => s.SessionId, s => s.Vendor),
+                    sessionCwds),
                 ScannedVendors(sources)));
 
             return 0;
@@ -1140,12 +1142,19 @@ class ImportCommand(
                     scope,
                     (t, _) => new ValueTask<(string?, string?)>(
                         resolved.TryGetValue(t.SessionId, out var v) && v is { } x ? (x.Owner, x.Name) : (null, null)
-                    )
+                    ),
+                    folderOf: sid => sessionCwds.GetValueOrDefault(sid),
+                    skip: skip
                 ))
                 .Select(t => t.SessionId)
                 .ToHashSet(StringComparer.Ordinal);
 
             filteredPerSource[i] = [.. disc.Where(s => keptIds.Contains(s.SessionId))];
+        }
+
+        // A nested run's caller has already said it.
+        if (skip is { IsEmpty: false } && !nested) {
+            display.Line($"Leaving out of this import only: {string.Join(", ", skip.Labels)}.");
         }
 
         var totalAfterScope = filteredPerSource.Sum(d => d.Count);
@@ -1383,6 +1392,12 @@ class ImportCommand(
                 var totalGroups = excludedByRepo.Count + excludedByPath.Count + (outsideAllowlist.Count > 0 ? 1 : 0);
                 await console.Error.WriteLineAsync(
                     $"{display.Indented}{AutoSkipNotice(distinctSessions, totalGroups, skipConfirmation, autoSkipExclusions)}");
+
+                foreach (var line in ExcludedSourceLines(
+                             excludedByRepo.Select(kv => (kv.Key, kv.Value.Count)),
+                             excludedByPath.Select(kv => (kv.Key, kv.Value.Count)),
+                             outsideAllowlist.Count))
+                    await console.Error.WriteLineAsync($"{display.Indented}  {line}");
             }
         }
 
@@ -3085,7 +3100,7 @@ class ImportCommand(
                 await console.Ansi.Status()
                     .Spinner(Spinner.Known.Dots)
                     .StartAsync(
-                        $"Scanning repositories (0/{total})…",
+                        $"Matching folders to repositories (0/{total})…",
                         async ctx => {
                             await Parallel.ForEachAsync(
                                 uniqueCwds,
@@ -3098,14 +3113,14 @@ class ImportCommand(
                                     // the per-completion update so parallel workers can't race on the
                                     // status renderer.
                                     lock (statusLock) {
-                                        ctx.Status($"Scanning repositories ({d}/{total})…");
+                                        ctx.Status($"Matching folders to repositories ({d}/{total})…");
                                     }
                                 }
                             );
                         }
                     );
             } else {
-                display.Line($"Scanning {total} repositor{(total == 1 ? "y" : "ies")}...");
+                display.Line(MatchingFoldersLine(total));
                 await Parallel.ForEachAsync(uniqueCwds, options, async (cwd, _) => await DetectOne(cwd));
             }
         }
@@ -3744,6 +3759,26 @@ class ImportCommand(
         tty && !inputRedirected && !autoSkipExclusions && !skipConfirmation;
 
     /// <summary>What a run that cannot ask prints in place of the exclusion prompts.</summary>
+    /// <summary>The count is of working directories: several can share a repository, and one can have none.</summary>
+    internal static string MatchingFoldersLine(int folders) =>
+        $"Matching {folders} folder{(folders == 1 ? "" : "s")} to repositories...";
+
+    /// <summary>Each source an auto-skip held back and the setting that excludes it, so the user can tell
+    /// which list to change.</summary>
+    internal static IEnumerable<string> ExcludedSourceLines(
+            IEnumerable<(string Key, int Sessions)> repos, IEnumerable<(string Key, int Sessions)> paths, int outsideAllowlist) {
+        static string Count(int n) => $"{n} session{(n == 1 ? "" : "s")}";
+
+        foreach (var (key, sessions) in repos)
+            yield return $"repository {key}: {Count(sessions)}, excluded by the profile's excluded_repos";
+
+        foreach (var (key, sessions) in paths)
+            yield return $"path {key}: {Count(sessions)}, excluded by `kcap ignore`";
+
+        if (outsideAllowlist > 0)
+            yield return $"{Count(outsideAllowlist)} outside the allow list (`kcap allow --list`)";
+    }
+
     internal static string AutoSkipNotice(int sessions, int groups, bool skipConfirmation, bool autoSkipExclusions) {
         var notice = $"Auto-skipping {sessions} session(s) from {groups} excluded source(s) "
                    + (skipConfirmation && !autoSkipExclusions ? "(--yes keeps exclusions)." : "(non-interactive).");

@@ -194,6 +194,17 @@ Options:
                               past sessions. Also disables the import that
                               --no-prompt performs by default. An import you
                               choose on the browser's Import screen still runs.
+  --skip-import-repo <owner/name>
+                              Leave this repository out of the Step 6 import.
+                              Repeatable. At a terminal it starts unticked in
+                              the project checklist; without one, or with
+                              --no-prompt, it is simply left out. This import
+                              only: recording and later imports are unchanged
+                              (kcap ignore or excluded_repos keep it out).
+  --skip-import-folder <path> Leave the sessions that ran in <path>, a folder
+                              that matched no repository, out of the Step 6
+                              import, as kcap import --discover names it.
+                              Repeatable; this import only, like the above.
   --muse-assistant            Set up for Muse Assistant (the Meta assistant whose
                               VM home is /home/hatch). Implies --no-prompt, --device
                               and --skip-import, needs <tenant> or --server-url,
@@ -224,6 +235,8 @@ changes.
   Search by meaning (local)             --builtin-embeddings,   chosen**
                                         --embedding-model,
                                         --no-embeddings
+  Share usage data (local)              - (kcap config set      not shared,
+                                        telemetry on first)     nothing saved
   Default visibility                    --default-visibility    the workspace's
                                                                 default
                                                                 (org_public on
@@ -237,6 +250,8 @@ changes.
   Keep provider API keys                --use-provider-api-key  kept
   Daemon name                           --daemon-name           suggested
   Import past sessions                  --skip-import           yes
+  Which projects to import              --skip-import-repo,     every one
+                                        --skip-import-folder
   Name imported sessions with your      -                       no
   coding agent (sends excerpts to its
   model provider)
@@ -275,6 +290,11 @@ and act as its admin, so setup asks you to confirm that and the install itself
 (--single-user and --yes; --no-prompt and --json cannot ask and require both).
 Under --no-prompt its sessions default to private visibility.
 Running it again reuses the existing installation.
+Usage data: the local edition sends none until you choose to share it. Setup
+asks before the install, with no default answer, and saves the answer for every
+kcap command and the desktop app; a saved choice is not asked again. A run that
+cannot ask shares nothing and saves no choice; kcap config set telemetry on|off
+changes it later.
 Search by meaning uses Ollama on http://localhost:11434 with mxbai-embed-large
 (1024 dimensions, about 670 MB), pulled if missing, or the built-in model, which
 setup downloads and kcap runs itself. With no embedding flag, an earlier choice
