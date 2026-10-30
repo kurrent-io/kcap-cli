@@ -1,0 +1,34 @@
+using Capacitor.Cli.Core;
+
+namespace Capacitor.App.Services;
+
+/// Finds this machine's checkout of a repository by its origin. The daemon re-checks the path on
+/// the probe and on launch, so this choice is a convenience, never authority.
+public sealed class LocalCheckoutFinder(RepoIdentityResolver identities, Func<string, string?>? mainRoot = null) {
+    readonly Func<string, string?> _mainRoot = mainRoot ?? MainRootOf;
+
+    /// The session's own checkout first, then the candidates in order. Reads git metadata, so it
+    /// runs on the thread pool.
+    public Task<string?> FindAsync(
+            string owner, string name, string? sessionCwd, IEnumerable<string> candidates, CancellationToken ct) {
+        var ordered = new List<string>();
+        if (!string.IsNullOrEmpty(sessionCwd)) ordered.Add(sessionCwd);
+        ordered.AddRange(candidates);
+        return Task.Run(() => Find($"repo:{owner}/{name}".ToLowerInvariant(), ordered, ct), ct);
+    }
+
+    string? Find(string key, IReadOnlyList<string> paths, CancellationToken ct) {
+        var seen = new HashSet<string>(PlatformPaths.Comparer);
+        foreach (var path in paths) {
+            ct.ThrowIfCancellationRequested();
+            if (_mainRoot(path) is not { Length: > 0 } root) continue;
+            var normalized = PlatformPaths.Normalize(root);
+            if (!seen.Add(normalized)) continue;
+            if (identities.ForLocalRoot(normalized).Key == key) return normalized;
+        }
+        return null;
+    }
+
+    static string? MainRootOf(string path) =>
+        GitRepository.FindRoot(path) is { } root ? GitRepository.ResolveMainRepoRoot(root) : null;
+}

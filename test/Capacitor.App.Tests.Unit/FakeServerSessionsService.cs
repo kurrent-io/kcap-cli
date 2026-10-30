@@ -59,8 +59,9 @@ sealed class FakeServerSessionsService : IServerSessionsService, IDisposable {
         return result;
     }
 
+    public HandoffContextDto? HandoffContext;
     public Task<HandoffContextDto?> ReadHandoffContextAsync(string sessionId, CancellationToken ct) =>
-        Task.FromResult<HandoffContextDto?>(null);
+        Task.FromResult(HandoffContext);
 
     public void Unpin() {
         _pinRequest++;
