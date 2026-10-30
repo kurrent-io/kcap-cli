@@ -81,7 +81,7 @@ public sealed class CursorHookCommand(
         HandleWithDeps(stdin,
             http.ForHookAsync,
             () => {
-                var s = new HookSpool(config, clock.Time);
+                var s = new HookSpool(config, clock.Time, Url);
                 MigrateLegacyCursorSpool(s, harnesses.Of<CursorHarness>().Paths.SpoolDir);
                 s.ReapOlderThan(TimeSpan.FromDays(30));
                 return s;

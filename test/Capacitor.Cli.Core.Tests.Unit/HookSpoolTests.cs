@@ -5,6 +5,7 @@ namespace Capacitor.Cli.Core.Tests.Unit;
 public class HookSpoolTests {
     const string SidA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const string SidB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const string SidC = "cccccccccccccccccccccccccccccccc";
 
     /// <summary>The one classification every live post and drain poster shares. A 401 is retryable
     /// because <c>kcap login</c> repairs it; a 4xx that rejects the payload itself is not, since a
@@ -22,6 +23,35 @@ public class HookSpoolTests {
     public async Task retryable_statuses_stop_the_drain_and_the_rest_drop(int status, bool retryable) {
         await Assert.That(HookSpool.IsRetryable(status)).IsEqualTo(retryable);
         await Assert.That(HookSpool.OutcomeOf(status)).IsEqualTo(retryable ? DrainOutcome.TransientStop : DrainOutcome.Drop);
+    }
+
+    /// <summary>Either drain leaves a session spooled for another server where it is, whichever spool
+    /// holds it and however the server's URL is spelled. A session spooled before stamping goes to
+    /// whichever server drains it.</summary>
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task a_drain_sends_a_session_only_to_the_server_it_was_spooled_for(bool ordered) {
+        using var tmp = new TempDir();
+        const string local = "http://localhost:7248";
+        new HookSpool(tmp.Path, TimeProvider.System, server: local).Append(SidA, "session-start", """{"n":"local"}""");
+        new TranscriptSpool(tmp.PathTo("tx"), TimeProvider.System, server: local).Append(SidC, """{"n":"local-tail"}""");
+        new HookSpool(tmp.Path, TimeProvider.System).Append(SidB, "session-start", """{"n":"legacy"}""");
+
+        async Task<List<string>> DrainAs(string server) {
+            var seen = new List<string>();
+            Task<DrainOutcome> Post(string body) { seen.Add(body); return Task.FromResult(DrainOutcome.Delivered); }
+            var spool = new HookSpool(tmp.Path, TimeProvider.System, server: server);
+            if (ordered)
+                await LifecycleSpoolDrain.RunAsync(spool, new TranscriptSpool(tmp.PathTo("tx"), TimeProvider.System, server: server),
+                    currentSessionId: null, (_, body) => Post(body), Post, TimeSpan.FromSeconds(5), TimeProvider.System, CancellationToken.None);
+            else
+                await spool.DrainAllAsync(null, (_, body) => Post(body), TimeSpan.FromSeconds(5), CancellationToken.None);
+            return seen;
+        }
+
+        await Assert.That(await DrainAs("https://kurrent.kcap.ai")).IsEquivalentTo(["""{"n":"legacy"}"""]);
+        await Assert.That(await DrainAs("http://LOCALHOST:7248/")).Contains("""{"n":"local"}""");
     }
 
     [Test]

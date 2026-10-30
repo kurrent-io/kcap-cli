@@ -8,13 +8,10 @@ namespace Capacitor.Cli.Core;
 /// outage. Unlike <see cref="HookSpool"/> (1 MB drop-oldest — acceptable for small lifecycle POSTs)
 /// this is bounded with NO SILENT DROP: on cap exhaustion it stops appending and writes a
 /// <c>needs-import</c> marker so the session is surfaced as requiring `kcap import` rather than
-/// truncated. Per-session JSONL of transcript batch JSON, one per line, arrival order.
-///
-/// <para>Moved to <c>Capacitor.Cli.Core</c> alongside <see cref="HookSpool"/> and
-/// <see cref="LifecycleSpoolDrain"/> so both the CLI and the daemon can share the ordered-drain
-/// primitives.</para>
+/// truncated. Per-session JSONL of transcript batch JSON, one per line, arrival order. Stamped by
+/// server like <see cref="HookSpool"/>.
 /// </summary>
-public sealed partial class TranscriptSpool(string spoolDir, TimeProvider time, long capBytes = TranscriptSpool.DefaultCapBytes) {
+public sealed partial class TranscriptSpool(string spoolDir, TimeProvider time, long capBytes = TranscriptSpool.DefaultCapBytes, string? server = null) {
     public const long DefaultCapBytes = 8_388_608; // 8 MB per session
 
     // Named here rather than on ConfigRoot, for the same reason as HookSpool's.
@@ -22,8 +19,8 @@ public sealed partial class TranscriptSpool(string spoolDir, TimeProvider time, 
 
     /// <summary>The spool under a config root. The directory overload is for a spool that is not
     /// under one — a test's own throwaway directory.</summary>
-    public TranscriptSpool(ConfigRoot config, TimeProvider time, long capBytes = DefaultCapBytes)
-        : this(config.Path(DirName), time, capBytes) { }
+    public TranscriptSpool(ConfigRoot config, TimeProvider time, string? server, long capBytes = DefaultCapBytes)
+        : this(config.Path(DirName), time, capBytes, server) { }
 
     /// <summary>Outcome of an <see cref="Append"/> call.</summary>
     public enum AppendResult {
@@ -51,6 +48,7 @@ public sealed partial class TranscriptSpool(string spoolDir, TimeProvider time, 
         if (path is null) return AppendResult.Ignored; // malformed id — nothing we can key on
         try {
             Directory.CreateDirectory(spoolDir);
+            SpoolServerStamp.Write(spoolDir, EncodeKey(sessionId), server);
             var line = batchJson.Replace("\n", "").Replace("\r", "");
             var incoming = Encoding.UTF8.GetByteCount(line) + 1 + (reserving is null ? 0 : Encoding.UTF8.GetByteCount(reserving) + 1);
             var existing = File.Exists(path) ? new FileInfo(path).Length : 0;
@@ -80,6 +78,7 @@ public sealed partial class TranscriptSpool(string spoolDir, TimeProvider time, 
         if (p is null) return false;
         try {
             Directory.CreateDirectory(spoolDir);
+            SpoolServerStamp.Write(spoolDir, EncodeKey(sessionId), server);
             File.WriteAllText(p, $"{time.GetUtcNow():O} {reason}\n");
             return true;
         } catch (Exception ex) {
@@ -92,8 +91,6 @@ public sealed partial class TranscriptSpool(string spoolDir, TimeProvider time, 
         var p = MarkerPathFor(sessionId);
         return p is not null && File.Exists(p);
     }
-
-    /// <summary>True if this session still has undelivered spool entries (live .jsonl or .draining temp).</summary>
 
     // ---- filename key encoding -------------------------------------------------------------
     //
@@ -136,6 +133,10 @@ public sealed partial class TranscriptSpool(string spoolDir, TimeProvider time, 
         return sb.ToString();
     }
 
+    internal bool BelongsElsewhere(string sessionId) =>
+        SpoolServerStamp.BelongsElsewhere(spoolDir, EncodeKey(sessionId), server);
+
+    /// <summary>True if this session still has undelivered spool entries (live .jsonl or .draining temp).</summary>
     public bool HasBacklog(string sessionId) =>
         SafeSessionId.IsMatch(sessionId) && Directory.Exists(spoolDir)
         && (File.Exists(Path.Combine(spoolDir, $"{EncodeKey(sessionId)}.transcript.jsonl"))

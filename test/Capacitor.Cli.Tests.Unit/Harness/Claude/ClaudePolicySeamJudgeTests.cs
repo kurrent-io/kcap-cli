@@ -27,7 +27,7 @@ public class ClaudePolicySeamJudgeTests : IDisposable {
     /// the production budget before the stub is ever asked.</summary>
     static readonly TimeSpan Ample = TimeSpan.FromSeconds(30);
 
-    ClaudePolicySeam Seam => new(Config.Root, TimeProvider.System, new PolicyJudgeGateway(
+    ClaudePolicySeam Seam => new(Config.Root, TimeProvider.System, server: null, new PolicyJudgeGateway(
         () => Task.FromResult(new AuthAttempt(new HttpClient(), AuthStatus.NoAuthRequired)),
         _server.Url, TimeProvider.System));
 
@@ -106,7 +106,7 @@ public class ClaudePolicySeamJudgeTests : IDisposable {
         WriteUserPolicy(JudgeOn);
         Judge("ask");
         await Seam.HandlePreToolUseAsync(Payload("PreToolUse", "git push").ToJsonString(), Sid, false, new StringWriter(), Ample);
-        await new HookSpool(Config.Root, TimeProvider.System).DrainAllAsync(
+        await new HookSpool(Config.Root, TimeProvider.System, server: null).DrainAllAsync(
             Sid, (_, _) => Task.FromResult(DrainOutcome.Delivered), TimeSpan.FromSeconds(30), CancellationToken.None);
 
         await Seam.HandlePreToolUseAsync(Payload("PreToolUse", "git push", "toolu_2").ToJsonString(), Sid, false, new StringWriter(), Ample);

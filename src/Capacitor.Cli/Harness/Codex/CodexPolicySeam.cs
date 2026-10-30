@@ -14,7 +14,7 @@ namespace Capacitor.Cli.Harness.Codex;
 /// runs rules, then the judge on a call no rule decided. Fail-open throughout: an unreadable payload or policy,
 /// or a judge that does not answer, leaves Codex's own handling exactly as it is without the seam.
 /// </summary>
-internal sealed class CodexPolicySeam(ConfigRoot config, TimeProvider time, PolicyJudgeGateway? judge = null) {
+internal sealed class CodexPolicySeam(ConfigRoot config, TimeProvider time, string? server, PolicyJudgeGateway? judge = null) {
     const string Vendor        = "codex";
     const string DefaultReason = "kcap approval policy";
 
@@ -104,7 +104,7 @@ internal sealed class CodexPolicySeam(ConfigRoot config, TimeProvider time, Poli
                 ? (await CodexJudgeDeclarationReader.ReadAsync(path, sessionId, new WatchAckCursor(config), time,
                     budget < CursorWait ? budget / 2 : CursorWait, CancellationToken.None)).Turns
                 : null;
-            var inline  = new HookSpool(config, time).IsPolicySnapshotDelivered(sessionId, snapshot.Id)
+            var inline  = new HookSpool(config, time, server).IsPolicySnapshotDelivered(sessionId, snapshot.Id)
                 ? null
                 : PolicyWire.ToUpload(sessionId, snapshot);
             var wire    = PolicyWire.ToWire(action);
@@ -145,7 +145,7 @@ internal sealed class CodexPolicySeam(ConfigRoot config, TimeProvider time, Poli
 
     Task Emit(string sessionId, string seam, PolicySnapshot snapshot, CanonicalAction action, PolicyEvaluation eval, string? callId,
               string requested, string effective, PolicyJudgeResult? judged) =>
-        new PolicyDecisionEmitter(config, time).EmitAsync(PolicyWire.Decision(
+        new PolicyDecisionEmitter(config, time, server).EmitAsync(PolicyWire.Decision(
             sessionId: sessionId, agentId: null, vendor: Vendor, seam: seam, snapshot: snapshot, mode: EvaluationMode.Full,
             requestedOutcome: requested, effectiveOutcome: effective, action: PolicyWire.ToWire(action),
             matchedRules: PolicyWire.ToWire(eval.MatchedRules), time: time, failureClass: judged?.FailureClass,

@@ -19,12 +19,10 @@ public enum DrainOutcome {
 /// <c>.draining</c> temp before reading, so concurrent appends never collide
 /// with an in-flight drain.
 ///
-/// <para>Moved to <c>Capacitor.Cli.Core</c> so both the CLI
-/// (<c>Capacitor.Cli</c>, an AOT exe) and the daemon (<c>Capacitor.Cli.Daemon</c>,
-/// a separate AOT exe) can share the ordered-drain primitives without either
-/// project referencing the other's exe as a library.</para>
+/// <para>A spool bound to a <c>server</c> stamps what it appends for that server and drains only
+/// sessions stamped for it (see <see cref="SpoolServerStamp"/>).</para>
 /// </summary>
-public sealed partial class HookSpool(string spoolDir, TimeProvider time, int capBytes = HookSpool.DefaultCapBytes) {
+public sealed partial class HookSpool(string spoolDir, TimeProvider time, int capBytes = HookSpool.DefaultCapBytes, string? server = null) {
     public const int DefaultCapBytes = 1_048_576; // 1 MB per session file
 
     /// <summary>
@@ -49,8 +47,8 @@ public sealed partial class HookSpool(string spoolDir, TimeProvider time, int ca
 
     /// <summary>The spool under a config root. The directory overload is for a spool that is not
     /// under one — a test's own throwaway directory, or a vendor's legacy location.</summary>
-    public HookSpool(ConfigRoot config, TimeProvider time, int capBytes = DefaultCapBytes)
-        : this(config.Path(DirName), time, capBytes) { }
+    public HookSpool(ConfigRoot config, TimeProvider time, string? server, int capBytes = DefaultCapBytes)
+        : this(config.Path(DirName), time, capBytes, server) { }
 
     static readonly Regex SafeSessionId  = SafeSessionIdRegex();
     static readonly Regex LegacyGuidKey = LegacyGuidKeyRegex();
@@ -71,6 +69,7 @@ public sealed partial class HookSpool(string spoolDir, TimeProvider time, int ca
         if (path is null) return false;
         try {
             Directory.CreateDirectory(spoolDir);
+            SpoolServerStamp.Write(spoolDir, EncodeKey(sessionId), server);
             var line = new JsonObject { ["route"] = route, ["body"] = rawPayloadJson }.ToJsonString();
             EnsureUnderCap(path, Encoding.UTF8.GetByteCount(line) + 1);
             File.AppendAllText(path, $"{line}\n");
@@ -148,6 +147,7 @@ public sealed partial class HookSpool(string spoolDir, TimeProvider time, int ca
 
         foreach (var sid in OrderedSessionIds(currentSessionId)) {
             if (Expired() || ct.IsCancellationRequested) return;
+            if (BelongsElsewhere(sid)) continue;
             if (await DrainSessionAsync(sid, poster, Expired, ct)) return; // transient → stop the pass
         }
     }
@@ -163,6 +163,9 @@ public sealed partial class HookSpool(string spoolDir, TimeProvider time, int ca
         }
         return ids;
     }
+
+    internal bool BelongsElsewhere(string sessionId) =>
+        SpoolServerStamp.BelongsElsewhere(spoolDir, EncodeKey(sessionId), server);
 
     bool HasAny(string sid) =>
         File.Exists(Path.Combine(spoolDir, $"{EncodeKey(sid)}.jsonl"))

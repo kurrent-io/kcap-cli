@@ -47,13 +47,13 @@ public class ClaudeSessionStartClaimTests {
         DeadClaim(900_002, "true-orphan");
         var body = Hook(source, eventName);
         var prepared = await ClaudeSessionStartClaim.PrepareAsync(body, Config.Root, () => Environment.ProcessId, NeverSuppress);
-        var lifecycle = new HookSpool(Config.Root, TimeProvider.System);
+        var lifecycle = new HookSpool(Config.Root, TimeProvider.System, server: null);
         var http = new FixedCapacitorHttpClient();
         var profiles = Resolutions.At(Server, Config.Root);
         var poster = new AgentHookPoster(Config.Root, profiles, http,
             TestWatchers.For(Config.Root, profiles, http), TimeProvider.System);
 
-        await poster.DrainSpoolsCoreAsync(lifecycle, new TranscriptSpool(Config.Root, TimeProvider.System), null,
+        await poster.DrainSpoolsCoreAsync(lifecycle, new TranscriptSpool(Config.Root, TimeProvider.System, server: null), null,
             _ => Task.FromResult(new AuthAttempt(new HttpClient(), AuthStatus.Expired)));
 
         await Assert.That(lifecycle.HasBacklog(Session)).IsFalse();
@@ -114,7 +114,7 @@ public class ClaudeSessionStartClaimTests {
         if (!excluded) DisabledSessions.Mark(Session, Config.Root);
         var profiles = Resolutions.Of(new Profile { ExcludedPaths = excluded ? ["/repo"] : [] }, serverUrl: "ftp://host");
         var http = new FixedCapacitorHttpClient();
-        var spool = new HookSpool(Config.Root, TimeProvider.System);
+        var spool = new HookSpool(Config.Root, TimeProvider.System, server: null);
         var clock = new HookClock(TimeProvider.System);
         var command = new ClaudeHookCommand(Config.Root, profiles, clock, Home,
             TestHarnesses.Under(Home), HostedAgent.Terminal, http, TestWatchers.For(Config.Root, profiles, http),

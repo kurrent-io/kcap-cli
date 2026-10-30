@@ -6192,8 +6192,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             _configRoot,
             _http,
             _config.ServerUrl,
-            new HookSpool(_configRoot, _time),
-            new TranscriptSpool(_configRoot, _time),
+            new HookSpool(_configRoot, _time, _config.ServerUrl),
+            new TranscriptSpool(_configRoot, _time, _config.ServerUrl),
             _logger,
             _time,
             onWhatsDoneRequested: SpawnWhatsDoneGenerator);

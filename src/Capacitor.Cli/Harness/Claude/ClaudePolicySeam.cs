@@ -17,7 +17,7 @@ internal enum SeamAnswer { Answered, NotAnswered }
 /// an ungoverned session exits 0 with no output, because any non-zero exit renders Claude's opaque
 /// hook-error banner.
 /// </summary>
-internal sealed class ClaudePolicySeam(ConfigRoot config, TimeProvider time, PolicyJudgeGateway? judge = null) {
+internal sealed class ClaudePolicySeam(ConfigRoot config, TimeProvider time, string? server, PolicyJudgeGateway? judge = null) {
     /// <summary>False degrades a policy ask to pass-through: nothing is written to Claude, and the
     /// decision event records requested=ask against effective=pass_through so the gap stays
     /// visible rather than silent.</summary>
@@ -240,7 +240,7 @@ internal sealed class ClaudePolicySeam(ConfigRoot config, TimeProvider time, Pol
             var declarations = ClaudeJudgeDeclarationReader.Read(f.TranscriptPath, ctx.CallId, f.Cwd,
                 ClaudeJudgeDeclarationReader.StatePath(config, ctx.SessionId));
             var action       = PolicyWire.ToWire(ctx.Action);
-            var inline       = new HookSpool(config, time).IsPolicySnapshotDelivered(ctx.SessionId, ctx.Snapshot.Id)
+            var inline       = new HookSpool(config, time, server).IsPolicySnapshotDelivered(ctx.SessionId, ctx.Snapshot.Id)
                 ? null
                 : PolicyWire.ToUpload(ctx.SessionId, ctx.Snapshot);
 
@@ -278,7 +278,7 @@ internal sealed class ClaudePolicySeam(ConfigRoot config, TimeProvider time, Pol
             RawPayloadJson = rawPayload,
         };
 
-        return new PolicyDecisionEmitter(config, time).EmitAsync(PolicyWire.Decision(
+        return new PolicyDecisionEmitter(config, time, server).EmitAsync(PolicyWire.Decision(
             sessionId: sessionId, agentId: f.AgentId, vendor: "claude", seam: PolicySeams.ClaudePermissionRequest,
             snapshot: snapshot, mode: EvaluationMode.Full, requestedOutcome: "ask", effectiveOutcome: "prompt_stands",
             action: PolicyWire.ToWire(action), matchedRules: [], time: time,
@@ -293,7 +293,7 @@ internal sealed class ClaudePolicySeam(ConfigRoot config, TimeProvider time, Pol
 
     Task Emit(SeamContext ctx, string requested, string effective, bool? ambiguous = null,
               bool? pendingAskConsumed = null, string? freshOutcome = null, PolicyJudgeResult? judged = null) =>
-        new PolicyDecisionEmitter(config, time).EmitAsync(PolicyWire.Decision(
+        new PolicyDecisionEmitter(config, time, server).EmitAsync(PolicyWire.Decision(
             sessionId: ctx.SessionId, agentId: ctx.AgentId, vendor: "claude", seam: ctx.Seam,
             snapshot: ctx.Snapshot, mode: ctx.Mode, requestedOutcome: requested, effectiveOutcome: effective,
             action: PolicyWire.ToWire(ctx.Action), matchedRules: PolicyWire.ToWire(ctx.Eval.MatchedRules), time: time,

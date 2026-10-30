@@ -24,6 +24,7 @@ public static class LifecycleSpoolDrain {
 
         foreach (var sid in OrderedSessions(lifecycle, transcript, currentSessionId)) {
             if (Expired()) return;
+            if (lifecycle.BelongsElsewhere(sid) || transcript.BelongsElsewhere(sid)) continue;
 
             // Task 12 / BLOCKER-3: a session whose terminal (session-end) route was already
             // durably delivered by a PRIOR pass must never have a straggler non-terminal entry

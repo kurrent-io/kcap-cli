@@ -90,7 +90,7 @@ sealed class GrokHookCommand(
         }
 
         var outcome = await _poster.PostOrSpoolAsync("session-start/grok", enriched, "grok-hook",
-            new HookSpool(config, clock.Time), sessionId, route: "session-start/grok");
+            new HookSpool(config, clock.Time, Url), sessionId, route: "session-start/grok");
 
         // A refused start leaves the session unrecorded, so a later Stop must not start capturing it.
         if (outcome == HookPostOutcome.Failed) DisabledSessions.Mark(sessionId, config);
