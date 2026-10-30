@@ -293,11 +293,11 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
                 ShowsArtefactsTab = show;
                 if (!show && IsArtefactsActive) ActiveTab = RemoteTab.Chat;
             }).DisposeWith(_disposables);
-        var runs = _runs = new SessionRuns(time);
+        var runs = _runs = new SessionRuns(time) { OpensSubagents = readSubagent is not null };
         commands?.Track($"remote:{row.Id}", runs).DisposeWith(_disposables);
         WorkContext = new WorkContextViewModel(_presence, workContext, time, opener, runs,
             requestSignIn, signInCompleted, actions.OpenWorkItemInWeb, plans, planActivity,
-            artefacts: Artefacts, isRemote: true);
+            artefacts: Artefacts, isRemote: true, sessionOnly: row.Origin == AgentOrigin.Server);
         WorkContext.RunOpened += OpenSubagent;
         _disposables.Add(Disposable.Create(() => WorkContext.RunOpened -= OpenSubagent));
         // An open subagent belongs to the session it was opened from.
@@ -501,8 +501,14 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         var sessionId = _workAccessDenied ? null : _row.SessionId;
         _presence.OnNext(new AgentStatusDto(_row.Id, _row.Kind, _row.Vendor, _row.RepoPath, _row.Status,
             null, null, null, _row.CreatedAt, _row.Model, _row.RequesterDisplay,
-            Title: _row.Title, SessionId: sessionId, Branch: _row.Branch));
+            Title: _row.Title, WorktreePath: _row.WorktreePath, WorkLocation: _row.WorkLocation,
+            BorrowedFrom: _row.BorrowedFrom, SessionId: sessionId, Branch: _row.Branch));
         if (string.IsNullOrEmpty(sessionId)) PullRequests?.ClearSession();
+    }
+
+    /// Reopening a refused session asks the server again; a genuine revocation answers Denied again.
+    public void RecheckAccess() {
+        if (Access == RemoteSessionAccess.Denied && _leasedSession is { } sessionId) _access.RecheckDenied(sessionId);
     }
 
     void AcquireLease(string sessionId) {

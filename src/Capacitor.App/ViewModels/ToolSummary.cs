@@ -122,6 +122,9 @@ public static class ToolSummary {
             case "resume_agent":                                return "Resumed agent";
             case "list_agents":                                 return "Listed agents";
         }
+        // A patch whose headers name no file says only that it was a patch.
+        if (category == ToolCategory.Edit && ToolDetail.PatchTargets(inputJson, category) is { } targets)
+            return targets.Count switch { 0 => "Applied patch", 1 => "Edited file", _ => "Edited files" };
         return category switch {
             ToolCategory.Read      => "Read file",
             ToolCategory.Edit      => "Edited file",

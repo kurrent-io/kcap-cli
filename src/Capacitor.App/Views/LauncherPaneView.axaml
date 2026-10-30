@@ -228,6 +228,12 @@
                                TextTrimming="CharacterEllipsis" MaxWidth="640"
                                ToolTip.Tip="{Binding SelectedRepoPath}"
                                IsVisible="{Binding SelectedRepoPath, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    <TextBlock x:Name="LauncherWorktreeHint"
+                               Text="Runs in its own worktree, so your checkout stays as it is"
+                               FontSize="12" LineHeight="17" Foreground="{StaticResource KcapFaintBrush}"
+                               HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" MaxWidth="640"
+                               ToolTip.Tip="kcap works in .capacitor/worktrees/agent-… inside this repository, on a new capacitor/agent-… branch. The session's Worktree panel shows the path and the branch to merge."
+                               IsVisible="{Binding SelectedRepoPath, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 </StackPanel>
 
                 <Border x:Name="GoalCard" Classes="attachTarget" Background="{StaticResource KcapSurfaceBrush}"

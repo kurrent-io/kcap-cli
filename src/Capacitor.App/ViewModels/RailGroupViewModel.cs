@@ -135,11 +135,12 @@ public sealed class RailGroupViewModel : ReactiveObject, IDisposable {
         this.RaisePropertyChanged(nameof(ToggleAccessibleName));
     }
 
-    /// Mixed groups count each kind; a group of one kind reads as it always did.
+    /// Mixed groups count each kind; a group of one kind reads as it always did. A local row whose
+    /// agent completed is ended, as its row and its workspace header already say.
     static string CountTextFor(IEnumerable<AgentRow> rows) {
         int live = 0, ended = 0;
         foreach (var row in rows) {
-            if (row.IsEndedSession) ended++;
+            if (row.IsEndedSession || row is { Origin: AgentOrigin.Local, Status: "Completed" }) ended++;
             else live++;
         }
         if (ended > 0 && live > 0) return $"{live} live · {ended} ended";

@@ -516,6 +516,47 @@
                             </StackPanel>
                         </StackPanel>
 
+                        <StackPanel Classes="settingsGroup">
+                            <TextBlock Classes="settingsGroupTitle" Text="Status" />
+                            <Border Classes="settingsCard">
+                                <StackPanel>
+                                    <Grid Classes="settingsRow" ColumnDefinitions="140,*">
+                                        <TextBlock Classes="kcapLabel" Text="Daemon" VerticalAlignment="Center" />
+                                        <SelectableTextBlock x:Name="AboutDaemonStatusText" Grid.Column="1" Text="{Binding About.DaemonStatus, FallbackValue={x:Null}}"
+                                                             FontSize="12.5" TextWrapping="Wrap"
+                                                             Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                                    </Grid>
+                                    <StackPanel IsVisible="{Binding About.ServerConnection, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}">
+                                        <Border Classes="settingsDivider" />
+                                        <Grid Classes="settingsRow" ColumnDefinitions="140,*">
+                                            <TextBlock Classes="kcapLabel" Text="Server connection" VerticalAlignment="Center" />
+                                            <SelectableTextBlock x:Name="AboutServerConnectionText" Grid.Column="1" Text="{Binding About.ServerConnection, FallbackValue={x:Null}}"
+                                                                 FontSize="12.5" TextWrapping="Wrap"
+                                                                 Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                                        </Grid>
+                                    </StackPanel>
+                                    <StackPanel IsVisible="{Binding About.RunningAgents, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}">
+                                        <Border Classes="settingsDivider" />
+                                        <Grid Classes="settingsRow" ColumnDefinitions="140,*">
+                                            <TextBlock Classes="kcapLabel" Text="Hosted agents" VerticalAlignment="Center" />
+                                            <SelectableTextBlock x:Name="AboutRunningAgentsText" Grid.Column="1" Text="{Binding About.RunningAgents, FallbackValue={x:Null}}"
+                                                                 FontSize="12.5" TextWrapping="Wrap"
+                                                                 Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                                        </Grid>
+                                    </StackPanel>
+                                    <StackPanel IsVisible="{Binding About.LocalStack.StateText, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}">
+                                        <Border Classes="settingsDivider" />
+                                        <Grid Classes="settingsRow" ColumnDefinitions="140,*">
+                                            <TextBlock Classes="kcapLabel" Text="Local server" VerticalAlignment="Center" />
+                                            <SelectableTextBlock x:Name="AboutLocalStatusText" Grid.Column="1" Text="{Binding About.LocalStack.StateText, FallbackValue={x:Null}}"
+                                                                 FontSize="12.5" TextWrapping="Wrap"
+                                                                 Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                                        </Grid>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+
                         <StackPanel Classes="settingsGroup" IsVisible="{Binding About.BetaUpdatesVisible, FallbackValue=False}">
                             <TextBlock Classes="settingsGroupTitle" Text="Updates" />
                             <Border Classes="settingsCard">

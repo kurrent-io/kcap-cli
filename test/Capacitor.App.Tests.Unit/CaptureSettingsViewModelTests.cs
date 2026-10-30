@@ -1,5 +1,6 @@
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
+using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Setup;
 
@@ -158,6 +159,72 @@ public class CaptureSettingsViewModelTests {
         vm.AllowedRepos = "team/repo";
         await vm.SaveAsync();
         await Assert.That(store.LoadProfile().AllowedRepos).IsEquivalentTo(new[] { "team/repo" });
+    });
+
+    static Func<CancellationToken, Task<VisibilityOptionsRead?>> Offering(params string[] keys) =>
+        _ => Task.FromResult<VisibilityOptionsRead?>(new(new() {
+            Options = [.. keys.Select(k => new VisibilityOptionDto { Key = k, Label = k })], DefaultVisibility = keys[0],
+        }, null));
+
+    /// The three answers a tenant without an organization owner offers: the page must still show one selected.
+    [Test]
+    public Task A_saved_audience_the_server_offers_is_selected_on_entry() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var vm = new CaptureSettingsViewModel(Seed(), visibilityOptions: Offering("private", "project", "public"));
+        await vm.RefreshVisibilityOptionsAsync();
+        await Assert.That(vm.Visibility).IsEqualTo("private");
+        await Assert.That(vm.VisibilityNote).IsNull();
+    });
+
+    [Test]
+    public Task An_org_audience_on_a_server_without_one_selects_what_it_means_there_and_save_keeps_it() => AvaloniaSession.RunOnUiAsync(async () => {
+        var store = Seed();
+        await store.SaveCaptureAsync(new Profile { DefaultVisibility = "org_public" }, CancellationToken.None);
+        using (var vm = new CaptureSettingsViewModel(store, visibilityOptions: Offering("private", "project", "public"))) {
+            await vm.RefreshVisibilityOptionsAsync();
+            await Assert.That(vm.Visibility).IsEqualTo("project");
+            await Assert.That(vm.VisibilityNote!).Contains("not offered by this server");
+            await vm.SaveAsync();
+            await Assert.That(vm.Saved).IsTrue();
+            await Assert.That(vm.VisibilityNote).IsNull();
+        }
+        await Assert.That(store.LoadProfile().DefaultVisibility).IsEqualTo("project");
+
+        using var reopened = new CaptureSettingsViewModel(store, visibilityOptions: Offering("private", "project", "public"));
+        await reopened.RefreshVisibilityOptionsAsync();
+        await Assert.That(reopened.Visibility).IsEqualTo("project");
+        await Assert.That(reopened.VisibilityNote).IsNull();
+    });
+
+    [Test]
+    [Arguments("org_public", new[] { "private", "project", "org_public", "public" }, "org_public")]
+    [Arguments("org_public", new[] { "private", "project", "public" }, "project")]
+    [Arguments("org_public", new[] { "private", "public" }, "private")]
+    [Arguments("project", new[] { "private", "public" }, "private")]
+    [Arguments("public", new[] { "private", "public" }, "public")]
+    [Arguments("private", new[] { "project" }, null)]
+    public async Task A_saved_audience_resolves_to_the_offered_answer_with_its_readers(string stored, string[] offered, string? expected) =>
+        await Assert.That(CaptureSettingsViewModel.Effective(stored, [.. offered.Select(o => new VisibilityOption(o, o, ""))])).IsEqualTo(expected);
+
+    [Test]
+    public Task An_audience_saved_elsewhere_replaces_the_selection_on_reload() => AvaloniaSession.RunOnUiAsync(async () => {
+        var store = Seed();
+        using var vm = new CaptureSettingsViewModel(store, visibilityOptions: Offering("private", "project", "public"));
+        await vm.RefreshVisibilityOptionsAsync();
+        await store.SaveCaptureAsync(new Profile { DefaultVisibility = "org_public" }, CancellationToken.None);
+        await vm.ReloadSavedVisibilityAsync();
+        await Assert.That(vm.Visibility).IsEqualTo("project");
+        await Assert.That(vm.VisibilityNote).IsNotNull();
+    });
+
+    [Test]
+    public Task A_reload_keeps_an_unsaved_choice() => AvaloniaSession.RunOnUiAsync(async () => {
+        var store = Seed();
+        using var vm = new CaptureSettingsViewModel(store, visibilityOptions: Offering("private", "project", "public"));
+        await vm.RefreshVisibilityOptionsAsync();
+        vm.Visibility = "public";
+        await store.SaveCaptureAsync(new Profile { DefaultVisibility = "project" }, CancellationToken.None);
+        await vm.ReloadSavedVisibilityAsync();
+        await Assert.That(vm.Visibility).IsEqualTo("public");
     });
 
     [Test]

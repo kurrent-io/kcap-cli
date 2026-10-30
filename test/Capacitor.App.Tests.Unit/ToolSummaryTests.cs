@@ -131,4 +131,14 @@ public class ToolSummaryTests {
     public async Task Row_label_names_built_in_tools_without_their_own_prose_description(string name, ToolCategory category, string? input, string? expected) {
         await Assert.That(ToolSummary.RowLabel(name, category, input)).IsEqualTo(expected);
     }
+
+    /// A patch's label follows how many files its headers name; one naming none is not called a file edit.
+    [Test]
+    [Arguments("""{"input":"*** Begin Patch\n*** Update File: src/a.cs\n@@\n-x\n+y\n*** End Patch"}""", "Edited file")]
+    [Arguments("""{"command":"*** Begin Patch\n*** Add File: a.md\n+x\n*** Delete File: b.md\n*** End Patch"}""", "Edited files")]
+    [Arguments("""{"input":"*** Begin Patch\n*** End Patch"}""", "Applied patch")]
+    [Arguments("""{"changes":[{"path":"/r/a.cs","kind":"update"},{"path":"/r/b.cs","kind":"add"}]}""", "Edited files")]
+    public async Task Row_label_of_a_patch_counts_its_targets(string input, string expected) {
+        await Assert.That(ToolSummary.RowLabel("apply_patch", ToolCategory.Edit, input)).IsEqualTo(expected);
+    }
 }

@@ -5,6 +5,7 @@ using System.Reactive.Linq;
 using Capacitor.App.Services;
 using Capacitor.App.Services.Update;
 using Capacitor.App.Views;
+using Capacitor.Cli.Core.LocalIpc;
 using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
@@ -35,6 +36,20 @@ public sealed class AboutSettingsViewModel : ReactiveObject, IDisposable {
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(v => DaemonVersion = v.Length > 0 ? v : null)
             .DisposeWith(_subscriptions);
+        service.Status.CombineLatest(service.Snapshots.Select(s => (DaemonInfoDto?)s.Daemon).StartWith((DaemonInfoDto?)null),
+                (status, daemon) => (status, daemon))
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(t => {
+                DaemonStatus = DaemonStatusFor(t.status, t.daemon);
+                var attached = t.status.State == AttachState.Connected ? t.daemon : null;
+                ServerConnection = attached is null ? null
+                    : string.IsNullOrEmpty(attached.ServerUrl) ? attached.Connection
+                    : $"{attached.Connection} · {attached.ServerUrl}";
+                RunningAgents = attached is null ? null
+                    : attached.MaxAgents == 0 ? $"{attached.ActiveAgents} running · no limit"
+                    : $"{attached.ActiveAgents} running · limit {attached.MaxAgents}";
+            })
+            .DisposeWith(_subscriptions);
         updateMenu?.ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(item => Update = item)
             .DisposeWith(_subscriptions);
@@ -54,6 +69,35 @@ public sealed class AboutSettingsViewModel : ReactiveObject, IDisposable {
             this.RaisePropertyChanged(nameof(VersionReport));
         }
     }
+
+    /// The attach to this machine's daemon, with its name while attached.
+    public string DaemonStatus {
+        get;
+        private set => this.RaiseAndSetIfChanged(ref field, value);
+    } = "connecting";
+
+    /// The daemon's own connection to its server, and which server; null while not attached.
+    public string? ServerConnection {
+        get;
+        private set => this.RaiseAndSetIfChanged(ref field, value);
+    }
+
+    /// Agents running on the daemon against its configured limit; null while not attached.
+    public string? RunningAgents {
+        get;
+        private set => this.RaiseAndSetIfChanged(ref field, value);
+    }
+
+    internal static string DaemonStatusFor(AttachStatus status, DaemonInfoDto? daemon) => status.State switch {
+        AttachState.Connected   => daemon?.Name is { Length: > 0 } name ? $"connected · {name}" : "connected",
+        AttachState.Connecting  => "connecting",
+        _ => status.Reason switch {
+            "daemon_unreachable"         => "not running",
+            "daemon_incompatible"        => "version doesn't match the app",
+            ExpectedDaemonRestart.Reason => "restarting",
+            _                            => "unreachable",
+        },
+    };
 
     public string? CliVersion {
         get => _cliVersionText;

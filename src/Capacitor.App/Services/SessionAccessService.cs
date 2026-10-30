@@ -57,16 +57,28 @@ public sealed class SessionAccessService : IDisposable {
 
     public IObservable<(string SessionId, SessionAccessState State)> Transitions => _transitions.AsObservable();
 
+    /// A newcomer re-asks a refused session rather than inheriting the refusal: an earlier lease may
+    /// have asked before the server had the session, which it answers exactly as a hidden one.
     public SessionAccessLease Acquire(string sessionId) {
         Entry entry;
-        var fresh = false;
         lock (_lock) {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            if (!_entries.TryGetValue(sessionId, out entry!)) { entry = new Entry(sessionId); _entries[sessionId] = entry; fresh = true; }
+            if (!_entries.TryGetValue(sessionId, out entry!)) {
+                entry = new Entry(sessionId);
+                _entries[sessionId] = entry;
+                Begin(entry);
+            } else if (entry.State.Value == SessionAccessState.Denied) Begin(entry);
             entry.Leases++;
-            if (fresh) Begin(entry);
         }
         return new SessionAccessLease(sessionId, entry.State, Release);
+    }
+
+    /// Asks the server again for a session whose leases read Denied; any other state is left alone.
+    public void RecheckDenied(string sessionId) {
+        lock (_lock) {
+            if (_disposed || !_entries.TryGetValue(sessionId, out var entry)) return;
+            if (entry.State.Value == SessionAccessState.Denied) Begin(entry);
+        }
     }
 
     void Release(SessionAccessLease lease) {

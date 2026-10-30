@@ -218,6 +218,7 @@ public sealed partial class WorkContextViewModel {
         });
         ToggleSessionCommand = Toggle(() => SessionExpanded = !SessionExpanded);
         ToggleRunsCommand = Toggle(() => RunsExpanded = !RunsExpanded);
+        WatchOwnWorktree();
     }
 
     ReactiveCommand<Unit, Unit> Toggle(Action flip) {
@@ -355,6 +356,13 @@ public sealed partial class WorkContextViewModel {
         ContextUse = SessionFactText.Context(summary?.Stats);
         SessionSharing = summary is null ? SessionFactText.Unknown : SessionFactText.SessionSharing(summary);
         AgentSharing = SessionFactText.AgentSharing(summary?.AgentVisibility);
+        _storedBranch = FirstNonBlank(summary?.RepoBranch, summary?.Repositories.FirstOrDefault(r => r.IsPrimary)?.Branch);
+        _storedRepository = FirstNonBlank(summary?.Repositories.FirstOrDefault(r => r.IsPrimary)?.RepoName, summary?.RepoName);
+        if (_isRemote) {
+            ResolveBranch();
+            if (_dto is not null) ResolveRepository(_dto.RepoPath);
+        }
+        this.RaisePropertyChanged(nameof(PhaseNote));
     }
 
     static bool Same(string a, string? b) => string.Equals(a, b, StringComparison.Ordinal);

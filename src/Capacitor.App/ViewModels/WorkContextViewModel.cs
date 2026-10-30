@@ -61,6 +61,8 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     internal const string UnreachableNote  = "Couldn't reach the server.";
 
     readonly bool _isRemote;
+    /// A session no daemon hosts: nothing reports how it ran, so the vendor must not stand in for that.
+    readonly bool _sessionOnly;
     readonly IWorkContextSource _source;
     readonly SingleFlightReader<string, WorkContextRead> _reader;
     readonly SingleFlightReader<(string? Path, string? Reported), string> _branchReader;
@@ -176,7 +178,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     public string PhaseNote => Phase switch {
         WorkContextPhase.WaitingForSession or WorkContextPhase.SessionUnknown => WaitingNote,
         WorkContextPhase.Loading     => LoadingNote,
-        WorkContextPhase.NoWorkItem  => _dto?.RepoPath is null ? NoRepositoryNote : NoWorkItemNote,
+        WorkContextPhase.NoWorkItem  => _dto?.RepoPath is null && _storedRepository is null ? NoRepositoryNote : NoWorkItemNote,
         WorkContextPhase.SignedOut   => SignedOutNote,
         WorkContextPhase.NotInPlan   => NotInPlanNote,
         WorkContextPhase.Unreachable => UnreachableNote,
@@ -199,10 +201,19 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     }
 
     string? _reportedBranch;
+    /// The summary's branch, for a remote row whose listing carries none: the listing keeps the
+    /// branch first seen with the repository, the primary repository row a later one.
+    string? _storedBranch;
+    /// The summary's repository name, for a remote row whose listing carries no cwd.
+    string? _storedRepository;
+
+    void ResolveRepository(string? repoPath) =>
+        Repository = repoPath is null && _isRemote && _storedRepository is { } stored ? stored : RepoLabel.Leaf(repoPath);
+
     // The daemon reports the branch the worktree was cut on; HEAD knows a switch made since.
     void ResolveBranch(bool refresh = false) {
         if (_isRemote) {
-            Branch = string.IsNullOrWhiteSpace(_reportedBranch) ? "—" : _reportedBranch;
+            Branch = FirstNonBlank(_reportedBranch, _storedBranch) ?? "—";
             return;
         }
         var state = (Path: WorktreePath, Reported: _reportedBranch);
@@ -282,8 +293,9 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
             IObservable<AgentStatusDto?> presence, IWorkContextSource source, TimeProvider time, IUrlOpener opener,
             SessionRuns runs, Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null,
             Action<string>? openWorkItem = null, IPlanSource? plans = null, PlanActivity? planActivity = null,
-            ArtefactsTabViewModel? artefacts = null, bool isRemote = false) {
+            ArtefactsTabViewModel? artefacts = null, bool isRemote = false, bool sessionOnly = false) {
         _isRemote = isRemote;
+        _sessionOnly = sessionOnly;
         _source = source;
         _branchReader = new SingleFlightReader<(string? Path, string? Reported), string>(
             (state, ct) => Task.Run(() => {
@@ -376,7 +388,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     };
 
     void UpdateFacts(AgentStatusDto dto) {
-        Repository = RepoLabel.Leaf(dto.RepoPath);
+        ResolveRepository(dto.RepoPath);
         RepositoryPath = dto.RepoPath;
         var checkout = _isRemote ? dto.WorktreePath : CheckoutLabel.CheckoutPathFor(dto);
         WorktreePath = checkout;
@@ -387,7 +399,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         ResolveBranch();
         var vendorLabel = HostedHarnessCatalog.LabelFor(DefaultHarnessOptions, dto.Vendor);
         Harness = $"{vendorLabel} · {HostedHarnessCatalog.ModelLabelFor(dto.Vendor, dto.Model ?? "")}";
-        Transport = TransportLabel(HostedHarnessCatalog.EffectiveFamily(dto.HasTerminal, dto.Vendor));
+        Transport = _sessionOnly ? "—" : TransportLabel(HostedHarnessCatalog.EffectiveFamily(dto.HasTerminal, dto.Vendor));
         if (!_reader.HasCurrent) SessionIdText = SessionIds.Canonical(dto.SessionId) ?? "resolving…";
         UpdateRequester(dto, vendorLabel);
     }

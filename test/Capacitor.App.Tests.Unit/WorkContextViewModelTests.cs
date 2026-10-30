@@ -37,9 +37,10 @@ public class WorkContextViewModelTests {
         public PlanActivity PlanActivity { get; } = new();
         public WorkContextViewModel Vm { get; }
 
-        public Harness() {
+        public Harness(bool isRemote = false, bool sessionOnly = false) {
             Runs = new SessionRuns(Time);
-            Vm = new WorkContextViewModel(Presence, Source, Time, Opener, Runs, () => SignInRequests++, SignIn, OpenedWorkItems.Add, Plans, PlanActivity);
+            Vm = new WorkContextViewModel(Presence, Source, Time, Opener, Runs, () => SignInRequests++, SignIn, OpenedWorkItems.Add, Plans, PlanActivity,
+                isRemote: isRemote, sessionOnly: sessionOnly);
         }
 
         public Task PlanSettledAsync() => Vm.Plan.PendingReadForTesting ?? Task.CompletedTask;
@@ -140,6 +141,62 @@ public class WorkContextViewModelTests {
         });
     }
 
+    /// The agent's edits land in a worktree of its own, so the pane names it, its branch, and how to
+    /// bring the work back to the checkout the user picked.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_owned_worktree_is_named_with_its_branch_and_the_way_back() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            await Assert.That(h.Vm.ShowsOwnWorktree).IsFalse();
+
+            await h.PushAsync(Dto(sessionId: null, branch: "capacitor/agent-1"));
+
+            await Assert.That(h.Vm.ShowsOwnWorktree).IsTrue();
+            await Assert.That(h.Vm.CanOpenWorktree).IsTrue();
+            await Assert.That(h.Vm.WorktreePath).IsEqualTo("/repo/myproj/.capacitor/worktrees/agent-1");
+            await Assert.That(h.Vm.OwnWorktreeBranch).IsEqualTo("capacitor/agent-1");
+            await Assert.That(h.Vm.OwnWorktreeNote!).Contains("not in your myproj checkout");
+            await Assert.That(h.Vm.OwnWorktreeNote!).Contains("merge or cherry-pick this branch");
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// A borrowed reviewer, the repository's own checkout, and an older daemon that reports no
+    /// work location all work where the user looks, so there is nothing to explain.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments("borrowed", "/repo/myproj")]
+    [Arguments("owned", "/repo/myproj")]
+    [Arguments(null, "/repo/myproj/.capacitor/worktrees/agent-1")]
+    public async Task Work_in_the_picked_checkout_shows_no_worktree_note(string? workLocation, string worktreePath) {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            await h.PushAsync(Dto(sessionId: null) with { WorkLocation = workLocation, WorktreePath = worktreePath });
+
+            await Assert.That(h.Vm.ShowsOwnWorktree).IsFalse();
+            await Assert.That(h.Vm.CanOpenWorktree).IsFalse();
+            await Assert.That(h.Vm.OwnWorktreeBranch).IsNull();
+            await Assert.That(h.Vm.OwnWorktreeNote).IsNull();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// Another machine's worktree is named, but there is no folder on this one to open.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_remote_owned_worktree_is_named_but_not_opened() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(isRemote: true);
+            await h.PushAsync(Dto(sessionId: null, branch: "capacitor/agent-1"));
+
+            await Assert.That(h.Vm.ShowsOwnWorktree).IsTrue();
+            await Assert.That(h.Vm.CanOpenWorktree).IsFalse();
+            await Assert.That(h.Vm.OwnWorktreeBranch).IsEqualTo("capacitor/agent-1");
+            await h.Vm.TeardownAsync();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Transport_follows_the_effective_family() {
@@ -149,6 +206,95 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Vm.Transport).IsEqualTo("ACP");
             await h.PushAsync(Agent("c1", "claude", hasTerminal: false, repoPath: "/repo/x", sessionId: null));
             await Assert.That(h.Vm.Transport).IsEqualTo("chat");
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    static AgentStatusDto ServerSession(string vendor, string? branch) =>
+        Agent(SessionA, vendor, hasTerminal: null, repoPath: "/repo/myproj", kind: "session", sessionId: SessionA, branch: branch);
+
+    static WorkContextRead SummaryRead(string? repoBranch = null, string? primaryBranch = null) =>
+        WorkContextRead.Of(WorkContextReadKind.Ready) with {
+            Summary = new SessionSummaryDto {
+                SessionId = SessionA, RepoBranch = repoBranch,
+                Repositories = [
+                    new SessionRepositoryDto { RepoHash = "other", Owner = "kurrent-io", RepoName = "kcap-web", Branch = "elsewhere" },
+                    new SessionRepositoryDto { RepoHash = "h", Owner = "kurrent-io", RepoName = "kcap-cli", Branch = primaryBranch, IsPrimary = true },
+                ],
+            },
+        };
+
+    /// A session no daemon hosts has no terminal flag; its vendor alone must not read as a PTY.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments("claude")]
+    [Arguments("codex")]
+    public async Task A_session_only_row_shows_no_inferred_transport(string vendor) {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(isRemote: true, sessionOnly: true);
+            h.Source.Enqueue(SummaryRead());
+            await h.PushAsync(ServerSession(vendor, branch: "main"));
+            await Assert.That(h.Vm.Transport).IsEqualTo("—");
+            await Assert.That(h.Vm.Branch).IsEqualTo("main");
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_remote_daemon_row_keeps_the_vendor_transport() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(isRemote: true);
+            await h.PushAsync(Agent("a1", "claude", hasTerminal: null, repoPath: "/repo/x", sessionId: null));
+            await Assert.That(h.Vm.Transport).IsEqualTo("PTY");
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// The listing carries the branch first seen with the repository and can carry none; the
+    /// summary's primary repository keeps the one recorded later.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments("claude", null, "main", "main")]
+    [Arguments("codex", null, "main", "main")]
+    [Arguments("codex", "release", "main", "release")]
+    [Arguments("codex", null, null, "—")]
+    public async Task A_session_only_row_without_a_listed_branch_shows_the_stored_one(
+            string vendor, string? repoBranch, string? primaryBranch, string expected) {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(isRemote: true, sessionOnly: true);
+            h.Source.Enqueue(SummaryRead(repoBranch, primaryBranch));
+            await h.PushAsync(ServerSession(vendor, branch: null));
+            await Assert.That(h.Vm.Branch).IsEqualTo(expected);
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_listed_branch_wins_over_the_summary() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(isRemote: true, sessionOnly: true);
+            h.Source.Enqueue(SummaryRead(primaryBranch: "later"));
+            await h.PushAsync(ServerSession("codex", branch: "listed"));
+            await Assert.That(h.Vm.Branch).IsEqualTo("listed");
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// Below full access the server blanks every branch; a read it refuses leaves nothing stored.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_stored_branch_does_not_outlive_a_refused_read() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(isRemote: true, sessionOnly: true);
+            h.Source.Enqueue(SummaryRead(primaryBranch: "main"), WorkContextRead.Of(WorkContextReadKind.SessionUnknown));
+            await h.PushAsync(ServerSession("claude", branch: null));
+            await Assert.That(h.Vm.Branch).IsEqualTo("main");
+
+            await h.Vm.RefreshCommand.Execute();
+            await (h.Vm.PendingReadForTesting ?? Task.CompletedTask);
+            await WaitUntilAsync(() => h.Vm.Branch == "—", what: "stored branch cleared");
             await h.Vm.TeardownAsync();
         });
     }

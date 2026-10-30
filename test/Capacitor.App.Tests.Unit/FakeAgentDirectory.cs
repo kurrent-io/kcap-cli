@@ -42,6 +42,9 @@ sealed class FakeAgentDirectory : IAgentDirectory, IDisposable {
 
     public void RemovePlaceholder(string agentId) => RemovedPlaceholders.Add(agentId);
 
+    public List<string> Finished { get; } = [];
+    public void NoteFinished(string sessionId) => Finished.Add(sessionId);
+
     public IObservable<IReadOnlyDictionary<string, string>> SessionAgents =>
         Rows.Connect().QueryWhenChanged(q => SessionMap(q.Items))
             .StartWith((IReadOnlyDictionary<string, string>)FrozenDictionary<string, string>.Empty);

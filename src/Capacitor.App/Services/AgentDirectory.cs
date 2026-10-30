@@ -33,6 +33,9 @@ public interface IAgentDirectory {
     /// Whether the local daemon has proven it hosts this agent — the daemon proved to be its
     /// server twin registers it. A shared agent id proves nothing: the dedup fails open.
     bool IsProvenLocalTwin(string agentId);
+    /// The app saw this session's hosted agent end, which the server's listing can trail: its row
+    /// reads ended until a daemon row hosts the session again.
+    void NoteFinished(string sessionId) { }
     /// A row for a launch the server accepted, standing until the local lane publishes the id;
     /// a same-id row on the remote lane is a different agent and leaves it in place. It is
     /// dropped by the caller on a launch failure, and expires on its own after ten minutes.
@@ -84,6 +87,14 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
     /// Session id → when its hosted presentation lapses; written while a daemon row suppresses the
     /// server row, read once none does.
     readonly Dictionary<string, DateTime> _hostedUntil = new(StringComparer.Ordinal);
+    /// Listed session id → the checkout facts its daemon row last reported, for the server row
+    /// that stands for the session once the daemon row is gone.
+    readonly Dictionary<string, (string? RepoPath, string? WorktreePath, string? WorkLocation, string? BorrowedFrom, string? Branch)> _hostedFacts =
+        new(StringComparer.Ordinal);
+    /// Sessions whose hosted agent is known to have finished while the listing may still say live:
+    /// a local row seen Completed, or a stop the app saw accepted. A live daemon row for the session
+    /// clears the mark, and so does the listing once it says ended.
+    readonly HashSet<string> _finished = new(StringComparer.Ordinal);
     bool _disposed;
 
     public AgentDirectory(
@@ -210,6 +221,18 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
     }
 
     public bool IsProvenLocalTwin(string agentId) => _twinAgents.Contains(agentId);
+
+    public void NoteFinished(string sessionId) {
+        lock (_lock) MarkFinished(sessionId);
+        Recompute();
+    }
+
+    /// Under the lock. Both spellings the server may list the session under.
+    void MarkFinished(string? sessionId) {
+        if (SessionIds.Canonical(sessionId) is not { } own) return;
+        _finished.Add(own);
+        _finished.Add(SessionIds.ServerToken(own));
+    }
 
     // Placeholders are keyed by the normalized id: the server accepts a launch under one spelling
     // and the daemon can publish it under another.
@@ -350,9 +373,10 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
     /// One session, one row, decided by evidence. A daemon row is live only while its lane is
     /// current: the local socket Connected, or a registry read that succeeded in this connection.
     /// A live daemon row hides the server row for its session and stamps the hand-over grace; a
-    /// finished local row yields to the server's; a Failed local row stays, since its reason is
-    /// what the user needs; a cached row the lane merely retains yields to a server row that says
-    /// the session ended and hides one that says it is still active. Under Mine, the scoped live
+    /// finished local row yields to the server's, which reads ended from then on even while the
+    /// listing still says live; a Failed local row stays, since its reason is what the user needs; a
+    /// cached row the lane merely retains yields to a server row that says the session ended and
+    /// hides one that says it is still active. Under Mine, the scoped live
     /// listing is the ownership proof for every daemon row the server has listed, and a registry row
     /// the server has not listed is hidden while a local one is presumed the viewer's own. The pinned
     /// session is exempt from that filter, and joins the merge under either scope.
@@ -385,10 +409,18 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
         }
         var listedIdOf = new Dictionary<string, string?>(StringComparer.Ordinal);
         foreach (var row in next) if (row.Origin is AgentOrigin.Local or AgentOrigin.Remote) listedIdOf[row.Key] = ListedId(row);
+        if (localMatchable)
+            foreach (var row in next)
+                if (row is { Origin: AgentOrigin.Local, Status: "Completed" }) MarkFinished(row.SessionId);
 
         for (var i = 0; i < next.Count; i++) {
             var row = next[i];
             if (!Matchable(row) || listedIdOf.GetValueOrDefault(row.Key) is not { } sid || !listed.TryGetValue(sid, out var dto)) continue;
+            // A daemon row carries the listing's branch, never its own; the local daemon's is on its dto.
+            var daemonBranch = row.Origin == AgentOrigin.Local ? _localAgents.FirstOrDefault(a => a.Id == row.Id)?.Branch : null;
+            if (row.RepoPath is not null || row.WorktreePath is not null)
+                _hostedFacts[sid] = (row.RepoPath, row.WorktreePath, row.WorkLocation, row.BorrowedFrom,
+                    string.IsNullOrWhiteSpace(daemonBranch) ? row.Branch ?? dto.Branch : daemonBranch);
             next[i] = row with {
                 OwnerUserId = dto.Owner?.UserId,
                 OwnerName = dto.Owner?.DisplayName ?? dto.Owner?.Username,
@@ -442,10 +474,24 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
                     default: suppressServer = true; hostedNow = true; return false;
                 }
             });
-            if (hostedNow) _hostedUntil[sid] = now + HandoverGrace;
+            if (hostedNow) {
+                _hostedUntil[sid] = now + HandoverGrace;
+                _finished.Remove(sid);
+            }
+            if (serverEnded) _finished.Remove(sid);
             if (suppressServer) continue;
             var hosted = _hostedUntil.TryGetValue(sid, out var until) && until > now;
-            next.Add(AgentRow.FromServer(dto, hosted) with { OwnerIsViewer = Ownership(dto, sid) });
+            // The listing says live until the server folds the end; the agent's own end is the newer word.
+            var shown = !serverEnded && _finished.Contains(sid) ? dto with { Status = "ended", EndedAt = dto.LastActivityAt } : dto;
+            var server = AgentRow.FromServer(shown, hosted) with { OwnerIsViewer = Ownership(dto, sid) };
+            // The listing carries no checkout and often no cwd; what the daemon row reported while it
+            // hosted the session is the evidence, kept only where the viewer still has full access.
+            if (dto.AccessLevel == "full" && _hostedFacts.TryGetValue(sid, out var facts))
+                server = server with {
+                    RepoPath = facts.RepoPath ?? server.RepoPath, WorktreePath = facts.WorktreePath,
+                    WorkLocation = facts.WorkLocation, BorrowedFrom = facts.BorrowedFrom, Branch = facts.Branch ?? server.Branch,
+                };
+            next.Add(server);
         }
 
         foreach (var sid in _hostedUntil.Where(kv => kv.Value <= now).Select(kv => kv.Key).ToList()) _hostedUntil.Remove(sid);

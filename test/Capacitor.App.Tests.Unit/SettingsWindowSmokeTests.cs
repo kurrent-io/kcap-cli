@@ -658,7 +658,7 @@ public class SettingsWindowSmokeTests {
     [Test]
     [Arguments("project", true)]
     [Arguments("org_public", false)]
-    public Task Capture_options_refresh_preserves_only_a_supported_selected_audience(string savedVisibility, bool supported) => AvaloniaSession.RunOnUiAsync(async () => {
+    public Task Capture_options_refresh_selects_what_the_saved_audience_means_on_the_server(string savedVisibility, bool supported) => AvaloniaSession.RunOnUiAsync(async () => {
         ConfigMutator.Mutate(Config.Root, c => c with { Profiles = new() {
             ["work"] = new Profile { ServerUrl = "https://work.example", DefaultVisibility = savedVisibility }
         } });
@@ -681,12 +681,19 @@ public class SettingsWindowSmokeTests {
             await refresh;
             Settle(window);
 
-            await Assert.That(capture.Visibility).IsEqualTo(supported ? "project" : null);
-            await Assert.That(choices.SelectedValue).IsEqualTo(supported ? "project" : null);
+            // With no organization stop, org_public reaches the project readers, so both select "project".
+            await Assert.That(capture.Visibility).IsEqualTo("project");
+            await Assert.That(choices.SelectedValue).IsEqualTo("project");
+            var noteShown = window.GetVisualDescendants().OfType<TextBlock>()
+                .Any(t => t.IsEffectivelyVisible && t.Text is { } text && text.Contains("not offered by this server", StringComparison.Ordinal));
+            await Assert.That(noteShown).IsEqualTo(!supported);
+            await Assert.That(capture.VisibilityNote is null).IsEqualTo(supported);
             capture.AllowedRepos = "team/project";
             await capture.SaveAsync();
-            await Assert.That(store.LoadProfile().DefaultVisibility).IsEqualTo(savedVisibility);
-            await Assert.That(store.LoadProfile().AllowedRepos).IsEquivalentTo(supported ? new[] { "team/project" } : []);
+            Settle(window);
+            await Assert.That(store.LoadProfile().DefaultVisibility).IsEqualTo("project");
+            await Assert.That(store.LoadProfile().AllowedRepos).IsEquivalentTo(new[] { "team/project" });
+            await Assert.That(capture.VisibilityNote).IsNull();
         } finally { window.Close(); }
     });
 

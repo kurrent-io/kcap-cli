@@ -273,6 +273,22 @@ public class SessionRailViewModelTests {
         });
     }
 
+    /// A stopped agent's row reads Done before the server lists its session ended; the group count
+    /// agrees with the row instead of calling it live.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_completed_local_row_counts_as_ended() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var directory = new FakeAgentDirectory();
+            using var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System);
+            var repo = new RepoIdentity("path:/repo", "repo");
+            directory.Rows.AddOrUpdate(AgentRow.FromLocal(Dto("a", "/repo"), repo));
+            directory.Rows.AddOrUpdate(AgentRow.FromLocal(Dto("b", "/repo", status: "Completed"), repo));
+
+            await Assert.That(rail.Groups.Single().CountText).IsEqualTo("1 live · 1 ended");
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Selecting_a_session_does_not_reorder_the_directory_rows() {

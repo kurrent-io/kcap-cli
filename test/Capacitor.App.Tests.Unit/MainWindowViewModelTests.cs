@@ -259,13 +259,13 @@ public class MainWindowViewModelTests {
 
             await Assert.That(vm.DaemonName).IsEqualTo("daemon-a");
             await Assert.That(vm.ServerUrl).IsEqualTo("http://localhost:9999");
-            await Assert.That(vm.ConnectionDisplay).IsEqualTo("Connected"); // new presentation projection
+            await Assert.That(vm.Alert).IsNull();
         });
     }
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Restart_pending_marks_the_indicator_while_connected() {
+    public async Task Restart_pending_raises_an_alert_while_connected() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
             var restartPending = new BehaviorSubject<bool>(false);
@@ -274,18 +274,16 @@ public class MainWindowViewModelTests {
 
             service.SnapshotsSubject.OnNext(Snap());
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
-            await Assert.That(vm.RestartPending).IsFalse();
-            await Assert.That(vm.RestartPendingText).IsNull();
+            await Assert.That(vm.Alert).IsNull();
 
             restartPending.OnNext(true);
 
-            await Assert.That(vm.RestartPending).IsTrue();
-            await Assert.That(vm.RestartPendingText).IsEqualTo(MainWindowViewModel.RestartPendingMessage);
+            await Assert.That(vm.Alert!.Text).IsEqualTo(MainWindowViewModel.RestartPendingText);
+            await Assert.That(vm.Alert.Detail).IsEqualTo(MainWindowViewModel.RestartPendingMessage);
 
             restartPending.OnNext(false);
 
-            await Assert.That(vm.RestartPending).IsFalse();
-            await Assert.That(vm.RestartPendingText).IsNull();
+            await Assert.That(vm.Alert).IsNull();
         });
     }
 
@@ -300,12 +298,11 @@ public class MainWindowViewModelTests {
 
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
 
-            await Assert.That(vm.RestartPending).IsFalse();
-            await Assert.That(vm.RestartPendingText).IsNull();
+            await Assert.That(vm.Alert!.Text).IsEqualTo(MainWindowViewModel.DaemonStoppedText);
         });
     }
 
-    // ---- VersionDisplay (SEMVER only, everything from the first '+' is build metadata) ----
+    // ---- StripBuildMetadata (SEMVER only, everything from the first '+' is build metadata) ----
 
     [Test]
     [Arguments("1.2.3+abc", "1.2.3")]
@@ -313,38 +310,96 @@ public class MainWindowViewModelTests {
     [Arguments("1.2.3+a.b+c", "1.2.3")] // only the FIRST '+' matters
     [Arguments("", "")]
     [Arguments(null, "")]
-    public async Task VersionDisplay_strips_build_metadata(string? raw, string expected) {
+    public async Task StripBuildMetadata_keeps_the_semver(string? raw, string expected) {
         await Assert.That(MainWindowViewModel.StripBuildMetadata(raw)).IsEqualTo(expected);
     }
 
-    // ---- ConnectionDisplay / StatusBrush (local attach State first, daemon Connection only
-    // once Connected — see MainWindowViewModel.ConnectionDisplayFor's doc comment) ----
-
+    /// A healthy stack shows nothing; every other state names what is wrong, and offers the one
+    /// action that repairs it where there is one.
     [Test]
-    [Arguments(AttachState.Connecting, null, "connected", "Connecting…")]
-    [Arguments(AttachState.Unreachable, "daemon_unreachable", "connected", "Unreachable")]
-    [Arguments(AttachState.Unreachable, "daemon_incompatible", "connected", "Incompatible")]
-    [Arguments(AttachState.Unreachable, ExpectedDaemonRestart.Reason, "connected", "Restarting…")]
-    [Arguments(AttachState.Connected, null, "connected", "Connected")]
-    [Arguments(AttachState.Connected, null, "connecting", "Connecting…")]
-    [Arguments(AttachState.Connected, null, "reconnecting", "Reconnecting…")]
-    [Arguments(AttachState.Connected, null, "disconnected", "Disconnected")]
-    public async Task ConnectionDisplayFor_maps_state_and_daemon_connection_to_one_capitalized_word(
-            AttachState state, string? reason, string daemonConnection, string expected) {
-        var status = new AttachStatus(state, reason, null);
-        await Assert.That(MainWindowViewModel.ConnectionDisplayFor(status, daemonConnection)).IsEqualTo(expected);
+    [Arguments(AttachState.Connected, null, "connected", null, RailRecovery.None)]
+    [Arguments(AttachState.Connected, null, "", null, RailRecovery.None)]
+    [Arguments(AttachState.Connecting, null, "connected", MainWindowViewModel.DaemonConnectingText, RailRecovery.None)]
+    [Arguments(AttachState.Unreachable, "daemon_unreachable", "connected", MainWindowViewModel.DaemonStoppedText, RailRecovery.StartDaemon)]
+    [Arguments(AttachState.Unreachable, "daemon_incompatible", "connected", MainWindowViewModel.DaemonMismatchText, RailRecovery.Reconnect)]
+    [Arguments(AttachState.Unreachable, ExpectedDaemonRestart.Reason, "connected", MainWindowViewModel.DaemonRestartingText, RailRecovery.None)]
+    [Arguments(AttachState.Unreachable, "socket_refused", "connected", MainWindowViewModel.DaemonUnreachableText, RailRecovery.Reconnect)]
+    [Arguments(AttachState.Connected, null, "connecting", MainWindowViewModel.ServerConnectingText, RailRecovery.None)]
+    [Arguments(AttachState.Connected, null, "reconnecting", MainWindowViewModel.ReconnectingText, RailRecovery.None)]
+    [Arguments(AttachState.Connected, null, "disconnected", MainWindowViewModel.ServerLostText, RailRecovery.None)]
+    public async Task AlertFor_is_silent_when_healthy_and_specific_otherwise(
+            AttachState state, string? reason, string daemonConnection, string? text, RailRecovery recovery) {
+        var alert = MainWindowViewModel.AlertFor(new AttachStatus(state, reason, null), daemonConnection);
+        await Assert.That(alert?.Text).IsEqualTo(text);
+        await Assert.That(alert?.Recovery ?? RailRecovery.None).IsEqualTo(recovery);
+    }
+
+    /// Waiting on the daemon hub will not restore an expired sign-in, so it wins whatever the attach
+    /// says, and offers Sign in only where the app's sign-in repairs it.
+    [Test]
+    [Arguments(AttachState.Connected, null, "reconnecting", true)]
+    [Arguments(AttachState.Connected, null, "connected", false)]
+    [Arguments(AttachState.Connecting, null, "connected", true)]
+    [Arguments(AttachState.Unreachable, "daemon_unreachable", "connected", false)]
+    public async Task AlertFor_sign_in_required_wins_over_attach_and_daemon_connection(
+            AttachState state, string? reason, string daemonConnection, bool canSignIn) {
+        var alert = MainWindowViewModel.AlertFor(new AttachStatus(state, reason, null), daemonConnection,
+            signedOut: true, canSignIn: canSignIn);
+        await Assert.That(alert!.Text).IsEqualTo(MainWindowViewModel.SignInRequiredText);
+        await Assert.That(alert.Recovery).IsEqualTo(canSignIn ? RailRecovery.SignIn : RailRecovery.None);
+        await Assert.That(alert.ActionLabel).IsEqualTo(canSignIn ? "Sign in" : null);
+    }
+
+    /// The move to the Windows service brings the daemon back itself, so Start is not offered.
+    [Test]
+    public async Task AlertFor_offers_no_start_while_the_daemon_moves_to_the_windows_service() {
+        var alert = MainWindowViewModel.AlertFor(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null), "",
+            moving: true);
+        await Assert.That(alert!.Text).IsEqualTo(MainWindowViewModel.DaemonRestartingText);
+        await Assert.That(alert.Recovery).IsEqualTo(RailRecovery.None);
+    }
+
+    /// A stopped local server explains a daemon that cannot reach it, so it outranks the daemon's
+    /// reconnecting word; a daemon that is itself down outranks both.
+    [Test]
+    public async Task AlertFor_puts_the_local_server_between_the_attach_and_the_daemon_connection() {
+        var local = MainWindowViewModel.LocalServerAlertFor(updateFailed: false, starting: false, stopped: true, canStart: true);
+        var connected = new AttachStatus(AttachState.Connected, null, null);
+
+        await Assert.That(MainWindowViewModel.AlertFor(connected, "reconnecting", local: local)).IsEqualTo(local);
+        await Assert.That(MainWindowViewModel.AlertFor(
+                new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null), "reconnecting", local: local)!.Text)
+            .IsEqualTo(MainWindowViewModel.DaemonStoppedText);
     }
 
     [Test]
-    [Arguments(AttachState.Connected, null, "reconnecting")]
-    [Arguments(AttachState.Connected, null, "connected")]
-    [Arguments(AttachState.Connecting, null, "connected")]
-    [Arguments(AttachState.Unreachable, "daemon_unreachable", "connected")]
-    public async Task ConnectionDisplayFor_signed_out_wins_over_attach_and_daemon_connection(
-            AttachState state, string? reason, string daemonConnection) {
-        var status = new AttachStatus(state, reason, null);
-        await Assert.That(MainWindowViewModel.ConnectionDisplayFor(status, daemonConnection, signInExpired: true))
-            .IsEqualTo(MainWindowViewModel.SignedOutDisplay);
+    [Arguments(false, false, false, true, null, RailRecovery.None)]
+    [Arguments(false, false, true, true, MainWindowViewModel.LocalStoppedText, RailRecovery.StartLocalServer)]
+    [Arguments(false, false, true, false, MainWindowViewModel.LocalStoppedText, RailRecovery.None)]
+    [Arguments(false, true, true, false, MainWindowViewModel.LocalStartingText, RailRecovery.None)]
+    [Arguments(true, false, true, true, MainWindowViewModel.LocalUpdateFailedText, RailRecovery.None)]
+    public async Task LocalServerAlertFor_names_a_stopped_server_and_offers_start_when_the_launcher_does(
+            bool updateFailed, bool starting, bool stopped, bool canStart, string? text, RailRecovery recovery) {
+        var alert = MainWindowViewModel.LocalServerAlertFor(updateFailed, starting, stopped, canStart);
+        await Assert.That(alert?.Text).IsEqualTo(text);
+        await Assert.That(alert?.Recovery ?? RailRecovery.None).IsEqualTo(recovery);
+    }
+
+    /// The lowest rungs: a queued daemon restart, then the lane's diagnostic, each with its long copy on hover.
+    [Test]
+    public async Task AlertFor_restart_pending_and_lane_diagnostic_only_when_nothing_else_is_wrong() {
+        var connected = new AttachStatus(AttachState.Connected, null, null);
+
+        var pending = MainWindowViewModel.AlertFor(connected, "connected", restartPending: true, laneDiagnostic: "marker");
+        await Assert.That(pending!.Text).IsEqualTo(MainWindowViewModel.RestartPendingText);
+        await Assert.That(pending.Detail).IsEqualTo(MainWindowViewModel.RestartPendingMessage);
+
+        var diagnostic = MainWindowViewModel.AlertFor(connected, "connected", laneDiagnostic: "marker");
+        await Assert.That(diagnostic!.Text).IsEqualTo(MainWindowViewModel.LiveUpdatesText);
+        await Assert.That(diagnostic.Detail).IsEqualTo("marker");
+
+        await Assert.That(MainWindowViewModel.AlertFor(connected, "reconnecting", restartPending: true)!.Text)
+            .IsEqualTo(MainWindowViewModel.ReconnectingText);
     }
 
     [Test]
@@ -358,32 +413,30 @@ public class MainWindowViewModelTests {
         await Assert.That(MainWindowViewModel.ProfileLabelForRail(profile)).IsEqualTo(expected);
     }
 
-    /// The rail takes the launcher card's tone: grey while in progress, amber when it needs the user, red once broken.
+    /// The alert takes the launcher card's tone: grey while in progress, amber when it needs the user, red once broken.
     [Test]
     [Arguments(AttachState.Connecting, null, "connected", false, StatusColors.Pending)]
     [Arguments(AttachState.Unreachable, "daemon_restarting", "connected", false, StatusColors.Pending)]
     [Arguments(AttachState.Unreachable, "daemon_unreachable", "connected", false, StatusColors.InProgress)]
     [Arguments(AttachState.Unreachable, "daemon_unreachable", "connected", true, StatusColors.Disrupted)]
     [Arguments(AttachState.Unreachable, "daemon_incompatible", "connected", false, StatusColors.Disrupted)]
-    [Arguments(AttachState.Connected, null, "connected", false, StatusColors.Connected)]
     [Arguments(AttachState.Connected, null, "connecting", false, StatusColors.Pending)]
     [Arguments(AttachState.Connected, null, "reconnecting", false, StatusColors.Pending)]
     [Arguments(AttachState.Connected, null, "disconnected", false, StatusColors.InProgress)]
-    public async Task StatusBrushFor_matches_the_launcher_card_tone(
+    public async Task AlertFor_matches_the_launcher_card_tone(
             AttachState state, string? reason, string daemonConnection, bool failed, string expectedHex) {
-        var status = new AttachStatus(state, reason, null);
-        var brush = (ISolidColorBrush)MainWindowViewModel.StatusBrushFor(status, daemonConnection, failed: failed);
-        await Assert.That(brush.Color).IsEqualTo(Color.Parse(expectedHex));
+        var alert = MainWindowViewModel.AlertFor(new AttachStatus(state, reason, null), daemonConnection, failed: failed);
+        await Assert.That(alert!.Tone).IsEqualTo(expectedHex);
     }
 
     /// An expired sign-in needs the user; only a local server that refused the app, which the card reports as a failure, is red.
     [Test]
     [Arguments(false, StatusColors.InProgress)]
     [Arguments(true, StatusColors.Disrupted)]
-    public async Task StatusBrushFor_signed_out_follows_the_card(bool failed, string expectedHex) {
+    public async Task AlertFor_signed_out_follows_the_card(bool failed, string expectedHex) {
         var status = new AttachStatus(AttachState.Connected, null, null);
-        var brush = (ISolidColorBrush)MainWindowViewModel.StatusBrushFor(status, "reconnecting", signInExpired: true, failed: failed);
-        await Assert.That(brush.Color).IsEqualTo(Color.Parse(expectedHex));
+        var alert = MainWindowViewModel.AlertFor(status, "reconnecting", signedOut: true, failed: failed);
+        await Assert.That(alert!.Tone).IsEqualTo(expectedHex);
     }
 
     [Test]
@@ -417,7 +470,7 @@ public class MainWindowViewModelTests {
             if (remoteFirst) report.OnNext(failed);
 
             await Assert.That(home.BannerFailed).IsFalse();
-            await Assert.That(vm.ConnectionDisplay).IsEqualTo("Unreachable");
+            await Assert.That(vm.Alert!.Text).IsEqualTo(MainWindowViewModel.DaemonStoppedText);
             await Assert.That(((ISolidColorBrush)vm.StatusBrush).Color).IsEqualTo(Color.Parse("#FF7272"));
 
             report.OnNext(null);
@@ -427,7 +480,7 @@ public class MainWindowViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task ConnectionDisplay_signed_out_wins_over_daemon_reconnecting() {
+    public async Task Sign_in_required_wins_over_daemon_reconnecting() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
             var service = new FakeDaemonClientService();
@@ -442,11 +495,11 @@ public class MainWindowViewModelTests {
 
             service.SnapshotsSubject.OnNext(Snap(connection: "reconnecting"));
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
-            await Assert.That(vm.ConnectionDisplay).IsEqualTo("Reconnecting…");
+            await Assert.That(vm.Alert!.Text).IsEqualTo(MainWindowViewModel.ReconnectingText);
 
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.SignedOut));
             await Assert.That(home.ConnectionNotice).IsEqualTo(HomeViewModel.SignInExpiredNotice);
-            await Assert.That(vm.ConnectionDisplay).IsEqualTo(MainWindowViewModel.SignedOutDisplay);
+            await Assert.That(vm.Alert!.Text).IsEqualTo(MainWindowViewModel.SignInRequiredText);
             // An expired sign-in needs the user, which is how the launcher's card shows it too.
             var brush = (ISolidColorBrush)vm.StatusBrush;
             await Assert.That(brush.Color).IsEqualTo(Color.Parse(StatusColors.InProgress));
@@ -479,35 +532,81 @@ public class MainWindowViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task ConnectionHasDetail_follows_the_lane_diagnostic() {
+    public async Task The_lane_diagnostic_is_an_alert_with_its_text_on_hover() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
             var lane = new FakeServerLane();
             var vm = new MainWindowViewModel(
                 service, CancellationToken.None, TestActivity.New(), TimeProvider.System, laneStatus: lane.Status);
             using var activation = vm.Activator.Activate();
+            service.SnapshotsSubject.OnNext(Snap(connection: "connected"));
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
 
-            await Assert.That(vm.ConnectionHasDetail).IsFalse();
+            await Assert.That(vm.Alert).IsNull();
 
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Diagnostic: "diagnostic-marker"));
-            await Assert.That(vm.ServerLaneTip).IsEqualTo("diagnostic-marker");
-            await Assert.That(vm.ConnectionHasDetail).IsTrue();
+            await Assert.That(vm.Alert!.Text).IsEqualTo(MainWindowViewModel.LiveUpdatesText);
+            await Assert.That(vm.Alert.Detail).IsEqualTo("diagnostic-marker");
 
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
-            await Assert.That(vm.ConnectionHasDetail).IsFalse();
+            await Assert.That(vm.Alert).IsNull();
         });
     }
 
+    /// The alert's action runs the same command the launcher banner offers for that state.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task VersionDisplay_is_the_daemon_semver_without_build_metadata() {
+    public async Task The_alert_action_is_the_command_that_repairs_the_state() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
-            var vm = NewVm(service);
+            var lane = new FakeServerLane();
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                laneStatus: lane.Status, requestSignIn: () => { });
             using var activation = vm.Activator.Activate();
 
-            service.SnapshotsSubject.OnNext(Snap(version: "1.2.3+abc"));
-            await Assert.That(vm.VersionDisplay).IsEqualTo("1.2.3");
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+            await Assert.That(vm.AlertActionCommand).IsSameReferenceAs(vm.StartDaemonCommand);
+            await Assert.That(vm.Alert!.ActionLabel).IsEqualTo("Start daemon");
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_incompatible", null));
+            await Assert.That(vm.AlertActionCommand).IsSameReferenceAs(vm.RetryCommand);
+
+            service.SnapshotsSubject.OnNext(Snap(connection: "connected"));
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            await Assert.That(vm.AlertActionCommand).IsNull();
+
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.SignedOut));
+            await Assert.That(vm.AlertActionCommand).IsSameReferenceAs(vm.SignInCommand);
+        });
+    }
+
+    /// The local server's state reaches the rail only through the alert, and only while it needs the user.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_stopped_local_server_is_an_alert_with_its_start() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var service = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            using var home = new HomeViewModel(service, new AppStateStore(path), new UnusedLaunchClient(),
+                () => Task.FromResult(Array.Empty<string>()), TimeProvider.System, laneStatus: lane.Status);
+            using var recovery = new LocalServerRecoveryViewModel(lane.Status, isLocalServer: true,
+                _ => Task.FromResult(new ProcessResult(0, "", "", false)), () => Task.CompletedTask, CancellationToken.None);
+            home.AttachLocalServerRecovery(recovery);
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                home: home, laneStatus: lane.Status);
+            using var activation = vm.Activator.Activate();
+            service.SnapshotsSubject.OnNext(Snap(connection: "connected"));
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
+            await Assert.That(vm.Alert).IsNull();
+
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
+            await Assert.That(vm.Alert!.Text).IsEqualTo(MainWindowViewModel.LocalStoppedText);
+            await Assert.That(vm.AlertActionCommand).IsSameReferenceAs(recovery.StartCommand);
+
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
+            await Assert.That(vm.Alert).IsNull();
         });
     }
 
@@ -586,25 +685,6 @@ public class MainWindowViewModelTests {
 
             gate.SetResult();
             await execute;
-        });
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Agent_count_renders_only_while_connected() {
-        await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            var service = new FakeDaemonClientService();
-            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System);
-            using var activation = vm.Activator.Activate();
-
-            service.SnapshotsSubject.OnNext(Snap(active: 2, max: 5));
-            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
-            await Assert.That(vm.AgentCountText).IsEqualTo("2 of 5 agents");
-
-            // Retention is the SERVICE's concern; the fake never clears its snapshot
-            // on disconnect either; the VM merely stops RENDERING the count.
-            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
-            await Assert.That(vm.AgentCountText).IsEmpty();
         });
     }
 
@@ -1016,19 +1096,18 @@ public class MainWindowViewModelTests {
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
 
             await Assert.That(vm.DaemonName).IsEqualTo("daemon-a");
-            await Assert.That(vm.AgentCountText).IsEqualTo("1 of 5 agents");
+            await Assert.That(vm.Alert).IsNull();
 
             activation.Dispose(); // window close
 
             var daemonNameAtDeactivation = vm.DaemonName;
-            var agentCountAtDeactivation = vm.AgentCountText;
             var stateAtDeactivation      = vm.State;
 
             service.SnapshotsSubject.OnNext(Snap(daemon: "daemon-b", active: 3, max: 5));
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
 
             await Assert.That(vm.DaemonName).IsEqualTo(daemonNameAtDeactivation);
-            await Assert.That(vm.AgentCountText).IsEqualTo(agentCountAtDeactivation);
+            await Assert.That(vm.Alert).IsNull();
             await Assert.That(vm.State).IsEqualTo(stateAtDeactivation);
         });
     }
@@ -1999,26 +2078,70 @@ public class MainWindowViewModelTests {
         });
     }
 
+    /// The server can take longer than the grace to list a stopped session as ended. While the rail
+    /// still shows the finished row the workspace stays selected; it closes once the row is gone.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_completed_local_workspace_closes_when_no_server_row_arrives() {
+    public async Task A_completed_local_workspace_closes_only_once_its_row_leaves_the_rail() {
         await AvaloniaSession.RunOnUiAsync(async () => {
             using var host = new RemoteHost();
             var service = new FakeDaemonClientService();
             var time = new FakeTimeProvider();
+            var repo = new RepoIdentity("path:/repos/alpha", "alpha");
             service.Agents.AddOrUpdate(LocalWithSession("a1", "S"));
-            host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(LocalWithSession("a1", "S"), new RepoIdentity("path:/repos/alpha", "alpha")));
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(LocalWithSession("a1", "S"), repo));
             var vm = NewVm(service, id => NewWorkspace(service, id),
                 originOf: _ => AgentOrigin.Local, serverWorkspaceFactory: id => host.NewServer(id), directory: host.Directory, time: time);
             vm.OpenSession("a1", AgentOrigin.Local);
             var local = vm.CurrentWorkspace;
 
             service.Agents.AddOrUpdate(LocalWithSession("a1", "S", "Completed"));
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(LocalWithSession("a1", "S", "Completed"), repo));
             await WorkspaceFixtures.WaitUntilAsync(() => ((WorkspaceViewModel)local!).SessionEnded, what: "the agent's end reached the workspace");
-            await Assert.That(vm.CurrentWorkspace).IsSameReferenceAs(local);
 
             time.Advance(AgentDirectory.HandoverGrace + TimeSpan.FromSeconds(1));
-            await WorkspaceFixtures.WaitUntilAsync(() => vm.CurrentWorkspace is null, what: "closed after the grace");
+            await Task.Delay(100);
+            await Assert.That(vm.CurrentWorkspace).IsSameReferenceAs(local);
+
+            host.Directory.Rows.RemoveKey("local:a1");
+            await WorkspaceFixtures.WaitUntilAsync(() => vm.CurrentWorkspace is null, what: "closed once the rail dropped the row");
+        });
+    }
+
+    /// Past the grace, a server row that lists the session ended still takes the workspace over.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_completed_local_workspace_hands_off_to_a_server_row_that_arrives_after_the_grace() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            var time = new FakeTimeProvider();
+            var repo = new RepoIdentity("path:/repos/alpha", "alpha");
+            service.Agents.AddOrUpdate(LocalWithSession("a1", "S"));
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(LocalWithSession("a1", "S"), repo));
+            using var rail = new SessionRailViewModel(host.Directory, _ => { }, _ => { }, TimeProvider.System);
+            RemoteSessionViewModel? built = null;
+            var vm = NewVm(service, id => NewWorkspace(service, id), rail,
+                originOf: id => id == "S" ? AgentOrigin.Server : AgentOrigin.Local,
+                serverWorkspaceFactory: id => built = host.NewServer(id), directory: host.Directory, time: time);
+            vm.OpenSession("a1", AgentOrigin.Local);
+            var local = vm.CurrentWorkspace;
+
+            service.Agents.AddOrUpdate(LocalWithSession("a1", "S", "Completed"));
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(LocalWithSession("a1", "S", "Completed"), repo));
+            await WorkspaceFixtures.WaitUntilAsync(() => ((WorkspaceViewModel)local!).SessionEnded, what: "the agent's end reached the workspace");
+            time.Advance(AgentDirectory.HandoverGrace + TimeSpan.FromSeconds(1));
+            await Task.Delay(100);
+            await Assert.That(rail.SelectedSessionKey).IsEqualTo("local:a1");
+
+            host.Directory.Rows.Edit(rows => {
+                rows.RemoveKey("local:a1");
+                rows.AddOrUpdate(RemoteHost.ServerRow("S"));
+            });
+
+            await WorkspaceFixtures.WaitUntilAsync(() => built is not null && ReferenceEquals(vm.CurrentWorkspace, built), what: "hand-off after the grace");
+            await Assert.That(rail.SelectedSessionKey).IsEqualTo("server:S");
+            vm.CloseWorkspace();
         });
     }
 
@@ -2060,6 +2183,33 @@ public class MainWindowViewModelTests {
             host.Directory.Rows.AddOrUpdate(RemoteHost.ServerRow("S"));
             await Assert.That(vm.CurrentWorkspace).IsSameReferenceAs(built);
             await Assert.That(built!.IsSessionOnly).IsTrue();
+            vm.CloseWorkspace();
+        });
+    }
+
+    /// The server drops a stopped session from its live listing before its ended listing carries it:
+    /// the listing keeps the session meanwhile, and the hand-off still lands however long that takes.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_removed_remote_row_keeps_its_session_listed_and_hands_off_after_the_grace() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            var time = new FakeTimeProvider();
+            RemoteSessionViewModel? built = null;
+            var vm = NewVm(service, originOf: id => id == "S" ? AgentOrigin.Server : AgentOrigin.Remote,
+                remoteWorkspaceFactory: id => host.New(id, "S"), serverWorkspaceFactory: id => built = host.NewServer(id),
+                directory: host.Directory, time: time, sessions: host.Sessions);
+            vm.OpenSession("r1", AgentOrigin.Remote);
+            var remote = vm.CurrentWorkspace;
+
+            host.Directory.Rows.RemoveKey("remote:r1");
+            await Assert.That(host.Sessions.Kept).IsEqualTo("S");
+            time.Advance(AgentDirectory.HandoverGrace + TimeSpan.FromSeconds(1));
+            await Assert.That(vm.CurrentWorkspace).IsSameReferenceAs(remote);
+
+            host.Directory.Rows.AddOrUpdate(RemoteHost.ServerRow("S"));
+            await Assert.That(vm.CurrentWorkspace).IsSameReferenceAs(built);
             vm.CloseWorkspace();
         });
     }
