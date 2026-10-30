@@ -63,11 +63,14 @@ public class HandoffOutcomeTests {
     }
 
     [Test]
-    public async Task A_refusal_keeps_its_reason() {
-        var dto = HandoffOutcomeDto.From(Source, null, new TakeoverResult.Refused("Session x is no longer ended."));
+    public async Task A_refusal_or_failure_keeps_its_code_not_its_sentence() {
+        var refused = HandoffOutcomeDto.From(Source, null, new TakeoverResult.Refused("Session x is no longer ended.", TakeoverResult.Refused.SourceNotEnded));
+        var failed  = HandoffOutcomeDto.From(Source, null, new TakeoverResult.Failed("Reading session x failed: HTTP 500."));
 
-        await Assert.That(dto.State).IsEqualTo("refused");
-        await Assert.That(dto.Detail).IsEqualTo("Session x is no longer ended.");
+        await Assert.That(refused.State).IsEqualTo("refused");
+        await Assert.That(refused.Detail).IsEqualTo("source_not_ended");
+        await Assert.That(failed.State).IsEqualTo("failed");
+        await Assert.That(failed.Detail).IsEqualTo("source_unreadable");
     }
 
     [Test]

@@ -6,7 +6,7 @@ namespace Capacitor.Cli.Core.Handoff;
 
 /// <summary>What a hand-off's takeover carried, item by item. State is running, refused, failed,
 /// unauthorized, done or interrupted; interrupted is only for a takeover a daemon restart cut short,
-/// so <see cref="From"/> never produces it.</summary>
+/// so <see cref="From"/> never produces it. Detail is a code, never a sentence, so the app words it.</summary>
 public sealed record HandoffOutcomeDto(
     string SourceSessionId,
     string? SourceTitle,
@@ -23,9 +23,9 @@ public sealed record HandoffOutcomeDto(
 
     public static HandoffOutcomeDto From(string sourceSessionId, string? sourceTitle, TakeoverResult result) =>
         result switch {
-            TakeoverResult.Refused r     => new(sourceSessionId, sourceTitle, "refused", r.Reason, []),
+            TakeoverResult.Refused r     => new(sourceSessionId, sourceTitle, "refused", r.Code, []),
             TakeoverResult.Unauthorized  => new(sourceSessionId, sourceTitle, "unauthorized", null, []),
-            TakeoverResult.Failed f      => new(sourceSessionId, sourceTitle, "failed", f.Reason, []),
+            TakeoverResult.Failed f      => new(sourceSessionId, sourceTitle, "failed", f.Code, []),
             TakeoverResult.Interrupted i => new(sourceSessionId, sourceTitle, "failed", i.Code, Itemise(i.Outcome)),
             TakeoverResult.Completed c   => new(sourceSessionId, sourceTitle, c.CredentialRejected ? "unauthorized" : "done", null, Itemise(c.Outcome)),
             _                            => throw new InvalidOperationException(result.GetType().Name),

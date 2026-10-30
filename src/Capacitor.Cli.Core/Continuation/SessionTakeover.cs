@@ -21,13 +21,14 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
     public async Task<TakeoverResult> RunAsync(
             HttpClient client, string baseUrl, string previous, string current, TakeoverAdmission admission, CancellationToken ct = default) {
         if (WorkContextIds.CanonicalSessionId(previous) is not { } previousWire || SessionId.Parse(previousWire) is not { } previousId)
-            return new TakeoverResult.Refused($"'{previous}' is not a session id.");
+            return new TakeoverResult.Refused($"'{previous}' is not a session id.", TakeoverResult.Refused.InvalidSessionId);
 
         if (WorkContextIds.CanonicalSessionId(current) is not { } currentWire)
-            return new TakeoverResult.Refused($"'{current}' is not a session id.");
+            return new TakeoverResult.Refused($"'{current}' is not a session id.", TakeoverResult.Refused.InvalidSessionId);
 
         if (previousWire == currentWire)
-            return new TakeoverResult.Refused("A session cannot continue itself: name the session whose work this one takes over.");
+            return new TakeoverResult.Refused(
+                "A session cannot continue itself: name the session whose work this one takes over.", TakeoverResult.Refused.SelfContinuation);
 
         var outcome = new JsonObject { ["continued_from"] = previousWire };
 
@@ -51,14 +52,14 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
 
         if (summary.StatusCode == HttpStatusCode.Unauthorized) return new TakeoverResult.Unauthorized();
         if (summary.StatusCode == HttpStatusCode.NotFound)
-            return new TakeoverResult.Refused($"Session {previous} was not found or is not visible to you.");
+            return new TakeoverResult.Refused($"Session {previous} was not found or is not visible to you.", TakeoverResult.Refused.SourceNotFound);
         if (!summary.IsSuccessStatusCode)
             return new TakeoverResult.Failed($"Reading session {previous} failed: HTTP {(int)summary.StatusCode}.");
 
         local.Reap();
 
         var (liveness, refusal) = Judge(previous, local.Liveness(previousId), ParseObject(await summary.Content.ReadAsStringAsync(ct)), admission);
-        if (refusal is not null) return new TakeoverResult.Refused(refusal);
+        if (refusal is not null) return refusal;
 
         outcome["liveness"] = liveness;
 
@@ -105,21 +106,21 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
         return new TakeoverResult.Completed(outcome, Unsuccessful: state.Failed > 0 || readFailed, state.Unauthorized);
     }
 
-    (string Liveness, string? Refusal) Judge(string previous, SessionLiveness here, JsonObject? summary, TakeoverAdmission admission) {
+    (string Liveness, TakeoverResult.Refused? Refusal) Judge(string previous, SessionLiveness here, JsonObject? summary, TakeoverAdmission admission) {
         var ended = string.Equals(Str(summary?["status"]), "ended", StringComparison.OrdinalIgnoreCase);
 
         switch (admission) {
             case TakeoverAdmission.Forced:
                 return ("forced", null);
             case TakeoverAdmission.EndedOnly when here == SessionLiveness.Running:
-                return ("running", $"Session {previous} is still running on this machine.");
+                return ("running", Active($"Session {previous} is still running on this machine."));
             case TakeoverAdmission.EndedOnly:
-                return ended ? ("ended", null) : ("active", $"Session {previous} is no longer ended.");
+                return ended ? ("ended", null) : ("active", new($"Session {previous} is no longer ended.", TakeoverResult.Refused.SourceNotEnded));
         }
 
         switch (here) {
             case SessionLiveness.Running:
-                return ("running", $"Session {previous} is still running on this machine. Take it over only if the user confirms, by retrying with force.");
+                return ("running", Active($"Session {previous} is still running on this machine. Take it over only if the user confirms, by retrying with force."));
             case SessionLiveness.Exited:
                 return ("exited", null);
         }
@@ -131,8 +132,10 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
 
         var when = lastSeen?.ToString("u", CultureInfo.InvariantCulture) ?? "unknown";
 
-        return ("active", $"Session {previous} still looks active (last event {when}) and did not run on this machine. If its agent is gone, ask the user, then retry with force.");
+        return ("active", Active($"Session {previous} still looks active (last event {when}) and did not run on this machine. If its agent is gone, ask the user, then retry with force."));
     }
+
+    static TakeoverResult.Refused Active(string reason) => new(reason, TakeoverResult.Refused.SourceActive);
 
     static async Task<(JsonObject Section, List<(JsonObject Entry, JsonObject Body)> Declares)> ReadWorkItemsAsync(
             HttpResponseMessage? read, string? readError, string current, CancellationToken ct) {

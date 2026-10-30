@@ -212,7 +212,7 @@ internal partial class AgentOrchestrator {
             return;
         } catch (Exception ex) {
             LogHandoffTakeoverFailed(ex, agentId, source.SessionId);
-            outcome = new HandoffOutcomeDto(source.SessionId, source.Title, "failed", ex.Message, []);
+            outcome = Failed(source, "takeover_error");
         }
 
         PutHandoffOutcome(successor, outcome);

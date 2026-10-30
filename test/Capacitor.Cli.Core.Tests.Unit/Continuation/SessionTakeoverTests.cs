@@ -49,6 +49,7 @@ public class SessionTakeoverTests {
         var r = await Run(routes, previous: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", current: Previous);
         await Assert.That(r).IsTypeOf<TakeoverResult.Refused>();
         await Assert.That(((TakeoverResult.Refused)r).Reason).Contains("cannot continue itself");
+        await Assert.That(((TakeoverResult.Refused)r).Code).IsEqualTo(TakeoverResult.Refused.SelfContinuation);
         await Assert.That(routes.Requests.Count).IsEqualTo(0);
     }
 
@@ -64,7 +65,9 @@ public class SessionTakeoverTests {
     public async Task Refuses_a_session_the_server_does_not_show() {
         var routes = new Routes();
         routes.Get($"/api/sessions/{Previous}/summary", 404, "");
-        await Assert.That(await Run(routes)).IsTypeOf<TakeoverResult.Refused>();
+        var r = await Run(routes);
+        await Assert.That(r).IsTypeOf<TakeoverResult.Refused>();
+        await Assert.That(((TakeoverResult.Refused)r).Code).IsEqualTo(TakeoverResult.Refused.SourceNotFound);
     }
 
     [Test]
@@ -553,6 +556,7 @@ public class SessionTakeoverTests {
         var r = await Run(routes, TakeoverAdmission.EndedOnly);
 
         await Assert.That(((TakeoverResult.Refused)r).Reason).IsEqualTo($"Session {Previous} is no longer ended.");
+        await Assert.That(((TakeoverResult.Refused)r).Code).IsEqualTo(TakeoverResult.Refused.SourceNotEnded);
         await Assert.That(routes.Posts.Count).IsEqualTo(0);
     }
 
@@ -564,6 +568,7 @@ public class SessionTakeoverTests {
         var r = await Run(routes, TakeoverAdmission.EndedOnly);
 
         await Assert.That(((TakeoverResult.Refused)r).Reason).Contains("running on this machine");
+        await Assert.That(((TakeoverResult.Refused)r).Code).IsEqualTo(TakeoverResult.Refused.SourceActive);
         await Assert.That(routes.Posts.Count).IsEqualTo(0);
     }
 

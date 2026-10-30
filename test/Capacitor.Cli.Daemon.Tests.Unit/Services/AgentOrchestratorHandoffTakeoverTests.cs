@@ -426,6 +426,7 @@ public class AgentOrchestratorHandoffTakeoverTests : IDisposable {
         var outcome = await SettledAsync(f);
 
         await Assert.That(outcome.State).IsEqualTo("failed");
+        await Assert.That(outcome.Detail).IsEqualTo("takeover_error");
         await WaitHarness.PollUntilAsync(() => !f.Server.HandoffEnds.IsEmpty);
         await Assert.That(f.Server.HandoffEnds).IsEquivalentTo([Token]);
         await AssertStillRunningAsync(f);
