@@ -123,7 +123,7 @@ Repository: `/Users/alexey/dev/eventstore/kcap-server`, its own branch and PR. R
 - Consumes: `SourceSessionReservations` (Task 3), `SessionWriter.TryRecordSessionContinuedAsAtAsync(source, next, expectedRevision, ct)`, `SessionSummaryFold.IsReactivationEvent`, `AgentInstanceRegistry.FindLiveBySessionId`.
 - Produces: `public sealed record HandoffTakeoverAdmission(string? Token, string? Refusal, int LeaseSeconds)` — exactly one of `Token`/`Refusal`; refusal codes `source_active`, `source_reserved`, `source_unavailable`, `successor_unknown`.
 - Produces hub methods (daemon connection only; a caller without a registered daemon entry gets `source_unavailable`):
-  - `Task<HandoffTakeoverAdmission> BeginHandoffTakeover(string sourceSessionId, string successorSessionId)`
+  - `Task<HandoffTakeoverAdmission> BeginHandoffTakeover(HandoffTakeoverBeginRequest request)` with `public sealed record HandoffTakeoverBeginRequest(string SourceSessionId, string SuccessorSessionId)` (one record so the call can grow without breaking a bound daemon)
   - `Task<bool> RenewHandoffTakeover(string token)`
   - `Task EndHandoffTakeover(string token)`
 - Produces: `SessionWriter.ReadEndStateAsync(string sessionId, CancellationToken ct) : Task<(bool Ended, long Revision)?>` — null when the stream does not exist.
