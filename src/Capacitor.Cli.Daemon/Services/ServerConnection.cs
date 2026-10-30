@@ -505,26 +505,25 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     long _connectedTimestamp;
 
     /// <summary>
-    /// Sentinel prefix the server (<c>DaemonRegistry.NameInUseErrorCode</c>)
-    /// embeds in the <see cref="Microsoft.AspNetCore.SignalR.HubException"/>
-    /// message when <c>DaemonConnect</c> is rejected because another live
-    /// daemon already holds the <c>(owner, name)</c> slot. The daemon parses
-    /// this prefix and exits with code 3 instead of force-reconnecting in a
-    /// loop with the incumbent — see <see cref="OnNameInUse"/>.
+    /// Sentinel the server (<c>DaemonRegistry.NameInUseErrorCode</c>) puts in the
+    /// <see cref="Microsoft.AspNetCore.SignalR.HubException"/> message when <c>DaemonConnect</c> is
+    /// rejected because another live daemon holds the <c>(owner, name)</c> slot. SignalR's dispatcher
+    /// wraps that message, so the sentinel arrives mid-string, never as a prefix. The daemon exits
+    /// with code 3 on it instead of reconnecting against the incumbent — see <see cref="OnNameInUse"/>.
     /// </summary>
     public const string NameInUseErrorCode = "DAEMON_NAME_IN_USE";
 
     /// <summary>
     /// Fires when the server rejected <c>DaemonConnect</c> with the
-    /// <see cref="NameInUseErrorCode"/> prefix. <c>DaemonRunner</c>
+    /// <see cref="NameInUseErrorCode"/> sentinel. <c>DaemonRunner</c>
     /// subscribes and signals host shutdown so the binary exits with
     /// code 3 rather than oscillating with the incumbent daemon.
     /// </summary>
     public event Action<string>? OnNameInUse;
 
-    static bool IsNameInUse(Exception ex) =>
+    internal static bool IsNameInUse(Exception ex) =>
         ex is Microsoft.AspNetCore.SignalR.HubException he
-        && he.Message.StartsWith(NameInUseErrorCode, StringComparison.Ordinal);
+        && he.Message.Contains(NameInUseErrorCode, StringComparison.Ordinal);
 
     public async Task ConnectAsync(CancellationToken ct) {
         _ct                 = ct;
