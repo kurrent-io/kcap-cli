@@ -275,12 +275,9 @@ public class McpFlowsServerTests : IAsyncDisposable {
             await Assert.That(result).IsNotNull();
             await Assert.That(result!["serverInfo"]?["name"]?.GetValue<string>()).IsEqualTo("kcap-flows");
             await Assert.That(result["protocolVersion"]?.GetValue<string>()).IsEqualTo("2024-11-05");
-            // The instructions cover waiting alone: naming a flow or agent tool would route work to
-            // paid hosted reviewers nobody asked for.
-            var instructions = result["instructions"]?.GetValue<string>();
-            await Assert.That(instructions).Contains("schedule_wakeup");
-            foreach (var tool in new[] { "start_review_flow", "start_flow", "start_agent", "submit_review_round" })
-                await Assert.That(instructions!).DoesNotContain(tool);
+            // flows deliberately omits server-level instructions — no routing to a paid
+            // hosted reviewer — so the field must be omitted, not empty.
+            await Assert.That(result["instructions"]).IsNull();
         } finally {
             await ShutdownAsync(proc);
         }

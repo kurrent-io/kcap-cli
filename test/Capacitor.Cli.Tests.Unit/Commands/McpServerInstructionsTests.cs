@@ -8,7 +8,6 @@ public class McpServerInstructionsTests {
 
     public static IEnumerable<Func<(string Server, string Instructions)>> AllInstructions() {
         yield return () => ("kcap-analytics", McpAnalyticsServer.ServerInstructions);
-        yield return () => ("kcap-flows", McpFlowsServer.ServerInstructions);
         yield return () => ("kcap-pages", McpArtefactsServer.ServerInstructions);
         yield return () => ("kcap-handoff", McpHandoffServer.ServerInstructions);
         yield return () => ("kcap-knowledge", McpKnowledgeServer.ServerInstructions);
