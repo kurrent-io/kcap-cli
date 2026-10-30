@@ -143,6 +143,7 @@ internal partial class AgentOrchestrator {
     internal const string SourceReservationHeader = "X-Kcap-Source-Reservation";
 
     const string SuccessorUnknown = "successor_unknown";
+    const string SourceActive     = "source_active";
 
     internal TimeSpan HandoffLeaseRenewal    { get; set; } = TimeSpan.FromSeconds(20);
     internal TimeSpan HandoffRenewTimeout    { get; set; } = TimeSpan.FromSeconds(10);
@@ -217,10 +218,14 @@ internal partial class AgentOrchestrator {
         LogHandoffTakeover(agentId, source.SessionId, successor, outcome.State, outcome.Detail);
     }
 
-    /// <summary>Every request of the run carries the lease token, and the lease is renewed while it runs: a renewal
+    /// <summary>A source one of this daemon's agents runs is refused before begin, which records the continuation on
+    /// the server. Every request of the run carries the lease token, and the lease is renewed while it runs: a renewal
     /// that fails cancels the run at once, since the server may already have given the source to someone else.</summary>
     async Task<HandoffOutcomeDto> TakeOverHandoffAsync(string agentId, HandoffSourceContext source, string successor, CancellationToken ct) {
         var sourceWire = SessionIds.Canonical(source.SessionId) ?? source.SessionId;
+        if (SessionId.Parse(sourceWire) is { } sourceId && HostsSession(sourceId))
+            return HandoffOutcomeDto.Refused(source.SessionId, source.Title, SourceActive);
+
         HandoffTakeoverAdmission admission;
         switch (await BeginHandoffTakeoverAsync(sourceWire, successor, ct)) {
             case HandoffBeginResult.Answered answered: admission = answered.Admission; break;

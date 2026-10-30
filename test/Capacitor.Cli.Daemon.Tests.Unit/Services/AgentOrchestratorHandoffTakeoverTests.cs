@@ -523,9 +523,10 @@ public class AgentOrchestratorHandoffTakeoverTests : IDisposable {
         await Assert.That(f.Server.HandoffBegins).IsEmpty();
     }
 
-    /// <summary>A source this daemon still runs is not ended, whatever the server says.</summary>
+    /// <summary>A source this daemon still runs is not ended, whatever the server says, and is refused before the
+    /// server records a continuation.</summary>
     [Test]
-    public async Task A_source_this_daemon_still_hosts_is_refused() {
+    public async Task A_source_this_daemon_still_hosts_is_refused_before_begin() {
         ServeSource();
         await using var f = Build();
         var running = AgentOrchestratorHarness.SeedAcpAgent(f.Orch, "source-agent", new FakeAcpRuntime { AcpSessionId = Source });
@@ -535,6 +536,8 @@ public class AgentOrchestratorHandoffTakeoverTests : IDisposable {
         var outcome = await SettledAsync(f);
 
         await Assert.That(outcome.State).IsEqualTo("refused");
+        await Assert.That(outcome.Detail).IsEqualTo("source_active");
+        await Assert.That(f.Server.HandoffBegins).IsEmpty();
         await Assert.That(Writes()).IsEmpty();
     }
 
