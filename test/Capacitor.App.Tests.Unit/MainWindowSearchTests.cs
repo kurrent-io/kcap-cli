@@ -224,6 +224,28 @@ public class MainWindowSearchTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task A_rail_click_before_a_listed_hits_pin_lands_leaves_nothing_pinned_when_an_earlier_pin_was_held() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            h.ListServer("P");
+            h.ListServer("T");
+            await Assert.That(await h.Vm.OpenSearchHitAsync("P", NoPresentation, CancellationToken.None)).IsEqualTo(SearchOpenOutcome.Opened);
+            h.Sessions.PinnedIdSubject.OnNext("P");
+            await h.OpenSearch();
+            var gate = new TaskCompletionSource<PinOutcome>();
+            h.Sessions.PinGate = gate;
+
+            await Assert.That(await h.Vm.OpenSearchHitAsync("T", NoPresentation, CancellationToken.None)).IsEqualTo(SearchOpenOutcome.Opened);
+            h.OpenServer("S");
+            gate.SetResult(PinOutcome.Pinned);
+
+            await Assert.That(h.Vm.CurrentWorkspace!.AgentId).IsEqualTo("S");
+            await Assert.That(h.Sessions.PinnedSessionId).IsNull();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Rail_click_dismisses_search_and_releases_the_pin() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var h = new Harness();

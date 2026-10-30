@@ -807,8 +807,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public async Task<SearchOpenOutcome> OpenSearchHitAsync(string sessionId, PinPresentation presentation, CancellationToken ct) {
         if (_directory is null) return SearchOpenOutcome.Failed;
         if (_directory.RowForSession(sessionId) is { } listed) {
-            _searchPin = sessionId;
+            // Set after Navigate, whose release of an earlier pin would otherwise clear it.
             if (!Navigate(listed.Id, listed.Origin, sessionId)) return SearchOpenOutcome.Failed;
+            _searchPin = sessionId;
             // A failed pin only costs the session its exemption from the rail's filters later.
             _ = _sessions?.PinAsync(sessionId, presentation, CancellationToken.None);
             return SearchOpenOutcome.Opened;
