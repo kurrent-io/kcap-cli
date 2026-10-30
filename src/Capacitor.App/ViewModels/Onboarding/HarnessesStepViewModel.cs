@@ -91,8 +91,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
     public string SkipLabel => "Not now";
 
     public string Lede =>
-        "Sessions record themselves from now on, and each harness gets tools to search your past work — " +
-        "so what you already fixed is there to find.";
+        "Sessions are stored from now on, and each harness gets tools to search your past work";
 
     public string MachineName { get; }
 
