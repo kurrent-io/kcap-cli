@@ -19,11 +19,41 @@ public static class LocalServerConditions {
             StateRead<InstallRegistry>.Present { Value.Active: not null } when !Directory.Exists(Path.Combine(root.Directory, "bin"))
                 => LocalServerCondition.Uninstalled,
             StateRead<InstallRegistry>.Present { Value.Active: not null } => File.Exists(ServerBinary(root))
+                                                                          || (OperatingSystem.IsWindows() && File.Exists(ServerBinary(root) + ".exe"))
                 ? LocalServerCondition.Installed
                 : LocalServerCondition.FilesMissing,
             StateRead<InstallRegistry>.Present { Value.Retired.Count: > 0 } => LocalServerCondition.Purged,
             _ => LocalServerCondition.NotInstalled,
         };
+    }
+
+    static HttpClient Probe => field ??= new(new SocketsHttpHandler { AllowAutoRedirect = false, UseProxy = false, UseCookies = false });
+
+    /// <summary><see cref="Read(LocalRoot)"/>, then, for an installation a start could bring up, who answers on its
+    /// port. Still write-free and lock-free; it costs one request, and a process lookup only when the port is not
+    /// plainly free or plainly the server's.</summary>
+    public static Task<LocalServerReading> ReadAsync(LocalRoot root, CancellationToken ct) =>
+        ReadAsync(root, Probe, PortHolder.Find, TimeProvider.System, ct);
+
+    /// <summary>An answer the kcap server never gives is another program's whatever the OS says; a connection with no
+    /// answer is another program's only when the OS names a listener that is not the server. Anything less stays
+    /// <see cref="LocalServerCondition.Installed"/>: not running as far as anyone knows, and never taken as healthy.</summary>
+    public static async Task<LocalServerReading> ReadAsync(
+            LocalRoot root, HttpClient http, Func<int, PortHolder?> findHolder, TimeProvider time, CancellationToken ct) {
+        var condition = Read(root);
+        if (condition != LocalServerCondition.Installed || LocalEndpoints.Read(root).Active is not { Port: var port })
+            return new(condition);
+
+        switch (await LocalPortProbe.ReadAsync(http, port, time, ct)) {
+            case LocalPortAnswer.Foreign(var what):
+                return new(LocalServerCondition.PortTaken, port, findHolder(port) is { IsServerProcess: false } named ? named : null, what);
+
+            case LocalPortAnswer.Silent when findHolder(port) is { IsServerProcess: false } holder:
+                return new(LocalServerCondition.PortTaken, port, holder);
+
+            default:
+                return new(condition, port);
+        }
     }
 
     extension(LocalServerCondition condition) {
@@ -37,6 +67,7 @@ public static class LocalServerConditions {
             LocalServerCondition.Changing     => "Another kcap command is changing the local server. It reconnects when that finishes.",
             LocalServerCondition.Interrupted  => "An earlier local server command stopped part way. kcap local status says what to do.",
             LocalServerCondition.Unreadable   => "The local installation's records cannot be read. kcap local status says which file.",
+            LocalServerCondition.PortTaken    => "Another program holds the local server's port, so it cannot start. Stop that program; kcap never stops a program it did not start.",
             _                                 => null,
         };
     }

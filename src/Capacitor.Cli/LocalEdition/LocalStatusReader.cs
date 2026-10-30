@@ -101,8 +101,7 @@ sealed class LocalStatusReader(LocalStack stack, string cliVersion, Func<int, Po
         switch (activity) {
             case UnitActivity.Stopped:
                 fields.Add(new("Postgres", PostgresField()));
-                var blocked = Taken(installation.Port, null, "Stop that process, then run kcap local start; kcap never stops a process it did not start.")
-                    .ToList();
+                var blocked = await TakenAsync(unit, "Stop that process, then run kcap local start; kcap never stops a process it did not start.", ct);
                 return blocked.Count > 0
                     ? Down($"Stopped, and port {installation.Port} is taken by another process.", fields, notes, blocked, Leftovers())
                     : Down("Stopped.", fields, notes, StoppedAdvice(unit, "starts it"), Leftovers());
@@ -114,12 +113,13 @@ sealed class LocalStatusReader(LocalStack stack, string cliVersion, Func<int, Po
             case UnitActivity.Restarting(var code):
                 fields.Add(new("Postgres", PostgresField()));
                 return Down($"Not running: the server exited{ExitCode(code)} and the {service.Describe} is starting it again.", fields, notes,
-                    Taken(installation.Port, null), [$"A server that cannot start a store or listen on its port exits and is started again; {Logs} shows why."]);
+                    await TakenAsync(unit, KeepsTrying, ct), [$"A server that cannot start a store or listen on its port exits and is started again; {Logs} shows why."]);
 
             case UnitActivity.Exited(var code):
                 fields.Add(new("Postgres", PostgresField()));
                 return Down($"Not running: the server exited{ExitCode(code)} and will not be started again on its own.", fields, notes,
-                    Taken(installation.Port, null), [$"kcap local restart starts it; {Logs} shows why it exited."]);
+                    await TakenAsync(unit, "Stop that process, then run kcap local restart; kcap never stops a process it did not start.", ct),
+                    [$"kcap local restart starts it; {Logs} shows why it exited."]);
 
             case UnitActivity.Unknown(var reason):
                 return Down($"Unknown: {reason}.", fields, notes);
@@ -157,6 +157,10 @@ sealed class LocalStatusReader(LocalStack stack, string cliVersion, Func<int, Po
                 return Down("Starting, or a store is down.", fields, notes,
                     [$"The server reports ready once both stores are up and its schema is migrated. {Logs} shows its progress."]);
 
+            case ServerHealth.Foreign(var what):
+                fields.Add(new("Postgres", PostgresField()));
+                return Down($"Not ready: something else answers on port {port}.", fields, notes, taken.Count > 0 ? taken : Answers(port, what, KeepsTrying).AsEnumerable());
+
             case ServerHealth.Unreachable:
                 fields.Add(new("Postgres", PostgresField()));
                 if (taken.Count > 0) return Down($"Not ready: port {port} is taken.", fields, notes, taken);
@@ -190,15 +194,37 @@ sealed class LocalStatusReader(LocalStack stack, string cliVersion, Func<int, Po
         ? "run kcap setup --local"
         : "run kcap local restart, and see kcap local logs if it persists";
 
+    const string KeepsTrying = "Stop that process; while the service runs, the server starts on its own once the port is free.";
+
     /// <summary>A listener on the port that is not the server's own process; <paramref name="ours"/> null when the
     /// server is not running, so any listener is a stranger.</summary>
-    IEnumerable<string> Taken(int port, int? ours, string then = "Stop that process; while the service runs, the server starts on its own once the port is free.") {
+    IEnumerable<string> Taken(int port, int? ours, string then = KeepsTrying) {
         if (findHolder(port) is not { } holder || holder.Pid == ours) yield break;
 
         yield return $"Port {port} is taken by {holder.Command} (pid {holder.Pid}), so the server cannot listen on it. "
                    + "The port is part of this installation's identity, so the stack cannot move to another. "
                    + then;
     }
+
+    /// <summary>With the server not running, a stranger the OS names, else one whose answer the kcap server never
+    /// gives. Without root, <c>lsof</c> sees only this user's processes, so the answer is the only evidence of
+    /// another user's.</summary>
+    async Task<List<string>> TakenAsync(LocalServerUnit unit, string then, CancellationToken ct) {
+        var named = Taken(unit.Port, null, then).ToList();
+        if (named.Count > 0) return named;
+
+        return await LocalServerHealth.ReadAsync(stack.Local, unit, stack.Time, ct) is ServerHealth.Foreign(var what)
+            ? [.. Answers(unit.Port, what, then)]
+            : [];
+    }
+
+    static string[] Answers(int port, string what, string then) => [
+        $"Port {port} answers as {what}, not as the kcap server, so the server cannot listen on it. "
+      + "The port is part of this installation's identity, so the stack cannot move to another. " + then,
+        OperatingSystem.IsLinux()
+            ? $"sudo ss -ltnp 'sport = :{port}' names the process that holds it."
+            : $"sudo lsof -nP -iTCP:{port} -sTCP:LISTEN names the process that holds it.",
+    ];
 
     static LocalStatusReport Changing(List<KeyValuePair<string, string>> fields, List<string> notes) =>
         Down("Changing: another kcap command holds the installation, so the server may be starting, stopping or restarting.", fields, notes,

@@ -249,8 +249,90 @@ public class LocalServerRecoveryViewModelTests {
 
     static LocalServerRecoveryViewModel WithCondition(
             BehaviorSubject<ServerLaneStatus> status, Func<LocalServerCondition> read, Recorder recorder, bool canStart = true) =>
+        WithReading(status, () => new(read()), recorder, canStart);
+
+    static LocalServerRecoveryViewModel WithReading(
+            BehaviorSubject<ServerLaneStatus> status, Func<LocalServerReading> read, Recorder recorder, bool canStart = true) =>
         new(status, isLocalServer: true, recorder.Start, recorder.Reconnect, CancellationToken.None,
-            readCondition: read, canStart: canStart, readScheduler: System.Reactive.Concurrency.ImmediateScheduler.Instance);
+            readCondition: _ => Task.FromResult(read()), canStart: canStart,
+            readScheduler: System.Reactive.Concurrency.ImmediateScheduler.Instance);
+
+    /// <summary>A port another program holds is no stopped server: the banner names the holder, offers no Start that
+    /// could only fail, and Start invoked anyway runs nothing.</summary>
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_taken_port_names_its_holder_and_is_never_offered_start() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var status = new BehaviorSubject<ServerLaneStatus>(new(ServerLaneState.Connecting));
+            var recorder = new Recorder();
+            using var vm = WithReading(status,
+                () => new(LocalServerCondition.PortTaken, 9473, new PortHolder(4242, "python3"), "a web server that calls itself SimpleHTTP/0.6"),
+                recorder);
+
+            status.OnNext(new(ServerLaneState.Retrying, "Connection refused"));
+
+            await Assert.That(vm.Visible).IsTrue();
+            await Assert.That(vm.StartOffered).IsFalse();
+            await Assert.That(vm.Headline).IsEqualTo("Another program holds the local server's port");
+            await Assert.That(vm.Body!).Contains("Port 9473 is held by python3 (pid 4242)").And.Contains("kcap never stops a program it did not start");
+            await Assert.That(vm.Body!).DoesNotContain("shows which process it is");
+            await Assert.That(((ICommand)vm.StartCommand).CanExecute(null)).IsFalse();
+            await Assert.That(await vm.StartAsync()).IsFalse();
+            await Assert.That(recorder.Starts).IsEqualTo(0);
+        });
+    }
+
+    /// <summary>When the OS cannot name the holder, its own answer names it, and the banner says how to find the
+    /// process.</summary>
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_taken_port_the_os_cannot_name_is_named_by_its_answer() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var status = new BehaviorSubject<ServerLaneStatus>(new(ServerLaneState.Connecting));
+            using var vm = WithReading(status,
+                () => new(LocalServerCondition.PortTaken, 9473, Answer: "a web server that calls itself nginx/1.25.3"), new Recorder());
+
+            status.OnNext(new(ServerLaneState.Retrying, "Connection refused"));
+
+            await Assert.That(vm.Body!).Contains("Port 9473 is held by a web server that calls itself nginx/1.25.3")
+                .And.Contains("shows which process it is");
+        });
+    }
+
+    /// <summary>Freeing the port takes the conflict away on the next retry: the same banner offers Start again.</summary>
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_freed_port_offers_start_again_on_the_next_retry() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var status = new BehaviorSubject<ServerLaneStatus>(new(ServerLaneState.Connecting));
+            var reading = new LocalServerReading(LocalServerCondition.PortTaken, 9473, new PortHolder(1, "nginx"));
+            using var vm = WithReading(status, () => reading, new Recorder());
+
+            status.OnNext(new(ServerLaneState.Retrying, "Connection refused"));
+            await Assert.That(vm.StartOffered).IsFalse();
+
+            reading = new(LocalServerCondition.Installed, 9473);
+            status.OnNext(new(ServerLaneState.Retrying, "Connection refused"));
+
+            await Assert.That(vm.StartOffered).IsTrue();
+            await Assert.That(vm.Headline).IsEqualTo("The local server isn't running");
+        });
+    }
+
+    /// <summary>A read that fails is evidence of nothing, so it offers nothing.</summary>
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_failed_read_offers_no_start() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var status = new BehaviorSubject<ServerLaneStatus>(new(ServerLaneState.Connecting));
+            using var vm = WithReading(status, () => throw new IOException("disk gone"), new Recorder());
+
+            status.OnNext(new(ServerLaneState.Retrying, "Connection refused"));
+
+            await Assert.That(vm.Condition).IsEqualTo(LocalServerCondition.Unreadable);
+            await Assert.That(vm.StartOffered).IsFalse();
+        });
+    }
 
     /// An uninstalled, purged or never-installed server still reads as down, but a start cannot bring it back:
     /// the banner says what the files say and offers nothing to click, and Start invoked anyway runs nothing.

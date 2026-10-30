@@ -26,4 +26,9 @@ public enum LocalServerCondition {
 
     /// <summary>Installed with its files in place. Whether it runs is the service manager's and the server's to say.</summary>
     Installed,
+
+    /// <summary>Installed, but another program holds its port, so no start can bring it up. Never read from the files
+    /// alone: it takes an answer on the port that the kcap server never gives, or a listener the OS names as another
+    /// program.</summary>
+    PortTaken,
 }

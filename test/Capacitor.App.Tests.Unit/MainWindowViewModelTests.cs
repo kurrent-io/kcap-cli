@@ -407,8 +407,8 @@ public class MainWindowViewModelTests {
         await Assert.That(alert?.Recovery ?? RailRecovery.None).IsEqualTo(recovery);
     }
 
-    /// A stopped server whose installation is gone or being changed by another kcap never carries Start, and its
-    /// hover says what the files under the local root say.
+    /// A stopped server whose installation is gone, is being changed by another kcap, or whose port another program
+    /// holds never carries Start, and its hover says why.
     [Test]
     [Arguments(LocalServerCondition.Changing, MainWindowViewModel.LocalChangingText)]
     [Arguments(LocalServerCondition.Uninstalled, MainWindowViewModel.LocalRemovedText)]
@@ -416,6 +416,7 @@ public class MainWindowViewModelTests {
     [Arguments(LocalServerCondition.NotInstalled, MainWindowViewModel.LocalRemovedText)]
     [Arguments(LocalServerCondition.FilesMissing, MainWindowViewModel.LocalNeedsAttentionText)]
     [Arguments(LocalServerCondition.Interrupted, MainWindowViewModel.LocalNeedsAttentionText)]
+    [Arguments(LocalServerCondition.PortTaken, MainWindowViewModel.LocalPortTakenText)]
     public async Task LocalServerAlertFor_names_a_gone_or_changing_installation_without_start(LocalServerCondition condition, string text) {
         var alert = MainWindowViewModel.LocalServerAlertFor(updateFailed: false, starting: false, stopped: true, canStart: true, condition);
 

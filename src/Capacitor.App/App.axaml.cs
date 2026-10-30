@@ -1154,7 +1154,7 @@ public partial class App : Application {
         if (localStack is not null) stackOwnsStart = localStack.WhenAnyValue(x => x.SuppressesServerStart);
         var localServer = new LocalServerRecoveryViewModel(
             serverLane.Status, isLocalServer, lifecycleCli.LocalStartAsync, () => serverLane.RestartAsync(), _shutdown.Token,
-            busy: stackOwnsStart, readCondition: () => LocalServerConditions.Read(_localRoot),
+            busy: stackOwnsStart, readCondition: ct => LocalServerConditions.ReadAsync(_localRoot, ct),
             canStart: OperatingSystem.IsMacOS() || OperatingSystem.IsLinux());
         _localServer = localServer;
         var webWorkspace = new WebWorkspaceViewModel(profiles?.Resolution.ServerUrl, opener, notifier.Notify,

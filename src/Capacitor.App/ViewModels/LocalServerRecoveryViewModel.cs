@@ -14,8 +14,9 @@ namespace Capacitor.App.ViewModels;
 
 /// The launcher's "local server is not running" banner. Whether the server is down is the server lane's
 /// word alone, so a stopped server behind a healthy daemon still shows; a cloud server never does. Whether
-/// Start is offered is the local root's files' word: never for an installation that is gone or that another
-/// kcap is changing. While <c>busy</c> (the upgrade banner owns the stack) the banner stays hidden.
+/// Start is offered is the local root's files' and the port's word: never for an installation that is gone, that
+/// another kcap is changing, or whose port another program holds. While <c>busy</c> (the upgrade banner owns the
+/// stack) the banner stays hidden.
 public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
     const int MessageTailLines = 12;
 
@@ -27,35 +28,38 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
     readonly ObservableAsPropertyHelper<bool> _serverDown;
     readonly Subject<Unit> _rereads = new();
     readonly bool _canStart;
-    LocalServerCondition? _condition;
+    LocalServerReading? _reading;
     bool _disposed;
     bool _isStarting;
     int _running;
     int _connectedVersion;
     string? _message;
 
-    /// <param name="readCondition">What the local root's files say, read off the UI thread each time the lane
-    /// retries and after each start. Null trusts the installation to exist.</param>
+    /// <param name="readCondition">What the local root's files and the server's port say, read off the UI thread each
+    /// time the lane retries and after each start; a newer read cancels the one in flight. Null trusts the
+    /// installation to exist.</param>
     /// <param name="canStart">Whether <c>kcap local start</c> runs on this platform at all.</param>
     public LocalServerRecoveryViewModel(
             IObservable<ServerLaneStatus> status, bool isLocalServer,
             Func<CancellationToken, Task<ProcessResult>> start, Func<Task> reconnect, CancellationToken shutdown,
-            IObservable<bool>? busy = null, Func<LocalServerCondition>? readCondition = null, bool canStart = true,
+            IObservable<bool>? busy = null, Func<CancellationToken, Task<LocalServerReading>>? readCondition = null, bool canStart = true,
             IScheduler? readScheduler = null) {
         _start = start;
         _reconnect = reconnect;
         _shutdown = shutdown;
         _canStart = canStart;
-        _condition = readCondition is null ? LocalServerCondition.Installed : null;
+        _reading = readCondition is null ? new(LocalServerCondition.Installed) : null;
         IsLocalServer = isLocalServer;
 
         if (isLocalServer && readCondition is not null) {
             var scheduler = readScheduler ?? RxSchedulers.TaskpoolScheduler;
             Observable.Switch(status.Where(s => s.State == ServerLaneState.Retrying).Select(_ => Unit.Default)
                     .Merge(_rereads)
-                    .Select(_ => Observable.Start(readCondition, scheduler).Catch(Observable.Return(LocalServerCondition.Unreadable))))
+                    .Select(_ => Observable.Return(Unit.Default, scheduler)
+                        .SelectMany(Observable.FromAsync(readCondition))
+                        .Catch(Observable.Return(new LocalServerReading(LocalServerCondition.Unreadable)))))
                 .ObserveOn(RxSchedulers.MainThreadScheduler)
-                .Subscribe(c => Condition = c)
+                .Subscribe(r => Reading = r)
                 .DisposeWith(_disposables);
         }
 
@@ -91,7 +95,7 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
 
         StartCommand = ReactiveCommand.CreateFromTask(async () => { await StartAsync(); },
             this.WhenAnyValue(x => x.IsStarting, x => x.Condition, (starting, condition) => !starting && StartPossible(condition)));
-        this.WhenAnyValue(x => x.Visible, x => x.IsStarting, x => x.Condition, (_, _, _) => Unit.Default)
+        this.WhenAnyValue(x => x.Visible, x => x.IsStarting, x => x.Reading, (_, _, _) => Unit.Default)
             .Subscribe(_ => {
                 this.RaisePropertyChanged(nameof(StartOffered));
                 this.RaisePropertyChanged(nameof(Headline));
@@ -105,11 +109,19 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
     /// <summary>The banner shows: the lane reads the server down and no upgrade owns the stack.</summary>
     public bool Visible => _visible.Value;
 
-    /// <summary>What the local root's files say; null until the first read after the lane first retries.</summary>
-    public LocalServerCondition? Condition {
-        get => _condition;
-        private set => this.RaiseAndSetIfChanged(ref _condition, value);
+    /// <summary>What the local root's files and the server's port say; null until the first read after the lane first
+    /// retries.</summary>
+    public LocalServerReading? Reading {
+        get => _reading;
+        private set {
+            if (_reading == value) return;
+            _reading = value;
+            this.RaisePropertyChanged();
+            this.RaisePropertyChanged(nameof(Condition));
+        }
     }
+
+    public LocalServerCondition? Condition => Reading?.Condition;
 
     /// <summary>Start is offered only for an installation whose files are in place, with no other kcap changing it,
     /// on a platform where <c>kcap local start</c> runs.</summary>
@@ -117,6 +129,7 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
 
     public string Headline => Condition switch {
         LocalServerCondition.Changing                                   => "The local server is being changed",
+        LocalServerCondition.PortTaken                                  => "Another program holds the local server's port",
         LocalServerCondition.Uninstalled                                => "The local server was uninstalled",
         LocalServerCondition.Purged or LocalServerCondition.NotInstalled => "The local server was removed",
         LocalServerCondition.FilesMissing or LocalServerCondition.Interrupted or LocalServerCondition.Unreadable
@@ -126,10 +139,21 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
 
     public string? Body => Condition switch {
         null                                       => null,
+        LocalServerCondition.PortTaken             => PortTakenBody(Reading!),
         LocalServerCondition.Installed when _canStart => "Start it to launch agents and open the dashboard.",
         LocalServerCondition.Installed             => "kcap can't start it on this computer. Start it the way it was installed.",
         { } other                                  => other.Explanation,
     };
+
+    /// <summary>Names the holder when the OS or its answer does; kcap never stops it, so the user does.</summary>
+    static string PortTakenBody(LocalServerReading reading) {
+        var find = reading.Holder is not null ? ""
+            : OperatingSystem.IsWindows() ? $" netstat -ano -p TCP | findstr :{reading.Port} shows which process it is."
+            : $" sudo lsof -nP -iTCP:{reading.Port} -sTCP:LISTEN shows which process it is.";
+
+        return $"Port {reading.Port} is held by {reading.HolderText}, so the local server cannot listen on it. The port is part of "
+             + $"the server's identity, so it cannot move to another. Stop that program; kcap never stops a program it did not start.{find}";
+    }
 
     bool StartPossible(LocalServerCondition? condition) => _canStart && condition == LocalServerCondition.Installed;
 

@@ -1,6 +1,7 @@
 using System.Collections.Frozen;
 using System.Net;
 using System.Text.Json;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.Cli.LocalEdition;
 
@@ -18,10 +19,14 @@ static class LocalServerHealth {
 
         try {
             using var response = await http.GetAsync(new Uri($"{unit.BaseUrl}/healthz/ready"), linked.Token);
+            if (LocalPortProbe.Classify(response) is LocalPortAnswer.Foreign(var what)) return new ServerHealth.Foreign(what);
+
             status = response.StatusCode;
             body   = await response.Content.ReadAsStringAsync(linked.Token);
         } catch (HttpRequestException ex) {
-            return new ServerHealth.Unreachable(ex.Message);
+            return LocalPortProbe.Classify(ex) is LocalPortAnswer.Foreign(var what)
+                ? new ServerHealth.Foreign(what)
+                : new ServerHealth.Unreachable(ex.Message);
         } catch (OperationCanceledException) when (!ct.IsCancellationRequested) {
             return new ServerHealth.Unreachable($"no answer within {RequestTimeout.TotalSeconds:0} seconds");
         }

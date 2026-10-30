@@ -136,6 +136,19 @@ public class LocalStackControlTests {
         await Assert.That(failure!.Message).Contains("Port 9473 is taken by nginx (pid 1)");
     }
 
+    /// <summary>The OS names no holder here, as it cannot for another user's process; the 404 alone is enough,
+    /// since the kcap server's health route never returns one.</summary>
+    [Test]
+    public async Task Start_gives_up_at_once_on_a_foreign_answer_the_os_cannot_name() {
+        Publish();
+        Server.Override = path => path == "/healthz/ready" ? new HttpResponseMessage(System.Net.HttpStatusCode.NotFound) : null;
+
+        var failure = await Assert.ThrowsAsync<LocalInstallFailure>(() => Start(new FakeTimeProvider()));
+
+        await Assert.That(failure!.Message).Contains("Port 9473 answers as a web server that answers HTTP 404, not as the kcap server");
+        await Assert.That(_log).DoesNotContain("stop");
+    }
+
     [Test]
     public async Task Start_gives_up_at_once_on_a_server_that_exited_for_good() {
         Publish();

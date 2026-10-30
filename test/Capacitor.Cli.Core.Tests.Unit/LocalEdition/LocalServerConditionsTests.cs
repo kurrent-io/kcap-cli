@@ -1,4 +1,7 @@
+using System.Net;
+using System.Net.Sockets;
 using Capacitor.Cli.Core.LocalEdition;
+using TUnit.Core.Enums;
 
 namespace Capacitor.Cli.Core.Tests.Unit.LocalEdition;
 
@@ -30,6 +33,15 @@ public class LocalServerConditionsTests {
     public async Task An_installation_with_its_binary_is_installed() {
         await PublishAsync(InstallRegistry.Empty.WithActive(Active));
         CreateBinary();
+
+        await Assert.That(LocalServerConditions.Read(Root)).IsEqualTo(LocalServerCondition.Installed);
+    }
+
+    [Test, RunOn(OS.Windows)]
+    public async Task A_windows_server_binary_counts_as_installed() {
+        await PublishAsync(InstallRegistry.Empty.WithActive(Active));
+        Directory.CreateDirectory(Path.GetDirectoryName(LocalServerConditions.ServerBinary(Root))!);
+        File.WriteAllText(LocalServerConditions.ServerBinary(Root) + ".exe", "");
 
         await Assert.That(LocalServerConditions.Read(Root)).IsEqualTo(LocalServerCondition.Installed);
     }
@@ -83,6 +95,119 @@ public class LocalServerConditionsTests {
         File.WriteAllText(Root.RegistryPath, "{not json");
 
         await Assert.That(LocalServerConditions.Read(Root)).IsEqualTo(LocalServerCondition.Unreadable);
+    }
+
+    sealed class Answering(Func<HttpResponseMessage> answer) : HttpMessageHandler {
+        public int Requests;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+            Interlocked.Increment(ref Requests);
+            return Task.FromResult(answer());
+        }
+    }
+
+    sealed class Refusing : HttpMessageHandler {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+            throw new HttpRequestException(HttpRequestError.ConnectionError, "Connection refused",
+                new SocketException((int)SocketError.ConnectionRefused));
+    }
+
+    sealed class Silent : HttpMessageHandler {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+            throw new HttpRequestException(HttpRequestError.ResponseEnded, "The response ended prematurely.");
+    }
+
+    async Task InstallAsync() {
+        await PublishAsync(InstallRegistry.Empty.WithActive(Active));
+        CreateBinary();
+    }
+
+    Task<LocalServerReading> ReadAsync(HttpMessageHandler handler, Func<int, PortHolder?> findHolder) =>
+        LocalServerConditions.ReadAsync(Root, new HttpClient(handler), findHolder, TimeProvider.System, CancellationToken.None);
+
+    /// <summary>A 404 is never the kcap server's health answer, so the port is another program's even when the OS
+    /// cannot say whose (another user's process, without root).</summary>
+    [Test]
+    public async Task A_foreign_answer_on_the_port_is_port_taken_without_naming_the_process() {
+        await InstallAsync();
+
+        var reading = await ReadAsync(new Answering(() => new HttpResponseMessage(HttpStatusCode.NotFound)), _ => null);
+
+        await Assert.That(reading.Condition).IsEqualTo(LocalServerCondition.PortTaken);
+        await Assert.That(reading.Port).IsEqualTo(Active.Port);
+        await Assert.That(reading.HolderText).IsEqualTo("a web server that answers HTTP 404");
+    }
+
+    [Test]
+    public async Task A_foreign_answer_names_the_holder_the_os_reports() {
+        await InstallAsync();
+
+        var reading = await ReadAsync(new Answering(() => new HttpResponseMessage(HttpStatusCode.NotFound)), _ => new(4242, "python3"));
+
+        await Assert.That(reading.Condition).IsEqualTo(LocalServerCondition.PortTaken);
+        await Assert.That(reading.HolderText).IsEqualTo("python3 (pid 4242)");
+    }
+
+    /// <summary>A listener that accepts and never answers, such as a bare TcpListener, is told apart only by the OS
+    /// naming a process that is not the server.</summary>
+    [Test]
+    public async Task A_silent_listener_the_os_names_as_another_program_is_port_taken() {
+        await InstallAsync();
+
+        var reading = await ReadAsync(new Silent(), _ => new(812, "powershell"));
+
+        await Assert.That(reading.Condition).IsEqualTo(LocalServerCondition.PortTaken);
+        await Assert.That(reading.HolderText).IsEqualTo("powershell (pid 812)");
+    }
+
+    /// <summary>The server busy starting is silent too; a silence nobody can name stays installed, never port taken
+    /// and never healthy.</summary>
+    [Test]
+    [Arguments("kcap-server")]
+    [Arguments(null)]
+    public async Task A_silence_from_the_server_or_from_nobody_known_stays_installed(string? command) {
+        await InstallAsync();
+
+        var reading = await ReadAsync(new Silent(), _ => command is null ? null : new(77, command));
+
+        await Assert.That(reading.Condition).IsEqualTo(LocalServerCondition.Installed);
+    }
+
+    [Test]
+    [Arguments(HttpStatusCode.OK)]
+    [Arguments(HttpStatusCode.ServiceUnavailable)]
+    public async Task An_answer_the_server_gives_stays_installed_and_looks_up_no_process(HttpStatusCode status) {
+        await InstallAsync();
+        var lookups = 0;
+
+        var reading = await ReadAsync(new Answering(() => new HttpResponseMessage(status)), _ => { lookups++; return new(1, "nginx"); });
+
+        await Assert.That(reading.Condition).IsEqualTo(LocalServerCondition.Installed);
+        await Assert.That(lookups).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task A_free_port_stays_installed_and_looks_up_no_process() {
+        await InstallAsync();
+        var lookups = 0;
+
+        var reading = await ReadAsync(new Refusing(), _ => { lookups++; return new(1, "nginx"); });
+
+        await Assert.That(reading.Condition).IsEqualTo(LocalServerCondition.Installed);
+        await Assert.That(lookups).IsEqualTo(0);
+    }
+
+    /// <summary>Only an installation a start could bring up is worth a request: a removed one is explained by its
+    /// files.</summary>
+    [Test]
+    public async Task A_removed_installation_is_read_without_touching_the_port() {
+        await PublishAsync(InstallRegistry.Empty.WithActive(Active));
+        var handler = new Answering(() => new HttpResponseMessage(HttpStatusCode.NotFound));
+
+        var reading = await ReadAsync(handler, _ => new(1, "nginx"));
+
+        await Assert.That(reading.Condition).IsEqualTo(LocalServerCondition.Uninstalled);
+        await Assert.That(handler.Requests).IsEqualTo(0);
     }
 
     [Test]

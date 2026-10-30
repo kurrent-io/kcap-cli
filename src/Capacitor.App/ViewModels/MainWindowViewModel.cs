@@ -1207,6 +1207,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     internal const string LocalChangingText     = "Local server changing…";
     internal const string LocalRemovedText      = "Local server removed";
     internal const string LocalNeedsAttentionText = "Local server needs attention";
+    internal const string LocalPortTakenText    = "Local server port in use";
     internal const string LocalStartingText     = "Starting the local server…";
     internal const string LocalUpdateFailedText = "Local server update failed";
 
@@ -1268,6 +1269,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         : !stopped   ? null
         : condition switch {
             LocalServerCondition.Changing => new(LocalChangingText, StatusColors.Pending, Detail: condition.Value.Explanation),
+            LocalServerCondition.PortTaken => new(LocalPortTakenText, StatusColors.InProgress, Detail: condition.Value.Explanation),
             LocalServerCondition.Uninstalled or LocalServerCondition.Purged or LocalServerCondition.NotInstalled
                 => new(LocalRemovedText, StatusColors.InProgress, Detail: condition.Value.Explanation),
             LocalServerCondition.FilesMissing or LocalServerCondition.Interrupted or LocalServerCondition.Unreadable

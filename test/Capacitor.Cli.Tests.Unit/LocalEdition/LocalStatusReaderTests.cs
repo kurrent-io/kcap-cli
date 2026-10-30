@@ -389,6 +389,83 @@ public class LocalStatusReaderTests {
         await Assert.That(Text(report)).Contains("taken by nginx (pid 1)");
     }
 
+    void Foreign(string? server = "nginx/1.25.3") =>
+        Server.Override = path => {
+            if (path != "/healthz/ready") return null;
+
+            var response = new HttpResponseMessage(HttpStatusCode.NotFound);
+            if (server is not null) response.Headers.TryAddWithoutValidation("Server", server);
+            return response;
+        };
+
+    /// <summary>The kcap server's health route never answers 404, so a running unit behind one is not starting: another
+    /// program holds the port, though the OS names no holder (another user's process, without root).</summary>
+    [Test]
+    public async Task A_running_server_behind_a_foreign_answer_is_not_called_starting() {
+        Running();
+        Foreign();
+
+        var report = await Read();
+
+        await Assert.That(report.Ready).IsFalse();
+        await Assert.That(report.Headline).IsEqualTo("Not ready: something else answers on port 9473.");
+        await Assert.That(Text(report)).Contains("Port 9473 answers as a web server that calls itself nginx/1.25.3, not as the kcap server")
+            .And.Contains("names the process that holds it");
+        await Assert.That(Text(report)).DoesNotContain("Starting");
+    }
+
+    [Test]
+    public async Task A_listener_that_does_not_speak_http_is_another_program() {
+        Running();
+        Server.Override = _ => throw new HttpRequestException(HttpRequestError.InvalidResponse, "The server returned an invalid or unrecognized response.");
+
+        var report = await Read();
+
+        await Assert.That(report.Headline).IsEqualTo("Not ready: something else answers on port 9473.");
+        await Assert.That(Text(report)).Contains("answers as a program that does not speak HTTP");
+    }
+
+    /// <summary>The OS's name for the holder wins over what its answer says.</summary>
+    [Test]
+    public async Task A_foreign_answer_from_a_holder_the_os_names_names_the_process() {
+        Running();
+        Foreign();
+        _holders.Add(new(4242, "python3"));
+
+        var report = await Read();
+
+        await Assert.That(report.Headline).IsEqualTo("Not ready: something else answers on port 9473.");
+        await Assert.That(Text(report)).Contains("taken by python3 (pid 4242)");
+    }
+
+    [Test]
+    public async Task A_stopped_server_behind_a_foreign_answer_offers_no_start() {
+        Running();
+        await Service.StopAsync(Unit, CancellationToken.None);
+        Foreign(server: null);
+        var calls = _log.Count;
+
+        var report = await Read();
+
+        await Assert.That(report.Headline).IsEqualTo("Stopped, and port 9473 is taken by another process.");
+        await Assert.That(Text(report)).Contains("answers as a web server that answers HTTP 404").And.Contains("never stops a process it did not start");
+        await Assert.That(Text(report)).DoesNotContain("kcap local start starts it");
+        await Assert.That(_log.Skip(calls).Any(l => l.Contains("stop", StringComparison.OrdinalIgnoreCase))).IsFalse();
+    }
+
+    /// <summary>An answer the kcap server can give, even an unhealthy one, says nothing about who holds the port.</summary>
+    [Test]
+    public async Task A_stopped_server_with_a_server_shaped_answer_on_its_port_still_offers_start() {
+        Running();
+        await Service.StopAsync(Unit, CancellationToken.None);
+        Health(HttpStatusCode.ServiceUnavailable, postgres: "Unhealthy");
+
+        var report = await Read();
+
+        await Assert.That(report.Headline).IsEqualTo("Stopped.");
+        await Assert.That(Text(report)).Contains("kcap local start starts it");
+    }
+
     [Test]
     public async Task A_server_that_keeps_exiting_on_a_taken_port_says_both() {
         Running();
