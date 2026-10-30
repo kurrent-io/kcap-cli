@@ -57,8 +57,10 @@ public static class WindowSizeMemory {
             lastPos = window.Position;
         }
 
+        // A hidden window's geometry and state are the platform's: an X11 window manager drops the
+        // maximized state on unmap, and the tray restore moves the frame before showing it.
         void RememberNormal() {
-            if (window.WindowState != WindowState.Normal) return;
+            if (window.WindowState != WindowState.Normal || !window.IsVisible) return;
             Snapshot();
         }
 
@@ -90,7 +92,7 @@ public static class WindowSizeMemory {
         // Avalonia has no RestoreBounds; leaving Normal is the last moment size and position are
         // still the restore geometry, so snapshot before the maximized frame lands.
         window.PropertyChanged += (_, e) => {
-            if (e.Property != Window.WindowStateProperty) return;
+            if (e.Property != Window.WindowStateProperty || !window.IsVisible) return;
             if (e.OldValue is WindowState.Normal) Snapshot();
             if (e.NewValue is WindowState state && state != WindowState.Minimized) lastShown = state;
             Schedule();

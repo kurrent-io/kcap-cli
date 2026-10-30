@@ -6,6 +6,7 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.LocalEdition;
 using Avalonia.Media;
 using Capacitor.App.Services;
 using Capacitor.App.Views;
@@ -567,14 +568,14 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .DistinctUntilChanged();
 
             var localServer = Home?.LocalServer is { } recovery
-                ? recovery.WhenAnyValue(x => x.ServerDown, x => x.IsStarting, x => x.Visible,
-                    (down, starting, offered) => (Down: down, Starting: starting, Offered: offered))
-                : Observable.Return((Down: false, Starting: false, Offered: false));
+                ? recovery.WhenAnyValue(x => x.ServerDown, x => x.IsStarting, x => x.StartOffered, x => x.Condition,
+                    (down, starting, offered, condition) => (Down: down, Starting: starting, Offered: offered, Condition: condition))
+                : Observable.Return((Down: false, Starting: false, Offered: false, Condition: (LocalServerCondition?)null));
             var updateFailed = (LocalStack ?? Home?.LocalStack) is { } localStack
                 ? localStack.WhenAnyValue(x => x.Attention)
                 : Observable.Return(false);
             var localAlert = localServer.CombineLatest(updateFailed,
-                    (server, update) => LocalServerAlertFor(update, server.Starting, server.Down, server.Offered))
+                    (server, update) => LocalServerAlertFor(update, server.Starting, server.Down, server.Offered, server.Condition))
                 .DistinctUntilChanged();
             var diagnostic = (laneStatus ?? Observable.Return(new ServerLaneStatus(ServerLaneState.Dormant)))
                 .Select(s => s.Diagnostic)
@@ -861,14 +862,57 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             CloseWorkspace();
     }
 
-    /// The coordinator's close paths. Before shutdown, even a close-to-hide with no workspace
-    /// open must retire an in-flight launch's captured generation. Shutdown already released the
-    /// workspace; its final window-close notification must not touch disposed dependencies.
+    /// Before shutdown, even a close with no workspace open must retire an in-flight launch's
+    /// captured generation. Shutdown already released the workspace; its final window-close
+    /// notification must not touch disposed dependencies.
     public void CloseWorkspace() {
         if (_shutdownLatched || _navigation.ShutdownLatched) return;
         SwapTo(null);
         // Nothing is selected, so nothing keeps a pin; an open page may still be pinning its hit.
         if (!IsSearchOpen) ReleasePinUnless(null);
+    }
+
+    (string AgentId, bool Terminal, bool PullRequest, bool Artefacts, PullRequestSubjectDto? Subject, int Generation)? _parked;
+
+    /// Hide-to-tray: releases the workspace as CloseWorkspace does, but remembers the session and its
+    /// tab for RestoreParkedWorkspace. The pin stays, since a session opened from search may have no
+    /// rail row without it. A repeated park with nothing open keeps what the first one remembered.
+    public void ParkWorkspace() {
+        if (_shutdownLatched || _navigation.ShutdownLatched) return;
+        var parked = _parked;
+        if (CurrentWorkspace is { } open) {
+            var (terminal, pullRequest, artefacts) = open switch {
+                WorkspaceViewModel local => (local.IsTerminalActive, local.IsPullRequestActive, local.IsArtefactsActive),
+                RemoteSessionViewModel remote => (remote.IsTerminalActive, remote.IsPullRequestActive, remote.IsArtefactsActive),
+                _ => (false, false, false),
+            };
+            parked = (open.AgentId, terminal, pullRequest, artefacts, open.PullRequests?.Selected?.Subject, 0);
+        }
+        SwapTo(null);
+        _parked = parked is { } p
+            ? (p.AgentId, p.Terminal, p.PullRequest, p.Artefacts, p.Subject, _navigation.Generation)
+            : null;
+    }
+
+    /// Reopens what the last hide-to-tray parked, on the tab it showed, unless anything has
+    /// navigated since. The lane is resolved afresh, as a rail click would, so a session that moved
+    /// lanes while hidden opens where it is now, and one no lane lists any longer leaves the launcher.
+    public void RestoreParkedWorkspace() {
+        if (_parked is not { } parked) return;
+        _parked = null;
+        if (parked.Generation != _navigation.Generation || CurrentWorkspace is not null) return;
+        if (_originOf(parked.AgentId) is not { } lane || !OpenSessionCore(parked.AgentId, lane, revealInRail: true)) {
+            if (!IsSearchOpen) ReleasePinUnless(null);
+            return;
+        }
+
+        switch (CurrentWorkspace) {
+            case WorkspaceViewModel local when parked.Terminal: local.ShowTerminalCommand.Execute().Subscribe(); break;
+            case RemoteSessionViewModel remote when parked.Terminal: remote.ShowTerminalCommand.Execute().Subscribe(); break;
+            case WorkspaceViewModel local when parked.Artefacts: local.ShowArtefactsCommand.Execute().Subscribe(); break;
+            case RemoteSessionViewModel remote when parked.Artefacts: remote.ShowArtefactsCommand.Execute().Subscribe(); break;
+            case { } open when parked.PullRequest: open.OpenPullRequest(parked.Subject); break;
+        }
     }
 
     static IObservable<bool> CanRefreshOpenWork(ISessionWorkspace? workspace) =>
@@ -1151,6 +1195,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     internal const string RestartPendingText    = "Daemon restart pending";
     internal const string LiveUpdatesText       = "Live updates may be missing";
     internal const string LocalStoppedText      = "Local server stopped";
+    internal const string LocalChangingText     = "Local server changing…";
+    internal const string LocalRemovedText      = "Local server removed";
+    internal const string LocalNeedsAttentionText = "Local server needs attention";
     internal const string LocalStartingText     = "Starting the local server…";
     internal const string LocalUpdateFailedText = "Local server update failed";
 
@@ -1203,12 +1250,21 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     }
 
     /// The local server's alert: null when it runs, or when there is no local server at all.
-    /// <param name="canStart">The launcher's Start is offered: not while an update owns the stack.</param>
-    internal static RailAlert? LocalServerAlertFor(bool updateFailed, bool starting, bool stopped, bool canStart) =>
+    /// <param name="canStart">The launcher's Start is offered: an installation that exists and nothing else owns.</param>
+    /// <param name="condition">What the local root's files say; null until they have been read.</param>
+    internal static RailAlert? LocalServerAlertFor(bool updateFailed, bool starting, bool stopped, bool canStart,
+            LocalServerCondition? condition = null) =>
         updateFailed ? new(LocalUpdateFailedText, StatusColors.Disrupted)
         : starting   ? new(LocalStartingText, StatusColors.Pending)
-        : stopped    ? new(LocalStoppedText, StatusColors.InProgress, canStart ? RailRecovery.StartLocalServer : RailRecovery.None)
-        : null;
+        : !stopped   ? null
+        : condition switch {
+            LocalServerCondition.Changing => new(LocalChangingText, StatusColors.Pending, Detail: condition.Value.Explanation),
+            LocalServerCondition.Uninstalled or LocalServerCondition.Purged or LocalServerCondition.NotInstalled
+                => new(LocalRemovedText, StatusColors.InProgress, Detail: condition.Value.Explanation),
+            LocalServerCondition.FilesMissing or LocalServerCondition.Interrupted or LocalServerCondition.Unreadable
+                => new(LocalNeedsAttentionText, StatusColors.InProgress, Detail: condition.Value.Explanation),
+            _ => new(LocalStoppedText, StatusColors.InProgress, canStart ? RailRecovery.StartLocalServer : RailRecovery.None),
+        };
 
     System.Windows.Input.ICommand? CommandFor(RailRecovery recovery) => recovery switch {
         RailRecovery.SignIn           => SignInCommand,

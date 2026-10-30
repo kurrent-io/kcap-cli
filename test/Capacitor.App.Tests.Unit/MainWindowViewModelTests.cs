@@ -8,6 +8,7 @@ using Capacitor.App.Views;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.PullRequests;
 using Capacitor.Remote.Models;
 using DynamicData;
@@ -383,6 +384,23 @@ public class MainWindowViewModelTests {
         var alert = MainWindowViewModel.LocalServerAlertFor(updateFailed, starting, stopped, canStart);
         await Assert.That(alert?.Text).IsEqualTo(text);
         await Assert.That(alert?.Recovery ?? RailRecovery.None).IsEqualTo(recovery);
+    }
+
+    /// A stopped server whose installation is gone or being changed by another kcap never carries Start, and its
+    /// hover says what the files under the local root say.
+    [Test]
+    [Arguments(LocalServerCondition.Changing, MainWindowViewModel.LocalChangingText)]
+    [Arguments(LocalServerCondition.Uninstalled, MainWindowViewModel.LocalRemovedText)]
+    [Arguments(LocalServerCondition.Purged, MainWindowViewModel.LocalRemovedText)]
+    [Arguments(LocalServerCondition.NotInstalled, MainWindowViewModel.LocalRemovedText)]
+    [Arguments(LocalServerCondition.FilesMissing, MainWindowViewModel.LocalNeedsAttentionText)]
+    [Arguments(LocalServerCondition.Interrupted, MainWindowViewModel.LocalNeedsAttentionText)]
+    public async Task LocalServerAlertFor_names_a_gone_or_changing_installation_without_start(LocalServerCondition condition, string text) {
+        var alert = MainWindowViewModel.LocalServerAlertFor(updateFailed: false, starting: false, stopped: true, canStart: true, condition);
+
+        await Assert.That(alert!.Text).IsEqualTo(text);
+        await Assert.That(alert.Recovery).IsEqualTo(RailRecovery.None);
+        await Assert.That(alert.Detail).IsEqualTo(condition.Explanation);
     }
 
     /// The lowest rungs: a queued daemon restart, then the lane's diagnostic, each with its long copy on hover.
@@ -2236,6 +2254,98 @@ public class MainWindowViewModelTests {
             time.Advance(AgentDirectory.HandoverGrace + TimeSpan.FromSeconds(1));
             await Assert.That(vm.CurrentWorkspace).IsSameReferenceAs(remote);
             vm.CloseWorkspace();
+        });
+    }
+
+    /// Hide-to-tray releases the workspace, and every trip back reopens the same session, selected
+    /// in the rail and on the tab it showed, rather than the launcher.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Coming_back_from_the_tray_reopens_the_session_on_its_tab() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            service.Agents.AddOrUpdate(new AgentStatusDto(
+                "a1", "agent", "claude", "/dev/alpha", "Running", null, null, null, DateTime.UtcNow, null, null));
+            var directory = new AgentDirectory(
+                service, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null), p => p, null, null,
+                TimeProvider.System);
+            using var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System);
+            var vm = NewVm(service, workspaceFactory: id => NewWorkspace(service, id), rail: rail,
+                trackWorkspaceTeardown: teardown => _ = teardown());
+            vm.OpenSession("a1");
+            await ((WorkspaceViewModel)vm.CurrentWorkspace!).ShowTerminalCommand.Execute().ToTask();
+
+            for (var trip = 0; trip < 3; trip++) {
+                vm.ParkWorkspace();
+                await Assert.That(vm.CurrentWorkspace).IsNull();
+
+                vm.RestoreParkedWorkspace();
+                await Assert.That(vm.CurrentWorkspace?.AgentId).IsEqualTo("a1");
+                await Assert.That(((WorkspaceViewModel)vm.CurrentWorkspace!).IsTerminalActive).IsTrue();
+                await Assert.That(rail.SelectedSessionKey).IsEqualTo("local:a1");
+            }
+            vm.CloseWorkspace();
+        });
+    }
+
+    /// The window's Closed callback can park again after the hide already did: the second park,
+    /// with nothing open, must not forget the session.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_repeated_park_keeps_the_session_the_first_one_remembered() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var vm = NewVm(service, workspaceFactory: id => NewWorkspace(service, id), trackWorkspaceTeardown: teardown => _ = teardown());
+            vm.OpenSession("a1");
+
+            vm.ParkWorkspace();
+            vm.ParkWorkspace();
+            vm.RestoreParkedWorkspace();
+
+            await Assert.That(vm.CurrentWorkspace?.AgentId).IsEqualTo("a1");
+            vm.CloseWorkspace();
+        });
+    }
+
+    /// A notification opened another session while the window was hidden: that is where the user
+    /// is going, so the parked session is not brought back over it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_session_opened_while_hidden_wins_over_the_parked_one() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var vm = NewVm(service, workspaceFactory: id => NewWorkspace(service, id), trackWorkspaceTeardown: teardown => _ = teardown());
+            vm.OpenSession("a1");
+
+            vm.ParkWorkspace();
+            vm.OpenSession("a2");
+            vm.RestoreParkedWorkspace();
+
+            await Assert.That(vm.CurrentWorkspace?.AgentId).IsEqualTo("a2");
+            vm.CloseWorkspace();
+        });
+    }
+
+    /// A session that ended while the window was hidden cannot be reopened; the window comes back
+    /// on the launcher, and a later trip does not try again.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_parked_session_that_is_gone_leaves_the_launcher() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var listed = true;
+            var vm = NewVm(service, workspaceFactory: id => NewWorkspace(service, id),
+                originOf: _ => listed ? AgentOrigin.Local : null, trackWorkspaceTeardown: teardown => _ = teardown());
+            vm.OpenSession("a1");
+
+            vm.ParkWorkspace();
+            listed = false;
+            vm.RestoreParkedWorkspace();
+            await Assert.That(vm.CurrentWorkspace).IsNull();
+
+            listed = true;
+            vm.RestoreParkedWorkspace();
+            await Assert.That(vm.CurrentWorkspace).IsNull();
         });
     }
 }
