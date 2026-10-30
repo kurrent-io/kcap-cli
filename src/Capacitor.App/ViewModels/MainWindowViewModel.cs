@@ -178,6 +178,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     readonly Func<string, RemoteSessionViewModel?>? _serverFactory;
     readonly IAgentDirectory? _directory;
     readonly IServerSessionsService? _sessions;
+    /// The session of the last pin search asked for; it may still be reading while nothing is held.
+    string? _searchPin;
+    PinPresentation _searchPinPresentation = new(null, null, null);
     readonly IDisposable _onAppServer;
     /// A session id names a session only within one server: a hand-off to the server's row is
     /// sound only while the local daemon reports the app's server.
@@ -213,12 +216,28 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// the coordinator's close paths route through.
     public ReactiveCommand<Unit, Unit> CloseWorkspaceCommand { get; }
 
-    /// The rail button and Cmd/Ctrl+N. Over an open workspace it closes it; over the launcher,
-    /// where closing changes nothing, it nudges the launcher instead so the press visibly lands.
+    /// Back to the launcher as the user's own navigation: it also dismisses search and releases the pin.
+    /// Pressed over the launcher already showing, it nudges the launcher so the press visibly lands.
     public ReactiveCommand<Unit, Unit> NewSessionCommand { get; }
 
     /// Fires when New session is pressed while the launcher is already showing.
     public IObservable<Unit> LauncherNudges => _launcherNudges.AsObservable();
+
+    /// Null without a server sessions service.
+    public SessionSearchViewModel? Search { get; }
+
+    /// The search page covers the main area; CurrentWorkspace and its watches carry on beneath it.
+    public bool IsSearchOpen {
+        get;
+        private set => this.RaiseAndSetIfChanged(ref field, value);
+    }
+
+    public ReactiveCommand<Unit, Unit> OpenSearchCommand { get; }
+    public ReactiveCommand<Unit, Unit> DismissSearchCommand { get; }
+
+    readonly Subject<Unit> _searchFocusRequests = new();
+    /// The shortcut or the rail field while the page is already open: focus the query, keep its state.
+    public IObservable<Unit> SearchFocusRequests => _searchFocusRequests;
 
     /// The header refresh on the open workspace. Disabled with no workspace, no session
     /// id, or a refresh the user already asked for still running — the same intervals the button is.
@@ -288,6 +307,14 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// offers it then; the launcher's Sign in is on the other pane and hidden once a workspace
     /// is open.
     public bool SignInVisible => _signInVisible?.Value ?? false;
+
+    /// No server to ask, or the window reads signed out: the page takes no query.
+    public bool SearchSignedOut => Search is null || _searchSignedOut;
+
+    /// The page shows the sign-in prompt in place of the list: signed out, or the server answered
+    /// 401 to the page, where the query stays editable and the next edit asks again.
+    public bool SearchShowsSignIn => SearchSignedOut || Search?.ListState == SearchListState.SignInRequired;
+    bool _searchSignedOut;
 
     string? _startMessage;
     // Cleared on every new start attempt and on Connected; set when a start attempt fails.
@@ -385,7 +412,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
             IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null, Action? openLaunchApprovals = null,
             IObservable<bool>? movingToWindowsService = null,
-            Func<string, RemoteSessionViewModel?>? serverWorkspaceFactory = null, IServerSessionsService? sessions = null) {
+            Func<string, RemoteSessionViewModel?>? serverWorkspaceFactory = null,
+            Func<Func<string, PinPresentation, CancellationToken, Task<SearchOpenOutcome>>, SessionSearchViewModel>? searchFactory = null,
+            IServerSessionsService? sessions = null) {
         _service = service;
         _serverFactory = serverWorkspaceFactory;
         Time = time;
@@ -405,6 +434,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         TenantName = ProfileLabelForRail(tenantName);
         CloseWorkspaceCommand = ReactiveCommand.Create(CloseWorkspace);
         NewSessionCommand = ReactiveCommand.Create(NewSession);
+        Search = sessions is null ? null : searchFactory?.Invoke(OpenSearchHitAsync);
+        Search?.Closed.Subscribe(_ => IsSearchOpen = false);
+        if (Search is { } page) page.WhenAnyValue(x => x.ListState).Subscribe(_ => this.RaisePropertyChanged(nameof(SearchShowsSignIn)));
+        OpenSearchCommand = ReactiveCommand.Create(OpenSearch);
+        DismissSearchCommand = ReactiveCommand.Create(CloseSearch);
         var canRefreshWork = Observable.Switch(this.WhenAnyValue(x => x.CurrentWorkspace)
             .Select(CanRefreshOpenWork))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
@@ -540,10 +574,19 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             var signedOut = signInExpired.CombineLatest(daemonSignIn, (app, daemon) => app || daemon.SignedOut)
                 .DistinctUntilChanged();
 
-            _signInVisible = signInExpired
-                .CombineLatest(daemonSignIn, (app, daemon) => (app || daemon is { SignedOut: true, OursToRepair: true }) && offersSignIn)
+            var signInVisible = signInExpired
+                .CombineLatest(daemonSignIn, (app, daemon) => (app || daemon is { SignedOut: true, OursToRepair: true }) && offersSignIn);
+            _signInVisible = signInVisible
                 .ToProperty(this, x => x.SignInVisible, false)
                 .DisposeWith(disposables);
+            // Its own copy: an OAPH notifies before its new value is readable.
+            signInVisible.Subscribe(visible => {
+                var signedBackIn = _searchSignedOut && !visible;
+                _searchSignedOut = visible;
+                this.RaisePropertyChanged(nameof(SearchSignedOut));
+                this.RaisePropertyChanged(nameof(SearchShowsSignIn));
+                if (signedBackIn) Search?.RetrySignIn();
+            }).DisposeWith(disposables);
 
             // The banner owns update progress; the rail keeps identity while services restart.
             var localUpgrade = Home?.LocalStack is { } stack
@@ -712,7 +755,111 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// so; without an origin the id is resolved, and a same-id pair on both lanes resolves local.
     /// Refused once shutdown has latched — a new workspace is a new attach, and quiesce is already
     /// running. True when the session is the open workspace afterwards.
-    public bool OpenSession(string agentId, AgentOrigin? origin = null) => OpenSessionCore(agentId, origin, revealInRail: true);
+    public bool OpenSession(string agentId, AgentOrigin? origin = null) => Navigate(agentId, origin, sessionId: null);
+
+    /// `sessionId` is the session the caller asked for; without one it is read off what opened.
+    bool Navigate(string agentId, AgentOrigin? origin, string? sessionId) {
+        if (!OpenSessionCore(agentId, origin, revealInRail: true)) return false;
+        CloseSearch();
+        ReleasePinUnless(sessionId ?? SessionOfOpen());
+        return true;
+    }
+
+    // Closes even over the launcher: the swap bumps the navigation generation, which keeps an
+    // in-flight launch from opening its workspace over the next draft.
+    void NewSession() {
+        var onLauncher = CurrentWorkspace is null && !IsSearchOpen;
+        CloseSearch();
+        CloseWorkspace();
+        if (onLauncher) _launcherNudges.OnNext(Unit.Default);
+    }
+
+    void OpenSearch() {
+        if (IsSearchOpen) {
+            _searchFocusRequests.OnNext(Unit.Default);
+            return;
+        }
+        Search?.Reset();
+        IsSearchOpen = true;
+        _navigation.Bump();
+    }
+
+    /// A closed page keeps no query, so a reconnect or an access change has nothing to ask again.
+    void CloseSearch() {
+        IsSearchOpen = false;
+        Search?.Reset();
+        if (CurrentWorkspace is null) ReleasePinUnless(null);
+    }
+
+    /// Unpin also supersedes a pin still reading, so it runs when only the request is outstanding.
+    void ReleasePinUnless(string? sessionId) {
+        if (_sessions is null || (_sessions.PinnedSessionId ?? _searchPin) is not { } pinned) return;
+        if (sessionId is not null && SessionIds.SameSession(pinned, sessionId)) return;
+        _searchPin = null;
+        _sessions.Unpin();
+    }
+
+    string? SessionOfOpen() {
+        var open = CurrentWorkspace;
+        if (KeyOf(open) is { } key && _directory?.Rows.Lookup(key) is { HasValue: true, Value.SessionId: { Length: > 0 } listed })
+            return listed;
+        return open switch {
+            RemoteSessionViewModel { IsSessionOnly: true } session => session.AgentId,
+            RemoteSessionViewModel remote => SessionOf(remote),
+            WorkspaceViewModel { SessionId: { Length: > 0 } id } => id,
+            _ => null,
+        };
+    }
+
+    /// Opens what a rail click on the hit's session would, and pins the session. A listed session
+    /// opens at once and pins beside it; one the directory has no row for is pinned first, and opens
+    /// only if the page is still up and the intent still current when the pin lands.
+    public async Task<SearchOpenOutcome> OpenSearchHitAsync(string sessionId, PinPresentation presentation, CancellationToken ct) {
+        if (_directory is null) return SearchOpenOutcome.Failed;
+        if (_directory.RowForSession(sessionId) is { } listed) {
+            // Set after Navigate, whose release of an earlier pin would otherwise clear it.
+            if (!Navigate(listed.Id, listed.Origin, sessionId)) return SearchOpenOutcome.Failed;
+            _searchPin = sessionId;
+            _searchPinPresentation = presentation;
+            // A failed pin only costs the session its exemption from the rail's filters later.
+            _ = _sessions?.PinAsync(sessionId, presentation, CancellationToken.None);
+            return SearchOpenOutcome.Opened;
+        }
+        if (_sessions is null) return SearchOpenOutcome.Failed;
+        // A pin that lands replaces the selected session's; abandoning the open puts that one back.
+        (string Id, PinPresentation Presentation)? restore =
+            _sessions.PinnedSessionId is { } held ? (held, _searchPinPresentation) : null;
+        _searchPin = sessionId;
+        var pinned = await _sessions.PinAsync(sessionId, presentation, ct);
+        switch (pinned) {
+            case PinOutcome.Unauthorized: return SearchOpenOutcome.SignInRequired;
+            case PinOutcome.Unavailable: return SearchOpenOutcome.Unavailable;
+            case PinOutcome.Failed: return SearchOpenOutcome.Failed;
+            case PinOutcome.Superseded: return SearchOpenOutcome.Superseded;
+        }
+        _searchPinPresentation = presentation;
+        var current = !ct.IsCancellationRequested && IsSearchOpen;
+        if (!current || _directory.RowForSession(sessionId) is not { } found) {
+            ReleaseUnopenedPin(sessionId, restore);
+            return current ? SearchOpenOutcome.Failed : SearchOpenOutcome.Superseded;
+        }
+        if (Navigate(found.Id, found.Origin, sessionId)) return SearchOpenOutcome.Opened;
+        ReleaseUnopenedPin(sessionId, restore);
+        return SearchOpenOutcome.Failed;
+    }
+
+    /// A pin that landed for a session nothing opened would keep a rail row for it.
+    void ReleaseUnopenedPin(string sessionId, (string Id, PinPresentation Presentation)? restore) {
+        if (_sessions?.PinnedSessionId is not { } pinned || !SessionIds.SameSession(pinned, sessionId)) return;
+        var open = SessionOfOpen();
+        if (open is not null && SessionIds.SameSession(pinned, open)) return;
+        _searchPin = null;
+        _sessions.Unpin();
+        if (restore is not { } previous || open is null || !SessionIds.SameSession(previous.Id, open)) return;
+        _searchPin = previous.Id;
+        _searchPinPresentation = previous.Presentation;
+        _ = _sessions.PinAsync(previous.Id, previous.Presentation, CancellationToken.None);
+    }
 
     bool OpenSessionCore(string agentId, AgentOrigin? origin, bool revealInRail) {
         if (_navigation.ShutdownLatched) return false;
@@ -765,8 +912,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// The launcher words a launch failure, and an open workspace covers the launcher. Only a
     /// workspace the daemon never filled is closed: a failure report can trail the agent it names.
     public void CloseFailedLaunch(string agentId) {
-        if (CurrentWorkspace is WorkspaceViewModel { HasAgent: false } open
-            && AgentIds.Normalize(open.AgentId) == AgentIds.Normalize(agentId))
+        if (CurrentWorkspace is WorkspaceViewModel { HasAgent: false } or RemoteSessionViewModel { IsPlaceholder: true }
+            && AgentIds.Normalize(CurrentWorkspace.AgentId) == AgentIds.Normalize(agentId))
             CloseWorkspace();
     }
 
@@ -776,14 +923,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public void CloseWorkspace() {
         if (_shutdownLatched || _navigation.ShutdownLatched) return;
         SwapTo(null);
-    }
-
-    // Closes even over the launcher: the swap bumps the navigation generation, which keeps an
-    // in-flight launch from opening its workspace over the next draft.
-    void NewSession() {
-        var onLauncher = CurrentWorkspace is null;
-        CloseWorkspace();
-        if (onLauncher) _launcherNudges.OnNext(Unit.Default);
+        // Nothing is selected, so nothing keeps a pin; an open page may still be pinning its hit.
+        if (!IsSearchOpen) ReleasePinUnless(null);
     }
 
     static IObservable<bool> CanRefreshOpenWork(ISessionWorkspace? workspace) =>
@@ -818,12 +959,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     void SwapTo(ISessionWorkspace? next) {
         var outgoing = CurrentWorkspace;
         CurrentWorkspace = next;
-        if (Rail is not null) Rail.SelectedSessionKey = next switch {
-            RemoteSessionViewModel { IsSessionOnly: true } session => $"server:{session.AgentId}",
-            RemoteSessionViewModel remote => $"remote:{remote.AgentId}",
-            null => null,
-            _ => $"local:{next.AgentId}",
-        };
+        if (Rail is not null) Rail.SelectedSessionKey = KeyOf(next);
         _navigation.Bump();
         if (outgoing is not null) _trackTeardown(outgoing.TeardownAsync);
         _handoff.Disposable = Disposable.Empty;
@@ -831,6 +967,13 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         // caused overwritten by the arming that is still returning.
         WatchOpen(next);
     }
+
+    static string? KeyOf(ISessionWorkspace? workspace) => workspace switch {
+        RemoteSessionViewModel { IsSessionOnly: true } session => $"server:{session.AgentId}",
+        RemoteSessionViewModel remote => $"remote:{remote.AgentId}",
+        null => null,
+        _ => $"local:{workspace.AgentId}",
+    };
 
     /// An open workspace follows its row across lanes, both directions, carrying the tab in use.
     /// Once its session ends it hands off to the server's row for that session, which opens the

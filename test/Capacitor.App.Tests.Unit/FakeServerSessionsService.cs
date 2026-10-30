@@ -18,6 +18,13 @@ sealed class FakeServerSessionsService : IServerSessionsService, IDisposable {
     public readonly BehaviorSubject<string?> ViewerUserIdSubject = new(null);
     public readonly BehaviorSubject<bool> CurrentSubject = new(true);
     readonly BehaviorSubject<RailScope> _scope = new(RailScope.Mine);
+    public readonly BehaviorSubject<RepoSessionDto?> PinnedSubject = new(null);
+    public readonly BehaviorSubject<string?> PinnedIdSubject = new(null);
+    public readonly BehaviorSubject<SessionIdentity> IdentitySubject = new(new(0, 1, true));
+    /// What PinAsync answers; a Pinned answer also sets the pinned id.
+    public PinOutcome PinResult = PinOutcome.Pinned;
+    public readonly List<(string SessionId, PinPresentation Presentation)> PinCalls = [];
+    public int UnpinCalls;
     public int ShowMoreCalls;
     public int ReconcileCalls;
 
@@ -27,12 +34,37 @@ sealed class FakeServerSessionsService : IServerSessionsService, IDisposable {
     public string? Kept;
     public readonly Subject<string> DroppedSubject = new();
     public IObservable<string> Dropped => DroppedSubject;
-    /// Derived from the three caches, so a test edits one cache and the directory sees the whole state.
+    /// Derived from the three caches and the pin subjects, so a test edits one and the directory sees the whole state.
     public IObservable<ServerSessionsSnapshot> Snapshots => Observable.CombineLatest(
         LiveCache.Connect(suppressEmptyChangeSets: false).ToCollection().StartWith((IReadOnlyCollection<RepoSessionDto>)[]),
         MineLiveCache.Connect(suppressEmptyChangeSets: false).ToCollection().StartWith((IReadOnlyCollection<RepoSessionDto>)[]),
         EndedCache.Connect(suppressEmptyChangeSets: false).ToCollection().StartWith((IReadOnlyCollection<RepoSessionDto>)[]),
-        (live, mine, ended) => new ServerSessionsSnapshot([.. live], [.. mine], [.. ended]));
+        PinnedSubject, PinnedIdSubject,
+        (live, mine, ended, pinned, pinnedId) => new ServerSessionsSnapshot([.. live], [.. mine], [.. ended], pinned, pinnedId));
+    public IObservable<SessionIdentity> Identity => IdentitySubject;
+    public string? PinnedSessionId => PinnedIdSubject.Value;
+
+    /// When set, PinAsync answers once the test completes it rather than with PinResult.
+    public TaskCompletionSource<PinOutcome>? PinGate;
+
+    int _pinRequest;
+
+    /// A later PinAsync or an Unpin supersedes one still waiting on its gate, as the real service does.
+    public async Task<PinOutcome> PinAsync(string sessionId, PinPresentation presentation, CancellationToken ct) {
+        PinCalls.Add((sessionId, presentation));
+        var request = ++_pinRequest;
+        var result = PinGate is { } gate ? await gate.Task : PinResult;
+        if (request != _pinRequest) return PinOutcome.Superseded;
+        if (result == PinOutcome.Pinned) PinnedIdSubject.OnNext(sessionId);
+        return result;
+    }
+
+    public void Unpin() {
+        _pinRequest++;
+        UnpinCalls++;
+        PinnedSubject.OnNext(null);
+        PinnedIdSubject.OnNext(null);
+    }
     public void Keep(string? sessionId) => Kept = sessionId;
     public readonly List<(string SessionId, string Title)> Renames = [];
     public void ApplyRename(string sessionId, string title) => Renames.Add((sessionId, title));

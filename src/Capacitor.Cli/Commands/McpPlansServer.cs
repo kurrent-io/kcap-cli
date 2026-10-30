@@ -33,8 +33,7 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
         // Resolved once, from the running harness rather than the inherited environment (see
         // HarnessRequesterContext): a relative document path is resolved against the directory the
         // harness is working in, and the repo root is what the path is keyed against.
-        var requester = HarnessRequesterContext.Resolve();
-        var cwd       = requester.ProjectDir ?? workdir.Path;
+        var cwd       = HarnessRequesterContext.ProjectDir() ?? workdir.Path;
         var repoRoot  = GitRepository.FindRoot(cwd);
 
         var tools = BuildToolsList();

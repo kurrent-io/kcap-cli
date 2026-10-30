@@ -352,8 +352,9 @@ internal partial class AgentOrchestrator {
         }
     }
 
+    /// <param name="permissionMode">A local launch's mode, which has no <paramref name="cmd"/> to carry it.</param>
     internal ResumeLedgerEntry BuildLedgerEntry(
-            AgentInstance agent, LaunchAgentCommand? cmd, string origin, LaunchConsentOutcome? consent) {
+            AgentInstance agent, LaunchAgentCommand? cmd, string origin, LaunchConsentOutcome? consent, string? permissionMode = null) {
         var prior = TryReadLedger(agent.Id);
         var launch = new ResumeLaunchDescriptor(
             Prompt:           agent.Prompt,
@@ -381,7 +382,7 @@ internal partial class AgentOrchestrator {
             WorktreeBranch:       agent.Worktree.Branch,
             WorktreeIsStandalone: agent.Worktree.IsStandalone,
             WorktreeSourceRepo:   agent.Worktree.SourceRepo,
-            PermissionMode:         cmd?.PermissionMode ?? prior?.Launch.PermissionMode,
+            PermissionMode:         cmd?.PermissionMode ?? permissionMode ?? prior?.Launch.PermissionMode,
             InactivityBoundSeconds: agent.InactivityBoundSeconds,
             AccountDirectory:       agent.Account?.Directory,
             AccountId:              agent.Account?.AccountId,
@@ -497,13 +498,14 @@ internal partial class AgentOrchestrator {
             ? Guid.NewGuid().ToString()
             : null;
 
-    internal void WriteLedger(AgentInstance agent, LaunchAgentCommand? cmd, string origin, LaunchConsentOutcome? consent) {
+    internal void WriteLedger(
+            AgentInstance agent, LaunchAgentCommand? cmd, string origin, LaunchConsentOutcome? consent, string? permissionMode = null) {
         if (ResumeLedger is null || !IsLedgered(agent)) return;
 
         lock (_ledgerLock) {
             if (agent.IsCleanupStarted) return;
             if (!IsInteractive(agent)) _participantEntries[agent.Id] = 0;
-            TryWriteLedger(agent.Id, () => BuildLedgerEntry(agent, cmd, origin, consent));
+            TryWriteLedger(agent.Id, () => BuildLedgerEntry(agent, cmd, origin, consent, permissionMode));
         }
     }
 

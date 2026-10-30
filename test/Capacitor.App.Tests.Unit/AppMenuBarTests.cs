@@ -83,7 +83,7 @@ public class AppMenuBarTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Window_menu_on_the_main_window_offers_Refresh_beside_the_other_shortcuts() {
+    public async Task Window_menu_on_the_main_window_offers_Refresh_and_Search_beside_the_other_shortcuts() {
         var (layout, gesture, enabled) = await AvaloniaSession.DispatchAsync(() => {
             var vm = new MainWindowViewModel(
                 new FakeDaemonClientService(), CancellationToken.None, TestActivity.New(), TimeProvider.System);
@@ -92,14 +92,14 @@ public class AppMenuBarTests {
             return (Layout(menu), refresh.Gesture, refresh.IsEnabled);
         });
 
-        await Assert.That(layout).IsEqualTo("Minimize|Zoom|Toggle Full Screen|Refresh|-|kcap|Launch approvals…|-|Bring All to Front");
+        await Assert.That(layout).IsEqualTo("Minimize|Zoom|Toggle Full Screen|Refresh|Search Sessions|-|kcap|Launch approvals…|-|Bring All to Front");
         await Assert.That(gesture).IsEqualTo(RefreshShortcut.Primary);
         await Assert.That(enabled).IsFalse();
     }
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Window_menu_on_any_other_window_has_no_Refresh() {
+    public async Task Window_menu_on_any_other_window_has_no_Refresh_or_Search() {
         var layout = await AvaloniaSession.DispatchAsync(() =>
             Layout(Submenu(NewBar().Build(new SettingsWindow()), "Window")));
 

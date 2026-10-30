@@ -242,7 +242,7 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
         Meta = MetaFor(row);
     }
 
-    static string? Initials(string? name) {
+    internal static string? Initials(string? name) {
         if (string.IsNullOrWhiteSpace(name)) return null;
         var words = name.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         return string.Concat(words.Take(2).Select(word => char.ToUpperInvariant(word[0])));
