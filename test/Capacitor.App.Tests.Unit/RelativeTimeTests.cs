@@ -33,7 +33,27 @@ public class RelativeTimeTests {
     [Arguments(364, "12mo ago")]
     [Arguments(365, "1y ago")]
     public async Task Ago_stays_relative_at_every_age(int daysAgo, string expected) {
-        await Assert.That(RelativeTime.Ago(Now.AddDays(-daysAgo), Now)).IsEqualTo(expected);
+        await Assert.That(RelativeTime.Ago(Now.AddDays(-daysAgo), Now, TimeZoneInfo.Utc)).IsEqualTo(expected);
+    }
+
+    /// 2d 16h after an evening stamp is three dates later, and the row agrees with the day header.
+    [Test]
+    public async Task Ago_counts_calendar_days_rather_than_whole_24_hour_spans() {
+        var mondayEvening = new DateTimeOffset(2026, 9, 2, 20, 0, 0, TimeSpan.Zero);
+        await Assert.That(RelativeTime.Ago(mondayEvening, Now, TimeZoneInfo.Utc)).IsEqualTo("3d ago");
+    }
+
+    /// The same two instants fall two dates apart ten hours east of UTC: the day is the viewer's.
+    [Test]
+    public async Task Ago_counts_days_in_the_viewers_zone() {
+        var east = TimeZoneInfo.CreateCustomTimeZone("utc+10", TimeSpan.FromHours(10), "utc+10", "utc+10");
+        var mondayEvening = new DateTimeOffset(2026, 9, 2, 20, 0, 0, TimeSpan.Zero);
+        await Assert.That(RelativeTime.Ago(mondayEvening, Now, east)).IsEqualTo("2d ago");
+    }
+
+    [Test]
+    public async Task Ago_under_a_day_reads_in_hours_even_across_midnight() {
+        await Assert.That(RelativeTime.Ago(Now.AddHours(-13), Now, TimeZoneInfo.Utc)).IsEqualTo("13h ago");
     }
 
     [Test]

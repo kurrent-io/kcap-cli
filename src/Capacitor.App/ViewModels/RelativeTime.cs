@@ -14,13 +14,18 @@ public static class RelativeTime {
         return at.ToString(at.Year == now.Year ? "MMM d" : "MMM d, yyyy", CultureInfo.InvariantCulture);
     }
 
-    /// Relative at every age, for a list read by comparing rows: as Format for a week, then weeks
-    /// under two months, months under a year, then years.
-    public static string Ago(DateTimeOffset at, DateTimeOffset now) {
-        var age = now - at;
-        if (age < TimeSpan.FromDays(7))   return Format(at, now);
-        if (age < TimeSpan.FromDays(60))  return $"{(int)(age.TotalDays / 7)}w ago";
-        if (age < TimeSpan.FromDays(365)) return $"{(int)(age.TotalDays / 30)}mo ago";
-        return $"{(int)(age.TotalDays / 365)}y ago";
+    /// Relative at every age, for a list read by comparing rows: as Format under a day, then days,
+    /// weeks under two months, months under a year, then years. From a day on it counts calendar
+    /// days in the viewer's zone, as the rail's day groups do: whole 24-hour spans would call Monday
+    /// evening "2d ago" on Thursday morning, under a header that names Monday.
+    public static string Ago(DateTimeOffset at, DateTimeOffset now, TimeZoneInfo zone) {
+        if (now - at < TimeSpan.FromDays(1)) return Format(at, now);
+        var days = Math.Max(1, LocalDay(now, zone).DayNumber - LocalDay(at, zone).DayNumber);
+        if (days < 7)   return $"{days}d ago";
+        if (days < 60)  return $"{days / 7}w ago";
+        if (days < 365) return $"{days / 30}mo ago";
+        return $"{days / 365}y ago";
     }
+
+    static DateOnly LocalDay(DateTimeOffset at, TimeZoneInfo zone) => DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(at, zone).DateTime);
 }

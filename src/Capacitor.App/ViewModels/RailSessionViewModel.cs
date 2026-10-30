@@ -227,7 +227,7 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
         var created = AsUtc(row.CreatedAt);
         if (row.IsEndedSession && row.EndedAt is { } endedRaw) {
             var ended = AsUtc(endedRaw);
-            return $"{RelativeTime.Ago(new DateTimeOffset(ended), now)} · {UptimeFormat.Format(ended - created)}";
+            return $"{RelativeTime.Ago(new DateTimeOffset(ended), now, _time.LocalTimeZone)} · {UptimeFormat.Format(ended - created)}";
         }
         var kind = row.Kind is "agent" or "session" ? null : row.Kind;
         var borrowed = row.WorkLocation == WorkLocationText.Borrowed ? "borrowed" : null;
