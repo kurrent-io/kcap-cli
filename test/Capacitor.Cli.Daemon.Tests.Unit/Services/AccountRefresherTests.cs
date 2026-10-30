@@ -108,6 +108,12 @@ public class AccountRefresherTests {
     static Task Until(AccountRefresher refresher, Func<bool> condition) =>
         refresher.WaitForAsync(condition, CancellationToken.None).WaitAsync(HangGuard);
 
+    /// <summary>The probe count moves outside the refresher's progress signal, so it is polled.</summary>
+    static async Task ProbeCount(CountingProbe probe, int total) {
+        using var guard = new CancellationTokenSource(HangGuard);
+        while (probe.Total < total) await Task.Delay(1, guard.Token);
+    }
+
     /// <summary>Fake time fires a due deferral inside <c>Advance</c>, so once this returns nothing more is coming
     /// until time moves again.</summary>
     static Task Idle(AccountRefresher refresher) => Until(refresher, () => refresher.IsIdle);
@@ -508,6 +514,8 @@ public class AccountRefresherTests {
             _time.Advance(2 * Minute);
             // Only the check that stood down can drain while the other's probe is gated.
             await Task.WhenAny(Idle(refresherA), Idle(refresherB)).Unwrap();
+            // The winner stamps the registry before its probe counts, so idle alone can come first.
+            await ProbeCount(probe, 3);
             await Assert.That(probe.Total).IsEqualTo(3);
 
             probe.Gate.SetResult();
