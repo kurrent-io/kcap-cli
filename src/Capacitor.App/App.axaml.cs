@@ -1222,7 +1222,6 @@ public partial class App : Application {
             return [.. remembered, .. known, .. agents];
         }
         MainWindowViewModel? OpenWindow() => _coordinator?.Window?.DataContext as MainWindowViewModel;
-        const string ServerKeyPrefix = "server:";
         HandoffComposerViewModel BuildHandoff(AgentRow row) => new(
             HandoffComposerViewModel.SourceOf(row), service, launch, sessions, ops, checkouts, HandoffCandidatesAsync,
             handoffDrafts, serverLane.Status, uploader, directory,
@@ -1230,7 +1229,9 @@ public partial class App : Application {
             openSessionIfCurrent: (agentId, origin, generation) => OpenWindow()?.OpenSessionIfCurrent(agentId, origin, generation),
             closeFailedLaunch: agentId => OpenWindow()?.CloseFailedLaunch(agentId),
             // Unconditional: the failed launch's close has just moved the navigation generation on.
-            reopenSource: key => OpenWindow()?.OpenSession(key.StartsWith(ServerKeyPrefix, StringComparison.Ordinal) ? key[ServerKeyPrefix.Length..] : key, AgentOrigin.Server),
+            reopenSource: (sessionId, presentation) =>
+                OpenWindow() is { } window ? window.ReopenServerSessionAsync(sessionId, presentation) : Task.FromResult(false),
+            notifier: notifier,
             modelCatalog: modelCatalog.Catalog, shutdown: _shutdown.Token);
         // A session the server lists with no daemon behind it: read-only, so no terminal surface.
         RemoteSessionViewModel? BuildServer(string sessionId) =>

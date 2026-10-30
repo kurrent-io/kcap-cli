@@ -16,7 +16,7 @@ public sealed class HandoffDrafts : IDisposable {
     static readonly TimeSpan PendingTtl = TimeSpan.FromMinutes(10);
     static readonly TimeSpan RecentFailureTtl = TimeSpan.FromSeconds(30);
 
-    sealed record Held(string SourceSessionId, HandoffDraft Draft, DateTimeOffset At, Action? OnFailed);
+    sealed record Held(string SourceSessionId, HandoffDraft Draft, DateTimeOffset At, Action<string>? OnFailed);
 
     readonly Lock _lock = new();
     readonly Dictionary<string, Held> _pending = new(StringComparer.Ordinal);
@@ -47,8 +47,9 @@ public sealed class HandoffDrafts : IDisposable {
             .DisposeWith(_subscriptions);
     }
 
-    /// onFailed runs on the UI thread when a failure for the agent arrives after this hold.
-    public HandoffHold Hold(string sourceSessionId, string agentId, HandoffDraft draft, Action? onFailed = null) {
+    /// onFailed runs on the UI thread, with the worded failure, when a failure for the agent arrives
+    /// after this hold.
+    public HandoffHold Hold(string sourceSessionId, string agentId, HandoffDraft draft, Action<string>? onFailed = null) {
         var id = Key(agentId);
         if (RowExists(id)) return HandoffHold.AlreadyStarted;
         lock (_lock) {
@@ -91,10 +92,11 @@ public sealed class HandoffDrafts : IDisposable {
         lock (_lock) {
             var now = _time.GetUtcNow();
             if (_pending.Remove(id, out var held) && now - held.At <= PendingTtl) {
-                _failed[held.SourceSessionId] = held.Draft with { Error = HandoffFailureText.For(failure.Reason) };
+                var worded = HandoffFailureText.For(failure.Reason);
+                _failed[held.SourceSessionId] = held.Draft with { Error = worded };
                 return () => {
                     _directory?.RemovePlaceholder(id);
-                    held.OnFailed?.Invoke();
+                    held.OnFailed?.Invoke(worded);
                     _failedFor.OnNext(held.SourceSessionId);
                 };
             }

@@ -43,8 +43,11 @@ public class HandoffComposerViewModelTests {
         public List<(string Id, AgentOrigin Origin, int Generation)> Opened { get; } = [];
         public List<string> Closed { get; } = [];
         public List<string> Reopened { get; } = [];
+        public RecordingNotifier Notifier { get; } = new();
+        /// What ReopenServerSessionAsync answers: false is a pin that failed or a navigation while it read.
+        public bool ReopenOpens = true;
         public RepoSessionDto Session = new() {
-            SessionId = SessionId, Status = "ended", AccessLevel = "full", Vendor = "codex", Cwd = Checkout,
+            SessionId = SessionId, Status = "ended", AccessLevel = "full", Vendor = "codex", Cwd = Checkout, Title = "Fix the widgets",
             Branch = "feature/x", StartedAt = DateTimeOffset.UnixEpoch, LastActivityAt = DateTimeOffset.UnixEpoch,
         };
         readonly List<HandoffComposerViewModel> _built = [];
@@ -78,10 +81,12 @@ public class HandoffComposerViewModelTests {
             Generation++;
         }
 
-        void Reopen(string key) {
-            Reopened.Add(key);
-            Current = key;
+        Task<bool> Reopen(string sessionId, PinPresentation presentation) {
+            Reopened.Add(sessionId);
+            if (!ReopenOpens) return Task.FromResult(false);
+            Current = sessionId;
             Generation++;
+            return Task.FromResult(true);
         }
 
         public void Navigate() {
@@ -96,7 +101,7 @@ public class HandoffComposerViewModelTests {
                 _ => Task.FromResult<IReadOnlyList<string>>([]),
                 Drafts, Lane, Uploader, Directory,
                 () => Generation, Open,
-                Close, Reopen);
+                Close, Reopen, Notifier);
             _built.Add(vm);
             return vm;
         }
@@ -397,7 +402,7 @@ public class HandoffComposerViewModelTests {
         rig.Failures.OnNext(new LaunchFailure(LaunchedId, "handoff_start_changed"));
 
         await Assert.That(rig.Closed).IsEquivalentTo([LaunchedId]);
-        await Assert.That(rig.Reopened).IsEquivalentTo([$"server:{SessionId}"]);
+        await Assert.That(rig.Reopened).IsEquivalentTo([SessionId]);
         await Assert.That(rig.Directory.RemovedPlaceholders).IsEquivalentTo([LaunchedId]);
 
         var reopened = await rig.ReadyAsync();
@@ -408,6 +413,69 @@ public class HandoffComposerViewModelTests {
         await Assert.That(reopened.Choices.SelectedEffort).IsEqualTo("high");
         await Assert.That(reopened.Error).IsEqualTo(StartChanged);
         await Assert.That(rig.Ops.Probes.Count).IsEqualTo(2);
+    });
+
+    const string StartChangedNotice =
+        "The hand-off of Fix the widgets didn't start: The branch changed after it was checked, so nothing was started. "
+      + "Check the new starting point and start again. Your message is back in that session.";
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_reopened_source_posts_no_notice() => Run(async rig => {
+        var vm = await rig.ReadyAsync();
+        vm.Text = "carry on";
+        await vm.StartCommand.Execute();
+        vm.Dispose();
+
+        rig.Failures.OnNext(new LaunchFailure(LaunchedId, "handoff_start_changed"));
+
+        await Assert.That(rig.Reopened).IsEquivalentTo([SessionId]);
+        await Assert.That(rig.Notifier.Notified).IsEmpty();
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_source_that_cannot_be_reopened_posts_a_notice() => Run(async rig => {
+        rig.ReopenOpens = false;
+        var vm = await rig.ReadyAsync();
+        vm.Text = "carry on";
+        await vm.StartCommand.Execute();
+        vm.Dispose();
+
+        rig.Failures.OnNext(new LaunchFailure(LaunchedId, "handoff_start_changed"));
+
+        await Assert.That(rig.Reopened).IsEquivalentTo([SessionId]);
+        await Assert.That(rig.Notifier.Notified).IsEquivalentTo([StartChangedNotice]);
+        await Assert.That((await rig.ReadyAsync()).Text).IsEqualTo("carry on");
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_delayed_failure_after_navigating_away_posts_a_notice() => Run(async rig => {
+        var vm = await rig.ReadyAsync();
+        vm.Text = "carry on";
+        await vm.StartCommand.Execute();
+        vm.Dispose();
+        rig.Navigate();
+
+        rig.Failures.OnNext(new LaunchFailure(LaunchedId, "handoff_start_changed: feature/x moved"));
+
+        await Assert.That(rig.Notifier.Notified).IsEquivalentTo([StartChangedNotice]);
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task An_untitled_source_is_named_by_its_id_prefix() => Run(async rig => {
+        rig.Session = rig.Session with { SessionId = "0123456789abcdef", Title = null };
+        rig.Sessions.HandoffContext = rig.Sessions.HandoffContext! with { SessionId = "0123456789abcdef" };
+        var vm = await rig.ReadyAsync();
+        await vm.StartCommand.Execute();
+        vm.Dispose();
+        rig.Navigate();
+
+        rig.Failures.OnNext(new LaunchFailure(LaunchedId, "handoff_source_unavailable"));
+
+        await Assert.That(rig.Notifier.Notified.Single()).StartsWith("The hand-off of 01234567 didn't start: You can no longer hand off this session.");
     });
 
     [Test]

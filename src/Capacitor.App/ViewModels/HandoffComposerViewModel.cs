@@ -52,7 +52,8 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
     readonly Func<int> _navigationGeneration;
     readonly Action<string, AgentOrigin, int> _openSessionIfCurrent;
     readonly Action<string> _closeFailedLaunch;
-    readonly Action<string> _reopenSource;
+    readonly Func<string, PinPresentation, Task<bool>> _reopenSource;
+    readonly IAppNotifier _notifier;
     readonly CancellationToken _shutdown;
     readonly HandoffChoicesViewModel _choices;
     readonly CompositeDisposable _disposables = new();
@@ -73,14 +74,15 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
     /// <param name="navigationGeneration">Read before the launch call; an open under an older
     /// generation is refused (MainWindowViewModel.OpenSessionIfCurrent).</param>
     /// <param name="closeFailedLaunch">MainWindowViewModel.CloseFailedLaunch.</param>
-    /// <param name="reopenSource">Opens a row by key; given <c>server:{sessionId}</c> after a
-    /// delayed failure, whose composer then takes the draft back.</param>
+    /// <param name="reopenSource">MainWindowViewModel.ReopenServerSessionAsync, after a delayed
+    /// failure; the reopened session's composer takes the draft back.</param>
+    /// <param name="notifier">Says where the draft went when the source was not reopened.</param>
     public HandoffComposerViewModel(
             RepoSessionDto session, IDaemonClientService daemon, ILaunchClient launch, IServerSessionsService sessions,
             ILocalControlOps ops, LocalCheckoutFinder finder, Func<CancellationToken, Task<IReadOnlyList<string>>> candidateRoots,
             HandoffDrafts drafts, IObservable<ServerLaneStatus> laneStatus, IAttachmentUploader uploader, IAgentDirectory? directory,
             Func<int> navigationGeneration, Action<string, AgentOrigin, int> openSessionIfCurrent,
-            Action<string> closeFailedLaunch, Action<string> reopenSource,
+            Action<string> closeFailedLaunch, Func<string, PinPresentation, Task<bool>> reopenSource, IAppNotifier notifier,
             IObservable<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>? modelCatalog = null,
             CancellationToken shutdown = default) {
         _session = session;
@@ -97,6 +99,7 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
         _openSessionIfCurrent = openSessionIfCurrent;
         _closeFailedLaunch = closeFailedLaunch;
         _reopenSource = reopenSource;
+        _notifier = notifier;
         _shutdown = shutdown;
         _choices = new HandoffChoicesViewModel(daemon, session.Vendor, modelCatalog).DisposeWith(_disposables);
 
@@ -392,19 +395,24 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
                 return;
             }
 
-            var sourceKey = $"server:{_session.SessionId}";
+            var sourceId = _session.SessionId;
+            var title = string.IsNullOrWhiteSpace(_session.Title) ? ShortId(sourceId) : _session.Title.Trim();
+            var presentation = new PinPresentation(null, _session.Owner?.DisplayName, _session.Owner?.AvatarUrl);
             var closeFailedLaunch = _closeFailedLaunch;
             var reopenSource = _reopenSource;
+            var notifier = _notifier;
             var navigationGeneration = _navigationGeneration;
             // The generation the placeholder's open left; null when the open was refused.
             int? openedUnder = null;
-            var hold = _drafts.Hold(_session.SessionId, agentId, draft, () => {
+            var hold = _drafts.Hold(sourceId, agentId, draft, reason => {
                 // Read before the close, which is itself a navigation. Only a user still on the
-                // placeholder is taken back; anyone else finds the draft on the source's next open.
+                // placeholder is taken back; anyone else is told where the draft went.
                 var stillThere = openedUnder is { } opened && navigationGeneration() == opened;
                 closeFailedLaunch(agentId);
+                var notice = NotStartedNotice(title, reason);
                 // A close that left the generation alone closed nothing: the workspace holds another session.
-                if (stillThere && navigationGeneration() != openedUnder) reopenSource(sourceKey);
+                if (stillThere && navigationGeneration() != openedUnder) _ = ReopenOrNotifyAsync(reopenSource, sourceId, presentation, notifier, notice);
+                else notifier.Notify(notice);
             });
             if (hold == HandoffHold.AlreadyFailed) {
                 if (_disposed) return;
@@ -432,6 +440,24 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
         }
     }
 
+    public static string NotStartedNotice(string title, string reason) =>
+        $"The hand-off of {title} didn't start: {reason.TrimEnd('.')}. Your message is back in that session.";
+
+    static string ShortId(string sessionId) => sessionId.Length > 8 ? sessionId[..8] : sessionId;
+
+    static async Task ReopenOrNotifyAsync(
+            Func<string, PinPresentation, Task<bool>> reopen, string sessionId, PinPresentation presentation,
+            IAppNotifier notifier, string notice) {
+        bool opened;
+        try {
+            opened = await reopen(sessionId, presentation);
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"kcap: hand-off reopen: {ex.Message}");
+            opened = false;
+        }
+        if (!opened) notifier.Notify(notice);
+    }
+
     void TakeBackFailedDraft() {
         if (_disposed || IsLaunching || _drafts.TakeFailed(_session.SessionId) is not { } failed) return;
         Apply(failed);
@@ -451,6 +477,7 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
     public static RepoSessionDto SourceOf(AgentRow row) => new() {
         SessionId = row.SessionId ?? row.Id, Status = row.IsEndedSession ? "ended" : "active",
         AccessLevel = row.AccessLevel ?? "", Vendor = row.Vendor, Title = row.Title, Cwd = row.RepoPath, Branch = row.Branch,
+        Owner = row.OwnerUserId is { } owner ? new() { UserId = owner, DisplayName = row.OwnerName, AvatarUrl = row.OwnerAvatarUrl } : null,
         StartedAt = row.CreatedAt, LastActivityAt = row.LastActivityAt ?? row.CreatedAt, EndedAt = row.EndedAt,
     };
 

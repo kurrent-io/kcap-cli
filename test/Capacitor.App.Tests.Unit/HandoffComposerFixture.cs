@@ -23,6 +23,7 @@ sealed class HandoffComposerFixture : IDisposable {
     public HandoffDrafts Drafts { get; }
     public List<HandoffComposerViewModel> Built { get; } = [];
     public List<string> Reopened { get; } = [];
+    public RecordingNotifier Notifier { get; } = new();
     readonly Dictionary<string, string> _origins = new() { [Checkout] = "https://github.com/acme/widgets.git" };
 
     public HandoffComposerFixture() {
@@ -37,7 +38,8 @@ sealed class HandoffComposerFixture : IDisposable {
             new LocalCheckoutFinder(new RepoIdentityResolver(root => _origins.GetValueOrDefault(root)), mainRoot: p => p),
             _ => Task.FromResult<IReadOnlyList<string>>([Checkout]),
             Drafts, Lane, Uploader, Directory,
-            () => 0, (_, _, _) => { }, _ => { }, Reopened.Add);
+            () => 0, (_, _, _) => { }, _ => { },
+            (sessionId, _) => { Reopened.Add(sessionId); return Task.FromResult(true); }, Notifier);
         Sessions.HandoffContext = new HandoffContextDto(row.SessionId ?? row.Id, "acme", "widgets", "feature/x", null, ["c1"]);
         Built.Add(vm);
         return vm;
