@@ -148,6 +148,7 @@ internal partial class AgentOrchestrator {
     internal TimeSpan HandoffRenewTimeout    { get; set; } = TimeSpan.FromSeconds(10);
     internal TimeSpan HandoffSuccessorRetry  { get; set; } = TimeSpan.FromSeconds(2);
     internal TimeSpan HandoffSuccessorWindow { get; set; } = TimeSpan.FromSeconds(60);
+    internal TimeSpan HandoffShutdownGrace   { get; set; } = TimeSpan.FromSeconds(5);
 
     /// <summary>Replaces the takeover run, given the run's client, the source, the successor and the run's token.</summary>
     internal Func<HttpClient, string, string, CancellationToken, Task<TakeoverResult>>? RunHandoffTakeoverForTest { get; set; }
@@ -174,10 +175,32 @@ internal partial class AgentOrchestrator {
         if (Interlocked.CompareExchange(ref agent.HandoffTakeoverStarted, 1, 0) != 0) return;
 
         PutHandoffOutcome(successor, HandoffOutcomeDto.Running(source.SessionId, source.Title));
-        _ = HandOffAsync(agent.Id, source, successor, _shutdownCts.Token);
+        TrackHandoffTakeover(HandOffAsync(agent.Id, source, successor, _shutdownCts.Token));
     }
 
-    /// <summary>Never throws: it runs unobserved. A shutdown stores nothing, so the next start reads the
+    readonly Lock          _handoffTakeoversLock = new();
+    readonly HashSet<Task> _handoffTakeovers     = [];
+
+    void TrackHandoffTakeover(Task run) {
+        lock (_handoffTakeoversLock) _handoffTakeovers.Add(run);
+        _ = run.ContinueWith(done => { lock (_handoffTakeoversLock) _handoffTakeovers.Remove(done); }, TaskScheduler.Default);
+    }
+
+    /// <summary>Runs after the shutdown token is cancelled and before the hub goes, so a takeover that already
+    /// finished can store its outcome and every run can end its lease.</summary>
+    async Task DrainHandoffTakeoversAsync() {
+        Task[] runs;
+        lock (_handoffTakeoversLock) runs = [.. _handoffTakeovers];
+        if (runs.Length == 0) return;
+
+        try {
+            await Task.WhenAll(runs).WaitAsync(HandoffShutdownGrace, _time);
+        } catch (TimeoutException) {
+            LogHandoffTakeoversAbandoned(runs.Count(r => !r.IsCompleted));
+        }
+    }
+
+    /// <summary>Never throws. A run that shutdown cut short stores nothing, so the next start reads the
     /// <c>running</c> it leaves as interrupted.</summary>
     async Task HandOffAsync(string agentId, HandoffSourceContext source, string successor, CancellationToken ct) {
         HandoffOutcomeDto outcome;
@@ -217,7 +240,7 @@ internal partial class AgentOrchestrator {
             var result = await (RunHandoffTakeoverForTest?.Invoke(client, sourceWire, successor, run.Token)
                 ?? new SessionTakeover(new HostedSessionLiveness(HostsSession), _time)
                     .RunAsync(client, ServerBase, sourceWire, successor, TakeoverAdmission.EndedOnly, run.Token));
-            ct.ThrowIfCancellationRequested();
+            if (result is TakeoverResult.Interrupted && ct.IsCancellationRequested) throw new OperationCanceledException(ct);
 
             return HandoffOutcomeDto.From(source.SessionId, source.Title, result);
         } finally {
@@ -304,6 +327,9 @@ internal partial class AgentOrchestrator {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Hand-off: agent {AgentId} lost its takeover lease; the takeover stops")]
     partial void LogHandoffLeaseLost(string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Hand-off: shutdown stopped waiting for {Count} takeover(s)")]
+    partial void LogHandoffTakeoversAbandoned(int count);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Hand-off: the outcome for session {Successor} could not be saved")]
     partial void LogHandoffOutcomeNotSaved(Exception ex, string successor);

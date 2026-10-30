@@ -6490,6 +6490,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 LogDisposeStepFailed(ex, "shutdown-cancel");
             }
 
+            try {
+                await DrainHandoffTakeoversAsync();
+            } catch (Exception ex) {
+                LogDisposeStepFailed(ex, "handoff-takeovers");
+            }
+
             // Before the hub is disposed (DaemonRunner disposes it after this method returns):
             // close admission, then end every pump, including one whose read loop is mid-drain.
             try {

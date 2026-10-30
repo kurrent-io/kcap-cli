@@ -430,6 +430,61 @@ public class AgentOrchestratorHandoffTakeoverTests : IDisposable {
         await AssertStillRunningAsync(f);
     }
 
+    /// <summary>The run ends only once shutdown has cancelled it, with <paramref name="result"/>.</summary>
+    static void FinishAfterShutdown(Fixture f, Func<TakeoverResult> result) =>
+        f.Orch.RunHandoffTakeoverForTest = async (_, _, _, ct) => {
+            await Task.Delay(Timeout.Infinite, ct).ContinueWith(_ => { }, TaskScheduler.Default);
+            await Task.Delay(100, CancellationToken.None);
+
+            return result();
+        };
+
+    /// <summary>The last write landed before shutdown was signalled, so the work was carried over.</summary>
+    [Test]
+    public async Task A_takeover_that_finishes_during_shutdown_stores_its_outcome() {
+        ServeSource();
+        await using var f = Build();
+        FinishAfterShutdown(f, () => new TakeoverResult.Completed(new JsonObject(), Unsuccessful: false));
+
+        await f.Orch.HandleLaunchAgentForTest(Launch(f.Repo));
+        await WaitHarness.PollUntilAsync(() => !f.Server.HandoffBegins.IsEmpty);
+        await f.Orch.DisposeAsync();
+
+        await Assert.That((await QueryAsync(f.Orch, Successor))!.State).IsEqualTo("done");
+        await Assert.That(f.Server.HandoffEnds).IsEquivalentTo([Token]);
+    }
+
+    /// <summary>The <c>running</c> left behind is what the next start reads as interrupted.</summary>
+    [Test]
+    public async Task A_takeover_cut_short_by_shutdown_stores_nothing_and_ends_its_lease() {
+        ServeSource();
+        await using var f = Build();
+        FinishAfterShutdown(f, () => new TakeoverResult.Interrupted(new JsonObject(), TakeoverResult.Interrupted.Cancelled));
+
+        await f.Orch.HandleLaunchAgentForTest(Launch(f.Repo));
+        await WaitHarness.PollUntilAsync(() => !f.Server.HandoffBegins.IsEmpty);
+        await f.Orch.DisposeAsync();
+
+        await Assert.That((await QueryAsync(f.Orch, Successor))!.State).IsEqualTo("running");
+        await Assert.That(f.Server.HandoffEnds).IsEquivalentTo([Token]);
+    }
+
+    [Test]
+    public async Task Shutdown_waits_for_a_takeover_only_so_long() {
+        ServeSource();
+        await using var f = Build();
+        f.Orch.RunHandoffTakeoverForTest = (_, _, _, _) => new TaskCompletionSource<TakeoverResult>().Task;
+
+        await f.Orch.HandleLaunchAgentForTest(Launch(f.Repo));
+        await WaitHarness.PollUntilAsync(() => !f.Server.HandoffBegins.IsEmpty);
+        var started  = f.Time.GetUtcNow();
+        var disposed = f.Orch.DisposeAsync().AsTask();
+        await PumpUntilAsync(f, () => disposed.IsCompleted, TimeSpan.FromSeconds(1));
+
+        await disposed;
+        await Assert.That(f.Time.GetUtcNow() - started).IsGreaterThanOrEqualTo(TimeSpan.FromSeconds(5));
+    }
+
     /// <summary>The successor's row becomes a server row once it ends, and its view still asks the daemon.</summary>
     [Test]
     public async Task The_outcome_outlives_the_agent() {
