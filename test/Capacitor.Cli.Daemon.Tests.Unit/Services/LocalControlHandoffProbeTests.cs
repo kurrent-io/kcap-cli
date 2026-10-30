@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Handoff;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Pty;
@@ -80,6 +81,8 @@ public class LocalControlHandoffProbeTests {
         await Assert.That(reply.Refusal).IsNull();
         await Assert.That(reply.FetchError).IsNull();
         await Assert.That(reply.Start!.StartSha).IsEqualTo(tip);
+        await Assert.That(reply.Start.ToStart()).IsEqualTo(new HandoffStart(
+            HandoffSource.Branch, HandoffCheckout.CreateBranch, tip, "feature", HandoffDetachReason.None, null));
         await Assert.That(reply.Start.Checkout).IsEqualTo("CreateBranch");
         await Assert.That(reply.Start.Source).IsEqualTo("Branch");
         await Assert.That(reply.Start.DetachReason).IsEqualTo("None");
@@ -98,6 +101,7 @@ public class LocalControlHandoffProbeTests {
 
         var reply = await orch.ProbeHandoffAsync(Request(f, "feature", commits: [missing]), CancellationToken.None);
 
+        await Assert.That(reply.Start!.ToStart()).IsNotNull();
         await Assert.That(reply.Completeness).IsEqualTo("PartlyMissing");
         await Assert.That(reply.MissingCommits!.Single()).IsEqualTo(missing);
     }
@@ -134,7 +138,6 @@ public class LocalControlHandoffProbeTests {
         using var f = new Fixture();
         using var gone = new TempDir("gone");
         f.PointOriginAt(gone.PathTo("missing"));
-        f.Clone.Config($"url.{gone.PathTo("missing")}.insteadOf", Remote);
         f.Clone.Do("config", "--unset-all", $"url.{f.Upstream.Path}.insteadOf");
         await using var orch = Build();
 
@@ -153,5 +156,42 @@ public class LocalControlHandoffProbeTests {
         var reply = await orch.ProbeHandoffAsync(Request(f, "bad..name"), CancellationToken.None);
 
         await Assert.That(reply.Refusal).IsEqualTo(HandoffRefusals.InvalidTarget);
+    }
+
+    [Test]
+    public async Task Probe_reports_a_git_failure_that_is_not_a_validation_refusal_as_a_fetch_error() {
+        using var f = new Fixture();
+        await using var orch = Build();
+        orch.ResolveHandoffForTest = (_, _, _) => throw new InvalidOperationException("git fetch timed out after 120s");
+
+        var reply = await orch.ProbeHandoffAsync(Request(f, "feature"), CancellationToken.None);
+
+        await Assert.That(reply.Refusal).IsNull();
+        await Assert.That(reply.FetchError).IsEqualTo("git fetch timed out after 120s");
+    }
+
+    [Test]
+    public async Task Probe_strips_credentials_from_a_fetch_error() {
+        using var f = new Fixture();
+        await using var orch = Build();
+        orch.ResolveHandoffForTest = (_, _, _) => Task.FromResult(
+            new HandoffResolution(null, "fatal: unable to access 'https://user:s3cret@github.com/acme/widgets.git/': denied"));
+
+        var reply = await orch.ProbeHandoffAsync(Request(f, "feature"), CancellationToken.None);
+
+        await Assert.That(reply.FetchError).IsEqualTo("fatal: unable to access 'https://github.com/acme/widgets.git/': denied");
+    }
+
+    [Test]
+    public async Task Probe_answers_a_fetch_error_once_its_deadline_passes() {
+        using var f = new Fixture();
+        await using var orch = Build();
+        orch.HandoffProbeDeadline = TimeSpan.FromMilliseconds(50);
+        orch.ResolveHandoffForTest = (_, _, _) => new TaskCompletionSource<HandoffResolution>().Task;
+
+        var reply = await orch.ProbeHandoffAsync(Request(f, "feature"), CancellationToken.None);
+
+        await Assert.That(reply.Start).IsNull();
+        await Assert.That(reply.FetchError!).Contains("timed out");
     }
 }

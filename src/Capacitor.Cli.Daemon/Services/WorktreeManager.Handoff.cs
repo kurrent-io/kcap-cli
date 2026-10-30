@@ -61,6 +61,13 @@ public partial class WorktreeManager {
             : new(new(HandoffSource.DefaultBranch, HandoffCheckout.Detached, defaultSha, defaultBranch, HandoffDetachReason.BranchAbsent, null), null);
     }
 
+    /// <summary>True for the refusals <see cref="ResolveHandoffStartAsync"/> raises about the target itself,
+    /// as opposed to a git failure while reading the repository.</summary>
+    public static bool IsHandoffTargetRefusal(Exception ex) =>
+        ex is ArgumentException
+     || ex is InvalidOperationException { Message: var m }
+     && (m.StartsWith("invalid_handoff_target:", StringComparison.Ordinal) || m.StartsWith("invalid_base_ref:", StringComparison.Ordinal));
+
     async Task<(string? Sha, string? Error)> FetchOriginBranchAsync(string repoPath, string branch) {
         var tracking = $"refs/remotes/origin/{branch}";
         var fetched = await RunGitCaptureResult(repoPath, FetchTimeout, time, false, HandoffFetchConfig(),
