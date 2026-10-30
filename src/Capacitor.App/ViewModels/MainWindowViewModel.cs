@@ -156,6 +156,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public const string AgentCountTip = "Agents running on this daemon";
 
     readonly BehaviorSubject<string?> _startMessageChanges = new(null);
+    readonly Subject<Unit> _launcherNudges = new();
 
     /// Constructed once at the composition root; the prompt window's onConcluded callback nudges
     /// the same instance.
@@ -211,6 +212,13 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// Clears the open workspace back to the launcher pane — the same command
     /// the coordinator's close paths route through.
     public ReactiveCommand<Unit, Unit> CloseWorkspaceCommand { get; }
+
+    /// The rail button and Cmd/Ctrl+N. Over an open workspace it closes it; over the launcher,
+    /// where closing changes nothing, it nudges the launcher instead so the press visibly lands.
+    public ReactiveCommand<Unit, Unit> NewSessionCommand { get; }
+
+    /// Fires when New session is pressed while the launcher is already showing.
+    public IObservable<Unit> LauncherNudges => _launcherNudges.AsObservable();
 
     /// The header refresh on the open workspace. Disabled with no workspace, no session
     /// id, or a refresh the user already asked for still running — the same intervals the button is.
@@ -396,6 +404,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         Rail = rail;
         TenantName = ProfileLabelForRail(tenantName);
         CloseWorkspaceCommand = ReactiveCommand.Create(CloseWorkspace);
+        NewSessionCommand = ReactiveCommand.Create(NewSession);
         var canRefreshWork = Observable.Switch(this.WhenAnyValue(x => x.CurrentWorkspace)
             .Select(CanRefreshOpenWork))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
@@ -767,6 +776,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public void CloseWorkspace() {
         if (_shutdownLatched || _navigation.ShutdownLatched) return;
         SwapTo(null);
+    }
+
+    void NewSession() {
+        if (CurrentWorkspace is null) _launcherNudges.OnNext(Unit.Default);
+        else CloseWorkspace();
     }
 
     static IObservable<bool> CanRefreshOpenWork(ISessionWorkspace? workspace) =>

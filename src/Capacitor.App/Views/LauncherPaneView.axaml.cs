@@ -11,6 +11,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core.Accounts;
@@ -23,6 +24,9 @@ namespace Capacitor.App.Views;
 public partial class LauncherPaneView : UserControl {
     AttachmentDropPaste? _attachments;
     Flyout? _openMenu;
+    IDisposable? _nudgeEnd;
+
+    static readonly TimeSpan NudgeHold = TimeSpan.FromMilliseconds(450);
 
     /// A picker search term matches a model by its label or its launch id, so a Pi row is found by
     /// model name, provider, or `provider/` prefix alike.
@@ -39,6 +43,17 @@ public partial class LauncherPaneView : UserControl {
     }
 
     public void FocusComposer() => GoalInput.Focus();
+
+    /// New session pressed while this pane is already showing: focus the goal and ring the card
+    /// briefly, so the press does not read as a dead button.
+    public void Nudge() {
+        FocusComposer();
+        _nudgeEnd?.Dispose();
+        GoalCard.Classes.Set("nudge", true);
+        _nudgeEnd = DispatcherTimer.RunOnce(() => GoalCard.Classes.Set("nudge", false), NudgeHold);
+    }
+
+    internal bool IsNudgingForTesting => GoalCard.Classes.Contains("nudge");
 
     internal Task? PendingIntakeForTesting => _attachments?.PendingIntakeForTesting;
 

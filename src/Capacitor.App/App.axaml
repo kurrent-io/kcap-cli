@@ -654,6 +654,11 @@
         <Style Selector="Border.attachTarget">
             <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
         </Style>
+        <!-- Declared before dragOver so a drag in progress keeps its ring. -->
+        <Style Selector="Border.attachTarget.nudge">
+            <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
+            <Setter Property="BoxShadow" Value="0 0 0 4 #597BA7F7" />
+        </Style>
         <Style Selector="Border.attachTarget.dragOver">
             <Setter Property="BorderBrush" Value="{StaticResource KcapPrimaryBrush}" />
         </Style>
