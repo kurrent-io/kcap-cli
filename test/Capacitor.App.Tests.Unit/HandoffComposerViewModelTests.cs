@@ -26,6 +26,9 @@ public class HandoffComposerViewModelTests {
     static HandoffProbeReplyDto Reply(HandoffLaunchStart start, string completeness = "Unconfirmed", IReadOnlyList<string>? missing = null) =>
         new(null, null, start, completeness, missing ?? []);
 
+    const string StartChanged = "The branch changed after it was checked, so nothing was started. Check the new starting point and start again.";
+    const string SourceUnavailable = "You can no longer hand off this session. It may have been deleted, or your access to it changed.";
+
     sealed class FakeLaunchClient : ILaunchClient {
         public IReadOnlySet<string> Features = FrozenSet.Create("handoff/1");
         public List<LaunchRequest> Requests { get; } = [];
@@ -92,13 +95,19 @@ public class HandoffComposerViewModelTests {
             Drafts = new HandoffDrafts(Failures, Directory, Time);
         }
 
+        /// MainWindowViewModel.OpenSessionIfCurrent: refused under a stale generation, and an open moves it on.
+        void Open(string id, AgentOrigin origin, int generation) {
+            Opened.Add((id, origin, generation));
+            if (generation == Generation) Generation++;
+        }
+
         public HandoffComposerViewModel Build() {
             var vm = new HandoffComposerViewModel(
                 Session, Daemon, Launch, Sessions, Ops,
                 new LocalCheckoutFinder(new RepoIdentityResolver(root => Origins.GetValueOrDefault(root)), mainRoot: p => p),
                 _ => Task.FromResult<IReadOnlyList<string>>([]),
                 Drafts, Lane, Uploader, Directory,
-                () => Generation, (id, origin, generation) => Opened.Add((id, origin, generation)),
+                () => Generation, Open,
                 Closed.Add, Reopened.Add);
             _built.Add(vm);
             return vm;
@@ -342,7 +351,7 @@ public class HandoffComposerViewModelTests {
 
         await Assert.That(vm.Text).IsEqualTo("carry on");
         await Assert.That(vm.Tray.Count).IsEqualTo(1);
-        await Assert.That(vm.Error).IsEqualTo(HomeViewModel.FriendlyLaunchFailure("handoff_source_unavailable"));
+        await Assert.That(vm.Error).IsEqualTo(SourceUnavailable);
         await Assert.That(rig.Ops.Probes.Count).IsEqualTo(2);
         await Assert.That(rig.Directory.Placeholders).IsEmpty();
         await Assert.That(rig.Opened).IsEmpty();
@@ -353,11 +362,15 @@ public class HandoffComposerViewModelTests {
     public Task A_delayed_failure_reopens_the_source_with_the_draft() => Run(async rig => {
         var vm = await rig.ReadyAsync();
         vm.Text = "carry on";
-        vm.Tray.AddAll([Chip("a.png")]);
-        vm.Choices.SelectedModel = "gpt-5";
+        var chip = Chip("a.png");
+        await vm.Choices.ChooseHarnessAsync("claude");
+        vm.Choices.SelectedModel = "claude-opus-5";
         vm.Choices.SelectedEffort = "high";
+        vm.Tray.Restore([chip]);
         await vm.StartCommand.Execute();
         await Assert.That(rig.Opened.Count).IsEqualTo(1);
+        // Opening the new session tears the source's workspace down.
+        vm.Dispose();
 
         rig.Failures.OnNext(new LaunchFailure(LaunchedId, "handoff_start_changed"));
 
@@ -367,11 +380,11 @@ public class HandoffComposerViewModelTests {
 
         var reopened = await rig.ReadyAsync();
         await Assert.That(reopened.Text).IsEqualTo("carry on");
-        await Assert.That(reopened.Tray.Count).IsEqualTo(1);
-        await Assert.That(reopened.Choices.SelectedVendor).IsEqualTo("codex");
-        await Assert.That(reopened.Choices.SelectedModel).IsEqualTo("gpt-5");
+        await Assert.That(reopened.Tray.Items.Single()).IsSameReferenceAs(chip);
+        await Assert.That(reopened.Choices.SelectedVendor).IsEqualTo("claude");
+        await Assert.That(reopened.Choices.SelectedModel).IsEqualTo("claude-opus-5");
         await Assert.That(reopened.Choices.SelectedEffort).IsEqualTo("high");
-        await Assert.That(reopened.Error).IsEqualTo(HomeViewModel.FriendlyLaunchFailure("handoff_start_changed"));
+        await Assert.That(reopened.Error).IsEqualTo(StartChanged);
         await Assert.That(rig.Ops.Probes.Count).IsEqualTo(2);
     });
 
@@ -386,7 +399,7 @@ public class HandoffComposerViewModelTests {
 
         await Assert.That(vm.Text).IsEqualTo("carry on");
         await Assert.That(vm.Tray.Count).IsEqualTo(1);
-        await Assert.That(vm.Error).IsEqualTo(HomeViewModel.FriendlyLaunchFailure("handoff_start_changed"));
+        await Assert.That(vm.Error).IsEqualTo(StartChanged);
         await Assert.That(rig.Directory.Placeholders).IsEmpty();
         await Assert.That(rig.Opened).IsEmpty();
         await Assert.That(rig.Reopened).IsEmpty();
@@ -420,5 +433,93 @@ public class HandoffComposerViewModelTests {
         await Assert.That(rig.Reopened).IsEmpty();
         await Assert.That(rig.Closed).IsEmpty();
         await Assert.That(rig.Drafts.TakeFailed(SessionId)).IsNull();
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_delayed_failure_after_navigating_away_keeps_the_draft_without_moving_the_user() => Run(async rig => {
+        var vm = await rig.ReadyAsync();
+        vm.Text = "carry on";
+        await vm.StartCommand.Execute();
+        vm.Dispose();
+        rig.Generation++;
+
+        rig.Failures.OnNext(new LaunchFailure(LaunchedId, "handoff_start_changed: feature/x moved"));
+
+        await Assert.That(rig.Closed).IsEquivalentTo([LaunchedId]);
+        await Assert.That(rig.Reopened).IsEmpty();
+        var later = await rig.ReadyAsync();
+        await Assert.That(later.Text).IsEqualTo("carry on");
+        await Assert.That(later.Error).IsEqualTo(StartChanged);
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_live_source_composer_takes_its_failed_draft_back_once() => Run(async rig => {
+        // The user navigates while the launch is in flight, so the open is refused and the composer stays.
+        rig.Launch.During = _ => rig.Generation++;
+        var vm = await rig.ReadyAsync();
+        vm.Text = "carry on";
+        var chip = Chip("a.png");
+        vm.Tray.Restore([chip]);
+        await vm.Choices.ChooseHarnessAsync("claude");
+        vm.Choices.SelectedEffort = "low";
+        await vm.StartCommand.Execute();
+        await Assert.That(vm.Text).IsEqualTo("");
+
+        rig.Failures.OnNext(new LaunchFailure(LaunchedId, "handoff_start_changed: feature/x moved"));
+
+        await Assert.That(vm.Text).IsEqualTo("carry on");
+        await Assert.That(vm.Tray.Items.Single()).IsSameReferenceAs(chip);
+        await Assert.That(vm.Choices.SelectedVendor).IsEqualTo("claude");
+        await Assert.That(vm.Choices.SelectedEffort).IsEqualTo("low");
+        await Assert.That(vm.Error).IsEqualTo(StartChanged);
+        await vm.PendingEvaluationForTesting;
+        await Assert.That(rig.Ops.Probes.Count).IsEqualTo(2);
+        await Assert.That(rig.Reopened).IsEmpty();
+        await Assert.That((await rig.ReadyAsync()).Text).IsEqualTo("");
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_disconnected_server_reads_as_unreachable_and_rechecks_on_connect() => Run(async rig => {
+        rig.Lane.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
+        rig.Launch.Features = FrozenSet<string>.Empty;
+        var vm = await rig.ReadyAsync();
+
+        await Assert.That(vm.DisabledReason).IsEqualTo("Couldn't reach your kcap server");
+        await Assert.That(rig.Ops.Probes).IsEmpty();
+
+        rig.Launch.Features = FrozenSet.Create("handoff/1");
+        rig.Lane.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
+        await vm.PendingEvaluationForTesting;
+
+        await Assert.That(vm.DisabledReason).IsNull();
+        await Assert.That(rig.Ops.Probes.Count).IsEqualTo(1);
+        await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsTrue();
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Refusal_codes_are_worded_without_the_code() => Run(async rig => {
+        (string Reason, string? Worded)[] cases = [
+            ("handoff_start_changed: feature/x is at 1a2b, not 3c4d", StartChanged),
+            ("handoff_source_unavailable: The session to continue cannot be read.", SourceUnavailable),
+            ("invalid_handoff: the block is incomplete",
+                "Your local kcap daemon couldn't start this hand-off, so nothing was started. Update kcap and try again."),
+            ("repo_mismatch", "The checkout on this machine isn't a clone of this session's repository, so nothing was started."),
+            ("repo_not_allowed", "Your local kcap daemon isn't allowed to work in that checkout, so nothing was started."),
+            ("some_new_code: the thing broke", null),
+            ("some_new_code", null),
+        ];
+        foreach (var (reason, worded) in cases) {
+            rig.Launch.Next = new LaunchOutcome(false, null, reason);
+            var vm = await rig.ReadyAsync();
+            await vm.StartCommand.Execute();
+            var code = reason.Split(':')[0];
+            await Assert.That(vm.Error).IsNotNull();
+            await Assert.That(vm.Error!).DoesNotContain(code);
+            if (worded is not null) await Assert.That(vm.Error).IsEqualTo(worded);
+        }
     });
 }

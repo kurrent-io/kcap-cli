@@ -18,10 +18,12 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable {
     public const string NeedsFullAccess = "You need full access to this session to hand it off";
     public const string ServerTooOld = "Your kcap server doesn't support hand-off yet";
     public const string DaemonTooOld = "Your local kcap daemon doesn't support hand-off yet. Update kcap to use it.";
-    public const string DaemonNotRunning = "Your local kcap daemon isn't running";
-    public const string ContextUnavailable = "Couldn't read this session's repository from your kcap server";
-    public const string ProbeFailed = "Couldn't check this hand-off with your local kcap daemon";
-    public const string InvalidTarget = "This session's branch can't be handed off";
+    public const string ServerUnreachable = "Couldn't reach your kcap server";
+    public const string DaemonNotRunning = "Your local kcap daemon isn't running. Start it to hand off.";
+    public const string ContextUnavailable = "Couldn't load this session's details from your kcap server";
+    public const string NoRepository = "This session isn't linked to a GitHub repository, so it can't be handed off";
+    public const string ProbeFailed = "Your local kcap daemon didn't answer, so the starting point couldn't be checked";
+    public const string InvalidTarget = "There's no branch or commit to start this hand-off from";
     public const string SignInToHandOff = "Sign in to your kcap server to hand off";
     const string StripPrefix = "New session in a fresh worktree";
     const string FullAccess = "full";
@@ -57,7 +59,9 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable {
 
     volatile AttachStatus? _attach;
     volatile bool _signedIn;
+    volatile bool _serverConnected;
     bool _initialized;
+    bool _disposed;
     IReadOnlySet<string>? _features;
     HandoffContextDto? _context;
     string? _checkout;
@@ -96,7 +100,21 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable {
         _choices = new HandoffChoicesViewModel(daemon, session.Vendor, modelCatalog).DisposeWith(_disposables);
 
         daemon.Status.Subscribe(s => _attach = s).DisposeWith(_disposables);
-        laneStatus.Subscribe(s => _signedIn = s.State == ServerLaneState.Connected).DisposeWith(_disposables);
+        var connected = laneStatus.Select(s => s.State == ServerLaneState.Connected);
+        connected.Subscribe(c => _signedIn = _serverConnected = c).DisposeWith(_disposables);
+        // An empty feature list read while disconnected says nothing about the server.
+        connected
+            .DistinctUntilChanged()
+            .Skip(1)
+            .Where(c => c)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(change => { if (_initialized && !IsLaunching) _ = ReevaluateAsync(CancellationToken.None); })
+            .DisposeWith(_disposables);
+        // HandoffDrafts publishes on the UI thread.
+        drafts.FailedFor
+            .Where(id => id == session.SessionId)
+            .Subscribe(_ => TakeBackFailedDraft())
+            .DisposeWith(_disposables);
         // A daemon that connects, restarts or updates under an open composer answers again.
         daemon.Status
             .Select(s => (s.State, Handoff: HasHandoff(s)))
@@ -177,7 +195,11 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable {
         return ReevaluateAsync(ct);
     }
 
-    async Task ReevaluateAsync(CancellationToken ct) {
+    internal Task PendingEvaluationForTesting { get; private set; } = Task.CompletedTask;
+
+    Task ReevaluateAsync(CancellationToken ct) => PendingEvaluationForTesting = RunEvaluationAsync(ct);
+
+    async Task RunEvaluationAsync(CancellationToken ct) {
         _evaluation?.Cancel();
         _evaluation?.Dispose();
         var cts = _evaluation = CancellationTokenSource.CreateLinkedTokenSource(_shutdown, ct);
@@ -191,7 +213,7 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable {
             result = await EvaluateAsync(cts.Token);
         } catch (OperationCanceledException) when (cts.IsCancellationRequested) {
             return;
-        } catch (Exception ex) when (ex is not OperationCanceledException) {
+        } catch (Exception ex) {
             Console.Error.WriteLine($"kcap: hand-off check: {ex.Message}");
             result = new(ProbeFailed);
         }
@@ -208,6 +230,7 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable {
         if (!string.Equals(_session.AccessLevel, FullAccess, StringComparison.OrdinalIgnoreCase))
             return new(NeedsFullAccess);
 
+        if (!_serverConnected) return new(ServerUnreachable);
         if (_features is null || _features.Count == 0) _features = await _launch.GetLaunchFeaturesAsync(ct);
         if (!_features.Contains(HandoffWire.Capability)) return new(ServerTooOld);
 
@@ -218,10 +241,11 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable {
         }
 
         _context ??= await _sessions.ReadHandoffContextAsync(_session.SessionId, ct);
+        if (_context is null) return new(ContextUnavailable);
         if (_context is not { RepoOwner: { Length: > 0 } owner, RepoName: { Length: > 0 } name } context)
-            return new(ContextUnavailable);
+            return new(NoRepository);
 
-        var candidates = await _candidateRoots(ct);
+        var candidates = await Task.Run(() => _candidateRoots(ct), ct);
         if (await _finder.FindAsync(owner, name, _session.Cwd, candidates, ct) is not { } checkout)
             return new(NoCheckout(owner, name));
 
@@ -276,7 +300,7 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable {
             var generation = _navigationGeneration();
             var outcome = await _launch.StartAsync(request, _shutdown);
             if (!outcome.Started) {
-                Error = outcome.Unauthorized ? SignInToHandOff : HomeViewModel.FriendlyLaunchFailure(outcome.Error ?? "");
+                Error = outcome.Unauthorized ? SignInToHandOff : HandoffFailureText.For(outcome.Error);
                 await ReevaluateAsync(CancellationToken.None);
                 return;
             }
@@ -288,9 +312,14 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable {
             var sourceKey = $"server:{_session.SessionId}";
             var closeFailedLaunch = _closeFailedLaunch;
             var reopenSource = _reopenSource;
+            var navigationGeneration = _navigationGeneration;
+            // The generation the placeholder's open left; null when the open was refused.
+            int? openedUnder = null;
             var hold = _drafts.Hold(_session.SessionId, agentId, draft, () => {
                 closeFailedLaunch(agentId);
-                reopenSource(sourceKey);
+                // Only a user still on the placeholder is taken back; anyone else finds the draft on
+                // the source's next open.
+                if (openedUnder is { } opened && navigationGeneration() == opened) reopenSource(sourceKey);
             });
             if (hold == HandoffHold.AlreadyFailed) {
                 if (_drafts.TakeFailed(_session.SessionId) is { } failed) Apply(failed);
@@ -303,10 +332,18 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable {
             Tray.Clear();
             if (hold == HandoffHold.Pending)
                 _directory?.AddPlaceholder(agentId, draft.Vendor, checkout, AgentRow.TitleFromPrompt(draft.Text), draft.Model);
+            var opens = _navigationGeneration() == generation;
             _openSessionIfCurrent(agentId, AgentOrigin.Local, generation);
+            if (opens) openedUnder = _navigationGeneration();
         } finally {
             IsLaunching = false;
         }
+    }
+
+    void TakeBackFailedDraft() {
+        if (IsLaunching || _drafts.TakeFailed(_session.SessionId) is not { } failed) return;
+        Apply(failed);
+        _ = ReevaluateAsync(CancellationToken.None);
     }
 
     void Apply(HandoffDraft draft) {
@@ -359,6 +396,8 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable {
     };
 
     public void Dispose() {
+        if (_disposed) return;
+        _disposed = true;
         _evaluation?.Cancel();
         _evaluation?.Dispose();
         _disposables.Dispose();

@@ -1,6 +1,7 @@
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using Capacitor.App.ViewModels;
 using DynamicData;
 using ReactiveUI.Reactive;
@@ -24,6 +25,7 @@ public sealed class HandoffDrafts : IDisposable {
     readonly IAgentDirectory? _directory;
     readonly TimeProvider _time;
     readonly CompositeDisposable _subscriptions = new();
+    readonly Subject<string> _failedFor = new();
 
     public HandoffDrafts(IObservable<LaunchFailure> failures, IAgentDirectory? directory, TimeProvider time) {
         _directory = directory;
@@ -52,7 +54,7 @@ public sealed class HandoffDrafts : IDisposable {
         lock (_lock) {
             var now = _time.GetUtcNow();
             if (_recentFailures.Remove(id, out var failure) && now - failure.At <= RecentFailureTtl) {
-                _failed[sourceSessionId] = draft with { Error = HomeViewModel.FriendlyLaunchFailure(failure.Reason) };
+                _failed[sourceSessionId] = draft with { Error = HandoffFailureText.For(failure.Reason) };
                 return HandoffHold.AlreadyFailed;
             }
             _pending[id] = new Held(sourceSessionId, draft, now, onFailed);
@@ -62,6 +64,10 @@ public sealed class HandoffDrafts : IDisposable {
         Confirm(id);
         return HandoffHold.AlreadyStarted;
     }
+
+    /// The source session of a draft a later failure handed back, on the UI thread, after the
+    /// hold's onFailed. Whichever composer calls TakeFailed first gets the draft.
+    public IObservable<string> FailedFor => _failedFor;
 
     public HandoffDraft? TakeFailed(string sourceSessionId) {
         lock (_lock) return _failed.Remove(sourceSessionId, out var draft) ? draft : null;
@@ -80,10 +86,11 @@ public sealed class HandoffDrafts : IDisposable {
         lock (_lock) {
             var now = _time.GetUtcNow();
             if (_pending.Remove(id, out var held) && now - held.At <= PendingTtl) {
-                _failed[held.SourceSessionId] = held.Draft with { Error = HomeViewModel.FriendlyLaunchFailure(failure.Reason) };
+                _failed[held.SourceSessionId] = held.Draft with { Error = HandoffFailureText.For(failure.Reason) };
                 return () => {
                     _directory?.RemovePlaceholder(id);
                     held.OnFailed?.Invoke();
+                    _failedFor.OnNext(held.SourceSessionId);
                 };
             }
             _recentFailures[id] = (failure.Reason, now);
@@ -100,5 +107,8 @@ public sealed class HandoffDrafts : IDisposable {
 
     static string Key(string agentId) => AgentIds.Normalize(agentId) ?? agentId;
 
-    public void Dispose() => _subscriptions.Dispose();
+    public void Dispose() {
+        _subscriptions.Dispose();
+        _failedFor.Dispose();
+    }
 }
