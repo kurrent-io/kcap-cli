@@ -69,7 +69,7 @@ public class AccountRefresherTests {
 
     /// <summary>A rollout or a menu scrape in another process, writing a block the way producers do.</summary>
     void ProducerBlocks(string id, DateTimeOffset at) {
-        if (!Store.Readings.TryRecord(id, 0, "session-1", f => f with { Reading = ReadingMerge.Apply(f.Reading, ReachedAt(at)) }))
+        if (!Store.Readings.TryRecord(id, (f, _) => f with { Reading = ReadingMerge.Apply(f.Reading, ReachedAt(at)) }))
             throw new InvalidOperationException("the block was not recorded");
     }
 

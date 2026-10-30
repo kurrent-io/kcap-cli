@@ -86,7 +86,7 @@ public static class AccountResolution {
     static AccountResolutionOutcome Accepted(string directory, VendorAccount? entry) {
         var physical = Physical(directory);
 
-        return new(new ResolvedAccount(physical, entry?.Id, entry?.Label ?? Path.GetFileName(physical), entry?.Generation ?? 0), null);
+        return new(new ResolvedAccount(physical, entry?.Id, entry?.Label ?? Path.GetFileName(physical)), null);
     }
 
     static string Physical(string directory) {

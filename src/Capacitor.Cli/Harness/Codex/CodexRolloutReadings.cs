@@ -9,12 +9,12 @@ namespace Capacitor.Cli.Harness.Codex;
 
 /// <summary>Records the rate limits on a Codex rollout's <c>token_count</c> lines as the owning account's
 /// reading. A side output of the watcher: it reads the raw lines and never changes what is sent.</summary>
-public sealed class CodexRolloutReadings(ReadingStore store, VendorAccount account, string sessionId) {
+public sealed class CodexRolloutReadings(ReadingStore store, VendorAccount account) {
     const string Marker = "token_count";
 
-    public static CodexRolloutReadings? For(AccountStore accounts, string rolloutPath, string sessionId, UserHome home) =>
+    public static CodexRolloutReadings? For(AccountStore accounts, string rolloutPath, UserHome home) =>
         accounts.TryLoad() is { } registry && AccountPaths.CodexAccountForRollout(rolloutPath, registry, home) is { } account
-            ? new CodexRolloutReadings(accounts.Readings, account, sessionId)
+            ? new CodexRolloutReadings(accounts.Readings, account)
             : null;
 
     public void Observe(string rawLine) => Observe([rawLine]);
@@ -29,8 +29,11 @@ public sealed class CodexRolloutReadings(ReadingStore store, VendorAccount accou
 
             if (observations.Count == 0) return;
 
-            store.TryRecord(account.Id, account.Generation, sessionId,
-                f => f with { Reading = observations.Aggregate(f.Reading, ReadingMerge.Apply) });
+            store.TryRecord(account.Id, (f, entry) => {
+                var current = observations.Where(o => entry.GenerationStartedAt is not { } start || o.ProducedAt >= start).ToList();
+
+                return current.Count == 0 ? null : f with { Reading = current.Aggregate(f.Reading, ReadingMerge.Apply) };
+            });
         } catch (Exception) {
             // A malformed line must never reach the watcher.
         }

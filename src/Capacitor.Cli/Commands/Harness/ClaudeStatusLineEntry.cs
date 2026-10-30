@@ -92,12 +92,7 @@ public static class ClaudeStatusLineEntry {
 
         if (ClaudeStatusLineReading.Apply(ReadingFile.Empty(account.Generation), payload, now) is null) return;
 
-        accounts.Readings.TryRecord(
-            account.Id,
-            account.Generation,
-            payload.Str("session_id"),
-            held => ClaudeStatusLineReading.Apply(held, payload, now) ?? held
-        );
+        accounts.Readings.TryRecord(account.Id, (held, _) => ClaudeStatusLineReading.Apply(held, payload, now) ?? held);
     }
 
     // No WorkingDirectory and no environment edits: the child inherits both from this process.

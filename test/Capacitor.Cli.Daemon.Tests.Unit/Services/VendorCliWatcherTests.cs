@@ -400,7 +400,7 @@ public class VendorCliWatcherTests {
         try {
             await Assert.That(refreshes.Count).IsEqualTo(1);
 
-            var recorded = store.Readings.TryRecord(work.Id, 0, null, f => f with {
+            var recorded = store.Readings.TryRecord(work.Id, (f, _) => f with {
                 Reading = f.Reading with { Windows = [new UsageWindowDto("five_hour", 300, 42, null, null)] },
             });
             await Assert.That(recorded).IsTrue();

@@ -28,8 +28,8 @@ public class AccountReadingSinkTests {
         return store;
     }
 
-    void Register(string id, long generation = 0) {
-        var entry = new VendorAccount(id, HarnessId.Codex, AccountDirectory.Normalize(Tmp.CreateDir(id)), id, DateTimeOffset.UnixEpoch, Generation: generation);
+    void Register(string id, long generation = 0, DateTimeOffset? startedAt = null) {
+        var entry = new VendorAccount(id, HarnessId.Codex, AccountDirectory.Normalize(Tmp.CreateDir(id)), id, DateTimeOffset.UnixEpoch, Generation: generation, GenerationStartedAt: startedAt);
         Store.Mutate(r => (r with { Accounts = [.. r.Accounts, entry] }, 0));
     }
 
@@ -44,7 +44,7 @@ public class AccountReadingSinkTests {
     /// <summary>Whether the consumer wrote <paramref name="observation"/>, once it has dealt with it.</summary>
     Task<bool> Processed(ReadingObservation observation) => Outcome(observation).Task.WaitAsync(HangGuard);
 
-    static ResolvedAccount Account(string? id, long generation = 0) => new("/unused", id, id ?? "default", generation);
+    static ResolvedAccount Account(string? id) => new("/unused", id, id ?? "default");
 
     static ReadingObservation Window(double used) =>
         new(At, Fresh: true, [new UsageWindowDto("codex", 300, used, At.AddHours(5), null)], null, null, [], false, true);
@@ -92,23 +92,32 @@ public class AccountReadingSinkTests {
     }
 
     [Test]
-    public async Task Notification_from_a_retired_generation_is_dropped() {
-        Register(Work, generation: 1);
+    public async Task Observation_before_the_generation_start_is_skipped() {
+        Register(Work, generation: 1, startedAt: At.AddMinutes(1));
         Register(Spare);
         using var sink = Sink();
-        var retired = Window(80);
-        var spare   = Window(5);
+        var early = Window(80);
+        var spare = Window(5);
 
-        sink.Post(Account(Work, generation: 0), retired);
+        sink.Post(Account(Work), early);
         sink.Post(Account(Spare), spare);
 
-        await Assert.That(await Processed(retired)).IsFalse();
+        await Assert.That(await Processed(early)).IsFalse();
         await Assert.That(await Processed(spare)).IsTrue();
         await Assert.That(Read(Work)).IsNull();
+    }
 
-        var current = Window(20);
-        sink.Post(Account(Work, generation: 1), current);
-        await Assert.That(await Processed(current)).IsTrue();
+    [Test]
+    public async Task Observation_after_a_re_login_is_recorded_without_relaunch() {
+        Register(Work);
+        using var sink = Sink();
+        var launched = Account(Work);
+
+        Store.Mutate(r => (r with { Accounts = [r.Accounts.Single() with { Generation = 1, GenerationStartedAt = At.AddMinutes(-1) }] }, 0));
+        var later = Window(20);
+        sink.Post(launched, later);
+
+        await Assert.That(await Processed(later)).IsTrue();
         var file = Read(Work)!;
         await Assert.That(file.Reading.Generation).IsEqualTo(1L);
         await Assert.That(file.Reading.Windows.Single().UsedPercent).IsEqualTo(20.0);

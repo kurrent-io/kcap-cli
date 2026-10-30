@@ -40,8 +40,8 @@ public class AccountRefreshTests {
     static ReadingObservation Limits(int at, double used, int windowMinutes = 300) =>
         Obs(at, fresh: true, windows: [W("codex", windowMinutes, used, At(at + windowMinutes))]);
 
-    bool Seed(string session, long generation = 0, double used = 50) =>
-        Store.Readings.TryRecord("a", generation, session, f => f with {
+    bool Seed(string session, double used = 50) =>
+        Store.Readings.TryRecord("a", (f, _) => f with {
             Reading  = ReadingMerge.Apply(f.Reading, Limits(0, used)),
             Sessions = [.. f.Sessions, new ReadingSession(session, null)],
         });
@@ -242,8 +242,7 @@ public class AccountRefreshTests {
 
         await Refresh(Identity("b@example.com", "idB"));
 
-        await Assert.That(Seed("s1", generation: 1)).IsTrue();
-        await Assert.That(Seed("s1", generation: 0)).IsFalse();
+        await Assert.That(Seed("s1")).IsTrue();
     }
 
     [Test]
@@ -270,7 +269,7 @@ public class AccountRefreshTests {
         await Assert.That(await producer!).IsTrue();
         await Assert.That(Reading).IsNull();
         await Assert.That(Account.GenerationStartedAt).IsNotNull();
-        await Assert.That(Seed("S", generation: 1)).IsTrue();
+        await Assert.That(Seed("S")).IsTrue();
     }
 
     [Test]
@@ -443,7 +442,7 @@ public class AccountRefreshTests {
     [Test]
     public async Task Refresh_after_crash_resets_an_older_generation_reading() {
         Register(Codex(generation: 1));
-        await Assert.That(Seed("s1", generation: 1, used: 90)).IsTrue();
+        await Assert.That(Seed("s1", used: 90)).IsTrue();
         Store.Mutate(r => (r with { Accounts = [Codex(generation: 2)] }, 0));
 
         await Refresh(Identity("a@example.com", "idA", Limits(10, 5, windowMinutes: 10080)));
