@@ -1463,15 +1463,14 @@ public class RemoteSessionViewModelTests {
         });
     }
 
-    /// A pinned session enters with an unknown access level, which the composer reads as not full;
-    /// the listing's level reaches the same composer, so what the user typed survives the re-check.
+    /// A later level reaches the same composer, so what the user typed survives the re-check.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task An_ended_row_revision_refreshes_the_composer_without_rebuilding_it() {
         await RunOnUiAsync(async () => {
             using var h = new Harness();
             using var handoff = new HandoffComposerFixture();
-            var vm = h.Build(Harness.ServerRow() with { AccessLevel = "" }, handoff: handoff.Build);
+            var vm = h.Build(Harness.ServerRow() with { AccessLevel = "overview" }, handoff: handoff.Build);
             var composer = vm.Chat.Handoff!;
             await WaitUntilAsync(() => composer.DisabledReason is not null, what: "the first check");
             await Assert.That(composer.DisabledReason).IsEqualTo(HandoffComposerViewModel.NeedsFullAccess);
