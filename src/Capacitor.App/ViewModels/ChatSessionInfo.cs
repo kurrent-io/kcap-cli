@@ -52,7 +52,7 @@ public sealed record ChatSessionInfo(
     /// `readOnlyNotice` names why the chat cannot be messaged; "" when it can.
     public static ChatSessionInfo FromRemote(AgentRow row, bool ended, string readOnlyNotice = "") => new(
         row.Status, SessionStatusDots.Label(row), row.Vendor, row.Model,
-        row.RepoPath, row.AwaitingInput, ended || SessionStatusDots.IsTerminal(row.Status), readOnlyNotice, row.SessionId,
+        row.WorktreePath ?? row.RepoPath, row.AwaitingInput, ended || SessionStatusDots.IsTerminal(row.Status), readOnlyNotice, row.SessionId,
         TerminalDialog: row.TerminalDialog,
         AccountDirectory: row.AccountDirectory, AccountId: row.AccountId, AccountLabel: row.AccountLabel) {
         WaitsOnUser = SessionStatusDots.WaitsOnUser(row), TakesAttachments = row.Kind == "agent",

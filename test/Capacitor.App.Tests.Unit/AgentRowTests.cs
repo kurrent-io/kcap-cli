@@ -48,6 +48,27 @@ public class AgentRowTests {
         await Assert.That(row.RepoPath).IsNull();
     }
 
+    /// After an app restart nothing but the listing describes the session: a hosted agent's cwd is
+    /// its worktree, and the checkout that owns it is the repository.
+    [Test]
+    [Arguments("/Users/u/dev/shop-api/.capacitor/worktrees/agent-1a2b3c4d5e6f", "/Users/u/dev/shop-api")]
+    [Arguments(@"C:\src\shop-api\.claude\worktrees\snappy-leaf", @"C:\src\shop-api")]
+    public async Task Server_row_whose_cwd_is_an_agent_worktree_names_the_owning_checkout(string cwd, string repo) {
+        var row = AgentRow.FromServer(Listed(cwd: cwd), hostedPresentation: false);
+
+        await Assert.That(row.RepoPath).IsEqualTo(repo);
+        await Assert.That(row.WorktreePath).IsEqualTo(cwd);
+    }
+
+    /// Any other cwd may be a linked worktree too; naming it as one would call it the main checkout.
+    [Test]
+    public async Task Server_row_whose_cwd_is_no_agent_worktree_names_no_worktree() {
+        var row = AgentRow.FromServer(Listed(cwd: "/Users/u/worktrees/shop-api/fix-login"), hostedPresentation: false);
+
+        await Assert.That(row.RepoPath).IsEqualTo("/Users/u/worktrees/shop-api/fix-login");
+        await Assert.That(row.WorktreePath).IsNull();
+    }
+
     [Test]
     public async Task Live_server_row_is_a_terminal_session_unless_hosted() {
         var terminal = AgentRow.FromServer(Listed(status: "active", stale: true), hostedPresentation: false);

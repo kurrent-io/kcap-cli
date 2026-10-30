@@ -89,11 +89,16 @@ public sealed record AgentRow(
     public static AgentRow FromServer(RepoSessionDto dto, bool hostedPresentation) {
         var active = dto.Status == "active";
         var repo = RepoIdentityResolver.ForRemote(dto.Repo?.Owner, dto.Repo?.Name, dto.Cwd, "server");
+        // The listing names only the cwd. A hosted agent's is its worktree, whose path names the
+        // checkout that owns it; any other cwd could be a linked worktree just the same, so it is
+        // not presented as one.
+        var owner = dto.Cwd is { } cwd ? GitRepository.AgentWorktreeOwner(cwd) : null;
+        var worktree = owner is not null && owner.Length != dto.Cwd!.Length ? dto.Cwd : null;
         return new(
             Key: $"server:{dto.SessionId}", Origin: AgentOrigin.Server, Id: dto.SessionId, SessionId: dto.SessionId,
             Kind: "session", Vendor: dto.Vendor ?? "", Status: active ? "Running" : "Completed",
-            CreatedAt: dto.StartedAt.UtcDateTime, RepoPath: dto.Cwd, Title: dto.Title, Model: null, RequesterDisplay: null,
-            WorktreePath: null, WorkLocation: null, BorrowedFrom: null,
+            CreatedAt: dto.StartedAt.UtcDateTime, RepoPath: owner, Title: dto.Title, Model: null, RequesterDisplay: null,
+            WorktreePath: worktree, WorkLocation: null, BorrowedFrom: null,
             MachineBadge: null, RepoGroupKey: repo.Key, RepoGroupLabel: repo.Label,
             CheckoutKey: "@server", CheckoutLabel: "",
             OwnerUserId: dto.Owner?.UserId, OwnerName: dto.Owner?.DisplayName ?? dto.Owner?.Username,
