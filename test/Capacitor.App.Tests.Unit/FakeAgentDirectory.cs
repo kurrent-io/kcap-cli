@@ -58,6 +58,11 @@ sealed class FakeAgentDirectory : IAgentDirectory, IDisposable {
         return map;
     }
 
+    /// Session id -> what RowForSession answers; a missing id answers null.
+    public Dictionary<string, (string Id, AgentOrigin Origin)> SessionRows { get; } = new(StringComparer.Ordinal);
+    public (string Id, AgentOrigin Origin)? RowForSession(string sessionId) =>
+        SessionRows.TryGetValue(sessionId, out var row) ? row : null;
+
     public void Dispose() {
         Rows.Dispose();
         RemoteStale.Dispose();
