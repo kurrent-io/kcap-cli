@@ -595,4 +595,34 @@ public class PullRequestPresentationTests {
         window.UpdateLayout();
         Dispatcher.UIThread.RunJobs();
     }
+
+    [Test]
+    [Arguments("exact", "Checks pending · 9/12")]
+    [Arguments("lower_bound", "Checks pending")]
+    [Arguments("unknown", "Checks pending")]
+    public Task A_pending_summary_shows_completed_over_total_only_when_every_count_is_exact_and_known(string kind, string expected) => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        h.Source.OverviewResponses.Enqueue((subject, _) => {
+            var read = h.Source.Overview(subject);
+            var counts = new Dictionary<string, PullRequestCountDto> {
+                ["success"] = new() { Kind = "exact", Value = 8 }, ["skipped"] = new() { Kind = "exact", Value = 1 }, ["pending"] = new() { Kind = kind == "lower_bound" ? kind : "exact", Value = 3 } };
+            if (kind == "unknown") counts["unknown"] = new() { Kind = "exact", Value = 1 };
+            return Task.FromResult(read with { Data = read.Data! with { Checks = read.Data.Checks! with { Rollup = "pending", Counts = counts } } });
+        });
+        await h.ShowAsync();
+        await Assert.That(h.Model.ChecksStatus.Text).IsEqualTo(expected);
+    });
+
+    [Test]
+    public Task A_complete_check_page_with_pending_rows_shows_completed_over_total() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        h.Source.TotalPages = 1;
+        h.Source.PageItem = section => section == "checks"
+            ? new PullRequestCheckDto { Id = "item-0", Availability = "available", Name = "test", Outcome = "pending", HeadSha = new string('a', 40) } : null;
+        await h.ShowAsync();
+        h.Model.SelectedTabIndex = 1;
+        await h.SettleAsync();
+        await Assert.That(h.Model.ChecksStatus.Text).IsEqualTo("Checks pending · 0/1");
+        await Assert.That(h.Model.ChecksStatus.Detail).IsEqualTo("Checks are still running (0 failed · 1 pending · 0 passed).");
+    });
 }

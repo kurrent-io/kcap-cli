@@ -27,6 +27,9 @@ public interface IAgentDirectory {
     IObservable<IReadOnlyDictionary<string, string>> SessionAgents { get; }
     /// The vendor of the row whose SessionId matches, or null.
     string? VendorOfSession(string sessionId);
+    /// The row a rail click on this server-lane session id opens: a daemon row that survived the
+    /// merge (local first), else its server row, else null.
+    (string Id, AgentOrigin Origin)? RowForSession(string sessionId);
     /// Whether the local daemon has proven it hosts this agent — the daemon proved to be its
     /// server twin registers it. A shared agent id proves nothing: the dedup fails open.
     bool IsProvenLocalTwin(string agentId);
@@ -34,6 +37,11 @@ public interface IAgentDirectory {
     /// a same-id row on the remote lane is a different agent and leaves it in place. It is
     /// dropped by the caller on a launch failure, and expires on its own after ten minutes.
     void AddPlaceholder(string agentId, string vendor, string repoPath, string? title, string? model);
+    /// The remote-lane counterpart, standing until the registry lists the id in any status. Keyed
+    /// by the id as given, which should be the server's own spelling so the real row replaces it.
+    void AddRemotePlaceholder(
+        string agentId, string machine, string? ownerUserId, string vendor, string repoPath, string? title, string? model);
+    /// Drops the launch's stand-in on either lane.
     void RemovePlaceholder(string agentId);
 }
 
@@ -68,12 +76,15 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
     List<AgentStatusDto> _localAgents = [];
     List<PendingLaunchDto> _pendingLaunches = [];
     readonly Dictionary<string, AgentRow> _placeholders = new(StringComparer.Ordinal);
+    readonly Dictionary<string, AgentRow> _remotePlaceholders = new(StringComparer.Ordinal);
     static readonly TimeSpan PlaceholderTtl = TimeSpan.FromMinutes(10);
     FrozenSet<string> _twinAgents = FrozenSet<string>.Empty;
     bool _registryCurrent;
     List<RepoSessionDto> _serverLive = [];
     List<RepoSessionDto> _serverMineLive = [];
     List<RepoSessionDto> _serverEnded = [];
+    RepoSessionDto? _serverPinned;
+    string? _serverPinnedId;
     RailScope _scope = RailScope.Mine;
     IReadOnlySet<string> _viewerIds = FrozenSet<string>.Empty;
     /// Session id → when its hosted presentation lapses; written while a daemon row suppresses the
@@ -108,6 +119,8 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
                         _serverLive = [.. snapshot.Live];
                         _serverMineLive = [.. snapshot.MineLive];
                         _serverEnded = [.. snapshot.Ended];
+                        _serverPinned = snapshot.Pinned;
+                        _serverPinnedId = snapshot.PinnedSessionId;
                     }
                     Recompute();
                 })
@@ -192,6 +205,16 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
         ServerSessionRows(_rows.Items, _onAppServer.Value)
             .Where(r => r.SessionId == sessionId).OrderBy(r => r.Origin).Select(r => r.Vendor).FirstOrDefault();
 
+    public (string Id, AgentOrigin Origin)? RowForSession(string sessionId) {
+        var rows = _rows.Items.ToList();
+        var daemon = ServerSessionRows(rows, _onAppServer.Value)
+            .Where(r => SessionIds.Canonical(r.SessionId) is { } own && (own == sessionId || SessionIds.ServerToken(own) == sessionId))
+            .OrderBy(r => r.Origin)
+            .FirstOrDefault();
+        if (daemon is not null) return (daemon.Id, daemon.Origin);
+        return rows.FirstOrDefault(r => r.Key == $"server:{sessionId}") is { } server ? (server.Id, server.Origin) : null;
+    }
+
     public bool IsProvenLocalTwin(string agentId) => _twinAgents.Contains(agentId);
 
     // Placeholders are keyed by the normalized id: the server accepts a launch under one spelling
@@ -202,9 +225,28 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
         Recompute();
     }
 
+    public void AddRemotePlaceholder(
+            string agentId, string machine, string? ownerUserId, string vendor, string repoPath, string? title, string? model) {
+        if (AgentIds.Normalize(agentId) is not { } key) return;
+        lock (_lock) {
+            var daemonKey = $"{ownerUserId}/{machine}";
+            // The registry names the repository by its remote, which only the target machine knows;
+            // a row it already lists for the same checkout keeps the stand-in in that row's group.
+            var sibling = _remoteAgents.FirstOrDefault(a =>
+                a.DaemonName == machine && a.OwnerUserId == ownerUserId && a.RepoPath == repoPath);
+            var repo = RepoIdentityResolver.ForRemote(sibling?.RepoOwner, sibling?.RepoName, repoPath, daemonKey);
+            _remotePlaceholders[key] = AgentRow.RemotePlaceholder(
+                agentId, machine, vendor, repoPath, title, model, _time.GetUtcNow().UtcDateTime, repo, daemonKey);
+        }
+        Recompute();
+    }
+
     public void RemovePlaceholder(string agentId) {
         if (AgentIds.Normalize(agentId) is not { } key) return;
-        lock (_lock) _placeholders.Remove(key);
+        lock (_lock) {
+            _placeholders.Remove(key);
+            _remotePlaceholders.Remove(key);
+        }
         Recompute();
     }
 
@@ -299,10 +341,16 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
             // their normalized form because the two lanes spell a Guid differently.
             var published = next.Where(r => r.Origin == AgentOrigin.Local).Select(r => AgentIds.Normalize(r.Id)).OfType<string>().ToHashSet(StringComparer.Ordinal);
             foreach (var id in _placeholders.Keys.Where(published.Contains).ToList()) _placeholders.Remove(id);
+            // Any registry row retires a remote stand-in, a failed one included: from then on the
+            // registry speaks for the launch.
+            var registered = _remoteAgents.Select(a => AgentIds.Normalize(a.AgentId)).OfType<string>().ToHashSet(StringComparer.Ordinal);
+            foreach (var id in _remotePlaceholders.Keys.Where(registered.Contains).ToList()) _remotePlaceholders.Remove(id);
             var now = _time.GetUtcNow().UtcDateTime;
             foreach (var id in _placeholders.Where(kv => kv.Value.CreatedAt + PlaceholderTtl <= now).Select(kv => kv.Key).ToList()) _placeholders.Remove(id);
+            foreach (var id in _remotePlaceholders.Where(kv => kv.Value.CreatedAt + PlaceholderTtl <= now).Select(kv => kv.Key).ToList()) _remotePlaceholders.Remove(id);
+            var standIns = _placeholders.Values.Concat(_remotePlaceholders.Values).ToList();
             // Infinite when nothing is pending; otherwise positive, since every expired entry was just removed.
-            var nextExpiry = _placeholders.Count == 0 ? Timeout.InfiniteTimeSpan : _placeholders.Values.Min(r => r.CreatedAt) + PlaceholderTtl - now;
+            var nextExpiry = standIns.Count == 0 ? Timeout.InfiniteTimeSpan : standIns.Min(r => r.CreatedAt) + PlaceholderTtl - now;
             _placeholderExpiry.Change(nextExpiry, Timeout.InfiniteTimeSpan);
             var pendingRows = _pendingLaunches
                 .Where(p => AgentIds.Normalize(p.Id) is { } id && !published.Contains(id))
@@ -311,6 +359,7 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
             var starting = pendingRows.Select(r => AgentIds.Normalize(r.Id)).OfType<string>().ToHashSet(StringComparer.Ordinal);
             next.AddRange(pendingRows);
             next.AddRange(_placeholders.Values.Where(r => !starting.Contains(r.Id)));
+            next.AddRange(_remotePlaceholders.Values);
 
             var nextKeys = next.Select(r => r.Key).ToHashSet(StringComparer.Ordinal);
             _rows.Edit(cache => {
@@ -337,7 +386,8 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
     /// what the user needs; a cached row the lane merely retains yields to a server row that says
     /// the session ended and hides one that says it is still active. Under Mine, the scoped live
     /// listing is the ownership proof for every daemon row the server has listed, and a registry row
-    /// the server has not listed is hidden while a local one is presumed the viewer's own.
+    /// the server has not listed is hidden while a local one is presumed the viewer's own. The pinned
+    /// session is exempt from that filter, and joins the merge under either scope.
     void MergeServerLane(List<AgentRow> next) {
         var now = _time.GetUtcNow().UtcDateTime;
         var localMatchable = ServerIdentity.SameServer(_localServerUrl, _appServerUrl);
@@ -348,9 +398,13 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
         foreach (var dto in _serverLive) listed[dto.SessionId] = dto;
         foreach (var dto in _serverMineLive) listed.TryAdd(dto.SessionId, dto);
         foreach (var dto in _serverEnded) listed.TryAdd(dto.SessionId, dto);
+        if (_serverPinned is { } pinned) listed.TryAdd(pinned.SessionId, pinned);
         var mine = _serverMineLive.Select(dto => dto.SessionId).ToHashSet(StringComparer.Ordinal);
         if (_scope == RailScope.Mine) foreach (var dto in _serverEnded) mine.Add(dto.SessionId);
 
+        // A pinned session no Mine listing proves the viewer's is judged by owner id, never by scope.
+        bool? Ownership(RepoSessionDto dto, string sid) =>
+            sid == _serverPinnedId && !mine.Contains(sid) ? ViewerOwns(dto) : OwnerIsViewer(dto, mine.Contains(sid));
         bool Matchable(AgentRow row) => row.Origin == AgentOrigin.Local ? localMatchable : registryMatchable;
         // The daemon spells a hook's GUID as it came and an ACP id as the vendor gave it; the server
         // files the first as 32 hex digits and the second under its own token. The server's spelling
@@ -371,7 +425,7 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
                 OwnerUserId = dto.Owner?.UserId,
                 OwnerName = dto.Owner?.DisplayName ?? dto.Owner?.Username,
                 OwnerAvatarUrl = dto.Owner?.AvatarUrl,
-                OwnerIsViewer = OwnerIsViewer(dto, mine.Contains(sid)),
+                OwnerIsViewer = Ownership(dto, sid),
                 LastActivityAt = dto.LastActivityAt.UtcDateTime,
                 ListedPullRequests = dto.PullRequests,
                 Branch = row.Branch ?? dto.Branch,
@@ -380,7 +434,7 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
         if (_scope == RailScope.Mine) {
             next.RemoveAll(row => {
                 if (row.Origin is not (AgentOrigin.Local or AgentOrigin.Remote) || !Matchable(row)) return false;
-                if (listedIdOf.GetValueOrDefault(row.Key) is { } sid) return !mine.Contains(sid);
+                if (listedIdOf.GetValueOrDefault(row.Key) is { } sid) return !mine.Contains(sid) && sid != _serverPinnedId;
                 // The registry names the owner before the listing names the session.
                 return row.Origin == AgentOrigin.Remote && !(row.OwnerUserId is { } owner && _viewerIds.Contains(owner));
             });
@@ -389,6 +443,7 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
         var source = (_scope == RailScope.Mine ? _serverMineLive : _serverLive).Concat(_serverEnded);
         var byId = new Dictionary<string, RepoSessionDto>(StringComparer.Ordinal);
         foreach (var dto in source) byId[dto.SessionId] = dto;
+        if (_serverPinnedId is { } pinnedId && listed.TryGetValue(pinnedId, out var pinnedDto)) byId.TryAdd(pinnedId, pinnedDto);
         foreach (var dto in byId.Values) {
             var sid = dto.SessionId;
             var serverEnded = dto.Status != "active";
@@ -422,7 +477,7 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
             if (hostedNow) _hostedUntil[sid] = now + HandoverGrace;
             if (suppressServer) continue;
             var hosted = _hostedUntil.TryGetValue(sid, out var until) && until > now;
-            next.Add(AgentRow.FromServer(dto, hosted) with { OwnerIsViewer = OwnerIsViewer(dto, mine.Contains(sid) || (_scope == RailScope.Mine && serverEnded)) });
+            next.Add(AgentRow.FromServer(dto, hosted) with { OwnerIsViewer = Ownership(dto, sid) });
         }
 
         foreach (var sid in _hostedUntil.Where(kv => kv.Value <= now).Select(kv => kv.Key).ToList()) _hostedUntil.Remove(sid);
@@ -431,10 +486,10 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
     }
 
     /// Under Mine the scoped listing answers; under Team only the account's ids can, and only once known.
-    bool? OwnerIsViewer(RepoSessionDto dto, bool inMine) =>
-        _scope == RailScope.Mine ? inMine
-        : _viewerIds.Count > 0 && dto.Owner is { } owner ? _viewerIds.Contains(owner.UserId)
-        : null;
+    bool? OwnerIsViewer(RepoSessionDto dto, bool inMine) => _scope == RailScope.Mine ? inMine : ViewerOwns(dto);
+
+    bool? ViewerOwns(RepoSessionDto dto) =>
+        _viewerIds.Count > 0 && dto.Owner is { } owner ? _viewerIds.Contains(owner.UserId) : null;
 
     public void Dispose() {
         lock (_lock) {

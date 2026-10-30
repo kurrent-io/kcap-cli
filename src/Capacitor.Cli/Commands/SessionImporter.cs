@@ -1,4 +1,5 @@
 using System.Net;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -116,6 +117,8 @@ static class SessionImporter {
             lineIndex++;
         }
 
+        var completeLines = CompleteLines(stream, lineIndex);
+
         // Flush remaining main transcript lines
         if (!batch.IsEmpty) await FlushAsync();
 
@@ -174,7 +177,7 @@ static class SessionImporter {
             }
         }
 
-        return new ImportResult(sessionId, agentIds, totalSent);
+        return new ImportResult(sessionId, agentIds, totalSent, completeLines);
 
         async Task FlushAsync() =>
             totalSent += await FlushBatchAsync(
@@ -525,6 +528,7 @@ static class SessionImporter {
     /// is what catches a marker written during the only batch of a short transcript. Keep it cheap: a
     /// marker check over an already-resolved identity, not a correlator run per batch.
     /// </param>
+    /// <param name="completeLines">Receives <see cref="CompleteLines"/> for the read.</param>
     internal static async Task<int> SendTranscriptBatches(
             HttpClient                 httpClient,
             string                     baseUrl,
@@ -537,7 +541,8 @@ static class SessionImporter {
             HarnessId                  vendor            = HarnessId.Claude,
             int                        lineNumberOffset  = 0,
             bool                       failOnError       = false,
-            Func<bool>?                abortDelivery     = null
+            Func<bool>?                abortDelivery     = null,
+            StrongBox<int>?            completeLines     = null
         ) {
         if (!File.Exists(filePath)) return 0;
 
@@ -569,6 +574,8 @@ static class SessionImporter {
 
             lineIndex++;
         }
+
+        completeLines?.Value = CompleteLines(stream, lineIndex);
 
         if (!batch.IsEmpty) await FlushAsync();
 
@@ -673,6 +680,23 @@ static class SessionImporter {
     }
 
     /// <summary>
+    /// The lines a read that just reached end of file consumed, not counting a last line no newline has
+    /// ended yet: the agent may still be writing it, so it is not delivered for good.
+    /// </summary>
+    static int CompleteLines(FileStream stream, int linesRead) {
+        try {
+            var end = stream.Position;
+            if (end == 0 || linesRead == 0) return 0;
+
+            stream.Position = end - 1;
+
+            return stream.ReadByte() is '\n' or '\r' ? linesRead : linesRead - 1;
+        } catch (IOException) {
+            return 0;
+        }
+    }
+
+    /// <summary>
     /// Discover agent transcript files in the subagents/ directory alongside the session transcript.
     /// </summary>
     internal static List<(string AgentId, string Path)> DiscoverAgentTranscripts(string sessionTranscriptPath) {
@@ -733,4 +757,6 @@ static class SessionImporter {
     }
 }
 
-public record ImportResult(string SessionId, List<string> AgentIds, int LinesSent);
+/// <param name="CompleteLines">How many of the main transcript's lines the read covered, a last line still
+/// being written aside.</param>
+public record ImportResult(string SessionId, List<string> AgentIds, int LinesSent, int CompleteLines = 0);

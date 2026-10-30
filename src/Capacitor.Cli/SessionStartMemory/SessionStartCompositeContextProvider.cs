@@ -71,16 +71,16 @@ internal sealed class SessionStartCompositeContextProvider(
             SessionStartMemoryContextResult? memoryResult, SessionStartMemoryContextResult? guidelinesResult, SessionStartMemoryContextResult? flowsResult) {
         var memoryFragment     = Fragment(memoryResult);
         var guidelinesFragment = Fragment(guidelinesResult);
-        var flowsFragment      = Fragment(flowsResult);
+        // A flows retry can still carry a fragment of its own: the wake-up nudge, confirmed while the catalogue was not.
+        var flowsFragment      = Fragment(flowsResult) ?? (IsRetry(flowsResult) ? flowsResult!.Fragment : null);
 
         if (memoryFragment is not null || guidelinesFragment is not null)
             return Committed(Compose(memoryFragment, guidelinesFragment, flowsFragment));
 
-        if (IsRetry(memoryResult) || IsRetry(guidelinesResult))
+        if (IsRetry(memoryResult) || IsRetry(guidelinesResult) || IsRetry(flowsResult))
             return Retry([memoryResult, guidelinesResult, flowsResult]) with { Fragment = flowsFragment is null ? null : Compose(null, null, flowsFragment) };
 
         if (flowsFragment is not null) return Committed(Compose(null, null, flowsFragment));
-        if (IsRetry(flowsResult)) return Retry([flowsResult]);
 
         return SessionStartMemoryContextResult.Empty;
 

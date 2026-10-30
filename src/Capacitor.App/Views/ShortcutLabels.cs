@@ -8,5 +8,7 @@ public static class ShortcutLabels {
 
     public static string NewSession { get; } = For("N", UsesCommandKey);
 
+    public static string Search { get; } = For("K", UsesCommandKey);
+
     public static string For(string key, bool isMacOs) => isMacOs ? $"⌘{key}" : $"Ctrl+{key}";
 }

@@ -29,9 +29,10 @@ internal static class TranscriptFileClassification {
         ) {
         using var probeGate = new SemaphoreSlim(8);
         var       tasks     = new List<Task<ImportCommand.SessionClassification>>(transcripts.Count);
+        var       ledger    = TranscriptImportLedger.Load(config);
 
         foreach (var (sessionId, filePath, encodedCwd) in transcripts) {
-            tasks.Add(ClassifyOneAsync(router, config, home, httpClient, time, baseUrl, sessionId, filePath, encodedCwd, minLines, probeGate, vendor, onProbed, ct));
+            tasks.Add(ClassifyOneAsync(router, config, home, httpClient, time, baseUrl, sessionId, filePath, encodedCwd, minLines, probeGate, vendor, ledger, onProbed, ct));
         }
 
         var results = await Task.WhenAll(tasks);
@@ -40,42 +41,44 @@ internal static class TranscriptFileClassification {
     }
 
     static async Task<ImportCommand.SessionClassification> ClassifyOneAsync(
-            GitProviderRouter router,
-            ConfigRoot        config,
-            UserHome          home,
-            HttpClient        httpClient,
-            TimeProvider      time,
-            string            baseUrl,
-            string            sessionId,
-            string            filePath,
-            string            encodedCwd,
-            int               minLines,
-            SemaphoreSlim     probeGate,
-            HarnessId         vendor,
-            Action?           onProbed,
-            CancellationToken ct
+            GitProviderRouter      router,
+            ConfigRoot             config,
+            UserHome               home,
+            HttpClient             httpClient,
+            TimeProvider           time,
+            string                 baseUrl,
+            string                 sessionId,
+            string                 filePath,
+            string                 encodedCwd,
+            int                    minLines,
+            SemaphoreSlim          probeGate,
+            HarnessId              vendor,
+            TranscriptImportLedger ledger,
+            Action?                onProbed,
+            CancellationToken      ct
         ) {
         try {
-            return await ClassifyOneCoreAsync(router, config, home, httpClient, time, baseUrl, sessionId, filePath, encodedCwd, minLines, probeGate, vendor, ct);
+            return await ClassifyOneCoreAsync(router, config, home, httpClient, time, baseUrl, sessionId, filePath, encodedCwd, minLines, probeGate, vendor, ledger, ct);
         } finally {
             onProbed?.Invoke();
         }
     }
 
     static async Task<ImportCommand.SessionClassification> ClassifyOneCoreAsync(
-            GitProviderRouter router,
-            ConfigRoot        config,
-            UserHome          home,
-            HttpClient        httpClient,
-            TimeProvider      time,
-            string            baseUrl,
-            string            sessionId,
-            string            filePath,
-            string            encodedCwd,
-            int               minLines,
-            SemaphoreSlim     probeGate,
-            HarnessId         vendor,
-            CancellationToken ct
+            GitProviderRouter      router,
+            ConfigRoot             config,
+            UserHome               home,
+            HttpClient             httpClient,
+            TimeProvider           time,
+            string                 baseUrl,
+            string                 sessionId,
+            string                 filePath,
+            string                 encodedCwd,
+            int                    minLines,
+            SemaphoreSlim          probeGate,
+            HarnessId              vendor,
+            TranscriptImportLedger ledger,
+            CancellationToken      ct
         ) {
         var isCodex = vendor is HarnessId.Codex;
         var meta    = isCodex ? ImportCommand.ExtractCodexSessionMetadata(filePath) : ImportCommand.ExtractSessionMetadata(filePath);
@@ -136,7 +139,7 @@ internal static class TranscriptFileClassification {
                         using var doc  = JsonDocument.Parse(json);
 
                         if (doc.RootElement.Num("last_line_number") is { } lastLine) {
-                            resumeFromLine = (int)lastLine + 1;
+                            resumeFromLine = ledger.ResumeFrom(baseUrl, sessionId, (int)lastLine) ?? (int)lastLine + 1;
                             status         = ImportCommand.ClassificationStatus.Partial;
                         } else {
                             status = ImportCommand.ClassificationStatus.AlreadyLoaded;

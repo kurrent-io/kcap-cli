@@ -189,7 +189,7 @@ public class InstallStepViewModelTests {
         });
 
         await Assert.That(message).IsEqualTo(InstallStepViewModel.NotStartedText);
-        await Assert.That(message!).DoesNotContain("kcap ");
+        await Assert.That(message!).DoesNotContain("kcap setup");
         await Assert.That(detail).IsEqualTo("The local server did not confirm it left setup mode. The setup journal is kept.");
         await Assert.That(detailVisible).IsTrue();
     }

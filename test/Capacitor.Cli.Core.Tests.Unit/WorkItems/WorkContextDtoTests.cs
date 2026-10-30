@@ -56,7 +56,10 @@ public class WorkContextDtoTests {
         await Assert.That(summary.DefaultVisibility).IsEqualTo("org");
         await Assert.That(summary.DetailLevel).IsEqualTo("activity");
         await Assert.That(summary.AgentVisibility).IsEqualTo("scoped");
-        await Assert.That(summary.Stats!.TokenUsageByModel[0].Total).IsEqualTo(100L);
+        await Assert.That(summary.Stats!.TokenUsageByModel[0].InputTokens).IsEqualTo(10L);
+        await Assert.That(summary.Stats.TokenUsageByModel[0].OutputTokens).IsEqualTo(20L);
+        await Assert.That(summary.Stats.TokenUsageByModel[0].CacheReadTokens).IsEqualTo(30L);
+        await Assert.That(summary.Stats.TokenUsageByModel[0].CacheWriteTokens).IsEqualTo(40L);
         await Assert.That(summary.Stats.PeakContextTokens).IsEqualTo(142_000L);
         await Assert.That(summary.Stats.ContextWindow).IsEqualTo(200_000L);
         await Assert.That(summary.Stats.EstimatedCostUsd).IsEqualTo(1.25);

@@ -161,8 +161,5 @@
                    Text="{x:Static vm:SetupLocation.NothingSelectedNote}" />
         <TextBlock Classes="onboardingNote" IsVisible="{Binding ConnectionsSaved}"
                    Text="{Binding SavedNote}" />
-        <TextBlock Classes="onboardingNote" IsVisible="{Binding !DeclineVisible}">
-            <Run Text="Then you can ask " /><Run Text="“have I hit this before?”" Foreground="{StaticResource OnboardingMutedBrush}" /><Run Text=" or " /><Run Text="“what did I change in the importer last week?”" Foreground="{StaticResource OnboardingMutedBrush}" />
-        </TextBlock>
     </StackPanel>
 </UserControl>

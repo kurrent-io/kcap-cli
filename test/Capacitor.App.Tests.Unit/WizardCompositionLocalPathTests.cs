@@ -212,7 +212,7 @@ public class WizardCompositionLocalPathTests {
         harness.Cli.SetupLocalBehavior = async (onLine, _, _) => {
             await release.Task;
             File.Delete(root.JournalPath);
-            onLine(new StreamedLine(ProcessStreamKind.Stdout, LocalSetupScript.Failed("start_failed")));
+            onLine(new StreamedLine(ProcessStreamKind.Stdout, LocalSetupScript.Failed("download_failed")));
 
             return new StreamingResult(1, false, []);
         };

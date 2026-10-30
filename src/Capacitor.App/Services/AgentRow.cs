@@ -48,6 +48,8 @@ public sealed record AgentRow(
         string? AccountId = null,
         // The branch the listing reported; null below full access and on a daemon row.
         string? Branch = null,
+        // The app's own stand-in on the remote lane, until the registry publishes the launch.
+        bool IsPlaceholder = false,
         string? AccountLabel = null) {
 
     /// A session the server lists as ended; a daemon row's Completed is not this.
@@ -128,6 +130,18 @@ public sealed record AgentRow(
             string agentId, string vendor, string repoPath, string? title, string? model, DateTime createdAt, RepoIdentity repo) =>
         FromPending(new PendingLaunchDto(agentId, vendor, repoPath, title, createdAt, null), repo)
             with { Model = string.IsNullOrEmpty(model) ? null : model };
+
+    /// The app's stand-in for a launch the server accepted at another machine, keyed as the
+    /// registry will key the agent so a workspace opened on it follows the real row in place.
+    public static AgentRow RemotePlaceholder(
+            string agentId, string machine, string vendor, string repoPath, string? title, string? model,
+            DateTime createdAt, RepoIdentity repo, string daemonKey) => new(
+        Key: $"remote:{agentId}", Origin: AgentOrigin.Remote, Id: agentId, SessionId: null, Kind: "agent",
+        Vendor: vendor, Status: "Starting", CreatedAt: createdAt, RepoPath: repoPath,
+        Title: title, Model: string.IsNullOrEmpty(model) ? null : model, RequesterDisplay: null,
+        WorktreePath: null, WorkLocation: null, BorrowedFrom: null,
+        MachineBadge: machine, RepoGroupKey: repo.Key, RepoGroupLabel: repo.Label,
+        CheckoutKey: $"@{daemonKey}", CheckoutLabel: $"on {machine}", IsPlaceholder: true);
 
     internal static string? TitleFromPrompt(string? prompt) {
         if (string.IsNullOrWhiteSpace(prompt)) return null;
