@@ -631,6 +631,24 @@ public class AgentDirectoryTests {
         await Assert.That(row.Branch).IsEqualTo("feature");
     }
 
+    /// A remote launch's registry row leaves the registry when it stops; its repository stays on the server row.
+    [Test]
+    public async Task The_server_row_that_replaces_a_registry_row_keeps_its_repository() {
+        var (_, remote, sessions, _, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        remote.Cache.AddOrUpdate(Remote("b1", daemon: "home-pc", owner: "me", sessionId: "S") with { RepoPath = "/home/r" });
+        sessions.LiveCache.AddOrUpdate(Listed("S", "active") with { Cwd = "/home/r/.wt/b1" });
+        sessions.MineLiveCache.AddOrUpdate(Listed("S", "active") with { Cwd = "/home/r/.wt/b1" });
+
+        remote.Cache.RemoveKey("b1");
+        sessions.LiveCache.RemoveKey("S");
+        sessions.MineLiveCache.RemoveKey("S");
+        sessions.EndedCache.AddOrUpdate(Listed("S") with { Cwd = "/home/r/.wt/b1" });
+
+        await Assert.That(dir.Rows.Lookup("server:S").Value.RepoPath).IsEqualTo("/home/r");
+    }
+
     [Test]
     public async Task Mine_hides_a_teammates_hosted_row_and_keeps_unknown_local_rows() {
         var (local, remote, sessions, _, dir) = BuildWithSessions();
