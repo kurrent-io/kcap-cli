@@ -38,6 +38,16 @@ sealed class RemoteHost : IDisposable {
             () => new FakeTerminalSurface(), pullRequests: pullRequests, drafts: drafts);
     }
 
+    /// A workspace over a remote launch's placeholder, before the registry lists the agent.
+    public RemoteSessionViewModel NewPlaceholder(string agentId) {
+        var row = AgentRow.RemotePlaceholder(agentId, "work-mac", "claude", "/w/r", null, null, DateTime.UtcNow,
+            new RepoIdentity("daemon:u1/work-mac:/w/r", "r"), "u1/work-mac");
+        Directory.Rows.AddOrUpdate(row);
+        return new RemoteSessionViewModel(row, Directory, _access, _permissions, WorkspaceFixtures.NewActions(), _lane,
+            (_, _) => Task.FromResult(new SessionDetailFetch(null)), new RecordingOpener(), new FakeTimeProvider(), WorkSource,
+            () => new FakeTerminalSurface());
+    }
+
     /// A session-only workspace over a row the server lists with no daemon behind it.
     public RemoteSessionViewModel NewServer(string sessionId, string status = "ended") {
         var row = ServerRow(sessionId, status);

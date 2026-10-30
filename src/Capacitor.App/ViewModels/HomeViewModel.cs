@@ -6,6 +6,7 @@ using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Runtime.CompilerServices;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
@@ -516,10 +517,12 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     /// One accepted launch awaiting settlement. UploadedAt is null for a text-only launch; both
     /// stamps come from the same clock, so one TimeProvider governs every expiry. Generation is
-    /// the navigation generation captured before the launch call.
+    /// the navigation generation captured before the launch call, or the one its placeholder's open
+    /// left. It is shared rather than copied: a row confirmed while the placeholder opens is opened
+    /// later on the UI thread, which reads it only after that open has moved it on.
     sealed record PendingLaunch(
         DateTimeOffset At, AgentOrigin Lane, bool HadAttachments, DateTimeOffset? UploadedAt,
-        string RepoPath, int Generation, string Machine);
+        string RepoPath, StrongBox<int> Generation, string Machine);
 
     /// The only copy of a sent launch's bytes, held until the daemon settles that launch or the
     /// window closes. The two counters are what the composer looked like AFTER the launch emptied
@@ -559,8 +562,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// </param>
     /// <param name="openSessionIfCurrent">
     /// The launch auto-open (MainWindowViewModel.OpenSessionIfCurrent), carrying the lane and that
-    /// captured generation. A remote launch has no placeholder row, so it opens only once its
-    /// directory row arrives — the remote workspace cannot open an id no lane holds.
+    /// captured generation. Either lane's launch opens on its placeholder row at once.
     /// </param>
     /// <param name="requestSignIn">Opens the re-auth sign-in surface (App owns the window). Null
     /// leaves the Sign in button inert — a HomeViewModel with no windows to open.</param>
@@ -1873,13 +1875,26 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
                 _retainedDraft = new RetainedDraft(
                     agentId, draft, uploadedAt!.Value, clearedGoal, _goalEdits, clearedTray, Tray.Generation);
         var lane = draft.Remote ? AgentOrigin.Remote : AgentOrigin.Local;
+        var opensUnder = new StrongBox<int>(generation);
         var tracked = RecordPendingLaunch(
-            agentId, lane, draft.Files.Count > 0, uploadedAt, draft.RepoPath, generation, draft.Machine);
-        // The placeholder is a local-lane row. A remote launch opens from ConfirmPendingRows when
-        // its row arrives, or here when that row beat the registration.
+            agentId, lane, draft.Files.Count > 0, uploadedAt, draft.RepoPath, opensUnder, draft.Machine);
         if (draft.Remote) {
-            if (!tracked && RowId(agentId, AgentOrigin.Remote) is { } rowId)
-                _openSessionIfCurrent?.Invoke(rowId, AgentOrigin.Remote, generation);
+            if (!tracked) {
+                if (RowId(agentId, AgentOrigin.Remote) is { } rowId)
+                    _openSessionIfCurrent?.Invoke(rowId, AgentOrigin.Remote, generation);
+                return;
+            }
+            // Keyed by the server's own spelling, which the registry row is expected to share.
+            _directory?.AddRemotePlaceholder(outcome.AgentId!, draft.Machine, _lastViewerId, draft.Vendor, draft.RepoPath,
+                AgentRow.TitleFromPrompt(draft.Goal), draft.Model);
+            // A navigation while the launch was in flight refuses the open, and the launch must stay
+            // unable to open later.
+            if ((_navigationGeneration?.Invoke() ?? 0) != generation) return;
+            _openSessionIfCurrent?.Invoke(outcome.AgentId!, AgentOrigin.Remote, generation);
+            // Opening moved the generation on. Should the registry spell the id differently, its
+            // row lands under another key, and ConfirmPendingRows still swaps the open placeholder
+            // workspace over to it unless the user has navigated since.
+            if (_navigationGeneration?.Invoke() is { } opened) opensUnder.Value = opened;
             return;
         }
         if (tracked)
@@ -1897,7 +1912,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// False when a row or a buffered failure has already settled the launch.
     bool RecordPendingLaunch(
             string agentId, AgentOrigin lane, bool hadAttachments, DateTimeOffset? uploadedAt,
-            string repoPath, int generation, string machine) {
+            string repoPath, StrongBox<int> generation, string machine) {
         // A row for this id confirms success, and it can appear on either side of the registration
         // below: the launch may have succeeded before this method ran at all, or the directory's
         // Add may land while it runs — at which point ConfirmPendingRows finds nothing pending yet
@@ -2040,12 +2055,14 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// NormalizeAgentId comparison as ApplyFailureIfPending, for the same id-shape reason.
     /// A remote launch's row is also its auto-open: the remote workspace needs that row to exist.
     void ConfirmPendingRows(IChangeSet<AgentRow, string> changes) {
-        List<(string AgentId, int Generation)>? remoteOpens = null;
+        List<(string AgentId, StrongBox<int> Generation)>? remoteOpens = null;
         lock (_launchTrackingLock) {
-            // A pending row is the launch's own stand-in, so only a published one on the launch's
-            // own lane settles it.
+            // A pending row or placeholder is the launch's own stand-in, so only a published row on
+            // the launch's own lane settles it. The registry's row can replace a remote placeholder
+            // under the same key, which arrives as an update.
             foreach (var change in changes)
-                if (change.Reason == ChangeReason.Add && NormalizeAgentId(change.Current.Id) is { } agentId
+                if (change.Reason is ChangeReason.Add or ChangeReason.Update && !change.Current.IsPlaceholder
+                    && NormalizeAgentId(change.Current.Id) is { } agentId
                     && _pendingLaunches.TryGetValue(agentId, out var pending) && pending.Lane == change.Current.Origin) {
                     _pendingLaunches.Remove(agentId);
                     _recentFailures.Remove(agentId);
@@ -2058,7 +2075,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         if (remoteOpens is not null && _openSessionIfCurrent is { } open)
             RxSchedulers.MainThreadScheduler.Schedule(() => {
                 if (_disposed) return;
-                foreach (var (agentId, generation) in remoteOpens) open(agentId, AgentOrigin.Remote, generation);
+                foreach (var (agentId, generation) in remoteOpens) open(agentId, AgentOrigin.Remote, generation.Value);
             });
     }
 

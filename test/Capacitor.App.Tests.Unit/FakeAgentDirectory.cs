@@ -35,10 +35,15 @@ sealed class FakeAgentDirectory : IAgentDirectory, IDisposable {
 
     /// Placeholder calls as received, in order; a test asserts on them rather than on rows.
     public List<(string Id, string Vendor, string RepoPath, string? Title, string? Model)> Placeholders { get; } = [];
+    public List<(string Id, string Machine, string? Owner, string Vendor, string RepoPath)> RemotePlaceholders { get; } = [];
     public List<string> RemovedPlaceholders { get; } = [];
 
     public void AddPlaceholder(string agentId, string vendor, string repoPath, string? title, string? model) =>
         Placeholders.Add((agentId, vendor, repoPath, title, model));
+
+    public void AddRemotePlaceholder(
+            string agentId, string machine, string? ownerUserId, string vendor, string repoPath, string? title, string? model) =>
+        RemotePlaceholders.Add((agentId, machine, ownerUserId, vendor, repoPath));
 
     public void RemovePlaceholder(string agentId) => RemovedPlaceholders.Add(agentId);
 
