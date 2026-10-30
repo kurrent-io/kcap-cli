@@ -394,6 +394,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
                 _dropped.OnNext(sessionId);
                 _tombstones[sessionId] = ++_deleteSeq;
                 if (_kept == sessionId) _keptRow = null;
+                if (_pendingPinId == sessionId) _pendingPinDeleted = true;
                 MarkPinGone();
                 EmitSnapshot();
             }

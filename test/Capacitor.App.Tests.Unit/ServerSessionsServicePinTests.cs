@@ -257,6 +257,24 @@ public class ServerSessionsServicePinTests {
     }
 
     [Test]
+    public async Task An_unavailable_refresh_rejects_a_pin_of_the_same_session_still_reading() {
+        using var rig = new Rig();
+        rig.Connect();
+        await rig.PinUnlistedAsync("x", Summary("x"));
+        rig.Push(SessionPushKind.ActiveChanged, "x");
+        await Eventually(() => rig.Summaries.Calls.Count == 2, "refresh");
+
+        var again = rig.Service.PinAsync("x", new(null, null, null), CancellationToken.None);
+        await Eventually(() => rig.Summaries.Calls.Count == 3, "second pin read");
+        rig.Summaries.Fail(1, ServerReadOutcome.Unavailable);
+        await Eventually(() => rig.Latest.Pinned is null, "refresh dropped the row");
+        rig.Summaries.Answer(2, Summary("x"));
+
+        await Assert.That(await again).IsEqualTo(PinOutcome.Unavailable);
+        await Assert.That(rig.Latest.Pinned).IsNull();
+    }
+
+    [Test]
     public async Task Deleted_push_for_a_held_unlisted_pin_drops_the_row_and_keeps_the_pin_id() {
         using var rig = new Rig();
         var dropped = ImmutableList<string>.Empty;
