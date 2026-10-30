@@ -1311,7 +1311,9 @@ public class SetupCommandTests {
                 return answer;
             }));
 
-        await Assert.That(saidBeforeAsking).Contains("go to the model provider that agent uses");
+        // The console wraps at its own width, so the disclosure is read with its line breaks as single spaces.
+        await Assert.That(string.Join(' ', saidBeforeAsking!.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)))
+            .Contains("go to the model provider that agent uses");
         await Assert.That(runner.Captured!.SkipTitle).IsEqualTo(!answer);
         await Assert.That(spawner.Seen!.NameSessions).IsEqualTo(answer);
     }
