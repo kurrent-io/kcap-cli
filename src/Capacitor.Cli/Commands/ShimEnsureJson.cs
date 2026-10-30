@@ -8,12 +8,12 @@ namespace Capacitor.Cli.Commands;
 /// <see cref="FirstRunMachineActionOutcomes"/> and <see cref="FirstRunMachineActionReasons"/> — one
 /// canonical list, because the browser validates against it and renders copy per token, and a second
 /// spelling here would be a wire break nobody could see. <see cref="Reason"/> is non-null only on a
-/// refusal. <see cref="Detail"/>/<see cref="SudoFallback"/> carry the installer's actionable guidance on
-/// <c>installed_not_on_path</c>/<c>failed</c> and are <b>terminal-only</b>: neither crosses to the browser,
+/// refusal. <see cref="Detail"/> carries the installer's actionable guidance on
+/// <c>installed_not_on_path</c>/<c>failed</c> and is <b>terminal-only</b>: it never crosses to the browser,
 /// which keys its copy off <see cref="Outcome"/> and never off the exit code.</summary>
 public sealed record ShimEnsureJson(
     string Capability, string? Target, bool? Probed, bool? OnPath, string Action, string Outcome,
-    string? Reason = null, string? Detail = null, string? SudoFallback = null) {
+    string? Reason = null, string? Detail = null) {
     /// <summary>Exit 0 only when the terminal now resolves <c>kcap</c>. Derived from the outcome rather
     /// than passed in per arm, so the two cannot disagree — and the flow reads the outcome, never this.
     /// <c>JsonIgnore</c> because this record IS the <c>--json</c> document: an exit code is the process's

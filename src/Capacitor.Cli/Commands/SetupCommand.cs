@@ -133,26 +133,24 @@ sealed class SpectreFirstRunFlowProgress(TimeProvider time, IKeyWatcher? keys = 
     public void PerformingAction(string capability) {
         // The service ladder writes its own coded lines, so the spinner comes down first for exactly
         // the reason the import takes it down: two live renderables cannot share a console. The shim
-        // prompts through osascript and writes nothing, so it keeps the spinner.
+        // writes nothing to the console, so it keeps the spinner.
         if (capability == FirstRunMachineCapabilities.DaemonService) _wait.Stop();
 
         Say(SetupAuthProgress.Indent(capability switch {
-            FirstRunMachineCapabilities.PathShim => PathShimNotice(OperatingSystem.IsMacOS(),
-                new ShellProfile(UserHome.FromEnvironment(), Environment.GetEnvironmentVariable("SHELL")).Disclosure),
+            FirstRunMachineCapabilities.PathShim => PathShimNotice(OperatingSystem.IsMacOS()
+                ? new ShellProfile(UserHome.FromEnvironment(), Environment.GetEnvironmentVariable("SHELL")).Disclosure
+                : null),
             FirstRunMachineCapabilities.DaemonService =>
                 "The browser asked to run the agent daemon as a service, so this machine stays reachable.",
             _ => "The browser asked this machine to do something this version of kcap does not know."
         }));
     }
 
-    /// <summary>The password prompt comes from macOS's own dialog; elsewhere the link needs none. A
-    /// user without admin rights gets <paramref name="profileLine"/> instead, so it is named before
-    /// it is written.</summary>
-    internal static string PathShimNotice(bool macOS, string? profileLine = null) =>
+    /// <summary>Names <paramref name="profileLine"/> before it is written, for when no folder already on
+    /// PATH is writable.</summary>
+    internal static string PathShimNotice(string? profileLine) =>
         "The browser asked to put kcap on your terminal PATH."
-      + (!macOS ? ""
-        : profileLine is null ? " [dim]Your Mac will ask for your admin password.[/]"
-        : $" [dim]Your Mac will ask for your admin password; without admin rights, kcap adds {Markup.Escape(profileLine)} instead.[/]");
+      + (profileLine is null ? "" : $" [dim]If no folder on it is writable, kcap adds {Markup.Escape(profileLine)}.[/]");
 
     public void ActionEnded() => Refresh();
 

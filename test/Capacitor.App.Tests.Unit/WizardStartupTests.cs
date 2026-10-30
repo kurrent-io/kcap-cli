@@ -189,7 +189,7 @@ static class WizardFixtures {
             RunMutation: Lane.RunAsync,
             Observation: Observation,
             AppState: new NoopAppStateStore(),
-            ShimInstaller: ShimInstaller ?? new PathShimInstaller(new NoopProcessRunner(), Probe),
+            ShimInstaller: ShimInstaller ?? new PathShimInstaller(Probe, new UserHome(_config.PathTo("home"))),
             UrlOpener: UrlOpener,
             Probe: Probe,
             // A NEW feed per call: a composition that built one per step is caught by the factory
