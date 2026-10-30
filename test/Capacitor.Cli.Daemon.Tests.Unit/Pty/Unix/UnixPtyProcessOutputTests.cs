@@ -88,21 +88,25 @@ public partial class UnixPtyProcessOutputTests {
         }
     }
 
-    /// <summary>The mode is the child's, read through the master: canonical until the child turns raw
-    /// input on, and the child cannot get there until it has read the line this test writes.</summary>
+    /// <summary>The mode is the child's, read through the master. Leaving canonical mode is not enough
+    /// while CR still maps to LF; the child moves one step per line this test writes, so each read is
+    /// of a settled state.</summary>
     [Test]
-    public async Task IsInputLineEdited_follows_the_child_into_raw_mode() {
+    public async Task IsInputCooked_holds_until_the_child_stops_mapping_CR() {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
 
         using var spawner = new UnixSpawnerThread();
-        var       proc    = Spawn(spawner, "/bin/sh", "-c", "read x; stty raw; echo ready; sleep 5");
+        var       proc    = Spawn(spawner, "/bin/sh", "-c", "read x; stty -icanon; echo half; read y; stty -icrnl; echo ready; sleep 5");
         try {
-            await Assert.That(proc.IsInputLineEdited).IsTrue();
+            await Assert.That(proc.IsInputCooked).IsTrue();
+
+            await proc.WriteAsync("go\r");
+            await ReadUntilAsync(proc, "half");
+            await Assert.That(proc.IsInputCooked).IsTrue();
 
             await proc.WriteAsync("go\r");
             await ReadUntilAsync(proc, "ready");
-
-            await Assert.That(proc.IsInputLineEdited).IsFalse();
+            await Assert.That(proc.IsInputCooked).IsFalse();
         } finally {
             await proc.DisposeAsync();
         }

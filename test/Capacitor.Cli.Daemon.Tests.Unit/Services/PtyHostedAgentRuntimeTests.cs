@@ -362,11 +362,11 @@ public class PtyHostedAgentRuntimeTests {
     }
 
     /// <summary>A TUI that has not turned raw input on yet would receive the submit CR as LF, so the
-    /// prompt waits for raw mode however long startup takes, then for the quiet window after it.</summary>
+    /// prompt waits for raw input however long startup takes, then for the quiet window after it.</summary>
     [Test]
-    public async Task Launch_prompt_waits_for_the_terminal_to_leave_canonical_mode() {
+    public async Task Launch_prompt_waits_for_the_terminal_to_stop_cooking_input() {
         var time    = new FakeTimeProvider();
-        var pty     = new RecordingScriptedPtyProcess { IsInputLineEdited = true };
+        var pty     = new RecordingScriptedPtyProcess { IsInputCooked = true };
         var runtime = new PtyHostedAgentRuntime("claude", pty, time, approvalsDisabled: false);
 
         runtime.DeliverLaunchPrompt("build it");
@@ -377,7 +377,7 @@ public class PtyHostedAgentRuntimeTests {
         await AdvanceAsync(time, PtyHostedAgentRuntime.LaunchPromptMaxWait * 2);
         await Assert.That(pty.Writes).IsEmpty();
 
-        pty.IsInputLineEdited = false;
+        pty.IsInputCooked = false;
         await StepAsync(time, PtyHostedAgentRuntime.LaunchPromptQuietWindow + PtyHostedAgentRuntime.SingleSubmitDelay,
             () => runtime.LaunchPromptDelivery!.IsCompleted);
 

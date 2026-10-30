@@ -272,12 +272,12 @@ public sealed class UnixPtyProcess : IPtyProcess {
         }
     }
 
-    public bool IsInputLineEdited {
+    public bool IsInputCooked {
         get {
-            var canonical = false;
-            _master.TryUse(fd => canonical = UnixPtyInterop.IsCanonical(fd));
+            var cooked = false;
+            _master.TryUse(fd => cooked = UnixPtyInterop.IsCooked(fd));
 
-            return canonical;
+            return cooked;
         }
     }
 

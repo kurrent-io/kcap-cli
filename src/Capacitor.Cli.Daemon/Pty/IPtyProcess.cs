@@ -15,10 +15,9 @@ public interface IPtyProcess : IAsyncDisposable
     /// defeat the whole point of capturing pre-reap).</summary>
     string? StartIdentity => null;
 
-    /// <summary>True while the child's terminal is still in canonical mode: a TUI that has not
-    /// switched to raw input yet, whose line discipline turns a written CR into LF. False when
-    /// unknown.</summary>
-    bool IsInputLineEdited => false;
+    /// <summary>True while the child's terminal still edits input — canonical mode, or a CR mapped to
+    /// LF or dropped — as it does until a TUI switches to raw input. False when unknown.</summary>
+    bool IsInputCooked => false;
 
     IAsyncEnumerable<byte[]> ReadOutputAsync(CancellationToken ct = default);
     Task WriteAsync(string input);
