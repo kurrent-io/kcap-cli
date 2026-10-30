@@ -1335,7 +1335,8 @@ class ImportCommand(
         // to retry" reads as a transient blip unless the cause is named.
         if (planCounts.ProbeError > 0 && await ServerReachability.UnreachableReasonAsync(httpClient, baseUrl, time) is { } unreachable)
             await console.Error.WriteLineAsync(
-                $"{display.Indented}Could not reach the kcap server at {baseUrl} ({unreachable}). Nothing can be imported until it is back.");
+                $"{display.Indented}Could not reach the kcap server at {UnusableUrlDiagnostic.Sanitize(baseUrl)} "
+              + $"({HttpClientExtensions.StripControlCharacters(unreachable)}). Nothing can be imported until it is back.");
 
         // --- Build chains + set continuation predecessors ---
         // Chain workers operate on file-based classifications (Claude/Codex);

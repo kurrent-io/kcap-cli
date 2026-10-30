@@ -76,6 +76,17 @@ public class ImportServerOutageTests {
     }
 
     [Test]
+    public async Task The_unreachable_message_drops_credentials_from_the_server_url() {
+        var terminal = new TestImportTerminal();
+        var port     = ClosedPort();
+
+        await Import($"http://user:hunter2@127.0.0.1:{port}", new FakeTimeProvider { AutoAdvanceAmount = TimeSpan.FromMinutes(3) }, terminal);
+
+        await Assert.That(terminal.Error.ToString()).Contains($"Could not reach the kcap server at 127.0.0.1:{port}");
+        await Assert.That(terminal.Error.ToString()).DoesNotContain("hunter2");
+    }
+
+    [Test]
     public async Task A_server_that_answers_with_errors_fails_the_run_without_calling_itself_unreachable() {
         using var server = WireMockServer.Start();
         server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
