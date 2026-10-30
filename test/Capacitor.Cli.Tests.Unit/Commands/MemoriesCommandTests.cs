@@ -132,6 +132,50 @@ public class MemoriesCommandTests {
         await Assert.That(MemorySlug.Normalize(input)).IsEqualTo(expected);
 
     [Test]
+    [Arguments(true, false)]
+    [Arguments(false, true)]
+    [Arguments(true, true)]
+    public async Task Without_a_terminal_the_run_stops_at_once_without_reading_an_answer(bool inputRedirected, bool outputRedirected) {
+        // A "y" waiting on stdin would be taken as consent if anything read it.
+        var input  = new StringReader("y\n");
+        var output = new StringWriter();
+        var error  = new StringWriter();
+
+        var stop = await MemoriesCommand.ConfirmAsync(yes: false, inputRedirected, outputRedirected, input, output, error);
+
+        await Assert.That(stop).IsEqualTo(1);
+        await Assert.That(input.Peek()).IsEqualTo((int)'y');
+        await Assert.That(output.ToString()).IsEmpty();
+        await Assert.That(error.ToString()).Contains("--yes");
+    }
+
+    [Test]
+    public async Task Yes_goes_ahead_without_asking_even_without_a_terminal() {
+        var input  = new StringReader("n\n");
+        var output = new StringWriter();
+
+        var stop = await MemoriesCommand.ConfirmAsync(yes: true, inputRedirected: true, outputRedirected: true, input, output, new StringWriter());
+
+        await Assert.That(stop).IsNull();
+        await Assert.That(input.Peek()).IsEqualTo((int)'n');
+        await Assert.That(output.ToString()).IsEmpty();
+    }
+
+    [Test]
+    [Arguments("y\n", null)]
+    [Arguments("n\n", 0)]
+    [Arguments("", 0)]
+    public async Task At_a_terminal_the_answer_decides(string answer, int? expected) {
+        var output = new StringWriter();
+
+        var stop = await MemoriesCommand.ConfirmAsync(yes: false, inputRedirected: false, outputRedirected: false,
+                                                      new StringReader(answer), output, new StringWriter());
+
+        await Assert.That(stop).IsEqualTo(expected);
+        await Assert.That(output.ToString()).StartsWith("Import? [y/N] ");
+    }
+
+    [Test]
     public async Task A_slug_past_64_chars_is_refused() =>
         await Assert.That(MemorySlug.Normalize(new string('a', MemorySlug.MaxLength + 1))).IsNull();
 }
