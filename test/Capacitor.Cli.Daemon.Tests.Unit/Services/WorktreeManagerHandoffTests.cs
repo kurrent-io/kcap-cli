@@ -564,18 +564,23 @@ public class WorktreeManagerHandoffTests {
             .Throws<InvalidOperationException>().WithMessageMatching("invalid_handoff_target:*");
     }
 
+    /// <summary>A revert message cannot say whether a later revert of the revert put the work back, so
+    /// the work is unconfirmed rather than missing — and never complete.</summary>
     [Test]
-    public async Task a_reverted_session_commit_is_missing_though_reachable() {
+    [Arguments(1)]
+    [Arguments(2)]
+    public async Task a_reverted_session_commit_is_unconfirmed_though_reachable(int reverts) {
         using var f      = Fixture.Create();
         var       commit = f.CommitOnOrigin("feature", "b.txt");
         f.Upstream.Checkout("feature");
         f.Upstream.Do("revert", "--no-edit", commit);
+        if (reverts == 2) f.Upstream.Do("revert", "--no-edit", "HEAD");
         f.Upstream.Checkout(f.Default);
         var start = await ResolveAsync(f, new HandoffTarget("feature", null, false));
 
         var work = await CheckAsync(f, start.Sha, [commit]);
 
-        await Assert.That(work.Completeness).IsEqualTo(HandoffCompleteness.PartlyMissing);
-        await Assert.That(work.MissingCommits).IsEquivalentTo([commit]);
+        await Assert.That(work.Completeness).IsEqualTo(HandoffCompleteness.Unconfirmed);
+        await Assert.That(work.MissingCommits).IsEmpty();
     }
 }

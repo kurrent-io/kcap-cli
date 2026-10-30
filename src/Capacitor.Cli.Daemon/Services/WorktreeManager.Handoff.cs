@@ -125,6 +125,8 @@ public partial class WorktreeManager {
         };
         var noHooks = NoBranchHooks();
 
+        var registered = false;
+
         try {
             await WithWorktreeMetadataGate(repoPath, time, async () => {
                 if (!detached) {
@@ -138,27 +140,31 @@ public partial class WorktreeManager {
                 switch (start.Checkout) {
                     case HandoffCheckout.CreateBranch:
                         await RunGit(repoPath, GitTimeout, time, noHooks, "worktree", "add", "--no-checkout", "-b", branch, worktreePath, start.Sha);
+                        registered = true;
                         break;
                     case HandoffCheckout.FastForwardBranch:
                         // Registered on the branch first: git then refuses any other checkout of it, which
                         // the gate cannot do for the user's own git, so the fast-forward moves no tree but ours.
                         await RunGit(repoPath, GitTimeout, time, noHooks, "worktree", "add", "--no-checkout", worktreePath, branch);
+                        registered = true;
                         var moved = await RunGitCaptureResult(repoPath, GitTimeout, time, false, [],
                             "update-ref", $"refs/heads/{branch}", start.Sha, start.LocalBranchSha!);
-                        if (moved.ExitCode != 0) {
-                            await RunGitBestEffort(repoPath, time, "worktree", "remove", "--force", worktreePath);
-                            throw StartChanged($"{branch} moved before it could be fast-forwarded");
-                        }
+                        if (moved.ExitCode != 0) throw StartChanged($"{branch} moved before it could be fast-forwarded");
                         break;
                     case HandoffCheckout.CheckoutBranch:
                         await RunGit(repoPath, GitTimeout, time, noHooks, "worktree", "add", "--no-checkout", worktreePath, branch);
+                        registered = true;
                         break;
                     default:
                         await RunGit(repoPath, GitTimeout, time, noHooks, "worktree", "add", "--no-checkout", "--detach", worktreePath, start.Sha);
+                        registered = true;
                         break;
                 }
             });
         } catch {
+            if (registered)
+                await WithWorktreeMetadataGate(repoPath, time, () =>
+                    RunGitBestEffort(repoPath, time, "worktree", "remove", "--force", worktreePath));
             await RunGitBestEffort(repoPath, time, "update-ref", "-d", fetchedRef);
             throw;
         }
@@ -184,30 +190,33 @@ public partial class WorktreeManager {
 
     /// <summary>Checks the session's commits against the starting point. <paramref name="sessionCommits"/>
     /// null means they are unknown; <paramref name="mayHaveUnpushedWork"/> means the session may have left
-    /// work that no commit list can show. A missing or reverted commit outranks either uncertainty.</summary>
+    /// work that no commit list can show. A missing commit outranks any uncertainty.</summary>
     public async Task<HandoffWork> CheckHandoffWorkAsync(
             string repoPath, string startSha, IReadOnlyList<string>? sessionCommits, bool mayHaveUnpushedWork) {
         var missing = new List<string>();
 
+        var reverted = false;
+
         foreach (var commit in sessionCommits ?? []) {
-            if (!IsFullSha(commit) || !await IsPresentAsync(commit)) missing.Add(commit);
+            if (!IsFullSha(commit) || !await IsReachableAsync(commit)) missing.Add(commit);
+            else if (await IsNamedByRevertAsync(commit)) reverted = true;
         }
 
-        var completeness = missing.Count > 0                            ? HandoffCompleteness.PartlyMissing
-                         : sessionCommits is null || mayHaveUnpushedWork ? HandoffCompleteness.Unconfirmed
-                         :                                                  HandoffCompleteness.Complete;
+        var completeness = missing.Count > 0                                        ? HandoffCompleteness.PartlyMissing
+                         : sessionCommits is null || mayHaveUnpushedWork || reverted ? HandoffCompleteness.Unconfirmed
+                         :                                                              HandoffCompleteness.Complete;
 
         return new(completeness, missing);
 
-        // Reachable is not enough: a later `git revert` of the commit takes its change back out.
-        async Task<bool> IsPresentAsync(string commit) {
-            var ancestor = await RunGitCaptureResult(repoPath, GitTimeout, time, true, [], "merge-base", "--is-ancestor", commit, startSha);
-            if (ancestor.ExitCode != 0) return false;
+        async Task<bool> IsReachableAsync(string commit) =>
+            (await RunGitCaptureResult(repoPath, GitTimeout, time, true, [], "merge-base", "--is-ancestor", commit, startSha)).ExitCode == 0;
 
+        // A revert may itself have been reverted, so its message only makes the work unconfirmed.
+        async Task<bool> IsNamedByRevertAsync(string commit) {
             var reverts = await RunGitCaptureResult(repoPath, GitTimeout, time, true, [],
                 "rev-list", "--count", "--fixed-strings", $"--grep=This reverts commit {commit}", $"{commit}..{startSha}");
 
-            return reverts.ExitCode == 0 && reverts.Stdout.Trim() == "0";
+            return reverts.ExitCode != 0 || reverts.Stdout.Trim() != "0";
         }
     }
 

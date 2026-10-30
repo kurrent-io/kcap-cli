@@ -196,8 +196,9 @@ so what the user saw is what launches:
      the default branch's fetched SHA, **no branch is created**: the agent creates one if the work
      needs it, so a hand-off with no code changes leaves nothing behind.
 - **Completeness**: whether the ended session's work is all in the starting code. When the server
-  knows the commits the session made, the daemon checks they are reachable from the starting SHA and
-  not taken back out by a later `git revert` of them.
+  knows the commits the session made, the daemon checks they are reachable from the starting SHA. A
+  session commit that a later `git revert` names makes the work unconfirmed, since a revert can itself
+  be reverted.
   The strip and the prompt say one of: the work is there; part of it is missing (named commits); or
   **it can't be confirmed** — always the case when the session may have left unpushed commits or
   uncommitted edits, including after a linked PR merged. Only the first is presented as complete.
