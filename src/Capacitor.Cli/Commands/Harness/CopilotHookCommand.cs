@@ -124,7 +124,7 @@ sealed class CopilotHookCommand(
                     IsTopLevel: true, ClassificationAuthoritative: true,
                     SessionStartMemoryHookSupport.ReasonFor(source), CallbackMayRepeat: false),
                 new SessionStartMemoryContextRequest(Url, scopeRoot, disabled, budget, CancellationToken.None,
-                    GuidelinesDisabled: guidelinesDisabled, FlowsDisabled: flowsDisabled),
+                    GuidelinesDisabled: guidelinesDisabled, Vendor: HarnessId.Copilot.VendorId, FlowsDisabled: flowsDisabled),
                 commitGate);
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return null;

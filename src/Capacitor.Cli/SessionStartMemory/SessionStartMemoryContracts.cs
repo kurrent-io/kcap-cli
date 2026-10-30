@@ -55,6 +55,7 @@ internal sealed record SessionStartMemoryContextRequest(
     TimeSpan Budget,
     CancellationToken CancellationToken,
     bool GuidelinesDisabled = true,
+    string? Vendor = null,
     bool FlowsDisabled = true) {
     public bool AllLanesDisabled => Disabled && GuidelinesDisabled && FlowsDisabled;
 }
