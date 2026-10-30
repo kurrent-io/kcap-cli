@@ -42,13 +42,51 @@ public class SessionSearchViewSmokeTests {
         var rendered = string.Join('\n', host.Named<SessionSearchView>("SearchCover").GetVisualDescendants().OfType<TextBlock>()
             .Select(t => t.Inlines is { Count: > 0 } inlines ? string.Concat(inlines.OfType<Run>().Select(r => r.Text)) : t.Text ?? ""));
 
+        var chip = host.Named<SessionSearchView>("SearchCover").GetVisualDescendants().OfType<Border>().Single(b => b.Name == "SearchHitPrChip");
+        var gap = chip.TranslatePoint(default, title)!.Value.X - title.Bounds.Width;
+
         await Assert.That(text).IsEqualTo("Fix auth flow");
+        await Assert.That(gap).IsLessThanOrEqualTo(6.5);
         await Assert.That(rendered).DoesNotContain('\u0002');
         await Assert.That(rendered).DoesNotContain('\u0003');
         await Assert.That(rendered).Contains("#42");
         await Assert.That((int)matched.FontWeight).IsGreaterThanOrEqualTo((int)FontWeight.SemiBold);
         await Assert.That(matched.Foreground).IsSameReferenceAs(textBrush);
         await Assert.That(runs.Where(r => r != matched).All(r => r.FontWeight < FontWeight.SemiBold)).IsTrue();
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_long_title_is_trimmed_and_keeps_the_pr_chip_and_time_in_the_row() => AvaloniaSession.RunOnUiAsync(async () => {
+        using var host = new SearchWindowHost();
+        var title = string.Join(' ', Enumerable.Repeat("authentication", 40));
+        host.Response = new SearchResponseDto {
+            Sessions = [new() {
+                SessionId = "S1", Slug = "fix-auth", Title = title, StartedAt = "2026-10-29T09:00:00Z", EndedAt = "2026-10-29T10:00:00Z",
+                MatchedField = "title", Snippet = title, PrNumber = 42,
+            }],
+        };
+        OpenWithShortcut(host);
+
+        host.Window.KeyTextInput("auth");
+        host.SettleSearch();
+
+        var cover = host.Named<SessionSearchView>("SearchCover");
+        var titleBlock = cover.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "SearchHitTitle");
+        var chip = cover.GetVisualDescendants().OfType<Border>().Single(b => b.Name == "SearchHitPrChip");
+        var row = titleBlock.FindAncestorOfType<Button>()!;
+        var when = row.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Text == host.Vm.Search!.Hits[0].WhenText);
+        double Right(Visual v) => v.TranslatePoint(new Point(v.Bounds.Width, 0), row)!.Value.X;
+        double Left(Visual v) => v.TranslatePoint(new Point(0, 0), row)!.Value.X;
+        var untrimmed = new TextBlock { Text = title, FontSize = titleBlock.FontSize };
+        untrimmed.Measure(Size.Infinity);
+
+        await Assert.That(titleBlock.Bounds.Width).IsLessThan(untrimmed.DesiredSize.Width);
+        await Assert.That(chip.IsEffectivelyVisible).IsTrue();
+        await Assert.That(chip.Bounds.Width).IsGreaterThan(0);
+        await Assert.That(Right(titleBlock)).IsLessThanOrEqualTo(Left(chip));
+        await Assert.That(Right(chip)).IsLessThanOrEqualTo(Left(when));
+        await Assert.That(Right(when)).IsLessThanOrEqualTo(row.Bounds.Width);
     });
 
     [Test]

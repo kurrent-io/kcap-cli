@@ -123,16 +123,17 @@
                                                 </Panel>
                                             </Border>
                                             <StackPanel Grid.Column="1" Spacing="3">
-                                                <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="6">
+                                                <!-- Left-aligned so the star column shrinks to a short title and the chip follows it. -->
+                                                <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6" HorizontalAlignment="Left">
                                                     <TextBlock x:Name="SearchHitTitle" views:SearchSnippetText.Runs="{Binding Title}"
                                                                FontSize="13.5" Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
-                                                    <Border Grid.Column="1" CornerRadius="5" Padding="5,0" VerticalAlignment="Center"
+                                                    <Border x:Name="SearchHitPrChip" Grid.Column="1" CornerRadius="5" Padding="5,0" VerticalAlignment="Center"
                                                             Background="{StaticResource KcapSurfaceRaisedBrush}"
                                                             IsVisible="{Binding PrNumber, Converter={x:Static ObjectConverters.IsNotNull}}">
                                                         <TextBlock Text="{Binding PrNumber, StringFormat='#{0}'}" FontSize="11"
                                                                    Foreground="{StaticResource KcapMutedBrush}" />
                                                     </Border>
-                                                    <TextBlock Grid.Column="1" Text="{Binding Speaker}" Classes="searchMeta" VerticalAlignment="Center"
+                                                    <TextBlock Grid.Column="2" Text="{Binding Speaker}" Classes="searchMeta" VerticalAlignment="Center"
                                                                IsVisible="{Binding Speaker, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                                                 </Grid>
                                                 <TextBlock x:Name="SearchHitSnippet" views:SearchSnippetText.Runs="{Binding Snippet}"
