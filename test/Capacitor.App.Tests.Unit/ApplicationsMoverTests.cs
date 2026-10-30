@@ -196,28 +196,40 @@ public class ApplicationsMoverTests {
         await Assert.That(App.ShouldPromptToInstall(InstallLocationKind.UserApplications, source, mover.Inspect(source))).IsFalse();
     }
 
+    /// The daemon and terminal command follow one copy, and an update replaces only the copy that runs, so two
+    /// installed copies drift apart. Opening either asks which to keep, and keeping one replaces the other unless the
+    /// other is newer: a choice never downgrades. Keeping an older copy updates it from the opened one first.
     [Test]
+    [Arguments(false, "1.0.0")]
+    [Arguments(true, "1.0.0")]
     [Arguments(false, "1.1.0")]
     [Arguments(false, "2.0.0")]
     [Arguments(true, "1.1.0")]
     [Arguments(true, "2.0.0")]
-    public async Task Opening_a_canonical_install_keeps_its_folder_when_both_copies_are_canonical(bool perUser, string alternateVersion) {
+    public async Task Opening_one_of_two_installed_copies_asks_which_to_keep(bool perUser, string alternateVersion) {
         var system = Tmp.CreateDir("SystemApplications");
         var user = Tmp.CreateDir("UserApplications");
         var home = perUser ? user : system;
         var other = perUser ? system : user;
         var source = Path.Combine(home, "kcap.app");
+        var otherCopy = Path.Combine(other, "kcap.app");
         CompleteBundle(source, "1.1.0");
-        CompleteBundle(Path.Combine(other, "kcap.app"), alternateVersion);
+        CompleteBundle(otherCopy, alternateVersion);
+        ApplicationsMover Mover(string directory) => new(new FakeDitto(CompleteBundle), MovePromote, directory,
+            userApplicationsDir: user, systemApplicationsDir: system);
 
-        var selected = ApplicationsMover.ApplicationDirectories(source, user, system).Single();
-        var mover = new ApplicationsMover(new FakeDitto(CompleteBundle), MovePromote, selected);
+        var directories = ApplicationsMover.ApplicationDirectories(source, user, system);
+        var keepHome = Mover(home).Inspect(source);
+        var keepOther = Mover(other).Inspect(source);
 
-        await Assert.That(selected).IsEqualTo(home);
-        await Assert.That(App.ShouldPromptToInstall(
-            perUser ? InstallLocationKind.UserApplications : InstallLocationKind.Applications,
-            source, mover.Inspect(source))).IsFalse();
-        await Assert.That(ApplicationsMover.ApplicationDirectories(Tmp.PathTo("Downloads/kcap.app"), user, system).Count).IsEqualTo(2);
+        await Assert.That(directories.Order(StringComparer.Ordinal).SequenceEqual(new string[] { system, user }.Order(StringComparer.Ordinal))).IsTrue();
+        await Assert.That(ApplicationsMover.InstalledInEach(directories)).IsTrue();
+        var otherIsNewer = alternateVersion == "2.0.0";
+        await Assert.That(keepHome.Replaces.SequenceEqual(otherIsNewer ? Array.Empty<string>() : [otherCopy])).IsTrue();
+        await Assert.That(keepOther.Replaces.SequenceEqual([source])).IsTrue();
+        await Assert.That(keepOther.SourceVersion).IsEqualTo(otherIsNewer ? "2.0.0" : "1.1.0");
+        await Assert.That(keepHome.RetiresOthersIn(directories)).IsEqualTo(!otherIsNewer);
+        await Assert.That(keepOther.RetiresOthersIn(directories)).IsTrue();
     }
 
     [Test]

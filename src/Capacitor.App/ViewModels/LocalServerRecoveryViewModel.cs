@@ -3,6 +3,7 @@ using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using Capacitor.App.Services;
+using Capacitor.App.Services.LocalSetup;
 using Capacitor.Cli.Core;
 using ReactiveUI.Reactive;
 
@@ -22,6 +23,7 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
     readonly ObservableAsPropertyHelper<bool> _serverDown;
     bool _isStarting;
     int _running;
+    int _connectedVersion;
     string? _message;
 
     public LocalServerRecoveryViewModel(
@@ -55,6 +57,14 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
             .ToProperty(this, x => x.Visible, initialValue: false)
             .DisposeWith(_disposables);
 
+        // A server that came back on its own leaves no failure behind: a later stop is a stop, not that failure again.
+        if (isLocalServer)
+            status.Where(s => s.State == ServerLaneState.Connected)
+                .Do(_ => Interlocked.Increment(ref _connectedVersion))
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(_ => Message = null)
+                .DisposeWith(_disposables);
+
         StartCommand = ReactiveCommand.CreateFromTask(async () => { await StartAsync(); },
             this.WhenAnyValue(x => x.IsStarting).Select(starting => !starting));
     }
@@ -71,7 +81,7 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
         private set => this.RaiseAndSetIfChanged(ref _isStarting, value);
     }
 
-    /// The last start or reconnect failure; cleared when a new start begins.
+    /// The last start or reconnect failure; cleared when a new start begins or the server connects.
     public string? Message {
         get => _message;
         private set => this.RaiseAndSetIfChanged(ref _message, value);
@@ -82,6 +92,7 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
     public async Task<bool> StartAsync() {
         // ReactiveCommand's executing gate only disables a bound button; ICommand.Execute still runs.
         if (Interlocked.Exchange(ref _running, 1) == 1) return false;
+        var connectedVersion = Volatile.Read(ref _connectedVersion);
         IsStarting = true;
         try {
             Message = null;
@@ -91,7 +102,8 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
             } catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) {
                 return false;
             } catch (Exception ex) {
-                Message = $"kcap local start could not run: {ex.Message}";
+                if (Volatile.Read(ref _connectedVersion) == connectedVersion)
+                    Message = $"kcap local start could not run: {ex.Message}";
                 return false;
             }
 
@@ -100,13 +112,16 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
                     await _reconnect();
                 } catch (Exception) when (_shutdown.IsCancellationRequested) {
                 } catch (Exception ex) {
-                    Message = $"The local server started, but reconnecting failed: {ex.Message}";
+                    if (Volatile.Read(ref _connectedVersion) == connectedVersion)
+                        Message = $"The local server started, but reconnecting failed: {ex.Message}";
                     return false;
                 }
                 return !_shutdown.IsCancellationRequested;
             }
 
-            Message = MessageFor(result);
+            // A connection during this attempt supersedes even a failure returned after it.
+            if (Volatile.Read(ref _connectedVersion) == connectedVersion)
+                Message = MessageFor(result);
             return false;
         } finally {
             IsStarting = false;
@@ -118,7 +133,7 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
         var lines = (result.Stdout + "\n" + result.Stderr)
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .TakeLast(MessageTailLines);
-        var output = string.Join("\n", lines);
+        var output = TerminalAdvice.Strip(string.Join("\n", lines)) ?? "";
         var headline = result.TimedOut
             ? "kcap local start did not finish in time."
             : $"kcap local start failed (exit code {result.ExitCode}).";

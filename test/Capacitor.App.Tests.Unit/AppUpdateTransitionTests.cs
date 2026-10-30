@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Capacitor.App.Services;
+using Capacitor.App.Services.LocalSetup;
 using Capacitor.App.Services.Update;
 using Capacitor.Cli.Core;
 using Microsoft.Extensions.Time.Testing;
@@ -62,6 +63,15 @@ public class AppUpdateTransitionTests {
         await Assert.That(AppComponentStamp.Owed(config, "1.4.1")).IsTrue();
         AppComponentStamp.Write(config, "1.4.1");
         await Assert.That(AppComponentStamp.Owed(config, "1.4.1")).IsFalse();
+    }
+
+    [Test]
+    public async Task Only_an_upgrade_that_finished_or_had_nothing_to_do_settles_the_components() {
+        await Assert.That(AppComponentStamp.SettledBy(new LocalUpgradeOutcome.Upgraded("1.4.0", "1.4.1"))).IsTrue();
+        await Assert.That(AppComponentStamp.SettledBy(new LocalUpgradeOutcome.NothingToDo("current"))).IsTrue();
+        await Assert.That(AppComponentStamp.SettledBy(new LocalUpgradeOutcome.NotPublished("not yet"))).IsFalse();
+        await Assert.That(AppComponentStamp.SettledBy(new LocalUpgradeOutcome.Failed(
+            "start_failed", "did not start", true, LocalInstallAffordance.For("start_failed"), "1.4.0", "1.4.1"))).IsFalse();
     }
 
     [Test]

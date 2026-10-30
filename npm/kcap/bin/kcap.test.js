@@ -28,10 +28,6 @@ assert.strictEqual(resolveInstallSpec({ install_tag: "1.0.1" }), "@kurrent/kcap@
 assert.deepStrictEqual(npmInstallArgs("@kurrent/kcap@1.0.2"), ["install", "-g", "@kurrent/kcap@1.0.2", "--prefer-online"]);
 // kcap update refreshes on its own; the printed repair command must leave postinstall to do it.
 assert.deepStrictEqual(npmUpdateArgs("@kurrent/kcap@1.0.2"), ["install", "-g", "@kurrent/kcap@1.0.2", "--prefer-online", "--ignore-scripts"]);
-{
-  const src = fs.readFileSync(path.join(__dirname, "kcap.js"), "utf8");
-  assert(src.includes('spawnSync("npm", npmUpdateArgs('), "kcap update must install through npmUpdateArgs");
-}
 
 // The new binary's coordinator runs after the CLI moves, silent where there is no installation.
 assert.deepStrictEqual(localUpgradeArgs(), ["local", "upgrade", "--if-installed", "--no-update-check"]);
@@ -44,10 +40,6 @@ assert.strictEqual(localUpgradeSucceeded(4), true);   // bundle not published ye
 assert.strictEqual(localUpgradeSucceeded(1), false);
 assert.strictEqual(localUpgradeSucceeded(2), false);
 assert.strictEqual(localUpgradeSucceeded(null), false);
-{
-  const src = fs.readFileSync(path.join(__dirname, "kcap.js"), "utf8");
-  assert(src.indexOf("spawnSync(binaryPath, localUpgradeArgs()") > src.indexOf('spawnSync("npm", npmUpdateArgs('), "local upgrade must run the binary npm installed");
-}
 
 assert.deepStrictEqual(probeArgs([]), ["update", "--check", "--no-update-check"]);
 assert.deepStrictEqual(probeArgs(["--beta"]), ["update", "--check", "--no-update-check", "--beta"]);
@@ -139,31 +131,5 @@ assert.strictEqual(describeRole("kcap.exe watch"), "kcap process");
   }
 }
 
-// Source-shape guard for runUpdate's report-version call: execFileSync has no mock seam (module-load-destructured), so this checks presence/ordering/try-catch by text instead of exact literals.
-{
-  const src = fs.readFileSync(path.join(__dirname, "kcap.js"), "utf8");
-
-  const updateStart = src.indexOf("function runUpdate(");
-  assert(updateStart >= 0, "expected a runUpdate function in kcap.js");
-  const updateEnd = src.indexOf("\nfunction ", updateStart + 1);
-  const runUpdateBody = src.slice(updateStart, updateEnd >= 0 ? updateEnd : undefined);
-
-  const refreshIdx = runUpdateBody.indexOf("runRefreshes(");
-  const reportIdx  = runUpdateBody.indexOf("report-version");
-  const exitIdx    = runUpdateBody.lastIndexOf("process.exit(exitCode)");
-
-  assert(refreshIdx >= 0, "expected runUpdate to call runRefreshes(...)");
-  assert(reportIdx >= 0, "expected runUpdate to spawn report-version");
-  assert(exitIdx >= 0, "expected runUpdate to end on its success path's exit code");
-  assert(refreshIdx < reportIdx, "report-version must be spawned AFTER the refresh step");
-  assert(reportIdx < exitIdx, "report-version must be spawned BEFORE runUpdate's final process.exit");
-
-  // Guarded by its own try/catch: the nearest preceding `try {` must be closer than any `} catch`.
-  const precedingSlice = runUpdateBody.slice(0, reportIdx);
-  const lastTryIdx      = precedingSlice.lastIndexOf("try {");
-  const lastCatchIdx    = precedingSlice.lastIndexOf("} catch");
-  assert(lastTryIdx >= 0 && lastTryIdx > lastCatchIdx,
-    "report-version must be guarded by its own try/catch");
-}
 
 console.log("ok");

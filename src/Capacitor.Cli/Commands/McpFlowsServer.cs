@@ -255,21 +255,28 @@ partial class McpFlowsServer(
                 // extend the total past the single-call deadline.
                 var settlementStartedAt = clock.UtcNow;
 
+                // wait:false returns the run id with the round still running, for a caller whose tool
+                // calls are cut short long before a round ends.
+                var roundWait = ParseRoundWaitArg(arguments);
+                TimeSpan? roundPollCap = roundWait ? null : TimeSpan.Zero;
+                TimeSpan? sendBudget   = roundWait ? null : ShortCallSendBudget;
+                DateTimeOffset? shortCallDeadline = roundWait ? null : settlementStartedAt + ShortCallBudget;
+
                 var startPatch = toolName is "start_review_flow" or "start_flow"
                     ? await ReadPatchAsync(arguments, CancellationToken.None)
                     : null;
 
                 var sendResult = toolName switch {
                     "start_review_flow"   => wasModelStart
-                        ? await SendOnceWithDeadlineAsync(client, (c, ct) => StartFlowAsync(c, apiRoot, arguments, hostCwd, hostRoot, hostInfo, kindArgName: "kind", requestingSessionId: requestingSessionId, ct: ct, patch: startPatch), clock)
-                        : await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, hostCwd, hostRoot, hostInfo, kindArgName: "kind", requestingSessionId: requestingSessionId, ct: ct, patch: startPatch), clock, backoff),
+                        ? await SendOnceWithDeadlineAsync(client, (c, ct) => StartFlowAsync(c, apiRoot, arguments, hostCwd, hostRoot, hostInfo, kindArgName: "kind", requestingSessionId: requestingSessionId, ct: ct, patch: startPatch), clock, sendBudget)
+                        : await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, hostCwd, hostRoot, hostInfo, kindArgName: "kind", requestingSessionId: requestingSessionId, ct: ct, patch: startPatch), clock, backoff, absoluteBudget: sendBudget),
                     "start_flow"          => wasModelStart
-                        ? await SendOnceWithDeadlineAsync(client, (c, ct) => StartFlowAsync(c, apiRoot, arguments, hostCwd, hostRoot, hostInfo, kindArgName: "definition_id", requestingSessionId: requestingSessionId, ct: ct, patch: startPatch), clock)
-                        : await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, hostCwd, hostRoot, hostInfo, kindArgName: "definition_id", requestingSessionId: requestingSessionId, ct: ct, patch: startPatch), clock, backoff),
+                        ? await SendOnceWithDeadlineAsync(client, (c, ct) => StartFlowAsync(c, apiRoot, arguments, hostCwd, hostRoot, hostInfo, kindArgName: "definition_id", requestingSessionId: requestingSessionId, ct: ct, patch: startPatch), clock, sendBudget)
+                        : await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, hostCwd, hostRoot, hostInfo, kindArgName: "definition_id", requestingSessionId: requestingSessionId, ct: ct, patch: startPatch), clock, backoff, absoluteBudget: sendBudget),
                     // Round submission also retries the coded participant_unreachable 409 (see
                     // ParticipantUnreachableCode) — never a start, which can't return it.
-                    "submit_review_round" => await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "context", participant: null, async: true, ct: ct), clock, backoff, extraRetryableCode: ParticipantUnreachableCode),
-                    _                     => await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "message", participant: GetRequiredArg(arguments, "participant"), async: ParseAsyncArg(arguments), ct: ct), clock, backoff, extraRetryableCode: ParticipantUnreachableCode)
+                    "submit_review_round" => await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "context", participant: null, async: true, ct: ct), clock, backoff, extraRetryableCode: ParticipantUnreachableCode, absoluteBudget: sendBudget),
+                    _                     => await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "message", participant: GetRequiredArg(arguments, "participant"), async: ParseAsyncArg(arguments), ct: ct), clock, backoff, extraRetryableCode: ParticipantUnreachableCode, absoluteBudget: sendBudget)
                 };
 
                 // Settlement-admission design (§3.2 G): the elapsed deadline is mapped HERE, at the
@@ -369,7 +376,7 @@ partial class McpFlowsServer(
                             c, apiRoot, arguments, hostCwd, hostRoot, hostInfo,
                             kindArgName: toolName == "start_review_flow" ? "kind" : "definition_id",
                             requestingSessionId: requestingSessionId, ct: ct, patch: startPatch),
-                        clock, backoff, budgetStartedAt: settlementStartedAt);
+                        clock, backoff, budgetStartedAt: settlementStartedAt, absoluteBudget: sendBudget);
 
                     if (retryResult is SettlementSendResult.DeadlineExhausted retryExhausted)
                         return BuildToolResult(id, FormatSettlementDeadlineError(retryExhausted), isError: true);
@@ -412,7 +419,7 @@ partial class McpFlowsServer(
 
                     await RecordStartedRunAsync(retryBody, requestingSessionId, cwd, repoRoot);
 
-                    var (retryPayload, retryIsError) = await ResolveRoundResultAsync(client, apiRoot, retryBody, toolName, wasDynamicStart, clock, backoff, settlementStartedAt);
+                    var (retryPayload, retryIsError) = await ResolveRoundResultAsync(client, apiRoot, retryBody, toolName, wasDynamicStart, clock, backoff, settlementStartedAt, roundPollCap, shortCallDeadline);
 
                     return BuildToolResult(id, $"{PreferenceAppliedPrefix(preference)}\n{retryPayload}", retryIsError);
                 }
@@ -423,15 +430,18 @@ partial class McpFlowsServer(
                 if (toolName is "start_review_flow" or "start_flow")
                     await RecordStartedRunAsync(postBody, requestingSessionId, cwd, repoRoot);
 
-                var (payload, isError) = await ResolveRoundResultAsync(client, apiRoot, postBody, toolName, wasDynamicStart, clock, backoff, settlementStartedAt);
+                var (payload, isError) = await ResolveRoundResultAsync(client, apiRoot, postBody, toolName, wasDynamicStart, clock, backoff, settlementStartedAt, roundPollCap, shortCallDeadline);
                 return BuildToolResult(id, payload, isError);
             }
 
             // `wait: true` blocks via bounded repeated GETs instead of the single GET below. Absent or
             // false never reaches this branch — that untouched single-GET path IS the backwards-compat
             // contract for every existing caller.
+            // timeout_s bounds the whole status call, the lookup of an omitted flow_run_id included.
+            DateTimeOffset? statusDeadline = null;
             if (toolName is "get_review_flow_status" or "get_flow_status") {
-                var resolution = await ResolveStatusFlowRunIdAsync(client, apiRoot, arguments, requestingSessionId, cwd, repoRoot, clock);
+                statusDeadline = clock.UtcNow + ParseTimeoutArg(arguments);
+                var resolution = await ResolveStatusFlowRunIdAsync(client, apiRoot, arguments, requestingSessionId, cwd, repoRoot, clock, statusDeadline);
                 if (resolution.Error is { } unresolved) return BuildToolResult(id, unresolved, isError: true);
                 arguments = WithFlowRunId(arguments, resolution.FlowRunId!);
             }
@@ -439,7 +449,9 @@ partial class McpFlowsServer(
             if (toolName is "get_review_flow_status" or "get_flow_status" && ParseWaitArg(arguments)) {
                 var waitFlowRunId = arguments?["flow_run_id"]?.GetValue<string>()
                     ?? throw new ArgumentException("Missing required argument: flow_run_id");
-                var waitResult = await PollStatusUntilTerminalAsync(client, apiRoot, waitFlowRunId, toolName, clock, backoff);
+                var waitResult = await PollStatusUntilTerminalAsync(
+                    client, apiRoot, waitFlowRunId, toolName, clock, backoff,
+                    statusDeadline is { } end ? Remaining(end, clock) : null);
                 return BuildToolResult(id, waitResult.Payload, waitResult.IsError);
             }
 
@@ -665,6 +677,14 @@ partial class McpFlowsServer(
     /// the last moment still has time to return its flow_run_id.</summary>
     internal static readonly TimeSpan SettlementAbsoluteDeadline = TimeSpan.FromSeconds(210);
 
+    /// <summary>The whole send budget of a <c>wait: false</c> call, so it answers inside the 60 s a
+    /// short-call client (Muse's helper) allows, process start included. An exhausted budget started
+    /// nothing, so the caller can retry the call.</summary>
+    internal static readonly TimeSpan ShortCallSendBudget = TimeSpan.FromSeconds(40);
+
+    /// <summary>The whole <c>wait: false</c> call, send and the acknowledgment of what it rendered.</summary>
+    internal static readonly TimeSpan ShortCallBudget = TimeSpan.FromSeconds(50);
+
     /// <summary>The one end-to-end budget for a tool call that sends and then polls, anchored at its
     /// first POST attempt. The settlement lane and the round-poll lane run sequentially, so bounding
     /// them separately bounds the call at their sum; sharing this budget means whatever settlement
@@ -751,11 +771,12 @@ partial class McpFlowsServer(
     static async Task<SettlementSendResult> SendOnceWithDeadlineAsync(
             HttpClient                                                    client,
             Func<HttpClient, CancellationToken, Task<HttpResponseMessage>> send,
-            FlowRetryClock                                                clock
+            FlowRetryClock                                                clock,
+            TimeSpan?                                                     budget = null
         ) {
         var startedAt = clock.UtcNow;
 
-        using var scope = clock.CreateDeadline(SettlementElapsedDeadline, CancellationToken.None);
+        using var scope = clock.CreateDeadline(budget ?? SettlementElapsedDeadline, CancellationToken.None);
 
         try {
             return new SettlementSendResult.Response(await send(client, scope.Token));
@@ -829,10 +850,11 @@ partial class McpFlowsServer(
             // A single additional coded 409 this call treats as retryable, alongside the two
             // settlement codes — see the class remarks above and ParticipantUnreachableCode's own
             // doc. Null (every caller except round-submit) preserves today's behavior exactly.
-            string?                                                       extraRetryableCode = null
+            string?                                                       extraRetryableCode = null,
+            TimeSpan?                                                     absoluteBudget = null
         ) {
         var startedAt         = budgetStartedAt ?? clock.UtcNow;
-        var absoluteDeadline  = startedAt + SettlementAbsoluteDeadline;
+        var absoluteDeadline  = startedAt + (absoluteBudget ?? SettlementAbsoluteDeadline);
         // The rolling no-progress deadline. Starts as the flat window from startedAt — identical to
         // today's behavior — and is pushed out (never past absoluteDeadline; see EffectiveDeadline)
         // only when a 409 carries a last_processed_seq STRICTLY greater than the one before it.
@@ -1469,7 +1491,7 @@ partial class McpFlowsServer(
     /// open flows are listed for the driver to choose from, never guessed between.</summary>
     async Task<FlowRunIdResolution> ResolveStatusFlowRunIdAsync(
             HttpClient client, string apiRoot, JsonObject? arguments, string? requestingSessionId,
-            string cwd, string? repoRoot, FlowRetryClock clock) {
+            string cwd, string? repoRoot, FlowRetryClock clock, DateTimeOffset? deadline = null) {
         if (arguments?["flow_run_id"] is { } node) {
             if (node is not JsonValue value || !value.TryGetValue<string>(out var given))
                 throw new ArgumentException("Invalid argument: flow_run_id must be a string");
@@ -1477,10 +1499,10 @@ partial class McpFlowsServer(
         }
 
         if (McpSessionId.TryResolveWithin(arguments, requestingSessionId) is not { } sessionId)
-            return await ResolveFromRunLedgerAsync(client, apiRoot, RunLedgerWorkspace(cwd, repoRoot), clock);
+            return await ResolveFromRunLedgerAsync(client, apiRoot, RunLedgerWorkspace(cwd, repoRoot), clock, deadline);
 
         var url = $"{apiRoot}/api/flows?requesting_session_id={Uri.EscapeDataString(sessionId)}&state=all";
-        var (sent, failure) = await GetForLookupAsync(client, url, "/api/flows", clock);
+        var (sent, failure) = await GetForLookupAsync(client, url, "/api/flows", clock, deadline);
         if (sent is null) return new(null, failure);
         using var resp = sent;
         var body = await resp.Content.ReadAsStringAsync();
@@ -1519,7 +1541,8 @@ partial class McpFlowsServer(
     /// newer settled ones is still found. A run the server no longer knows is skipped — unless it
     /// was recorded within <see cref="NotFoundGrace"/>, when the 404 may only mean the server has
     /// not caught up with the start. The workspace path is never shown to the model.</summary>
-    async Task<FlowRunIdResolution> ResolveFromRunLedgerAsync(HttpClient client, string apiRoot, string workspace, FlowRetryClock clock) {
+    async Task<FlowRunIdResolution> ResolveFromRunLedgerAsync(
+            HttpClient client, string apiRoot, string workspace, FlowRetryClock clock, DateTimeOffset? deadline = null) {
         var recorded = new FlowRunLedger(config, time).Retained(workspace);
         if (recorded.Count == 0)
             return new(null, $"Error: this harness gives kcap no session id, and no flow started from this workspace is recorded on this machine. {PassTheFlowRunId}");
@@ -1527,7 +1550,7 @@ partial class McpFlowsServer(
         var flows = new List<SessionFlow>();
         foreach (var (flowRunId, _, startedAt) in recorded) {
             var route = $"/api/flows/{Uri.EscapeDataString(flowRunId)}";
-            var (sent, failure) = await GetForLookupAsync(client, apiRoot + route, route, clock);
+            var (sent, failure) = await GetForLookupAsync(client, apiRoot + route, route, clock, deadline);
             if (sent is null) return new(null, failure);
             using var resp = sent;
             var body = await resp.Content.ReadAsStringAsync();
@@ -1553,8 +1576,8 @@ partial class McpFlowsServer(
 
     /// <summary>A null response comes with the actionable error text in its place.</summary>
     static async Task<(HttpResponseMessage? Response, string Failure)> GetForLookupAsync(
-            HttpClient client, string url, string route, FlowRetryClock clock) {
-        var (response, how) = await GetBoundedAsync(client, url, clock);
+            HttpClient client, string url, string route, FlowRetryClock clock, DateTimeOffset? deadline = null) {
+        var (response, how) = await GetBoundedAsync(client, url, clock, deadline);
 
         return response is not null
             ? (response, "")
@@ -1563,13 +1586,15 @@ partial class McpFlowsServer(
 
     /// <summary>One GET under <see cref="PerGetTimeout"/>, so a server that stops answering cannot hold the
     /// serial tool loop open; a null response comes with how it failed.</summary>
-    static async Task<(HttpResponseMessage? Response, string How)> GetBoundedAsync(HttpClient client, string url, FlowRetryClock clock) {
-        using var getCts = clock.CreateTimeoutSource(PerGetTimeout);
+    static async Task<(HttpResponseMessage? Response, string How)> GetBoundedAsync(
+            HttpClient client, string url, FlowRetryClock clock, DateTimeOffset? deadline = null) {
+        var timeout = deadline is { } end ? Min(PerGetTimeout, Remaining(end, clock)) : PerGetTimeout;
+        using var getCts = clock.CreateTimeoutSource(timeout);
         try {
             return (await client.GetAsync(url, getCts.Token), "");
         } catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException) {
             // No caller token reaches this lane, so a cancellation here is the lookup's own timeout.
-            return (null, ex is OperationCanceledException ? $"timed out after {(int)PerGetTimeout.TotalSeconds} s" : $"failed: {ex.Message}");
+            return (null, ex is OperationCanceledException ? $"timed out after {(int)timeout.TotalSeconds} s" : $"failed: {ex.Message}");
         }
     }
 
@@ -1691,7 +1716,7 @@ partial class McpFlowsServer(
     /// still start, nothing else can be discovered.</summary>
     internal const string ServerCannotListDefinitions =
         "This server cannot list flow definitions (GET /api/flows/definitions returned 404). " +
-        "The built-in definitions are spec-review and code-review; for any other flow, ask the user for its definition id.";
+        "The built-in definitions are spec-review, code-review and doc-review; for any other flow, ask the user for its definition id.";
 
     /// <summary>Renders GET /api/flows/definitions for the driver, each entry led by the id it passes to
     /// start_flow. Null when the body is not the expected shape.</summary>
@@ -1733,7 +1758,7 @@ partial class McpFlowsServer(
 
         sb.Append(definitions.Count == 0
             ? "No flow definition is runnable on this server. Ask the user for one to publish, or compose one inline with definition_yaml."
-            : "Pass a listed id as definition_id to start_flow (spec-review and code-review also work as kind on start_review_flow).");
+            : "Pass a listed id as definition_id to start_flow (spec-review, code-review and doc-review also work as kind on start_review_flow).");
 
         return sb.ToString();
 
@@ -1856,11 +1881,11 @@ partial class McpFlowsServer(
     /// (the instant before its first POST), so the poll lane shares that budget with the settlement
     /// lane rather than starting fresh. Null from a call site with no settlement lane in front of it,
     /// which then falls back to <see cref="PollCap"/> alone.</summary>
-    async Task<PollResult> ResolveRoundResultAsync(HttpClient client, string apiRoot, string postBody, string toolName, bool wasDynamicStart, FlowRetryClock clock, SettlementBackoff backoff, DateTimeOffset? toolCallStartedAt = null) {
+    async Task<PollResult> ResolveRoundResultAsync(HttpClient client, string apiRoot, string postBody, string toolName, bool wasDynamicStart, FlowRetryClock clock, SettlementBackoff backoff, DateTimeOffset? toolCallStartedAt = null, TimeSpan? pollCap = null, DateTimeOffset? ackDeadline = null) {
         if (TryFormatRoundlessStart(postBody, out var roundlessPendingIds) is { } roundless) {
             if (roundlessPendingIds.Count > 0 &&
                 JsonNode.Parse(postBody)?.AsObject()?["flow_run_id"]?.GetValue<string>() is { } roundlessRunId)
-                await AckRenderedMessagesAsync(client, apiRoot, roundlessRunId, roundlessPendingIds, clock);
+                await AckRenderedMessagesAsync(client, apiRoot, roundlessRunId, roundlessPendingIds, clock, ackDeadline);
 
             return new(roundless, false);
         }
@@ -1876,12 +1901,12 @@ partial class McpFlowsServer(
 
             // flowRunId may be null here (unparseable body) — nothing to ack against.
             if (flowRunId is not null)
-                await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, clock);
+                await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, clock, ackDeadline);
 
             return new(formatted, false);
         }
 
-        return await PollUntilTerminalAsync(client, apiRoot, flowRunId, roundNum.Value, toolName, wasDynamicStart, clock, backoff, toolCallStartedAt);
+        return await PollUntilTerminalAsync(client, apiRoot, flowRunId, roundNum.Value, toolName, wasDynamicStart, clock, backoff, toolCallStartedAt, pollCap);
     }
 
     /// <summary>Tool family that started the round determines which status tool the graceful-cap
@@ -1891,12 +1916,12 @@ partial class McpFlowsServer(
     static string StatusToolNameFor(string toolName) =>
         toolName is "start_review_flow" or "submit_review_round" ? "get_review_flow_status" : "get_flow_status";
 
-    async Task<PollResult> PollUntilTerminalAsync(HttpClient client, string apiRoot, string flowRunId, int roundNumber, string toolName, bool wasDynamicStart, FlowRetryClock clock, SettlementBackoff backoff, DateTimeOffset? toolCallStartedAt = null) {
+    async Task<PollResult> PollUntilTerminalAsync(HttpClient client, string apiRoot, string flowRunId, int roundNumber, string toolName, bool wasDynamicStart, FlowRetryClock clock, SettlementBackoff backoff, DateTimeOffset? toolCallStartedAt = null, TimeSpan? pollCap = null) {
         var url                   = $"{apiRoot}/api/flows/{Uri.EscapeDataString(flowRunId)}";
         var pollStartedAt         = clock.UtcNow;
         // The poll lane's cap, CLIPPED to what remains of the shared ToolCallBudget. Absent an anchor
         // there was no settlement lane to share with, so PollCap stands alone.
-        var pollLaneDeadline      = pollStartedAt + PollCap;
+        var pollLaneDeadline      = pollStartedAt + (pollCap ?? PollCap);
         var deadline              = toolCallStartedAt is { } anchor && anchor + ToolCallBudget < pollLaneDeadline
             ? anchor + ToolCallBudget
             : pollLaneDeadline;
@@ -2019,16 +2044,18 @@ partial class McpFlowsServer(
     /// <see cref="FormatPolledRoundResult(JsonObject, string, out IReadOnlyList{string})"/>'s round-submission shape. Reusing it would make the tool's
     /// response shape depend on whether <c>wait</c> was set.</para></summary>
     async Task<PollResult> PollStatusUntilTerminalAsync(
-            HttpClient client, string apiRoot, string flowRunId, string toolName, FlowRetryClock clock, SettlementBackoff backoff) {
+            HttpClient client, string apiRoot, string flowRunId, string toolName, FlowRetryClock clock, SettlementBackoff backoff,
+            TimeSpan? pollCap = null) {
         var url                   = $"{apiRoot}/api/flows/{Uri.EscapeDataString(flowRunId)}";
         var pollStartedAt         = clock.UtcNow;
-        var deadline              = pollStartedAt + PollCap;
+        var deadline              = pollStartedAt + (pollCap ?? PollCap);
         var consecutiveTransient  = 0;
         string? lastTransientError;
         var settlementRetriesUsed = 0;
 
         while (clock.UtcNow < deadline) {
-            using var getCts = clock.CreateTimeoutSource(PerGetTimeout);
+            // Clipped to the deadline, so timeout_s bounds the whole call rather than the last GET's start.
+            using var getCts = clock.CreateTimeoutSource(Min(PerGetTimeout, Remaining(deadline, clock)));
             HttpResponseMessage resp;
             try {
                 resp = await client.GetAsync(url, getCts.Token);
@@ -2037,7 +2064,7 @@ partial class McpFlowsServer(
                 lastTransientError = ex.Message;
                 if (consecutiveTransient > MaxTransientRetries)
                     return new($"Error: poll failed after {MaxTransientRetries} consecutive network errors: {lastTransientError}", true);
-                await clock.DelayAsync(PollInterval); continue;
+                await clock.DelayAsync(Min(PollInterval, Remaining(deadline, clock))); continue;
             }
 
             using (resp) {
@@ -2068,7 +2095,7 @@ partial class McpFlowsServer(
                     lastTransientError = $"HTTP {statusCode}";
                     if (consecutiveTransient > MaxTransientRetries)
                         return new($"Error: poll failed after {MaxTransientRetries} consecutive server errors: {lastTransientError}", true);
-                    await clock.DelayAsync(PollInterval); continue;
+                    await clock.DelayAsync(Min(PollInterval, Remaining(deadline, clock))); continue;
                 }
 
                 consecutiveTransient  = 0;
@@ -2085,11 +2112,11 @@ partial class McpFlowsServer(
 
                 if (runTerminal || roundTerminal) {
                     var formatted = FormatStatusResponse(body, out var pendingIds);
-                    await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, clock);
+                    await AckRenderedMessagesAsync(client, apiRoot, flowRunId, pendingIds, clock, deadline);
                     return new(formatted, false);
                 }
             }
-            await clock.DelayAsync(PollInterval);
+            await clock.DelayAsync(Min(PollInterval, Remaining(deadline, clock)));
         }
 
         // PollCap reached: the same benign text the round-submission poll lane returns, minus the round
@@ -2490,7 +2517,10 @@ partial class McpFlowsServer(
             string                apiRoot,
             string                flowRunId,
             IReadOnlyList<string> messageIds,
-            FlowRetryClock        clock
+            FlowRetryClock        clock,
+            // A caller with its own deadline (a status wait under timeout_s) stops acknowledging at it;
+            // an unacknowledged message is redelivered on the next call.
+            DateTimeOffset?       deadline = null
         ) {
         if (messageIds.Count == 0) return;
 
@@ -2504,7 +2534,8 @@ partial class McpFlowsServer(
                 // round endpoints), so an unbounded ack POST could hang the tool response the
                 // driver is waiting on. A timeout surfaces as OperationCanceledException, which
                 // falls into the existing swallow-and-retry-once path below.
-                using var postCts = clock.CreateTimeoutSource(PerAckPostTimeout);
+                using var postCts = clock.CreateTimeoutSource(
+                    deadline is { } end ? Min(PerAckPostTimeout, Remaining(end, clock)) : PerAckPostTimeout);
                 using var response = await client.PostAsync(
                     url, JsonContent.Create(body, McpJsonContext.Default.AckFlowMessagesDto), postCts.Token);
                 return response.IsSuccessStatusCode;
@@ -2515,9 +2546,11 @@ partial class McpFlowsServer(
 
         if (await TryPostAsync()) return;
 
-        await clock.DelayAsync(TimeSpan.FromSeconds(2));
-
-        if (await TryPostAsync()) return;
+        var retryGap = TimeSpan.FromSeconds(2);
+        if (deadline is null || Remaining(deadline.Value, clock) > retryGap) {
+            await clock.DelayAsync(retryGap);
+            if (await TryPostAsync()) return;
+        }
 
         await Console.Error.WriteLineAsync(
             $"kcap mcp flows: failed to ack {messageIds.Count} rendered message(s) for flow_run_id {flowRunId}; will redeliver on next call.");
@@ -2558,6 +2591,30 @@ partial class McpFlowsServer(
             JsonValue v when v.TryGetValue<bool>(out var b) => b,
             _                                                 => throw new ArgumentException("Invalid argument: wait must be a boolean")
         };
+
+    /// <summary>The optional "wait" argument on start_flow/send_to_participant (and their review aliases).
+    /// Missing or null defaults to true, the blocking call every existing driver relies on.</summary>
+    static bool ParseRoundWaitArg(JsonObject? arguments) =>
+        arguments?["wait"] switch {
+            null                                              => true,
+            JsonValue v when v.TryGetValue<bool>(out var b) => b,
+            _                                                 => throw new ArgumentException("Invalid argument: wait must be a boolean")
+        };
+
+    /// <summary>The optional "timeout_s" bound on a status wait, 1 to <see cref="PollCap"/> seconds;
+    /// missing or null leaves <see cref="PollCap"/>.</summary>
+    static TimeSpan? ParseTimeoutArg(JsonObject? arguments) =>
+        arguments?["timeout_s"] switch {
+            null => null,
+            JsonValue v when v.TryGetValue<int>(out var seconds) && seconds >= 1 && seconds <= PollCap.TotalSeconds
+                => TimeSpan.FromSeconds(seconds),
+            _ => throw new ArgumentException($"Invalid argument: timeout_s must be an integer from 1 to {(int)PollCap.TotalSeconds}")
+        };
+
+    static TimeSpan Min(TimeSpan a, TimeSpan b) => a < b ? a : b;
+
+    static TimeSpan Remaining(DateTimeOffset deadline, FlowRetryClock clock) =>
+        deadline - clock.UtcNow is var left && left > TimeSpan.Zero ? left : TimeSpan.Zero;
 
     static string BuildInitializeResponse(JsonNode id, JsonObject request) =>
         ToResponse<McpInitResult>(
@@ -2612,7 +2669,7 @@ partial class McpFlowsServer(
             new(
                 "object",
                 new() {
-                    ["kind"]         = new("string", "Review flow kind. Valid values: 'spec-review' (for specs and design documents), 'code-review' (for code changes and PRs)."),
+                    ["kind"]         = new("string", "Review flow kind. Valid values: 'spec-review' (for specs and design documents in this repository), 'code-review' (for code changes and PRs), 'doc-review' (for a document or spec inlined in context; needs no repository)."),
                     ["target_kind"]  = new("string", "What is being reviewed: 'pr', 'branch', 'file', 'spec', 'plan', etc."),
                     ["target_ref"]   = new("string", "A reference to the target (PR URL, branch name, file path, etc.). With target_kind 'pr' and no repo_path, a PR URL or owner/repo#N in a repository other than this session's runs on a daemon that hosts that repository, in a worktree of its checkout rather than the PR's branch: say which commits to review in context."),
                     ["target_title"] = new("string", "Human-readable title for the target (PR title, spec name, etc.)."),
@@ -2657,7 +2714,8 @@ partial class McpFlowsServer(
                 new() {
                     ["flow_run_id"] = new("string", "Flow run ID returned by start_review_flow. Optional: when omitted, the newest open flow this session started is read (on a harness that gives this server no session, the newest one started from this workspace on this machine) — the way back to a run whose start the harness aborted, or whose id was lost to context compaction. With several open flows the reply lists them instead."),
                     ["session_id"]  = new("string", "Session whose flows to look up when flow_run_id is omitted. Defaults to the session this server runs in when omitted."),
-                    ["wait"]        = new("boolean", "Optional, defaults to false. When true, block until the round is terminal or roughly 3.5 minutes elapse, instead of returning immediately.")
+                    ["wait"]        = new("boolean", "Optional, defaults to false. When true, block until the round is terminal or roughly 3.5 minutes elapse, instead of returning immediately."),
+                    ["timeout_s"]   = new("integer", "Optional, with wait: true. Bounds the wait to this many seconds, 1 to 210 (the default). A caller whose tool calls are cut off sooner passes less and calls again.")
                 },
                 []
             ),
@@ -2700,8 +2758,9 @@ partial class McpFlowsServer(
                     ["repo_path"]      = new("string", "Optional absolute path to a checkout or linked worktree on this machine to review instead of this session's project directory — for a change in another repository or worktree. The session stays the requester; a daemon must host that repository, and on this machine the reviewer borrows that checkout."),
                     ["patch_path"]     = new("string", "Optional absolute path to a file holding a git diff (at most 4 MiB, UTF-8) to review instead of inline context, for a change too large to paste. Requires base_commit. The reviewer gets a worktree at base_commit on a daemon that hosts the repository, with the patch attached, and applies it itself; nothing else of yours is seen. Follow-up rounds inline their own delta in context. Not with mode 'context-only'; needs a server with the v5 start protocol."),
                     ["base_commit"]    = new("string", "The full 40-character SHA the patch applies to, e.g. from `git merge-base origin/main HEAD`. It must be reachable from the hosting daemon's checkout or its origin, so a pushed commit unless the daemon runs on this machine. Required with patch_path."),
-                    ["vendor"]         = new("string", "Optional reviewer vendor. Reserved spec-review/code-review aliases use it independently of the driver. Omit to use the flow definition's authored vendor; if the definition names none, your saved flows.reviewer_vendor preference is applied, else the server asks for one. Custom single-participant catalog definitions accept an explicit override. Rejected for multi-participant and definition_yaml flows. The selected vendor must be certified unattended on an eligible daemon; no silent fallback. Pass a lowercase canonical token."),
-                    ["model"]          = new("string", "Optional reviewer model override for a single-participant catalog review definition. REQUIRES 'vendor' — the model is interpreted against that vendor (there is no vendor->model table here), so passing model without vendor is rejected locally. Rejected for definition_yaml (dynamic) and multi-participant flows. Omit to use the vendor's default reviewer model. The chosen model must be resolvable and certified on the selected daemon; there is no silent fallback. Pass the vendor's own model id or alias verbatim (case-sensitive) — do not translate or guess it. Requires a server that supports the v3 flow-start protocol.")
+                    ["vendor"]         = new("string", "Optional reviewer vendor. Reserved spec-review/code-review/doc-review aliases use it independently of the driver. Omit to use the flow definition's authored vendor; if the definition names none, your saved flows.reviewer_vendor preference is applied, else the server asks for one. Custom single-participant catalog definitions accept an explicit override. Rejected for multi-participant and definition_yaml flows. The selected vendor must be certified unattended on an eligible daemon; no silent fallback. Pass a lowercase canonical token."),
+                    ["model"]          = new("string", "Optional reviewer model override for a single-participant catalog review definition. REQUIRES 'vendor' — the model is interpreted against that vendor (there is no vendor->model table here), so passing model without vendor is rejected locally. Rejected for definition_yaml (dynamic) and multi-participant flows. Omit to use the vendor's default reviewer model. The chosen model must be resolvable and certified on the selected daemon; there is no silent fallback. Pass the vendor's own model id or alias verbatim (case-sensitive) — do not translate or guess it. Requires a server that supports the v3 flow-start protocol."),
+                    ["wait"]           = new("boolean", "Optional, defaults to true. Pass false to return as soon as the round is accepted, with the flow_run_id and the round still running; then poll get_flow_status. For a caller whose tool calls are cut short long before a round ends.")
                 },
                 ["target_kind", "target_ref", "target_title", "session_title", "context"]
             ),
@@ -2719,7 +2778,8 @@ partial class McpFlowsServer(
                     ["participant"]  = new("string", "The participant role to send to, as declared by the flow definition's participants map (single-participant definitions use 'reviewer'). The server rejects an unknown role, naming the valid ones."),
                     ["message"]      = new("string", "Updated context or response to the participant's previous findings."),
                     ["instructions"] = new("string", "Optional instructions for this round."),
-                    ["async"]        = new("boolean", "Optional. Defaults to true.")
+                    ["async"]        = new("boolean", "Optional. Defaults to true."),
+                    ["wait"]         = new("boolean", "Optional, defaults to true. Pass false to return as soon as the round is accepted, with the flow_run_id and the round still running; then poll get_flow_status. For a caller whose tool calls are cut short long before a round ends.")
                 },
                 ["flow_run_id", "participant", "message"]
             ),
@@ -2736,7 +2796,8 @@ partial class McpFlowsServer(
                 new() {
                     ["flow_run_id"] = new("string", "Flow run ID returned by start_flow. Optional: when omitted, the newest open flow this session started is read (on a harness that gives this server no session, the newest one started from this workspace on this machine) — the way back to a run whose start the harness aborted, or whose id was lost to context compaction. With several open flows the reply lists them instead."),
                     ["session_id"]  = new("string", "Session whose flows to look up when flow_run_id is omitted. Defaults to the session this server runs in when omitted."),
-                    ["wait"]        = new("boolean", "Optional, defaults to false. When true, block until the round is terminal or roughly 3.5 minutes elapse, instead of returning immediately.")
+                    ["wait"]        = new("boolean", "Optional, defaults to false. When true, block until the round is terminal or roughly 3.5 minutes elapse, instead of returning immediately."),
+                    ["timeout_s"]   = new("integer", "Optional, with wait: true. Bounds the wait to this many seconds, 1 to 210 (the default). A caller whose tool calls are cut off sooner passes less and calls again.")
                 },
                 []
             ),

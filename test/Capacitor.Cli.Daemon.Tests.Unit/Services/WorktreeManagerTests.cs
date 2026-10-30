@@ -899,6 +899,42 @@ public class WorktreeManagerTests {
         }
     }
 
+    /// <summary>A scratch workspace holds nothing but an empty repository — Codex refuses to run outside
+    /// one — and is the daemon's own, so removal deletes it outright.</summary>
+    [Test]
+    public async Task CreateScratchAsync_makes_an_empty_repository_that_removal_deletes() {
+        using var tmp = new TempDir();
+        var manager = new WorktreeManager(
+            new DaemonConfig { WorktreeRoot = tmp.PathTo("root") }, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+
+        var scratch = await manager.CreateScratchAsync("scratch-agent", CancellationToken.None);
+
+        await Assert.That(scratch.Path).IsEqualTo(Path.Combine(tmp.PathTo("root"), WorktreeManager.ScratchDirectoryName, "scratch-agent"));
+        await Assert.That(scratch.IsStandalone).IsTrue();
+        await Assert.That(Directory.Exists(Path.Combine(scratch.Path, ".git"))).IsTrue();
+        await Assert.That(Directory.EnumerateFileSystemEntries(scratch.Path).Select(e => Path.GetFileName(e)!)).IsEquivalentTo([".git"]);
+
+        await WorktreeManager.RemoveAsync(scratch, TimeProvider.System);
+
+        await Assert.That(Directory.Exists(scratch.Path)).IsFalse();
+    }
+
+    [Test]
+    public async Task CleanupOrphaned_removes_orphan_scratch_workspaces_and_keeps_active_ones() {
+        using var tmp = new TempDir();
+        var root = tmp.PathTo("root");
+        var manager = new WorktreeManager(
+            new DaemonConfig { WorktreeRoot = root }, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var active = await manager.CreateScratchAsync("active", CancellationToken.None);
+        var orphan = await manager.CreateScratchAsync("orphan", CancellationToken.None);
+        File.WriteAllText(Path.Combine(orphan.Path, "notes.md"), "left behind");
+
+        await manager.CleanupOrphanedAsync([active.Path]);
+
+        await Assert.That(Directory.Exists(active.Path)).IsTrue();
+        await Assert.That(Directory.Exists(orphan.Path)).IsFalse();
+    }
+
     [Test]
     public async Task CleanupOrphaned_PreservesActiveBorrowedSnapshotContainerAndRemovesOnlyOrphans() {
         using var tmp = new TempDir();

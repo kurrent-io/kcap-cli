@@ -12,7 +12,7 @@ public sealed class ClaudeIdentityProbe(HarnessRegistry harnesses, UserHome home
     internal TimeSpan Timeout { get; init; } = TimeSpan.FromSeconds(10);
 
     public async Task<ProbeResult> ProbeAsync(VendorAccount account, CancellationToken ct) {
-        if (harnesses.ResolveExecutable(HarnessId.Claude) is not { } exe) return Failed("claude not found on PATH");
+        if (harnesses.ResolveLaunchable(HarnessId.Claude) is not { } exe) return Failed("claude not found on PATH or in the desktop app");
 
         var psi = new ProcessStartInfo {
             FileName               = exe,

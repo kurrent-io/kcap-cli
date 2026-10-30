@@ -69,6 +69,10 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     // Events for incoming commands from server
     public event Func<LaunchAgentCommand, Task>?    OnLaunchAgent;
+
+    /// Sees every credential this connection's lanes resolve. Invoked on the token path, so it must
+    /// stay a cheap synchronous write.
+    public Action<CredentialState>? OnCredentialResolved { get; set; }
     public event Func<string, Task>?                OnStopAgent; // agentId
     public event Func<SendInputCommand, Task>?      OnSendInput;
     public event Func<string, string, Task>?        OnSendSpecialKey; // agentId, key
@@ -260,7 +264,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         _config          = config;
         _logger          = logger;
         _statusNotifier  = statusNotifier ?? new();
-        Credentials      = credentials;
+        Credentials      = credentials = new ObservedCredentialSource(credentials, state => OnCredentialResolved?.Invoke(state));
 
         // A refused bearer is logged with its expiry and the server's error code on both lanes that
         // carry it, so a 401 can be told apart from a lapsed token without the server's log.
@@ -784,7 +788,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             ActiveCount: activeCount?.Count,
             ActiveCountVersion: activeCount?.Version,
             SupportsAccountLaunches: true,
-            Accounts: GetAccountsSnapshot?.Invoke());
+            Accounts: GetAccountsSnapshot?.Invoke(),
+            SupportsScratchWorkspace: true);
     }
 
     async Task DaemonConnectCoreAsync(RegistrationAttempt attempt) {

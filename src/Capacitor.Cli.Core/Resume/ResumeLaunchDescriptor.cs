@@ -32,6 +32,8 @@ public sealed record ResumeLaunchDescriptor(
     int? InactivityBoundSeconds = null,
     string? AccountDirectory = null,
     string? AccountId = null,
+    // A ledger entry without the field reads as null: a launch into a repository.
+    bool? ScratchWorkspace = null,
     // Null for an entry written before the field, which owned its branch.
     bool? WorktreeOwnsBranch = null,
     string? AccountLabel = null

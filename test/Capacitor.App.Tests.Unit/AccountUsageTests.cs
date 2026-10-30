@@ -132,12 +132,19 @@ public class AccountUsageTests {
     }
 
     [Test]
-    public async Task Expired_window_reads_reset_usage_unknown() {
+    public async Task Expired_window_reads_reset_with_usage_not_read() {
         var bar = Project(Reading([W("claude", 300, 80, Now.AddMinutes(-1))])).Bars[0];
         await Assert.That(bar.Percent).IsNull();
-        await Assert.That(bar.PercentText).IsEqualTo("—");
+        await Assert.That(bar.PercentText).IsEqualTo("reset");
         await Assert.That(bar.Tone).IsEqualTo(UsageTone.Unknown);
-        await Assert.That(bar.ResetText).IsEqualTo("reset · usage unknown");
+        await Assert.That(bar.ResetText).IsEqualTo("new window · usage not read yet");
+    }
+
+    /// Once the 5h window has reset, the next reset is the week's, and an unlabelled one reads as the session's.
+    [Test]
+    public async Task Next_reset_after_the_session_window_resets_names_the_week() {
+        var view = Project(Reading([W("claude", 300, 80, Now.AddMinutes(-1)), W("claude", 10080, 77, Now.AddDays(4))]));
+        await Assert.That(view.NextResetText).IsEqualTo("Week resets Sat 12:00");
     }
 
     [Test]
@@ -187,7 +194,7 @@ public class AccountUsageTests {
             W("claude", 60, 10, Now.AddMinutes(-5))
         ]));
         await Assert.That(AccountUsage.NextReset(account, Now)).IsEqualTo(Now.AddHours(1));
-        await Assert.That(AccountUsage.Project(account, Now, Utc).NextResetText).IsEqualTo("resets in 1h 00m");
+        await Assert.That(AccountUsage.Project(account, Now, Utc).NextResetText).IsEqualTo("Week resets in 1h 00m");
     }
 
     [Test]

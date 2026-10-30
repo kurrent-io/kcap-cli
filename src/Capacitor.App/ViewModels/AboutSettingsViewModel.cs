@@ -17,13 +17,18 @@ public sealed class AboutSettingsViewModel : ReactiveObject, IDisposable {
     string? _daemonVersion;
     string? _cliVersionText;
     UpdateMenuItem? _update;
+    readonly Func<bool, Task>? _setBetaUpdates;
+    bool _betaUpdates;
 
     public AboutSettingsViewModel(IDaemonClientService service, Func<CancellationToken, Task<string?>> cliVersion,
             LocalStackViewModel? localStack = null, IObservable<UpdateMenuItem>? updateMenu = null, Func<Task>? updateAction = null,
-            IUrlOpener? opener = null, CancellationToken appLifetime = default) {
+            IUrlOpener? opener = null, Func<bool>? followsBetas = null, Func<bool, Task>? setBetaUpdates = null,
+            CancellationToken appLifetime = default) {
         _cliVersion = cliVersion;
         _lifetime = CancellationTokenSource.CreateLinkedTokenSource(appLifetime);
         LocalStack = localStack;
+        _setBetaUpdates = setBetaUpdates;
+        _betaUpdates = followsBetas?.Invoke() ?? false;
         // The service keeps its last snapshot after a disconnect, so the version only stands while attached.
         service.Status.CombineLatest(service.Snapshots.Select(s => MainWindowViewModel.StripBuildMetadata(s.Daemon.Version)),
                 (status, version) => status.State == AttachState.Connected ? version : "")
@@ -63,10 +68,22 @@ public sealed class AboutSettingsViewModel : ReactiveObject, IDisposable {
         private set {
             this.RaiseAndSetIfChanged(ref _update, value);
             this.RaisePropertyChanged(nameof(UpdateVisible));
+            this.RaisePropertyChanged(nameof(BetaUpdatesVisible));
         }
     }
 
     public bool UpdateVisible => Update is { Visible: true };
+
+    public bool BetaUpdatesVisible => UpdateVisible && _setBetaUpdates is not null;
+
+    public bool BetaUpdates {
+        get => _betaUpdates;
+        set {
+            if (_setBetaUpdates is null || value == _betaUpdates) return;
+            this.RaiseAndSetIfChanged(ref _betaUpdates, value);
+            _ = _setBetaUpdates(value);
+        }
+    }
 
     public ReactiveCommand<Unit, Unit> UpdateCommand { get; }
     public ReactiveCommand<Unit, Unit> OpenDocsCommand { get; }

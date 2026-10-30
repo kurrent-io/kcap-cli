@@ -385,6 +385,7 @@ internal partial class AgentOrchestrator {
             InactivityBoundSeconds: agent.InactivityBoundSeconds,
             AccountDirectory:       agent.Account?.Directory,
             AccountId:              agent.Account?.AccountId,
+            ScratchWorkspace:       cmd is { ScratchWorkspace: true } ? true : prior?.Launch.ScratchWorkspace,
             WorktreeOwnsBranch:     agent.Worktree.OwnsBranch,
             AccountLabel:           agent.Account?.Label);
 
@@ -456,6 +457,7 @@ internal partial class AgentOrchestrator {
             InactivityBoundSeconds: cmd.InactivityBoundSeconds,
             AccountDirectory:       account?.Directory,
             AccountId:              account?.AccountId,
+            ScratchWorkspace:       cmd.ScratchWorkspace ? true : null,
             WorktreeOwnsBranch:     worktree.OwnsBranch,
             AccountLabel:           account?.Label);
 
@@ -1536,7 +1538,8 @@ internal partial class AgentOrchestrator {
             Prompt:              ResumeNudge.Build(interruptedAt, launch.Prompt),
             Model:               launch.Model ?? "",
             Effort:              launch.Effort,
-            RepoPath:            launch.RepoPath,
+            // A scratch launch names no repository; the resumed worktree is its workspace.
+            RepoPath:            launch.ScratchWorkspace == true ? "" : launch.RepoPath,
             Tools:               null,
             AttachmentIds:       null,
             Vendor:              entry.Vendor,
@@ -1552,7 +1555,8 @@ internal partial class AgentOrchestrator {
             Title:               launch.Title,
             // A prompt cut re-sent as the caller's title would outrank the one the session has since been given.
             TitleDerived:        launch.TitleDerived ?? true,
-            AccountId:           launch.AccountId);
+            AccountId:           launch.AccountId,
+            ScratchWorkspace:    launch.ScratchWorkspace == true);
     }
 
     /// <summary>The ledger's worktree as the launch path names it.</summary>

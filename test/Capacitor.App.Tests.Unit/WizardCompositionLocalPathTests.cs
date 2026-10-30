@@ -114,7 +114,7 @@ public class WizardCompositionLocalPathTests {
         public ShimPreflight Preflight(string target) => ShimPreflight.Installable;
         public Task<ShimResult> InstallAsync(string target, CancellationToken ct) {
             Targets.Add(target);
-            return Task.FromResult(new ShimResult(ShimOutcome.Installed, null, null));
+            return Task.FromResult(new ShimResult(ShimOutcome.Installed, null));
         }
     }
 

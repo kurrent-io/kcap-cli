@@ -69,6 +69,24 @@ public class LocalStatusReaderTests {
         string.Join("\n", [report.Headline, .. report.Fields.Select(f => $"{f.Key}: {f.Value}"), .. report.Notes]);
 
     [Test]
+    public async Task An_upgrade_is_in_progress_until_its_lease_is_released() {
+        Publish();
+        using (var lease = await LifecycleLease.AcquireAsync(Root, TimeSpan.Zero, TimeProvider.System, CancellationToken.None)) {
+            lease.Begin("upgrade", "staging", ServerStart.Allow);
+            var journal = File.ReadAllText(Root.JournalPath);
+
+            var active = Text(await Read());
+
+            await Assert.That(active).Contains("in progress");
+            await Assert.That(active).DoesNotContain("interrupted");
+            await Assert.That(active).DoesNotContain("finishes or undoes");
+            await Assert.That(File.ReadAllText(Root.JournalPath)).IsEqualTo(journal);
+        }
+
+        await Assert.That(Text(await Read())).Contains("interrupted upgrade");
+    }
+
+    [Test]
     public async Task The_search_field_names_the_embedding_model_or_says_keyword_only() {
         Running();
 

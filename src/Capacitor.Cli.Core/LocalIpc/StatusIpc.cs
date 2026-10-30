@@ -44,7 +44,10 @@ public sealed record DaemonInfoDto(
     // The profile the daemon resolved its server and sign-in from. Null from an older daemon.
     string? Profile = null,
     // Same shape as VendorModels, keyed by registry id.
-    Dictionary<string, VendorModelOption[]>? VendorModelsByAccount = null);
+    Dictionary<string, VendorModelOption[]>? VendorModelsByAccount = null,
+    // The signed-in account's stable subject, echoed back in a rename so the daemon can refuse
+    // when the client was looking at another account. Null = older daemon or signed out.
+    string? UserSubject = null);
 
 /// <summary>
 /// <see cref="Status"/> is the daemon's internal status string VERBATIM (PascalCase, open
@@ -125,7 +128,9 @@ public sealed record AgentStatusDto(
     // relayed prompt submit or tool call since its last turn end. AwaitingInput == false is not
     // that evidence; an idle PTY prompt reports it too. False and null (an older daemon) both mean
     // unproven, so a client must not send a keystroke that is safe only mid-turn.
-    bool? TurnAttested = null);
+    bool? TurnAttested = null,
+    // The session is hidden from everyone but its owner. Null = older daemon, unknown.
+    bool? IsPrivate = null);
 
 /// Wire tokens for <see cref="AgentStatusDto.WorkLocation"/>, compared literally by every
 /// client, so they never change.

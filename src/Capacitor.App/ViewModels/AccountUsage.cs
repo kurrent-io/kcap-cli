@@ -86,7 +86,7 @@ public static class AccountUsage {
     static UsageBar Bar(UsageWindowDto window, IReadOnlyList<BlockConstraintDto> blocked, DateTimeOffset now, TimeZoneInfo zone) {
         var label = UsageText.WindowLabel(window.WindowMinutes);
 
-        if (Expired(window, now)) return new(label, null, "—", UsageTone.Unknown, "reset · usage unknown");
+        if (Expired(window, now)) return new(label, null, "reset", UsageTone.Unknown, "new window · usage not read yet");
 
         var percent = Rounded(window);
         var tone    = percent >= 100 || blocked.Any(c => c.WindowMinutes == window.WindowMinutes) ? UsageTone.Danger
@@ -105,7 +105,9 @@ public static class AccountUsage {
                       && Rounded(w) < ReadyBelowPercent);
 
     static string? NextResetText(AccountViewDto account, DateTimeOffset now, TimeZoneInfo zone) =>
-        NextReset(account, now) is { } at ? UsageText.Reset(at, now, zone) : null;
+        NextResetWindow(account, now) is { ResetsAt: { } at } window
+            ? $"{UsageText.WindowLabel(window.WindowMinutes)} {UsageText.Reset(at, now, zone)}"
+            : null;
 
     static string AgeText(AccountReadingDto reading, DateTimeOffset now) =>
         reading.Windows.Max(w => w.ConfirmedAt) is { } at ? "updated " + RelativeTime.Format(at, now) : "freshness unknown";

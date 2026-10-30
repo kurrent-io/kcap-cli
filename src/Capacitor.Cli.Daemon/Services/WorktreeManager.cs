@@ -935,6 +935,26 @@ public partial class WorktreeManager(
     /// <summary>Builds an independent, bundle-derived repository snapshot outside the source
     /// checkout. Unlike a linked worktree it shares no gitdir, refs, reflogs, object alternates, or
     /// worktree registration with the requester's repository.</summary>
+    public const string ScratchDirectoryName = "scratch";
+
+    /// <summary>An empty workspace for a reviewer that judges only its prompt: no source repository, no
+    /// files. It is still a git repository, because some vendors (Codex) refuse to run outside one.</summary>
+    public async Task<WorktreeInfo> CreateScratchAsync(string name, CancellationToken ct) {
+        var root = Path.GetFullPath(Path.Combine(config.WorktreeRoot, ScratchDirectoryName));
+        CreateOwnerOnlyDirectory(root);
+        var path = Path.Combine(root, name);
+        if (Path.Exists(path)) throw new InvalidOperationException($"scratch_workspace_exists: {path}");
+        CreateOwnerOnlyDirectory(path);
+        try {
+            ct.ThrowIfCancellationRequested();
+            await RunGit(path, GitTimeout, time, "init", "--quiet");
+            return new WorktreeInfo(path, "", path, IsStandalone: true);
+        } catch {
+            DeleteTreeNoFollow(path);
+            throw;
+        }
+    }
+
     public async Task<WorktreeInfo> CreateBorrowedSnapshotAsync(
             string sourceRepoRoot, string? name, CancellationToken ct) {
         return await CreateBorrowedSnapshotAsync(sourceRepoRoot, sourceRepoRoot, name, ct);
@@ -1704,18 +1724,20 @@ public partial class WorktreeManager(
     public async Task CleanupOrphanedAsync(IEnumerable<string>? activeWorktreePaths = null) {
         // Legacy global root — clean up any leftover worktrees from before the per-repo change
         var worktreePaths = activeWorktreePaths as string[] ?? [..activeWorktreePaths ?? []];
-        await CleanupDirectoryAsync(config.WorktreeRoot, worktreePaths, "borrowed-snapshots");
-        var borrowedSnapshotsRoot = Path.Combine(config.WorktreeRoot, "borrowed-snapshots");
-        // This name is a daemon-owned routing entry. Never enumerate through a pre-existing link:
-        // doing so would turn orphan cleanup into deletion of directories outside WorktreeRoot.
-        // Removing the link itself is safe and leaves its target untouched.
-        if (Path.Exists(borrowedSnapshotsRoot) &&
-            File.GetAttributes(borrowedSnapshotsRoot).HasFlag(FileAttributes.ReparsePoint)) {
-            LogCleaningUp(borrowedSnapshotsRoot);
-            try { DeleteTreeNoFollow(borrowedSnapshotsRoot); }
-            catch (Exception ex) { LogCleanupFailed(ex, borrowedSnapshotsRoot); }
-        } else {
-            await CleanupDirectoryAsync(borrowedSnapshotsRoot, worktreePaths, keepUnsavedWork: false);
+        string[] daemonOwnedRoots = ["borrowed-snapshots", ScratchDirectoryName];
+        await CleanupDirectoryAsync(config.WorktreeRoot, worktreePaths, daemonOwnedRoots);
+        foreach (var name in daemonOwnedRoots) {
+            var ownedRoot = Path.Combine(config.WorktreeRoot, name);
+            // This name is a daemon-owned routing entry. Never enumerate through a pre-existing link:
+            // doing so would turn orphan cleanup into deletion of directories outside WorktreeRoot.
+            // Removing the link itself is safe and leaves its target untouched.
+            if (Path.Exists(ownedRoot) && File.GetAttributes(ownedRoot).HasFlag(FileAttributes.ReparsePoint)) {
+                LogCleaningUp(ownedRoot);
+                try { DeleteTreeNoFollow(ownedRoot); }
+                catch (Exception ex) { LogCleanupFailed(ex, ownedRoot); }
+            } else {
+                await CleanupDirectoryAsync(ownedRoot, worktreePaths, keepUnsavedWork: false);
+            }
         }
 
         // Per-repo roots — scan each allowed repo for .capacitor/worktrees/
@@ -1730,14 +1752,13 @@ public partial class WorktreeManager(
     /// Otherwise a left-behind worktree holding work that exists nowhere else is kept, as at teardown.</param>
     async Task CleanupDirectoryAsync(
             string root, IEnumerable<string>? activeWorktreePaths,
-            string? reservedDirectoryName = null, bool keepUnsavedWork = true) {
+            string[]? reservedDirectoryNames = null, bool keepUnsavedWork = true) {
         if (!Directory.Exists(root)) return;
 
         var activePaths = activeWorktreePaths?.Select(Path.GetFullPath).ToArray() ?? [];
 
         foreach (var dir in Directory.GetDirectories(root)) {
-            if (reservedDirectoryName is not null &&
-                Path.GetFileName(dir).Equals(reservedDirectoryName, StringComparison.OrdinalIgnoreCase))
+            if (reservedDirectoryNames?.Contains(Path.GetFileName(dir), StringComparer.OrdinalIgnoreCase) == true)
                 continue;
             var fullDir = Path.GetFullPath(dir).TrimEnd(Path.DirectorySeparatorChar);
 

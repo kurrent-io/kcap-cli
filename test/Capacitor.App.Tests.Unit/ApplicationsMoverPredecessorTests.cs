@@ -114,6 +114,41 @@ public class ApplicationsMoverPredecessorTests {
         await Assert.That(KcapBundle.Read(legacy)?.Version).IsEqualTo("1.5.0");
     }
 
+    /// Opening the copy in ~/Applications while /Applications holds the one the daemon runs from: keeping the opened
+    /// copy quits the other, moves the references to the kept copy and removes the other one.
+    [Test]
+    public async Task Keeping_the_opened_copy_replaces_the_installed_one_in_the_other_folder() {
+        var system = Tmp.CreateDir("Applications");
+        var user = Tmp.CreateDir("home/Applications");
+        var source = Path.Combine(user, "kcap.app");
+        var other = Path.Combine(system, "kcap.app");
+        Bundle(source, "1.4.1");
+        Bundle(other, "1.4.1");
+        var running = new HashSet<string> { other };
+        var quit = new List<string>();
+        var references = new RecordingReferences();
+        var opened = new List<string>();
+        var mover = new ApplicationsMover(new Ditto("1.4.1"), Promote, user, Swap, isRunning: running.Contains,
+            quitRunning: (root, _) => { quit.Add(root); running.Remove(root); return Task.FromResult(true); },
+            migrateReferences: () => references, activate: (target, _) => { opened.Add(target); return Task.FromResult(true); },
+            retirement: new Retirement(), userApplicationsDir: user, systemApplicationsDir: system);
+
+        var plan = mover.Inspect(source);
+        var outcome = await mover.MoveAsync(source, CancellationToken.None);
+
+        await Assert.That(plan.Action).IsEqualTo(ApplicationsInstallAction.OpenInstalled);
+        await Assert.That(plan.Replaces.SequenceEqual([other])).IsTrue();
+        await Assert.That(plan.Title).IsEqualTo("kcap is installed twice");
+        await Assert.That(plan.ButtonLabel).IsEqualTo("Keep this copy");
+        await Assert.That(plan.Detail).StartsWith($"The copy at {Path.Combine(user, "kcap.app")} stays. The one at {other} is removed");
+        await Assert.That(outcome.Moved).IsTrue();
+        await Assert.That(quit.SequenceEqual([other])).IsTrue();
+        await Assert.That(references.OldRoots).Contains(other);
+        await Assert.That(opened.SequenceEqual([source])).IsTrue();
+        await Assert.That(Directory.Exists(other)).IsFalse();
+        await Assert.That(KcapBundle.Read(source)?.Version).IsEqualTo("1.4.1");
+    }
+
     [Test]
     public async Task A_failed_activation_withdraws_the_hand_off_and_restores_the_folder() {
         var apps = Tmp.CreateDir("Applications");
@@ -151,7 +186,7 @@ public class ApplicationsMoverPredecessorTests {
 
         await Assert.That(plan.Title).IsEqualTo("Upgrade to kcap");
         await Assert.That(plan.ButtonLabel).IsEqualTo("Quit and update");
-        await Assert.That(plan.Detail).StartsWith("Kurrent Capacitor will be replaced with kcap, and the updated app will open.");
+        await Assert.That(plan.Detail).StartsWith("kcap will replace Kurrent Capacitor and open.");
         await Assert.That(outcome.Moved).IsTrue();
         await Assert.That(quit.SequenceEqual([legacy])).IsTrue();
         await Assert.That(references.OldRoots).Contains(legacy);
@@ -236,7 +271,7 @@ public class ApplicationsMoverPredecessorTests {
         await Assert.That(plan.Action).IsEqualTo(ApplicationsInstallAction.OpenInstalled);
         await Assert.That(plan.Title).IsEqualTo("Upgrade to kcap");
         await Assert.That(plan.ButtonLabel).IsEqualTo("Replace and open");
-        await Assert.That(plan.Detail).StartsWith($"Kurrent Capacitor will be replaced with the kcap already installed at {Path.Combine(apps, "kcap.app")}, which will open.");
+        await Assert.That(plan.Detail).StartsWith($"kcap at {Path.Combine(apps, "kcap.app")} will replace Kurrent Capacitor and open.");
         await Assert.That(outcome.Moved).IsTrue();
         await Assert.That(ditto.Calls).IsEqualTo(0);
         await Assert.That(references.OldRoots).Contains(source);

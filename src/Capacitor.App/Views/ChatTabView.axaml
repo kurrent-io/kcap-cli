@@ -225,8 +225,23 @@
                     <views:ChatCardRow>
                         <Border Classes="systemNote chatSystemCard" Margin="0,8,0,12">
                             <StackPanel Spacing="6">
-                                <views:ChatKindHeader Label="{Binding Label}" IconKind="{Binding IconKind}" />
-                                <views:MarkdownView Text="{Binding Text}"
+                                <views:ChatKindHeader Label="{Binding Label}" IconKind="{Binding IconKind}"
+                                                      IsVisible="{Binding !IsCollapsible}" />
+                                <Button Classes="toolSummary" IsVisible="{Binding IsCollapsible}"
+                                        Command="{Binding ToggleCommand}" Click="OnToolSummaryClick"
+                                        AutomationProperties.Name="{Binding ToggleAccessibleName}">
+                                    <views:ChatKindHeader Label="{Binding Label}" IconKind="{Binding IconKind}">
+                                        <views:ChatKindHeader.Status>
+                                            <Panel Width="12" Height="12" VerticalAlignment="Center">
+                                                <views:AppIcon Kind="ChevronDown" Size="12" IsVisible="{Binding IsExpanded}"
+                                                               Foreground="{StaticResource KcapMutedBrush}" />
+                                                <views:AppIcon Kind="ChevronRight" Size="12" IsVisible="{Binding !IsExpanded}"
+                                                               Foreground="{StaticResource KcapMutedBrush}" />
+                                            </Panel>
+                                        </views:ChatKindHeader.Status>
+                                    </views:ChatKindHeader>
+                                </Button>
+                                <views:MarkdownView Text="{Binding Text}" IsVisible="{Binding IsExpanded}"
                                                     OpenLink="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).OpenLinkCommand}"
                                                     RunCode="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).RunCodeCommand}" />
                             </StackPanel>

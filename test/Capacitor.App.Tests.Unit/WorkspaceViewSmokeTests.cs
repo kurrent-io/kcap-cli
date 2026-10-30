@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -561,7 +562,7 @@ public class WorkspaceViewSmokeTests {
                 double Mid(Control control) => control.TranslatePoint(new Point(0, control.Bounds.Height / 2), window)!.Value.Y;
                 double Baseline(TextBlock text) => text.TranslatePoint(new Point(0, text.TextLayout.Baseline), window)!.Value.Y;
                 var glyph = idleMark.FindControl<Panel>("Glyph")!;
-                var title = Find<TextBlock>(window, "WorkspaceTitle")!;
+                var title = Find<TextBlock>(window, "TitleText")!;
                 double Bottom(Control control) => control.TranslatePoint(new Point(0, control.Bounds.Height), window)!.Value.Y;
                 double Top(Control control) => control.TranslatePoint(default, window)!.Value.Y;
                 await Assert.That(Top(subtitle) - Bottom(title)).IsGreaterThan(4);
@@ -671,6 +672,143 @@ public class WorkspaceViewSmokeTests {
             await Assert.That(ToolTip.GetTip(button)).IsEqualTo("Open in web");
             await Assert.That(button.Classes.Contains("kcapIcon")).IsTrue();
             window.Close();
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// A workspace the app may rename: the daemon advertises rename, shares the app's server and
+    /// account, and the agent is public with a session.
+    static async Task<(Window Window, WorkspaceViewModel Vm, ScriptedLocalControlOps Ops)> ShowRenamableAsync() {
+        var daemon = new FakeDaemonClientService();
+        var ops = new ScriptedLocalControlOps();
+        daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, [RenameWire.Capability]));
+        var snap = FakeDaemonClientService.Snap();
+        daemon.SnapshotsSubject.OnNext(snap with { Daemon = snap.Daemon with { UserSubject = "u1" } });
+        var vm = new WorkspaceViewModel(
+            AgentId, daemon, NewActions(), new FakeTerminalAttachClientFactory().Factory, () => new FakeTerminalSurface(),
+            new FakeTimeProvider(), new RecordingOpener(), new FakePermissionService(), new FakeWorkContextSource(),
+            ops, new NoAttachmentUploader(), localDaemonOnAppServer: new BehaviorSubject<bool>(true),
+            appSubject: new BehaviorSubject<string?>("u1"), notifier: new RecordingNotifier());
+        var window = new Window { Content = new WorkspaceView { DataContext = vm }, Width = 900, Height = 600 };
+        window.Show();
+        daemon.Agents.AddOrUpdate(WorkspaceFixtures.Agent(AgentId, "claude", hasTerminal: false, "/repo/myproj",
+            sessionId: "s1", isPrivate: false) with { Title = "Old name" });
+        await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+        Dispatcher.UIThread.RunJobs();
+        window.UpdateLayout();
+        return (window, vm, ops);
+    }
+
+    static Point CenterOf(Control control, Window window) =>
+        control.TranslatePoint(new Point(control.Bounds.Width / 2, control.Bounds.Height / 2), window)!.Value;
+
+    /// The pencil opens the field with the whole title selected; Enter saves through the daemon,
+    /// and the read-only title comes back with the new name.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_pencil_opens_the_editor_and_Enter_saves() {
+        await RunOnUiAsync(async () => {
+            var (window, vm, ops) = await ShowRenamableAsync();
+            ops.Rename = _ => Task.FromResult(new SessionRenameAckDto(true, null, "New name"));
+
+            var pencil = Find<Button>(window, "RenameButton")!;
+            await Assert.That(pencil.IsEffectivelyVisible).IsTrue();
+            await Assert.That(Visible(window, "TitleInput")).IsFalse();
+            await Assert.That(Find<TextBlock>(window, "TitleText")!.Text).IsEqualTo("Old name");
+
+            window.MouseDown(CenterOf(pencil, window), MouseButton.Left);
+            window.MouseUp(CenterOf(pencil, window), MouseButton.Left);
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            var input = Find<TextBox>(window, "TitleInput")!;
+            await Assert.That(input.IsEffectivelyVisible).IsTrue();
+            await Assert.That(input.IsFocused).IsTrue();
+            await Assert.That(input.SelectedText).IsEqualTo("Old name");
+            await Assert.That(pencil.IsEffectivelyVisible).IsFalse();
+            await Assert.That(Visible(window, "SaveRenameButton")).IsTrue();
+            await Assert.That(Visible(window, "CancelRenameButton")).IsTrue();
+
+            input.Text = "New name";
+            window.KeyPressQwerty(PhysicalKey.Enter, RawInputModifiers.None);
+            await WaitUntilAsync(() => { Dispatcher.UIThread.RunJobs(); return !vm.TitleEditor.IsEditing; }, what: "saved");
+            window.UpdateLayout();
+
+            await Assert.That(ops.RenamePayloads.Select(r => r.Title)).IsEquivalentTo(new[] { "New name" });
+            await Assert.That(Find<TextBlock>(window, "TitleText")!.Text).IsEqualTo("New name");
+            await Assert.That(pencil.IsEffectivelyVisible).IsTrue();
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// Escape leaves the field without a call, and the title is what it was.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Escape_closes_the_editor_without_renaming() {
+        await RunOnUiAsync(async () => {
+            var (window, vm, ops) = await ShowRenamableAsync();
+            await vm.TitleEditor.BeginEditCommand.Execute();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            var input = Find<TextBox>(window, "TitleInput")!;
+            input.Text = "Half typed";
+            window.KeyPressQwerty(PhysicalKey.Escape, RawInputModifiers.None);
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+
+            await Assert.That(vm.TitleEditor.IsEditing).IsFalse();
+            await Assert.That(ops.RenamePayloads).IsEmpty();
+            await Assert.That(Find<TextBlock>(window, "TitleText")!.Text).IsEqualTo("Old name");
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// The header drags the window from a blank press; a press inside the field or on its buttons
+    /// must never reach that handler.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Pressing_inside_the_editor_never_reaches_the_header_drag() {
+        await RunOnUiAsync(async () => {
+            var (window, vm, _) = await ShowRenamableAsync();
+            var reached = new List<string>();
+            var view = (WorkspaceView)window.Content!;
+            view.AddHandler(InputElement.PointerPressedEvent, (_, e) => reached.Add((e.Source as Control)?.Name ?? "?"));
+
+            // The probe is live: a press on the read-only title is a header press.
+            var title = Find<TextBlock>(window, "TitleText")!;
+            window.MouseDown(CenterOf(title, window), MouseButton.Left);
+            window.MouseUp(CenterOf(title, window), MouseButton.Left);
+            await Assert.That(reached).IsNotEmpty();
+            reached.Clear();
+
+            var pencil = Find<Button>(window, "RenameButton")!;
+            window.MouseDown(CenterOf(pencil, window), MouseButton.Left);
+            window.MouseUp(CenterOf(pencil, window), MouseButton.Left);
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            foreach (var name in new[] { "TitleInput", "CancelRenameButton" }) {
+                var target = Find<Control>(window, name)!;
+                window.MouseDown(CenterOf(target, window), MouseButton.Left);
+                window.MouseUp(CenterOf(target, window), MouseButton.Left);
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+            }
+
+            await Assert.That(reached).IsEmpty();
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
             await vm.TeardownAsync();
         });
     }

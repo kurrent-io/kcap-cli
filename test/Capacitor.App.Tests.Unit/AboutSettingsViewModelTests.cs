@@ -25,4 +25,20 @@ public class AboutSettingsViewModelTests {
         Avalonia.Threading.Dispatcher.UIThread.RunJobs();
         await Assert.That(vm.VersionReport).Contains("Daemon: not connected");
     });
+
+    [Test]
+    public Task Beta_switch_starts_from_the_updater_and_saves_each_change() => AvaloniaSession.RunOnUiAsync(async () => {
+        var saved = new List<bool>();
+        using var vm = new AboutSettingsViewModel(new FakeDaemonClientService(), _ => Task.FromResult<string?>(null),
+            updateMenu: System.Reactive.Linq.Observable.Return(new Capacitor.App.Services.Update.UpdateMenuItem(true, "Check for Updates…")),
+            followsBetas: () => true, setBetaUpdates: v => { saved.Add(v); return Task.CompletedTask; });
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        await Assert.That(vm.BetaUpdates).IsTrue();
+        await Assert.That(vm.BetaUpdatesVisible).IsTrue();
+
+        vm.BetaUpdates = false;
+        vm.BetaUpdates = false;
+
+        await Assert.That(saved).IsEquivalentTo([false]);
+    });
 }

@@ -4,7 +4,7 @@ using Capacitor.Cli.Core.LocalEdition;
 namespace Capacitor.Cli.LocalEdition;
 
 /// <summary>
-/// Explains the state of this root's installation without changing it: no lock, no write, and no probe that could
+/// Explains the state of this root's installation without changing it: no write, and no probe that could
 /// keep a starting server from running. Every state a crash, a failed stop or a taken port can leave behind reads as
 /// a verdict and what to do about it.
 /// </summary>
@@ -19,6 +19,9 @@ sealed class LocalStatusReader(LocalStack stack, string cliVersion, Func<int, Po
 
             LocalStackState.Unreadable(var path, var reason) => new(false, $"{path} cannot be read ({reason}).", [],
                 ["No kcap local command acts on the installation until that file is fixed or removed."]),
+
+            LocalStackState.Interrupted(var operation, var phase) when LifecycleLease.IsHeld(stack.Root) => new(false,
+                $"Local {operation} in progress ({phase}).", [new("Root", root)], ["Wait for it to finish before running another local command."]),
 
             LocalStackState.Interrupted(var operation, var phase) => new(false,
                 $"An interrupted {operation} of the local installation stopped at \"{phase}\".", [new("Root", root)],
@@ -111,6 +114,7 @@ sealed class LocalStatusReader(LocalStack stack, string cliVersion, Func<int, Po
                 if (taken.Count > 0) return Down($"Not ready: something else answers on port {port}.", fields, notes, taken);
 
                 AddStores(fields, ready.Stores);
+                if (ready.UpdatePending) notes.Add("The server can serve requests while its update finishes. A planned restart is still pending.");
                 await ApplyEmbeddingHealthAsync(fields, unit, pending, ct);
 
                 return await LocalServerProbe.AuthConfigAsync(stack.Local, unit.BaseUrl, ct) switch {

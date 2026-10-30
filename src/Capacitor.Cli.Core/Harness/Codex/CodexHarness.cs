@@ -25,6 +25,7 @@ public sealed class CodexHarness : IHarness<CodexHarness> {
         UserDataSignal = Paths.HasUserData,
         AppSignal      = apps => apps.Finds(
             "Codex.app", Path.Combine("ChatGPT.app", "Contents", "Resources", "codex-cli"), "Codex", "com.openai.codex"),
+        BundledCli     = CodexDesktopCli.Find,
         Wired          = () => CodexHooksInstaller.ReferencesKcapHook(Paths.UserHooksJson),
     };
 }
