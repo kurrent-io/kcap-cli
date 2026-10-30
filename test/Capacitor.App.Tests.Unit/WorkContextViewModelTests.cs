@@ -206,7 +206,7 @@ public class WorkContextViewModelTests {
 
             await h.PushAsync(Dto());
 
-            await Assert.That(h.Vm.Tokens).IsEqualTo("1.5M");
+            await Assert.That(h.Vm.Tokens).IsEqualTo("1M in · 200k out");
             await Assert.That(h.Vm.Cost).IsEqualTo("≈ $3.46");
             await Assert.That(h.Vm.ContextUse).IsEqualTo("142k / 200k (71%)");
             await Assert.That(h.Vm.SessionSharing).IsEqualTo("Org members · Activity");
@@ -226,7 +226,7 @@ public class WorkContextViewModelTests {
             await h.PushAsync(Dto());
 
             await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.NotInPlan);
-            await Assert.That(h.Vm.Tokens).IsEqualTo("1.5M");
+            await Assert.That(h.Vm.Tokens).IsEqualTo("1M in · 200k out");
             await h.Vm.TeardownAsync();
         });
     }
@@ -244,7 +244,7 @@ public class WorkContextViewModelTests {
 
             await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.NotInPlan);
             await Assert.That(h.Vm.IsStale).IsTrue();
-            await Assert.That(h.Vm.Tokens).IsEqualTo("1.5M");
+            await Assert.That(h.Vm.Tokens).IsEqualTo("1M in · 200k out");
             await h.Vm.TeardownAsync();
         });
     }
@@ -261,7 +261,7 @@ public class WorkContextViewModelTests {
             await h.TickAsync();
 
             await Assert.That(h.Vm.IsStale).IsTrue();
-            await Assert.That(h.Vm.Tokens).IsEqualTo("1.5M");
+            await Assert.That(h.Vm.Tokens).IsEqualTo("1M in · 200k out");
             await h.Vm.TeardownAsync();
         });
     }
