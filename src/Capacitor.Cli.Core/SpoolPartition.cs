@@ -48,8 +48,9 @@ public sealed class SpoolPartition {
     }
 
     /// <summary>Counts root files the next drain will adopt, so a backlog spooled before the partition
-    /// existed still holds back a later entry of the same session.</summary>
-    public bool AnyFileMatches(string pattern) => Matches(DirectoryPath, pattern) || (Root is not null && Matches(Root, pattern));
+    /// existed still holds back a later entry of the same session. The root goes first: adoption moves
+    /// a file from it into the partition, so a move between the two checks is still seen.</summary>
+    public bool AnyFileMatches(string pattern) => (Root is not null && Matches(Root, pattern)) || Matches(DirectoryPath, pattern);
 
     static bool Matches(string dir, string pattern) => Directory.Exists(dir) && Directory.EnumerateFiles(dir, pattern).Any();
 
