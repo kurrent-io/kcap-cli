@@ -1,3 +1,5 @@
+using Capacitor.Cli.Core.Mcp;
+
 namespace Capacitor.Cli.Core.Harness.Pi;
 
 /// <summary>
@@ -6,7 +8,7 @@ namespace Capacitor.Cli.Core.Harness.Pi;
 /// (<c>~/.pi/agent/extensions/kcap-mcp.ts</c>) that spawns the <c>kcap mcp &lt;name&gt;</c>
 /// servers and registers their tools as native Pi tools. Sibling of
 /// <see cref="PiExtensionInstaller"/> with a distinct file + marker; <see cref="ExtensionContent"/>
-/// is the embedded source of truth (const, not a resource — NativeAOT-safe).
+/// is the embedded source of truth (a string, not a resource — NativeAOT-safe).
 /// </summary>
 public static class PiMcpExtensionInstaller {
     public const string MarkerFileName = ".kcap-mcp-extension-version";
@@ -17,7 +19,12 @@ public static class PiMcpExtensionInstaller {
     /// fail-safe so a kcap/server hiccup never disrupts the pi session: each server
     /// is spawned/handshaken independently and failures are logged and skipped.
     /// </summary>
-    public const string ExtensionContent = Header + PiMcpStdioClientSource.Text + Body;
+    public static readonly string ExtensionContent = Header + ServerList() + Limits + PiMcpStdioClientSource.Text + Body;
+
+    /// <summary>Every server in <see cref="KcapMcpServers.All"/>, by the name <c>kcap mcp</c> takes, so Pi
+    /// bridges the same set every other harness registers.</summary>
+    static string ServerList() =>
+        $"const KCAP_MCP_SERVERS = [{string.Join(", ", KcapMcpServers.All.Select(s => $"\"{s.Args[^1]}\""))}];\n";
 
     const string Header =
         """
@@ -28,7 +35,11 @@ public static class PiMcpExtensionInstaller {
 
         import { spawn } from "node:child_process";
 
-        const KCAP_MCP_SERVERS = ["review", "sessions", "flows", "memory", "analytics", "workitems", "plans", "pages", "knowledge"];
+
+        """;
+
+    const string Limits =
+        """
         const HANDSHAKE_TIMEOUT_MS = 10000;
         // Generous — above the flows server's own round timeouts; only a backstop against a
         // stalled-but-not-exited server. A timeout surfaces as a tool failure (execute throws).
