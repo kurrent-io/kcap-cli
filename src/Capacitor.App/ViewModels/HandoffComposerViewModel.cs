@@ -285,7 +285,9 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
     }
 
     async Task<Evaluation> EvaluateAsync(CancellationToken ct) {
-        if (!string.Equals(_session.AccessLevel, FullAccess, StringComparison.OrdinalIgnoreCase))
+        // A pinned row carries no level until a listing holds it, so the context read decides.
+        var accessUnknown = string.IsNullOrEmpty(_session.AccessLevel);
+        if (!accessUnknown && !string.Equals(_session.AccessLevel, FullAccess, StringComparison.OrdinalIgnoreCase))
             return new(NeedsFullAccess);
 
         if (!_serverConnected) return new(ServerUnreachable);
@@ -302,8 +304,12 @@ public sealed class HandoffComposerViewModel : ReactiveObject, IDisposable, IAtt
             case { } status when !HasHandoff(status): return new(DaemonTooOld);
         }
 
-        _context ??= await _sessions.ReadHandoffContextAsync(_session.SessionId, ct);
-        if (_context is null) return new(ContextUnavailable);
+        if (_context is null) {
+            var read = await _sessions.ReadHandoffContextAsync(_session.SessionId, ct);
+            if (read is not { Outcome: ServerReadOutcome.Ok, Context: { } fetched })
+                return new(accessUnknown && read.Outcome == ServerReadOutcome.Unavailable ? NeedsFullAccess : ContextUnavailable);
+            _context = fetched;
+        }
         if (_context is not { RepoOwner: { Length: > 0 } owner, RepoName: { Length: > 0 } name } context)
             return new(NoRepository);
 

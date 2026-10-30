@@ -60,8 +60,12 @@ sealed class FakeServerSessionsService : IServerSessionsService, IDisposable {
     }
 
     public HandoffContextDto? HandoffContext;
-    public Task<HandoffContextDto?> ReadHandoffContextAsync(string sessionId, CancellationToken ct) =>
-        Task.FromResult(HandoffContext);
+    /// Anything but Ok answers without HandoffContext.
+    public ServerReadOutcome HandoffContextOutcome = ServerReadOutcome.Ok;
+    public Task<HandoffContextFetch> ReadHandoffContextAsync(string sessionId, CancellationToken ct) =>
+        Task.FromResult(HandoffContextOutcome == ServerReadOutcome.Ok && HandoffContext is { } context
+            ? new HandoffContextFetch(ServerReadOutcome.Ok, context)
+            : new HandoffContextFetch(HandoffContextOutcome == ServerReadOutcome.Ok ? ServerReadOutcome.Failed : HandoffContextOutcome, null));
 
     public void Unpin() {
         _pinRequest++;

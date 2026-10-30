@@ -71,7 +71,7 @@ public class ServerSearchHttpTests {
     }
 
     [Test]
-    public async Task HandoffContext_reads_the_context_and_maps_404_to_null() {
+    public async Task HandoffContext_reads_the_context_and_maps_404_to_unavailable() {
         using var server = WireMockServer.Start();
         server.Given(Request.Create().WithPath("/api/sessions/s1/handoff-context").UsingGet())
               .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json")
@@ -82,12 +82,16 @@ public class ServerSearchHttpTests {
         await using var _ = provider;
         var read = ServerSearchHttp.HandoffContext(http, profiles);
 
-        var context = await read("s1", CancellationToken.None);
-        await Assert.That(context!.Branch).IsEqualTo("feat");
+        var fetch = await read("s1", CancellationToken.None);
+        await Assert.That(fetch.Outcome).IsEqualTo(ServerReadOutcome.Ok);
+        var context = fetch.Context!;
+        await Assert.That(context.Branch).IsEqualTo("feat");
         await Assert.That(context.PullRequest!.Number).IsEqualTo(7);
         await Assert.That(context.PullRequest.HeadIsFork).IsFalse();
         await Assert.That(context.SessionCommits!.Count).IsEqualTo(1);
-        await Assert.That(await read("gone", CancellationToken.None)).IsNull();
+        var gone = await read("gone", CancellationToken.None);
+        await Assert.That(gone.Outcome).IsEqualTo(ServerReadOutcome.Unavailable);
+        await Assert.That(gone.Context).IsNull();
     }
 
     [Test]

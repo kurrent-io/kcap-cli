@@ -144,6 +144,40 @@ public class HandoffComposerViewModelTests {
         await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsFalse();
     });
 
+    /// A pinned row carries no access level until a listing holds it; the context read decides.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task An_unknown_access_level_reaches_a_probed_start() => Run(async rig => {
+        rig.Session = rig.Session with { AccessLevel = "" };
+        var vm = await rig.ReadyAsync();
+
+        await Assert.That(vm.DisabledReason).IsNull();
+        await Assert.That(vm.ProbedStart).IsEqualTo(AttachedStart);
+        await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsTrue();
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task An_unknown_access_level_the_server_hides_needs_full_access() => Run(async rig => {
+        rig.Session = rig.Session with { AccessLevel = "" };
+        rig.Sessions.HandoffContextOutcome = ServerReadOutcome.Unavailable;
+        var vm = await rig.ReadyAsync();
+
+        await Assert.That(vm.DisabledReason).IsEqualTo("You need full access to this session to hand it off");
+        await Assert.That(rig.Ops.Probes).IsEmpty();
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_failed_context_read_is_unavailable_whatever_the_access_level() => Run(async rig => {
+        rig.Sessions.HandoffContextOutcome = ServerReadOutcome.Failed;
+        rig.Session = rig.Session with { AccessLevel = "" };
+        await Assert.That((await rig.ReadyAsync()).DisabledReason).IsEqualTo("Couldn't load this session's details from your kcap server");
+        rig.Session = rig.Session with { AccessLevel = "full" };
+        rig.Sessions.HandoffContextOutcome = ServerReadOutcome.Unavailable;
+        await Assert.That((await rig.ReadyAsync()).DisabledReason).IsEqualTo("Couldn't load this session's details from your kcap server");
+    });
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public Task An_old_server_is_disabled_with_the_reason() => Run(async rig => {

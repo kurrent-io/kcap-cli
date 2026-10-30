@@ -24,13 +24,12 @@ public static class ServerSearchHttp {
         return new(outcome, body);
     };
 
-    /// Null for a session the caller cannot read, one that does not exist, and any failure.
-    public static Func<string, CancellationToken, Task<HandoffContextDto?>> HandoffContext(
+    public static Func<string, CancellationToken, Task<HandoffContextFetch>> HandoffContext(
             ICapacitorHttpClient? http, ProfileContext? profiles) => async (sessionId, ct) => {
-        var (_, body) = await GetAsync(http, profiles,
+        var (outcome, body) = await GetAsync(http, profiles,
             ApiRoutes.SessionHandoffContext(sessionId),
             RemoteModelsJsonContext.Default.HandoffContextDto, ct).ConfigureAwait(false);
-        return body;
+        return new(outcome, body);
     };
 
     static async Task<(ServerReadOutcome, T?)> GetAsync<T>(

@@ -49,7 +49,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
     readonly Func<ServerSessionsQuery, CancellationToken, Task<ServerSessionsFetch>> _fetch;
     readonly Func<CancellationToken, Task<SessionOwnerOptionDto[]?>> _fetchOwners;
     readonly Func<string, CancellationToken, Task<SummaryFetch>>? _fetchSummary;
-    readonly Func<string, CancellationToken, Task<HandoffContextDto?>>? _fetchHandoffContext;
+    readonly Func<string, CancellationToken, Task<HandoffContextFetch>>? _fetchHandoffContext;
     readonly Action<int>? _onUnauthorized;
     readonly CompositeDisposable _subscriptions = new();
     readonly ITimer _cadence;
@@ -114,7 +114,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
             TimeSpan? pushDebounce = null, TimeSpan? reconcileEvery = null, Action<int>? onUnauthorized = null,
             Func<string, CancellationToken, Task<SummaryFetch>>? fetchSummary = null,
             IScheduler? pushScheduler = null,
-            Func<string, CancellationToken, Task<HandoffContextDto?>>? fetchHandoffContext = null) {
+            Func<string, CancellationToken, Task<HandoffContextFetch>>? fetchHandoffContext = null) {
         _fetch = fetch;
         _fetchOwners = fetchOwners;
         _fetchSummary = fetchSummary;
@@ -254,14 +254,14 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
         if (unlisted) IssuePinRefresh();
     }
 
-    public async Task<HandoffContextDto?> ReadHandoffContextAsync(string sessionId, CancellationToken ct) {
-        if (_fetchHandoffContext is null) return null;
+    public async Task<HandoffContextFetch> ReadHandoffContextAsync(string sessionId, CancellationToken ct) {
+        if (_fetchHandoffContext is null) return new(ServerReadOutcome.Failed, null);
         try {
             return await _fetchHandoffContext(sessionId, ct).ConfigureAwait(false);
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             throw;
         } catch (Exception) {
-            return null;
+            return new(ServerReadOutcome.Failed, null);
         }
     }
 
