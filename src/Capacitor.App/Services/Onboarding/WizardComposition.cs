@@ -365,7 +365,8 @@ internal static class WizardComposition {
             ? WizardStepId.SignIn
             : (WizardStepId?)null;
         var wizard = shell = new OnboardingViewModel(
-            steps, options.ShutdownToken, options.Surface, startAt, canFinishLater, durable.Select(_ => Unit.Default));
+            steps, options.ShutdownToken, options.Surface, startAt, canFinishLater,
+            preflight: new HarnessPreflight(detect), restate: durable.Select(_ => Unit.Default));
         signIn.SignUpExpired += () => {
             edition.ShowNotice(SignInStepViewModel.SignUpExpiredNotice);
             wizard.TryGoTo(WizardStepId.Edition);
