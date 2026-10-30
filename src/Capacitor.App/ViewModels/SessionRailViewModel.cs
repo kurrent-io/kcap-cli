@@ -70,6 +70,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             this.RaisePropertyChanged(nameof(IsMine));
             this.RaisePropertyChanged(nameof(IsTeam));
             if (_sessions is not null) _sessions.Scope = value;
+            this.RaisePropertyChanged(nameof(FiltersDiffer));
             Persist();
         }
     }
@@ -92,6 +93,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             this.RaisePropertyChanged(nameof(IsLive));
             this.RaisePropertyChanged(nameof(IsEnded));
             _stateFilter.OnNext(StateFilter());
+            this.RaisePropertyChanged(nameof(FiltersDiffer));
             Persist();
         }
     }
@@ -111,6 +113,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             _groupComparer.OnNext(GroupComparer(value));
             _groupingChanges.OnNext(value);
             _regroup.OnNext(Unit.Default);
+            this.RaisePropertyChanged(nameof(FiltersDiffer));
             Persist();
         }
     }
@@ -133,6 +136,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             this.RaiseAndSetIfChanged(ref _sort, value);
             this.RaisePropertyChanged(nameof(SortLabel));
             _rowComparer.OnNext(RowComparer(value, Descending));
+            this.RaisePropertyChanged(nameof(FiltersDiffer));
             Persist();
         }
     }
@@ -154,12 +158,30 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             this.RaiseAndSetIfChanged(ref _descending, value);
             this.RaisePropertyChanged(nameof(DirectionLabel));
             _rowComparer.OnNext(RowComparer(Sort, value));
+            this.RaisePropertyChanged(nameof(FiltersDiffer));
             Persist();
         }
     }
 
     public string DirectionLabel => _descending ? "Descending" : "Ascending";
 
+    /// True when any of the five controls differs from the defaults, however the panel is collapsed.
+    public bool FiltersDiffer {
+        get {
+            var defaults = RailPreferences.Default;
+            return _scope != defaults.Scope || _state != defaults.State || _grouping != defaults.Grouping
+                || _sort != defaults.Sort || _descending != defaults.Descending;
+        }
+    }
+
+    bool _filtersOpen;
+    /// Starts collapsed on every launch; never persisted.
+    public bool FiltersOpen {
+        get => _filtersOpen;
+        private set => this.RaiseAndSetIfChanged(ref _filtersOpen, value);
+    }
+
+    public ReactiveCommand<Unit, Unit> ToggleFiltersCommand { get; }
     public ReactiveCommand<RailScope, Unit> SetScopeCommand { get; }
     public ReactiveCommand<RailState, Unit> SetStateCommand { get; }
     public ReactiveCommand<RailGrouping, Unit> SetGroupingCommand { get; }
@@ -220,6 +242,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
         SetGroupingCommand = ReactiveCommand.Create<RailGrouping>(grouping => Grouping = grouping).DisposeWith(_disposables);
         SetSortCommand = ReactiveCommand.Create<RailSort>(sort => Sort = sort).DisposeWith(_disposables);
         ToggleDirectionCommand = ReactiveCommand.Create(() => { Descending = !Descending; }).DisposeWith(_disposables);
+        ToggleFiltersCommand = ReactiveCommand.Create(() => { FiltersOpen = !FiltersOpen; }).DisposeWith(_disposables);
         _stateFilter = new BehaviorSubject<Func<AgentRow, bool>>(StateFilter()).DisposeWith(_disposables);
         if (shownRows is not null) _stateFilter.Subscribe(shownRows.OnNext).DisposeWith(_disposables);
         _rowComparer = new BehaviorSubject<IComparer<RailSessionViewModel>>(RowComparer(_sort, _descending)).DisposeWith(_disposables);
