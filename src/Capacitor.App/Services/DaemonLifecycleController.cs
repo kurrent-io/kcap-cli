@@ -193,6 +193,9 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     /// Cached once at Start(); null when the CLI is missing or --version failed.
     public string? CliVersion { get; private set; }
 
+    /// The version the attached daemon last reported, or null before its first snapshot.
+    public string? AttachedDaemonVersion => Volatile.Read(ref _latestDaemon)?.Version;
+
     /// True while launchd holds the service in the background band; unchanged by an unknown word or a failed read.
     public IObservable<bool> BackgroundPriority => _backgroundPriority.DistinctUntilChanged();
     /// The last Reload outcome that still stands, or null. Replays to a late subscriber.
@@ -699,6 +702,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             LifecyclePrompt prompt, CancellationToken ct, bool requireIdle = false,
             Func<CancellationToken, Task<bool>>? stillEligible = null) {
         if (RequireAppRestart()) return;
+        prompt = WithVersionChange(prompt, AttachedDaemonVersion, CliVersion);
         var gen0     = CurrentGeneration(); // captured immediately before ConfirmAsync (stale-consent check below)
         var accepted = await _surface.ConfirmAsync(prompt, ct).ConfigureAwait(false);
         if (!accepted || RequireAppRestart()) return;
@@ -723,6 +727,12 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
         await RunLaneMutationAsync(MutationVerb.Replace, ct).ConfigureAwait(false);
     }
+
+    /// The replace installs the app's own kcap, so the prompt says which version that moves the daemon to.
+    internal static LifecyclePrompt WithVersionChange(LifecyclePrompt prompt, string? daemonVersion, string? cliVersion) =>
+        DaemonVersionChange.Describe(daemonVersion, cliVersion) is { } change
+            ? prompt with { Disclosure = $"{prompt.Disclosure}\n\n{change}" }
+            : prompt;
 
     /// The rail's Reload button. One operation at a time, claimed before the prompt: the confirmation
     /// surface queues dialogs and releases its gate when one is answered, so a claim taken on acceptance

@@ -51,6 +51,26 @@ public class ProcessTreeTests {
         await Assert.That(done.HasExited).IsTrue();
     }
 
+    /// <summary>A grandchild is found under the process that started it, and never the other way round.</summary>
+    [Test]
+    public async Task Descends_finds_a_grandchild_and_not_an_ancestor() {
+        if (OperatingSystem.IsWindows()) return;
+
+        using var root = StartTree("sleep 300 & wait");
+        try {
+            var (leaf, _) = (await PinChildrenAsync(root.Id, 1)).Single();
+
+            await Assert.That(ProcessTree.Descends(leaf, Environment.ProcessId)).IsTrue();
+            await Assert.That(ProcessTree.Descends(leaf, root.Id)).IsTrue();
+            await Assert.That(ProcessTree.Descends(root.Id, leaf)).IsFalse();
+            await Assert.That(ProcessTree.Descends(Environment.ProcessId, root.Id)).IsFalse();
+            await Assert.That(ProcessTree.Descends(root.Id, root.Id)).IsFalse();
+        } finally {
+            ProcessTree.Kill(root);
+            root.WaitForExit(5000);
+        }
+    }
+
     static Process StartTree(string script) =>
         Process.Start(new ProcessStartInfo("sh", ["-c", script]) { UseShellExecute = false })!;
 

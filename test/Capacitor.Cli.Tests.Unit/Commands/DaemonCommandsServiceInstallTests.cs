@@ -33,6 +33,29 @@ internal sealed class DaemonCommandsServiceInstallTests {
         await Assert.That(err.GetCapturedError()).Contains(refusal);
     }
 
+    /// <summary>An agent the target daemon hosts would be ended by the replace it started, so the command
+    /// refuses before resolving or touching anything, and names the command to run elsewhere. A retired
+    /// daemon ends what it hosts too.</summary>
+    [Test, NotInParallel]
+    [Arguments("test-id", new[] { "--replace", "--verify" }, "`kcap daemon service install --replace --verify --name test-id`")]
+    [Arguments("old", new[] { "--replace", "--verify", "--retire", "old" }, "`kcap daemon service install --replace --verify --retire old --name test-id`")]
+    [Arguments("test-id", new string[0], "`kcap daemon service install --name test-id`")]
+    public async Task Install_refuses_inside_an_agent_the_daemon_it_stops_hosts(string host, string[] args, string command) {
+        using var err = ConsoleOutput.StartErrorCapture();
+        var manager = new CountingManager();
+        var asked   = new List<string>();
+
+        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), manager, "test-id", Home, TimeProvider.System) {
+            HostsCaller = id => { asked.Add(id); return id == host; },
+        }.Install(args, startNow: true);
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(err.GetCapturedError()).Contains($"daemon '{host}' hosts");
+        await Assert.That(err.GetCapturedError()).Contains(command);
+        await Assert.That(manager.InstallCalls).IsEqualTo(0);
+        await Assert.That(asked).Contains(host);
+    }
+
     /// <summary>A plain (non-verify) install serializes on the same per-label service lock as every
     /// other mutating verb: a held lock yields the coded-contention exit without ever calling
     /// Install.</summary>

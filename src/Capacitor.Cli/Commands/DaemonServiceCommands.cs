@@ -268,6 +268,9 @@ sealed class DaemonServiceCommands(
     /// <summary>Stops a running daemon for a reload. Test seam; production uses the control socket.</summary>
     internal Func<string, ReloadStop>? ReloadStopper { get; init; }
 
+    /// <summary>Whether the daemon of a service id hosts this process. Test seam; production asks <see cref="HostedCaller"/>.</summary>
+    internal Func<string, bool>? HostsCaller { get; init; }
+
     static readonly TimeSpan ForcedLockWait = TimeSpan.FromSeconds(10);
 
     internal static string RefreshToken(UnitRefresh outcome) => outcome switch {
@@ -500,6 +503,15 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
+        var hostsCaller = HostsCaller ?? (serviceId => HostedCaller.HostedBy(store, serviceId));
+        if (new[] { id, retireId }.FirstOrDefault(target => target is not null && hostsCaller(target)) is { } host) {
+            List<string> words = ["kcap", "daemon", "service", "install", .. args];
+            if (!args.Contains("--name")) words.AddRange(["--name", id]);
+            var command = $"`{string.Join(' ', words)}`";
+            await Console.Error.WriteLineAsync(HostedCaller.Refusal(host, command));
+            return 1;
+        }
+
         var daemonPath = UnitIdentity.ResolveDaemonBinary();
         if (daemonPath is null) { await Console.Error.WriteLineAsync(DaemonCommands.DaemonNotFoundMessage()); return 1; }
 
@@ -547,6 +559,7 @@ sealed class DaemonServiceCommands(
         try {
             if (verify) {
                 await Console.Out.WriteLineAsync($"Service '{id}' installed (verified, {manager.Describe()}).");
+                await Console.Out.WriteLineAsync($"  Daemon:    {CapacitorVersion.CurrentDisplay()} is running; the unit starts {daemonPath}");
             } else {
                 await Console.Out.WriteLineAsync($"Service '{id}' installed ({manager.Describe()}).");
                 await Console.Out.WriteLineAsync("  Auto-restarts on crash/SIGKILL; starts at login.");
