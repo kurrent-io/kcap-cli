@@ -14,6 +14,9 @@ partial class SessionsCommand(
         WorkingDirectory workdir, TimeProvider time) {
     internal const string TimeFilterUnsupported = "The time filter needs a newer server; ask your admin to update.";
 
+    internal const string NoRepository =
+        "Not in a git repository with a remote origin. Pass --repo <owner/name>, or --repo all for every repository.";
+
     public async Task<int> HandleAsync(string[] args) {
         var options = SessionsArgs.Parse(args, time, out var error);
 
@@ -36,7 +39,7 @@ partial class SessionsCommand(
                 config, workdir.Path, time, detectPullRequest: false);
 
             if (repo?.Owner is null || repo.RepoName is null) {
-                await Console.Error.WriteLineAsync("Not in a git repository with a remote origin.");
+                await Console.Error.WriteLineAsync(NoRepository);
 
                 return 1;
             }

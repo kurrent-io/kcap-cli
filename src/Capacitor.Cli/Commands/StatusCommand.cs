@@ -26,6 +26,10 @@ public sealed class StatusCommand(
 
         if (args.Contains("--json")) return await WriteJsonAsync(args, baseUrl);
 
+        var glyphs = StatusGlyphs.Encodable(Console.OutputEncoding);
+
+        Task Line(string text) => Console.Out.WriteLineAsync(glyphs ? text : StatusGlyphs.Plain(text));
+
         // Version line reuses UpdateNotice's shared check and marks-reported so the exit footer
         // doesn't double-print; respects the same opt-outs.
         await WriteVersionLineAsync(args);
@@ -34,14 +38,16 @@ public sealed class StatusCommand(
         // label would say nothing about what is being waited on.
         Console.Write(baseUrl is null ? "  Server:  " : $"  Server:  {baseUrl} ");
         var server = await ProbeServerAsync(http, baseUrl, config, time);
-        await Console.Out.WriteLineAsync(FormatReachability(server));
+        await Line(FormatReachability(server));
+
+        if (UnreachableRemedy(server) is { } remedy) await Line($"           {remedy}");
 
         if (profiles.Resolution.IgnoredRepoProfile is { } ignored)
-            await Console.Out.WriteLineAsync($"           {IgnoredRepoProfileLine(ignored)}");
+            await Line($"           {IgnoredRepoProfileLine(ignored)}");
 
         // Auth
         var auth = await ResolveAuthAsync(tokenStore, machine, profiles.Name, server, profiles.Resolution.Endpoint);
-        await Console.Out.WriteLineAsync($"  Auth:    {FormatAuthLine(auth, time.GetUtcNow())}");
+        await Line($"  Auth:    {FormatAuthLine(auth, time.GetUtcNow())}");
 
         // Hooks
         await Console.Out.WriteAsync("  Hooks:   ");
@@ -49,14 +55,14 @@ public sealed class StatusCommand(
         var codexRefused = CodexRefusedHooks(harnesses);
         var line         = BuildHooksStatusLine(harnesses.Select(h => (h.Id, HooksRun(h.Id, h.Signals.IsWired, codexRefused))));
 
-        await Console.Out.WriteLineAsync(line);
+        await Line(WrapHooksLine(glyphs ? line : StatusGlyphs.Plain(line), TerminalWidth()));
 
-        if (codexRefused is not null) await Console.Out.WriteLineAsync($"           {CodexHooksDetailLine(codexRefused)}");
+        if (codexRefused is not null) await Line($"           {CodexHooksDetailLine(codexRefused)}");
 
         var accountLines = BuildAccountLines(
             accounts.TryLoad()?.Accounts.Select(a => (a, AccountWiring.State(a, home))) ?? [],
             vendor => AccountLayouts.DefaultDirectory(vendor, home));
-        if (accountLines.Length > 0) await Console.Out.WriteLineAsync(accountLines);
+        if (accountLines.Length > 0) await Line(accountLines);
 
         // Newly-installed-but-unconfigured harnesses. Ledger-independent (a dismissed vendor is
         // still surfaced here) — status always tells the truth, unlike the nudge which respects
@@ -64,32 +70,30 @@ public sealed class StatusCommand(
         foreach (var h in harnesses) {
             if (!harnesses.Detected(h.Id)) continue;
             if (h.Signals.IsWired) continue;
-            await Console.Out.WriteLineAsync(
-                $"           {h.Label} installed but kcap not configured — run `{InstallCommandFor(h.Id)}`");
+            await Line($"           {h.Label} installed but kcap not configured — run `{InstallCommandFor(h.Id)}`");
         }
 
         var activity = new HookActivity(config, time);
 
         foreach (var h in harnesses.Where(h => HooksRun(h.Id, h.Signals.IsWired, codexRefused)))
-            await Console.Out.WriteLineAsync(
-                $"           {RecordingLine(h.Id, h.Label, activity.LastEvent(h.VendorId), time.GetUtcNow())}");
+            await Line($"           {RecordingLine(h.Id, h.Label, activity.LastEvent(h.VendorId), time.GetUtcNow())}");
 
         if (harnesses.FirstOrDefault(h => h.Id == HarnessId.Muse) is { } muse
             && MuseHooksDetailLine(harnesses.Of<MuseHarness>().Paths.SettingsJson,
                    detected: harnesses.Detected(HarnessId.Muse), wired: muse.Signals.IsWired) is { } museGap)
-            await Console.Out.WriteLineAsync($"           {museGap}");
+            await Line($"           {museGap}");
 
         if (new GitHookInstaller(home).IsInstalled() && GitHookWarning(GitHookInstaller.InstalledGitVersion()) is { } gitWarning)
-            await Console.Out.WriteLineAsync($"  Git:     {gitWarning}");
+            await Line($"  Git:     {gitWarning}");
 
         // Daemon: the per-name PID files `kcap daemon status` reads, so the two agree.
         var daemons = ReadDaemonEntries(store);
-        await Console.Out.WriteLineAsync($"  Daemon:  {DaemonLine(daemons)}");
+        await Line($"  Daemon:  {DaemonLine(daemons)}");
 
         var (units, verifySupported) = await InstalledUnitsAsync();
         foreach (var warning in DaemonDriftLines(
                      CapacitorVersion.Current(), daemons, units, UnitIdentity.ResolveDaemonBinary(), verifySupported))
-            await Console.Out.WriteLineAsync($"           {warning}");
+            await Line($"           {warning}");
 
         return 0;
     }
@@ -174,8 +178,8 @@ public sealed class StatusCommand(
             if (announced is not null) AuthProviderCache.Set(baseUrl, announced, config, time);
 
             return new ServerReach(baseUrl, true, null, announced ?? LastKnownProvider());
-        } catch {
-            return new ServerReach(baseUrl, false, null, LastKnownProvider());
+        } catch (Exception ex) {
+            return new ServerReach(baseUrl, false, null, LastKnownProvider(), ConnectionFailures.Of(ex));
         }
 
         string? LastKnownProvider() => AuthProviderCache.TryGet(baseUrl, config, time);
@@ -197,7 +201,11 @@ public sealed class StatusCommand(
         server.Url is null ? "not configured"
         : server.Reachable ? "✓ reachable"
         : server.StatusCode is { } code ? $"✗ HTTP {code}"
-        : "✗ unreachable";
+        : $"✗ unreachable ({(server.Failure ?? ConnectionFailure.Other).Reason})";
+
+    /// <summary>What to do about a server that gave no answer, or null when it answered.</summary>
+    internal static string? UnreachableRemedy(ServerReach server) =>
+        server.Unanswered ? (server.Failure ?? ConnectionFailure.Other).Remedy : null;
 
     /// <summary>
     /// Decided in the order the credential lane picks a source — no auth, then the machine, then the
@@ -249,8 +257,9 @@ public sealed class StatusCommand(
         return resolved.Status switch {
             AuthStatus.Ok          => new AuthSnapshot(StatusAuthState.Valid, resolved.Tokens!.GitHubUsername, resolved.Tokens.ExpiresAt),
             AuthStatus.WrongServer => new AuthSnapshot(StatusAuthState.WrongServer, IssuedServerUrl: resolved.IssuedServerUrl),
-            AuthStatus.Expired     => new AuthSnapshot(StatusAuthState.Expired, (await tokens.LoadForProfileAsync(profile))?.GitHubUsername),
-            _                      => new AuthSnapshot(StatusAuthState.None),
+            AuthStatus.Expired     => new AuthSnapshot(StatusAuthState.Expired, (await tokens.LoadForProfileAsync(profile))?.GitHubUsername,
+                                          ServerUnanswered: server.Unanswered),
+            _                      => new AuthSnapshot(StatusAuthState.None, ServerUnanswered: server.Unanswered),
         };
     }
 
@@ -259,8 +268,13 @@ public sealed class StatusCommand(
         StatusAuthState.Machine or StatusAuthState.MachineIncomplete
                                     => auth.MachineLine!,
         StatusAuthState.Valid       => $"{auth.Identity} ✓ token valid ({FormatExpiry(auth.ExpiresAt!.Value - now)})",
+        // A login cannot reach a server that gives no answer, and that is also what stops a refresh.
+        StatusAuthState.Expired when auth.ServerUnanswered
+                                    => $"{auth.Identity} ✗ token expired; it cannot be renewed until the server answers",
         StatusAuthState.Expired     => $"{auth.Identity} ✗ token expired (run: kcap login)",
         StatusAuthState.WrongServer => $"✗ token was issued by {auth.IssuedServerUrl ?? "another server"} (run: kcap login)",
+        StatusAuthState.None when auth.ServerUnanswered
+                                    => "unknown — the server gave no answer, so whether it needs a sign-in cannot be checked",
         StatusAuthState.None        => "not authenticated (run: kcap login)",
         StatusAuthState.LocalUnavailable => $"✗ {auth.Problem}",
     };
@@ -292,11 +306,18 @@ public sealed class StatusCommand(
     /// <param name="StatusCode">Set only when the server answered with a failure status.</param>
     /// <param name="Provider">The auth provider the server announces, or null when that is not
     /// known. Never a guess: an unanswered probe leaves it to the last answer on disk.</param>
-    internal sealed record ServerReach(string? Url, bool Reachable, int? StatusCode, string? Provider = null);
+    /// <param name="Failure">Why a configured server gave no answer at all.</param>
+    internal sealed record ServerReach(
+        string? Url, bool Reachable, int? StatusCode, string? Provider = null, ConnectionFailure? Failure = null) {
+        /// <summary>Configured, and no answer of any kind: a status, even a 401, is an answer.</summary>
+        public bool Unanswered => Url is not null && !Reachable && StatusCode is null;
+    }
 
+    /// <param name="ServerUnanswered">The configured server gave no answer, so neither a missing nor an
+    /// expired token can be repaired by a sign-in yet.</param>
     internal sealed record AuthSnapshot(
         StatusAuthState State, string? Identity = null, DateTimeOffset? ExpiresAt = null, string? MachineLine = null,
-        string? IssuedServerUrl = null, string? Problem = null);
+        string? IssuedServerUrl = null, string? Problem = null, bool ServerUnanswered = false);
 
     async Task WriteVersionLineAsync(string[] args) {
         Console.Write("  Version: ");
@@ -447,8 +468,13 @@ public sealed class StatusCommand(
             var outside = binary is not null && daemonBinary is not null && !UnitIdentity.SameDaemon(binary, daemonBinary);
             if (!drifted && !outside) continue;
 
+            var newer = drifted && DaemonVersionChange.IsDowngrade(version, cli);
+            var older = drifted && DaemonVersionChange.IsDowngrade(cli, version);
+
             List<string> facts = [];
-            if (drifted) facts.Add($"daemon '{name}' runs {version}, but this kcap is {cli}");
+            if (drifted) facts.Add(newer ? $"daemon '{name}' runs {version}, newer than this kcap's {cli}"
+                : older ? $"daemon '{name}' runs {version}, older than this kcap's {cli}"
+                : $"daemon '{name}' runs {version}, but this kcap is {cli}");
             if (outside) facts.Add($"{(drifted ? "its service" : $"service '{name}'")} runs {binary}, outside this kcap's install, so `kcap update` does not reach it");
 
             var fix = !hasUnit
@@ -457,7 +483,10 @@ public sealed class StatusCommand(
                     ? $"`kcap daemon service install --replace --verify --name {name}`"
                     : $"`kcap daemon service install --name {name}`";
 
-            lines.Add($"⚠ {string.Join("; ", facts)}. Run {fix}.");
+            lines.Add($"⚠ {string.Join("; ", facts)}. " + (
+                newer ? $"Update this kcap to {version} or later; {fix} from this kcap would downgrade the daemon to {cli}."
+                : older ? $"Run {fix} to upgrade it to {cli}."
+                : $"Run {fix}."));
         }
 
         return lines;
@@ -599,7 +628,46 @@ public sealed class StatusCommand(
     /// in the caller.
     /// </summary>
     internal static string BuildHooksStatusLine(IEnumerable<(HarnessId Id, bool Wired)> wiring) =>
-        string.Join("  ", wiring.Select(w => $"{ShortLabel(w.Id)} {(w.Wired ? "✓" : "✗")}"));
+        string.Join(HooksSeparator, wiring.Select(w => $"{ShortLabel(w.Id)} {(w.Wired ? "✓" : "✗")}"));
+
+    const string HooksSeparator = "  ";
+
+    /// <summary>The width of "  Hooks:   ", and of every continuation row under it.</summary>
+    const int HooksIndent = 11;
+
+    /// <summary>Breaks the Hooks line between entries so no row reaches the last column of
+    /// <paramref name="width"/>: a terminal wraps an overlong row to column 1, under the labels. A null
+    /// width, as for redirected output, leaves the line whole.</summary>
+    internal static string WrapHooksLine(string line, int? width) {
+        if (width is not { } columns || HooksIndent + line.Length < columns) return line;
+
+        var room = Math.Max(columns - 1 - HooksIndent, 1);
+        var rows = new List<string>();
+        var row  = "";
+
+        foreach (var entry in line.Split(HooksSeparator)) {
+            if (row.Length > 0 && row.Length + HooksSeparator.Length + entry.Length > room) {
+                rows.Add(row);
+                row = entry;
+            } else {
+                row = row.Length == 0 ? entry : row + HooksSeparator + entry;
+            }
+        }
+
+        rows.Add(row);
+
+        return string.Join(Environment.NewLine + new string(' ', HooksIndent), rows);
+    }
+
+    static int? TerminalWidth() {
+        if (Console.IsOutputRedirected) return null;
+
+        try {
+            return Console.WindowWidth > 0 ? Console.WindowWidth : null;
+        } catch (Exception ex) when (ex is IOException or PlatformNotSupportedException) {
+            return null;
+        }
+    }
 
     /// <summary>One line per registered account, but only once some account is not its vendor's
     /// environment-derived directory: those alone are what the Hooks line already reports.</summary>

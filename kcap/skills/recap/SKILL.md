@@ -178,7 +178,7 @@ When using `--chain`, sessions are separated by `# Session <id>` headers, and ag
 - **No flags** (`kcap recap`) — summary + per-turn outline for the current session
 - **`--per-turn`** (`kcap recap --per-turn`) — compact metadata index per turn (prompt excerpt, tools, files, tokens, time), no prose
 - **`--get-turn <N>`** (`kcap recap --get-turn <N>`) — one turn's full transcript, drilling down from the outline or the per-turn index
-- **`--full`** (`kcap recap --full`) — whole transcript: exact prompts, responses, and file contents for a specific session
+- **`--full`** (`kcap recap --full`) — whole transcript for a specific session: every turn's prompts, responses, tool calls and results, as `--get-turn` shows them
 - **`--chain`** (`kcap recap --chain`) — understanding the full history of a task that spanned multiple sessions
 - **`--chain --full`** — complete transcript across all continuations
 

@@ -4,7 +4,11 @@ Usage: kcap recap [options] [sessionId]
 
 Options:
   --chain                 Include all sessions in the continuation chain
-  --full                  Show raw transcript instead of summary
+  --full                  Show the whole transcript instead of the summary:
+                          every closed turn as --get-turn shows it (prompts,
+                          replies, tool calls and their results, subagents).
+                          Activity not yet closed into a turn shows prompts,
+                          replies and file writes only, and says so
   --repo                  Show recent session summaries for the current repo
   --per-turn              Show a compact per-turn index (prompt, tools,
                           files, tokens, time) — one block per turn
