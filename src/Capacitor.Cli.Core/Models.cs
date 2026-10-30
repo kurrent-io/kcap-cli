@@ -1132,6 +1132,8 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(FirstRun.RelinquishFirstRunFlowRequest))]
 [JsonSerializable(typeof(FirstRun.ReportFirstRunImportOutcomeRequest))]
 [JsonSerializable(typeof(LaunchAgentCommand))]
+[JsonSerializable(typeof(Handoff.HandoffTakeoverAdmission))]
+[JsonSerializable(typeof(Handoff.HandoffTakeoverBeginRequest))]
 [JsonSerializable(typeof(ExplicitReviewerModelLaunch))]
 [JsonSerializable(typeof(ReviewerModelResolveRequestV1))]
 [JsonSerializable(typeof(ReviewerModelResolveResponseV1))]
@@ -1753,7 +1755,10 @@ public readonly record struct LaunchAgentCommand(
         string?           ExpectedRuntimeTransport = null,
         // A review-flow reviewer with no repository: it runs in an empty daemon-owned directory and
         // RepoPath is empty. Sent only to a daemon advertising DaemonConnect.SupportsScratchWorkspace.
-        bool              ScratchWorkspace = false
+        bool              ScratchWorkspace = false,
+        // Continue an ended session from this start. Sent only to a daemon advertising
+        // DaemonConnect.SupportsHandoffLaunch; a daemon that cannot carry it refuses the launch.
+        Capacitor.Cli.Core.Handoff.HandoffLaunch? Handoff = null
     );
 
 /// <summary>Caller-selected Codex launch posture. Valid ONLY for interactive, daemon-owned-worktree
@@ -2302,7 +2307,10 @@ public readonly record struct DaemonConnect(
         Dictionary<string, VendorModelOption[]>?    VendorModelsByAccount = null,
         // Accepts a LaunchAgentCommand.ScratchWorkspace launch. False from a daemon predating it, which
         // would try to create a worktree from an empty repository path.
-        bool                                        SupportsScratchWorkspace = false
+        bool                                        SupportsScratchWorkspace = false,
+        // Accepts a LaunchAgentCommand.Handoff launch. False from a daemon predating it, which would
+        // ignore the block and start an ordinary session.
+        bool                                        SupportsHandoffLaunch = false
     );
 
 public sealed record UnattendedVendorCapability(

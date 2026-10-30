@@ -1,3 +1,5 @@
+using Capacitor.Cli.Core.Handoff;
+
 namespace Capacitor.Cli.Daemon.Services;
 
 public partial class WorktreeManager {
