@@ -48,7 +48,7 @@ internal enum LaunchAvailability { Ready, Pending, DaemonUnavailable, ServerDisc
 /// on the daemon client's own background thread (same as MainWindowViewModel/
 /// ConsentPromptViewModel), so projections ObserveOn RxSchedulers.MainThreadScheduler BEFORE the
 /// operator that touches bound state — a binding must never see a mutation off the UI thread.
-public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink {
+public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink, ILaunchChoices {
     /// A repository with no remembered choice falls back to this — never to whatever vendor was
     /// selected for a DIFFERENT repository, which would leak a preference across repositories.
     public const string DefaultVendor = "claude";

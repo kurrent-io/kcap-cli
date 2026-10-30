@@ -80,9 +80,9 @@ public class LauncherPaneViewSmokeTests {
     [Test]
     public async Task Picker_search_matches_label_and_slug() {
         var m = new ModelChoice("github-copilot/claude-opus-5", "Claude Opus 5 · github-copilot");
-        await Assert.That(LauncherPaneView.RowMatches(m, "opus")).IsTrue();
-        await Assert.That(LauncherPaneView.RowMatches(m, "GitHub-Copilot/")).IsTrue();
-        await Assert.That(LauncherPaneView.RowMatches(m, "anthropic")).IsFalse();
+        await Assert.That(LaunchChipsView.RowMatches(m, "opus")).IsTrue();
+        await Assert.That(LaunchChipsView.RowMatches(m, "GitHub-Copilot/")).IsTrue();
+        await Assert.That(LaunchChipsView.RowMatches(m, "anthropic")).IsFalse();
     }
 
     /// Real-shaped agent ids (Guid("N"), 32 hex digits): a Started outcome carrying anything else
@@ -402,8 +402,8 @@ public class LauncherPaneViewSmokeTests {
 
     [Test]
     public async Task A_picker_row_names_its_selection() {
-        await Assert.That(LauncherPaneView.ChoiceName("High", selected: true)).IsEqualTo("High, selected");
-        await Assert.That(LauncherPaneView.ChoiceName("High", selected: false)).IsEqualTo("High");
+        await Assert.That(ChoiceMenus.ChoiceName("High", selected: true)).IsEqualTo("High, selected");
+        await Assert.That(ChoiceMenus.ChoiceName("High", selected: false)).IsEqualTo("High");
     }
 
     /// The button carries a glyph, not text, so assistive technology reads the automation name.
@@ -843,7 +843,7 @@ public class LauncherPaneViewSmokeTests {
 
     static (Flyout Menu, List<AppIcon> Checks) OpenMenu(Window window, LauncherPaneView view, string chipName) {
         Click(window, Find<Button>(window, chipName)!);
-        var menu = view.OpenMenuForTesting!;
+        var menu = (chipName is "RepositoryChip" or "MachineChip" ? view.OpenMenuForTesting : view.GetVisualDescendants().OfType<LaunchChipsView>().Single().OpenMenuForTesting)!;
         var checks = ((Control)menu.Content!).GetVisualDescendants().OfType<AppIcon>()
             .Where(i => i.Kind == Lucide.Avalonia.LucideIconKind.Check).ToList();
         return (menu, checks);

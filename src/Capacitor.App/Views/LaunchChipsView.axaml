@@ -1,0 +1,57 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
+             xmlns:views="clr-namespace:Capacitor.App.Views"
+             x:Class="Capacitor.App.Views.LaunchChipsView"
+             x:DataType="vm:ILaunchChoices">
+    <WrapPanel ItemSpacing="8" LineSpacing="8" VerticalAlignment="Center">
+        <!-- Harness + model picker: built per open in code-behind, like the repo menu. -->
+        <Button x:Name="AgentChip" Classes="kcapChip" Click="OnAgentChipClick"
+                Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+                Foreground="{StaticResource KcapTextBrush}" CornerRadius="999" Padding="11,5"
+                ToolTip.Tip="Harness and model" AutomationProperties.Name="{Binding #AgentChipLabel.Text}">
+            <StackPanel Orientation="Horizontal" Spacing="7">
+                <ContentControl VerticalAlignment="Center"
+                                Content="{Binding SelectedVendor, Converter={x:Static views:VendorGlyphConverter.Instance}, ConverterParameter=13}" />
+                <TextBlock x:Name="AgentChipLabel" VerticalAlignment="Center">
+                    <TextBlock.Text>
+                        <MultiBinding Converter="{x:Static views:AgentChipTextConverter.Instance}">
+                            <Binding Path="Harnesses" />
+                            <Binding Path="SelectedVendor" />
+                            <Binding Path="SelectedModel" />
+                            <Binding Path="EffectiveModelCatalog" />
+                            <Binding Path="SelectedAccountLabel" />
+                        </MultiBinding>
+                    </TextBlock.Text>
+                </TextBlock>
+            </StackPanel>
+        </Button>
+
+        <Button x:Name="EffortChip" Classes="kcapChip" Click="OnEffortChipClick"
+                Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+                Foreground="{StaticResource KcapTextBrush}" CornerRadius="999" Padding="11,5"
+                Content="{Binding SelectedEffort, Converter={x:Static views:EffortChipTextConverter.Instance}}"
+                ToolTip.Tip="Reasoning effort. Default lets the harness decide" />
+
+        <Button x:Name="PermissionChip" Classes="kcapChip" Click="OnPermissionChipClick"
+                Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+                Foreground="{StaticResource KcapTextBrush}" CornerRadius="999" Padding="11,5"
+                Content="{Binding SelectedPermissionMode, Converter={x:Static views:PermissionChipTextConverter.Instance}}"
+                IsVisible="{Binding SelectedVendor, Converter={x:Static views:PermissionChipVisibleConverter.Instance}}"
+                ToolTip.Tip="Permission mode. How much Claude asks before acting" />
+
+        <Button x:Name="CodexSandboxChip" Classes="kcapChip" Click="OnCodexSandboxChipClick"
+                Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+                Foreground="{StaticResource KcapTextBrush}" CornerRadius="999" Padding="11,5"
+                Content="{Binding SelectedCodexSandbox, Converter={x:Static views:CodexPostureChipTextConverter.Sandbox}}"
+                IsVisible="{Binding SelectedVendor, Converter={x:Static views:CodexPostureChipVisibleConverter.Instance}}"
+                ToolTip.Tip="Sandbox. What Codex may read and write" />
+
+        <Button x:Name="CodexApprovalChip" Classes="kcapChip" Click="OnCodexApprovalChipClick"
+                Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+                Foreground="{StaticResource KcapTextBrush}" CornerRadius="999" Padding="11,5"
+                Content="{Binding SelectedCodexApproval, Converter={x:Static views:CodexPostureChipTextConverter.Approval}}"
+                IsVisible="{Binding SelectedVendor, Converter={x:Static views:CodexPostureChipVisibleConverter.Instance}}"
+                ToolTip.Tip="Approvals. When Codex asks before acting" />
+    </WrapPanel>
+</UserControl>
