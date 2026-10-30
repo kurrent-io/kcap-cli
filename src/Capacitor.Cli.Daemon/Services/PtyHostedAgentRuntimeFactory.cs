@@ -157,7 +157,8 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
         var disablesApprovalPrompts = launcher.DisablesApprovalPrompts(launcherCtx);
 
         var pty     = ptyFactory.Spawn(launcher.CliPath, args, ctx.Worktree.Path, env, ctx.Cols, ctx.Rows, removeEnv);
-        var runtime = new PtyHostedAgentRuntime(ctx.Vendor, pty, time, disablesApprovalPrompts, logger);
+        var runtime = new PtyHostedAgentRuntime(ctx.Vendor, pty, time, disablesApprovalPrompts, logger,
+            readyOnBracketedPaste: OperatingSystem.IsWindows());
 
         if (launchPrompt is not null) {
             runtime.DeliverLaunchPrompt(launchPrompt);
@@ -198,7 +199,7 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
     [LoggerMessage(Level = LogLevel.Debug, Message = "Agent {AgentId} received its launch prompt")]
     partial void LogLaunchPromptDelivered(string agentId);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Agent {AgentId}'s startup output never settled; its launch prompt was pasted after {Seconds}s")]
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Agent {AgentId} never settled ready for input; its launch prompt was pasted after {Seconds}s")]
     partial void LogLaunchPromptPastedBlind(string agentId, double seconds);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Agent {AgentId} exited before it received its launch prompt")]

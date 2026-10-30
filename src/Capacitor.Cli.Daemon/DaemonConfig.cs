@@ -5,6 +5,7 @@ using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Daemon.Harness.Claude;
+using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.Cli.Daemon;
@@ -14,6 +15,9 @@ public class DaemonConfig {
     public string   ServerUrl           { get; set; } = "";
     public string[] AllowedRepoPaths    { get; set; } = [];
     public int      MaxConcurrentAgents { get; set; } = 5;
+
+    /// <summary>The daemon's own binary as it stood at process start, the restart poll's first baseline.</summary>
+    public BinaryStat? LaunchBinary { get; set; }
 
     /// <summary>How long a self-detected restart waits for interactive agents to reach a turn boundary.</summary>
     public TimeSpan RestartTurnWait { get; set; } = TimeSpan.FromMinutes(5);

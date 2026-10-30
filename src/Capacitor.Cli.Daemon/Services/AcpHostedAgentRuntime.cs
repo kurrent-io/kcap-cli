@@ -1512,7 +1512,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 Prompt: [new PromptContentBlock(Type: "text", Text: turn.Text)]),
             CapacitorJsonContext.Default.SessionPromptParams);
 
-        await connection.RequestAsync(
+        var result = await connection.RequestAsync(
             "session/prompt", promptParams, ct, () => {
                 turn.Written?.TrySetResult();
 
@@ -1523,6 +1523,10 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                         inFlight.WriteState = InFlightTurn.Written;
                 }
             }).ConfigureAwait(false);
+
+        // A vendor with its own reader reports the turn there; reading the response too would count it twice.
+        if (_turnUsageReader is null)
+            EmitTurnUsage(AcpPromptUsage.Read(result, _resolvedModel));
     }
 
     sealed record PendingTurn(string Text, TaskCompletionSource? Written);
@@ -1785,14 +1789,8 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 Title: GetStringOrNull(update, "title"),
                 Raw: update),
 
-            // The ACP spec's Session Usage RFD. No vendor implements it yet, so this arm is
-            // dormant; it exists so the context chip lights up for every ACP-hosted vendor the
-            // moment any of them ships it. Content-free unless both fields are present and
-            // sane - a partial reading is worse than none, since `size` is the chip's
-            // denominator. `used > size` is kept: reported windows can be advisory. A zero
-            // `used` is dropped to match the server's re-validation, where it would be
-            // durably appended yet invisible to every consumer (the peak comparison they all
-            // share ignores a zero candidate). Any `cost` or unknown siblings are ignored.
+            // The ACP spec's Session Usage RFD, which drives the context chip. Both fields or nothing:
+            // `size` is the chip's denominator. A zero `used` is dropped, as the server would drop it.
             "usage_update" => update.Num("used") is { } used and > 0 && update.Num("size") is { } size and > 0
                 ? new AcpSessionUpdate(
                     AcpUpdateKind.UsageUpdate,

@@ -33,6 +33,56 @@ namespace Capacitor.App.Tests.Unit;
 /// Headless rendering of MainWindow against a fake Connected snapshot: the rail footer shows
 /// connection and tenant on one line, then the daemon's name, version and agent count.
 public class MainWindowSmokeTests {
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Update_footer_keeps_identity_without_connection_churn_and_restores_live_status() => AvaloniaSession.DispatchAsync(async () => {
+        using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+        var service = new FakeDaemonClientService();
+        service.SnapshotsSubject.OnNext(Snap(daemon: "daemon-a", connection: "connected", active: 1, max: 5));
+        service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+        using var home = new HomeViewModel(service, new AppStateStore(path), new NeverLaunchClient(),
+            () => Task.FromResult(Array.Empty<string>()), TimeProvider.System);
+        using var progress = new BehaviorSubject<(bool, string?)>((false, null));
+        home.AttachUpdateProgress(progress);
+        var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+            tenantName: "kurrent", home: home);
+        var window = new MainWindow { DataContext = vm };
+        try {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            var rail = window.FindDescendantOfType<SessionRailView>()!;
+            var status = rail.FindControl<StackPanel>("RailConnectionStatus")!;
+            await Assert.That(status.IsEffectivelyVisible).IsTrue();
+
+            progress.OnNext((true, "Restarting the daemon"));
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, ExpectedDaemonRestart.Reason, null));
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            await Assert.That(status.IsEffectivelyVisible).IsFalse();
+            var footerText = rail.FindControl<StackPanel>("RailFooterPanel")!.GetVisualDescendants().OfType<TextBlock>()
+                .Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToArray();
+            await Assert.That(footerText).Contains("kurrent");
+            await Assert.That(footerText).Contains("daemon-a");
+            var help = rail.FindControl<Button>("RailHelpButton")!;
+            await Assert.That(help.IsEffectivelyVisible && help.IsEffectivelyEnabled).IsTrue();
+
+            var longName = "engineering-workstation-" + new string('a', 100);
+            service.SnapshotsSubject.OnNext(Snap(daemon: longName, connection: "connected", active: 1, max: 5));
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            var context = rail.FindControl<StackPanel>("RailUpdateContext")!;
+            var nameText = context.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Text == longName);
+            await Assert.That(nameText.Bounds.Width).IsLessThan(context.Bounds.Width);
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            progress.OnNext((false, null));
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(status.IsEffectivelyVisible).IsTrue();
+            await Assert.That(vm.ConnectionDisplay).IsEqualTo("Connected");
+        } finally { window.Close(); }
+        return true;
+    });
+
     sealed class NeverLaunchClient : ILaunchClient {
         public Task<LaunchOutcome> StartAsync(LaunchRequest request, CancellationToken ct) =>
             Task.FromResult(new LaunchOutcome(false, null, "unexpected launch"));
@@ -255,7 +305,7 @@ public class MainWindowSmokeTests {
                 service.StartBehavior = _ => Task.FromResult(new StartDaemonResult(false, "boom: could not bind socket"));
                 await vm.StartDaemonCommand.Execute().ToTask();
                 Dispatcher.UIThread.RunJobs();
-                var textAfter = Banner().Text;
+                var textAfter = window.GetVisualDescendants().OfType<SelectableTextBlock>().First(t => t.Name == "BannerDetailText").Text;
 
                 window.Close();
                 Dispatcher.UIThread.RunJobs();
@@ -265,7 +315,7 @@ public class MainWindowSmokeTests {
             });
 
         await Assert.That(bannerInitially).IsTrue(); // Connecting… still has a notice
-        await Assert.That(bannerTextUnreachable).IsEqualTo(HomeViewModel.DaemonDownNotice);
+        await Assert.That(bannerTextUnreachable).IsEqualTo(NoticeText.Headline(HomeViewModel.DaemonDownNotice).Title);
         await Assert.That(bannerTextAfterFailure).IsEqualTo("boom: could not bind socket");
     }
 
@@ -1742,9 +1792,9 @@ public class MainWindowSmokeTests {
         });
 
         await Assert.That(tips.ConnectionLines).IsEquivalentTo(
-            new[] { MainWindowViewModel.AttachStatusTip }, CollectionOrdering.Matching);
+            new[] { MainWindowViewModel.ConnectionStatusTip }, CollectionOrdering.Matching);
         await Assert.That(tips.ConnectionDetailLines).IsEquivalentTo(
-            new[] { "diagnostic-marker", MainWindowViewModel.AttachStatusTip }, CollectionOrdering.Matching);
+            new[] { "diagnostic-marker", MainWindowViewModel.ConnectionStatusTip }, CollectionOrdering.Matching);
         await Assert.That(tips.TenantLines).IsEquivalentTo(
             new[] { "http://localhost:9999", MainWindowViewModel.ServerUrlTip }, CollectionOrdering.Matching);
         await Assert.That(tips.TenantText).IsEqualTo("kurrent");

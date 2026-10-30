@@ -191,8 +191,31 @@ public class PtyHostedAgentRuntimeTests {
         await Assert.That(pty.StringWrites[1]).IsEqualTo("\r");
     }
 
+    const string ReadyBanner = "\x1b[?2004hbanner";
+
     static Task PumpAsync(PtyHostedAgentRuntime runtime) =>
         Task.Run(async () => { await foreach (var _ in runtime.ReadOutputAsync()) { } });
+
+    /// <summary>Drains the runtime's output and counts the chunks it has finished reading, so a test
+    /// can know a mode change has landed before it moves the clock.</summary>
+    sealed class CountingPump {
+        int _consumed;
+
+        public CountingPump(PtyHostedAgentRuntime runtime) =>
+            _ = Task.Run(async () => {
+                await foreach (var _ in runtime.ReadOutputAsync()) Interlocked.Increment(ref _consumed);
+            });
+
+        public async Task EmitAsync(RecordingScriptedPtyProcess pty, string text) {
+            var target = Volatile.Read(ref _consumed) + 1;
+            pty.Emit(text);
+
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (Volatile.Read(ref _consumed) < target && DateTime.UtcNow < deadline) await Task.Delay(5);
+
+            if (Volatile.Read(ref _consumed) < target) throw new TimeoutException("The runtime did not read the emitted output.");
+        }
+    }
 
     /// <summary>Advances the fake clock by <paramref name="span"/> in slices, yielding between them so
     /// timer continuations run. For a step where nothing is meant to happen.</summary>
@@ -255,6 +278,65 @@ public class PtyHostedAgentRuntimeTests {
         time.Advance(TimeSpan.FromMilliseconds(300));
         await Task.Delay(100);
 
+        await Assert.That(pty.Writes).IsEmpty();
+
+        await StepAsync(time, PtyHostedAgentRuntime.LaunchPromptQuietWindow, () => pty.Writes.Count >= 1);
+
+        await Assert.That(pty.Writes[0]).IsEqualTo("\x1b[200~build it\x1b[201~");
+        pty.Exit();
+    }
+
+    /// <summary>ConPTY's preamble arrives, then goes quiet while the agent is still booting. Pasting
+    /// in that silence leaves the prompt in the composer with its submitting CR lost, so the paste
+    /// waits for the agent to enable bracketed paste.</summary>
+    [Test]
+    public async Task Launch_prompt_waits_for_the_tui_to_enable_bracketed_paste() {
+        var time    = new FakeTimeProvider();
+        var pty     = new RecordingScriptedPtyProcess();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, time, approvalsDisabled: false, readyOnBracketedPaste: true);
+
+        runtime.DeliverLaunchPrompt("build it");
+        var pump = new CountingPump(runtime);
+        await pump.EmitAsync(pty, "\x1b[?9001h\x1b[?1004h");
+        await pump.EmitAsync(pty, "\x1b[?25l\x1b[2J\x1b[m\x1b[H\x1b]0;claude\x07\x1b[?25h");
+
+        await AdvanceAsync(time, PtyHostedAgentRuntime.LaunchPromptQuietWindow * 4);
+        await Task.Delay(100);
+        await Assert.That(pty.Writes).IsEmpty();
+
+        await pump.EmitAsync(pty, ReadyBanner);
+        await AdvanceAsync(time, PtyHostedAgentRuntime.LaunchPromptQuietWindow / 2);
+        await Task.Delay(100);
+        await Assert.That(pty.Writes).IsEmpty();
+
+        await StepAsync(time, PtyHostedAgentRuntime.LaunchPromptQuietWindow, () => pty.Writes.Count >= 1);
+
+        await Assert.That(pty.Writes[0]).IsEqualTo("\x1b[200~build it\x1b[201~");
+        pty.Exit();
+    }
+
+    /// <summary>Readiness is the mode as it stands when the quiet window ends: a TUI that turns
+    /// bracketed paste off again is not ready, however quiet it has been since turning it on.</summary>
+    [Test]
+    public async Task Launch_prompt_waits_again_when_the_tui_turns_bracketed_paste_off() {
+        var time    = new FakeTimeProvider();
+        var pty     = new RecordingScriptedPtyProcess();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, time, approvalsDisabled: false, readyOnBracketedPaste: true);
+
+        runtime.DeliverLaunchPrompt("build it");
+        var pump = new CountingPump(runtime);
+        await pump.EmitAsync(pty, ReadyBanner);
+        time.Advance(TimeSpan.FromMilliseconds(250));
+        await Task.Delay(50);
+        await pump.EmitAsync(pty, "\x1b[?2004l");
+
+        await AdvanceAsync(time, PtyHostedAgentRuntime.LaunchPromptQuietWindow * 4);
+        await Task.Delay(100);
+        await Assert.That(pty.Writes).IsEmpty();
+
+        await pump.EmitAsync(pty, ReadyBanner);
+        await AdvanceAsync(time, PtyHostedAgentRuntime.LaunchPromptQuietWindow / 2);
+        await Task.Delay(100);
         await Assert.That(pty.Writes).IsEmpty();
 
         await StepAsync(time, PtyHostedAgentRuntime.LaunchPromptQuietWindow, () => pty.Writes.Count >= 1);

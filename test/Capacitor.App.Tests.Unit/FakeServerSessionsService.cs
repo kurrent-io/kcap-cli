@@ -34,6 +34,8 @@ sealed class FakeServerSessionsService : IServerSessionsService, IDisposable {
         EndedCache.Connect(suppressEmptyChangeSets: false).ToCollection().StartWith((IReadOnlyCollection<RepoSessionDto>)[]),
         (live, mine, ended) => new ServerSessionsSnapshot([.. live], [.. mine], [.. ended]));
     public void Keep(string? sessionId) => Kept = sessionId;
+    public readonly List<(string SessionId, string Title)> Renames = [];
+    public void ApplyRename(string sessionId, string title) => Renames.Add((sessionId, title));
     public IObservable<ServerSessionsPaging> Paging => PagingSubject;
     public IObservable<int> LiveNotShown => LiveNotShownSubject;
     public IObservable<IReadOnlySet<string>> ViewerIds => ViewerIdsSubject;

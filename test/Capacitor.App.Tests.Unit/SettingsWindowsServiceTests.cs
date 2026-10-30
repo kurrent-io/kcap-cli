@@ -64,14 +64,14 @@ public class SettingsWindowsServiceTests {
     });
 
     [Test]
-    public Task The_confirmation_says_running_agents_are_resumed_under_the_service() => AvaloniaSession.RunOnUiAsync(async () => {
+    public Task The_confirmation_makes_agent_resume_conditional() => AvaloniaSession.RunOnUiAsync(async () => {
         using var vm = MakeViewModel(Snapshot("windows_scheduled_task", installable: true), new MutationOutcome.Succeeded(), activeAgents: 2);
         await SettleAsync(() => vm.WindowsServiceOffered);
 
         await vm.WindowsServiceCommand.Execute();
 
         await Assert.That(_prompts.Single().Disclosure).IsEqualTo(DaemonLifecycleController.WindowsServiceDisclosure(2, resumes: true));
-        await Assert.That(_prompts.Single().Disclosure).Contains("its 2 running agents are resumed under the service");
+        await Assert.That(_prompts.Single().Disclosure).Contains("2 running agents resume if auto-resume is on");
     });
 
     [Test]

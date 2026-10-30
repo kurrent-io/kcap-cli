@@ -57,6 +57,7 @@ public static partial class DaemonRunner {
         // before DI exists, so it is threaded by hand until the container is built.
         var time = TimeProvider.System;
         if (TryHandleVersionFlag(args, Console.Out)) return 0;
+        var launchBinary = RestartCoordinator.StatProcessBinary();
 
         string?    logFile     = null;
         string?    stderrFile  = null;
@@ -86,6 +87,7 @@ public static partial class DaemonRunner {
             Binaries     = binaries,
             WorktreeRoot = Path.Combine(userHome.Path, ".capacitor", "worktrees"),
             OriginalArgs = args,
+            LaunchBinary = launchBinary,
         };
         var awaitLock = args.Contains("--await-lock");
 
@@ -206,7 +208,7 @@ public static partial class DaemonRunner {
 
         // Committed before the first advertisement, which carries it to the server.
         var startupCodex = Harness.Codex.CodexTransportResolution.Read(
-            1, config.ReadExperimentalSettings, () => ProbeCliVersion(config.CodexPath),
+            1, config.ReadExperimentalSettings, () => ProbeCliVersion(harnesses.LaunchCommand(HarnessId.Codex, config.CodexPath)),
             problem => {
                 config.ExperimentalSettingsProblem = problem;
                 return Harness.Codex.CodexTransportResolution.Unreadable(1, problem);

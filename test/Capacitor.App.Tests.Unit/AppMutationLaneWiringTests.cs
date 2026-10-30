@@ -95,7 +95,7 @@ public class AppMutationLaneWiringTests {
     }
 
     [Test]
-    public async Task Takeover_decline_issues_no_request_and_exactly_one_status_line_naming_the_token() {
+    public async Task Takeover_decline_issues_no_request_and_shows_recovery_without_the_wire_token() {
         var surface = new FakeLifecycleSurface { ConfirmBehavior = (_, _) => Task.FromResult(false) };
         var envelope = Envelope(new MutationOutcome.Failed(28, "foreign_binary", RecoverySurface.Takeover));
 
@@ -103,7 +103,8 @@ public class AppMutationLaneWiringTests {
             surface, envelope, NeverRunMutation, FixedTerminalPath("/usr/bin"), () => "1.2.3", CancellationToken.None);
 
         await Assert.That(surface.StatusMessages.Count).IsEqualTo(1);
-        await Assert.That(surface.StatusMessages[0]).Contains("foreign_binary");
+        await Assert.That(surface.StatusMessages[0]).DoesNotContain("foreign_binary");
+        await Assert.That(surface.StatusMessages[0]).Contains("Restart kcap");
         await Assert.That(surface.AttentionMessages).IsEmpty();
     }
 
@@ -477,7 +478,8 @@ public class AppMutationLaneWiringTests {
         channel.Enqueue(envelope); // the SAME (request, token) pair re-arrives
         await WaitUntilAsync(() => surface.AttentionMessages.Count == 1, what: "the downgraded attention presentation");
         await Assert.That(surface.Prompts.Count).IsEqualTo(1); // no second dialog
-        await Assert.That(surface.AttentionMessages[0]).Contains("foreign_binary");
+        await Assert.That(surface.AttentionMessages[0]).DoesNotContain("foreign_binary");
+        await Assert.That(surface.AttentionMessages[0]).Contains("Restart kcap");
 
         cts.Cancel();
         await consumerTask.WaitAsync(TimeSpan.FromSeconds(5));

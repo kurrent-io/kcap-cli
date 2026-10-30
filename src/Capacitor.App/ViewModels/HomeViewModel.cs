@@ -72,23 +72,23 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     internal const string SignInToAttach = "sign in to attach files";
 
-    internal const string ConnectingNotice     = "Connecting to the server…";
+    internal const string ConnectingNotice     = "Connecting to the server. Session activity appears when the connection is ready.";
     /// Longer than the daemon's 30s connect backoff so one redial still reads as connecting.
     internal static readonly TimeSpan CatchUpLimit = TimeSpan.FromSeconds(60);
     internal const string FinishingSignInNotice =
         "Finishing sign-in. Reconnecting to the server…";
     internal const string DaemonDownNotice     =
-        "The daemon isn't running. The app is starting its service. Press Start daemon to try again now.";
+        "The daemon isn't running. Agents can't start until it's back.";
     internal const string DaemonRestartingNotice =
-        "The daemon is restarting into its new version. It reconnects on its own.";
+        "The daemon is restarting to update. It reconnects on its own.";
     internal const string DaemonIncompatibleNotice =
-        "App and daemon are incompatible. Update both to matching versions, then press Reconnect.";
+        "The app and daemon versions don't match. Update both, then reconnect.";
     internal const string ServerLostNotice     = "Not connected to the server. Sign in again to reconnect.";
-    internal const string SignInExpiredNotice  = "Your sign-in has expired. Sign in again.";
+    internal const string SignInExpiredNotice  = "Your sign-in has expired. Sign in again to reconnect.";
     /// A daemon attached by name that serves another server: signing in again cannot move it.
     internal static string DaemonOnOtherServerNotice(string daemonServer, string appServer) {
         var (daemonLabel, appLabel) = AttachedIdentity.ServerLabels(daemonServer, appServer);
-        return $"This machine's daemon is running for {daemonLabel}, not {appLabel}, so it cannot run agents here.";
+        return $"This machine's daemon uses another server. It's connected to {daemonLabel}, so it can't run agents for {appLabel}.";
     }
 
     /// The daemon's server when it is known and is not the app's; null otherwise, an unknown side included.
@@ -96,21 +96,25 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         string.IsNullOrEmpty(daemonServer) || string.IsNullOrEmpty(appServer) || ServerIdentity.SameServer(daemonServer, appServer)
             ? null : daemonServer;
 
-    internal const string DaemonSignedOutNotice = "This machine's daemon is signed out, so it cannot reach the server. Sign in to its profile and it reconnects.";
+    internal const string DaemonSignedOutNotice = "This machine's daemon is signed out. Sign in to its profile to reconnect.";
 
     /// The connection word the notice reads when the daemon reports its own sign-in as the reason its
     /// hub is down; never on the wire.
     internal const string DaemonSignedOutWord = "signed out";
-    internal const string LocalServerRefusedNotice = "The local server refused this app's connection. Restart kcap.";
-    internal const string LocalServerLostNotice    = "Lost the connection to the local server. kcap keeps trying to reconnect.";
+    internal const string LocalServerRefusedNotice = "The local server refused the connection. Restart kcap.";
+    internal const string FinishingUpdateNotice    = "Finishing the update…";
+    internal const string LocalServerLostNotice    = "Lost the connection to the local server. kcap keeps retrying.";
 
     /// A service-run daemon restarts itself for a harness installed on its PATH; setup fixes a PATH that
     /// misses it, and a daemon started by hand needs a restart.
     internal static string NoHarnessesNotice(string? remoteMachine) => remoteMachine is null
-        ? "No coding agents were found on this machine. Install Claude Code, Codex or another supported agent; if it does not appear, run setup again or restart the daemon."
-        : $"No coding agents were found on {remoteMachine}. Install one there; if it does not appear, run setup there again or restart its daemon.";
+        ? "No coding agents found on this machine. Install Claude Code, Codex or another supported agent. If it doesn't show up, run setup again or restart the daemon."
+        : $"No coding agents found on {remoteMachine}. Install one there. If it doesn't show up, run setup there again or restart its daemon.";
 
     internal static string HarnessUnavailableMessage(string label) => $"{label} isn't available on this machine. Choose another agent.";
+
+    /// The title over a daemon status that arrives alone, so the card keeps a title and a body.
+    internal const string DaemonStatusTitle = "Daemon status";
 
     internal static string RemoteOfflineNotice(string machine) => $"{machine} is offline. Launches resume when it reconnects.";
 
@@ -290,6 +294,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     // A local server takes no sign-in: its recovery is the Start banner.
     readonly BehaviorSubject<bool> _localServer = new(false);
     readonly BehaviorSubject<bool> _localServerDown = new(false);
+    readonly BehaviorSubject<bool> _updateFinishing = new(false);
+    string? _updateDetail;
     readonly Action? _requestSignIn;
 
     readonly ObservableAsPropertyHelper<string?> _connectionNotice;
@@ -298,10 +304,22 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     public string? ConnectionNotice => _connectionNotice.Value;
 
     readonly ObservableAsPropertyHelper<string?> _bannerMessage;
-    /// Single banner body: a start/lifecycle message wins over the generic connection notice so
-    /// Unreachable + "kcap too old" does not stack two lines that both say press Start daemon.
-    /// Expired sign-in still wins over those start messages — reconnecting will not restore a session.
+    /// The connection explanation, or the local daemon's status when there is none.
     public string? BannerMessage => _bannerMessage.Value;
+
+    readonly ObservableAsPropertyHelper<string?> _bannerTitle;
+    public string? BannerTitle => _bannerTitle.Value;
+
+    readonly ObservableAsPropertyHelper<string?> _bannerBody;
+    public string? BannerBody => _bannerBody.Value;
+
+    readonly ObservableAsPropertyHelper<string?> _bannerDetail;
+    /// Local daemon status and system output that goes with the message, without its commands.
+    public string? BannerDetail => _bannerDetail.Value;
+
+    readonly ObservableAsPropertyHelper<string?> _bannerCommand;
+    /// A command the banner asks the user to run, lifted out of the prose so it can be copied.
+    public string? BannerCommand => _bannerCommand.Value;
 
     readonly ObservableAsPropertyHelper<bool> _connectionBannerVisible;
     /// Same connection/sign-in/daemon banner the launcher shows above the composer.
@@ -314,8 +332,15 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// True while the banner is an in-flight connect/finish line — a loader, not Sign in.
     public bool BannerBusy => _bannerBusy.Value;
 
+    readonly ObservableAsPropertyHelper<bool> _bannerFailed;
+    /// True when the banner reports a failure rather than something that needs the user.
+    public bool BannerFailed => _bannerFailed.Value;
+
     readonly ObservableAsPropertyHelper<bool> _signInVisible;
     public bool SignInVisible => _signInVisible.Value;
+
+    readonly ObservableAsPropertyHelper<bool> _bannerActionsVisible;
+    public bool BannerActionsVisible => _bannerActionsVisible.Value;
 
     /// Lane SignedOut or a 401 launch — the same flag NoticeFor uses for SignInExpiredNotice.
     /// An observable (not WhenAnyValue) so MainWindow can fold it into the rail footer without
@@ -330,6 +355,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     // Feeds BannerMessage before AttachDaemonRecovery runs (null) and after (lifecycle lane).
     readonly BehaviorSubject<string?> _daemonStartMessageFeed = new(null);
+    // Same lane for the action cluster: false until AttachDaemonRecovery subscribes the real predicates.
+    readonly BehaviorSubject<bool> _daemonStartVisibleFeed = new(false);
+    readonly BehaviorSubject<bool> _daemonRetryVisibleFeed = new(false);
+    readonly BehaviorSubject<bool> _daemonRepairVisibleFeed = new(false);
 
     /// Wired by AttachDaemonRecovery to MainWindow's Start/Reconnect commands.
     public ReactiveCommand<Unit, Unit>? StartDaemonCommand { get; private set; }
@@ -793,13 +822,17 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .StartWith(0);
         // Staged chips the target cannot take block Start rather than launching without them, and
         // an upload in flight owns the composer until it settles.
+        // An update still bringing this machine's local server and daemon back holds local launches until it settles.
+        var updateHolds = _updateFinishing.CombineLatest(_machineSelectionChanges, (finishing, sel) => finishing && !sel.Remote)
+            .DistinctUntilChanged();
         var canLaunch = selectedAvailability.Select(a => a == LaunchAvailability.Ready)
             .CombineLatest(
                 stagedCount.CombineLatest(canAttach, (count, attach) => count == 0 || attach),
                 _uploadingChanges,
                 noHarnesses,
                 _accountPending.DistinctUntilChanged(),
-                (ready, attachable, uploading, none, pending) => ready && attachable && !uploading && !none && !pending);
+                updateHolds,
+                (ready, attachable, uploading, none, pending, held) => ready && attachable && !uploading && !none && !pending && !held);
 
         // Explicit ObserveOn: ReactiveCommand does NOT reschedule the supplied canExecute, and a
         // Status event arrives on the daemon client's pump thread (MainWindowViewModel's canStart
@@ -838,35 +871,76 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         rawNotices.Subscribe(ArmOrResetCatchUp).DisposeWith(_disposables);
         // A stopped local server's Start banner is the whole story, so the no-harness fallback stays
         // out of it whether or not the daemon has noticed the server is gone.
-        var notices = rawNotices.CombineLatest(_catchUpTimedOut, NoticeAfterCatchUp)
-            .CombineLatest(noHarnesses.ObserveOn(RxSchedulers.MainThreadScheduler), _localServer, _localServerDown, _machineSelectionChanges,
-                (notice, none, local, down, sel) => NoticeForLocalServer(
-                    notice ?? (none && !(local && down && !sel.Remote) ? NoHarnessesNotice(sel.Remote ? sel.Name : null) : null),
-                    local, down, sel.Remote ? sel.Name : null));
+        var connectionNotices = rawNotices.CombineLatest(_catchUpTimedOut, NoticeAfterCatchUp)
+            .CombineLatest(_localServer, _localServerDown, _machineSelectionChanges,
+                (notice, local, down, sel) => NoticeForLocalServer(notice, local, down, sel.Remote ? sel.Name : null));
+        var harnessNotice = noHarnesses.ObserveOn(RxSchedulers.MainThreadScheduler)
+            .CombineLatest(_localServer, _localServerDown, _machineSelectionChanges,
+                (none, local, down, sel) => none && !(local && down && !sel.Remote)
+                    ? NoHarnessesNotice(sel.Remote ? sel.Name : null) : null);
+        var notices = connectionNotices.CombineLatest(harnessNotice, (connection, harness) => connection ?? harness);
         _connectionNotice = notices
             .ToProperty(this, x => x.ConnectionNotice, ConnectingNotice)
             .DisposeWith(_disposables);
         // The lifecycle feed speaks for the LOCAL daemon (start attempts, version mismatch), so it
-        // may only pre-empt the notice while the local machine is the selected one — under a remote
-        // selection its banner would outrank a healthy remote's own (absent) notice.
-        var bannerMessages = notices.CombineLatest(
-            _daemonStartMessageFeed, _machineSelectionChanges,
-            (notice, startMessage, sel) => BannerMessageFor(notice, sel.Remote ? null : startMessage));
-        _bannerMessage = bannerMessages
+        // is shown only while the local machine is selected. Remote notices must stay independent.
+        var bannerContent = connectionNotices.CombineLatest(
+            _daemonStartMessageFeed, _machineSelectionChanges, harnessNotice,
+            (notice, startMessage, sel, harness) => {
+                var content = BannerContentFor(notice, sel.Remote ? null : startMessage);
+                return content.Message is null ? (Message: harness, Detail: (string?)null) : content;
+            });
+        _bannerMessage = bannerContent.Select(content => content.Message)
             .ToProperty(this, x => x.BannerMessage, ConnectingNotice)
             .DisposeWith(_disposables);
-        _connectionBannerVisible = bannerMessages
-            .Select(message => message is not null)
+        var bannerCard = bannerContent.Select(content => {
+            var message = NoticeText.Commands(content.Message);
+            var detail  = NoticeText.Commands(content.Detail);
+            var (title, body) = NoticeText.Headline(message.Prose);
+            if (body is null && detail.Prose is null && title is not null) (title, body) = (DaemonStatusTitle, message.Prose);
+            if (BannerInFlight(content)) {
+                title = title?.TrimEnd('…') + "…";
+                body = body?.Replace("…", "", StringComparison.Ordinal);
+                detail.Prose = detail.Prose?.Replace("…", "", StringComparison.Ordinal);
+            }
+            return (Title: title, Body: body, Detail: detail.Prose, Command: detail.Command ?? message.Command);
+        });
+        _bannerTitle = bannerCard.Select(card => card.Title)
+            .ToProperty(this, x => x.BannerTitle, NoticeText.Headline(ConnectingNotice).Title)
+            .DisposeWith(_disposables);
+        _bannerBody = bannerCard.Select(card => card.Body)
+            .ToProperty(this, x => x.BannerBody, NoticeText.Headline(ConnectingNotice).Body)
+            .DisposeWith(_disposables);
+        _bannerDetail = bannerCard.Select(card => card.Detail)
+            .ToProperty(this, x => x.BannerDetail)
+            .DisposeWith(_disposables);
+        _bannerCommand = bannerCard.Select(card => card.Command)
+            .ToProperty(this, x => x.BannerCommand)
+            .DisposeWith(_disposables);
+        Notices.TrackConnection(bannerContent.Select(content =>
+            (content.Message is not null, BannerInFlight(content) ? LauncherNotices.Kind.Progress : LauncherNotices.Kind.Problem)));
+        _connectionBannerVisible = bannerContent
+            .Select(content => content.Message is not null)
             .ToProperty(this, x => x.ConnectionBannerVisible, initialValue: false)
             .DisposeWith(_disposables);
-        _bannerBusy = bannerMessages
-            .Select(message => BusyNotice(message) || message == DaemonRestartingNotice)
+        _bannerBusy = bannerContent
+            .Select(BannerInFlight)
             .ToProperty(this, x => x.BannerBusy, initialValue: true)
             .DisposeWith(_disposables);
-        _signInVisible = signInState
+        _bannerFailed = bannerContent
+            .Select(BannerFailedFor)
+            .ToProperty(this, x => x.BannerFailed, initialValue: false)
+            .DisposeWith(_disposables);
+        var signInVisible = signInState
             .CombineLatest(_catchUpTimedOut, _localServer, (t, timedOut, local) => !local && !t.Awaiting && (t.Expired || (timedOut && !t.Foreign) || (
-                t.Availability == LaunchAvailability.ServerDisconnected && !t.Foreign && !LaneIsCatchingUp(t.Lane))))
+                t.Availability == LaunchAvailability.ServerDisconnected && !t.Foreign && !LaneIsCatchingUp(t.Lane))));
+        _signInVisible = signInVisible
             .ToProperty(this, x => x.SignInVisible, initialValue: false)
+            .DisposeWith(_disposables);
+        _bannerActionsVisible = _daemonStartVisibleFeed
+            .CombineLatest(_daemonRetryVisibleFeed, _daemonRepairVisibleFeed, signInVisible,
+                (start, retry, repair, signIn) => start || retry || repair || signIn)
+            .ToProperty(this, x => x.BannerActionsVisible, initialValue: false)
             .DisposeWith(_disposables);
 
         // The daemon catching up ends the wait whichever server it serves.
@@ -885,7 +959,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .DisposeWith(_disposables);
 
         _startButtonTip = _selectedRepoPathChanges
-            .CombineLatest(notices, _accountTip, TipFor)
+            .CombineLatest(notices, _accountTip, updateHolds,
+                (repo, notice, account, held) => TipFor(repo, held ? FinishingUpdateNotice : notice, account))
             .ToProperty(this, x => x.StartButtonTip, TipFor(SelectedRepoPath, ConnectingNotice, null))
             .DisposeWith(_disposables);
 
@@ -921,12 +996,18 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         this.RaisePropertyChanged(nameof(StartDaemonCommand));
         this.RaisePropertyChanged(nameof(RetryDaemonCommand));
 
-        _daemonStartVisible = startVisible
+        // Both act on this machine's daemon, so a remote pick's banner must not offer them.
+        var local = _machineSelectionChanges.Select(sel => !sel.Remote);
+        var startShown = startVisible.CombineLatest(local, (visible, isLocal) => visible && isLocal).DistinctUntilChanged();
+        var retryShown = retryVisible.CombineLatest(local, (visible, isLocal) => visible && isLocal).DistinctUntilChanged();
+        _daemonStartVisible = startShown
             .ToProperty(this, x => x.DaemonStartVisible, initialValue: false)
             .DisposeWith(_disposables);
-        _daemonRetryVisible = retryVisible
+        _daemonRetryVisible = retryShown
             .ToProperty(this, x => x.DaemonRetryVisible, initialValue: false)
             .DisposeWith(_disposables);
+        startShown.Subscribe(_daemonStartVisibleFeed).DisposeWith(_disposables);
+        retryShown.Subscribe(_daemonRetryVisibleFeed).DisposeWith(_disposables);
         startMessage
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_daemonStartMessageFeed)
@@ -938,32 +1019,74 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         RepairDaemonCommand = ReactiveCommand.CreateFromTask(() => repair(ct));
         this.RaisePropertyChanged(nameof(RepairDaemonCommand));
 
-        _daemonRepairVisible = offer
+        var repairVisible = offer
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .CombineLatest(this.WhenAnyValue(x => x.BannerMessage),
-                (offered, shown) => offered is not null && shown == offered)
+            .CombineLatest(this.WhenAnyValue(x => x.BannerMessage, x => x.BannerDetail, (message, detail) => (message, detail)),
+                (offered, shown) => offered is not null
+                    && (shown.message == offered || NoticeText.Commands(offered).Prose == shown.detail));
+        _daemonRepairVisible = repairVisible
             .ToProperty(this, x => x.DaemonRepairVisible, initialValue: false)
             .DisposeWith(_disposables);
+        repairVisible.Subscribe(_daemonRepairVisibleFeed).DisposeWith(_disposables);
     }
 
     /// The "local server is not running" banner, beside the daemon's own recovery.
     public LocalServerRecoveryViewModel? LocalServer { get; private set; }
 
     /// The local stack's upgrade banner; null unless the server is this machine's local installation.
-    public LocalStackViewModel? LocalStack { get; init; }
+    public LocalStackViewModel? LocalStack {
+        get => _localStack;
+        init {
+            _localStack = value;
+            if (value is not null)
+                Notices.TrackStack(value.WhenAnyValue(x => x.BannerVisible, x => x.Upgrading, x => x.IsNote, (visible, upgrading, note) =>
+                    (visible, upgrading ? LauncherNotices.Kind.Progress : note ? LauncherNotices.Kind.Note : LauncherNotices.Kind.Problem)));
+        }
+    }
+    readonly LocalStackViewModel? _localStack;
+
+    /// Which of the launcher's problem notices show.
+    public LauncherNotices Notices { get; } = new();
+
+    /// True while an update the user went on from early is still finishing on this machine.
+    public IObservable<bool> UpdateFinishing => _updateFinishing.DistinctUntilChanged();
+
+    /// The update's remaining step, while one still runs after the main window opened early.
+    public string? UpdateDetail {
+        get => _updateDetail;
+        private set => this.RaiseAndSetIfChanged(ref _updateDetail, value);
+    }
+
+    /// Follows an update the user went on from before it finished: with this machine selected, one card stands in
+    /// for the others and launches wait, until every step has settled.
+    public void AttachUpdateProgress(IObservable<(bool Finishing, string? Detail)> progress) {
+        progress.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(p => {
+            UpdateDetail = p.Detail?.TrimEnd('…');
+            _updateFinishing.OnNext(p.Finishing);
+        }).DisposeWith(_disposables);
+        // A remote machine's own notices still show: the update is changing only this one.
+        Notices.TrackUpdate(_updateFinishing.CombineLatest(_machineSelectionChanges, (finishing, sel) => finishing && !sel.Remote)
+            .DistinctUntilChanged());
+    }
 
     public void AttachLocalServerRecovery(LocalServerRecoveryViewModel recovery) {
         LocalServer = recovery;
         this.RaisePropertyChanged(nameof(LocalServer));
         _localServer.OnNext(recovery.IsLocalServer);
         recovery.WhenAnyValue(x => x.ServerDown).Subscribe(_localServerDown).DisposeWith(_disposables);
+        Notices.TrackServer(recovery.WhenAnyValue(x => x.Visible, x => x.IsStarting, (visible, starting) =>
+            (visible, starting ? LauncherNotices.Kind.Progress : LauncherNotices.Kind.Problem)));
     }
 
-    /// Prefer the actionable start/lifecycle line when present; otherwise the connection notice.
-    /// Expired sign-in is the exception: a reconnecting/start line must not hide it.
-    internal static string? BannerMessageFor(string? connectionNotice, string? startMessage) =>
-        connectionNotice == SignInExpiredNotice ? connectionNotice
-        : !string.IsNullOrEmpty(startMessage) ? startMessage : connectionNotice;
+    /// The explanation first and daemon output below it. An expired sign-in stays the whole message:
+    /// starting or reconnecting the daemon cannot restore that session. A status that hands the user a
+    /// command to run is the whole message too, since it already says what the explanation would.
+    internal static (string? Message, string? Detail) BannerContentFor(string? connectionNotice, string? startMessage) =>
+        connectionNotice == SignInExpiredNotice || string.IsNullOrEmpty(startMessage) || startMessage == connectionNotice
+            ? (connectionNotice, null)
+        : connectionNotice is null || NoticeText.Commands(startMessage).Command is not null
+            ? (startMessage, null)
+            : (connectionNotice, startMessage);
 
     /// The re-auth dialog's success lands here (App wires it): clears the expired flag and holds a
     /// finishing notice until the daemon reports the server is connected.
@@ -1070,6 +1193,21 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal static bool LaneIsCatchingUp(ServerLaneState lane) =>
         lane is ServerLaneState.Connecting or ServerLaneState.Retrying or ServerLaneState.Connected;
 
+    /// A failure is something that broke: versions that cannot work together, a server that refused
+    /// the app, or a daemon still down after the lifecycle settled on a report, which only follows a
+    /// start or setup that did not work.
+    internal static bool BannerFailedFor((string? Message, string? Detail) content) =>
+        content.Message is DaemonIncompatibleNotice or LocalServerRefusedNotice
+        || (content.Message == DaemonDownNotice && content.Detail is { } detail && !InFlight(detail));
+
+    static bool BannerInFlight((string? Message, string? Detail) content) =>
+        content.Detail is { } detail ? InFlight(detail)
+            : BusyNotice(content.Message) || InFlight(content.Message) || content.Message == DaemonRestartingNotice;
+
+    /// A lifecycle status still waiting on something, which the banner shows with a spinner. Every
+    /// in-flight status ends in an ellipsis; no failure does.
+    internal static bool InFlight(string? line) => line?.EndsWith('…') == true;
+
     internal static bool BusyNotice(string? notice) =>
         notice is ConnectingNotice or FinishingSignInNotice;
 
@@ -1102,8 +1240,13 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     public void Dispose() {
         _disposed = true;
         _disposables.Dispose();
+        Notices.Dispose();
         _daemonStartMessageFeed.Dispose();
+        _daemonStartVisibleFeed.Dispose();
+        _daemonRetryVisibleFeed.Dispose();
+        _daemonRepairVisibleFeed.Dispose();
         _uploadingChanges.Dispose();
+        _updateFinishing.Dispose();
         _retentionTimer.Dispose();
         _catchUpTimer.Dispose();
         _catchUpTimedOut.Dispose();
@@ -1438,7 +1581,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             return;
         }
 
+        var selected = SelectedRepoPath;
         var saved = await _state.LoadAsync();
+        // A machine switch or another pick made while the store loaded owns the vendor now.
+        if (RemoteMachineSelected || !string.Equals(SelectedRepoPath, selected, StringComparison.Ordinal)) return;
         SetVendor(Lookup(saved.HarnessByRepo, SelectedRepoPath) ?? DefaultVendor);
         RevalidateVendor(Harnesses);
     }

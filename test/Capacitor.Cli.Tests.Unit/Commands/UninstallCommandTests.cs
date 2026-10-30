@@ -14,6 +14,7 @@ using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.Mcp;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.LocalEdition;
+using Capacitor.Cli.Services;
 using Capacitor.Cli.Tests.Unit.LocalEdition.Fakes;
 using TUnit.Core.Enums;
 
@@ -781,7 +782,42 @@ public class UninstallCommandTests {
         await Assert.That(fixture.Err.ToString()).Contains("Watcher s-a is still running.");
     }
 
-    UninstallCommand NewCommand(Fixture f, DaemonStore? store = null, string? workdir = null, UserHome? home = null, IOutgoingRecorders? recorders = null, ILocalStackFactory? stacks = null, KcapLinkRemover? links = null, string stdin = "") {
+    [Test]
+    [RunOn(OS.Linux)]
+    public async Task Uninstall_without_systemd_keeps_the_config_while_a_daemon_unit_is_left() {
+        await using var fixture = await Fixture.CreateAsync();
+        var unit = SystemdUnit.UnitPath(fixture.UserHome, "laptop");
+        Directory.CreateDirectory(Path.GetDirectoryName(unit)!);
+        await File.WriteAllTextAsync(unit, "[Service]\nExecStart=/opt/kcap/kcap-daemon\n");
+
+        var exit = await NewCommand(fixture, systemdRunning: () => false).HandleAsync(["uninstall", "--yes"]);
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(fixture.Err.ToString()).Contains($"Could not remove daemon service 'laptop': systemd is not running. Delete {unit}");
+        await Assert.That(File.Exists(unit)).IsTrue();
+        await Assert.That(Directory.Exists(fixture.ConfigDir)).IsTrue();
+    }
+
+    [Test]
+    [RunOn(OS.Linux), SupportedOSPlatform("linux")]
+    public async Task Uninstall_without_systemd_keeps_the_config_when_the_unit_directory_is_unreadable() {
+        await using var fixture = await Fixture.CreateAsync();
+        var dir = Path.GetDirectoryName(SystemdUnit.UnitPath(fixture.UserHome, "laptop"))!;
+        Directory.CreateDirectory(dir);
+        File.SetUnixFileMode(dir, UnixFileMode.None);
+
+        try {
+            var exit = await NewCommand(fixture, systemdRunning: () => false).HandleAsync(["uninstall", "--yes"]);
+
+            await Assert.That(exit).IsEqualTo(1);
+            await Assert.That(fixture.Err.ToString()).Contains("Could not list daemon services");
+            await Assert.That(Directory.Exists(fixture.ConfigDir)).IsTrue();
+        } finally {
+            File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    UninstallCommand NewCommand(Fixture f, DaemonStore? store = null, string? workdir = null, UserHome? home = null, IOutgoingRecorders? recorders = null, ILocalStackFactory? stacks = null, KcapLinkRemover? links = null, Func<bool>? systemdRunning = null, string stdin = "") {
         var userHome = home ?? f.UserHome;
         var profiles = Resolutions.None(f.Root);
         var daemons  = store ?? Daemons.Store;
@@ -792,7 +828,9 @@ public class UninstallCommandTests {
         return new(
             daemons, f.Root, userHome, harness, TestBinaries.None, new AgentsPaths(userHome),
             new WorkingDirectory(workdir ?? AppContext.BaseDirectory),
-            recorders ?? new OutgoingRecorders(daemons, f.Root, profiles, userHome, harness, TestBinaries.None, watchers, TimeProvider.System, console),
+            recorders ?? new OutgoingRecorders(daemons, f.Root, profiles, userHome, harness, TestBinaries.None, watchers, TimeProvider.System, console) {
+                SystemdRunning = systemdRunning ?? (() => true),
+            },
             stacks ?? new EmptyStackFactory(userHome, f.Root),
             links ?? new KcapLinkRemover([], ""),
             console);

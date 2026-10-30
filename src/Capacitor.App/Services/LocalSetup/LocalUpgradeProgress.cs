@@ -12,6 +12,8 @@ public sealed class LocalUpgradeProgress : ReactiveObject {
     double? _downloadFraction;
     string? _from, _to, _switchedTo;
 
+    public LocalEmbeddingProgress Embeddings { get; } = new();
+
     public LocalUpgradePhase Phase {
         get => _phase;
         private set => this.RaiseAndSetIfChanged(ref _phase, value);
@@ -64,6 +66,13 @@ public sealed class LocalUpgradeProgress : ReactiveObject {
         }
         if (_recovering && line.Event is not "failed") return;
 
+        if (Embeddings.Apply(line)) {
+            DownloadFraction = Embeddings.Pulling ? Embeddings.PullFraction : null;
+            Phase = LocalUpgradePhase.DownloadingModel;
+            this.RaisePropertyChanged(nameof(Embeddings));
+            return;
+        }
+
         switch (line.Event) {
             case "upgrade_planned":
                 From = root.Str("from_version") ?? From;
@@ -76,8 +85,15 @@ public sealed class LocalUpgradeProgress : ReactiveObject {
                 break;
             case "download_progress":
                 if (root.Num("bytes") is > 0 and var total) _bytes = total;
-                Phase            = LocalUpgradePhase.Downloading;
                 DownloadFraction = Fraction(root.Num("received") ?? 0);
+                Phase            = DownloadFraction >= 1 ? LocalUpgradePhase.Verifying : LocalUpgradePhase.Downloading;
+                break;
+            case "verified":
+                Phase = LocalUpgradePhase.Extracting;
+                DownloadFraction = null;
+                break;
+            case "unpacked":
+                Phase = LocalUpgradePhase.Waiting;
                 break;
             case "stopping":
                 Phase = LocalUpgradePhase.Stopping;

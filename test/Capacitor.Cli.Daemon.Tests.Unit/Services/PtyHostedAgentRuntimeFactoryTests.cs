@@ -222,9 +222,9 @@ public class PtyHostedAgentRuntimeFactoryTests {
 
     /// <summary>Any local user can read a command line, and <c>pkill -f</c> matches it, so the prompt
     /// never appears there, even when it is short. It reaches the agent as its first message instead,
-    /// pasted once the TUI's startup output has settled.</summary>
+    /// pasted once the TUI is ready for it.</summary>
     [Test]
-    public async Task A_prompt_is_kept_off_the_command_line_and_pasted_once_startup_output_settles() {
+    public async Task A_prompt_is_kept_off_the_command_line_and_pasted_once_the_tui_is_ready() {
         var (factory, pty, process) = NewPasteFactory();
         var start = await factory.StartAsync(
             BuildClaudeLaunchContext(null) with { Prompt = "build it\nthen test it" }, CancellationToken.None);
@@ -233,7 +233,7 @@ public class PtyHostedAgentRuntimeFactoryTests {
             await Assert.That(pty.LastArgs!.Any(a => a.Contains("build it", StringComparison.Ordinal))).IsFalse();
 
             _ = PumpAsync(start.Runtime);
-            process.Emit("welcome banner");
+            process.Emit("\x1b[?2004hwelcome banner");
             await WaitForWritesAsync(process, 2);
 
             await Assert.That(process.Writes[0]).IsEqualTo("\x1b[200~build it\nthen test it\x1b[201~");

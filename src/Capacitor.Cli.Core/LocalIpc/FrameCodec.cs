@@ -66,7 +66,8 @@ public static class FrameCodec {
             or FrameType.Shutdown or FrameType.ShutdownAck
             or FrameType.AgentResume or FrameType.AgentResumeAck
             or FrameType.AgentSession or FrameType.AgentSessionReply
-            or FrameType.AccountsSnapshot => Encoding.UTF8.GetBytes(f.Text),
+            or FrameType.AccountsSnapshot
+            or FrameType.SessionRename or FrameType.SessionRenameAck => Encoding.UTF8.GetBytes(f.Text),
         FrameType.Attached or FrameType.Spawn
             or FrameType.StopV2 or FrameType.AttachedReadOnly => f.Bytes, // pre-encoded by the helpers below
         _ => throw new InvalidDataException($"unencodable frame {f.Type}"),
@@ -96,7 +97,8 @@ public static class FrameCodec {
             or FrameType.Shutdown or FrameType.ShutdownAck
             or FrameType.AgentResume or FrameType.AgentResumeAck
             or FrameType.AgentSession or FrameType.AgentSessionReply
-            or FrameType.AccountsSnapshot => new(t) { Text = Encoding.UTF8.GetString(p) },
+            or FrameType.AccountsSnapshot
+            or FrameType.SessionRename or FrameType.SessionRenameAck => new(t) { Text = Encoding.UTF8.GetString(p) },
         FrameType.Attached or FrameType.Spawn
             or FrameType.StopV2 or FrameType.AttachedReadOnly => new(t) { Bytes = p },
         _ => throw new InvalidDataException($"undecodable frame {t}"),

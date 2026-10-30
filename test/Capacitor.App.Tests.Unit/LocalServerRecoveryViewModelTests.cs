@@ -53,6 +53,50 @@ public class LocalServerRecoveryViewModelTests {
         });
     }
 
+    /// A failed start says so until the server comes back, however it comes back; a later stop is then a plain stop.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_server_that_comes_back_clears_the_last_start_failure() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var status = new BehaviorSubject<ServerLaneStatus>(new(ServerLaneState.Retrying, "Connection refused"));
+            var recorder = new Recorder { Next = _ => Task.FromResult(new ProcessResult(1, "", "start_failed: the server did not start\n", false)) };
+            using var vm = Build(status, isLocalServer: true, recorder);
+
+            await vm.StartCommand.Execute().ToTask();
+            await Assert.That(vm.Message).IsNotNull();
+
+            status.OnNext(new(ServerLaneState.Connected));
+            await Assert.That(vm.Message).IsNull();
+        });
+    }
+
+    [Test]
+    [Arguments("exit")]
+    [Arguments("start")]
+    [Arguments("reconnect")]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Recovery_during_a_start_prevents_a_late_failure_from_returning(string failure) {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var status = new BehaviorSubject<ServerLaneStatus>(new(ServerLaneState.Retrying));
+            var start = new TaskCompletionSource<ProcessResult>();
+            var reconnect = new TaskCompletionSource();
+            using var vm = new LocalServerRecoveryViewModel(status, true,
+                _ => failure == "reconnect" ? Task.FromResult(Started) : start.Task,
+                () => reconnect.Task, CancellationToken.None);
+            var run = vm.StartAsync();
+            status.OnNext(new(ServerLaneState.Connected));
+            status.OnNext(new(ServerLaneState.Retrying));
+
+            if (failure == "exit") start.SetResult(new ProcessResult(1, "", "late start failure", false));
+            else if (failure == "start") start.SetException(new InvalidOperationException("late start failure"));
+            else reconnect.SetException(new InvalidOperationException("late reconnect failure"));
+            await run;
+
+            await Assert.That(vm.Message).IsNull();
+            await Assert.That(vm.Visible).IsTrue();
+        });
+    }
+
     /// An upgrade stops the server on purpose, and a Start then would only meet its lock; the server
     /// still reads as down, so the generic lost-connection notice stays quiet.
     [Test]

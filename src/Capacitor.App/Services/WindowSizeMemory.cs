@@ -32,9 +32,6 @@ public static class WindowSizeMemory {
         return new PixelPoint(ClampOnto(x, home.X, home.Width, size.Width), ClampOnto(y, home.Y, home.Height, size.Height));
     }
 
-    public static void Restore(Window window, IAppStateStore store) =>
-        Apply(window, store.LoadAsync().GetAwaiter().GetResult());
-
     public static void Apply(Window window, AppState state) {
         var (width, height) = Resolve(state.WindowWidth, state.WindowHeight);
         window.Width = width;
