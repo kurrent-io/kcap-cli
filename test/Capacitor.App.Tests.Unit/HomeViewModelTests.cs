@@ -5,6 +5,7 @@ using System.Reactive.Subjects;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Remote.Models;
 using DynamicData;
@@ -458,9 +459,11 @@ public class HomeViewModelTests {
         });
     }
 
+    /// Manual must ride the launch: without the flag Claude falls back to the user's own
+    /// <c>permissions.defaultMode</c>, which can be <c>auto</c> while the chip still reads Manual.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Permission_mode_defaults_to_manual_which_sends_nothing() {
+    public async Task Permission_mode_defaults_to_manual_which_is_sent_explicitly() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
             var vm = Build(out var launch, out _, path);
@@ -469,7 +472,7 @@ public class HomeViewModelTests {
             await Assert.That(vm.SelectedPermissionMode).IsEqualTo(HomeViewModel.DefaultPermissionMode);
 
             await vm.StartCommand.Execute();
-            await Assert.That(launch.Last!.PermissionMode).IsNull();
+            await Assert.That(launch.Last!.PermissionMode).IsEqualTo(ClaudePermissionModes.Manual);
         });
     }
 

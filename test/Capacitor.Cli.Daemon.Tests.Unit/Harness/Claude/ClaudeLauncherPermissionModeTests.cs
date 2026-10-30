@@ -31,10 +31,14 @@ public class ClaudeLauncherPermissionModeTests {
     }
 
     [Test]
-    public async Task Interactive_launch_forwards_the_selected_mode_verbatim() {
-        var args = NewLauncher().BuildArgs(NewCtx(isReviewFlow: false, "acceptEdits")).Args;
+    [Arguments("manual")]
+    [Arguments("acceptEdits")]
+    [Arguments("auto")]
+    [Arguments("bypassPermissions")]
+    public async Task Interactive_launch_forwards_the_selected_mode_verbatim(string mode) {
+        var args = NewLauncher().BuildArgs(NewCtx(isReviewFlow: false, mode)).Args;
 
-        await Assert.That(ModeArg(args)).IsEqualTo("acceptEdits");
+        await Assert.That(ModeArg(args)).IsEqualTo(mode);
         await Assert.That(args.Count(a => a == "--permission-mode")).IsEqualTo(1);
     }
 
