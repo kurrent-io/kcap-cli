@@ -1,4 +1,5 @@
 using Capacitor.Cli.Daemon.Services;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
@@ -227,6 +228,21 @@ public class DaemonHeartbeatLoopTests {
 
         await Assert.That(port.ReRegisterCalls).IsEqualTo(1);
         await Assert.That(port.ForceReconnectCalls).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Tick_ReRegisterRejectedAsNameInUse_DoesNotForceReconnect() {
+        // The daemon is shutting down on the rejection; a forced reconnect would contest the slot again.
+        var port = new FakePort {
+            PingHandler       = _ => Task.FromResult(false),
+            ReRegisterHandler = () => Task.FromException(new HubException(ServerConnectionNameInUseTests.WrappedRejection))
+        };
+        var loop = CreateLoop(port);
+
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(port.ReRegisterCalls).IsEqualTo(1);
+        await Assert.That(port.ForceReconnectCalls).IsEqualTo(0);
     }
 
     [Test]
