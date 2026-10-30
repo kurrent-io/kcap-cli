@@ -184,7 +184,7 @@ public class MainWindowSearchTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_listed_session_opened_from_search_is_pinned_and_stays_pinned_across_a_scope_switch() {
+    public async Task A_listed_session_opened_from_search_asks_for_a_pin_and_a_scope_switch_does_not_unpin_it() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var h = new Harness();
             h.Sessions.Scope = RailScope.Team;
