@@ -1,7 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Capacitor.Models.Transcripts;
 
 namespace Capacitor.Cli.Core;
 

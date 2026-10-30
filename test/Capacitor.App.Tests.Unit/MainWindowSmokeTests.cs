@@ -25,7 +25,6 @@ using Capacitor.Cli.Core.PullRequests;
 using Capacitor.Cli.Core.WorkItems;
 using DynamicData;
 using Microsoft.Extensions.Time.Testing;
-using TUnit.Assertions.Enums;
 using static Capacitor.App.Tests.Unit.FakeDaemonClientService;
 
 namespace Capacitor.App.Tests.Unit;

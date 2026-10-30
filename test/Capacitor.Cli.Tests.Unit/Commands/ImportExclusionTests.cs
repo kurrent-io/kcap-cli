@@ -1,6 +1,5 @@
 using System.Text.Json;
 using Capacitor.Cli.Commands;
-using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Harness.Claude;
 using Capacitor.Cli.PrDetection;
 using Spectre.Console;
