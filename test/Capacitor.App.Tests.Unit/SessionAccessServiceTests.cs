@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using Capacitor.App.Services;
 using Microsoft.Extensions.Time.Testing;
 using static Capacitor.App.Tests.Unit.WorkspaceFixtures;
@@ -101,6 +102,34 @@ public class SessionAccessServiceTests {
         h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Ok);
         h.Connect(epoch: 2);
         await WaitUntilAsync(async () => await Harness.Current(second) == SessionAccessState.Established, "established");
+    }
+
+    /// A subscriber can release its lease from inside the state replayed to it, which the subject
+    /// delivers under its own gate, while an attempt finishes on another thread: the attempt must
+    /// not need that gate while it holds the service's lock, or the two wait on each other.
+    [Test]
+    public async Task Releasing_a_lease_inside_its_replayed_state_does_not_deadlock_a_finishing_attempt() {
+        using var h = new Harness();
+        h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
+        h.Connect();
+        using var first = h.Service.Acquire("s1");
+        await WaitUntilAsync(async () => await Harness.Current(first) == SessionAccessState.Denied, "first denied");
+        var answer = new TaskCompletionSource<HubCallOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.Lane.AccessWatchHandler = _ => answer.Task;
+        var second = h.Service.Acquire("s1");
+        await WaitUntilAsync(() => h.Lane.AccessWatches.Count(s => s == "s1") == 2, what: "the re-ask in flight");
+
+        var released = Task.Run(() => {
+            using var _ = second.State.Take(1).Subscribe(_ => {
+                answer.SetResult(HubCallOutcome.Denied("Session not visible to caller"));
+                // Long enough for the attempt to resume on the pool and reach its publish.
+                Thread.Sleep(200);
+                second.Dispose();
+            });
+        });
+
+        await Assert.That(await Task.WhenAny(released, Task.Delay(TimeSpan.FromSeconds(10)))).IsSameReferenceAs(released);
+        await WaitUntilAsync(async () => await Harness.Current(first) == SessionAccessState.Denied, "still denied");
     }
 
     /// An established entry is shared as is: joining it costs no hub call.
