@@ -11,8 +11,8 @@ public class ReadingStoreTests {
 
     AccountStore Store() => new(Tmp.PathTo("accounts"));
 
-    static VendorAccount Codex(string id, long generation = 0, string[]? retired = null) =>
-        new(id, HarnessId.Codex, $"/h/.codex-{id}", id, DateTimeOffset.UnixEpoch, Generation: generation, RetiredSessions: retired);
+    static VendorAccount Codex(string id, long generation = 0) =>
+        new(id, HarnessId.Codex, $"/h/.codex-{id}", id, DateTimeOffset.UnixEpoch, Generation: generation);
 
     static AccountStore Registered(AccountStore store, params VendorAccount[] accounts) {
         store.Mutate(r => (r with { Accounts = accounts }, 0));
@@ -55,14 +55,6 @@ public class ReadingStoreTests {
 
         await Assert.That(store.Readings.TryRecord("a", 1, null, Observe(0))).IsFalse();
         await Assert.That(File.Exists(ReadingPath(store, "a"))).IsFalse();
-    }
-
-    [Test]
-    public async Task TryRecord_skips_a_retired_session() {
-        var store = Registered(Store(), Codex("a", retired: ["old"]));
-
-        await Assert.That(store.Readings.TryRecord("a", 0, "old", Observe(0))).IsFalse();
-        await Assert.That(store.Readings.TryRecord("a", 0, "new", Observe(0))).IsTrue();
     }
 
     [Test]

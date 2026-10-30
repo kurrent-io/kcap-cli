@@ -74,24 +74,27 @@ public class AccountRefreshTests {
         await Assert.That(account.SignIn).IsEqualTo(SignInStates.SignedIn);
         await Assert.That(account.Label).IsEqualTo("a@example.com");
         await Assert.That(account.LabelSetByUser == false).IsTrue();
-        await Assert.That(account.RetiredSessions ?? []).IsEmpty();
+        await Assert.That(account.GenerationStartedAt).IsNull();
         await Assert.That(account.RefreshError).IsNull();
         await Assert.That(account.CommittedProbeSeq).IsEqualTo(1L);
         await Assert.That(Reading!.Sessions.Single().SessionId).IsEqualTo("s1");
     }
 
     [Test]
-    public async Task Login_change_bumps_generation_deletes_reading_and_retires_sessions() {
+    public async Task Login_change_bumps_generation_and_deletes_reading() {
         Register(Claude("a@example.com", "org-a"));
         Seed("s1");
         Seed("s2");
 
-        var outcome = await Refresh(Identity("b@example.com", orgId: "org-b"));
+        var probe = new FakeAccountProbe { BeforeReturn = () => _time.Advance(TimeSpan.FromMinutes(1)) };
+        probe.Complete(Identity("b@example.com", orgId: "org-b"));
+        var outcome = await Refresh(probe);
 
         var account = Account;
         await Assert.That(outcome.Steps.Select(s => s.Name)).IsEquivalentTo(["identity"]);
         await Assert.That(account.Generation).IsEqualTo(1L);
-        await Assert.That(account.RetiredSessions).IsEquivalentTo(["s1", "s2"]);
+        await Assert.That(account.GenerationStartedAt).IsEqualTo(T0);
+        await Assert.That(account.RefreshedAt).IsEqualTo(T0.AddMinutes(1));
         await Assert.That(account.Email).IsEqualTo("b@example.com");
         await Assert.That(account.OrgId).IsEqualTo("org-b");
         await Assert.That(account.Label).IsEqualTo("b@example.com");
@@ -233,19 +236,18 @@ public class AccountRefreshTests {
     }
 
     [Test]
-    public async Task Retired_session_late_observation_is_dropped() {
+    public async Task A_session_seen_before_the_switch_records_into_the_new_generation() {
         Register(Codex("a@example.com", "idA"));
         Seed("s1");
 
         await Refresh(Identity("b@example.com", "idB"));
 
-        await Assert.That(Seed("s1", generation: 1)).IsFalse();
+        await Assert.That(Seed("s1", generation: 1)).IsTrue();
         await Assert.That(Seed("s1", generation: 0)).IsFalse();
-        await Assert.That(Seed("s2", generation: 1)).IsTrue();
     }
 
     [Test]
-    public async Task Producer_committing_just_before_retirement_has_its_session_retired() {
+    public async Task Producer_committing_just_before_the_switch_is_not_fenced() {
         Register(Codex("a@example.com", "idA"));
         using var holding  = new ManualResetEventSlim();
         Task<bool>? producer = null;
@@ -266,8 +268,9 @@ public class AccountRefreshTests {
         Store.Readings.AfterMembershipCheck = null;
 
         await Assert.That(await producer!).IsTrue();
-        await Assert.That(Account.RetiredSessions).IsEquivalentTo(["S"]);
         await Assert.That(Reading).IsNull();
+        await Assert.That(Account.GenerationStartedAt).IsNotNull();
+        await Assert.That(Seed("S", generation: 1)).IsTrue();
     }
 
     [Test]
@@ -344,7 +347,7 @@ public class AccountRefreshTests {
     }
 
     [Test]
-    public async Task Email_change_without_id_then_id_arrives_retires_once() {
+    public async Task Email_change_without_id_then_id_arrives_bumps_generation_once() {
         Register(Codex("a@example.com", "idA"));
 
         await Refresh(Identity("b@example.com"));
@@ -417,7 +420,7 @@ public class AccountRefreshTests {
     sealed class SimulatedCrash : Exception;
 
     [Test]
-    public async Task Failed_registry_save_leaves_reading_and_retirement_untouched() {
+    public async Task Failed_registry_save_leaves_reading_and_generation_untouched() {
         Register(Codex("a@example.com", "idA"));
         Seed("s1");
         var saves = 0;
@@ -430,7 +433,7 @@ public class AccountRefreshTests {
 
         var account = Account;
         await Assert.That(account.Generation).IsEqualTo(0L);
-        await Assert.That(account.RetiredSessions).IsNull();
+        await Assert.That(account.GenerationStartedAt).IsNull();
         await Assert.That(account.Email).IsEqualTo("a@example.com");
         await Assert.That(Reading!.Reading.Generation).IsEqualTo(0L);
         await Assert.That(Reading!.Sessions.Single().SessionId).IsEqualTo("s1");

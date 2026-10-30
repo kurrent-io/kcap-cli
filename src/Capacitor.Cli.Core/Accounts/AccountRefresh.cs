@@ -7,7 +7,6 @@ namespace Capacitor.Cli.Core.Accounts;
 /// runs and commits only when no later probe committed first, so refreshes finishing in reverse order never
 /// restore an older login. Its limits belong to the login its own probe saw and commit with it.</summary>
 public static class AccountRefresh {
-    const int MaxRetiredSessions = 256;
     const int MaxRefreshOrigins  = 16;
 
     /// <summary>What the commit decided, carried from the registry change to the reading writes.</summary>
@@ -23,8 +22,9 @@ public static class AccountRefresh {
 
         if (started is null) return new(false, [], startRevision);
 
-        var result = await probe.ProbeAsync(started, ct).ConfigureAwait(false);
-        var now    = time.GetUtcNow();
+        var probeStartedAt = time.GetUtcNow();
+        var result         = await probe.ProbeAsync(started, ct).ConfigureAwait(false);
+        var now            = time.GetUtcNow();
 
         Decision? decision    = null;
         string?   writeFailed = null;
@@ -33,7 +33,7 @@ public static class AccountRefresh {
             (r, held) => {
                 if (r.Accounts.FirstOrDefault(a => a.Id == accountId) is not { } current) return (r, false);
 
-                var (next, made) = Commit(current with { RefreshedAt = now }, started, result, held);
+                var (next, made) = Commit(current with { RefreshedAt = now }, started, result, probeStartedAt);
                 decision = made;
                 return (Replace(r, next), true);
             },
@@ -57,7 +57,7 @@ public static class AccountRefresh {
         return new(found, found ? Steps(started.Vendor, result, decision, writeFailed) : [], revision);
     }
 
-    static (VendorAccount Next, Decision? Decision) Commit(VendorAccount current, VendorAccount started, ProbeResult result, HeldReadings held) {
+    static (VendorAccount Next, Decision? Decision) Commit(VendorAccount current, VendorAccount started, ProbeResult result, DateTimeOffset probeStartedAt) {
         if (started.ProbeSeq <= current.CommittedProbeSeq) return (current, null);
 
         var next = current with {
@@ -90,11 +90,7 @@ public static class AccountRefresh {
 
             if (!current.LabelIsUserSet && committed.Email is { } email) next = next with { Label = email };
 
-            if (differs) {
-                var seen    = held.Read(current.Id, current.Generation).Sessions.Select(s => s.SessionId);
-                var retired = (current.RetiredSessions ?? []).Concat(seen).Distinct().TakeLast(MaxRetiredSessions);
-                next = next with { Generation = current.Generation + 1, RetiredSessions = [.. retired] };
-            }
+            if (differs) next = next with { Generation = current.Generation + 1, GenerationStartedAt = probeStartedAt };
         }
 
         return (next, new(current.Generation, next.Generation, true));

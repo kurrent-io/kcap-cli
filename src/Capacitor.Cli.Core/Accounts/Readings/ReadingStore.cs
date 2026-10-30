@@ -43,9 +43,8 @@ public sealed class ReadingStore {
     internal IDisposable Lock() => ConfigFileLock.Acquire(_lockPath);
 
     /// <summary>Writes nothing, and returns false, when the account is not registered at
-    /// <paramref name="producerGeneration"/> or <paramref name="sessionId"/> was retired from it. Never
-    /// throws for IO, lock or parse failures. Not re-entrant: never call it while holding
-    /// <c>readings.lock</c>.</summary>
+    /// <paramref name="producerGeneration"/>. Never throws for IO, lock or parse failures. Not re-entrant:
+    /// never call it while holding <c>readings.lock</c>.</summary>
     public bool TryRecord(string accountId, long producerGeneration, string? sessionId, Func<ReadingFile, ReadingFile> update) {
         if (!SafeId(accountId)) return false;
 
@@ -55,7 +54,6 @@ public sealed class ReadingStore {
 
             var account = _registry()?.Accounts.FirstOrDefault(a => a.Id == accountId);
             if (account is null || account.Generation != producerGeneration) return false;
-            if (sessionId is not null && account.RetiredSessions?.Contains(sessionId) == true) return false;
 
             AfterMembershipCheck?.Invoke();
 

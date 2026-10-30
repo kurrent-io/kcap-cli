@@ -6,8 +6,8 @@ namespace Capacitor.Cli.Core.Accounts;
 /// <summary>Builds what the daemon publishes of a host's accounts. There is no row for a default
 /// directory: a reader derives the Default badge, and the row for an unregistered default, by
 /// matching <see cref="AccountViewDto.DirectoryKey"/> against <see cref="DefaultDirectoryDto.DirectoryKey"/>.
-/// Only the fields of <see cref="AccountViewDto"/> leave the host: a status line backup, retired
-/// sessions and reading sessions never do.</summary>
+/// Only the fields of <see cref="AccountViewDto"/> leave the host: a status line backup and
+/// reading sessions never do.</summary>
 public static class AccountSnapshotBuilder {
     public static AccountsSnapshotDto Build(
         AccountRegistry                          registry,
