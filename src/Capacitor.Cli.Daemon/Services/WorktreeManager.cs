@@ -29,9 +29,13 @@ public record WorktreeInfo(
     /// </summary>
     public string? GitRelativeCwd { get; init; }
 
+    /// <summary>False for a branch that existed before the worktree, or none at all: removal keeps it,
+    /// so commits on it are not work the removal would lose.</summary>
+    public bool OwnsBranch { get; init; } = true;
+
     /// <summary>A borrowed cwd (local in-place launch) the daemon does NOT own. Cleanup
     /// never removes it — the <see cref="AgentInstance.Work"/> guard enforces that.</summary>
-    public static WorktreeInfo Borrowed(string cwd) => new(cwd, "", cwd, IsStandalone: false);
+    public static WorktreeInfo Borrowed(string cwd) => new(cwd, "", cwd, IsStandalone: false) { OwnsBranch = false };
 }
 
 public partial class WorktreeManager(
@@ -748,7 +752,7 @@ public partial class WorktreeManager(
         await WithWorktreeMetadataGate(worktree.SourceRepo, time, async () => {
             await RunGit(worktree.SourceRepo, GitTimeout, time, "worktree", "remove", worktree.Path, "--force");
 
-            if (deleteBranch && !string.IsNullOrEmpty(worktree.Branch)) {
+            if (deleteBranch && worktree.OwnsBranch && !string.IsNullOrEmpty(worktree.Branch)) {
                 await RunGitBestEffort(worktree.SourceRepo, time, "branch", "-D", worktree.Branch);
             }
         });
@@ -861,11 +865,12 @@ public partial class WorktreeManager(
         var changes  = ParsePorcelainZ(status.Stdout).Count(entry => !IsDaemonEdit(worktree, baseline, entry));
         if (changes > 0) return $"{changes} uncommitted {(changes == 1 ? "change" : "changes")}";
 
-        // The worktree's own branch is deleted with it, so its commits count even with HEAD moved elsewhere.
-        var ownBranch = $"refs/heads/{worktree.Branch}";
-        var hasBranch = !string.IsNullOrEmpty(worktree.Branch) && await RefExistsAsync(worktree.Path, ownBranch, time);
+        // An owned branch is deleted with the worktree, so its commits count even with HEAD moved elsewhere.
+        var dyingBranch = worktree.OwnsBranch && !string.IsNullOrEmpty(worktree.Branch);
+        var ownBranch   = $"refs/heads/{worktree.Branch}";
+        var hasBranch   = dyingBranch && await RefExistsAsync(worktree.Path, ownBranch, time);
         string[] uniqueCommits = ["rev-list", "--count", "HEAD", .. hasBranch ? [ownBranch] : Array.Empty<string>(), "--not"];
-        if (!string.IsNullOrEmpty(worktree.Branch)) uniqueCommits = [.. uniqueCommits, $"--exclude={worktree.Branch}"];
+        if (dyingBranch) uniqueCommits = [.. uniqueCommits, $"--exclude={worktree.Branch}"];
         uniqueCommits = [.. uniqueCommits, "--branches", "--remotes", "--tags"];
         if (!string.IsNullOrEmpty(worktree.FetchedRef) && await RefExistsAsync(worktree.Path, worktree.FetchedRef, time))
             uniqueCommits = [.. uniqueCommits, worktree.FetchedRef];
@@ -1779,8 +1784,10 @@ public partial class WorktreeManager(
                 continue;
             }
 
+            if (!await UnregisterLeftWorktreeAsync(dir)) continue;
+
             LogCleaningUp(dir);
-            try { DeleteTreeNoFollow(dir); } catch (Exception ex) { LogCleanupFailed(ex, dir); }
+            try { if (Directory.Exists(dir)) DeleteTreeNoFollow(dir); } catch (Exception ex) { LogCleanupFailed(ex, dir); }
         }
     }
 
@@ -1816,8 +1823,38 @@ public partial class WorktreeManager(
         if (common.ExitCode != 0 || Path.GetDirectoryName(common.Stdout.Trim().TrimEnd('/', '\\')) is not { Length: > 0 } source)
             return null;
 
-        return new WorktreeInfo(dir, branch.ExitCode == 0 ? branch.Stdout.Trim() : "", source,
-            FetchedRef: FetchedRefFor(Path.GetFileName(dir)));
+        // Only a branch named after its worktree is one the daemon created; deciding by name needs no
+        // record that a daemon dying mid-creation could fail to write.
+        var current = branch.ExitCode == 0 ? branch.Stdout.Trim() : "";
+
+        return new WorktreeInfo(dir, current, source, FetchedRef: FetchedRefFor(Path.GetFileName(dir))) {
+            OwnsBranch = current == $"capacitor/{Path.GetFileName(dir)}",
+        };
+    }
+
+    /// <summary>Unregisters a left-behind linked worktree before its directory is deleted, so git does not
+    /// keep its branch checked out there. A removal of this one worktree, not a prune. False when git
+    /// refused for a branch the daemon does not own: the directory must then stay.</summary>
+    async Task<bool> UnregisterLeftWorktreeAsync(string dir) {
+        try {
+            if (!File.Exists(Path.Combine(dir, ".git")) || await LeftWorktreeAsync(dir) is not { } worktree) return true;
+
+            var removed = false;
+            await WithWorktreeMetadataGate(worktree.SourceRepo, time, async () =>
+                removed = (await RunGitCaptureResult(worktree.SourceRepo, GitTimeout, time, false, [],
+                    "worktree", "remove", "--force", dir)).ExitCode == 0);
+
+            if (removed || worktree.OwnsBranch) return true;
+
+            LogOrphanKept(dir, $"git would not unregister it, and its branch {worktree.Branch} is not the daemon's");
+
+            return false;
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException
+                                       or GitConfigTransportException or Win32Exception) {
+            LogOrphanCheckFailed(ex, dir);
+
+            return false;
+        }
     }
 
     /// <summary>The ref a review launch fetched its base into, named after its worktree.</summary>

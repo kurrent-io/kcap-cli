@@ -378,6 +378,51 @@ public class WorktreeManagerTests {
         }
     }
 
+    /// <summary>A commit on a branch the worktree does not own survives on that branch, so it is not work
+    /// the removal would lose.</summary>
+    [Test]
+    public async Task RemoveAsync_keeps_a_branch_the_worktree_does_not_own() {
+        using var repo = GitRepo.Create("not-owned");
+        repo.CreateFile("a.txt", "a");
+        repo.CommitAll("first");
+        var main = repo.CurrentBranch;
+        repo.Checkout("feature", create: true);
+        repo.Checkout(main);
+
+        var path = Path.Combine(repo.Path, ".capacitor", "worktrees", "handoff");
+        repo.Do("worktree", "add", path, "feature");
+        var tree = GitRepo.At(path);
+        tree.CreateFile("b.txt", "b");
+        tree.CommitAll("agent work");
+        var agentCommit = tree.Head;
+
+        var removal = await WorktreeManager.RemoveAsync(
+            new WorktreeInfo(path, "feature", repo.Path) { OwnsBranch = false }, TimeProvider.System);
+
+        await Assert.That(removal).IsEqualTo(WorktreeRemoval.Removed);
+        await Assert.That(Directory.Exists(path)).IsFalse();
+        await Assert.That(repo.Do("rev-parse", "refs/heads/feature").Text).IsEqualTo(agentCommit);
+    }
+
+    [Test]
+    public async Task RemoveAsync_keeps_a_detached_worktree_holding_a_new_commit() {
+        using var repo = GitRepo.Create("detached");
+        repo.CreateFile("a.txt", "a");
+        repo.CommitAll("first");
+
+        var path = Path.Combine(repo.Path, ".capacitor", "worktrees", "detached");
+        repo.Do("worktree", "add", "--detach", path, "HEAD");
+        var tree = GitRepo.At(path);
+        tree.CreateFile("b.txt", "b");
+        tree.CommitAll("agent work");
+
+        var removal = await WorktreeManager.RemoveAsync(
+            new WorktreeInfo(path, "", repo.Path) { OwnsBranch = false }, TimeProvider.System);
+
+        await Assert.That(removal.KeptBecause).IsNotNull();
+        await Assert.That(Directory.Exists(path)).IsTrue();
+    }
+
     /// <summary>The startup sweep of left-behind worktrees keeps one holding work, as teardown does, and
     /// still clears one that holds none: a review worktree whose head only its fetched ref has, and a
     /// standalone snapshot, are the daemon's own.</summary>
