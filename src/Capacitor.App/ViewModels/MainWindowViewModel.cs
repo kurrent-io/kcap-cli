@@ -778,9 +778,12 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         SwapTo(null);
     }
 
+    // Closes even over the launcher: the swap bumps the navigation generation, which keeps an
+    // in-flight launch from opening its workspace over the next draft.
     void NewSession() {
-        if (CurrentWorkspace is null) _launcherNudges.OnNext(Unit.Default);
-        else CloseWorkspace();
+        var onLauncher = CurrentWorkspace is null;
+        CloseWorkspace();
+        if (onLauncher) _launcherNudges.OnNext(Unit.Default);
     }
 
     static IObservable<bool> CanRefreshOpenWork(ISessionWorkspace? workspace) =>

@@ -284,8 +284,8 @@ public class WorkspaceNavigationTests {
         });
     }
 
-    /// Over the launcher, closing changes nothing, so New session nudges it instead; over a
-    /// workspace it closes it and does not nudge.
+    /// Over the launcher, New session nudges it and still retires an in-flight launch's captured
+    /// generation; over a workspace it closes it and does not nudge.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task New_session_nudges_the_launcher_only_when_it_is_already_showing() {
@@ -293,9 +293,11 @@ public class WorkspaceNavigationTests {
             var nav = NewNav();
             var nudges = 0;
             using var _ = nav.Vm.LauncherNudges.Subscribe(_ => nudges++);
+            var captured = nav.Vm.NavigationGeneration;
 
             await nav.Vm.NewSessionCommand.Execute();
             await Assert.That(nudges).IsEqualTo(1);
+            await Assert.That(nav.Vm.NavigationGeneration).IsNotEqualTo(captured);
 
             nav.Vm.OpenSession(Id1);
             await nav.Vm.NewSessionCommand.Execute();
