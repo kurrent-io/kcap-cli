@@ -49,11 +49,11 @@ public partial class LauncherPaneView : UserControl {
     public void Nudge() {
         FocusComposer();
         _nudgeEnd?.Dispose();
-        GoalCard.Classes.Set("nudge", true);
-        _nudgeEnd = DispatcherTimer.RunOnce(() => GoalCard.Classes.Set("nudge", false), NudgeHold);
+        GoalNudgeRing.Classes.Set("on", true);
+        _nudgeEnd = DispatcherTimer.RunOnce(() => GoalNudgeRing.Classes.Set("on", false), NudgeHold);
     }
 
-    internal bool IsNudgingForTesting => GoalCard.Classes.Contains("nudge");
+    internal bool IsNudgingForTesting => GoalNudgeRing.Classes.Contains("on");
 
     internal Task? PendingIntakeForTesting => _attachments?.PendingIntakeForTesting;
 

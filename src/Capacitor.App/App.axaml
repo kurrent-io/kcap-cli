@@ -654,9 +654,17 @@
         <Style Selector="Border.attachTarget">
             <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
         </Style>
-        <!-- Declared before dragOver so a drag in progress keeps its ring. -->
-        <Style Selector="Border.attachTarget.nudge">
+        <Style Selector="Border.goalNudgeRing">
             <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
+            <Setter Property="Opacity" Value="0" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <DoubleTransition Property="Opacity" Duration="0:0:0.25" Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Border.goalNudgeRing.on">
+            <Setter Property="Opacity" Value="1" />
         </Style>
         <Style Selector="Border.attachTarget.dragOver">
             <Setter Property="BorderBrush" Value="{StaticResource KcapPrimaryBrush}" />
