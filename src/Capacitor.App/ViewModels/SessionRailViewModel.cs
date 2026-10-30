@@ -392,11 +392,13 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
         _ => "all",
     };
 
-    /// Waiting on you, Running, Failed, Ended: the order the status groups keep.
+    /// Waiting on you, Running, Failed, Ended: the order the status groups keep. A row whose chip
+    /// says Working is Running even when its parent turn is waiting, or the group contradicts the chip.
     static int StatusBucket(AgentRow row) {
         if (row.IsEndedSession) return 3;
         if (row.Status == "Failed") return 2;
-        return SessionStatusDots.NeedsAttention(row) || SessionStatusDots.WaitsOnUser(row) ? 0 : 1;
+        if (SessionStatusDots.ForRow(row, pending: false).Kind == AgentStatusKind.Working) return 1;
+        return SessionStatusDots.NeedsAttention(row) ? 0 : 1;
     }
 
     string LabelFor(string key, RailGrouping grouping, IGroup<AgentRow, string, string>? group = null) => grouping switch {

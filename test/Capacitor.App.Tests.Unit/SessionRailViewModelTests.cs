@@ -663,6 +663,17 @@ public class SessionRailViewModelTests {
         });
     }
 
+    /// The chip reads Working for a parent waiting on input with a subagent still running, so the
+    /// group must say Running too.
+    [Test]
+    public async Task Status_grouping_puts_a_waiting_parent_with_a_live_subagent_under_running() {
+        var row = Local("parent", awaiting: true) with { LiveSubagents = 1 };
+
+        await Assert.That(SessionStatusDots.Label(row)).IsEqualTo("Working");
+        await Assert.That(SessionRailViewModel.GroupKey(row, RailGrouping.Status, DateOnly.FromDateTime(Noon), TimeZoneInfo.Utc))
+            .IsEqualTo("status:1");
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task None_grouping_is_one_headerless_group() {
